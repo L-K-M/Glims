@@ -172,6 +172,25 @@ and designing UI for new features. That part never becomes trivial.
   first call.
 - Configure needs PyGObject and GExiv2 available to meson's Python.
 
+Decided 2026-11-04: the prefix lives in the repo's ignored `_deps/macports`,
+built by `scripts/bootstrap-deps.sh` from the pins in `scripts/engine.env`
+(MacPorts base 2.12.7 from source, checksum-pinned; no root privileges). It
+installs the ports of `build/macos/all-deps-uni.txt` at every ref the spike
+builds (`GIMP_3_2_8`, `GIMP_3_2_0`, `master`), read from a bare blobless GIMP
+mirror in `_engine/gimp.git`. Like upstream, it sets `build_arch` and
+`macosx_deployment_target` in `macports.conf` and adds
+`-Werror=unguarded-availability-new` to libidn2 (upstream bce467bf). A
+non-default prefix cannot use MacPorts' binary archives, so every port builds
+from source and the first run takes hours.
+
+The workspace volume (`/Volumes/PaseoData`) is case-sensitive APFS, while
+upstream's CI and most Macs are case-insensitive. MacPorts itself builds on
+case-sensitive filesystems (its buildbots did as of 2016), and the problems
+its developers warn about come from building and installing on filesystems of
+different sensitivity, which does not happen here because everything lives on
+one volume. If a port still fails for case reasons, move the prefix to the
+internal disk (case-insensitive) and rebuild there.
+
 Machine as of 2026-11-04: macOS 27.0.1 on arm64, Xcode 27.2, Swift 6.4.2,
 Homebrew present, MacPorts, meson, ninja and pkg-config not installed.
 
@@ -233,8 +252,6 @@ process. Then try the helper-process fallback before reconsidering the plan.
 
 ## Open decisions
 
-- Where the dependency prefix lives (inside the repo under `_deps/`, or on
-  the internal disk outside the synced workspace).
 - Whether new generic controls go into Rigi immediately or incubate here
   first.
 - Rigi currently mandates light Aqua; `design.md` proposes neutral gray and

@@ -20,7 +20,8 @@ Keep `docs/plan.md` current as the spike proceeds.
 | `Sources/GlimsKit/` | The AppKit interface, built with RigiUI. Never includes GIMP headers. |
 | `Sources/Glims/` | The thin executable. |
 | `Tests/GlimsKitTests/` | Unit tests. |
-| `Resources/` | `Info.plist` (the release version source) and the generated `Third-Party-Notices.txt`. |
+| `Resources/` | `Info.plist` (the release version source), the generated `Third-Party-Notices.txt` and app icon. |
+| `media-sources/` | The app icon master and its generation prompt. |
 | `scripts/` | Build, release, app assembly and license-notice scripts. |
 | `Engine/` | Planned C adapter over GIMP's engine. Does not exist yet. |
 | `docs/` | Plan, design and research records. |
@@ -49,6 +50,14 @@ Keep `docs/plan.md` current as the spike proceeds.
   `Resources/Third-Party-Notices.txt`; `build-app.sh` fails while it is stale.
 - Rigi is pinned by revision in `Package.swift`. Before moving the pin, run
   Rigi's own checks at the new revision; then regenerate the notices.
+- `scripts/bootstrap-deps.sh [--check] [--macports-only]` builds the engine's
+  dependency prefix in `_deps/macports` from the pins in `scripts/engine.env`.
+  The first full run builds every port from source and takes hours; run it
+  detached and read `_deps/logs/`. Never run two at once.
+- The app icon is generated: `media-sources/icon.png` is the unedited master
+  (made with ChatGPT's image tool, prompt in `media-sources/IconPrompt.txt`);
+  `swift scripts/generate-icons.swift` writes `Resources/AppIcon.png` and
+  `Resources/AppIcon.icns`. Commit all three together.
 - [`CICD.md`](CICD.md) describes the workflows.
 
 ## Architecture boundaries
