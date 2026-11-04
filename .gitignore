@@ -1,0 +1,12 @@
+.build/
+.swiftpm/
+build/
+dist/
+.idea/
+.vscode/
+.DS_Store
+*.app
+
+# Engine build trees and dependency prefixes created by scripts/
+/_engine/
+/_deps/

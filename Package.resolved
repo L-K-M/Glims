@@ -1,0 +1,13 @@
+{
+  "pins" : [
+    {
+      "identity" : "rigi",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/L-K-M/Rigi.git",
+      "state" : {
+        "revision" : "dcfc91e3b72aee612b2b48aed4a744397b78dc77"
+      }
+    }
+  ],
+  "version" : 2
+}

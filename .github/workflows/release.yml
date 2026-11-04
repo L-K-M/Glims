@@ -1,0 +1,181 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']        # e.g. v0.2.0
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write       # needed to create the GitHub Release
+
+env:
+  APP_NAME: Glims
+
+jobs:
+  release:
+    name: Build & publish (unsigned)
+    runs-on: macos-26
+    timeout-minutes: 45   # don't let a wedged build stall a release for 6h
+    steps:
+      # Actions are pinned to immutable commit SHAs: a mutable tag can be repointed
+      # at tampered code, a commit SHA cannot. This workflow holds contents:write
+      # and produces the bytes users download, so it gets the same pin-and-verify
+      # discipline zai-code-review.yml already uses.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing in this job runs git after checkout; don't leave a
+          # contents:write token sitting in .git/config for the whole build.
+          persist-credentials: false
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        # Must match ci.yml. A release built on a toolchain CI has never used is
+        # a build nobody has tested.
+        with:
+          xcode-version: '26.0'
+
+      - name: Install tooling
+        run: brew install create-dmg
+
+      - name: Version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      # scripts/release.sh bumps every committed version marker; a hand-cut tag
+      # can skip them. Refuse to publish a build that reports another version.
+      - name: Verify the tag matches the committed version
+        run: |
+          PLIST_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+          README_VERSION="$(sed -n 's/.*<!-- version -->\(.*\)<!-- \/version -->.*/\1/p' README.md | head -1)"
+          fail=0
+          if [ "$PLIST_VERSION" != "$VERSION" ]; then
+            echo "::error::tag version ($VERSION) != Resources/Info.plist CFBundleShortVersionString ($PLIST_VERSION); bump it with scripts/release.sh before tagging."
+            fail=1
+          fi
+          if [ "$README_VERSION" != "$VERSION" ]; then
+            echo "::error::tag version ($VERSION) != README version marker ($README_VERSION); bump it with scripts/release.sh before tagging."
+            fail=1
+          fi
+          [ "$fail" -eq 0 ] || exit 1
+
+      # Gate the release on the test suite. With no signing/notarization
+      # downstream, tests are the only automated quality check — a tag on a
+      # broken commit must not publish.
+      - name: Test
+        run: swift test
+
+      - name: Build the app
+        run: ./scripts/build-app.sh
+
+      - name: Stamp the build number & re-sign
+        run: |
+          APP=dist/$APP_NAME.app
+          test -d "$APP" || { echo "::error::$APP not found"; exit 1; }
+          # The asset name promises arm64; hold the binary to it.
+          test "$(lipo -archs "$APP/Contents/MacOS/$APP_NAME")" = arm64 \
+            || { echo "::error::$APP_NAME is not an arm64-only binary; fix the asset names or the build"; exit 1; }
+
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" "$APP/Contents/Info.plist"
+
+          # Editing the plist broke the seal from build-app.sh: re-sign (ad-hoc,
+          # identity "-": no certificate, keychain or API key needed, but required
+          # for the app to launch on Apple Silicon) and re-verify. This is not a
+          # Developer ID signature and the app is not notarized.
+          codesign --force --sign - "$APP"
+          codesign --verify --deep --strict "$APP" \
+            || { echo "::error::the signed app failed verification — it would not launch"; exit 1; }
+
+      - name: Package zip + DMG
+        run: |
+          ZIP="$RUNNER_TEMP/$APP_NAME-v$VERSION-macos-arm64.zip"
+          DMG="$RUNNER_TEMP/$APP_NAME-v$VERSION-macos-arm64.dmg"
+          ditto -c -k --keepParent "dist/$APP_NAME.app" "$ZIP"
+          # create-dmg can exit non-zero on a headless runner even on success — verify the file.
+          create-dmg \
+            --volname "$APP_NAME $VERSION" \
+            --window-size 540 380 \
+            --icon-size 100 \
+            --icon "$APP_NAME.app" 150 185 \
+            --app-drop-link 390 185 \
+            "$DMG" "dist/$APP_NAME.app" || true
+          [ -f "$DMG" ] || { echo "::error::DMG was not created"; exit 1; }
+          # create-dmg's exit code is unreliable, so verify the image itself: a
+          # truncated/corrupt DMG must not ship as the release's preferred asset.
+          hdiutil verify "$DMG" || { echo "::error::DMG failed hdiutil verification — the image is corrupt or truncated"; exit 1; }
+          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+
+      # The app must carry the GPL text and the third-party notices in the
+      # archives users download, not only in the build directory.
+      - name: Verify license notices in the archives
+        run: |
+          check_notices() {
+            RESOURCES="$1/$APP_NAME.app/Contents/Resources"
+            for notice in LICENSE.txt Third-Party-Notices.txt; do
+              test -s "$RESOURCES/$notice" || { echo "::error::$notice missing from $2"; return 1; }
+            done
+            grep -q '^Rigi ' "$RESOURCES/Third-Party-Notices.txt" || { echo "::error::$2 notices lack Rigi"; return 1; }
+          }
+          ditto -x -k "$ZIP" "$RUNNER_TEMP/unzipped"
+          check_notices "$RUNNER_TEMP/unzipped" "$(basename "$ZIP")"
+          MOUNT="$RUNNER_TEMP/dmg-mount"
+          mkdir -p "$MOUNT"
+          hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" "$DMG"
+          status=0
+          check_notices "$MOUNT" "$(basename "$DMG")" || status=1
+          hdiutil detach "$MOUNT"
+          exit "$status"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          name: ${{ env.APP_NAME }} ${{ env.VERSION }}
+          files: |
+            ${{ env.DMG }}
+            ${{ env.ZIP }}
+          # A pre-release tag (contains a hyphen, e.g. v0.2.0-beta.1) is marked as a
+          # prerelease and is not made "latest" — a user following releases/latest
+          # should land on a stable build.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          body: |
+            ### Unsigned build
+
+            This app is **not** code-signed with a Developer ID or notarized, so macOS
+            Gatekeeper will warn on first launch. To open it:
+
+            - **Right-click** (or Control-click) the app → **Open** → **Open**, or
+            - run `xattr -dr com.apple.quarantine /Applications/${{ env.APP_NAME }}.app`
+
+            ### License and source
+
+            Glims is licensed under GPL-3.0-or-later. The complete corresponding
+            source is this release's tag; the app ships the license text and the
+            third-party notices in `Glims.app/Contents/Resources`.
+
+      # Never trust an upload: download what GitHub actually serves for the tag and
+      # byte-compare it against what was just built. A truncated or corrupt upload
+      # would otherwise ship silently.
+      - name: Verify published assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir "$RUNNER_TEMP/published"
+          gh release download "$GITHUB_REF_NAME" --dir "$RUNNER_TEMP/published" \
+            --pattern "$(basename "$ZIP")" --pattern "$(basename "$DMG")"
+          failed=0
+          for f in "$ZIP" "$DMG"; do
+            if ! cmp -- "$f" "$RUNNER_TEMP/published/$(basename "$f")"; then
+              # The published copy provably differs from what was built: take it
+              # down before failing. Keep checking, so a second bad asset is also
+              # caught and removed in the same run.
+              gh release delete-asset "$GITHUB_REF_NAME" "$(basename "$f")" -y \
+                || echo "::warning::failed to remove mismatched asset $(basename "$f") — take it down manually"
+              echo "::error::published $(basename "$f") differed from the built artifact and was removed"
+              failed=1
+            fi
+          done
+          [ "$failed" -eq 0 ] || exit 1

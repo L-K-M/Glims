@@ -1,0 +1,11 @@
+{
+  "comment": "Overrides for scripts/swiftpm-notices.py, which generates Resources/Third-Party-Notices.txt. Keys under packages are SwiftPM identities from Package.resolved. Every entry needs a reason.",
+  "preamble": [
+    "Glims is released under the GNU General Public License, version 3 or",
+    "later; the app ships the license text as LICENSE.txt. The components",
+    "below are compiled into the app and keep their own licenses. The Swift",
+    "runtime and system frameworks ship with macOS."
+  ],
+  "packages": {},
+  "components": []
+}
