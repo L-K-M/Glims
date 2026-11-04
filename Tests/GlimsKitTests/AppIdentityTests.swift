@@ -19,6 +19,14 @@ final class AppIdentityTests: XCTestCase {
         XCTAssertEqual(info["CFBundleName"] as? String, AppIdentity.name)
     }
 
+    func testInfoPlistNamesTheCommittedIcon() throws {
+        let info = try committedInfoPlist()
+        XCTAssertEqual(info["CFBundleIconFile"] as? String, "AppIcon")
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("Resources/AppIcon.icns").path))
+    }
+
     func testInfoPlistStatesTheProjectLicense() throws {
         let info = try committedInfoPlist()
         XCTAssertEqual(info["NSHumanReadableCopyright"] as? String, "Licensed under GPL-3.0-or-later")

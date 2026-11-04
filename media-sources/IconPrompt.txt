@@ -1,0 +1,18 @@
+Generated with the built-in image_gen.imagegen tool on 2026-11-04.
+Original: /Volumes/PaseoData/TrueNAS/paseo-home/.codex/generated_images/01a1a78a-585d-7f00-8b21-93c60b8cdc1e/exec-d67602d1-80fe-47c0-9bc0-1445fc6d3f86.png
+Project master: media-sources/icon.png (the original, 1254 x 1254, unedited)
+Project raster: Resources/AppIcon.png (1024 x 1024)
+Project macOS icon: Resources/AppIcon.icns
+Derived by: swift scripts/generate-icons.swift, which also clears the stray
+opaque specks the generator left outside the tile.
+
+Exact generation prompt:
+
+Use case: stylized-concept
+Asset type: production macOS application icon for Glims, square 1024 by 1024, transparent background outside the icon tile.
+Primary request: a polished native macOS icon for a professional image editor named after Piz Glims, a snow-capped peak in the Swiss Silvretta Alps, and Lai Glims, the small still mountain lake below it.
+Subject: a rounded-square tile showing one bold stylized alpine peak with a snowy summit, mirrored in a calm dark-blue mountain lake at its foot. A thin dashed rectangular selection frame (marching-ants marquee) encloses the peak and its reflection, the single cue that this is an image editor.
+Style/medium: refined late-2000s Mac OS X professional app icon craftsmanship: rich but restrained detail, crisp edges, soft glassy highlights, gentle depth, cool alpine palette of slate blue, snow white, granite gray and a hint of morning gold on the summit.
+Composition/framing: centered, front-facing single icon with a consistent generous inset; large clear silhouette recognizable at 32 px. The rounded square fills about 85 percent of the canvas. Transparent canvas outside the rounded square.
+Lighting/mood: clear calm morning light from the upper left, precise and professional.
+Constraints: no text, no letters, no watermark, no animals or mascots, no eye, no feather, no paintbrush clutter, no imitation of any existing application's icon, no tiny details that vanish at small sizes, no background scene outside the tile. Actual transparent alpha outside the rounded-square tile.

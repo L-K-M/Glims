@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds dist/Glims.app from the SwiftPM package. Copies the committed
-# Info.plist, the project LICENSE and the third-party notices into the bundle,
+# Info.plist, icon, the project LICENSE and the third-party notices into the bundle,
 # signs it and verifies the signature. Fails before assembling when the
 # committed notices no longer match the resolved packages.
 #
@@ -54,6 +54,7 @@ rm -rf "$APP_PATH"
 mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
 cp "$BIN_DIR/$APP_NAME" "$APP_PATH/Contents/MacOS/$APP_NAME"
 cp "$PROJECT_ROOT/Resources/Info.plist" "$APP_PATH/Contents/Info.plist"
+cp "$PROJECT_ROOT/Resources/AppIcon.icns" "$APP_PATH/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "$APP_PATH/Contents/PkgInfo"
 for bundle in "$BIN_DIR"/*.bundle; do
   [[ -d "$bundle" ]] && cp -R "$bundle" "$APP_PATH/Contents/Resources/"

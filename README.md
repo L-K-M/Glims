@@ -6,6 +6,8 @@
 A native Mac image editor with a classic, uncluttered interface, built on the
 GIMP image engine.
 
+<img src="Resources/AppIcon.png" alt="Glims app icon" width="160">
+
 **Version:** v<!-- version -->0.1.0<!-- /version -->
 
 **Status:** phase 0. The app is a shell with a placeholder canvas; the GIMP

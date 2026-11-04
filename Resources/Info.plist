@@ -8,6 +8,8 @@
 	<string>Glims</string>
 	<key>CFBundleExecutable</key>
 	<string>Glims</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>ch.lkmc.Glims</string>
 	<key>CFBundleInfoDictionaryVersion</key>

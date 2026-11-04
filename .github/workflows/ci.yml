@@ -76,6 +76,7 @@ jobs:
           test -x "$BIN" || { echo "::error::$BIN missing or not executable"; exit 1; }
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")" = 'ch.lkmc.Glims' \
             || { echo "::error::built app lost its bundle identifier"; exit 1; }
+          test -s "$RESOURCES/AppIcon.icns" || { echo "::error::built app lacks its icon"; exit 1; }
           for notice in LICENSE.txt Third-Party-Notices.txt; do
             test -s "$RESOURCES/$notice" || { echo "::error::$notice missing from Glims.app"; exit 1; }
           done
