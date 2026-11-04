@@ -22,18 +22,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck source=engine.env
-source "$ROOT/scripts/engine.env"
+# shellcheck source=engine-common.sh
+source "$ROOT/scripts/engine-common.sh"
 
-DEPS_DIR="$ROOT/_deps"
-PREFIX="$DEPS_DIR/macports"
-PORT="$PREFIX/bin/port"
-GIMP_MIRROR="$ROOT/_engine/gimp.git"
+GIMP_MIRROR="$ENGINE_DIR/gimp.git"
 LISTS_DIR="$DEPS_DIR/lists"
 TARBALL="$DEPS_DIR/downloads/MacPorts-$MACPORTS_VERSION.tar.bz2"
 TARBALL_URL="https://github.com/macports/macports-base/releases/download/v$MACPORTS_VERSION/MacPorts-$MACPORTS_VERSION.tar.bz2"
-# MacPorts must not see Homebrew or other user tools while it builds.
-CLEAN_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 
 MODE=all
 for arg in "$@"; do
@@ -45,8 +40,6 @@ for arg in "$@"; do
     *) echo "!! unknown option '$arg' (see --help)" >&2; exit 2 ;;
   esac
 done
-
-die() { echo "!! $*" >&2; exit 1; }
 
 [[ "$(uname -s)" == Darwin ]] || die "the engine dependencies build on macOS only."
 ARCH="$(uname -m)"
@@ -67,18 +60,13 @@ if [[ "$MODE" == check ]]; then
 fi
 
 xcode-select -p >/dev/null 2>&1 || die "install the Xcode command line tools first (xcode-select --install)."
-mkdir -p "$DEPS_DIR/downloads" "$DEPS_DIR/src" "$DEPS_DIR/logs" "$LISTS_DIR" "$ROOT/_engine"
+sanitize_environment
+acquire_lock
+mkdir -p "$DEPS_DIR/downloads" "$DEPS_DIR/src" "$DEPS_DIR/logs" "$LISTS_DIR" "$ENGINE_DIR"
 
 # --- GIMP's dependency lists, read from a bare mirror ----------------------------
 echo "==> Updating the GIMP mirror"
-if [[ ! -d "$GIMP_MIRROR" ]]; then
-  git clone --quiet --bare --filter=blob:none "$GIMP_REPO" "$GIMP_MIRROR"
-fi
-# A bare clone has no fetch refspec; without one, fetch would leave branches
-# such as master stale while tags update.
-git -C "$GIMP_MIRROR" remote set-url origin "$GIMP_REPO"
-git -C "$GIMP_MIRROR" config remote.origin.fetch '+refs/heads/*:refs/heads/*'
-git -C "$GIMP_MIRROR" fetch --quiet --tags --prune origin
+update_mirror gimp "$GIMP_REPO"
 
 for ref in $GIMP_REFS; do
   list="$LISTS_DIR/$ref.txt"

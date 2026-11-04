@@ -191,6 +191,12 @@ different sensitivity, which does not happen here because everything lives on
 one volume. If a port still fails for case reasons, move the prefix to the
 internal disk (case-insensitive) and rebuild there.
 
+First full run, 2026-11-04: 1 h 56 min on this Mac, 384 active ports, 8.5 GB.
+No port failed and no X11 library was installed. Key versions: gexiv2 0.14.7
+(inside GIMP's `< 0.15` bound), GTK 3.24.52, GLib 2.88.3 and cairo and pango
+built for Quartz, plus Python 3.14 (default) and 3.13 (GIMP 3.2.0's list
+names it) with PyGObject for both.
+
 Machine as of 2026-11-04: macOS 27.0.1 on arm64, Xcode 27.2, Swift 6.4.2,
 Homebrew present, MacPorts, meson, ninja and pkg-config not installed.
 
@@ -219,6 +225,34 @@ Week 3
   3.2.8 (48 with the research focus list, about 69 with a broader scope [M]).
 - Nested plug-in loop under Cocoa: 100 synchronous plug-in calls.
 - Performance pass against GIMP 3.2.8 on the same Mac.
+
+### Progress
+
+- 2026-11-04: dependency prefix built (`scripts/bootstrap-deps.sh`; see
+  Build environment).
+- 2026-11-04: GIMP 3.2.8 with babl 0.1.128 and GEGL 0.4.72 builds from
+  unmodified sources with `scripts/build-engine.sh`: no engine-source patches
+  and no packaging workarounds. babl, GEGL and GIMP together took about 9
+  minutes on this Mac; an incremental rerun takes about 2. After the build the
+  zero-patch gate found all three source trees, including the `gimp-data`
+  submodule, byte-identical to upstream. `gimp-console` 3.2.8 starts with a
+  throwaway user directory, registers all 128 installed plug-ins (233
+  procedures, including PNG, JPEG and TIFF export, PSD, PDF and SVG import, and
+  the Script-Fu and Python interpreters) and quits cleanly. This is the
+  reference engine for the performance comparison.
+- 2026-11-04: GIMP 3.2.0 with babl 0.1.124 and GEGL 0.4.68 also builds
+  unmodified, with no packaging workarounds (upstream's own macOS build needed
+  them at 3.2.0 only for bundling and a Python pin, neither of which applies
+  here). Its smoke test passes the same way. Go criterion 1 holds for both
+  tags so far. Next: start the adapter at `GIMP_3_2_0`.
+- 2026-11-04: `build-engine.sh` hardened after review: sources must be
+  pristine (ignored files included) before and after the build; a stamp of
+  source commits and options forces a clean rebuild when either changes;
+  caller compiler, Python, pkg-config, `DYLD_*` and `GIT_*` settings are
+  dropped; one engine script runs at a time; the smoke test runs in its own
+  process group with a timeout and a throwaway `HOME`, and build tools cache
+  under `_engine/cache`. Earlier runs had left `babl`, `gegl-0.4`,
+  `g-ir-scanner` and an empty `gimp` folder in `~/.cache`; they were removed.
 
 ### Go only if all hold
 

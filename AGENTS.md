@@ -10,7 +10,8 @@ both is in [`docs/research/`](docs/research/README.md).
 
 Phase 0 (spike). A RigiUI app shell exists: the workspace window, a
 placeholder canvas, status-strip zoom, and a `--smoke-test` mode. The engine
-adapter does not exist yet, and the engine build environment is not set up.
+dependency prefix is built (`_deps/macports`), and GIMP 3.2.8 and 3.2.0 build
+unmodified (`_engine/install/<ref>`); the adapter is next.
 Keep `docs/plan.md` current as the spike proceeds.
 
 ## Layout
@@ -54,6 +55,13 @@ Keep `docs/plan.md` current as the spike proceeds.
   dependency prefix in `_deps/macports` from the pins in `scripts/engine.env`.
   The first full run builds every port from source and takes hours; run it
   detached and read `_deps/logs/`. Never run two at once.
+- `scripts/build-engine.sh [--check] [GIMP_REF]` builds babl, GEGL and GIMP
+  for one engine set from `ENGINE_SETS` in `scripts/engine.env` (default: the
+  pinned engine) into `_engine/install/<GIMP_REF>`, fails if any upstream
+  source tree changed, and smoke-tests `gimp-console`. Engine tools must never
+  write to the user's real `HOME`, `~/.cache` or GIMP settings: run them with
+  the throwaway `HOME`, `XDG_CACHE_HOME` and `GIMP3_DIRECTORY` the script uses.
+  Only one engine script runs at a time (`_engine/.lock`).
 - The app icon is generated: `media-sources/icon.png` is the unedited master
   (made with ChatGPT's image tool, prompt in `media-sources/IconPrompt.txt`);
   `swift scripts/generate-icons.swift` writes `Resources/AppIcon.png` and
