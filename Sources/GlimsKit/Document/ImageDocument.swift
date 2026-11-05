@@ -31,6 +31,8 @@ final class ImageDocument {
     var onError: ((String) -> Void)?
     /// Called after the selection changed.
     var onSelectionChange: (() -> Void)?
+    /// Called after the image's size changed (crop, canvas size, undo).
+    var onSizeChange: (() -> Void)?
 
     nonisolated let inputQueue = DispatchQueue(label: "ch.lkmc.Glims.document.input", qos: .userInteractive)
     nonisolated let longQueue = DispatchQueue(label: "ch.lkmc.Glims.document.long", qos: .userInitiated)
@@ -63,9 +65,12 @@ final class ImageDocument {
         onStateChange?()
     }
 
+    /// Makes `id` the layer painting, fills, filters, plug-ins and the
+    /// Layer commands act on, here and in the engine.
     func selectLayer(_ id: Int32) {
         guard layers.contains(where: { $0.id == id && $0.kind != .group }) else { return }
         activeLayer = id
+        run { session, image in try session.selectLayer(id, image: image) }
         onStateChange?()
     }
 
@@ -78,6 +83,9 @@ final class ImageDocument {
             try? reload()
         case .selectionChanged(let image) where image == self.image:
             refreshSelection()
+        case .sizeChanged(let image) where image == self.image:
+            try? reload()
+            onSizeChange?()
         default:
             break
         }
@@ -127,6 +135,54 @@ final class ImageDocument {
     func select(_ command: EngineSession.SelectCommand, radius: Double = 0) {
         guard !refuseWhilePlugInRuns() else { return }
         run { session, image in try session.select(command, image: image, radius: radius) }
+    }
+
+    // MARK: Editing
+
+    func fill(at point: CGPoint, mode: EngineSession.FillMode, color: NSColor, threshold: Double,
+              sampleMerged: Bool) {
+        guard !refuseWhilePlugInRuns() else { return }
+        run { session, image in
+            try session.fill(image: image, at: point, mode: mode, color: color,
+                             threshold: threshold, sampleMerged: sampleMerged)
+        }
+    }
+
+    func gradient(from: CGPoint, to: CGPoint, shape: EngineSession.GradientShape, fromColor: NSColor, toColor: NSColor) {
+        guard !refuseWhilePlugInRuns() else { return }
+        run { session, image in
+            try session.gradient(image: image, from: from, to: to, shape: shape, fromColor: fromColor, toColor: toColor)
+        }
+    }
+
+    func layerCommand(_ command: EngineSession.LayerCommand) {
+        guard !refuseWhilePlugInRuns() else { return }
+        let layer = activeLayer ?? 0
+        run { session, image in
+            let created = try session.layerCommand(command, image: image, layer: layer)
+            if let created {
+                // The engine selects what it created; keep the interface in step.
+                DispatchQueue.main.async {
+                    try? self.reload()
+                    if self.layers.contains(where: { $0.id == created }) { self.selectLayer(created) }
+                }
+            }
+        }
+    }
+
+    func changeLayer(_ layer: Int32, _ change: EngineSession.LayerChange) {
+        guard !refuseWhilePlugInRuns() else { return }
+        run { session, image in try session.changeLayer(layer, image: image, change) }
+    }
+
+    func moveActiveLayer(by offset: CGSize) {
+        guard let layer = activeLayer, offset != .zero, !refuseWhilePlugInRuns() else { return }
+        run { session, image in try session.moveLayer(layer, image: image, by: offset) }
+    }
+
+    func crop(to rect: CGRect) {
+        guard !refuseWhilePlugInRuns() else { return }
+        run { session, image in try session.crop(image: image, to: rect) }
     }
 
     /// Re-reads the outline; the engine caches it until the selection changes.

@@ -4,6 +4,7 @@ import AppKit
 /// (docs/design.md, section 2): two columns, related tools grouped behind
 /// one cell, a single-letter shortcut per group (Shift-letter cycles).
 enum ToolID: String, CaseIterable {
+    case move, crop
     case rectangleSelect, ellipseSelect, lasso
     case magicWand, selectByColor
     case eyedropper
@@ -12,10 +13,15 @@ enum ToolID: String, CaseIterable {
     case clone, heal
     case smudge, blur, sharpen
     case dodge, burn
+    case gradient, bucketFill
     case hand, zoom
 
     var name: String {
         switch self {
+        case .move: return "Move"
+        case .crop: return "Crop"
+        case .gradient: return "Gradient"
+        case .bucketFill: return "Paint Bucket"
         case .rectangleSelect: return "Rectangle Select"
         case .ellipseSelect: return "Ellipse Select"
         case .lasso: return "Lasso"
@@ -41,6 +47,9 @@ enum ToolID: String, CaseIterable {
     /// The key that picks the tool's group; repeated with Shift it cycles.
     var shortcut: String {
         switch self {
+        case .move: return "V"
+        case .crop: return "C"
+        case .gradient, .bucketFill: return "G"
         case .rectangleSelect, .ellipseSelect: return "M"
         case .lasso: return "L"
         case .magicWand, .selectByColor: return "W"
@@ -58,6 +67,10 @@ enum ToolID: String, CaseIterable {
     /// SF Symbols names, first available wins; a letter otherwise.
     private var symbolNames: [String] {
         switch self {
+        case .move: return ["arrow.up.and.down.and.arrow.left.and.right", "move.3d"]
+        case .crop: return ["crop"]
+        case .gradient: return ["square.lefthalf.filled", "circle.lefthalf.filled"]
+        case .bucketFill: return ["drop.fill", "paintbrush.fill"]
         case .rectangleSelect: return ["rectangle.dashed"]
         case .ellipseSelect: return ["circle.dashed"]
         case .lasso: return ["lasso"]
@@ -126,12 +139,13 @@ enum ToolID: String, CaseIterable {
 
     /// The palette's cells, row by row; a cell with several tools is a group.
     static let paletteSlots: [[ToolID]] = [
-        [.rectangleSelect, .ellipseSelect], [.lasso],
+        [.rectangleSelect, .ellipseSelect], [.move],
+        [.lasso], [.crop],
         [.magicWand, .selectByColor], [.eyedropper],
         [.paintbrush, .pencil, .airbrush], [.eraser],
         [.clone, .heal], [.smudge, .blur, .sharpen],
-        [.dodge, .burn], [.hand],
-        [.zoom],
+        [.dodge, .burn], [.gradient, .bucketFill],
+        [.hand], [.zoom],
     ]
 
     /// The group a shortcut letter picks.
@@ -154,6 +168,12 @@ final class ToolState {
     private var brushes: [ToolID: EngineSession.Brush] = [:]
     var selectOptions = EngineSession.SelectOptions()
     var foreground = NSColor.black
+    var background = NSColor.white
+    var gradientShape = EngineSession.GradientShape.linear
+    /// Paint bucket: similar colors around the click, or the whole selection.
+    var fillMode = EngineSession.FillMode.similarColors
+    var fillThreshold: Double = 15.0 / 255.0
+    var fillSampleMerged = false
     /// Where clone and heal copy from; set with Option-click on the canvas.
     var cloneSource: EngineSession.Brush.Source?
 

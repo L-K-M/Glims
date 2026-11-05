@@ -9,7 +9,7 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
     static let definition = PaletteDefinition(
         kind: PaletteKind("ch.lkmc.Glims.tools"),
         title: "Tools",
-        contentSize: NSSize(width: 61, height: 194),
+        contentSize: NSSize(width: 61, height: 218),
         sizing: .fixed,
         frameAutosaveName: "Glims.palette.tools")
 
@@ -19,6 +19,7 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
         })
     })
     private let colorWell = NSColorWell()
+    private let backgroundWell = NSColorWell()
     private var observer: UUID?
 
     override func loadView() {
@@ -31,8 +32,13 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
         colorWell.action = #selector(colorChosen(_:))
         colorWell.toolTip = "Foreground color"
         colorWell.setAccessibilityLabel("Foreground color")
+        backgroundWell.color = ToolState.shared.background
+        backgroundWell.target = self
+        backgroundWell.action = #selector(backgroundChosen(_:))
+        backgroundWell.toolTip = "Background color (X swaps the two)"
+        backgroundWell.setAccessibilityLabel("Background color")
 
-        for view in [grid, colorWell] as [NSView] {
+        for view in [grid, colorWell, backgroundWell] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
@@ -42,7 +48,11 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
             colorWell.topAnchor.constraint(equalTo: grid.bottomAnchor, constant: 8),
             colorWell.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             colorWell.widthAnchor.constraint(equalToConstant: 40),
-            colorWell.heightAnchor.constraint(equalToConstant: 22),
+            colorWell.heightAnchor.constraint(equalToConstant: 20),
+            backgroundWell.topAnchor.constraint(equalTo: colorWell.bottomAnchor, constant: 3),
+            backgroundWell.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+            backgroundWell.widthAnchor.constraint(equalToConstant: 40),
+            backgroundWell.heightAnchor.constraint(equalToConstant: 20),
         ])
         view = root
         grid.selectTool(id: ToolState.shared.current.rawValue)
@@ -58,6 +68,9 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
         if colorWell.color != ToolState.shared.foreground {
             colorWell.color = ToolState.shared.foreground
         }
+        if backgroundWell.color != ToolState.shared.background {
+            backgroundWell.color = ToolState.shared.background
+        }
     }
 
     @objc private func toolChosen(_ sender: ClassicToolGrid) {
@@ -67,6 +80,11 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
 
     @objc private func colorChosen(_ sender: NSColorWell) {
         ToolState.shared.foreground = sender.color
+        ToolState.shared.notifyChange()
+    }
+
+    @objc private func backgroundChosen(_ sender: NSColorWell) {
+        ToolState.shared.background = sender.color
         ToolState.shared.notifyChange()
     }
 }
@@ -119,8 +137,27 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
             addPaintRows(for: tool, brush: state.brush(for: tool))
         } else if tool.isSelectionTool {
             addSelectionRows(for: tool)
+        } else if tool == .gradient {
+            stack.addArrangedSubview(popUp("Shape", ["Linear", "Bi-Linear", "Radial"],
+                                           selected: Int(state.gradientShape.rawValue)) { index in
+                ToolState.shared.gradientShape = EngineSession.GradientShape(rawValue: UInt32(index)) ?? .linear
+            })
+            stack.addArrangedSubview(hint("Drag across the image: foreground to background color."))
+        } else if tool == .bucketFill {
+            stack.addArrangedSubview(popUp("Fill", ["Similar colors", "Whole selection"],
+                                           selected: state.fillMode == .similarColors ? 0 : 1) { index in
+                ToolState.shared.fillMode = index == 0 ? .similarColors : .selection
+            })
+            stack.addArrangedSubview(slider("Threshold", 0...255, state.fillThreshold * 255, unit: "") { value in
+                ToolState.shared.fillThreshold = value / 255
+            })
+            stack.addArrangedSubview(checkbox("Sample merged", state.fillSampleMerged) { on in
+                ToolState.shared.fillSampleMerged = on
+            })
         } else {
             let hints: [ToolID: String] = [
+                .move: "Drag to move the selected layer. Arrow keys nudge it 1 pixel, Shift-arrow 10.",
+                .crop: "Drag the area to keep, then press Return to crop or Escape to cancel.",
                 .eyedropper: "Click the image to pick the foreground color.",
                 .hand: "Drag to scroll. Hold Space with any tool for the hand.",
                 .zoom: "Click to zoom in; Option-click to zoom out.",

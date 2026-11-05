@@ -35,6 +35,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             guard let self else { return }
             self.canvas.selectionOutline = self.imageDocument.selectionOutline
         }
+        imageDocument.onSizeChange = { [weak self] in
+            self?.canvas.imageSizeDidChange()
+            self?.stateDidChange()
+        }
         canvas.tools.onStatus = { [weak self] message in self?.statusBar.message = message }
         canvas.tools.onZoom = { [weak self] zoomIn, point in
             guard let self else { return }
@@ -136,6 +140,76 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         panel.onFinish = { [weak self] in self?.blurPanel = nil }
         blurPanel = panel
         panel.showWindow(nil)
+    }
+
+    // MARK: Layer menu
+
+    @objc func newLayer(_ sender: Any?) { imageDocument.layerCommand(.new) }
+    @objc func duplicateLayer(_ sender: Any?) { imageDocument.layerCommand(.duplicate) }
+    @objc func deleteLayer(_ sender: Any?) { imageDocument.layerCommand(.delete) }
+    @objc func bringLayerToFront(_ sender: Any?) { imageDocument.layerCommand(.toTop) }
+    @objc func bringLayerForward(_ sender: Any?) { imageDocument.layerCommand(.raise) }
+    @objc func sendLayerBackward(_ sender: Any?) { imageDocument.layerCommand(.lower) }
+    @objc func sendLayerToBack(_ sender: Any?) { imageDocument.layerCommand(.toBottom) }
+    @objc func mergeDown(_ sender: Any?) { imageDocument.layerCommand(.mergeDown) }
+    @objc func flattenImage(_ sender: Any?) { imageDocument.layerCommand(.flatten) }
+
+    /// Name, opacity, blend mode and visibility of the selected layer.
+    @objc func layerProperties(_ sender: Any?) {
+        guard let window, let id = imageDocument.activeLayer,
+              let layer = imageDocument.layers.first(where: { $0.id == id }) else { return }
+        let name = NSTextField(string: layer.name)
+        let opacity = NSTextField(string: String(Int((layer.opacity * 100).rounded())))
+        let mode = NSPopUpButton(frame: .zero, pullsDown: false)
+        mode.addItems(withTitles: Self.blendModes)
+        mode.selectItem(withTitle: layer.mode)
+        let visible = NSButton(checkboxWithTitle: "Visible", target: nil, action: nil)
+        visible.state = layer.isVisible ? .on : .off
+        let grid = NSGridView(views: [
+            [NSTextField(labelWithString: "Name:"), name],
+            [NSTextField(labelWithString: "Opacity (%):"), opacity],
+            [NSTextField(labelWithString: "Mode:"), mode],
+            [NSGridCell.emptyContentView, visible],
+        ])
+        grid.column(at: 0).xPlacement = .trailing
+        name.widthAnchor.constraint(equalToConstant: 180).isActive = true
+        grid.frame = NSRect(x: 0, y: 0, width: 280, height: 110)
+
+        let alert = NSAlert()
+        alert.messageText = "Layer Properties"
+        alert.accessoryView = grid
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            var change = EngineSession.LayerChange()
+            if name.stringValue != layer.name, !name.stringValue.isEmpty { change.name = name.stringValue }
+            let newOpacity = min(max(opacity.doubleValue, 0), 100) / 100
+            if abs(newOpacity - layer.opacity) > 0.001 { change.opacity = newOpacity }
+            if let title = mode.titleOfSelectedItem, title != layer.mode { change.mode = title }
+            if (visible.state == .on) != layer.isVisible { change.isVisible = visible.state == .on }
+            if change != EngineSession.LayerChange() { self.imageDocument.changeLayer(id, change) }
+        }
+    }
+
+    /// GIMP's default (non-legacy) layer modes by their engine nicks
+    /// (GimpLayerMode in app/operations/operations-enums.c), in the order
+    /// GIMP's mode menu groups them.
+    static let blendModes = ["normal", "dissolve", "behind",
+                             "lighten-only", "luma-lighten-only", "screen", "dodge", "addition",
+                             "darken-only", "luma-darken-only", "multiply", "burn", "linear-burn",
+                             "overlay", "softlight", "hardlight", "vivid-light", "pin-light", "linear-light", "hard-mix",
+                             "difference", "exclusion", "subtract", "grain-extract", "grain-merge", "divide",
+                             "hsv-hue", "hsv-saturation", "hsl-color", "hsv-value",
+                             "lch-hue", "lch-chroma", "lch-color", "lch-lightness", "luminance"]
+
+    @objc func cropToSelection(_ sender: Any?) {
+        guard let bounds = try? imageDocument.session.selectionBounds(image: imageDocument.image) else {
+            statusBar.message = "Select the area to keep first."
+            NSSound.beep()
+            return
+        }
+        imageDocument.crop(to: bounds)
     }
 
     // MARK: Select menu

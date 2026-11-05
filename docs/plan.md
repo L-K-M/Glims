@@ -509,6 +509,29 @@ In this order (reasons in `phase0-report.md`):
   Not done: tabbed palette groups, docking, workspaces, the color pair,
   move, crop, transform, text, paths, fill and gradient tools, and
   painting on a worker thread.
+- 2026-11-05: items 3 and 4, second slice. Engine: paint-bucket fill
+  (similar colors or the whole selection), gradients, the Layer commands
+  (new, duplicate, delete, arrange, merge down, flatten), layer name,
+  visibility, opacity and blend mode, layer selection in the engine,
+  layer moves, image crop and a SIZE_CHANGED event; 132 conformance checks
+  pass on all four engines, twice each. Interface: Move (V), Crop (C) and
+  Gradient and Paint Bucket (G) tools, a background color (X swaps, D
+  resets), the Layer menu with Layer Properties (name, opacity, all 35
+  blend modes, visibility), Image ▸ Crop to Selection and Flatten Image,
+  and canvas resizing after crops and their undo. Fixed on the way: the
+  Layers palette chose layers only in the app, so plug-ins and fills
+  still acted on the engine's selection; it now selects in the engine too.
+  Fixed a stale-render bug: reads that validated projection tiles now and
+  then returned pixels from before a change, and kept them (about one
+  round in 23 in a probe, intermittent in the tests). The adapter now
+  validates the requested area explicitly before reading. That costs
+  speed for never-rendered areas at 100 % on a loaded machine (first frame
+  580 ms instead of 167, panning into new areas 158 ms instead of 31 at
+  p95) and gains it zoomed out (1.2 s instead of 2.3 to fit); panning over
+  rendered areas and painting are unchanged. Restoring the fast path needs
+  the root cause in GEGL's tile handling, which is open. One bucket-fill
+  check failed once in five runs on GIMP 3.2.0 before the fix and not
+  since; its cause is not known.
 
 ## Later, before any public release
 

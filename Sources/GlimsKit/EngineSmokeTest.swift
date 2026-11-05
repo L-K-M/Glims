@@ -74,6 +74,7 @@ enum EngineSmokeTest {
         do {
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseTools(session, documents: documents)
+            try exerciseEditing(session, documents: documents)
             try exercisePlugInCommands(session, documents: documents)
             try measurePluginStalls(session, work: work)
         } catch {
@@ -208,6 +209,64 @@ enum EngineSmokeTest {
         spin()
         check(try session.selectionBounds(image: image) == CGRect(x: 0, y: 0, width: 400, height: 300),
               "Select ▸ All selects the whole image")
+        controller.window?.orderOut(nil)
+    }
+
+    /// The Layer menu, the paint bucket and gradient, layer moves, and a
+    /// crop that resizes the canvas, through the document as the menus and
+    /// tools drive them.
+    private static func exerciseEditing(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 300, height: 200)
+        let document = try ImageDocument(session: session, image: image, name: "Editing")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+
+        controller.newLayer(nil)
+        settle()
+        check(document.layers.count == 2 && document.activeLayer == document.layers.first?.id,
+              "Layer ▸ New Layer adds a layer and selects it")
+        document.fill(at: .zero, mode: .selection, color: .red, threshold: 0, sampleMerged: false)
+        settle()
+        check(pixel(session, image, x: 150, y: 100)?.prefix(3) == [255, 0, 0], "the paint bucket fills the new layer")
+
+        guard let layer = document.activeLayer else { return }
+        var accepted = 0
+        for mode in DocumentWindowController.blendModes {
+            if (try? session.changeLayer(layer, image: image, EngineSession.LayerChange(mode: mode))) != nil { accepted += 1 }
+        }
+        check(accepted == DocumentWindowController.blendModes.count,
+              "the engine knows every blend mode the Layer Properties menu offers (\(accepted) of \(DocumentWindowController.blendModes.count))")
+        try session.changeLayer(layer, image: image, EngineSession.LayerChange(mode: "normal"))
+
+        document.moveActiveLayer(by: CGSize(width: 20, height: 10))
+        settle()
+        check(document.layers.first?.bounds.origin == CGPoint(x: 20, y: 10), "the Move tool's drag moves the layer")
+
+        if let background = document.layers.last?.id { document.selectLayer(background) }
+        document.gradient(from: CGPoint(x: 0, y: 5), to: CGPoint(x: 300, y: 5), shape: .linear,
+                          fromColor: .black, toColor: .white)
+        settle()
+        check((pixel(session, image, x: 10, y: 5)?[0] ?? 255) < 60, "the gradient tool draws on the selected background")
+
+        controller.mergeDown(nil)
+        settle()
+        controller.flattenImage(nil)
+        settle()
+        check(document.layers.count == 1, "Merge Down and Flatten Image leave one layer")
+
+        document.select(.rectangle(CGRect(x: 50, y: 50, width: 100, height: 60)), options: EngineSession.SelectOptions())
+        settle()
+        controller.cropToSelection(nil)
+        settle()
+        check(document.info.width == 100 && document.info.height == 60 && controller.canvas.frame.size == CGSize(width: 100, height: 60),
+              "Crop to Selection resizes the image and the canvas (\(document.info.width) × \(document.info.height))")
+        document.undo()
+        settle()
+        check(document.info.width == 300 && controller.canvas.frame.width == 300, "undo restores the size and the canvas")
         controller.window?.orderOut(nil)
     }
 

@@ -16,6 +16,8 @@ final class CanvasToolController {
     private var lassoPoints: [CGPoint] = []
     private var handOrigin: (window: NSPoint, scroll: NSPoint)?
     private var spaceHeld = false
+    /// The crop rectangle waiting for Return (image pixels).
+    private(set) var pendingCrop: CGRect?
 
     /// Shows a short message in the document's status strip.
     var onStatus: ((String) -> Void)?
@@ -71,6 +73,14 @@ final class CanvasToolController {
             }
         case .zoom:
             onZoom?(!event.modifierFlags.contains(.option), point)
+        case .move, .gradient, .crop:
+            dragStart = point
+            dragCurrent = point
+            if tool == .crop { pendingCrop = nil }
+        case .bucketFill:
+            let state = ToolState.shared
+            document.fill(at: point, mode: state.fillMode, color: state.foreground,
+                          threshold: state.fillThreshold, sampleMerged: state.fillSampleMerged)
         default:
             break
         }
@@ -85,7 +95,7 @@ final class CanvasToolController {
             return
         }
         switch tool {
-        case .rectangleSelect, .ellipseSelect:
+        case .rectangleSelect, .ellipseSelect, .move, .gradient, .crop:
             dragCurrent = point
             canvas.needsDisplay = true
         case .lasso:
@@ -125,7 +135,23 @@ final class CanvasToolController {
         }
         var options = ToolState.shared.selectOptions
         options.operation = dragOperation
+        let end = canvas.imagePoint(for: event)
         switch tool {
+        case .move:
+            guard let start = dragStart else { return }
+            document.moveActiveLayer(by: CGSize(width: (end.x - start.x).rounded(), height: (end.y - start.y).rounded()))
+        case .gradient:
+            guard let start = dragStart, hypot(end.x - start.x, end.y - start.y) >= 1 else { return }
+            let state = ToolState.shared
+            document.gradient(from: start, to: end, shape: state.gradientShape,
+                              fromColor: state.foreground, toColor: state.background)
+        case .crop:
+            guard let start = dragStart else { return }
+            let rect = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
+                              width: abs(end.x - start.x), height: abs(end.y - start.y)).integral
+            pendingCrop = rect.width >= 1 && rect.height >= 1 ? rect : nil
+            onStatus?(pendingCrop == nil ? "Drag the area to keep."
+                                         : "Return crops to \(Int(rect.width)) × \(Int(rect.height)) px; Escape cancels.")
         case .rectangleSelect, .ellipseSelect:
             guard let start = dragStart else { return }
             let end = canvas.imagePoint(for: event)
@@ -180,11 +206,53 @@ final class CanvasToolController {
 
     // MARK: Keys
 
+    private static let returnKeys: Set<Int> = [36, 76]      // Return, keypad Enter
+    private static let escapeKey = 53
+    /// Arrow key codes and the direction each nudges (the canvas is flipped).
+    private static let arrowDirections: [Int: CGSize] = [
+        123: CGSize(width: -1, height: 0), 124: CGSize(width: 1, height: 0),
+        125: CGSize(width: 0, height: 1), 126: CGSize(width: 0, height: -1),
+    ]
+
     /// Tool shortcuts and Space for the hand. Returns false for keys it
     /// does not handle.
     func keyDown(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection([.command, .control, .option])
         guard flags.isEmpty, let key = event.charactersIgnoringModifiers else { return false }
+
+        let keyCode = Int(event.keyCode)
+        if let rect = pendingCrop, Self.returnKeys.contains(keyCode) {
+            document.crop(to: rect)
+            pendingCrop = nil
+            canvas.needsDisplay = true
+            return true
+        }
+        if pendingCrop != nil, keyCode == Self.escapeKey {
+            pendingCrop = nil
+            canvas.needsDisplay = true
+            onStatus?("Crop cancelled.")
+            return true
+        }
+        if ToolState.shared.current == .move, let direction = Self.arrowDirections[keyCode] {
+            let step: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
+            document.moveActiveLayer(by: CGSize(width: direction.width * step, height: direction.height * step))
+            return true
+        }
+
+        switch key.lowercased() {
+        case "x":
+            let state = ToolState.shared
+            (state.foreground, state.background) = (state.background, state.foreground)
+            state.notifyChange()
+            return true
+        case "d":
+            ToolState.shared.foreground = .black
+            ToolState.shared.background = .white
+            ToolState.shared.notifyChange()
+            return true
+        default:
+            break
+        }
 
         if key == " " {
             if !event.isARepeat {
@@ -232,9 +300,37 @@ final class CanvasToolController {
             path = NSBezierPath()
             path.move(to: NSPoint(x: lassoPoints[0].x * scale, y: lassoPoints[0].y * scale))
             lassoPoints.dropFirst().forEach { path.line(to: NSPoint(x: $0.x * scale, y: $0.y * scale)) }
+        case .crop?:
+            guard let start = dragStart, let end = dragCurrent else { return }
+            path = NSBezierPath(rect: NSRect(x: min(start.x, end.x) * scale, y: min(start.y, end.y) * scale,
+                                             width: abs(end.x - start.x) * scale, height: abs(end.y - start.y) * scale))
+        case .gradient?:
+            guard let start = dragStart, let end = dragCurrent else { return }
+            path = NSBezierPath()
+            path.move(to: NSPoint(x: start.x * scale, y: start.y * scale))
+            path.line(to: NSPoint(x: end.x * scale, y: end.y * scale))
+        case .move?:
+            // The selected layer's outline, following the pointer.
+            guard let start = dragStart, let end = dragCurrent,
+                  let layer = document.layers.first(where: { $0.id == document.activeLayer }) else { return }
+            let bounds = layer.bounds.offsetBy(dx: end.x - start.x, dy: end.y - start.y)
+            path = NSBezierPath(rect: NSRect(x: bounds.minX * scale, y: bounds.minY * scale,
+                                             width: bounds.width * scale, height: bounds.height * scale))
         default:
+            drawPendingCrop(scale: scale)
             return
         }
         EngineCanvasView.strokeMarchingAnts(path, phase: 0)
+    }
+
+    /// The area a pending crop keeps, with everything outside it dimmed.
+    private func drawPendingCrop(scale: Double) {
+        guard let rect = pendingCrop else { return }
+        let keep = NSRect(x: rect.minX * scale, y: rect.minY * scale, width: rect.width * scale, height: rect.height * scale)
+        let shade = NSBezierPath(rect: canvas.bounds)
+        shade.append(NSBezierPath(rect: keep).reversed)
+        NSColor(calibratedWhite: 0, alpha: 0.45).setFill()
+        shade.fill()
+        EngineCanvasView.strokeMarchingAnts(NSBezierPath(rect: keep), phase: 0)
     }
 }

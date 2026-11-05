@@ -29,10 +29,33 @@ enum MainMenu {
             item("Undo", Selector(("undo:")), "z"),
             item("Redo", Selector(("redo:")), "Z"),
         ])
-        // Image, Layer and Select hold the engine's plug-in commands until
-        // their native commands arrive (PlugInMenus).
-        add(menu, "Image", [])
-        add(menu, "Layer", [])
+        // Plug-in commands are appended to Image, Layer and Select (PlugInMenus).
+        add(menu, "Image", [
+            item("Crop to Selection", #selector(DocumentWindowController.cropToSelection(_:))),
+            item("Flatten Image", #selector(DocumentWindowController.flattenImage(_:))),
+        ])
+        let newLayer = item("New Layer", #selector(DocumentWindowController.newLayer(_:)), "n")
+        newLayer.keyEquivalentModifierMask = [.command, .shift]
+        let toFront = item("Bring to Front", #selector(DocumentWindowController.bringLayerToFront(_:)), "]")
+        toFront.keyEquivalentModifierMask = [.command, .shift]
+        let toBack = item("Send to Back", #selector(DocumentWindowController.sendLayerToBack(_:)), "[")
+        toBack.keyEquivalentModifierMask = [.command, .shift]
+        let arrange = NSMenuItem(title: "Arrange", action: nil, keyEquivalent: "")
+        arrange.submenu = NSMenu(title: "Arrange")
+        [toFront,
+         item("Bring Forward", #selector(DocumentWindowController.bringLayerForward(_:)), "]"),
+         item("Send Backward", #selector(DocumentWindowController.sendLayerBackward(_:)), "["),
+         toBack].forEach { arrange.submenu?.addItem($0) }
+        add(menu, "Layer", [
+            newLayer,
+            item("Duplicate Layer", #selector(DocumentWindowController.duplicateLayer(_:)), "j"),
+            item("Delete Layer", #selector(DocumentWindowController.deleteLayer(_:))),
+            .separator(),
+            item("Layer Properties…", #selector(DocumentWindowController.layerProperties(_:))),
+            arrange,
+            .separator(),
+            item("Merge Down", #selector(DocumentWindowController.mergeDown(_:)), "e"),
+        ])
         let inverse = item("Inverse", #selector(DocumentWindowController.selectInverse(_:)), "i")
         inverse.keyEquivalentModifierMask = [.command, .shift]
         add(menu, "Select", [

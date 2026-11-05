@@ -1,3 +1,4 @@
+import AppKit
 import CGlimsEngine
 import CoreGraphics
 import Foundation
@@ -29,6 +30,29 @@ final class EngineSession: @unchecked Sendable {
         /// Progress of the running plug-in procedure; `nil` once it ended.
         case progress(Progress?)
         case selectionChanged(image: Int32)
+        case sizeChanged(image: Int32)
+    }
+
+    // MARK: Editing types
+
+    enum FillMode: UInt32 {
+        case similarColors = 1, selection
+    }
+
+    enum GradientShape: UInt32 {
+        case linear = 0, bilinear, radial
+    }
+
+    enum LayerCommand: UInt32 {
+        case new = 1, duplicate, delete, raise, lower, toTop, toBottom, mergeDown, flatten
+    }
+
+    /// Layer properties to change; nil fields stay as they are.
+    struct LayerChange: Equatable {
+        var name: String?
+        var isVisible: Bool?
+        var opacity: Double?
+        var mode: String?
     }
 
     struct Progress: Equatable {
@@ -407,6 +431,97 @@ final class EngineSession: @unchecked Sendable {
                            sample_merged: options.sampleMerged)
     }
 
+    // MARK: Editing
+
+    func fill(image: Int32, at point: CGPoint, mode: FillMode, color: NSColor, opacity: Double = 1,
+              threshold: Double = 15.0 / 255.0, sampleMerged: Bool = false) throws {
+        var settings = GlimsFillSettings(struct_size: UInt32(MemoryLayout<GlimsFillSettings>.size),
+                                         mode: mode.rawValue, color: Self.color(color), opacity: opacity,
+                                         threshold: threshold, sample_merged: sampleMerged, antialias: true)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.fill(engine, image, GlimsPoint(x: point.x, y: point.y), &settings, &error), error)
+    }
+
+    func gradient(image: Int32, from: CGPoint, to: CGPoint, shape: GradientShape,
+                  fromColor: NSColor, toColor: NSColor, opacity: Double = 1) throws {
+        var settings = GlimsGradientSettings(struct_size: UInt32(MemoryLayout<GlimsGradientSettings>.size),
+                                             shape: shape.rawValue, from: Self.color(fromColor),
+                                             to: Self.color(toColor), opacity: opacity)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.gradient(engine, image, GlimsPoint(x: from.x, y: from.y), GlimsPoint(x: to.x, y: to.y),
+                               &settings, &error), error)
+    }
+
+    func selectLayer(_ layer: Int32, image: Int32) throws {
+        try check(api.layer_select(engine, image, layer), nil)
+    }
+
+    /// Returns the layer the command created, if any.
+    @discardableResult
+    func layerCommand(_ command: LayerCommand, image: Int32, layer: Int32 = 0) throws -> Int32? {
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.layer_command(engine, image, layer, command.rawValue, &result, &error), error)
+        return result == 0 ? nil : result
+    }
+
+    func changeLayer(_ layer: Int32, image: Int32, _ change: LayerChange) throws {
+        var settings = GlimsLayerChange()
+        settings.struct_size = UInt32(MemoryLayout<GlimsLayerChange>.size)
+        var properties: UInt32 = 0
+        if let name = change.name {
+            properties |= GLIMS_LAYER_NAME.rawValue
+            Self.copy(name, into: &settings.name)
+        }
+        if let visible = change.isVisible {
+            properties |= GLIMS_LAYER_VISIBLE.rawValue
+            settings.visible = visible
+        }
+        if let opacity = change.opacity {
+            properties |= GLIMS_LAYER_OPACITY.rawValue
+            settings.opacity = opacity
+        }
+        if let mode = change.mode {
+            properties |= GLIMS_LAYER_MODE.rawValue
+            Self.copy(mode, into: &settings.mode)
+        }
+        settings.properties = properties
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.layer_change(engine, image, layer, &settings, &error), error)
+    }
+
+    func moveLayer(_ layer: Int32, image: Int32, by offset: CGSize) throws {
+        try check(api.layer_move(engine, image, layer, offset.width, offset.height), nil)
+    }
+
+    func crop(image: Int32, to rect: CGRect) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        let area = GlimsRect(x: Int32(rect.minX.rounded()), y: Int32(rect.minY.rounded()),
+                             width: Int32(rect.width.rounded()), height: Int32(rect.height.rounded()))
+        try check(api.image_crop(engine, image, area, &error), error)
+    }
+
+    private static func color(_ color: NSColor) -> GlimsColor {
+        let rgb = color.usingColorSpace(.sRGB) ?? .black
+        return GlimsColor(red: Double(rgb.redComponent), green: Double(rgb.greenComponent),
+                          blue: Double(rgb.blueComponent), alpha: Double(rgb.alphaComponent))
+    }
+
+    /// Copies a string into a fixed-size C char array, truncated on a UTF-8
+    /// character boundary and NUL-terminated.
+    private static func copy<T>(_ string: String, into tuple: inout T) {
+        withUnsafeMutableBytes(of: &tuple) { bytes in
+            var utf8 = Array(string.utf8)
+            if utf8.count >= bytes.count {
+                utf8 = Array(utf8.prefix(bytes.count - 1))
+                while let last = utf8.last, last & 0xC0 == 0x80 { utf8.removeLast() }
+                if let last = utf8.last, last >= 0xC0 { utf8.removeLast() }
+            }
+            bytes.copyBytes(from: utf8)
+            bytes[utf8.count] = 0
+        }
+    }
+
     // MARK: Plug-in procedures
 
     /// Plug-in commands with menu entries. With an image, `isSensitive`
@@ -536,6 +651,8 @@ private let engineEventCallback: GlimsEventCallback = { context, eventPointer in
         relay.deliver(.message(event.text.map { String(cString: $0) } ?? ""))
     case UInt32(GLIMS_EVENT_SELECTION_CHANGED.rawValue):
         relay.deliver(.selectionChanged(image: event.image))
+    case UInt32(GLIMS_EVENT_SIZE_CHANGED.rawValue):
+        relay.deliver(.sizeChanged(image: event.image))
     case UInt32(GLIMS_EVENT_PROGRESS.rawValue):
         let text = event.text.map { String(cString: $0) } ?? ""
         relay.deliver(.progress(event.active

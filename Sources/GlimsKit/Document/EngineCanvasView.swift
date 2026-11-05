@@ -71,6 +71,16 @@ final class EngineCanvasView: NSView {
         setNeedsRender()
     }
 
+    /// The image's size changed (crop, undo of a crop): every tile is stale.
+    func imageSizeDidChange() {
+        generation += 1
+        tiles.removeAll()
+        staleTiles.removeAll()
+        updateFrameSize()
+        needsDisplay = true
+        setNeedsRender()
+    }
+
     private func updateFrameSize() {
         setFrameSize(NSSize(width: (Double(document.info.width) * scale).rounded(.up),
                             height: (Double(document.info.height) * scale).rounded(.up)))
