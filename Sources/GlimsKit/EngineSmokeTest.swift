@@ -79,8 +79,8 @@ enum EngineSmokeTest {
         controller.window?.orderFront(nil)
         controller.window?.contentView?.layoutSubtreeIfNeeded()
 
-        let canvasImage = try controller.canvas.renderNow()
-        check(canvasImage != nil && (canvasImage?.width ?? 0) > 0, "canvas renders its visible area (\(canvasImage?.width ?? 0)×\(canvasImage?.height ?? 0) device px)")
+        let tilesRendered = try controller.canvas.renderVisibleTilesNow()
+        check(tilesRendered > 0, "canvas renders its visible tiles (\(tilesRendered))")
         check(controller.window?.title.hasPrefix("Smoke @ 100% (RGB, ") == true, "document title: \(controller.window?.title ?? "")")
 
         // A stroke through the same path mouse and tablet events take.
@@ -128,8 +128,8 @@ enum EngineSmokeTest {
             controller.zoom(to: percent)
             controller.window?.contentView?.layoutSubtreeIfNeeded()
             let begin = DispatchTime.now()
-            _ = try controller.canvas.renderNow()
-            print("     canvas render at \(percent)%: \(String(format: "%.1f", milliseconds(since: begin))) ms")
+            let count = try controller.canvas.renderVisibleTilesNow()
+            print("     canvas render at \(percent)%: \(count) tiles in \(String(format: "%.1f", milliseconds(since: begin))) ms")
         }
         controller.window?.orderOut(nil)
     }
