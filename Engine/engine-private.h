@@ -60,6 +60,7 @@ typedef struct
   gulong     projection_update_handler;
   gulong     undo_event_handler;
   gulong     layers_changed_handler;
+  gulong     mask_changed_handler;
 } GlimsOpenImage;
 
 typedef GlimsStatus (*GlimsEngineFunc) (GlimsEngine *engine, gpointer data);
@@ -113,6 +114,18 @@ void        glims_filters_free     (gpointer filter);
 
 /* progress.c */
 GlimsProgress * glims_progress_new (GlimsEngine *engine);
+
+/* select.c */
+GlimsStatus glims_select_shape     (GlimsEngine *e, GlimsImageID image, uint32_t shape,
+                                    const GlimsPoint *points, size_t count,
+                                    const GlimsSelectOptions *options);
+GlimsStatus glims_select_color     (GlimsEngine *e, GlimsImageID image, GlimsPoint point,
+                                    const GlimsSelectOptions *options, char **error);
+GlimsStatus glims_select_command   (GlimsEngine *e, GlimsImageID image, uint32_t command,
+                                    double radius, char **error);
+GlimsStatus glims_selection_bounds (GlimsEngine *e, GlimsImageID image, bool *empty, GlimsRect *bounds);
+GlimsStatus glims_selection_outline(GlimsEngine *e, GlimsImageID image, GlimsSegment *segments,
+                                    int32_t capacity, int32_t *count);
 
 /* procedure.c */
 GlimsStatus glims_procedures       (GlimsEngine *e, GlimsImageID image, GlimsProcedureInfo *rows,

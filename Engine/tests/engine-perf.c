@@ -157,7 +157,10 @@ main (int argc, char **argv)
   /* Painting at 100 %: one pointer sample, then render the area it touched. */
   if (api->image_layers (engine, image, &top, 1, &count) == GLIMS_STATUS_OK && count > 0)
     {
-      GlimsBrushSettings brush = { sizeof brush, 40.0, 1.0, 0.1, 0.2, 0.9, true };
+      GlimsBrushSettings brush = { .struct_size = sizeof brush, .size = 40.0, .opacity = 1.0,
+                                   .red = 0.1, .green = 0.2, .blue = 0.9, .pressure_size = true,
+                                   .tool = GLIMS_PAINT_PAINTBRUSH, .hardness = -1.0, .rate = -1.0,
+                                   .flow = -1.0, .exposure = -1.0 };
       GlimsStrokePoint   point = { 2000, 2000, 0.8, 0, 0, 0 };
       GlimsStrokeID      stroke = 0;
       uint8_t            dab[96 * 96 * 4];

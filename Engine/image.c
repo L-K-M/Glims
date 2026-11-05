@@ -95,6 +95,13 @@ selected_layers_changed (GimpImage      *image,
 }
 
 /* Takes over the caller's reference to `image`. */
+static void
+mask_changed (GimpImage      *image,
+              GlimsOpenImage *open)
+{
+  glims_emit (open->engine, GLIMS_EVENT_SELECTION_CHANGED, image, NULL, NULL);
+}
+
 GlimsStatus
 glims_adopt_image (GlimsEngine  *engine,
                    GimpImage    *image,
@@ -111,6 +118,8 @@ glims_adopt_image (GlimsEngine  *engine,
     g_signal_connect (image, "undo-event", G_CALLBACK (undo_event), open);
   open->layers_changed_handler =
     g_signal_connect (image, "selected-layers-changed", G_CALLBACK (selected_layers_changed), open);
+  open->mask_changed_handler =
+    g_signal_connect (image, "mask-changed", G_CALLBACK (mask_changed), open);
 
   g_hash_table_insert (engine->images, GINT_TO_POINTER (gimp_image_get_id (image)), open);
 

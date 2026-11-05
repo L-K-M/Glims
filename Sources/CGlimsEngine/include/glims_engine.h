@@ -60,7 +60,8 @@ typedef enum GlimsEventKind {
   GLIMS_EVENT_LAYERS_CHANGED     = 2, /* image */
   GLIMS_EVENT_UNDO_CHANGED       = 3, /* image */
   GLIMS_EVENT_MESSAGE            = 4, /* text */
-  GLIMS_EVENT_PROGRESS           = 5  /* text (may be NULL), value, active */
+  GLIMS_EVENT_PROGRESS           = 5, /* text (may be NULL), value, active */
+  GLIMS_EVENT_SELECTION_CHANGED  = 6  /* image */
 } GlimsEventKind;
 
 typedef struct GlimsEvent {
@@ -123,12 +124,47 @@ typedef struct GlimsUndoInfo {
   char    next_redo[256];
 } GlimsUndoInfo;
 
+/* The engine's paint tools; each paints with GIMP's own paint core. */
+typedef enum GlimsPaintTool {
+  GLIMS_PAINT_PAINTBRUSH = 0,
+  GLIMS_PAINT_PENCIL     = 1,  /* hard-edged, no antialiasing */
+  GLIMS_PAINT_AIRBRUSH   = 2,  /* keeps painting while the pointer rests */
+  GLIMS_PAINT_ERASER     = 3,
+  GLIMS_PAINT_SMUDGE     = 4,
+  GLIMS_PAINT_BLUR       = 5,
+  GLIMS_PAINT_SHARPEN    = 6,
+  GLIMS_PAINT_DODGE      = 7,
+  GLIMS_PAINT_BURN       = 8,
+  GLIMS_PAINT_CLONE      = 9,  /* copies from source_drawable */
+  GLIMS_PAINT_HEAL       = 10  /* like clone, blended into the target */
+} GlimsPaintTool;
+
+/* The tonal range dodge and burn act on. */
+typedef enum GlimsToneRange {
+  GLIMS_TONES_MIDTONES   = 0,
+  GLIMS_TONES_SHADOWS    = 1,
+  GLIMS_TONES_HIGHLIGHTS = 2
+} GlimsToneRange;
+
 typedef struct GlimsBrushSettings {
   uint32_t struct_size;     /* sizeof (GlimsBrushSettings) */
   double   size;            /* diameter in image pixels */
   double   opacity;         /* 0 ... 1 */
   double   red, green, blue;/* sRGB, 0 ... 1 */
   bool     pressure_size;   /* pen pressure scales the size */
+
+  /* Paint tools. A caller whose struct_size ends before these paints with
+   * the paintbrush. A negative number means the engine's default. */
+  uint32_t    tool;            /* GlimsPaintTool */
+  double      hardness;        /* 0 ... 1, the brush edge */
+  double      rate;            /* 0 ... 100: airbrush stamps, smudge pickup, blur and sharpen strength */
+  double      flow;            /* 0 ... 100: airbrush and smudge paint flow */
+  double      exposure;        /* 0 ... 100: dodge and burn strength */
+  uint32_t    tones;           /* GlimsToneRange, dodge and burn */
+  bool        anti_erase;      /* eraser: restore erased opacity instead */
+  GlimsItemID source_drawable; /* clone and heal: what to copy from (any open image) */
+  double      source_x;        /* clone and heal: the source point, in the source's */
+  double      source_y;        /* image pixels; the stroke's first point copies it */
 } GlimsBrushSettings;
 
 typedef struct GlimsStrokePoint {
@@ -137,6 +173,54 @@ typedef struct GlimsStrokePoint {
   double   xtilt, ytilt;    /* -1 ... 1 */
   uint32_t time_ms;
 } GlimsStrokePoint;
+
+/* Selections. */
+typedef enum GlimsSelectOperation {
+  GLIMS_SELECT_REPLACE   = 0,
+  GLIMS_SELECT_ADD       = 1,
+  GLIMS_SELECT_SUBTRACT  = 2,
+  GLIMS_SELECT_INTERSECT = 3
+} GlimsSelectOperation;
+
+typedef enum GlimsSelectShape {
+  GLIMS_SHAPE_RECTANGLE = 1,  /* points: two opposite corners */
+  GLIMS_SHAPE_ELLIPSE   = 2,  /* points: two opposite corners of its bounds */
+  GLIMS_SHAPE_POLYGON   = 3   /* points: three or more vertices */
+} GlimsSelectShape;
+
+typedef enum GlimsSelectCommand {
+  GLIMS_SELECT_ALL        = 1,
+  GLIMS_SELECT_NONE       = 2,
+  GLIMS_SELECT_INVERT     = 3,
+  GLIMS_SELECT_FEATHER    = 4,  /* radius */
+  GLIMS_SELECT_GROW       = 5,  /* radius */
+  GLIMS_SELECT_SHRINK     = 6,  /* radius */
+  GLIMS_SELECT_BORDER     = 7,  /* radius */
+  GLIMS_SELECT_SHARPEN    = 8,
+  GLIMS_SELECT_FROM_ALPHA = 9   /* the active layer's opacity */
+} GlimsSelectCommand;
+
+typedef struct GlimsSelectOptions {
+  uint32_t struct_size;    /* sizeof (GlimsSelectOptions) */
+  uint32_t operation;      /* GlimsSelectOperation */
+  bool     antialias;
+  double   feather;        /* radius in image pixels; 0 for a hard edge */
+  double   corner_radius;  /* rectangles: rounded corners; 0 for square */
+  double   threshold;      /* color selections: 0 ... 1 */
+  bool     contiguous;     /* color: the area around the point, or every
+                            * pixel of that color */
+  bool     sample_merged;  /* color: compare the composite image, not the
+                            * active layer */
+} GlimsSelectOptions;
+
+typedef struct GlimsPoint {
+  double x, y;             /* image pixels */
+} GlimsPoint;
+
+/* One edge of the selection outline, on pixel corners. */
+typedef struct GlimsSegment {
+  int32_t x1, y1, x2, y2;
+} GlimsSegment;
 
 typedef enum GlimsRunMode {
   GLIMS_RUN_INTERACTIVE      = 1, /* the plug-in may show its dialog */
@@ -193,7 +277,8 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*image_undo)       (GlimsEngine *engine, GlimsImageID image);
   GlimsStatus  (*image_redo)       (GlimsEngine *engine, GlimsImageID image);
 
-  /* A paint stroke with the engine's paintbrush. One undo step per stroke. */
+  /* A paint stroke with one of the engine's paint tools (the brush
+   * settings' tool). One undo step per stroke. */
   GlimsStatus  (*stroke_begin)     (GlimsEngine *engine, GlimsImageID image,
                                     GlimsItemID layer,
                                     const GlimsBrushSettings *brush,
@@ -240,6 +325,26 @@ typedef struct GlimsEngineAPI {
   /* Asks the running procedure to stop, as a progress Cancel button does.
    * NOT_FOUND when none is running. */
   GlimsStatus  (*procedure_cancel) (GlimsEngine *engine);
+
+  /* Selections. Each change is one undo step and sends SELECTION_CHANGED;
+   * painting, fills and filters then stay inside the selection. NULL
+   * options mean replace, antialiased, no feather. */
+  GlimsStatus  (*select_shape)     (GlimsEngine *engine, GlimsImageID image,
+                                    uint32_t shape, const GlimsPoint *points,
+                                    size_t count, const GlimsSelectOptions *options);
+  /* Selects by the color at `point`, around it (contiguous) or everywhere. */
+  GlimsStatus  (*select_color)     (GlimsEngine *engine, GlimsImageID image,
+                                    GlimsPoint point, const GlimsSelectOptions *options,
+                                    char **error);
+  GlimsStatus  (*select_command)   (GlimsEngine *engine, GlimsImageID image,
+                                    uint32_t command, double radius, char **error);
+  GlimsStatus  (*selection_bounds) (GlimsEngine *engine, GlimsImageID image,
+                                    bool *empty, GlimsRect *bounds);
+  /* The outline as edges on pixel corners, in image pixels, for marching
+   * ants. Fills up to `capacity`; `count` receives the total. */
+  GlimsStatus  (*selection_outline)(GlimsEngine *engine, GlimsImageID image,
+                                    GlimsSegment *segments, int32_t capacity,
+                                    int32_t *count);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

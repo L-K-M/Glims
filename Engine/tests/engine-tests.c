@@ -11,6 +11,8 @@
  * check fails.
  */
 #include <dlfcn.h>
+#include <sys/param.h>
+#include <stddef.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -30,6 +32,7 @@ static atomic_int            undo_events;
 static atomic_int            progress_starts;
 static atomic_int            progress_ends;
 static atomic_bool           progress_active;
+static atomic_int            selection_events;
 
 #define CHECK(condition, ...)                       \
   do {                                              \
@@ -62,6 +65,8 @@ on_event (void *context, const GlimsEvent *event)
     atomic_fetch_add (&undo_events, 1);
   else if (event->kind == GLIMS_EVENT_MESSAGE && event->text)
     printf ("      engine message: %s\n", event->text);
+  else if (event->kind == GLIMS_EVENT_SELECTION_CHANGED)
+    atomic_fetch_add (&selection_events, 1);
   else if (event->kind == GLIMS_EVENT_PROGRESS)
     {
       if (event->active && ! atomic_exchange (&progress_active, true))
@@ -117,10 +122,45 @@ undo_depth (GlimsImageID image)
   return api->image_undo_info (engine, image, &info) == GLIMS_STATUS_OK ? info.undo_count : -1;
 }
 
+/* Black, fully opaque, the engine's defaults for everything else. */
+static GlimsBrushSettings
+brush_for (GlimsPaintTool tool, double size)
+{
+  GlimsBrushSettings brush = { .struct_size = sizeof (GlimsBrushSettings), .size = size, .opacity = 1.0,
+                               .tool = tool, .hardness = -1.0, .rate = -1.0, .flow = -1.0,
+                               .exposure = -1.0 };
+  return brush;
+}
+
+/* A stroke from (x0, y0) to (x1, y1) in 16 steps; returns the status of
+ * the first failing call. */
+static GlimsStatus
+stroke_line (GlimsImageID image, GlimsItemID layer, const GlimsBrushSettings *brush,
+             double x0, double y0, double x1, double y1, char **error)
+{
+  GlimsStrokePoint first = { x0, y0, 1.0, 0.0, 0.0, 0 };
+  GlimsStrokePoint points[16];
+  GlimsStrokeID    stroke = 0;
+  GlimsStatus      status;
+  int              i;
+
+  for (i = 0; i < 16; i++)
+    points[i] = (GlimsStrokePoint) { x0 + (x1 - x0) * (i + 1) / 16.0, y0 + (y1 - y0) * (i + 1) / 16.0,
+                                     1.0, 0.0, 0.0, (uint32_t) (i + 1) * 8 };
+
+  status = api->stroke_begin (engine, image, layer, brush, &first, &stroke, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  status = api->stroke_continue (engine, stroke, points, 16);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  return api->stroke_end (engine, stroke);
+}
+
 static void
 paint_line (GlimsImageID image, GlimsItemID layer, double x0, double x1, double y)
 {
-  GlimsBrushSettings brush = { sizeof (GlimsBrushSettings), 9.0, 1.0, 0.0, 0.0, 0.0, false };
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
   GlimsStrokePoint   first = { x0, y, 1.0, 0.0, 0.0, 0 };
   GlimsStrokePoint   points[16];
   GlimsStrokeID      stroke = 0;
@@ -135,6 +175,252 @@ paint_line (GlimsImageID image, GlimsItemID layer, double x0, double x1, double 
   api->free_string (error);
   CHECK (api->stroke_continue (engine, stroke, points, 16) == GLIMS_STATUS_OK, "stroke takes 16 points");
   CHECK (api->stroke_end (engine, stroke) == GLIMS_STATUS_OK, "stroke ends");
+}
+
+/* Red channel of one rendered pixel (the images here are gray). */
+static int
+red_at (GlimsImageID image, int32_t x, int32_t y)
+{
+  uint8_t pixel[4];
+
+  if (api->image_render (engine, image, 1.0, (GlimsRect) { x, y, 1, 1 }, pixel, 4) != GLIMS_STATUS_OK)
+    return -1;
+  return pixel[0];
+}
+
+static int
+rect_equals (GlimsRect a, int32_t x, int32_t y, int32_t w, int32_t h)
+{
+  return a.x == x && a.y == y && a.width == w && a.height == h;
+}
+
+static void
+test_selections (void)
+{
+  GlimsImageID       image = 0;
+  GlimsItemID        layer;
+  GlimsRect          bounds;
+  bool               empty = false;
+  GlimsSegment       segments[64];
+  int32_t            n = 0, before, i, inside = 1;
+  int                events = atomic_load (&selection_events);
+  GlimsSelectOptions add = { .struct_size = sizeof add, .operation = GLIMS_SELECT_ADD, .antialias = false };
+  GlimsSelectOptions subtract = { .struct_size = sizeof subtract, .operation = GLIMS_SELECT_SUBTRACT };
+  GlimsSelectOptions color = { .struct_size = sizeof color, .operation = GLIMS_SELECT_REPLACE,
+                               .threshold = 0.2, .contiguous = true };
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 30.0);
+  char              *error = NULL;
+
+  api->image_new (engine, 100, 80, &image, NULL);
+  layer  = first_layer (image);
+  before = undo_depth (image);
+
+  CHECK (api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && empty,
+         "a new image has no selection");
+
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 50, 40 }, { 10, 10 } }, 2, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && ! empty &&
+         rect_equals (bounds, 10, 10, 40, 30),
+         "a rectangle from either corner selects 10,10 40x30 (%d,%d %dx%d)",
+         bounds.x, bounds.y, bounds.width, bounds.height);
+  CHECK (undo_depth (image) == before + 1, "the selection is one undo step");
+  CHECK (atomic_load (&selection_events) > events, "selection-changed events arrived");
+
+  CHECK (api->selection_outline (engine, image, segments, 64, &n) == GLIMS_STATUS_OK && n >= 4 && n <= 64,
+         "the outline has %d edges", n);
+  for (i = 0; i < n && i < 64; i++)
+    if (MIN (segments[i].x1, segments[i].x2) < 10 || MAX (segments[i].x1, segments[i].x2) > 50 ||
+        MIN (segments[i].y1, segments[i].y2) < 10 || MAX (segments[i].y1, segments[i].y2) > 40)
+      inside = 0;
+  CHECK (inside, "every outline edge lies on the rectangle");
+
+  CHECK (stroke_line (image, layer, &brush, 0, 25, 100, 25, NULL) == GLIMS_STATUS_OK &&
+         red_at (image, 30, 25) < 64 && red_at (image, 70, 25) == 255,
+         "painting stays inside the selection (%d inside, %d outside)",
+         red_at (image, 30, 25), red_at (image, 70, 25));
+
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_ELLIPSE,
+                            (GlimsPoint[]) { { 60, 10 }, { 90, 40 } }, 2, &add) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         bounds.x == 10 && bounds.x + bounds.width == 90,
+         "adding an ellipse extends the selection to x 10...90 (%d...%d)", bounds.x, bounds.x + bounds.width);
+
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 0, 0 }, { 55, 80 } }, 2, &subtract) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && bounds.x >= 60,
+         "subtracting a rectangle removes the left part (now from x %d)", bounds.x);
+
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_POLYGON,
+                            (GlimsPoint[]) { { 20, 70 }, { 40, 50 }, { 60, 70 } }, 3, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         bounds.x >= 19 && bounds.x + bounds.width <= 61 && bounds.y >= 49 && bounds.y + bounds.height <= 71,
+         "a polygon selects within its vertices (%d,%d %dx%d)", bounds.x, bounds.y, bounds.width, bounds.height);
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_POLYGON,
+                            (GlimsPoint[]) { { 20, 70 }, { 40, 50 } }, 2, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a polygon needs three points");
+
+  CHECK (api->select_color (engine, image, (GlimsPoint) { 30, 25 }, &color, &error) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         bounds.x >= 10 && bounds.x + bounds.width <= 50,
+         "selecting the painted color around a point stays within the paint (%d,%d %dx%d)%s%s",
+         bounds.x, bounds.y, bounds.width, bounds.height, error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  color.contiguous = false;
+  CHECK (api->select_color (engine, image, (GlimsPoint) { 80, 70 }, &color, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         rect_equals (bounds, 0, 0, 100, 80),
+         "selecting white everywhere reaches the image edges");
+
+  CHECK (api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && empty,
+         "Select None empties the selection");
+  CHECK (api->select_command (engine, image, GLIMS_SELECT_GROW, 4, &error) == GLIMS_STATUS_FAILED && error,
+         "growing nothing is refused (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->select_command (engine, image, GLIMS_SELECT_INVERT, 0, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         rect_equals (bounds, 0, 0, 100, 80),
+         "inverting nothing selects everything");
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 30, 30 }, { 50, 50 } }, 2, NULL) == GLIMS_STATUS_OK &&
+         api->select_command (engine, image, GLIMS_SELECT_GROW, 5, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         rect_equals (bounds, 25, 25, 30, 30),
+         "growing by 5 widens 20x20 to 30x30 (%dx%d)", bounds.width, bounds.height);
+  /* The same after Select All, which leaves the engine believing the mask
+   * is full (see forget_mask_state in Engine/select.c). */
+  CHECK (api->select_command (engine, image, GLIMS_SELECT_ALL, 0, NULL) == GLIMS_STATUS_OK &&
+         api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 30, 30 }, { 50, 50 } }, 2, NULL) == GLIMS_STATUS_OK &&
+         api->select_command (engine, image, GLIMS_SELECT_INVERT, 0, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         rect_equals (bounds, 0, 0, 100, 80),
+         "after Select All, inverting a new rectangle selects around it (%d,%d %dx%d, empty %d)",
+         bounds.x, bounds.y, bounds.width, bounds.height, empty);
+  CHECK (api->select_command (engine, image, GLIMS_SELECT_INVERT, 0, NULL) == GLIMS_STATUS_OK &&
+         api->select_command (engine, image, GLIMS_SELECT_SHRINK, 5, NULL) == GLIMS_STATUS_OK &&
+         api->select_command (engine, image, GLIMS_SELECT_FEATHER, 3, NULL) == GLIMS_STATUS_OK &&
+         api->select_command (engine, image, GLIMS_SELECT_BORDER, 2, NULL) == GLIMS_STATUS_OK &&
+         api->select_command (engine, image, GLIMS_SELECT_SHARPEN, 0, NULL) == GLIMS_STATUS_OK,
+         "shrink, feather, border and sharpen run");
+  CHECK (api->select_command (engine, image, GLIMS_SELECT_FROM_ALPHA, 0, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         rect_equals (bounds, 0, 0, 100, 80),
+         "Alpha to Selection of an opaque layer selects all of it");
+  CHECK (api->select_command (engine, image, 99, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown command is rejected");
+
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && ! rect_equals (bounds, 0, 0, 100, 80),
+         "undo restores the previous selection");
+
+  api->image_close (engine, image);
+}
+
+static void
+test_paint_tools (void)
+{
+  GlimsImageID       image = 0;
+  GlimsItemID        layer;
+  GlimsBrushSettings brush;
+  int32_t            before;
+  char              *error = NULL;
+  int                y, hard = 1, quick, rested;
+
+  api->image_new (engine, 128, 64, &image, NULL);
+  layer  = first_layer (image);
+  before = undo_depth (image);
+
+  /* A caller built before the paint tools existed paints with the brush. */
+  brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+  brush.struct_size = (uint32_t) offsetof (GlimsBrushSettings, tool);
+  brush.tool = GLIMS_PAINT_PENCIL; /* beyond its struct_size: ignored */
+  CHECK (stroke_line (image, layer, &brush, 8, 8, 120, 8, NULL) == GLIMS_STATUS_OK && red_at (image, 64, 8) < 64,
+         "settings from an older caller paint with the paintbrush");
+
+  brush = brush_for (GLIMS_PAINT_PENCIL, 5.0);
+  CHECK (stroke_line (image, layer, &brush, 8, 20, 120, 20, NULL) == GLIMS_STATUS_OK && red_at (image, 64, 20) == 0,
+         "the pencil paints");
+  for (y = 14; y <= 26; y++)
+    if (red_at (image, 64, y) != 0 && red_at (image, 64, y) != 255)
+      hard = 0;
+  CHECK (hard, "the pencil's edge is hard (only black and white across the line)");
+
+  brush = brush_for (GLIMS_PAINT_ERASER, 14.0);
+  CHECK (stroke_line (image, layer, &brush, 8, 8, 120, 8, NULL) == GLIMS_STATUS_OK && red_at (image, 64, 8) == 255,
+         "the eraser restores the background on a layer without alpha (%d)", red_at (image, 64, 8));
+
+  brush = brush_for (GLIMS_PAINT_BLUR, 10.0);
+  brush.rate = 100.0;
+  CHECK (stroke_line (image, layer, &brush, 64, 12, 64, 28, NULL) == GLIMS_STATUS_OK &&
+         red_at (image, 64, 23) > 0 && red_at (image, 64, 23) < 255,
+         "blur softens the pencil's edge (%d next to the line)", red_at (image, 64, 23));
+
+  brush = brush_for (GLIMS_PAINT_DODGE, 10.0);
+  brush.tones    = GLIMS_TONES_SHADOWS;
+  brush.exposure = 100.0;
+  CHECK (stroke_line (image, layer, &brush, 32, 14, 32, 26, NULL) == GLIMS_STATUS_OK && red_at (image, 32, 20) > 0,
+         "dodge lightens the shadows (%d on the line)", red_at (image, 32, 20));
+
+  /* Narrower than the line, so the paint it picks up is the line's. */
+  brush = brush_for (GLIMS_PAINT_SMUDGE, 4.0);
+  brush.rate = 100.0;
+  CHECK (stroke_line (image, layer, &brush, 96, 20, 96, 40, NULL) == GLIMS_STATUS_OK && red_at (image, 96, 30) < 255,
+         "smudge drags the line's paint (%d below it)", red_at (image, 96, 30));
+
+  /* The airbrush keeps painting while the pointer rests. */
+  brush = brush_for (GLIMS_PAINT_AIRBRUSH, 10.0);
+  brush.rate = 80.0;
+  brush.flow = 10.0;
+  {
+    GlimsStrokePoint point = { 16, 50, 1.0, 0.0, 0.0, 0 };
+    GlimsStrokeID    stroke = 0;
+
+    api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL);
+    api->stroke_end (engine, stroke);
+    quick = red_at (image, 16, 50);
+
+    point.x = 40;
+    api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL);
+    usleep (500 * 1000);
+    api->stroke_end (engine, stroke);
+    rested = red_at (image, 40, 50);
+  }
+  CHECK (rested < quick, "the airbrush keeps painting while the pointer rests (%d after 0.5 s, %d at once)",
+         rested, quick);
+
+  brush = brush_for (GLIMS_PAINT_CLONE, 4.0);
+  brush.source_drawable = 0;
+  CHECK (stroke_line (image, layer, &brush, 16, 40, 20, 40, &error) == GLIMS_STATUS_FAILED && error,
+         "clone without a source is refused (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  brush.source_drawable = layer;
+  brush.source_x = 80; /* on the pencil line, away from the blur and dodge */
+  brush.source_y = 20;
+  CHECK (stroke_line (image, layer, &brush, 110, 40, 112, 40, NULL) == GLIMS_STATUS_OK && red_at (image, 110, 40) < 64,
+         "clone copies from the source point (%d)", red_at (image, 110, 40));
+
+  brush = brush_for (GLIMS_PAINT_HEAL, 6.0);
+  brush.source_drawable = layer;
+  brush.source_x = 64;
+  brush.source_y = 40;
+  {
+    int32_t heal_before = undo_depth (image);
+
+    CHECK (stroke_line (image, layer, &brush, 64, 20, 70, 20, NULL) == GLIMS_STATUS_OK &&
+           undo_depth (image) == heal_before + 1,
+           "heal runs as one undo step");
+  }
+
+  CHECK (undo_depth (image) == before + 10, "each of the 10 strokes is one undo step, the refused one none (%d)",
+         undo_depth (image) - before);
+
+  api->image_close (engine, image);
 }
 
 static int
@@ -675,6 +961,8 @@ main (int argc, char **argv)
       CHECK (api->image_close (engine, image) == GLIMS_STATUS_NOT_FOUND, "closing twice is reported");
     }
   test_fixture (argv[3], argv[2]);
+  test_paint_tools ();
+  test_selections ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 

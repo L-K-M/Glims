@@ -529,6 +529,7 @@ check_engine_interface (Gimp    *gimp,
   check_signal (problems, GIMP_TYPE_PROJECTION, "update", 5);
   check_signal (problems, GIMP_TYPE_IMAGE, "undo-event", 2);
   check_signal (problems, GIMP_TYPE_IMAGE, "selected-layers-changed", 0);
+  check_signal (problems, GIMP_TYPE_IMAGE, "mask-changed", 0);
   check_property (problems, GIMP_TYPE_PAINT_OPTIONS, "brush-size", G_TYPE_DOUBLE);
   check_property (problems, GIMP_TYPE_PAINT_CORE, "undo-desc", G_TYPE_STRING);
   check_property (problems, G_OBJECT_TYPE (gimp->edit_config), "prev-language", G_TYPE_STRING);
@@ -798,6 +799,8 @@ open_image_free (gpointer data)
         g_signal_handler_disconnect (open->image, open->undo_event_handler);
       if (open->layers_changed_handler)
         g_signal_handler_disconnect (open->image, open->layers_changed_handler);
+      if (open->mask_changed_handler)
+        g_signal_handler_disconnect (open->image, open->mask_changed_handler);
 
       g_object_unref (open->image);
     }
@@ -936,6 +939,7 @@ typedef struct
   void             *out;
   const void       *in;
   const void       *in2;
+  void             *in_out;
   size_t            n;
   char            **error;
 } GlimsArgs;
@@ -968,6 +972,13 @@ MARSHAL (filter_set_double, return glims_filter_set_double (e, a->item, a->strin
 MARSHAL (filter_commit, return glims_filter_commit (e, a->item, a->error);)
 MARSHAL (filter_abort, return glims_filter_abort (e, a->item);)
 MARSHAL (procedures,   return glims_procedures (e, a->image, a->out, a->capacity, a->count);)
+MARSHAL (select_shape, return glims_select_shape (e, a->image, (uint32_t) a->width, a->in, a->n, a->in2);)
+MARSHAL (select_color, {
+  const GlimsPoint *point = a->in;
+  return glims_select_color (e, a->image, *point, a->in2, a->error); })
+MARSHAL (select_command, return glims_select_command (e, a->image, (uint32_t) a->width, a->number, a->error);)
+MARSHAL (selection_bounds, return glims_selection_bounds (e, a->image, a->out, a->in_out);)
+MARSHAL (selection_outline, return glims_selection_outline (e, a->image, a->out, a->capacity, a->count);)
 MARSHAL (procedure_run, return glims_procedure_run (e, a->image, a->string, (uint32_t) a->width, a->error);)
 
 static GlimsStatus
@@ -1130,6 +1141,44 @@ api_procedure_cancel (GlimsEngine *e)
   return glims_engine_call (e, procedure_cancel_on_engine, NULL);
 }
 
+static GlimsStatus
+api_select_shape (GlimsEngine *e, GlimsImageID image, uint32_t shape, const GlimsPoint *points,
+                  size_t count, const GlimsSelectOptions *options)
+{
+  GlimsArgs a = { .image = image, .width = (int32_t) shape, .in = points, .n = count, .in2 = options };
+  return glims_engine_call (e, select_shape_on_engine, &a);
+}
+
+static GlimsStatus
+api_select_color (GlimsEngine *e, GlimsImageID image, GlimsPoint point,
+                  const GlimsSelectOptions *options, char **error)
+{
+  GlimsArgs a = { .image = image, .in = &point, .in2 = options, .error = error };
+  return glims_engine_call (e, select_color_on_engine, &a);
+}
+
+static GlimsStatus
+api_select_command (GlimsEngine *e, GlimsImageID image, uint32_t command, double radius, char **error)
+{
+  GlimsArgs a = { .image = image, .width = (int32_t) command, .number = radius, .error = error };
+  return glims_engine_call (e, select_command_on_engine, &a);
+}
+
+static GlimsStatus
+api_selection_bounds (GlimsEngine *e, GlimsImageID image, bool *empty, GlimsRect *bounds)
+{
+  GlimsArgs a = { .image = image, .out = empty, .in_out = bounds };
+  return glims_engine_call (e, selection_bounds_on_engine, &a);
+}
+
+static GlimsStatus
+api_selection_outline (GlimsEngine *e, GlimsImageID image, GlimsSegment *segments,
+                       int32_t capacity, int32_t *count)
+{
+  GlimsArgs a = { .image = image, .out = segments, .capacity = capacity, .count = count };
+  return glims_engine_call (e, selection_outline_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1158,6 +1207,11 @@ static const GlimsEngineAPI api_v1 = {
   .procedures        = api_procedures,
   .procedure_run     = api_procedure_run,
   .procedure_cancel  = api_procedure_cancel,
+  .select_shape      = api_select_shape,
+  .select_color      = api_select_color,
+  .select_command    = api_select_command,
+  .selection_bounds  = api_selection_bounds,
+  .selection_outline = api_selection_outline,
 };
 
 __attribute__ ((visibility ("default")))

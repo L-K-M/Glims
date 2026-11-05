@@ -28,6 +28,7 @@ final class EngineSession: @unchecked Sendable {
         case message(String)
         /// Progress of the running plug-in procedure; `nil` once it ended.
         case progress(Progress?)
+        case selectionChanged(image: Int32)
     }
 
     struct Progress: Equatable {
@@ -93,11 +94,70 @@ final class EngineSession: @unchecked Sendable {
         let nextRedo: String
     }
 
+    /// A paint stroke's tool and settings. `nil` numbers keep the engine's
+    /// default for that tool.
     struct Brush: Equatable {
+        enum Tool: UInt32, CaseIterable {
+            case paintbrush = 0, pencil, airbrush, eraser, smudge, blur, sharpen, dodge, burn, clone, heal
+        }
+
+        enum Tones: UInt32 {
+            case midtones = 0, shadows, highlights
+        }
+
+        /// Where clone and heal copy from: a layer of any open image and a
+        /// point in that image.
+        struct Source: Equatable {
+            var drawable: Int32
+            var x: Double
+            var y: Double
+        }
+
+        var tool: Tool = .paintbrush
         var size: Double = 12
         var opacity: Double = 1
         var red: Double = 0, green: Double = 0, blue: Double = 0
         var pressureSize = true
+        var hardness: Double?
+        var rate: Double?
+        var flow: Double?
+        var exposure: Double?
+        var tones: Tones = .midtones
+        var antiErase = false
+        var source: Source?
+    }
+
+    // MARK: Selection types
+
+    enum SelectOperation: UInt32 {
+        case replace = 0, add, subtract, intersect
+    }
+
+    enum SelectShape: Equatable {
+        case rectangle(CGRect)
+        case ellipse(CGRect)
+        case polygon([CGPoint])
+    }
+
+    struct SelectOptions: Equatable {
+        var operation: SelectOperation = .replace
+        var antialias = true
+        var feather: Double = 0
+        var cornerRadius: Double = 0
+        /// Color selections: 0 ... 1; GIMP's default is 15/255.
+        var threshold: Double = 15.0 / 255.0
+        var contiguous = true
+        var sampleMerged = false
+    }
+
+    enum SelectCommand: UInt32 {
+        case all = 1, none, invert, feather, grow, shrink, border, sharpen, fromAlpha
+    }
+
+    /// One edge of the selection outline, on pixel corners in image pixels.
+    struct Segment: Equatable {
+        let from: CGPoint
+        let to: CGPoint
     }
 
     struct StrokePoint: Equatable {
@@ -238,7 +298,13 @@ final class EngineSession: @unchecked Sendable {
         var settings = GlimsBrushSettings(struct_size: UInt32(MemoryLayout<GlimsBrushSettings>.size),
                                           size: brush.size, opacity: brush.opacity,
                                           red: brush.red, green: brush.green, blue: brush.blue,
-                                          pressure_size: brush.pressureSize)
+                                          pressure_size: brush.pressureSize,
+                                          tool: brush.tool.rawValue,
+                                          hardness: brush.hardness ?? -1, rate: brush.rate ?? -1,
+                                          flow: brush.flow ?? -1, exposure: brush.exposure ?? -1,
+                                          tones: brush.tones.rawValue, anti_erase: brush.antiErase,
+                                          source_drawable: brush.source?.drawable ?? 0,
+                                          source_x: brush.source?.x ?? 0, source_y: brush.source?.y ?? 0)
         var point = Self.point(first)
         var stroke: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
@@ -277,6 +343,68 @@ final class EngineSession: @unchecked Sendable {
 
     func abortFilter(_ filter: Int32) throws {
         try check(api.filter_abort(engine, filter), nil)
+    }
+
+    // MARK: Selections
+
+    func select(_ shape: SelectShape, image: Int32, options: SelectOptions = SelectOptions()) throws {
+        var settings = Self.selectOptions(options)
+        let (kind, points): (GlimsSelectShape, [GlimsPoint])
+        switch shape {
+        case .rectangle(let rect):
+            (kind, points) = (GLIMS_SHAPE_RECTANGLE, Self.corners(rect))
+        case .ellipse(let rect):
+            (kind, points) = (GLIMS_SHAPE_ELLIPSE, Self.corners(rect))
+        case .polygon(let vertices):
+            (kind, points) = (GLIMS_SHAPE_POLYGON, vertices.map { GlimsPoint(x: $0.x, y: $0.y) })
+        }
+        try points.withUnsafeBufferPointer { buffer in
+            try check(api.select_shape(engine, image, kind.rawValue, buffer.baseAddress, buffer.count, &settings), nil)
+        }
+    }
+
+    func selectColor(at point: CGPoint, image: Int32, options: SelectOptions = SelectOptions()) throws {
+        var settings = Self.selectOptions(options)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.select_color(engine, image, GlimsPoint(x: point.x, y: point.y), &settings, &error), error)
+    }
+
+    func select(_ command: SelectCommand, image: Int32, radius: Double = 0) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.select_command(engine, image, command.rawValue, radius, &error), error)
+    }
+
+    /// The selection's bounding box in image pixels, or nil when nothing is selected.
+    func selectionBounds(image: Int32) throws -> CGRect? {
+        var empty = true
+        var bounds = GlimsRect()
+        try check(api.selection_bounds(engine, image, &empty, &bounds), nil)
+        return empty ? nil : CGRect(x: Int(bounds.x), y: Int(bounds.y), width: Int(bounds.width), height: Int(bounds.height))
+    }
+
+    func selectionOutline(image: Int32) throws -> [Segment] {
+        var count: Int32 = 0
+        try check(api.selection_outline(engine, image, nil, 0, &count), nil)
+        var segments = [GlimsSegment](repeating: GlimsSegment(), count: Int(count))
+        var filled: Int32 = 0
+        try segments.withUnsafeMutableBufferPointer { buffer in
+            try check(api.selection_outline(engine, image, buffer.baseAddress, count, &filled), nil)
+        }
+        return segments.prefix(Int(min(count, filled))).map {
+            Segment(from: CGPoint(x: Int($0.x1), y: Int($0.y1)), to: CGPoint(x: Int($0.x2), y: Int($0.y2)))
+        }
+    }
+
+    private static func corners(_ rect: CGRect) -> [GlimsPoint] {
+        [GlimsPoint(x: rect.minX, y: rect.minY), GlimsPoint(x: rect.maxX, y: rect.maxY)]
+    }
+
+    private static func selectOptions(_ options: SelectOptions) -> GlimsSelectOptions {
+        GlimsSelectOptions(struct_size: UInt32(MemoryLayout<GlimsSelectOptions>.size),
+                           operation: options.operation.rawValue, antialias: options.antialias,
+                           feather: options.feather, corner_radius: options.cornerRadius,
+                           threshold: options.threshold, contiguous: options.contiguous,
+                           sample_merged: options.sampleMerged)
     }
 
     // MARK: Plug-in procedures
@@ -406,6 +534,8 @@ private let engineEventCallback: GlimsEventCallback = { context, eventPointer in
         relay.deliver(.undoChanged(image: event.image))
     case UInt32(GLIMS_EVENT_MESSAGE.rawValue):
         relay.deliver(.message(event.text.map { String(cString: $0) } ?? ""))
+    case UInt32(GLIMS_EVENT_SELECTION_CHANGED.rawValue):
+        relay.deliver(.selectionChanged(image: event.image))
     case UInt32(GLIMS_EVENT_PROGRESS.rawValue):
         let text = event.text.map { String(cString: $0) } ?? ""
         relay.deliver(.progress(event.active
