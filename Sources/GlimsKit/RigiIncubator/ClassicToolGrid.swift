@@ -456,17 +456,25 @@ public final class ClassicToolGrid: NSControl, NSViewToolTipOwner {
     }
 
     /// The 16 pt icon centered in the cell; template images take the chrome's
-    /// glyph gray.
+    /// glyph gray. The tint is applied to a copy of the image, so it never
+    /// touches the bezel behind the icon.
     private func drawImage(_ image: NSImage, centeredIn rect: CGRect, active: Bool) {
         let side = Self.iconSize
         let icon = CGRect(x: (rect.midX - side / 2).rounded(),
                           y: (rect.midY - side / 2).rounded(),
                           width: side, height: side)
-        image.draw(in: icon, from: .zero, operation: .sourceOver,
-                   fraction: active ? 1 : 0.45, respectFlipped: true, hints: nil)
-        guard image.isTemplate else { return }
-        ClassicChrome.glyphColor(active).setFill()
-        icon.fill(using: .sourceIn)
+        let drawn = image.isTemplate ? Self.tinted(image, ClassicChrome.glyphColor(active)) : image
+        drawn.draw(in: icon, from: .zero, operation: .sourceOver,
+                   fraction: active || image.isTemplate ? 1 : 0.45, respectFlipped: true, hints: nil)
+    }
+
+    private static func tinted(_ image: NSImage, _ color: NSColor) -> NSImage {
+        NSImage(size: NSSize(width: iconSize, height: iconSize), flipped: false) { bounds in
+            image.draw(in: bounds)
+            color.setFill()
+            bounds.fill(using: .sourceAtop)
+            return true
+        }
     }
 
     /// The small solid triangle marking a group slot's bottom-right corner.
