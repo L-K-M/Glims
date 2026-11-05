@@ -324,6 +324,86 @@ test_save_reopen_export (GlimsImageID image, const char *work)
   api->image_close (engine, imported);
 }
 
+/* Compares two layer trees by structure (ids differ between images). */
+static int
+same_layer_rows (const GlimsLayerInfo *a, const GlimsLayerInfo *b, int32_t count)
+{
+  int32_t i;
+
+  for (i = 0; i < count; i++)
+    if (strcmp (a[i].name, b[i].name) != 0 || a[i].kind != b[i].kind || a[i].depth != b[i].depth ||
+        strcmp (a[i].mode, b[i].mode) != 0 || a[i].visible != b[i].visible ||
+        a[i].has_mask != b[i].has_mask || a[i].filter_count != b[i].filter_count ||
+        a[i].opacity != b[i].opacity ||
+        memcmp (&a[i].bounds, &b[i].bounds, sizeof a[i].bounds) != 0)
+      return 0;
+  return 1;
+}
+
+/* The fixture made by GIMP's own engine (scripts/make-fixtures.sh): a group
+ * with a masked multiply layer and a layer with a non-destructive filter, a
+ * text layer, and GIMP's own composite of it. */
+static void
+test_fixture (const char *fixtures, const char *work)
+{
+  char           xcf[1024], png[1024], roundtrip[1024];
+  GlimsImageID   image = 0, reference = 0, reopened = 0;
+  GlimsLayerInfo rows[16], again[16];
+  int32_t        count = 0, count_again = 0, w1, h1, w2, h2, w3, h3, differences;
+  uint8_t       *ours, *gimps, *after;
+  char          *error = NULL;
+
+  snprintf (xcf, sizeof xcf, "%s/composite.xcf", fixtures);
+  snprintf (png, sizeof png, "%s/composite.png", fixtures);
+  snprintf (roundtrip, sizeof roundtrip, "%s/composite-roundtrip.xcf", work);
+
+  CHECK (api->image_open (engine, xcf, &image, &error) == GLIMS_STATUS_OK, "open the GIMP-made fixture XCF%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  if (! image)
+    return;
+
+  CHECK (api->image_layers (engine, image, rows, 16, &count) == GLIMS_STATUS_OK && count == 5 &&
+         strcmp (rows[0].name, "Glims") == 0 && rows[0].kind == GLIMS_LAYER_TEXT &&
+         strcmp (rows[1].name, "Shapes") == 0 && rows[1].kind == GLIMS_LAYER_GROUP &&
+         strcmp (rows[2].name, "Blue circle") == 0 && rows[2].depth == 1 && rows[2].parent == rows[1].id &&
+         rows[2].filter_count == 1 &&
+         strcmp (rows[3].name, "Red square") == 0 && rows[3].depth == 1 && rows[3].has_mask &&
+         strcmp (rows[3].mode, "multiply") == 0 && rows[3].opacity > 0.79 && rows[3].opacity < 0.81 &&
+         strcmp (rows[4].name, "Background") == 0 && rows[4].depth == 0,
+         "fixture layer tree: text, group with a filtered layer and a masked multiply layer, background");
+
+  CHECK (api->image_open (engine, png, &reference, &error) == GLIMS_STATUS_OK, "open GIMP's own composite PNG");
+  api->free_string (error);
+  error = NULL;
+  ours  = render_all (image, &w1, &h1);
+  gimps = reference ? render_all (reference, &w2, &h2) : NULL;
+  differences = ours && gimps && w1 == w2 && h1 == h2 ? count_differences (ours, gimps, (size_t) w1 * h1 * 4) : -1;
+  CHECK (differences == 0, "the adapter's render equals GIMP's own composite (%d of %d pixels differ)",
+         differences, w1 * h1);
+
+  CHECK (api->image_save (engine, image, roundtrip, &error) == GLIMS_STATUS_OK, "save the fixture as XCF%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_open (engine, roundtrip, &reopened, &error) == GLIMS_STATUS_OK, "reopen the saved fixture");
+  api->free_string (error);
+  after = reopened ? render_all (reopened, &w3, &h3) : NULL;
+  CHECK (ours && after && w1 == w3 && h1 == h3 && count_differences (ours, after, (size_t) w1 * h1 * 4) == 0,
+         "the XCF round trip keeps identical pixels");
+  CHECK (reopened && api->image_layers (engine, reopened, again, 16, &count_again) == GLIMS_STATUS_OK &&
+         count_again == count && same_layer_rows (rows, again, count),
+         "the XCF round trip keeps the layer structure, masks, modes and filters");
+
+  free (ours);
+  free (gimps);
+  free (after);
+  api->image_close (engine, image);
+  api->image_close (engine, reference);
+  api->image_close (engine, reopened);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -380,6 +460,7 @@ main (int argc, char **argv)
       CHECK (api->image_close (engine, image) == GLIMS_STATUS_OK, "close image");
       CHECK (api->image_close (engine, image) == GLIMS_STATUS_NOT_FOUND, "closing twice is reported");
     }
+  test_fixture (argv[3], argv[2]);
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 
   start = now_ms ();
