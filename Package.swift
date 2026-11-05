@@ -3,9 +3,10 @@ import PackageDescription
 
 // Glims: a classic native Mac image editor on the GIMP engine (docs/plan.md).
 //
-//   - `GlimsKit`: the AppKit interface, built with RigiUI. It will talk to the
-//     engine only through the facade C API of the planned `Engine/` adapter;
-//     it never includes GIMP headers.
+//   - `CGlimsEngine`: the engine facade header (`glims_engine.h`).
+//   - `GlimsKit`: the AppKit interface, built with RigiUI. It talks to the
+//     engine only through the facade, loading the adapter library built
+//     from `Engine/` at run time; it never includes GIMP headers.
 //   - `Glims`: the thin executable.
 //
 // Rigi is pinned to an immutable revision (Rigi's README asks consumers to);
@@ -21,9 +22,13 @@ let package = Package(
                  revision: "dcfc91e3b72aee612b2b48aed4a744397b78dc77")
     ],
     targets: [
+        // The engine facade header, shared with the C adapter in Engine/.
+        // The adapter itself is loaded at run time, so the app builds and
+        // runs without it.
+        .target(name: "CGlimsEngine"),
         .target(
             name: "GlimsKit",
-            dependencies: [.product(name: "RigiUI", package: "rigi")]
+            dependencies: ["CGlimsEngine", .product(name: "RigiUI", package: "rigi")]
         ),
         .executableTarget(
             name: "Glims",

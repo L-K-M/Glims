@@ -9,6 +9,7 @@ final class LaunchModeTests: XCTestCase {
     func testRecognisedOptions() throws {
         XCTAssertEqual(try LaunchMode(arguments: ["--smoke-test"]), .smokeTest)
         XCTAssertEqual(try LaunchMode(arguments: ["--version"]), .printVersion)
+        XCTAssertEqual(try LaunchMode(arguments: ["--engine-smoke-test"]), .engineSmokeTest)
     }
 
     func testAppKitArgumentsAreLeftAlone() throws {

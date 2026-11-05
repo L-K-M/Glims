@@ -5,7 +5,7 @@ import AppKit
 public enum GlimsApplication {
 
     /// Keeps the delegate alive; `NSApplication.delegate` is weak.
-    private static var delegate: AppDelegate?
+    private static var controller: AppController?
 
     /// Runs the app and returns the process exit status. Interactive runs only
     /// return when AppKit's run loop does.
@@ -27,36 +27,22 @@ public enum GlimsApplication {
         }
 
         let app = NSApplication.shared
-        app.setActivationPolicy(mode == .smokeTest ? .accessory : .regular)
+        app.setActivationPolicy(mode == .interactive ? .regular : .accessory)
         app.mainMenu = MainMenu.make()
-        let controller = WorkspaceWindowController()
 
-        if mode == .smokeTest {
-            controller.window?.orderFront(nil)
-            return SmokeTest.run(controller)
+        switch mode {
+        case .smokeTest:
+            let workspace = WorkspaceWindowController()
+            workspace.window?.orderFront(nil)
+            return SmokeTest.run(workspace)
+        case .engineSmokeTest:
+            return EngineSmokeTest.run()
+        case .interactive, .printVersion:
+            let controller = AppController()
+            Self.controller = controller
+            app.delegate = controller
+            app.run()
+            return 0
         }
-
-        let delegate = AppDelegate(workspace: controller)
-        Self.delegate = delegate
-        app.delegate = delegate
-        app.run()
-        return 0
     }
-}
-
-@MainActor
-private final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let workspace: WorkspaceWindowController
-
-    init(workspace: WorkspaceWindowController) {
-        self.workspace = workspace
-    }
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        workspace.showWindow(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    // Until documents exist the workspace window is the whole app.
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }

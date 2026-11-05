@@ -264,11 +264,11 @@ Week 3
   redo, paintbrush strokes with pressure (one undo step each), live filter
   sessions (non-destructive commit is one undo step, abort none, reproducing
   `gimp_filter_tool_commit`), XCF save, and export and import through the
-  file plug-ins. The library exports one symbol. Its 39 conformance checks
+  file plug-ins. The library exports one symbol. Its 42 conformance checks
   (`Engine/tests/engine-tests.c`, run through `dlopen` like the app) pass;
   startup takes about 10 s with a fresh user directory (plug-in query).
 - 2026-11-05: update drill 3.2.0 to 3.2.8: the unchanged adapter compiles,
-  links and passes all 39 checks against 3.2.8. Adapter edits needed: 0.
+  links and passes all 42 checks against 3.2.8. Adapter edits needed: 0.
   The drill also found two environment gaps that GIMP's own smoke test hid
   because the build environment exported them, fixed in the adapter: plug-ins
   need the engine's `bin` on `PATH` (Script-Fu interpreter) and
@@ -278,6 +278,26 @@ Week 3
   repairs the install tree, a recorded packaging workaround, not a source
   patch. GIMP 3.2.0 itself logs two `g_file_test` GLib CRITICALs at start-up;
   3.2.8 logs none.
+
+- 2026-11-05: update drill 3.2.8 to master (3.3.1-dev, `32c1ddaa2d`, babl and
+  GEGL master): master builds unmodified in under 3 minutes; the unchanged
+  adapter compiles without warnings and passes all 42 checks. Adapter edits
+  needed: 0.
+- 2026-11-05: the app uses the engine. `GlimsKit` loads the adapter at run
+  time (`GLIMS_ENGINE_LIBRARY`, the `EngineLibraryPath` default, or the
+  bundle's Frameworks), starts it in the background, and opens documents in
+  windows with an engine-backed canvas (visible area only, at backing scale,
+  coalesced background renders), pen-pressure painting, a Rigi Layers
+  palette, a modeless Gaussian Blur dialog with live preview, Undo, Redo,
+  Save As (XCF) and Export. `Glims --engine-smoke-test` drives all of that
+  through the interface code; it passes against 3.2.0, 3.2.8 and master.
+- 2026-11-05: go criterion 6 measured in the app process: 100 synchronous
+  plug-in calls (PNG exports, 141 to 168 ms each) on a background queue while
+  a 10 ms main-thread timer made a synchronous engine call every tick. Worst
+  main-thread stall: 5.0 ms (3.2.0), 2.0 ms (3.2.8), 2.0 ms (master); worst
+  engine call from the main thread: 9.3, 3.3 and 15.1 ms. The engine thread
+  keeps GIMP's nested loops off the main thread entirely, so the
+  GPollFunc integration planned under "Event loop" is not needed.
 
 ### Go only if all hold
 

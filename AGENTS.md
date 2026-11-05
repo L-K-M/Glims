@@ -12,7 +12,8 @@ Phase 0 (spike). A RigiUI app shell exists: the workspace window, a
 placeholder canvas, status-strip zoom, and a `--smoke-test` mode. The engine
 dependency prefix is built (`_deps/macports`), GIMP 3.2.8 and 3.2.0 build
 unmodified (`_engine/install/<ref>`), and adapter v1 (`Engine/`) passes its
-conformance tests against both. The Swift app does not use the engine yet.
+conformance tests against 3.2.0, 3.2.8 and master. The app loads the adapter
+at run time and edits real images through it.
 Keep `docs/plan.md` current as the spike proceeds.
 
 ## Layout
@@ -41,6 +42,10 @@ Keep `docs/plan.md` current as the spike proceeds.
   or with `CODE_SIGN_IDENTITY`.
 - `dist/Glims.app/Contents/MacOS/Glims --smoke-test` builds the workspace
   window, checks it and exits; `--version` prints the bundle version.
+- `GLIMS_ENGINE_LIBRARY=<adapter dylib> dist/Glims.app/Contents/MacOS/Glims`
+  runs the app on an engine; `--engine-smoke-test` drives a document through
+  the interface code and measures main-thread stalls during plug-in calls.
+  Without an engine library the app shows the placeholder workspace.
 - `scripts/build.sh [--clean] [--debug] [--run] [--install] [--zip] [--dmg] [--check]`
   wraps `build-app.sh` through the shared `lkm-build` engine.
 - `scripts/release.sh [X.Y.Z] [--push]` bumps `Resources/Info.plist` and the
