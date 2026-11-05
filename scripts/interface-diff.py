@@ -9,8 +9,13 @@ functions that disappeared or whose prototype changed. Run it before
 building the adapter against a new engine: a reported change is a compile
 error or, worse, a silent behavior change to look at.
 
+It also compares the members of every GIMP struct the adapter names (for
+example GimpProgressInterface, whose slots the adapter fills, or
+GimpPlugInProcedure, whose fields it reads): a member that disappeared and
+whose name the adapter uses is reported as a break.
+
 Not covered (the adapter's startup checks and the conformance tests are):
-macros, enum values, struct layouts, GObject signals and properties.
+macros, enum values, member types, GObject signals and properties.
 
 Usage: python3 -I interface-diff.py OBJECT_DIR OLD_SOURCE_DIR NEW_SOURCE_DIR
   OBJECT_DIR   _engine/adapter/<ref>/obj (the adapter's compiled objects)
@@ -22,6 +27,8 @@ import re
 import subprocess
 import sys
 
+ADAPTER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Engine")
+
 # GIMP's own symbols, as opposed to GLib, GEGL, babl, cairo or the system.
 GIMP_PREFIXES = ("gimp_", "file_", "xcf_", "errors_", "language_", "sanity_")
 HEADER_DIRS = ("app", "libgimpbase", "libgimpcolor", "libgimpconfig", "libgimpmath",
@@ -29,6 +36,8 @@ HEADER_DIRS = ("app", "libgimpbase", "libgimpcolor", "libgimpconfig", "libgimpma
 COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
 # G_DECLARE_*_TYPE (ModuleObjName, module_obj_name, ...) declares module_obj_name_get_type ().
 DECLARE_TYPE = re.compile(r"G_DECLARE_(?:FINAL|DERIVABLE|INTERFACE)_TYPE\s*\(\s*\w+\s*,\s*(\w+)")
+STRUCT = re.compile(r"struct\s+_(Gimp\w+)\s*\{(.*?)\}\s*;", re.S)
+MEMBER = re.compile(r"\(\s*\*\s*(\w+)\s*\)\s*\(|(\w+)\s*(?:\[[^\]]*\])?\s*(?::\s*\d+)?\s*;")
 DECLARATION = re.compile(r"([A-Za-z_][\w\s\*]*?[\s\*])([a-z_][a-z0-9_]*)\s*\(([^;{}()]*(?:\([^()]*\)[^;{}()]*)*)\)\s*(?:G_GNUC_\w+(?:\s*\([^)]*\))?\s*)*;")
 
 
@@ -72,6 +81,56 @@ def prototypes(source_dir):
     return found
 
 
+def adapter_sources():
+    texts = []
+    for root, _, files in os.walk(ADAPTER_DIR):
+        if "/tests" in root:
+            continue
+        for name in files:
+            if name.endswith((".c", ".h")):
+                with open(os.path.join(root, name), encoding="utf-8") as handle:
+                    texts.append(COMMENT.sub(" ", handle.read()))
+    return "\n".join(texts)
+
+
+def struct_members(source_dir):
+    """Member names of every `struct _GimpName { ... };` in the headers."""
+    found = {}
+    for top in HEADER_DIRS:
+        for root, _, files in os.walk(os.path.join(source_dir, top)):
+            for name in files:
+                if not name.endswith(".h"):
+                    continue
+                with open(os.path.join(root, name), encoding="utf-8", errors="replace") as handle:
+                    text = COMMENT.sub(" ", handle.read())
+                for match in STRUCT.finditer(text):
+                    body = re.sub(r"^\s*#.*$", " ", match.group(2), flags=re.M)
+                    members = set()
+                    for member in MEMBER.finditer(body):
+                        members.add(member.group(1) or member.group(2))
+                    found[match.group(1)] = members
+    return found
+
+
+def struct_changes(old_dir, new_dir):
+    """Members of structs the adapter names that vanished and that the
+    adapter's code mentions."""
+    sources = adapter_sources()
+    used_types = set(re.findall(r"\b(Gimp[A-Z]\w*)\b", sources))
+    words = set(re.findall(r"\b\w+\b", sources))
+    old, new = struct_members(old_dir), struct_members(new_dir)
+    changes = []
+    for name in sorted(used_types & set(old)):
+        if name not in new:
+            changes.append(f"struct   {name} no longer exists")
+            continue
+        gone = sorted(member for member in old[name] - new[name] if member in words)
+        if gone:
+            added = ", ".join(sorted(new[name] - old[name])) or "none"
+            changes.append(f"struct   {name}: member(s) {', '.join(gone)} gone (added: {added})")
+    return changes
+
+
 def main():
     if len(sys.argv) != 4:
         print(__doc__.strip().splitlines()[-4], file=sys.stderr)
@@ -90,6 +149,8 @@ def main():
         elif old[function][0] != new[function][0]:
             changed.append(f"changed  {function}\n    old: {old[function][0]}\n    new: {new[function][0]}  ({new[function][1]})")
 
+    changed.extend(struct_changes(old_dir, new_dir))
+
     print(f"{len(functions)} GIMP functions referenced by the adapter; "
           f"{len(functions) - len(missing_old)} matched to a header prototype")
     if missing_old:
@@ -97,7 +158,8 @@ def main():
               + ", ".join(missing_old))
     for line in changed:
         print(line)
-    print("no referenced function changed" if not changed else f"{len(changed)} referenced function(s) changed")
+    print("no referenced function or struct member changed" if not changed
+          else f"{len(changed)} referenced function(s) or struct(s) changed")
     return 1 if changed else 0
 
 
