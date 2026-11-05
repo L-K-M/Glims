@@ -20,7 +20,8 @@ final class ImageDocument {
 
     /// The layer painting and filters apply to.
     private(set) var activeLayer: Int32?
-    var brush = EngineSession.Brush()
+    /// The selection outline in image pixels, for marching ants.
+    private(set) var selectionOutline: [EngineSession.Segment] = []
 
     /// Called after layers or undo state changed.
     var onStateChange: (() -> Void)?
@@ -28,6 +29,8 @@ final class ImageDocument {
     var onProjectionChange: ((CGRect) -> Void)?
     /// Called with engine errors that the interface should show.
     var onError: ((String) -> Void)?
+    /// Called after the selection changed.
+    var onSelectionChange: (() -> Void)?
 
     nonisolated let inputQueue = DispatchQueue(label: "ch.lkmc.Glims.document.input", qos: .userInteractive)
     nonisolated let longQueue = DispatchQueue(label: "ch.lkmc.Glims.document.long", qos: .userInitiated)
@@ -73,6 +76,8 @@ final class ImageDocument {
         case .layersChanged(let image) where image == self.image,
              .undoChanged(let image) where image == self.image:
             try? reload()
+        case .selectionChanged(let image) where image == self.image:
+            refreshSelection()
         default:
             break
         }
@@ -80,9 +85,8 @@ final class ImageDocument {
 
     // MARK: Painting
 
-    func beginStroke(at point: EngineSession.StrokePoint) {
+    func beginStroke(at point: EngineSession.StrokePoint, brush: EngineSession.Brush = EngineSession.Brush()) {
         guard let layer = activeLayer, !refuseWhilePlugInRuns() else { return }
-        let brush = self.brush
         inputQueue.async { [session, image] in
             do {
                 self.currentStroke = try session.beginStroke(image: image, layer: layer, brush: brush, first: point)
@@ -106,6 +110,29 @@ final class ImageDocument {
             self.currentStroke = nil
             do { try session.endStroke(stroke) } catch { self.report(error) }
         }
+    }
+
+    // MARK: Selection
+
+    func select(_ shape: EngineSession.SelectShape, options: EngineSession.SelectOptions) {
+        guard !refuseWhilePlugInRuns() else { return }
+        run { session, image in try session.select(shape, image: image, options: options) }
+    }
+
+    func selectColor(at point: CGPoint, options: EngineSession.SelectOptions) {
+        guard !refuseWhilePlugInRuns() else { return }
+        run { session, image in try session.selectColor(at: point, image: image, options: options) }
+    }
+
+    func select(_ command: EngineSession.SelectCommand, radius: Double = 0) {
+        guard !refuseWhilePlugInRuns() else { return }
+        run { session, image in try session.select(command, image: image, radius: radius) }
+    }
+
+    /// Re-reads the outline; the engine caches it until the selection changes.
+    func refreshSelection() {
+        selectionOutline = (try? session.selectionOutline(image: image)) ?? []
+        onSelectionChange?()
     }
 
     // MARK: Undo

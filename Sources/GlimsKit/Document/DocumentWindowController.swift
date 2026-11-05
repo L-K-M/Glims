@@ -31,6 +31,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         imageDocument.onProjectionChange = { [weak self] rect in self?.canvas.imageDidChange(in: rect) }
         imageDocument.onStateChange = { [weak self] in self?.stateDidChange() }
         imageDocument.onError = { [weak self] message in self?.statusBar.message = message }
+        imageDocument.onSelectionChange = { [weak self] in
+            guard let self else { return }
+            self.canvas.selectionOutline = self.imageDocument.selectionOutline
+        }
+        canvas.tools.onStatus = { [weak self] message in self?.statusBar.message = message }
+        canvas.tools.onZoom = { [weak self] zoomIn, point in
+            guard let self else { return }
+            self.zoom(to: zoomIn ? ZoomLadder.zoomIn(from: self.canvas.zoomPercent)
+                                 : ZoomLadder.zoomOut(from: self.canvas.zoomPercent))
+            self.center(on: point)
+        }
         statusBar.onZoomIn = { [weak self] in self?.zoom(to: ZoomLadder.zoomIn(from: self?.canvas.zoomPercent ?? 100)) }
         statusBar.onZoomOut = { [weak self] in self?.zoom(to: ZoomLadder.zoomOut(from: self?.canvas.zoomPercent ?? 100)) }
         statusBar.onZoomReset = { [weak self] in self?.zoom(to: ZoomLadder.actualPixels) }
@@ -84,6 +95,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         canvas.setNeedsRender()
     }
 
+    /// Scrolls so `point` (image pixels) is in the middle of the view.
+    func center(on point: CGPoint) {
+        let visible = scrollView.contentView.bounds
+        canvas.scroll(NSPoint(x: point.x * canvas.scale - visible.width / 2,
+                              y: point.y * canvas.scale - visible.height / 2))
+    }
+
     func zoom(to percent: Int) {
         canvas.setZoom(percent: percent)
         statusBar.setZoom(percent: percent)
@@ -118,6 +136,36 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         panel.onFinish = { [weak self] in self?.blurPanel = nil }
         blurPanel = panel
         panel.showWindow(nil)
+    }
+
+    // MARK: Select menu
+
+    @objc override func selectAll(_ sender: Any?) { imageDocument.select(.all) }
+    @objc func selectNone(_ sender: Any?) { imageDocument.select(.none) }
+    @objc func selectInverse(_ sender: Any?) { imageDocument.select(.invert) }
+    @objc func sharpenSelection(_ sender: Any?) { imageDocument.select(.sharpen) }
+    @objc func selectFromAlpha(_ sender: Any?) { imageDocument.select(.fromAlpha) }
+    @objc func featherSelection(_ sender: Any?) { askRadius("Feather Selection", .feather, default: 5) }
+    @objc func growSelection(_ sender: Any?) { askRadius("Grow Selection", .grow, default: 1) }
+    @objc func shrinkSelection(_ sender: Any?) { askRadius("Shrink Selection", .shrink, default: 1) }
+    @objc func borderSelection(_ sender: Any?) { askRadius("Border Selection", .border, default: 5) }
+
+    /// A small sheet asking for a radius in pixels.
+    private func askRadius(_ title: String, _ command: EngineSession.SelectCommand, default value: Double) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = "Radius in pixels:"
+        let field = NSTextField(string: String(Int(value)))
+        field.frame = NSRect(x: 0, y: 0, width: 80, height: 22)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, field.doubleValue > 0 else { return }
+            self?.imageDocument.select(command, radius: field.doubleValue)
+        }
     }
 
     // MARK: Plug-in commands

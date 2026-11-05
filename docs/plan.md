@@ -3,7 +3,7 @@
 Status as of 2026-11-05: phase 0 finished with a go verdict
 ([`phase0-report.md`](phase0-report.md)); phase 1 is under way, items 1
 (interactive plug-ins), 2 (a self-contained app) and 5 (the nightly engine
-matrix) done. Evidence labels: **[M]**
+matrix) done; 3 (palettes) and 4 (native tools) partly done. Evidence labels: **[M]**
 measured from GIMP source or history, **[I]** inferred or estimated. Sources
 are in [`research/`](research/README.md); the round 2 memo and its two reviews
 are the main inputs.
@@ -482,6 +482,33 @@ In this order (reasons in `phase0-report.md`):
   pull requests. Run locally: both sets pass every step in 8.5 minutes,
   including master moved to `5374deeec1`. Not checked: the workflow itself,
   which needs the runner to be registered.
+- 2026-11-05: items 3 and 4, first slice. Engine: strokes run with any of
+  GIMP's paint cores (paintbrush, pencil, airbrush, eraser with
+  anti-erase, smudge, blur, sharpen, dodge, burn, clone, heal), with each
+  tool's settings appended to `GlimsBrushSettings`; selections by
+  rectangle, rounded rectangle, ellipse, polygon and color (contiguous or
+  global) with the four operations, feather and antialias; the Select
+  commands; the selection's bounds and outline; a SELECTION_CHANGED
+  event. 108 conformance checks pass on all four engines. Found and
+  worked around an engine bug present in 3.2.8 and master: after a
+  selection fills the mask, combining a new shape keeps the mask's cached
+  "full" flag, so Grow, Shrink, Border and Feather do nothing and Invert
+  clears the selection (`gimp_channel_combine_end`); the adapter drops the
+  cache after each change (`Engine/select.c`), and the checks were seen
+  failing without that. Interface: a Tools palette (`ClassicToolGrid`, 11
+  cells and 19 tools with groups, flyouts, Option-click cycling, tooltips,
+  radio-group accessibility, written by a helper model and reviewed; one
+  drawing bug fixed), a Tool Options palette for the current tool, the
+  canvas tools (all paint tools with Option-click for the clone source,
+  rectangle and ellipse select with Shift, Option and Shift-Option at drag
+  start, lasso, magic wand, select by color, eyedropper, hand and Space for
+  it, zoom), marching ants, the Select menu, tool shortcuts and `[`/`]` for
+  brush size, and the classic first-launch layout of the palettes. Checked:
+  the app's smoke test (33 checks, tools path included) and by hand on
+  screen (rectangle selection with ants, a brush stroke confined to it).
+  Not done: tabbed palette groups, docking, workspaces, the color pair,
+  move, crop, transform, text, paths, fill and gradient tools, and
+  painting on a worker thread.
 
 ## Later, before any public release
 
@@ -500,7 +527,10 @@ In this order (reasons in `phase0-report.md`):
 ## Open decisions
 
 - Whether new generic controls go into Rigi immediately or incubate here
-  first.
+  first. Provisionally (2026-11-05): they incubate in
+  `Sources/GlimsKit/RigiIncubator/` (generic, AppKit and RigiUI only) and
+  move to Rigi, with its gallery, guidelines and tests, once they settle.
+  `ClassicToolGrid` is the first.
 - Rigi currently mandates light Aqua; `design.md` proposes neutral gray and
   dark schemes for image work.
 - Save and Export model (see `design.md`).

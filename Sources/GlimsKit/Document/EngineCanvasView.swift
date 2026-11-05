@@ -31,6 +31,19 @@ final class EngineCanvasView: NSView {
     /// Bumped on zoom changes; results of an older generation are dropped.
     private var generation = 0
 
+    /// The current tool's handling of pointer and key events.
+    private(set) lazy var tools = CanvasToolController(canvas: self)
+
+    /// The selection outline in image pixels, drawn as marching ants.
+    var selectionOutline: [EngineSession.Segment] = [] {
+        didSet {
+            needsDisplay = true
+            updateAntsTimer()
+        }
+    }
+    private var antsPhase: CGFloat = 0
+    private var antsTimer: Timer?
+
     init(document: ImageDocument) {
         self.document = document
         super.init(frame: .zero)
@@ -164,6 +177,48 @@ final class EngineCanvasView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         setNeedsRender()
+        updateAntsTimer()
+    }
+
+    // MARK: Selection outline
+
+    /// Black and white dashes, the classic marching ants.
+    static func strokeMarchingAnts(_ path: NSBezierPath, phase: CGFloat) {
+        path.lineWidth = 1
+        NSColor.white.setStroke()
+        path.setLineDash(nil, count: 0, phase: 0)
+        path.stroke()
+        NSColor.black.setStroke()
+        path.setLineDash([4, 4], count: 2, phase: phase)
+        path.stroke()
+    }
+
+    private func updateAntsTimer() {
+        let animate = window != nil && !selectionOutline.isEmpty
+        if animate, antsTimer == nil {
+            // Selector-based, so the tick runs as a main-thread method.
+            antsTimer = Timer.scheduledTimer(timeInterval: 0.15, target: self, selector: #selector(antsTick),
+                                             userInfo: nil, repeats: true)
+        } else if !animate {
+            antsTimer?.invalidate()
+            antsTimer = nil
+        }
+    }
+
+    @objc private func antsTick() {
+        antsPhase = (antsPhase + 1).truncatingRemainder(dividingBy: 8)
+        setNeedsDisplay(visibleRect)
+    }
+
+    private func drawSelectionOutline() {
+        guard !selectionOutline.isEmpty else { return }
+        let path = NSBezierPath()
+        // Half a point inward of pixel corners keeps a 1 pt line crisp.
+        for segment in selectionOutline {
+            path.move(to: NSPoint(x: segment.from.x * scale + 0.5, y: segment.from.y * scale + 0.5))
+            path.line(to: NSPoint(x: segment.to.x * scale + 0.5, y: segment.to.y * scale + 0.5))
+        }
+        Self.strokeMarchingAnts(path, phase: antsPhase)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -181,11 +236,19 @@ final class EngineCanvasView: NSView {
             context.draw(image, in: CGRect(origin: .zero, size: rect.size))
             context.restoreGState()
         }
+        drawSelectionOutline()
+        tools.drawOverlay(scale: scale)
     }
 
-    // MARK: Painting
+    // MARK: Events
 
-    private func strokePoint(for event: NSEvent) -> EngineSession.StrokePoint {
+    /// The pointer's position in image pixels.
+    func imagePoint(for event: NSEvent) -> CGPoint {
+        let location = convert(event.locationInWindow, from: nil)
+        return CGPoint(x: Double(location.x) / scale, y: Double(location.y) / scale)
+    }
+
+    func strokePoint(for event: NSEvent) -> EngineSession.StrokePoint {
         let location = convert(event.locationInWindow, from: nil)
         let isTablet = event.subtype == .tabletPoint
         return EngineSession.StrokePoint(
@@ -198,15 +261,22 @@ final class EngineCanvasView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        document.beginStroke(at: strokePoint(for: event))
+        tools.mouseDown(with: event)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        document.continueStroke([strokePoint(for: event)])
+        tools.mouseDragged(with: event)
     }
 
     override func mouseUp(with event: NSEvent) {
-        document.continueStroke([strokePoint(for: event)])
-        document.endStroke()
+        tools.mouseUp(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if !tools.keyDown(with: event) { super.keyDown(with: event) }
+    }
+
+    override func keyUp(with event: NSEvent) {
+        if !tools.keyUp(with: event) { super.keyUp(with: event) }
     }
 }

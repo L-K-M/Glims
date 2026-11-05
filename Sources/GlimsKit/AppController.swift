@@ -22,6 +22,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private var documents: [DocumentWindowController] = []
     private var workspace: WorkspaceWindowController?
 
+    private lazy var toolsPalette: Palette = PaletteCenter.shared.palette(
+        for: ToolsPaletteController.definition,
+        target: { [weak self] in self?.frontDocument },
+        makeContent: { ToolsPaletteController() })
+
+    private lazy var toolOptionsPalette: Palette = PaletteCenter.shared.palette(
+        for: ToolOptionsPaletteController.definition,
+        target: { [weak self] in self?.frontDocument },
+        makeContent: { ToolOptionsPaletteController() })
+
     private lazy var layersPalette: Palette = PaletteCenter.shared.palette(
         for: LayersPaletteController.definition,
         target: { [weak self] in self?.frontDocument },
@@ -34,6 +44,31 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     var session: EngineSession? {
         if case .running(let session) = state { return session }
         return nil
+    }
+
+    /// The classic first-launch layout: Tools at the top left, Tool Options
+    /// beside it, Layers at the right. Applied only to a palette without a
+    /// saved frame (NSWindow frame autosave), right after it first opens,
+    /// so a palette the user moved stays where they put it.
+    private static func hasSavedFrame(_ definition: PaletteDefinition) -> Bool {
+        guard let name = definition.frameAutosaveName else { return true }
+        return UserDefaults.standard.persistentDomain(forName: AppIdentity.bundleIdentifier)?["NSWindow Frame \(name)"] != nil
+    }
+
+    private func placeOnFirstLaunch(_ definitions: [PaletteDefinition]) {
+        guard let visible = NSScreen.main?.visibleFrame else { return }
+        let margin: CGFloat = 8
+        var left = visible.minX + margin
+        for definition in definitions {
+            guard let name = definition.frameAutosaveName,
+                  let panel = NSApp.windows.first(where: { $0.frameAutosaveName == name }) else { continue }
+            if definition.kind == LayersPaletteController.definition.kind {
+                panel.setFrameTopLeftPoint(NSPoint(x: visible.maxX - margin - panel.frame.width, y: visible.maxY - margin))
+            } else {
+                panel.setFrameTopLeftPoint(NSPoint(x: left, y: visible.maxY - margin))
+                left += panel.frame.width + margin
+            }
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -117,7 +152,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         documents.append(controller)
         controller.showWindow(nil)
         PaletteCenter.shared.frontDocumentDidChange()
-        if !layersPalette.isPresented { layersPalette.showPanel() }
+        let unplaced = [ToolsPaletteController.definition, ToolOptionsPaletteController.definition,
+                        LayersPaletteController.definition].filter { !Self.hasSavedFrame($0) }
+        for palette in [toolsPalette, toolOptionsPalette, layersPalette] where !palette.isPresented {
+            palette.showPanel()
+        }
+        placeOnFirstLaunch(unplaced)
     }
 
     // MARK: Menu commands
@@ -150,6 +190,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         }
     }
 
+    @objc func showTools(_ sender: Any?) {
+        toolsPalette.isPresented ? toolsPalette.bringToFront() : toolsPalette.showPanel()
+    }
+
+    @objc func showToolOptions(_ sender: Any?) {
+        toolOptionsPalette.isPresented ? toolOptionsPalette.bringToFront() : toolOptionsPalette.showPanel()
+    }
+
     @objc func showLayers(_ sender: Any?) {
         layersPalette.isPresented ? layersPalette.bringToFront() : layersPalette.showPanel()
     }
@@ -159,7 +207,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         case #selector(newDocument(_:)), #selector(openDocument(_:)):
             // A plug-in dialog is modal for the engine (glims_engine.h).
             return session != nil && !PlugInCommands.isRunning
-        case #selector(showLayers(_:)):
+        case #selector(showLayers(_:)), #selector(showTools(_:)), #selector(showToolOptions(_:)):
             return session != nil
         default:
             return true

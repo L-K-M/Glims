@@ -33,7 +33,21 @@ enum MainMenu {
         // their native commands arrive (PlugInMenus).
         add(menu, "Image", [])
         add(menu, "Layer", [])
-        add(menu, "Select", [])
+        let inverse = item("Inverse", #selector(DocumentWindowController.selectInverse(_:)), "i")
+        inverse.keyEquivalentModifierMask = [.command, .shift]
+        add(menu, "Select", [
+            item("All", #selector(DocumentWindowController.selectAll(_:)), "a"),
+            item("Deselect", #selector(DocumentWindowController.selectNone(_:)), "d"),
+            inverse,
+            .separator(),
+            item("Feather…", #selector(DocumentWindowController.featherSelection(_:))),
+            item("Grow…", #selector(DocumentWindowController.growSelection(_:))),
+            item("Shrink…", #selector(DocumentWindowController.shrinkSelection(_:))),
+            item("Border…", #selector(DocumentWindowController.borderSelection(_:))),
+            item("Remove Antialiasing", #selector(DocumentWindowController.sharpenSelection(_:))),
+            .separator(),
+            item("From Layer Transparency", #selector(DocumentWindowController.selectFromAlpha(_:))),
+        ])
         add(menu, "View", [
             item("Zoom In", #selector(DocumentWindowController.zoomIn(_:)), "+"),
             item("Zoom Out", #selector(DocumentWindowController.zoomOut(_:)), "-"),
@@ -56,6 +70,8 @@ enum MainMenu {
         let windowMenu = add(menu, "Window", [
             item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"),
             .separator(),
+            item("Tools", #selector(AppController.showTools(_:))),
+            item("Tool Options", #selector(AppController.showToolOptions(_:))),
             item("Layers", #selector(AppController.showLayers(_:))),
         ])
         NSApplication.shared.windowsMenu = windowMenu

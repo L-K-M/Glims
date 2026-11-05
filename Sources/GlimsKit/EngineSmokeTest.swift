@@ -73,6 +73,7 @@ enum EngineSmokeTest {
 
         do {
             try exerciseDocument(session, work: work, documents: documents)
+            try exerciseTools(session, documents: documents)
             try exercisePlugInCommands(session, documents: documents)
             try measurePluginStalls(session, work: work)
         } catch {
@@ -151,6 +152,62 @@ enum EngineSmokeTest {
             let count = try controller.canvas.renderVisibleTilesNow()
             print("     canvas render at \(percent)%: \(count) tiles in \(String(format: "%.1f", milliseconds(since: begin))) ms")
         }
+        controller.window?.orderOut(nil)
+    }
+
+    /// The tools: shortcuts, a pencil stroke with the tool's settings, a
+    /// selection that reaches the canvas as marching ants and confines the
+    /// next stroke, and the Select menu through the document window.
+    private static func exerciseTools(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 400, height: 300)
+        let document = try ImageDocument(session: session, image: image, name: "Tools")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        let state = ToolState.shared
+
+        state.select(.paintbrush)
+        state.select(shortcut: "b", cycle: true)
+        check(state.current == .pencil, "Shift-B cycles the brush group to the pencil (\(state.current.name))")
+        state.select(shortcut: "m", cycle: false)
+        check(state.current == .rectangleSelect, "M picks the marquee group (\(state.current.name))")
+        check(ToolsPaletteController().view.subviews.contains { ($0 as? ClassicToolGrid)?.slots.count == ToolID.paletteSlots.count },
+              "the Tools palette shows \(ToolID.paletteSlots.count) tool cells")
+        state.select(.pencil)
+        check(ToolOptionsPaletteController().view.subviews.count >= 4, "Tool Options shows the pencil's settings")
+
+        state.foreground = .black
+        document.beginStroke(at: .init(x: 20, y: 50, pressure: 1), brush: state.brush(for: .pencil))
+        document.continueStroke([.init(x: 380, y: 50, pressure: 1, timeMilliseconds: 50)])
+        document.endStroke()
+        document.inputQueue.sync {}
+        spin()
+        check((pixel(session, image, x: 200, y: 50)?[0] ?? 255) < 64, "a pencil stroke with the tool's settings paints")
+
+        document.select(.rectangle(CGRect(x: 100, y: 100, width: 100, height: 80)),
+                        options: EngineSession.SelectOptions())
+        document.inputQueue.sync {}
+        spin()
+        check(document.selectionOutline.count >= 4 && controller.canvas.selectionOutline == document.selectionOutline,
+              "a rectangle selection reaches the canvas as marching ants (\(controller.canvas.selectionOutline.count) edges)")
+
+        document.beginStroke(at: .init(x: 20, y: 140, pressure: 1), brush: state.brush(for: .pencil))
+        document.continueStroke([.init(x: 380, y: 140, pressure: 1, timeMilliseconds: 50)])
+        document.endStroke()
+        document.inputQueue.sync {}
+        spin()
+        check((pixel(session, image, x: 150, y: 140)?[0] ?? 255) < 64 && pixel(session, image, x: 300, y: 140)?[0] == 255,
+              "the next stroke stays inside the selection")
+
+        controller.selectNone(nil)
+        document.inputQueue.sync {}
+        spin()
+        check(document.selectionOutline.isEmpty && controller.canvas.selectionOutline.isEmpty,
+              "Select ▸ Deselect through the window clears the ants")
+        controller.selectAll(nil)
+        document.inputQueue.sync {}
+        spin()
+        check(try session.selectionBounds(image: image) == CGRect(x: 0, y: 0, width: 400, height: 300),
+              "Select ▸ All selects the whole image")
         controller.window?.orderOut(nil)
     }
 
