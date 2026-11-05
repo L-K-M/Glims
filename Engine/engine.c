@@ -29,6 +29,8 @@
 #include "core/gimpprojection.h"
 
 #include "paint/gimppaintcore.h"
+#include "plug-in/gimpplugin.h"
+#include "plug-in/gimppluginmanager.h"
 #include "paint/gimppaintoptions.h"
 
 #include "errors.h"
@@ -122,6 +124,25 @@ glims_emit (GlimsEngine         *engine,
   engine->on_event (engine->event_context, &event);
 }
 
+void
+glims_emit_progress (GlimsEngine *engine,
+                     gboolean     active,
+                     gdouble      value,
+                     const gchar *text)
+{
+  GlimsEvent event = { 0 };
+
+  if (! engine->on_event)
+    return;
+
+  event.kind   = GLIMS_EVENT_PROGRESS;
+  event.text   = text;
+  event.value  = value;
+  event.active = active ? true : false;
+
+  engine->on_event (engine->event_context, &event);
+}
+
 GlimsStatus
 glims_fail (char        **error,
             GError       *gerror,
@@ -161,6 +182,86 @@ show_message (Gimp                *gimp,
     g_printerr ("%s\n", text);
 
   g_free (text);
+}
+
+/* ---- Plug-in dialogs ---------------------------------------------------- */
+
+/* GIMP's interface hands plug-ins its icon theme (app/gui/icon-themes.c);
+ * without one their dialogs show no icons. */
+static GFile *
+get_icon_theme_dir (Gimp *gimp)
+{
+  GlimsEngine *engine = g_object_get_data (G_OBJECT (gimp), "glims-engine");
+
+  return engine ? engine->icon_theme_dir : NULL;
+}
+
+static GFile *
+find_icon_theme_dir (Gimp *gimp)
+{
+  gchar *name = NULL;
+  GFile *dir;
+
+  g_object_get (gimp->config, "icon-theme", &name, NULL);
+  dir = gimp_data_directory_file ("icons", name ? name : "Default", NULL);
+  g_free (name);
+
+  if (g_file_query_file_type (dir, G_FILE_QUERY_INFO_NONE, NULL) != G_FILE_TYPE_DIRECTORY)
+    {
+      g_object_unref (dir);
+      dir = gimp_data_directory_file ("icons", "Default", NULL);
+    }
+
+  return dir;
+}
+
+/* Plug-in dialogs style themselves from theme.css in the user directory
+ * (gimp_ui_init in libgimp/gimpui.c), which GIMP's interface rewrites on
+ * every start (themes_theme_change_notify in app/gui/themes.c). Glims
+ * writes the same imports for GIMP's Default theme in its light scheme,
+ * the closest to Glims's own look. */
+static void
+write_plug_in_theme (void)
+{
+  gchar       *candidates[3];
+  GString     *css = g_string_new (NULL);
+  GFile       *theme_css;
+  GError      *error = NULL;
+  gint         i;
+
+  candidates[0] = g_build_filename (gimp_data_directory (), "themes", "Default", "gimp-light.css", NULL);
+  candidates[1] = g_build_filename (gimp_sysconf_directory (), "gimp.css", NULL);
+  candidates[2] = g_build_filename (gimp_directory (), "gimp.css", NULL);
+
+  g_string_append (css,
+                   "/* theme.css for GIMP plug-in dialogs, written by Glims on every\n"
+                   " * engine start. Edit gimp.css in this folder instead. */\n\n");
+
+  for (i = 0; i < G_N_ELEMENTS (candidates); i++)
+    {
+      if (g_file_test (candidates[i], G_FILE_TEST_IS_REGULAR))
+        {
+          gchar *uri = g_filename_to_uri (candidates[i], NULL, NULL);
+
+          if (uri)
+            g_string_append_printf (css, "@import url(\"%s\");\n", uri);
+          g_free (uri);
+        }
+      g_free (candidates[i]);
+    }
+
+  g_string_append (css, "\n* { -gtk-icon-style: symbolic; }\n");
+
+  theme_css = gimp_directory_file ("theme.css", NULL);
+  if (! g_file_replace_contents (theme_css, css->str, css->len, NULL, FALSE,
+                                 G_FILE_CREATE_NONE, NULL, NULL, &error))
+    {
+      g_printerr ("Glims: could not write %s: %s\n", g_file_peek_path (theme_css), error->message);
+      g_clear_error (&error);
+    }
+
+  g_object_unref (theme_css);
+  g_string_free (css, TRUE);
 }
 
 static void
@@ -232,6 +333,10 @@ check_engine_interface (Gimp    *gimp,
   check_property (problems, GIMP_TYPE_PAINT_CORE, "undo-desc", G_TYPE_STRING);
   check_property (problems, G_OBJECT_TYPE (gimp->edit_config), "prev-language", G_TYPE_STRING);
   check_property (problems, G_OBJECT_TYPE (gimp->edit_config), "config-version", G_TYPE_STRING);
+  check_property (problems, G_OBJECT_TYPE (gimp->config), "icon-theme", G_TYPE_STRING);
+  check_property (problems, G_OBJECT_TYPE (gimp->config), "module-path", G_TYPE_STRING);
+  check_property (problems, G_OBJECT_TYPE (gimp->config), "tool-preset-path", G_TYPE_STRING);
+  check_property (problems, G_OBJECT_TYPE (gimp->config), "tool-preset-path-writable", G_TYPE_STRING);
   check_property (problems, G_OBJECT_TYPE (gegl_config ()), "use-opencl", G_TYPE_BOOLEAN);
   check_property (problems, G_OBJECT_TYPE (gegl_config ()), "application-license", G_TYPE_STRING);
 
@@ -262,6 +367,7 @@ engine_initialize (GlimsEngine  *engine,
    * these once, so they are set before anything asks for them. */
   g_setenv ("GIMP3_DIRECTORY", engine->user_directory, TRUE);
   g_setenv ("XDG_CACHE_HOME", engine->cache_directory, TRUE);
+
   if (! g_getenv ("GI_TYPELIB_PATH"))
     g_setenv ("GI_TYPELIB_PATH", GLIMS_ENGINE_TYPELIB_PATH, TRUE);
 
@@ -299,7 +405,7 @@ engine_initialize (GlimsEngine  *engine,
                    FALSE,                    /* be verbose */
                    FALSE,                    /* no data */
                    FALSE,                    /* no fonts */
-                   TRUE,                     /* no interface: Glims is the interface */
+                   FALSE,                    /* no interface: see below */
                    TRUE,                     /* use shared memory with plug-ins */
                    TRUE,                     /* use CPU acceleration */
                    FALSE,                    /* console messages: use the hook */
@@ -308,8 +414,16 @@ engine_initialize (GlimsEngine  *engine,
                    GIMP_STACK_TRACE_NEVER,
                    GIMP_PDB_COMPAT_ON);
 
+  /* no_interface is off although GIMP's GTK interface is absent: with it
+   * on, the engine drops plug-ins' progress reports and parent-window
+   * requests (app/pdb/progress-cmds.c), so their dialogs float free and
+   * cannot be cancelled. Its other effects are handled below: the GTK
+   * modules and the tool presets it would load are disabled, and the
+   * remaining gui hooks stay unset, which GIMP treats as "no such window"
+   * (core/gimp-gui.c). */
   g_object_set_data (G_OBJECT (gimp), "glims-engine", engine);
-  gimp->gui.show_message = show_message;
+  gimp->gui.show_message       = show_message;
+  gimp->gui.get_icon_theme_dir = get_icon_theme_dir;
 
   /* Core code reaches gimp->app; it is never run. */
   engine->app = gimp_console_app_new (gimp, FALSE, FALSE, NULL, NULL, NULL);
@@ -329,6 +443,27 @@ engine_initialize (GlimsEngine  *engine,
   g_object_unref (gimpdir);
 
   gimp_load_config (gimp, NULL, NULL);
+
+  /* GIMP's modules (color selectors, display filters, MIDI controllers)
+   * are GTK widgets; with no_interface off, gimp_restore() would load them
+   * into this process. GIMP's tool presets describe the options of its
+   * GTK tools and cannot load without them (gimp_tool_options_check_tool_info
+   * fails and the engine crashes). Empty search paths load neither. GIMP
+   * copies every change of the running configuration into the one it
+   * saves (gimp_global_config_notify, connected with edit_config as its
+   * data); that copy is blocked here, so gimprc keeps the user's values. */
+  g_signal_handlers_block_matched (gimp->config, G_SIGNAL_MATCH_DATA,
+                                   0, 0, NULL, NULL, gimp->edit_config);
+  g_object_set (gimp->config,
+                "module-path",               "",
+                "tool-preset-path",          "",
+                "tool-preset-path-writable", "",
+                NULL);
+  g_signal_handlers_unblock_matched (gimp->config, G_SIGNAL_MATCH_DATA,
+                                     0, 0, NULL, NULL, gimp->edit_config);
+
+  engine->icon_theme_dir = find_icon_theme_dir (gimp);
+  write_plug_in_theme ();
 
   /* gimp-console gets this path from gimp_init_signal_handlers(); the
    * adapter installs no signal handlers, so it names the file itself. */
@@ -394,6 +529,7 @@ engine_shutdown (GlimsEngine *engine)
   while (g_main_context_pending (NULL))
     g_main_context_iteration (NULL, TRUE);
 
+  g_clear_object (&engine->icon_theme_dir);
   g_clear_object (&engine->app);
   engine->gimp = NULL;
   g_object_unref (gimp);
@@ -534,6 +670,15 @@ static GlimsStatus
 quit_loop (GlimsEngine *engine,
            gpointer     data)
 {
+  GimpPlugInManager *manager = engine->gimp->plug_in_manager;
+
+  /* A running plug-in (a dialog left open) holds the engine thread in a
+   * nested loop, so the main loop would not end until the user closed it.
+   * Close every plug-in first, as gimp_plug_in_manager_exit() does on
+   * GIMP's own exit; that ends their loops and the call that waits. */
+  while (manager->open_plug_ins)
+    gimp_plug_in_close (manager->open_plug_ins->data, TRUE);
+
   g_main_loop_quit (engine->loop);
 
   return GLIMS_STATUS_OK;
@@ -620,6 +765,14 @@ MARSHAL (filter_begin, return glims_filter_begin (e, a->image, a->item, a->strin
 MARSHAL (filter_set_double, return glims_filter_set_double (e, a->item, a->string, a->number);)
 MARSHAL (filter_commit, return glims_filter_commit (e, a->item, a->error);)
 MARSHAL (filter_abort, return glims_filter_abort (e, a->item);)
+MARSHAL (procedures,   return glims_procedures (e, a->image, a->out, a->capacity, a->count);)
+MARSHAL (procedure_run, return glims_procedure_run (e, a->image, a->string, (uint32_t) a->width, a->error);)
+
+static GlimsStatus
+procedure_cancel_on_engine (GlimsEngine *e, gpointer data)
+{
+  return glims_procedure_cancel (e);
+}
 
 static GlimsStatus
 api_image_new (GlimsEngine *e, int32_t width, int32_t height, GlimsImageID *image, char **error)
@@ -753,6 +906,28 @@ api_filter_abort (GlimsEngine *e, GlimsFilterID filter)
   return glims_engine_call (e, filter_abort_on_engine, &a);
 }
 
+static GlimsStatus
+api_procedures (GlimsEngine *e, GlimsImageID image, GlimsProcedureInfo *procedures,
+                int32_t capacity, int32_t *count)
+{
+  GlimsArgs a = { .image = image, .out = procedures, .capacity = capacity, .count = count };
+  return glims_engine_call (e, procedures_on_engine, &a);
+}
+
+static GlimsStatus
+api_procedure_run (GlimsEngine *e, GlimsImageID image, const char *name, uint32_t run_mode,
+                   char **error)
+{
+  GlimsArgs a = { .image = image, .string = name, .width = (int32_t) run_mode, .error = error };
+  return glims_engine_call (e, procedure_run_on_engine, &a);
+}
+
+static GlimsStatus
+api_procedure_cancel (GlimsEngine *e)
+{
+  return glims_engine_call (e, procedure_cancel_on_engine, NULL);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -778,6 +953,9 @@ static const GlimsEngineAPI api_v1 = {
   .filter_set_double = api_filter_set_double,
   .filter_commit     = api_filter_commit,
   .filter_abort      = api_filter_abort,
+  .procedures        = api_procedures,
+  .procedure_run     = api_procedure_run,
+  .procedure_cancel  = api_procedure_cancel,
 };
 
 __attribute__ ((visibility ("default")))

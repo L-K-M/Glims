@@ -1,7 +1,8 @@
 # Glims plan
 
 Status as of 2026-11-05: phase 0 finished with a go verdict
-([`phase0-report.md`](phase0-report.md)); phase 1 is next. Evidence labels: **[M]**
+([`phase0-report.md`](phase0-report.md)); phase 1 is under way, item 1
+(interactive plug-ins) done. Evidence labels: **[M]**
 measured from GIMP source or history, **[I]** inferred or estimated. Sources
 are in [`research/`](research/README.md); the round 2 memo and its two reviews
 are the main inputs.
@@ -69,6 +70,12 @@ builds]. The mechanisms all exist upstream:
   `-DGIMP_CONSOLE_COMPILATION` and `-ObjC`, or reuse the `gimp-console`
   object files minus `main.c.o` with flags from `compile_commands.json`.
   Read the library list from `meson introspect`, never hard-code it.
+
+As built (phase 1, item 1): `no_interface=FALSE`, empty `module-path` and
+`tool-preset-path` on the running configuration, and a `GimpProgress` per
+plug-in run. Two of the 27 `GimpGui` hooks are set (`show_message`,
+`get_icon_theme_dir`); no `GimpDisplay` subclass was needed yet. GIMP treats
+the unset hooks as "no window" or "not available".
 
 Known things to rebuild in the adapter or app, because GIMP keeps them in GTK
 code:
@@ -383,6 +390,58 @@ In this order (reasons in `phase0-report.md`):
 5. A nightly engine matrix (pinned tag, latest stable, master) on a
    self-hosted runner with a prebuilt dependency prefix.
 
+### Progress
+
+- 2026-11-05: item 1, interactive plug-ins, works. The engine now runs with
+  `no_interface` off. With it on, GIMP drops plug-ins' progress reports and
+  window-handle requests (`app/pdb/progress-cmds.c`) and fails their
+  resource choosers, so dialogs could not be parented, show progress or be
+  cancelled. Turning it off would also load GIMP's GTK modules and its tool
+  presets (which need the GTK tools and crashed the engine); the adapter
+  gives both empty search paths on the running configuration, and checks
+  those property names at start-up. No engine patch, no GimpGui display
+  hooks: a progress object per run (`Engine/progress.c`) supplies progress,
+  Cancel and the parent-window handle that makes libgimpui float a plug-in's
+  dialog over Glims and hide it when Glims is not active; the icon-theme
+  hook and a `theme.css` written at start-up give dialogs GIMP's light
+  theme. Facade v1 gained `procedures`, `procedure_run` and
+  `procedure_cancel`, a PROGRESS event and a CANCELLED status, all
+  appended. While a plug-in runs, edits of any image report BUSY, so its
+  dialog acts as a modal filter dialog (`design.md`, Filter menu row).
+  The app builds Filter, Image ▸ Adjust (GIMP's Colors), Image, Layer,
+  Select and File entries from the 90 plug-in commands' menu paths, with
+  Last Filter (⌘F), Last Filter Settings… (⌥⌘F), Recently Used, progress
+  with Stop in the status strip, and a plain refusal for edits while a
+  plug-in runs. Stopping the engine closes running plug-ins first, so
+  quitting Glims with a plug-in dialog open does not hang. A review by two
+  helper models found four real defects, all fixed with a check each: the
+  run-time overrides leaked into the saved gimprc (GIMP copies running
+  settings into the saved ones; the adapter now blocks that copy), File ▸
+  Open could start a second plug-in inside a run, a plug-in could start
+  while a filter preview was open, and context-menu procedures (`<Layers>`
+  and the like) were offered with the wrong items; only `<Image>` entries
+  are now. Checked: 74 conformance checks on all four engines (listing,
+  last-values runs as one undo step, a Python and a Script-Fu plug-in,
+  progress, BUSY while running, cancel, stop during a run, gimprc), the
+  app's engine smoke test (24 checks) on all four, and by hand on screen
+  with GIMP 3.2.8: Checkerboard's own dialog appeared in front with live
+  preview, OK applied it, Escape cancelled it, ⌘Z and ⌘F worked. Not
+  checked: resource choosers in plug-in dialogs (brush, font, pattern;
+  they still fail without a native chooser), and Script-Fu and Python
+  dialogs.
+- 2026-11-05: fixed a phase 0 bug found on screen: Edit ▸ Undo and Redo
+  never reached the engine, because `NSWindow` answers `undo:` and `redo:`
+  from its own empty undo manager before the window controller sees them;
+  the phase 0 smoke check had called the document directly. The document
+  window's undo manager now forwards to the engine
+  (`EngineUndoManager`), which also titles the items ("Undo Gaussian
+  Blur"); filter steps are now named by the operation's title, as GIMP's
+  filter tools do. The smoke test now goes through the window.
+- 2026-11-05: `interface-diff.py` also compares the members of GIMP structs
+  the adapter names, after master renamed `GimpProgressInterface`'s
+  `get_window_id` slot to `get_window_handle` (upstream ed668b3e2d), which
+  only the compiler caught. It reports that rename now.
+
 ## Later, before any public release
 
 - Developer ID signing and notarization for the app, GTK3, Python and every
@@ -412,3 +471,4 @@ In this order (reasons in `phase0-report.md`):
 | 2026-11-05 | GIMP_3_2_0 | GIMP_3_2_8 | 0 / 0 | none | not timed; build and tests about 3 min | no break | Found two host-environment gaps (`PATH`, `GI_TYPELIB_PATH`), fixed in the adapter, and the upstream typelib bug |
 | 2026-11-05 | GIMP_3_2_8 | master `32c1ddaa2d` (3.3.1-dev) | 0 / 0 | none | not timed; build under 3 min | no break | babl and GEGL master |
 | 2026-11-05 | GIMP_3_2_x | GIMP_3_0_8 | +15 / 1 | none | not timed; one edit round | `interface-diff.py` (all 3, before compiling), then the compiler | Reverse minor-release drill; environment: `mypaint-brushes1` port, typelib repair |
+| 2026-11-05 | GIMP_3_2_8 (adapter with plug-in procedures) | master `32c1ddaa2d` | +5 / 1 | none | minutes | the compiler; `interface-diff.py` did not compare struct members then, and does now | `GimpProgressInterface.get_window_id` renamed `get_window_handle` (ed668b3e2d); 3.0.8 and 3.2.0 needed nothing |

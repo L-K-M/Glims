@@ -77,7 +77,15 @@ glims_filter_begin (GlimsEngine    *engine,
   session->image     = g_object_ref (open->image);
   session->drawable  = g_object_ref (drawable);
   session->operation = gegl_node_new_child (NULL, "operation", operation, NULL);
-  session->filter    = gimp_drawable_filter_new (drawable, operation, session->operation, NULL);
+  /* The undo step and the filter's name in the layer's filter list use the
+   * operation's title ("Gaussian Blur"), as GIMP's filter tools do
+   * (gimp_tool_get_undo_desc in app/tools). */
+  {
+    const gchar *title = gegl_operation_get_key (operation, "title");
+
+    session->filter = gimp_drawable_filter_new (drawable, title ? title : operation,
+                                                session->operation, NULL);
+  }
 
   gimp_drawable_filter_apply (session->filter, NULL);
   gimp_drawable_filter_set_preview (session->filter, TRUE);

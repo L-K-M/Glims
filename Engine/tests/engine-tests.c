@@ -6,16 +6,19 @@
  * Loads the adapter with dlopen() exactly as the app does, starts the engine
  * with directories under WORK_DIR, and checks behavior the app relies on:
  * rendering, painting, undo accounting, filter sessions, saving and
- * reopening XCF, and exporting through the engine's file plug-ins. Prints
- * one line per check and exits non-zero if any check fails.
+ * reopening XCF, exporting through the engine's file plug-ins, and running
+ * plug-in procedures. Prints one line per check and exits non-zero if any
+ * check fails.
  */
 #include <dlfcn.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "glims_engine.h"
 
@@ -24,6 +27,9 @@ static GlimsEngine          *engine;
 static int                   failures;
 static atomic_int            projection_events;
 static atomic_int            undo_events;
+static atomic_int            progress_starts;
+static atomic_int            progress_ends;
+static atomic_bool           progress_active;
 
 #define CHECK(condition, ...)                       \
   do {                                              \
@@ -56,6 +62,13 @@ on_event (void *context, const GlimsEvent *event)
     atomic_fetch_add (&undo_events, 1);
   else if (event->kind == GLIMS_EVENT_MESSAGE && event->text)
     printf ("      engine message: %s\n", event->text);
+  else if (event->kind == GLIMS_EVENT_PROGRESS)
+    {
+      if (event->active && ! atomic_exchange (&progress_active, true))
+        atomic_fetch_add (&progress_starts, 1);
+      else if (! event->active && atomic_exchange (&progress_active, false))
+        atomic_fetch_add (&progress_ends, 1);
+    }
 }
 
 /* Renders the whole image at scale 1. The caller frees the result. */
@@ -252,6 +265,13 @@ test_filters (GlimsImageID image)
          error ? ": " : "", error ? error : "");
   api->free_string (error);
   CHECK (undo_depth (image) == before + 1, "commit adds exactly one undo step (%d -> %d)", before, undo_depth (image));
+  {
+    GlimsUndoInfo undo_info;
+
+    CHECK (api->image_undo_info (engine, image, &undo_info) == GLIMS_STATUS_OK &&
+           strcmp (undo_info.next_undo, "Gaussian Blur") == 0,
+           "the undo step is named after the filter (\"%s\")", undo_info.next_undo);
+  }
   CHECK (api->image_layers (engine, image, &row, 1, &count) == GLIMS_STATUS_OK && row.filter_count == 1,
          "the layer carries one non-destructive filter");
 
@@ -426,6 +446,178 @@ test_fixture (const char *fixtures, const char *work)
   api->image_close (engine, reopened);
 }
 
+/* A procedure_run on another thread, to probe the engine while it runs. */
+typedef struct
+{
+  GlimsImageID image;
+  const char  *name;
+  GlimsStatus  status;
+  atomic_bool  finished;
+} BackgroundRun;
+
+/* Waits until the background run reports progress or finishes; gives up
+ * after 30 s so a wedged plug-in fails a check instead of hanging. */
+static void
+wait_for_progress (BackgroundRun *run)
+{
+  double deadline = now_ms () + 30000;
+
+  while (! atomic_load (&run->finished) && ! atomic_load (&progress_active) && now_ms () < deadline)
+    usleep (1000);
+}
+
+static void *
+background_run (void *data)
+{
+  BackgroundRun *run = data;
+
+  run->status = api->procedure_run (engine, run->image, run->name, GLIMS_RUN_WITH_LAST_VALUES, NULL);
+  atomic_store (&run->finished, true);
+  return NULL;
+}
+
+static void
+test_procedures (void)
+{
+  const char         *checkerboard = "plug-in-checkerboard";
+  GlimsProcedureInfo *rows = NULL;
+  GlimsImageID        image = 0, big = 0;
+  int32_t             count = 0, filled = 0, before, width, height, i;
+  const GlimsProcedureInfo *found = NULL;
+  uint8_t            *pixels;
+  char               *error = NULL;
+  double              start;
+  BackgroundRun       run = { 0 };
+  pthread_t           thread;
+  GlimsStatus         undo_status = GLIMS_STATUS_OK, run_status = GLIMS_STATUS_OK;
+
+  api->image_new (engine, 64, 48, &image, NULL);
+
+  CHECK (api->procedures (engine, image, NULL, 0, &count) == GLIMS_STATUS_OK && count > 20,
+         "procedures: %d plug-in commands with menu entries", count);
+  rows = calloc ((size_t) (count > 0 ? count : 1), sizeof *rows);
+  CHECK (api->procedures (engine, image, rows, count, &filled) == GLIMS_STATUS_OK && filled == count,
+         "procedures fills every row");
+  for (i = 0; i < filled; i++)
+    if (strcmp (rows[i].name, checkerboard) == 0)
+      found = &rows[i];
+  CHECK (found && strcmp (found->label, "Checkerboard (legacy)\xe2\x80\xa6") == 0 &&
+         strncmp (found->menu_path, "<Image>/Filters/Render", 22) == 0 && found->sensitive,
+         "%s: label \"%s\", menu \"%s\", runnable on an RGB layer", checkerboard,
+         found ? found->label : "", found ? found->menu_path : "");
+  CHECK (api->procedures (engine, 9999, NULL, 0, &count) == GLIMS_STATUS_NOT_FOUND,
+         "procedures reports an unknown image");
+
+  CHECK (api->procedure_run (engine, image, "plug-in-no-such-thing", GLIMS_RUN_WITH_LAST_VALUES, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an unknown procedure is reported");
+  CHECK (api->procedure_run (engine, image, checkerboard, 77, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown run mode is rejected");
+  CHECK (api->procedure_cancel (engine) == GLIMS_STATUS_NOT_FOUND, "cancel with nothing running is reported");
+  {
+    GlimsFilterID session = 0;
+
+    api->filter_begin (engine, image, first_layer (image), "gegl:gaussian-blur", &session, NULL);
+    CHECK (api->procedure_run (engine, image, checkerboard, GLIMS_RUN_WITH_LAST_VALUES, &error) == GLIMS_STATUS_BUSY,
+           "no plug-in runs while a filter preview is open (%s)", error ? error : "");
+    api->free_string (error);
+    error = NULL;
+    api->filter_abort (engine, session);
+  }
+
+  before = undo_depth (image);
+  start  = now_ms ();
+  CHECK (api->procedure_run (engine, image, checkerboard, GLIMS_RUN_WITH_LAST_VALUES, &error) == GLIMS_STATUS_OK,
+         "%s runs with its last values (%.0f ms)%s%s", checkerboard, now_ms () - start,
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (undo_depth (image) == before + 1, "the plug-in's work is one undo step (%d -> %d)", before, undo_depth (image));
+  pixels = render_all (image, &width, &height);
+  CHECK (pixels && pixel_at (pixels, width, 5, 5)[0] != pixel_at (pixels, width, 15, 5)[0] &&
+         pixel_at (pixels, width, 5, 5)[0] == pixel_at (pixels, width, 15, 15)[0],
+         "the image shows 10-pixel checks (%d, %d, %d)",
+         pixels ? pixel_at (pixels, width, 5, 5)[0] : -1, pixels ? pixel_at (pixels, width, 15, 5)[0] : -1,
+         pixels ? pixel_at (pixels, width, 15, 15)[0] : -1);
+  free (pixels);
+  CHECK (atomic_load (&progress_starts) >= 1 && atomic_load (&progress_ends) == atomic_load (&progress_starts) &&
+         ! atomic_load (&progress_active),
+         "progress events started and ended (%d)", atomic_load (&progress_starts));
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == before,
+         "undo removes the plug-in's work");
+
+  /* While a procedure runs, writes are refused and reads still work. A
+   * large image keeps the plug-in busy long enough to probe it. */
+  api->image_new (engine, 6000, 4000, &big, NULL);
+  run.image = big;
+  run.name  = checkerboard;
+  atomic_store (&progress_active, false);
+  pthread_create (&thread, NULL, background_run, &run);
+  wait_for_progress (&run);
+  if (! atomic_load (&run.finished))
+    {
+      GlimsImageInfo info;
+
+      GlimsImageID opened = 0;
+
+      undo_status = api->image_undo (engine, image);
+      run_status  = api->procedure_run (engine, image, checkerboard, GLIMS_RUN_WITH_LAST_VALUES, NULL);
+      CHECK (api->image_open (engine, "/nonexistent.png", &opened, NULL) == GLIMS_STATUS_BUSY,
+             "opening a file waits for the running plug-in (BUSY)");
+      CHECK (api->image_info (engine, image, &info) == GLIMS_STATUS_OK, "reads work while a plug-in runs");
+    }
+  pthread_join (thread, NULL);
+  CHECK (undo_status == GLIMS_STATUS_BUSY && run_status == GLIMS_STATUS_BUSY && run.status == GLIMS_STATUS_OK,
+         "while a plug-in runs, undo and a second run report BUSY (%d, %d; run %d)",
+         undo_status, run_status, run.status);
+
+  /* Cancel, as the progress bar's Cancel button does. */
+  before = undo_depth (big);
+  atomic_store (&run.finished, false);
+  atomic_store (&progress_active, false);
+  undo_status = GLIMS_STATUS_FAILED;
+  pthread_create (&thread, NULL, background_run, &run);
+  wait_for_progress (&run);
+  if (! atomic_load (&run.finished))
+    undo_status = api->procedure_cancel (engine);
+  pthread_join (thread, NULL);
+  CHECK (undo_status == GLIMS_STATUS_OK && run.status == GLIMS_STATUS_CANCELLED && undo_depth (big) == before,
+         "cancelling a running plug-in returns CANCELLED and leaves no undo step (cancel %d, run %d)",
+         undo_status, run.status);
+
+  /* Plug-ins in Python and Script-Fu go through interpreters, typelibs
+   * and environment the C plug-ins above do not need. */
+  {
+    GlimsImageID   other = 0;
+    GlimsImageInfo info_before, info_after;
+
+    api->image_new (engine, 64, 48, &other, NULL);
+    api->image_info (engine, other, &info_before);
+    error = NULL;
+    start = now_ms ();
+    CHECK (api->procedure_run (engine, other, "python-fu-foggify", GLIMS_RUN_WITH_LAST_VALUES, &error) == GLIMS_STATUS_OK &&
+           api->image_info (engine, other, &info_after) == GLIMS_STATUS_OK &&
+           info_after.layer_count == info_before.layer_count + 1,
+           "a Python plug-in (Fog) adds its layer (%.0f ms)%s%s", now_ms () - start,
+           error ? ": " : "", error ? error : "");
+    api->free_string (error);
+    error = NULL;
+
+    api->image_info (engine, other, &info_before);
+    start = now_ms ();
+    CHECK (api->procedure_run (engine, other, "script-fu-addborder", GLIMS_RUN_WITH_LAST_VALUES, &error) == GLIMS_STATUS_OK &&
+           api->image_info (engine, other, &info_after) == GLIMS_STATUS_OK &&
+           info_after.width > info_before.width && info_after.height > info_before.height,
+           "a Script-Fu script (Add Border) enlarges the image to %dx%d (%.0f ms)%s%s",
+           info_after.width, info_after.height, now_ms () - start, error ? ": " : "", error ? error : "");
+    api->free_string (error);
+    api->image_close (engine, other);
+  }
+
+  free (rows);
+  api->image_close (engine, big);
+  api->image_close (engine, image);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -483,11 +675,48 @@ main (int argc, char **argv)
       CHECK (api->image_close (engine, image) == GLIMS_STATUS_NOT_FOUND, "closing twice is reported");
     }
   test_fixture (argv[3], argv[2]);
+  test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 
-  start = now_ms ();
-  api->stop (engine);
-  printf ("      engine stopped in %.0f ms\n", now_ms () - start);
+  /* Quitting while a plug-in runs (a dialog left open) must not wait for
+   * it: stop closes running plug-ins first. */
+  {
+    BackgroundRun run = { 0 };
+    pthread_t     thread;
+    int           running = 0;
+    double        stopped;
+
+    api->image_new (engine, 6000, 4000, &run.image, NULL);
+    run.name = "plug-in-checkerboard";
+    atomic_store (&progress_active, false);
+    pthread_create (&thread, NULL, background_run, &run);
+    wait_for_progress (&run);
+    running = ! atomic_load (&run.finished);
+    start = now_ms ();
+    api->stop (engine);
+    stopped = now_ms () - start;
+    pthread_join (thread, NULL);
+    CHECK (running && run.status != GLIMS_STATUS_OK && stopped < 5000,
+           "stopping the engine ends a running plug-in (stopped in %.0f ms, run %d)", stopped, run.status);
+  }
+
+  /* The adapter overrides some settings for the running engine only; the
+   * engine saves gimprc on exit and must not keep them. */
+  {
+    char  gimprc[1100], line[1024];
+    FILE *file;
+    int   kept = 0;
+
+    snprintf (gimprc, sizeof gimprc, "%s/gimprc", user_dir);
+    file = fopen (gimprc, "r");
+    while (file && fgets (line, sizeof line, file))
+      if (strstr (line, "(module-path") || strstr (line, "(tool-preset-path") ||
+          strstr (line, "(mypaint-brush-path"))
+        kept++;
+    if (file)
+      fclose (file);
+    CHECK (file && kept == 0, "the saved gimprc keeps none of the run-time overrides (%d kept)", kept);
+  }
 
   printf ("%s: %d failure%s\n", failures ? "FAILED" : "PASSED", failures, failures == 1 ? "" : "s");
   return failures ? 1 : 0;

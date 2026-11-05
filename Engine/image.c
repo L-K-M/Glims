@@ -175,6 +175,10 @@ glims_image_open (GlimsEngine   *engine,
   if (! path || ! out)
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
+  /* Loading a non-XCF file runs a plug-in; not inside another one's run. */
+  if (engine->busy > 0)
+    return GLIMS_STATUS_BUSY;
+
   file = g_file_new_for_path (path);
 
   /* Loading a non-XCF file runs a plug-in, which nests a main loop. */

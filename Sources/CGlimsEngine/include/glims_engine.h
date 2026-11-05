@@ -8,7 +8,9 @@
  *   - The adapter library exports one symbol, glims_engine_get_api(). The
  *     app loads the library at run time and asks for the version it was
  *     built against; a change that is not purely additive bumps
- *     GLIMS_ENGINE_API_VERSION.
+ *     GLIMS_ENGINE_API_VERSION. Within a version, functions, struct fields
+ *     and enum values are only ever appended; the table's struct_size tells
+ *     which functions a library has.
  *   - Every function is safe to call from any thread. Each runs on the
  *     engine thread and returns when it is done, so long operations (file
  *     export runs a plug-in) must not be called from the main thread.
@@ -45,7 +47,8 @@ typedef enum GlimsStatus {
   GLIMS_STATUS_NOT_FOUND        = 2,
   GLIMS_STATUS_FAILED           = 3, /* the engine reported an error */
   GLIMS_STATUS_BUSY             = 4, /* a long operation holds the image */
-  GLIMS_STATUS_NOT_RUNNING      = 5
+  GLIMS_STATUS_NOT_RUNNING      = 5,
+  GLIMS_STATUS_CANCELLED        = 6  /* the user cancelled, e.g. a plug-in dialog */
 } GlimsStatus;
 
 typedef struct GlimsRect {
@@ -56,14 +59,17 @@ typedef enum GlimsEventKind {
   GLIMS_EVENT_PROJECTION_CHANGED = 1, /* image, rect in image pixels */
   GLIMS_EVENT_LAYERS_CHANGED     = 2, /* image */
   GLIMS_EVENT_UNDO_CHANGED       = 3, /* image */
-  GLIMS_EVENT_MESSAGE            = 4  /* text */
+  GLIMS_EVENT_MESSAGE            = 4, /* text */
+  GLIMS_EVENT_PROGRESS           = 5  /* text (may be NULL), value, active */
 } GlimsEventKind;
 
 typedef struct GlimsEvent {
   uint32_t      kind;
   GlimsImageID  image;
   GlimsRect     rect;
-  const char   *text; /* valid during the callback only */
+  const char   *text;   /* valid during the callback only */
+  double        value;  /* PROGRESS: 0 ... 1, or -1 while the amount is unknown */
+  bool          active; /* PROGRESS: false once the operation has ended */
 } GlimsEvent;
 
 /* Called on the engine thread. It must return quickly and must not call
@@ -132,6 +138,21 @@ typedef struct GlimsStrokePoint {
   uint32_t time_ms;
 } GlimsStrokePoint;
 
+typedef enum GlimsRunMode {
+  GLIMS_RUN_INTERACTIVE      = 1, /* the plug-in may show its dialog */
+  GLIMS_RUN_WITH_LAST_VALUES = 2  /* repeat with the last settings, no dialog */
+} GlimsRunMode;
+
+/* A plug-in procedure with a menu entry that works on an image. */
+typedef struct GlimsProcedureInfo {
+  char name[128];        /* procedure name, e.g. "plug-in-sparkle" */
+  char label[256];       /* menu label without mnemonics; ends in "…" when
+                          * the plug-in asks for settings first */
+  char menu_path[256];   /* engine menu path, e.g. "<Image>/Filters/Light and Shadow" */
+  char blurb[512];       /* one-line description */
+  bool sensitive;        /* runnable on the given image's selected layers */
+} GlimsProcedureInfo;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -193,6 +214,32 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*filter_commit)    (GlimsEngine *engine, GlimsFilterID filter,
                                     char **error);
   GlimsStatus  (*filter_abort)     (GlimsEngine *engine, GlimsFilterID filter);
+
+  /* Plug-in procedures. They run in their own processes; interactive runs
+   * may show the plug-in's own dialog window.
+   *
+   * procedures() lists those with an entry in the image window's menus
+   * ("<Image>/...") that work on an image, in registration order. With an image, `sensitive` says whether each can
+   * run on its selected layers. Fills up to `capacity` rows; `count`
+   * receives the total. */
+  GlimsStatus  (*procedures)       (GlimsEngine *engine, GlimsImageID image,
+                                    GlimsProcedureInfo *procedures, int32_t capacity,
+                                    int32_t *count);
+  /* Runs a procedure on the image's selected layers, as the engine's own
+   * menus do, and returns when the plug-in has finished: interactively
+   * that includes the time its dialog is open, so never call this on the
+   * main thread. Meanwhile reads (render, info, layers) keep working, but
+   * calls that open, change or write images (image_open, strokes, filters,
+   * undo, redo, save, export, another procedure_run) report BUSY, so a
+   * plug-in dialog acts as a modal filter dialog. BUSY too while a stroke
+   * or filter session is open. Progress arrives as PROGRESS events.
+   * CANCELLED when the user cancelled. */
+  GlimsStatus  (*procedure_run)    (GlimsEngine *engine, GlimsImageID image,
+                                    const char *name, uint32_t run_mode,
+                                    char **error);
+  /* Asks the running procedure to stop, as a progress Cancel button does.
+   * NOT_FOUND when none is running. */
+  GlimsStatus  (*procedure_cancel) (GlimsEngine *engine);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

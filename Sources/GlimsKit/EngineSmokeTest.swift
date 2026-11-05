@@ -27,6 +27,13 @@ enum EngineSmokeTest {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
     }
 
+    private struct NoWindow: Error {}
+
+    private static func XCTUnwrapWindow(_ controller: DocumentWindowController) throws -> NSWindow {
+        guard let window = controller.window else { throw NoWindow() }
+        return window
+    }
+
     private static func pixel(_ session: EngineSession, _ image: Int32, x: Int, y: Int) -> [UInt8]? {
         guard let rendered = try? session.render(image, scale: 1, area: CGRect(x: x, y: y, width: 1, height: 1)),
               let data = rendered.dataProvider?.data as Data? else { return nil }
@@ -51,7 +58,12 @@ enum EngineSmokeTest {
             session = try EngineSession.start(api: EngineLibrary.load(path: path),
                                               userDirectory: work.appendingPathComponent("user"),
                                               cacheDirectory: work.appendingPathComponent("cache"),
-                                              onEvent: { event in documents.items.forEach { $0.handle(event) } })
+                                              onEvent: { event in
+                                                  if case .progress(let progress) = event {
+                                                      documents.progressEvents.append(progress)
+                                                  }
+                                                  documents.items.forEach { $0.handle(event) }
+                                              })
         } catch {
             print("FAIL engine start: \(error)")
             return 1
@@ -61,6 +73,7 @@ enum EngineSmokeTest {
 
         do {
             try exerciseDocument(session, work: work, documents: documents)
+            try exercisePlugInCommands(session, documents: documents)
             try measurePluginStalls(session, work: work)
         } catch {
             check(false, "unexpected engine error: \(error)")
@@ -113,15 +126,22 @@ enum EngineSmokeTest {
         check(document.undoInfo.undoCount == 2 && document.layers.first?.filterCount == 1,
               "OK commits one non-destructive filter as one undo step")
 
-        document.undo()
+        // Edit ▸ Undo and Redo send undo: and redo: up the responder chain,
+        // where the document window answers them (NSWindow handles both).
+        let undoItem = NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let window = try XCTUnwrapWindow(controller)
+        let expectedTitle = "Undo \(document.undoInfo.nextUndo)"
+        check(window.validateMenuItem(undoItem) && !document.undoInfo.nextUndo.isEmpty && undoItem.title == expectedTitle,
+              "Edit ▸ Undo is enabled and names the step (\(undoItem.title))")
+        window.tryToPerform(Selector(("undo:")), with: undoItem)
         document.inputQueue.sync {}
         spin()
         try document.reload()
-        check(document.undoInfo.undoCount == 1 && document.undoInfo.redoCount == 1, "Edit ▸ Undo through the document")
-        document.redo()
+        check(document.undoInfo.undoCount == 1 && document.undoInfo.redoCount == 1, "Edit ▸ Undo through the document window")
+        window.tryToPerform(Selector(("redo:")), with: nil)
         document.inputQueue.sync {}
         try document.reload()
-        check(document.undoInfo.undoCount == 2, "Edit ▸ Redo through the document")
+        check(document.undoInfo.undoCount == 2, "Edit ▸ Redo through the document window")
 
         // Render cost of the visible area at several zooms (this machine).
         for percent in [25, 50, 100, 200] {
@@ -131,6 +151,62 @@ enum EngineSmokeTest {
             let count = try controller.canvas.renderVisibleTilesNow()
             print("     canvas render at \(percent)%: \(count) tiles in \(String(format: "%.1f", milliseconds(since: begin))) ms")
         }
+        controller.window?.orderOut(nil)
+    }
+
+    /// The plug-in menus and a plug-in command run through a document
+    /// window, without a dialog (with last values), as Filter ▸ Last Filter
+    /// runs one.
+    private static func exercisePlugInCommands(_ session: EngineSession, documents: DocumentList) throws {
+        let mainMenu = MainMenu.make()
+        NSApp.mainMenu = mainMenu
+        let procedures = try session.procedures()
+        PlugInMenus.install(procedures, in: mainMenu)
+
+        func submenu(_ path: [String]) -> NSMenu? {
+            path.reduce(mainMenu as NSMenu?) { menu, title in menu?.item(withTitle: title)?.submenu }
+        }
+        let pattern = submenu(["Filter", "Render", "Pattern"])?.items.map(\.title) ?? []
+        check(pattern.contains("Checkerboard (legacy)…"),
+              "Filter ▸ Render ▸ Pattern lists the engine's plug-ins (\(pattern.joined(separator: ", ")))")
+        let blur = submenu(["Filter", "Blur"])?.items.map(\.title) ?? []
+        check(blur.first == "Gaussian Blur…" && blur.count > 1,
+              "Filter ▸ Blur keeps the native Gaussian Blur and adds plug-ins (\(blur.count) items)")
+        check(submenu(["Image", "Adjust"])?.items.isEmpty == false, "GIMP's Colors plug-ins appear under Image ▸ Adjust")
+        let categories = submenu(["Filter"])?.items.filter { $0.submenu != nil && $0.title != MainMenu.recentlyUsedTitle }.map(\.title) ?? []
+        check(categories.count > 5 && categories == categories.sorted { $0.localizedStandardCompare($1) == .orderedAscending },
+              "Filter categories are alphabetical (\(categories.prefix(4).joined(separator: ", "))…)")
+
+        guard let checkerboard = procedures.first(where: { $0.name == "plug-in-checkerboard" }) else {
+            check(false, "the engine offers plug-in-checkerboard")
+            return
+        }
+        let image = try session.newImage(width: 640, height: 480)
+        let document = try ImageDocument(session: session, image: image, name: "Plug-ins")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        var messages: [String] = []
+        document.onError = { messages.append($0) }
+        check(document.canRun(checkerboard), "the command is available for an RGB layer")
+
+        let progressBefore = documents.progressEvents.count
+        controller.run(checkerboard, mode: .withLastValues)
+        check(PlugInCommands.isRunning, "the command runs in the background")
+        document.undo()
+        check(messages.last?.hasPrefix("Finish or cancel") == true,
+              "edits are refused while it runs (\(messages.last ?? "no message"))")
+        let deadline = Date().addingTimeInterval(30)
+        while PlugInCommands.isRunning && Date() < deadline { spin(0.02) }
+        spin()
+        check(!PlugInCommands.isRunning && document.undoInfo.undoCount == 1,
+              "the command finished as one undo step (\(document.undoInfo.undoCount))")
+        let first = pixel(session, image, x: 5, y: 5), second = pixel(session, image, x: 15, y: 5)
+        check(first != nil && first != second, "the image changed (\(first ?? []) vs \(second ?? []))")
+        check(documents.progressEvents.count > progressBefore && documents.progressEvents.last == .some(nil),
+              "progress events reached the app and ended (\(documents.progressEvents.count - progressBefore))")
+        check(PlugInCommands.last?.name == checkerboard.name &&
+              submenu(["Filter", MainMenu.recentlyUsedTitle])?.items.first?.title == checkerboard.label,
+              "Last Filter and Recently Used remember the command")
         controller.window?.orderOut(nil)
     }
 
@@ -190,4 +266,5 @@ enum EngineSmokeTest {
 @MainActor
 private final class DocumentList {
     var items: [ImageDocument] = []
+    var progressEvents: [EngineSession.Progress?] = []
 }

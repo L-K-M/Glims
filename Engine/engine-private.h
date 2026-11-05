@@ -19,6 +19,11 @@
 
 #include "glims_engine.h"
 
+/* progress.c: the engine's progress and parent-window provider for
+ * plug-ins (implements GimpProgress). */
+#define GLIMS_TYPE_PROGRESS (glims_progress_get_type ())
+G_DECLARE_FINAL_TYPE (GlimsProgress, glims_progress, GLIMS, PROGRESS, GObject)
+
 struct GlimsEngine
 {
   /* Set before the engine thread starts; read-only afterwards. */
@@ -43,6 +48,8 @@ struct GlimsEngine
   GHashTable         *filters;   /* filter id -> GlimsFilter* */
   gint                next_session_id;
   gint                busy;      /* > 0 while a plug-in call runs */
+  GlimsProgress      *progress;  /* the running procedure's, or NULL */
+  GFile              *icon_theme_dir;
 };
 
 /* An image the app holds open. */
@@ -63,6 +70,8 @@ GlimsStatus      glims_engine_call       (GlimsEngine *engine, GlimsEngineFunc f
 void             glims_emit              (GlimsEngine *engine, GlimsEventKind kind,
                                           GimpImage *image, const GeglRectangle *rect,
                                           const gchar *text);
+void             glims_emit_progress     (GlimsEngine *engine, gboolean active,
+                                          gdouble value, const gchar *text);
 GlimsStatus      glims_fail              (char **error, GError *gerror, const gchar *fallback);
 GlimsOpenImage * glims_lookup_image      (GlimsEngine *engine, GlimsImageID id);
 GlimsStatus      glims_adopt_image       (GlimsEngine *engine, GimpImage *image, GlimsImageID *id);
@@ -101,5 +110,15 @@ GlimsStatus glims_filter_set_double(GlimsEngine *e, GlimsFilterID id, const char
 GlimsStatus glims_filter_commit    (GlimsEngine *e, GlimsFilterID id, char **error);
 GlimsStatus glims_filter_abort     (GlimsEngine *e, GlimsFilterID id);
 void        glims_filters_free     (gpointer filter);
+
+/* progress.c */
+GlimsProgress * glims_progress_new (GlimsEngine *engine);
+
+/* procedure.c */
+GlimsStatus glims_procedures       (GlimsEngine *e, GlimsImageID image, GlimsProcedureInfo *rows,
+                                    int32_t capacity, int32_t *count);
+GlimsStatus glims_procedure_run    (GlimsEngine *e, GlimsImageID image, const char *name,
+                                    uint32_t run_mode, char **error);
+GlimsStatus glims_procedure_cancel (GlimsEngine *e);
 
 #endif /* GLIMS_ENGINE_PRIVATE_H */

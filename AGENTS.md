@@ -9,11 +9,11 @@ both is in [`docs/research/`](docs/research/README.md).
 ## Status
 
 Phase 0 (spike) is finished with a go verdict
-([`docs/phase0-report.md`](docs/phase0-report.md)); phase 1 is next
-(`docs/plan.md`). The engine dependency prefix is built (`_deps/macports`);
+([`docs/phase0-report.md`](docs/phase0-report.md)); phase 1 is under way
+(`docs/plan.md`, "Phase 1"); plug-in commands with their own dialogs work. The engine dependency prefix is built (`_deps/macports`);
 the four engine sets in `scripts/engine.env` (GIMP 3.2.8, 3.2.0, master and
 3.0.8) build unmodified into `_engine/install/<ref>`; adapter v1 (`Engine/`)
-passes its 52 conformance checks against all four. The app loads the adapter
+passes its 74 conformance checks against all four. The app loads the adapter
 at run time and edits real images through it: tiled canvas, painting, a
 Layers palette, Gaussian Blur, undo, save and export.
 Keep `docs/plan.md` current as the work proceeds.
@@ -85,8 +85,9 @@ Keep `docs/plan.md` current as the work proceeds.
   `GLIMS_ENGINE_API_VERSION`.
 - `python3 -I scripts/interface-diff.py _engine/adapter/<ref>/obj
   _engine/src/<old>/gimp _engine/src/<new>/gimp` lists the GIMP functions the
-  compiled adapter calls whose prototypes differ between two engine trees.
-  Run it before building against a new engine.
+  compiled adapter calls whose prototypes differ between two engine trees,
+  and members of GIMP structs the adapter names that disappeared. Run it
+  before building against a new engine.
 - `scripts/make-fixtures.sh [GIMP_REF]` regenerates the conformance fixtures
   in `Engine/tests/fixtures` with GIMP's own engine (default `GIMP_3_2_0`).
 - [`CICD.md`](CICD.md) describes the workflows.

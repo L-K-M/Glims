@@ -1,5 +1,5 @@
+import AppKit
 import CoreGraphics
-import Foundation
 
 /// One open image in the engine, as the interface sees it.
 ///
@@ -35,6 +35,10 @@ final class ImageDocument {
     /// Touched only on `inputQueue`.
     private nonisolated(unsafe) var currentStroke: Int32?
 
+    /// Which plug-in commands can run on the selected layers, by name;
+    /// nil until asked for after a change.
+    private var procedureSensitivity: [String: Bool]?
+
     init(session: EngineSession, image: Int32, name: String) throws {
         self.session = session
         self.image = image
@@ -45,6 +49,7 @@ final class ImageDocument {
 
     /// Re-reads layers, undo state and size from the engine.
     func reload() throws {
+        procedureSensitivity = nil
         info = try session.info(image)
         layers = try session.layers(image)
         undoInfo = try session.undoInfo(image)
@@ -76,7 +81,7 @@ final class ImageDocument {
     // MARK: Painting
 
     func beginStroke(at point: EngineSession.StrokePoint) {
-        guard let layer = activeLayer else { return }
+        guard let layer = activeLayer, !refuseWhilePlugInRuns() else { return }
         let brush = self.brush
         inputQueue.async { [session, image] in
             do {
@@ -105,8 +110,50 @@ final class ImageDocument {
 
     // MARK: Undo
 
-    func undo() { run { session, image in try session.undo(image) } }
-    func redo() { run { session, image in try session.redo(image) } }
+    func undo() {
+        guard !refuseWhilePlugInRuns() else { return }
+        run { session, image in try session.undo(image) }
+    }
+
+    func redo() {
+        guard !refuseWhilePlugInRuns() else { return }
+        run { session, image in try session.redo(image) }
+    }
+
+    /// The engine refuses edits while a plug-in command runs (its dialog
+    /// acts as a modal filter dialog); say why instead of failing later.
+    private func refuseWhilePlugInRuns() -> Bool {
+        guard let running = PlugInCommands.running else { return false }
+        let title = running.procedure.label.replacingOccurrences(of: "…", with: "")
+        onError?("Finish or cancel \u{201C}\(title)\u{201D} first.")
+        NSSound.beep()
+        return true
+    }
+
+    // MARK: Plug-in commands
+
+    /// Whether the command can run on the selected layers. Asks the engine
+    /// once per change of the image.
+    func canRun(_ procedure: EngineSession.Procedure) -> Bool {
+        if procedureSensitivity == nil {
+            let rows = (try? session.procedures(image: image)) ?? []
+            procedureSensitivity = Dictionary(rows.map { ($0.name, $0.isSensitive) }, uniquingKeysWith: { a, _ in a })
+        }
+        return procedureSensitivity?[procedure.name] ?? false
+    }
+
+    /// Runs a plug-in command on the selected layers. Interactively the
+    /// plug-in shows its own dialog; the call completes when it finished.
+    func run(_ procedure: EngineSession.Procedure, mode: EngineSession.RunMode,
+             completion: @escaping @MainActor (Result<EngineSession.RunOutcome, Error>) -> Void) {
+        longQueue.async { [session, image] in
+            let result = Result { try session.runProcedure(procedure.name, image: image, mode: mode) }
+            DispatchQueue.main.async {
+                try? self.reload()
+                completion(result)
+            }
+        }
+    }
 
     // MARK: Files
 

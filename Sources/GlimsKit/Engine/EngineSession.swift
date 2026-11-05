@@ -26,6 +26,37 @@ final class EngineSession: @unchecked Sendable {
         case layersChanged(image: Int32)
         case undoChanged(image: Int32)
         case message(String)
+        /// Progress of the running plug-in procedure; `nil` once it ended.
+        case progress(Progress?)
+    }
+
+    struct Progress: Equatable {
+        /// 0 ... 1, or `nil` while the amount is unknown.
+        let fraction: Double?
+        let text: String
+    }
+
+    /// A plug-in command with a menu entry that works on an image.
+    struct Procedure: Equatable {
+        let name: String
+        /// Menu title; ends in "…" when the plug-in asks for settings first.
+        let label: String
+        /// The engine's menu path, e.g. "<Image>/Filters/Light and Shadow/[Shadow]".
+        let menuPath: String
+        let blurb: String
+        /// Runnable on the image's selected layers (when listed for an image).
+        let isSensitive: Bool
+    }
+
+    enum RunMode {
+        /// The plug-in may show its own dialog first.
+        case interactive
+        /// Repeats with the settings used last, without a dialog.
+        case withLastValues
+    }
+
+    enum RunOutcome: Equatable {
+        case completed, cancelled
     }
 
     struct ImageInfo: Equatable {
@@ -248,6 +279,47 @@ final class EngineSession: @unchecked Sendable {
         try check(api.filter_abort(engine, filter), nil)
     }
 
+    // MARK: Plug-in procedures
+
+    /// Plug-in commands with menu entries. With an image, `isSensitive`
+    /// reflects its selected layers.
+    func procedures(image: Int32? = nil) throws -> [Procedure] {
+        var count: Int32 = 0
+        try check(api.procedures(engine, image ?? 0, nil, 0, &count), nil)
+        var rows = [GlimsProcedureInfo](repeating: GlimsProcedureInfo(), count: Int(count))
+        var filled: Int32 = 0
+        try rows.withUnsafeMutableBufferPointer { buffer in
+            try check(api.procedures(engine, image ?? 0, buffer.baseAddress, count, &filled), nil)
+        }
+        return rows.prefix(Int(min(count, filled))).map { row in
+            Procedure(name: Self.string(row.name), label: Self.string(row.label),
+                      menuPath: Self.string(row.menu_path), blurb: Self.string(row.blurb),
+                      isSensitive: row.sensitive)
+        }
+    }
+
+    /// Runs a plug-in command on the image's selected layers and returns
+    /// when it finished, including the time its dialog is open. Never call
+    /// this on the main thread. While it runs, edits of any image fail with
+    /// a busy error.
+    func runProcedure(_ name: String, image: Int32, mode: RunMode) throws -> RunOutcome {
+        var error: UnsafeMutablePointer<CChar>?
+        let runMode = mode == .interactive ? GLIMS_RUN_INTERACTIVE : GLIMS_RUN_WITH_LAST_VALUES
+        let status = api.procedure_run(engine, image, name, runMode.rawValue, &error)
+        if status == GLIMS_STATUS_CANCELLED {
+            _ = Self.takeString(error, api: api)
+            return .cancelled
+        }
+        try check(status, error)
+        return .completed
+    }
+
+    /// Asks the running plug-in command to stop. Returns false when none runs.
+    @discardableResult
+    func cancelProcedure() -> Bool {
+        api.procedure_cancel(engine) == GLIMS_STATUS_OK
+    }
+
     // MARK: Helpers
 
     private func check(_ status: GlimsStatus, _ error: UnsafeMutablePointer<CChar>?) throws {
@@ -268,6 +340,7 @@ final class EngineSession: @unchecked Sendable {
         case GLIMS_STATUS_INVALID_ARGUMENT: return "The engine rejected the request."
         case GLIMS_STATUS_NOT_FOUND: return "The engine has no such image, layer or session."
         case GLIMS_STATUS_BUSY: return "The engine is busy with another operation."
+        case GLIMS_STATUS_CANCELLED: return "Cancelled."
         case GLIMS_STATUS_NOT_RUNNING: return "The engine is not running."
         default: return "The engine reported an error."
         }
@@ -333,6 +406,11 @@ private let engineEventCallback: GlimsEventCallback = { context, eventPointer in
         relay.deliver(.undoChanged(image: event.image))
     case UInt32(GLIMS_EVENT_MESSAGE.rawValue):
         relay.deliver(.message(event.text.map { String(cString: $0) } ?? ""))
+    case UInt32(GLIMS_EVENT_PROGRESS.rawValue):
+        let text = event.text.map { String(cString: $0) } ?? ""
+        relay.deliver(.progress(event.active
+            ? EngineSession.Progress(fraction: event.value < 0 ? nil : event.value, text: text)
+            : nil))
     default:
         break
     }

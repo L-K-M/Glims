@@ -77,6 +77,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         switch result {
         case .success(let session):
             state = .running(session)
+            if let mainMenu = NSApp.mainMenu, let procedures = try? session.procedures() {
+                PlugInMenus.install(procedures, in: mainMenu)
+            }
             workspace?.close()
             workspace = nil
             newDocument(nil)
@@ -94,6 +97,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     private func route(_ event: EngineSession.Event) {
+        if case .progress(let progress) = event {
+            let running = PlugInCommands.running?.document
+            documents.first { $0.imageDocument === running }?.showProgress(progress)
+            return
+        }
         for controller in documents { controller.imageDocument.handle(event) }
         if case .message(let text) = event {
             (NSApp.mainWindow?.windowController as? DocumentWindowController)?.statusBar.message = text
@@ -148,7 +156,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
-        case #selector(newDocument(_:)), #selector(openDocument(_:)), #selector(showLayers(_:)):
+        case #selector(newDocument(_:)), #selector(openDocument(_:)):
+            // A plug-in dialog is modal for the engine (glims_engine.h).
+            return session != nil && !PlugInCommands.isRunning
+        case #selector(showLayers(_:)):
             return session != nil
         default:
             return true

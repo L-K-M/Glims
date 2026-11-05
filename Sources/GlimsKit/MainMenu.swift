@@ -5,6 +5,8 @@ import AppKit
 /// `AppController`. The full outline is in docs/design.md, section 4.
 @MainActor
 enum MainMenu {
+    static let recentlyUsedTitle = "Recently Used"
+
     static func make() -> NSMenu {
         let menu = NSMenu()
 
@@ -23,16 +25,33 @@ enum MainMenu {
             item("Export…", #selector(DocumentWindowController.exportDocument(_:)), "E"),
         ])
         add(menu, "Edit", [
-            item("Undo", #selector(DocumentWindowController.undo(_:)), "z"),
-            item("Redo", #selector(DocumentWindowController.redo(_:)), "Z"),
+            // Answered by the key window from its undo manager.
+            item("Undo", Selector(("undo:")), "z"),
+            item("Redo", Selector(("redo:")), "Z"),
         ])
+        // Image, Layer and Select hold the engine's plug-in commands until
+        // their native commands arrive (PlugInMenus).
+        add(menu, "Image", [])
+        add(menu, "Layer", [])
+        add(menu, "Select", [])
         add(menu, "View", [
             item("Zoom In", #selector(DocumentWindowController.zoomIn(_:)), "+"),
             item("Zoom Out", #selector(DocumentWindowController.zoomOut(_:)), "-"),
             item("Actual Pixels", #selector(DocumentWindowController.actualPixels(_:)), "1"),
         ])
+        let lastFilterSettings = item("Last Filter Settings…", #selector(DocumentWindowController.reshowLastFilter(_:)), "f")
+        lastFilterSettings.keyEquivalentModifierMask = [.command, .option]
+        let recent = NSMenuItem(title: recentlyUsedTitle, action: nil, keyEquivalent: "")
+        recent.submenu = NSMenu(title: recentlyUsedTitle)
+        let blur = NSMenuItem(title: "Blur", action: nil, keyEquivalent: "")
+        blur.submenu = NSMenu(title: "Blur")
+        blur.submenu?.addItem(item("Gaussian Blur…", #selector(DocumentWindowController.gaussianBlur(_:))))
         add(menu, "Filter", [
-            item("Gaussian Blur…", #selector(DocumentWindowController.gaussianBlur(_:))),
+            item("Last Filter", #selector(DocumentWindowController.repeatLastFilter(_:)), "f"),
+            lastFilterSettings,
+            recent,
+            .separator(),
+            blur,
         ])
         let windowMenu = add(menu, "Window", [
             item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"),

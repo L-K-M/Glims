@@ -6,11 +6,13 @@ import UniformTypeIdentifiers
 /// strip. It handles the imageDocument's menu commands through the responder
 /// chain.
 @MainActor
-final class DocumentWindowController: NSWindowController, NSWindowDelegate {
+final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
     let imageDocument: ImageDocument
     let canvas: EngineCanvasView
     let statusBar = StatusBarView(frame: .zero)
     private let scrollView = NSScrollView()
+    private let progressView = PlugInProgressView(frame: .zero)
+    private lazy var engineUndoManager = EngineUndoManager(document: imageDocument)
     private var blurPanel: GaussianBlurPanel?
     var onClose: ((DocumentWindowController) -> Void)?
 
@@ -66,6 +68,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate {
             statusBar.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             statusBar.heightAnchor.constraint(equalToConstant: ClassicMetrics.statusBarHeight),
         ])
+
+        progressView.translatesAutoresizingMaskIntoConstraints = false
+        progressView.onStop = { [weak self] in self?.imageDocument.session.cancelProcedure() }
+        statusBar.addSubview(progressView)
+        NSLayoutConstraint.activate([
+            progressView.trailingAnchor.constraint(equalTo: statusBar.trailingAnchor,
+                                                   constant: -PlugInProgressView.zoomControlAllowance),
+            progressView.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
+        ])
         window.contentView = content
     }
 
@@ -93,17 +104,87 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: Menu commands
 
-    @objc func undo(_ sender: Any?) { imageDocument.undo() }
-    @objc func redo(_ sender: Any?) { imageDocument.redo() }
     @objc func zoomIn(_ sender: Any?) { zoom(to: ZoomLadder.zoomIn(from: canvas.zoomPercent)) }
     @objc func zoomOut(_ sender: Any?) { zoom(to: ZoomLadder.zoomOut(from: canvas.zoomPercent)) }
     @objc func actualPixels(_ sender: Any?) { zoom(to: ZoomLadder.actualPixels) }
 
     @objc func gaussianBlur(_ sender: Any?) {
-        guard blurPanel == nil, let panel = GaussianBlurPanel(document: imageDocument) else { return }
+        guard blurPanel == nil else { return }
+        guard let panel = GaussianBlurPanel(document: imageDocument) else {
+            statusBar.message = "Gaussian Blur could not start on this layer."
+            NSSound.beep()
+            return
+        }
         panel.onFinish = { [weak self] in self?.blurPanel = nil }
         blurPanel = panel
         panel.showWindow(nil)
+    }
+
+    // MARK: Plug-in commands
+
+    @objc func runPlugIn(_ sender: Any?) {
+        guard let command = (sender as? NSMenuItem)?.representedObject as? PlugInCommand else { return }
+        run(command.procedure, mode: .interactive)
+    }
+
+    @objc func repeatLastFilter(_ sender: Any?) {
+        guard let last = PlugInCommands.last else { return }
+        run(last, mode: .withLastValues)
+    }
+
+    @objc func reshowLastFilter(_ sender: Any?) {
+        guard let last = PlugInCommands.last else { return }
+        run(last, mode: .interactive)
+    }
+
+    /// Runs a plug-in command on this document, as its menu item does.
+    func run(_ procedure: EngineSession.Procedure, mode: EngineSession.RunMode) {
+        guard !PlugInCommands.isRunning else { return }
+        let title = procedure.label.replacingOccurrences(of: "…", with: "")
+        PlugInCommands.willRun(procedure, on: imageDocument)
+        statusBar.message = mode == .interactive && procedure.label.hasSuffix("…")
+            ? "\(title): waiting for its settings window" : "\(title)…"
+        imageDocument.run(procedure, mode: mode) { [weak self] result in
+            PlugInCommands.didRun(procedure, outcome: try? result.get())
+            guard let self else { return }
+            self.progressView.show(nil)
+            switch result {
+            case .success(.completed): self.stateDidChange()
+            case .success(.cancelled): self.statusBar.message = "\(title) was cancelled."
+            case .failure(let error): self.statusBar.message = "\(title): \(error)"
+            }
+        }
+    }
+
+    /// Progress of the plug-in command running on this document.
+    func showProgress(_ progress: EngineSession.Progress?) {
+        progressView.show(progress)
+        if let progress, !progress.text.isEmpty {
+            statusBar.message = progress.text
+        }
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(gaussianBlur(_:)):
+            return !PlugInCommands.isRunning
+        case #selector(runPlugIn(_:)):
+            // The engine runs no plug-in while a filter preview is open.
+            guard let command = menuItem.representedObject as? PlugInCommand else { return false }
+            return !PlugInCommands.isRunning && blurPanel == nil && imageDocument.canRun(command.procedure)
+        case #selector(repeatLastFilter(_:)), #selector(reshowLastFilter(_:)):
+            let base = menuItem.action == #selector(repeatLastFilter(_:)) ? "Last Filter" : "Last Filter Settings…"
+            guard let last = PlugInCommands.last else {
+                menuItem.title = base
+                return false
+            }
+            let title = last.label.replacingOccurrences(of: "…", with: "")
+            menuItem.title = menuItem.action == #selector(repeatLastFilter(_:))
+                ? "Last Filter: \(title)" : "Last Filter Settings: \(title)…"
+            return !PlugInCommands.isRunning && blurPanel == nil && imageDocument.canRun(last)
+        default:
+            return true
+        }
     }
 
     @objc func exportDocument(_ sender: Any?) {
@@ -130,6 +211,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate {
                 try? self.imageDocument.reload()
             }
         }
+    }
+
+    /// Edit ▸ Undo and Redo reach the engine through this (see
+    /// `EngineUndoManager`).
+    func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
+        engineUndoManager
     }
 
     func windowDidBecomeMain(_ notification: Notification) {
