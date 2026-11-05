@@ -24,6 +24,7 @@ Keep `docs/plan.md` current as the work proceeds.
 | Path | Contents |
 |---|---|
 | `Sources/GlimsKit/` | The AppKit interface, built with RigiUI. Never includes GIMP headers. |
+| `Sources/GlimsKit/RigiIncubator/` | Generic controls incubated here before they move to Rigi. |
 | `Sources/Glims/` | The thin executable. |
 | `Tests/GlimsKitTests/` | Unit tests. |
 | `Resources/` | `Info.plist` (the release version source), the generated `Third-Party-Notices.txt` and app icon. |
