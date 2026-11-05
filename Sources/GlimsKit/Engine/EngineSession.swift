@@ -43,6 +43,10 @@ final class EngineSession: @unchecked Sendable {
         case linear = 0, bilinear, radial
     }
 
+    enum Transform: UInt32 {
+        case rotate90 = 1, rotate180, rotate270, flipHorizontal, flipVertical
+    }
+
     enum LayerCommand: UInt32 {
         case new = 1, duplicate, delete, raise, lower, toTop, toBottom, mergeDown, flatten
     }
@@ -499,6 +503,26 @@ final class EngineSession: @unchecked Sendable {
         let area = GlimsRect(x: Int32(rect.minX.rounded()), y: Int32(rect.minY.rounded()),
                              width: Int32(rect.width.rounded()), height: Int32(rect.height.rounded()))
         try check(api.image_crop(engine, image, area, &error), error)
+    }
+
+    func transformImage(_ image: Int32, _ transform: Transform) throws {
+        try check(api.image_transform(engine, image, transform.rawValue), nil)
+    }
+
+    func transformLayer(_ layer: Int32, image: Int32, _ transform: Transform) throws {
+        try check(api.layer_transform(engine, image, layer, transform.rawValue), nil)
+    }
+
+    func scaleImage(_ image: Int32, width: Int, height: Int) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_scale(engine, image, Int32(width), Int32(height), &error), error)
+    }
+
+    func resizeCanvas(_ image: Int32, width: Int, height: Int, offset: CGPoint, fill: NSColor) throws {
+        var color = Self.color(fill)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_resize_canvas(engine, image, Int32(width), Int32(height),
+                                          Int32(offset.x), Int32(offset.y), &color, &error), error)
     }
 
     private static func color(_ color: NSColor) -> GlimsColor {

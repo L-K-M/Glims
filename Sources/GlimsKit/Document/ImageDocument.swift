@@ -180,6 +180,26 @@ final class ImageDocument {
         run { session, image in try session.moveLayer(layer, image: image, by: offset) }
     }
 
+    func transformImage(_ transform: EngineSession.Transform) {
+        guard !refuseWhilePlugInRuns() else { return }
+        run { session, image in try session.transformImage(image, transform) }
+    }
+
+    func transformActiveLayer(_ transform: EngineSession.Transform) {
+        guard let layer = activeLayer, !refuseWhilePlugInRuns() else { return }
+        run { session, image in try session.transformLayer(layer, image: image, transform) }
+    }
+
+    func scale(toWidth width: Int, height: Int) {
+        guard !refuseWhilePlugInRuns() else { return }
+        run { session, image in try session.scaleImage(image, width: width, height: height) }
+    }
+
+    func resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: NSColor) {
+        guard !refuseWhilePlugInRuns() else { return }
+        run { session, image in try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill) }
+    }
+
     func crop(to rect: CGRect) {
         guard !refuseWhilePlugInRuns() else { return }
         run { session, image in try session.crop(image: image, to: rect) }

@@ -267,6 +267,21 @@ enum EngineSmokeTest {
         document.undo()
         settle()
         check(document.info.width == 300 && controller.canvas.frame.width == 300, "undo restores the size and the canvas")
+
+        controller.rotateImage90(nil)
+        settle()
+        check(document.info.width == 200 && document.info.height == 300 && controller.canvas.frame.size == CGSize(width: 200, height: 300),
+              "Image ▸ Rotate ▸ 90° Clockwise swaps the size and the canvas follows")
+        document.scale(toWidth: 100, height: 150)
+        settle()
+        check(document.info.width == 100 && controller.canvas.frame.width == 100, "Image Size scales the image and the canvas")
+        document.resizeCanvas(width: 140, height: 190, offset: CGPoint(x: 20, y: 20), fill: .blue)
+        settle()
+        check(document.info.width == 140 && pixel(session, image, x: 2, y: 2)?.prefix(3) == [0, 0, 255],
+              "Canvas Size grows the canvas with the background color")
+        controller.flipLayerHorizontally(nil)
+        settle()
+        check(document.undoInfo.nextUndo.isEmpty == false, "Layer ▸ Transform ▸ Flip Horizontal is an undo step (\(document.undoInfo.nextUndo))")
         controller.window?.orderOut(nil)
     }
 

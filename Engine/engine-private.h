@@ -141,6 +141,13 @@ GlimsStatus glims_layer_change     (GlimsEngine *e, GlimsImageID image, GlimsIte
 GlimsStatus glims_layer_move       (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                     double dx, double dy);
 GlimsStatus glims_image_crop       (GlimsEngine *e, GlimsImageID image, GlimsRect rect, char **error);
+GlimsStatus glims_image_transform  (GlimsEngine *e, GlimsImageID image, uint32_t transform);
+GlimsStatus glims_layer_transform  (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, uint32_t transform);
+GlimsStatus glims_image_scale      (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t height,
+                                    char **error);
+GlimsStatus glims_image_resize_canvas (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t height,
+                                       int32_t offset_x, int32_t offset_y, const GlimsColor *fill,
+                                       char **error);
 
 /* procedure.c */
 GlimsStatus glims_procedures       (GlimsEngine *e, GlimsImageID image, GlimsProcedureInfo *rows,

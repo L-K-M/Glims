@@ -23,11 +23,17 @@
 #include "core/gimpgrouplayer.h"
 #include "core/gimpimage.h"
 #include "core/gimpimage-crop.h"
+#include "core/gimpimage-flip.h"
+#include "core/gimpimage-resize.h"
+#include "core/gimpimage-rotate.h"
+#include "core/gimpimage-scale.h"
 #include "core/gimpimage-merge.h"
 #include "core/gimpimage-undo.h"
 #include "core/gimpitem.h"
 #include "core/gimplayer.h"
 #include "core/gimplayer-new.h"
+
+#include "config/gimpcoreconfig.h"
 
 #include "gimp-intl.h"
 
@@ -473,6 +479,152 @@ glims_image_crop (GlimsEngine  *engine,
   /* GIMP's crop tool with "Delete cropped pixels" on, its default. */
   gimp_image_crop (image, gimp_get_user_context (engine->gimp), GIMP_FILL_TRANSPARENT,
                    bounds.x, bounds.y, bounds.width, bounds.height, TRUE);
+  gimp_image_flush (image);
+
+  return GLIMS_STATUS_OK;
+}
+
+/* ---- Transforms ---------------------------------------------------------- */
+
+static gboolean
+rotation_or_flip (uint32_t             transform,
+                  GimpRotationType    *rotation,
+                  GimpOrientationType *flip)
+{
+  *rotation = -1;
+  *flip     = GIMP_ORIENTATION_UNKNOWN;
+
+  switch (transform)
+    {
+    case GLIMS_TRANSFORM_ROTATE_90:       *rotation = GIMP_ROTATE_DEGREES90;  return TRUE;
+    case GLIMS_TRANSFORM_ROTATE_180:      *rotation = GIMP_ROTATE_DEGREES180; return TRUE;
+    case GLIMS_TRANSFORM_ROTATE_270:      *rotation = GIMP_ROTATE_DEGREES270; return TRUE;
+    case GLIMS_TRANSFORM_FLIP_HORIZONTAL: *flip = GIMP_ORIENTATION_HORIZONTAL; return TRUE;
+    case GLIMS_TRANSFORM_FLIP_VERTICAL:   *flip = GIMP_ORIENTATION_VERTICAL;   return TRUE;
+    default:                              return FALSE;
+    }
+}
+
+GlimsStatus
+glims_image_transform (GlimsEngine  *engine,
+                       GlimsImageID  id,
+                       uint32_t      transform)
+{
+  GlimsStatus          status;
+  GimpImage           *image = writable_image (engine, id, &status);
+  GimpContext         *context;
+  GimpRotationType     rotation;
+  GimpOrientationType  flip;
+
+  if (! image)
+    return status;
+  if (! rotation_or_flip (transform, &rotation, &flip))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  /* The whole image with every layer, channel and path, as Image >
+   * Transform does (app/actions/image-commands.c). */
+  context = gimp_get_user_context (engine->gimp);
+  if (flip != GIMP_ORIENTATION_UNKNOWN)
+    gimp_image_flip (image, context, flip, NULL);
+  else
+    gimp_image_rotate (image, context, rotation, NULL);
+
+  gimp_image_flush (image);
+
+  return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_layer_transform (GlimsEngine  *engine,
+                       GlimsImageID  id,
+                       GlimsItemID   layer_id,
+                       uint32_t      transform)
+{
+  GlimsStatus          status;
+  GimpImage           *image = writable_image (engine, id, &status);
+  GimpLayer           *layer;
+  GimpRotationType     rotation;
+  GimpOrientationType  flip;
+  gint                 x, y, width, height;
+
+  if (! image)
+    return status;
+  if (! rotation_or_flip (transform, &rotation, &flip))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  layer = find_layer (image, layer_id);
+  if (! layer)
+    return GLIMS_STATUS_NOT_FOUND;
+
+  /* Around the layer's own center, unclipped, as Layer > Transform does
+   * (app/actions/drawable-commands.c). */
+  gimp_item_get_offset (GIMP_ITEM (layer), &x, &y);
+  width  = gimp_item_get_width (GIMP_ITEM (layer));
+  height = gimp_item_get_height (GIMP_ITEM (layer));
+
+  if (flip == GIMP_ORIENTATION_HORIZONTAL)
+    gimp_item_flip (GIMP_ITEM (layer), gimp_get_user_context (engine->gimp), flip, x + width / 2.0, FALSE);
+  else if (flip == GIMP_ORIENTATION_VERTICAL)
+    gimp_item_flip (GIMP_ITEM (layer), gimp_get_user_context (engine->gimp), flip, y + height / 2.0, FALSE);
+  else
+    gimp_item_rotate (GIMP_ITEM (layer), gimp_get_user_context (engine->gimp), rotation,
+                      x + width / 2.0, y + height / 2.0, FALSE);
+
+  gimp_image_flush (image);
+
+  return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_image_scale (GlimsEngine  *engine,
+                   GlimsImageID  id,
+                   int32_t       width,
+                   int32_t       height,
+                   char        **error)
+{
+  GlimsStatus status;
+  GimpImage  *image = writable_image (engine, id, &status);
+
+  if (! image)
+    return status;
+  if (width < 1 || height < 1 || width > GIMP_MAX_IMAGE_SIZE || height > GIMP_MAX_IMAGE_SIZE)
+    return glims_fail (error, NULL, "The new size must be between 1 and 524288 pixels.");
+
+  /* With the interpolation the engine's preferences name. */
+  gimp_image_scale (image, width, height, engine->gimp->config->interpolation_type, NULL);
+  gimp_image_flush (image);
+
+  return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_image_resize_canvas (GlimsEngine      *engine,
+                           GlimsImageID      id,
+                           int32_t           width,
+                           int32_t           height,
+                           int32_t           offset_x,
+                           int32_t           offset_y,
+                           const GlimsColor *fill,
+                           char            **error)
+{
+  GlimsStatus  status;
+  GimpImage   *image = writable_image (engine, id, &status);
+  GimpContext *context;
+
+  if (! image)
+    return status;
+  if (! fill)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (width < 1 || height < 1 || width > GIMP_MAX_IMAGE_SIZE || height > GIMP_MAX_IMAGE_SIZE)
+    return glims_fail (error, NULL, "The new size must be between 1 and 524288 pixels.");
+
+  /* Image-sized layers (a background) grow with the canvas and fill the new
+   * area with `fill`; other layers keep their size, as in classic editors.
+   * GIMP's Canvas Size dialog offers the same choice. */
+  context = command_context (engine->gimp, NULL, fill);
+  gimp_image_resize_with_layers (image, context, GIMP_FILL_BACKGROUND, width, height,
+                                 offset_x, offset_y, GIMP_ITEM_SET_IMAGE_SIZED, FALSE, NULL);
+  g_object_unref (context);
   gimp_image_flush (image);
 
   return GLIMS_STATUS_OK;

@@ -31,6 +31,17 @@ enum MainMenu {
         ])
         // Plug-in commands are appended to Image, Layer and Select (PlugInMenus).
         add(menu, "Image", [
+            item("Image Size…", #selector(DocumentWindowController.imageSize(_:))),
+            item("Canvas Size…", #selector(DocumentWindowController.canvasSize(_:))),
+            submenu("Rotate", [
+                item("90° Clockwise", #selector(DocumentWindowController.rotateImage90(_:))),
+                item("90° Counter-Clockwise", #selector(DocumentWindowController.rotateImage270(_:))),
+                item("180°", #selector(DocumentWindowController.rotateImage180(_:))),
+                .separator(),
+                item("Flip Horizontal", #selector(DocumentWindowController.flipImageHorizontally(_:))),
+                item("Flip Vertical", #selector(DocumentWindowController.flipImageVertically(_:))),
+            ]),
+            .separator(),
             item("Crop to Selection", #selector(DocumentWindowController.cropToSelection(_:))),
             item("Flatten Image", #selector(DocumentWindowController.flattenImage(_:))),
         ])
@@ -53,6 +64,14 @@ enum MainMenu {
             .separator(),
             item("Layer Properties…", #selector(DocumentWindowController.layerProperties(_:))),
             arrange,
+            submenu("Transform", [
+                item("Rotate 90° Clockwise", #selector(DocumentWindowController.rotateLayer90(_:))),
+                item("Rotate 90° Counter-Clockwise", #selector(DocumentWindowController.rotateLayer270(_:))),
+                item("Rotate 180°", #selector(DocumentWindowController.rotateLayer180(_:))),
+                .separator(),
+                item("Flip Horizontal", #selector(DocumentWindowController.flipLayerHorizontally(_:))),
+                item("Flip Vertical", #selector(DocumentWindowController.flipLayerVertically(_:))),
+            ]),
             .separator(),
             item("Merge Down", #selector(DocumentWindowController.mergeDown(_:)), "e"),
         ])
@@ -100,6 +119,13 @@ enum MainMenu {
         NSApplication.shared.windowsMenu = windowMenu
 
         return menu
+    }
+
+    private static func submenu(_ title: String, _ items: [NSMenuItem]) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.submenu = NSMenu(title: title)
+        items.forEach { item.submenu?.addItem($0) }
+        return item
     }
 
     private static func item(_ title: String, _ action: Selector, _ key: String = "") -> NSMenuItem {

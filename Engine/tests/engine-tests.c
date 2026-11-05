@@ -453,6 +453,66 @@ test_editing (void)
   api->image_close (engine, image);
 }
 
+static void
+test_transforms (void)
+{
+  GlimsImageID       image = 0;
+  GlimsImageInfo     info;
+  GlimsSelectOptions none = { .struct_size = sizeof none };
+  GlimsFillSettings  fill = { .struct_size = sizeof fill, .mode = GLIMS_FILL_SELECTION,
+                              .color = { 0, 0, 0, 1 }, .opacity = 1, .antialias = true };
+  GlimsColor         blue = { 0, 0, 1, 1 };
+  uint8_t            pixel[4];
+  int32_t            before;
+  int                sizes = atomic_load (&size_events);
+  char              *error = NULL;
+
+  /* A black strip along the left edge, 20 pixels wide. */
+  api->image_new (engine, 100, 60, &image, NULL);
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 0, 0 }, { 20, 60 } }, 2, &none);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL);
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  before = undo_depth (image);
+
+  CHECK (api->image_transform (engine, image, GLIMS_TRANSFORM_ROTATE_90) == GLIMS_STATUS_OK &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK && info.width == 60 && info.height == 100 &&
+         red_at (image, 30, 5) == 0 && red_at (image, 30, 90) == 255 && atomic_load (&size_events) > sizes,
+         "rotating 90° clockwise turns 100x60 into 60x100 with the strip on top");
+  CHECK (undo_depth (image) == before + 1, "the rotation is one undo step");
+  CHECK (api->image_transform (engine, image, GLIMS_TRANSFORM_ROTATE_270) == GLIMS_STATUS_OK &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK && info.width == 100 &&
+         red_at (image, 5, 30) == 0 && red_at (image, 95, 30) == 255,
+         "rotating 90° back puts the strip on the left again");
+  CHECK (api->image_transform (engine, image, GLIMS_TRANSFORM_FLIP_HORIZONTAL) == GLIMS_STATUS_OK &&
+         red_at (image, 95, 30) == 0 && red_at (image, 5, 30) == 255,
+         "flipping horizontally moves the strip to the right");
+  CHECK (api->image_transform (engine, image, 42) == GLIMS_STATUS_INVALID_ARGUMENT, "an unknown transform is rejected");
+
+  CHECK (api->image_scale (engine, image, 50, 30, NULL) == GLIMS_STATUS_OK &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK && info.width == 50 && info.height == 30 &&
+         red_at (image, 47, 15) < 32 && red_at (image, 10, 15) == 255,
+         "Image Size scales to 50x30 with the strip still at the right");
+  CHECK (api->image_scale (engine, image, 0, 30, &error) == GLIMS_STATUS_FAILED && error,
+         "a zero size is refused");
+  api->free_string (error);
+  error = NULL;
+
+  CHECK (api->image_resize_canvas (engine, image, 70, 50, 10, 10, &blue, NULL) == GLIMS_STATUS_OK &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK && info.width == 70 && info.height == 50 &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 2, 2, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[2] == 255 && pixel[0] == 0 && red_at (image, 30, 25) == 255,
+         "Canvas Size to 70x50 grows the background and fills the new edge with the color");
+
+  before = undo_depth (image);
+  CHECK (api->layer_transform (engine, image, 0, GLIMS_TRANSFORM_FLIP_VERTICAL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "flipping the layer is one undo step");
+  CHECK (api->layer_transform (engine, image, 4242, GLIMS_TRANSFORM_FLIP_VERTICAL) == GLIMS_STATUS_NOT_FOUND,
+         "transforming an unknown layer is reported");
+
+  api->image_close (engine, image);
+}
+
 /* A render right after a change must show it. Validating tiles only as
  * reads touched them returned the old pixels now and then (about one round
  * in 23 here), and they stayed that way. */
@@ -1137,6 +1197,7 @@ main (int argc, char **argv)
   test_selections ();
   test_editing ();
   test_render_freshness ();
+  test_transforms ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 

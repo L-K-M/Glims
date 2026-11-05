@@ -994,6 +994,11 @@ MARSHAL (layer_command, return glims_layer_command (e, a->image, a->item, (uint3
 MARSHAL (layer_change, return glims_layer_change (e, a->image, a->item, a->in, a->error);)
 MARSHAL (layer_move, return glims_layer_move (e, a->image, a->item, a->number, a->number2);)
 MARSHAL (image_crop, return glims_image_crop (e, a->image, a->area, a->error);)
+MARSHAL (image_transform, return glims_image_transform (e, a->image, (uint32_t) a->width);)
+MARSHAL (layer_transform, return glims_layer_transform (e, a->image, a->item, (uint32_t) a->width);)
+MARSHAL (image_scale, return glims_image_scale (e, a->image, a->width, a->height, a->error);)
+MARSHAL (image_resize_canvas, return glims_image_resize_canvas (e, a->image, a->area.width, a->area.height,
+                                                                a->area.x, a->area.y, a->in, a->error);)
 MARSHAL (procedure_run, return glims_procedure_run (e, a->image, a->string, (uint32_t) a->width, a->error);)
 
 static GlimsStatus
@@ -1248,6 +1253,35 @@ api_image_crop (GlimsEngine *e, GlimsImageID image, GlimsRect rect, char **error
   return glims_engine_call (e, image_crop_on_engine, &a);
 }
 
+static GlimsStatus
+api_image_transform (GlimsEngine *e, GlimsImageID image, uint32_t transform)
+{
+  GlimsArgs a = { .image = image, .width = (int32_t) transform };
+  return glims_engine_call (e, image_transform_on_engine, &a);
+}
+
+static GlimsStatus
+api_layer_transform (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, uint32_t transform)
+{
+  GlimsArgs a = { .image = image, .item = layer, .width = (int32_t) transform };
+  return glims_engine_call (e, layer_transform_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_scale (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t height, char **error)
+{
+  GlimsArgs a = { .image = image, .width = width, .height = height, .error = error };
+  return glims_engine_call (e, image_scale_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_resize_canvas (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t height,
+                         int32_t offset_x, int32_t offset_y, const GlimsColor *fill, char **error)
+{
+  GlimsArgs a = { .image = image, .area = { offset_x, offset_y, width, height }, .in = fill, .error = error };
+  return glims_engine_call (e, image_resize_canvas_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1288,6 +1322,10 @@ static const GlimsEngineAPI api_v1 = {
   .layer_change      = api_layer_change,
   .layer_move        = api_layer_move,
   .image_crop        = api_image_crop,
+  .image_transform   = api_image_transform,
+  .layer_transform   = api_layer_transform,
+  .image_scale       = api_image_scale,
+  .image_resize_canvas = api_image_resize_canvas,
 };
 
 __attribute__ ((visibility ("default")))

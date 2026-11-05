@@ -532,6 +532,11 @@ In this order (reasons in `phase0-report.md`):
   the root cause in GEGL's tile handling, which is open. One bucket-fill
   check failed once in five runs on GIMP 3.2.0 before the fix and not
   since; its cause is not known.
+- 2026-11-05: Image ▸ Image Size (constrained proportions), Canvas Size
+  (centered; image-sized layers grow and take the background color, as in
+  classic editors), Rotate and Flip for the image, and Layer ▸ Transform
+  (rotate and flip around the layer's center). 142 conformance checks on
+  all four engines and the app's smoke test (45 checks) pass.
 
 ## Later, before any public release
 

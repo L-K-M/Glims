@@ -285,6 +285,14 @@ typedef struct GlimsLayerChange {
   char     mode[64];         /* blend mode nick, as GlimsLayerInfo reports it */
 } GlimsLayerChange;
 
+typedef enum GlimsTransform {
+  GLIMS_TRANSFORM_ROTATE_90       = 1,  /* clockwise */
+  GLIMS_TRANSFORM_ROTATE_180      = 2,
+  GLIMS_TRANSFORM_ROTATE_270      = 3,  /* clockwise, i.e. 90 counter-clockwise */
+  GLIMS_TRANSFORM_FLIP_HORIZONTAL = 4,
+  GLIMS_TRANSFORM_FLIP_VERTICAL   = 5
+} GlimsTransform;
+
 typedef enum GlimsRunMode {
   GLIMS_RUN_INTERACTIVE      = 1, /* the plug-in may show its dialog */
   GLIMS_RUN_WITH_LAST_VALUES = 2  /* repeat with the last settings, no dialog */
@@ -431,6 +439,21 @@ typedef struct GlimsEngineAPI {
   /* Crops the image and its layers to `rect` (image pixels); SIZE_CHANGED follows. */
   GlimsStatus  (*image_crop)       (GlimsEngine *engine, GlimsImageID image, GlimsRect rect,
                                     char **error);
+
+  /* Transforms. Each is one undo step; image-wide ones send SIZE_CHANGED
+   * when the size changes. */
+  GlimsStatus  (*image_transform)  (GlimsEngine *engine, GlimsImageID image, uint32_t transform);
+  /* Around the layer's center; `layer` 0 means the selected layer. */
+  GlimsStatus  (*layer_transform)  (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                                    uint32_t transform);
+  /* Scales the image and all its layers (Image Size). */
+  GlimsStatus  (*image_scale)      (GlimsEngine *engine, GlimsImageID image, int32_t width,
+                                    int32_t height, char **error);
+  /* Changes the canvas (Canvas Size); the old image lands at `offset`.
+   * Image-sized layers grow and fill the new area with `fill`. */
+  GlimsStatus  (*image_resize_canvas)(GlimsEngine *engine, GlimsImageID image, int32_t width,
+                                    int32_t height, int32_t offset_x, int32_t offset_y,
+                                    const GlimsColor *fill, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

@@ -203,6 +203,70 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                              "hsv-hue", "hsv-saturation", "hsl-color", "hsv-value",
                              "lch-hue", "lch-chroma", "lch-color", "lch-lightness", "luminance"]
 
+    // MARK: Image size and transforms
+
+    @objc func rotateImage90(_ sender: Any?) { imageDocument.transformImage(.rotate90) }
+    @objc func rotateImage270(_ sender: Any?) { imageDocument.transformImage(.rotate270) }
+    @objc func rotateImage180(_ sender: Any?) { imageDocument.transformImage(.rotate180) }
+    @objc func flipImageHorizontally(_ sender: Any?) { imageDocument.transformImage(.flipHorizontal) }
+    @objc func flipImageVertically(_ sender: Any?) { imageDocument.transformImage(.flipVertical) }
+    @objc func rotateLayer90(_ sender: Any?) { imageDocument.transformActiveLayer(.rotate90) }
+    @objc func rotateLayer270(_ sender: Any?) { imageDocument.transformActiveLayer(.rotate270) }
+    @objc func rotateLayer180(_ sender: Any?) { imageDocument.transformActiveLayer(.rotate180) }
+    @objc func flipLayerHorizontally(_ sender: Any?) { imageDocument.transformActiveLayer(.flipHorizontal) }
+    @objc func flipLayerVertically(_ sender: Any?) { imageDocument.transformActiveLayer(.flipVertical) }
+
+    @objc func imageSize(_ sender: Any?) {
+        askSize("Image Size", constrain: true) { [weak self] width, height in
+            self?.imageDocument.scale(toWidth: width, height: height)
+        }
+    }
+
+    /// The canvas grows or shrinks around the image's center; the new area
+    /// takes the background color, as in classic editors.
+    @objc func canvasSize(_ sender: Any?) {
+        askSize("Canvas Size", constrain: false) { [weak self] width, height in
+            guard let self else { return }
+            let info = self.imageDocument.info
+            let offset = CGPoint(x: ((width - info.width) / 2), y: ((height - info.height) / 2))
+            self.imageDocument.resizeCanvas(width: width, height: height, offset: offset,
+                                            fill: ToolState.shared.background)
+        }
+    }
+
+    /// A sheet asking for a width and height in pixels; with `constrain`
+    /// the proportions stay linked until the box is unchecked.
+    private func askSize(_ title: String, constrain: Bool, _ apply: @escaping (Int, Int) -> Void) {
+        guard let window else { return }
+        let info = imageDocument.info
+        let width = NSTextField(string: String(info.width))
+        let height = NSTextField(string: String(info.height))
+        let link = NSButton(checkboxWithTitle: "Constrain proportions", target: nil, action: nil)
+        link.state = constrain ? .on : .off
+        let linker = ProportionLinker(width: width, height: height, ratio: Double(info.width) / Double(info.height), link: link)
+        let grid = NSGridView(views: [
+            [NSTextField(labelWithString: "Width (px):"), width],
+            [NSTextField(labelWithString: "Height (px):"), height],
+            [NSGridCell.emptyContentView, link],
+        ])
+        grid.column(at: 0).xPlacement = .trailing
+        width.widthAnchor.constraint(equalToConstant: 90).isActive = true
+        grid.frame = NSRect(x: 0, y: 0, width: 260, height: 80)
+
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = "Now \(info.width) × \(info.height) px."
+        alert.accessoryView = grid
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = width
+        alert.beginSheetModal(for: window) { response in
+            withExtendedLifetime(linker) {}
+            guard response == .alertFirstButtonReturn, width.integerValue > 0, height.integerValue > 0 else { return }
+            apply(width.integerValue, height.integerValue)
+        }
+    }
+
     @objc func cropToSelection(_ sender: Any?) {
         guard let bounds = try? imageDocument.session.selectionBounds(image: imageDocument.image) else {
             statusBar.message = "Select the area to keep first."
@@ -349,5 +413,33 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         blurPanel?.cancel()
         try? imageDocument.session.closeImage(imageDocument.image)
         onClose?(self)
+    }
+}
+
+/// Keeps a width and height field in proportion while `link` is checked.
+@MainActor
+private final class ProportionLinker: NSObject, NSTextFieldDelegate {
+    private let width: NSTextField
+    private let height: NSTextField
+    private let ratio: Double
+    private let link: NSButton
+
+    init(width: NSTextField, height: NSTextField, ratio: Double, link: NSButton) {
+        self.width = width
+        self.height = height
+        self.ratio = ratio
+        self.link = link
+        super.init()
+        width.delegate = self
+        height.delegate = self
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard link.state == .on, ratio > 0, let field = notification.object as? NSTextField else { return }
+        if field === width, width.integerValue > 0 {
+            height.integerValue = max(1, Int((Double(width.integerValue) / ratio).rounded()))
+        } else if field === height, height.integerValue > 0 {
+            width.integerValue = max(1, Int((Double(height.integerValue) * ratio).rounded()))
+        }
     }
 }
