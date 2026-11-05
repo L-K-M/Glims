@@ -10,8 +10,9 @@ GIMP image engine.
 
 **Version:** v<!-- version -->0.1.0<!-- /version -->
 
-**Status:** phase 0. The app is a shell with a placeholder canvas; the GIMP
-engine is not connected yet, and nothing has been released.
+**Status:** phase 0. GIMP's engine builds unmodified and runs behind the C
+adapter in `Engine/`; the app does not use it yet, and nothing has been
+released.
 
 Glims pairs GIMP's GUI-free engine (layers, masks, painting, selections,
 non-destructive filters, XCF, plug-ins) with a new AppKit interface made with

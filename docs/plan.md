@@ -254,6 +254,31 @@ Week 3
   under `_engine/cache`. Earlier runs had left `babl`, `gegl-0.4`,
   `g-ir-scanner` and an empty `gimp` folder in `~/.cache`; they were removed.
 
+- 2026-11-05: adapter v1 (`Engine/`, facade `Sources/CGlimsEngine/include/glims_engine.h`,
+  API version 1) built with `scripts/build-adapter.sh` against `GIMP_3_2_0`.
+  The engine runs on its own thread that owns GLib's main context; facade
+  calls from other threads are queued onto it, so plug-in calls nest loops
+  only there. It starts the engine the way `app/app.c` does (minus signal
+  handlers, update check and locale changes), and covers new and open,
+  rendering the composited image to sRGB at any scale, layer tree, undo and
+  redo, paintbrush strokes with pressure (one undo step each), live filter
+  sessions (non-destructive commit is one undo step, abort none, reproducing
+  `gimp_filter_tool_commit`), XCF save, and export and import through the
+  file plug-ins. The library exports one symbol. Its 39 conformance checks
+  (`Engine/tests/engine-tests.c`, run through `dlopen` like the app) pass;
+  startup takes about 10 s with a fresh user directory (plug-in query).
+- 2026-11-05: update drill 3.2.0 to 3.2.8: the unchanged adapter compiles,
+  links and passes all 39 checks against 3.2.8. Adapter edits needed: 0.
+  The drill also found two environment gaps that GIMP's own smoke test hid
+  because the build environment exported them, fixed in the adapter: plug-ins
+  need the engine's `bin` on `PATH` (Script-Fu interpreter) and
+  `GI_TYPELIB_PATH`. It found one upstream packaging bug: GIMP 3.2.0 to 3.2.4
+  install typelibs pointing at the wrong prefix on macOS, breaking Python
+  plug-ins (fixed upstream in 3.2.6, 481bf7a998); `scripts/fix-typelibs.py`
+  repairs the install tree, a recorded packaging workaround, not a source
+  patch. GIMP 3.2.0 itself logs two `g_file_test` GLib CRITICALs at start-up;
+  3.2.8 logs none.
+
 ### Go only if all hold
 
 1. Zero engine-source patches at every tag. Packaging and environment

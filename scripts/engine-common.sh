@@ -73,3 +73,27 @@ update_mirror() {
   git -C "$mirror" fetch --quiet --tags --prune origin
   return 0
 }
+
+# run_with_timeout SECONDS LOG COMMAND...: run COMMAND in its own process
+# group with output to LOG; after SECONDS, stop the whole group (gimp-console
+# and the plug-in processes it started) and return 124.
+run_with_timeout() {
+  local limit="$1" log="$2" pid waited=0 grace=0
+  shift 2
+  set -m
+  "$@" < /dev/null > "$log" 2>&1 &
+  pid=$!
+  set +m
+  while kill -0 "$pid" 2>/dev/null; do
+    if (( waited >= limit )); then
+      kill -TERM -- "-$pid" 2>/dev/null || true
+      while kill -0 "$pid" 2>/dev/null && (( grace < 10 )); do sleep 1; grace=$((grace + 1)); done
+      kill -KILL -- "-$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return 124
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$pid"
+}

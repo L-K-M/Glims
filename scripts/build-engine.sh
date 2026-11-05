@@ -142,30 +142,6 @@ build() {
   return 0
 }
 
-# run_with_timeout SECONDS LOG COMMAND...: run COMMAND in its own process
-# group with output to LOG; after SECONDS, stop the whole group (gimp-console
-# and the plug-in processes it started) and return 124.
-run_with_timeout() {
-  local limit="$1" log="$2" pid waited=0 grace=0
-  shift 2
-  set -m
-  "$@" < /dev/null > "$log" 2>&1 &
-  pid=$!
-  set +m
-  while kill -0 "$pid" 2>/dev/null; do
-    if (( waited >= limit )); then
-      kill -TERM -- "-$pid" 2>/dev/null || true
-      while kill -0 "$pid" 2>/dev/null && (( grace < 10 )); do sleep 1; grace=$((grace + 1)); done
-      kill -KILL -- "-$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
-      return 124
-    fi
-    sleep 1
-    waited=$((waited + 1))
-  done
-  wait "$pid"
-}
-
 echo "==> Updating mirrors"
 update_mirror babl "$BABL_REPO"
 update_mirror gegl "$GEGL_REPO"
@@ -204,6 +180,17 @@ build babl
 build gegl
 build gimp "${GIMP_OPTIONS[@]}"
 
+# Packaging workaround for GIMP 3.2.0 to 3.2.4 (fixed upstream in 3.2.6):
+# repair typelib library paths in the install tree; a no-op otherwise.
+echo "==> Checking the installed typelibs"
+repairs="$(python3 -I "$ROOT/scripts/fix-typelibs.py" "$INSTALL" "$PREFIX")" ||
+  die "repairing the typelibs failed"
+if [[ -n "$repairs" ]]; then
+  while IFS= read -r line; do echo "-- packaging workaround: $line"; done <<< "$repairs"
+else
+  echo ".. all typelibs resolve"
+fi
+
 echo "==> Checking that the sources are unmodified"
 for name in babl gegl gimp; do assert_pristine "$name"; done
 echo "-- babl, gegl and gimp (with gimp-data) are byte-identical to upstream"
@@ -226,7 +213,28 @@ run_with_timeout 600 "$LOGS/$REF-smoke.log" \
       "$CONSOLE" -i --batch-interpreter=plug-in-script-fu-eval -b '(gimp-quit 0)' || status=$?
 (( status != 124 )) || die "gimp-console did not quit within 10 minutes; see $LOGS/$REF-smoke.log"
 (( status == 0 )) || die "gimp-console exited with status $status; see $LOGS/$REF-smoke.log"
-echo "-- gimp-console started, loaded its plug-ins and quit (log: $LOGS/$REF-smoke.log)"
+# A clean exit is not enough: plug-ins that fail to load still let
+# gimp-console quit with status 0. Every installed plug-in must register,
+# except those that by design register only when an outside program is
+# installed (darktable, RawTherapee, a mail client).
+CONDITIONAL_PLUG_INS=" file-darktable file-rawtherapee file-another-rawtherapee mail "
+missing="" skipped=""
+for plug_in in "$INSTALL"/lib/gimp/3.0/plug-ins/*/; do
+  name="$(basename "$plug_in")"
+  grep -q "plug-ins/$name/" "$SMOKE_HOME/gimp/pluginrc" && continue
+  if [[ "$CONDITIONAL_PLUG_INS" == *" $name "* ]]; then
+    skipped="$skipped $name"
+  else
+    missing="$missing $name"
+  fi
+done
+[[ -z "$missing" ]] || die "plug-ins failed to register:$missing; see $LOGS/$REF-smoke.log"
+[[ -z "$skipped" ]] || echo ".. optional plug-ins without their outside program:$skipped"
+! grep -qE "Traceback|Failed to load shared library" "$LOGS/$REF-smoke.log" ||
+  die "plug-ins reported load errors; see $LOGS/$REF-smoke.log"
+criticals="$(grep -c "CRITICAL" "$LOGS/$REF-smoke.log" || true)"
+(( criticals == 0 )) || echo "!! $criticals GLib CRITICAL message(s) during the smoke test; see $LOGS/$REF-smoke.log"
+echo "-- gimp-console started, registered every plug-in it can and quit (log: $LOGS/$REF-smoke.log)"
 
 echo "==> Summary"
 echo "-- $(du -sh "$INSTALL" | cut -f1) installed in $INSTALL"

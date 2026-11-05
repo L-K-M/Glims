@@ -10,8 +10,9 @@ both is in [`docs/research/`](docs/research/README.md).
 
 Phase 0 (spike). A RigiUI app shell exists: the workspace window, a
 placeholder canvas, status-strip zoom, and a `--smoke-test` mode. The engine
-dependency prefix is built (`_deps/macports`), and GIMP 3.2.8 and 3.2.0 build
-unmodified (`_engine/install/<ref>`); the adapter is next.
+dependency prefix is built (`_deps/macports`), GIMP 3.2.8 and 3.2.0 build
+unmodified (`_engine/install/<ref>`), and adapter v1 (`Engine/`) passes its
+conformance tests against both. The Swift app does not use the engine yet.
 Keep `docs/plan.md` current as the spike proceeds.
 
 ## Layout
@@ -24,7 +25,8 @@ Keep `docs/plan.md` current as the spike proceeds.
 | `Resources/` | `Info.plist` (the release version source), the generated `Third-Party-Notices.txt` and app icon. |
 | `media-sources/` | The app icon master and its generation prompt. |
 | `scripts/` | Build, release, app assembly and license-notice scripts. |
-| `Engine/` | Planned C adapter over GIMP's engine. Does not exist yet. |
+| `Engine/` | The C adapter over GIMP's engine, and its conformance tests in `Engine/tests/`. |
+| `Sources/CGlimsEngine/` | The facade header `glims_engine.h`, shared by the adapter and the app. |
 | `docs/` | Plan, design and research records. |
 
 ## Build, test and release
@@ -66,6 +68,12 @@ Keep `docs/plan.md` current as the spike proceeds.
   (made with ChatGPT's image tool, prompt in `media-sources/IconPrompt.txt`);
   `swift scripts/generate-icons.swift` writes `Resources/AppIcon.png` and
   `Resources/AppIcon.icns`. Commit all three together.
+- `scripts/build-adapter.sh [--test] [--check] [GIMP_REF]` builds
+  `_engine/adapter/<GIMP_REF>/libglimsengine.dylib` with GIMP's own
+  gimp-console flags and objects (read by `scripts/adapter-flags.py`), checks
+  it exports only `glims_engine_get_api`, and with `--test` runs the
+  conformance tests with a throwaway home. Any facade change that is not
+  purely additive bumps `GLIMS_ENGINE_API_VERSION`.
 - [`CICD.md`](CICD.md) describes the workflows.
 
 ## Architecture boundaries
