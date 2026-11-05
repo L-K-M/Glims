@@ -4,6 +4,7 @@
  */
 #include "engine-private.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "core/gimp.h"
@@ -327,6 +328,43 @@ glims_image_info (GlimsEngine    *engine,
 
 /* ---- Rendering --------------------------------------------------------- */
 
+/* Rows per read when validating; bounds the scratch memory. */
+#define VALIDATE_STRIP_ROWS 128
+
+/* GIMP's projection renders an invalid tile only when level 0 (full
+ * resolution) of it is read (GimpTileHandlerValidate validates on level-0
+ * reads). Reads at a smaller scale come from GEGL's mipmap levels, which are
+ * built from whatever level 0 holds, so they would show unrendered areas as
+ * transparent. Reading the level-0 area under `area` first renders it;
+ * GIMP's own display does the same work in idle chunks before drawing. */
+static void
+validate_full_resolution (GeglBuffer *buffer,
+                          double      scale,
+                          GlimsRect   area)
+{
+  const Babl          *format = gegl_buffer_get_format (buffer);
+  const GeglRectangle *extent = gegl_buffer_get_extent (buffer);
+  GeglRectangle        full;
+  guchar              *scratch;
+  gint                 y;
+
+  full.x      = (gint) floor (area.x / scale);
+  full.y      = (gint) floor (area.y / scale);
+  full.width  = (gint) ceil ((area.x + area.width) / scale) - full.x;
+  full.height = (gint) ceil ((area.y + area.height) / scale) - full.y;
+  if (! gegl_rectangle_intersect (&full, &full, extent))
+    return;
+
+  scratch = g_malloc ((gsize) full.width * VALIDATE_STRIP_ROWS * babl_format_get_bytes_per_pixel (format));
+  for (y = full.y; y < full.y + full.height; y += VALIDATE_STRIP_ROWS)
+    {
+      GeglRectangle strip = { full.x, y, full.width, MIN (VALIDATE_STRIP_ROWS, full.y + full.height - y) };
+
+      gegl_buffer_get (buffer, &strip, 1.0, format, scratch, GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
+    }
+  g_free (scratch);
+}
+
 GlimsStatus
 glims_image_render (GlimsEngine  *engine,
                     GlimsImageID  id,
@@ -346,13 +384,25 @@ glims_image_render (GlimsEngine  *engine,
       area.width < 1 || area.height < 1 || stride < (size_t) area.width * 4)
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
-  /* Render what is pending now; reading the buffer validates any tile that
-   * is still invalid. */
+  /* Hand pending updates to the projection as invalid tiles without
+   * rendering them; reading the buffer then renders only the tiles this
+   * area needs. That is what makes the visible area appear first, as in
+   * GIMP's own display, instead of compositing the whole image up front. */
   projection = gimp_image_get_projection (open->image);
-  gimp_projection_flush_now (projection, TRUE);
-  gimp_projection_finish_draw (projection);
 
+  /* Pending work can sit in two places: the update region, and GIMP's idle
+   * chunk renderer, which takes the update region over and renders it
+   * piece by piece without first marking its tiles invalid. Reads only
+   * render invalid tiles, so stop the chunk renderer (it hands its
+   * remaining area back to the update region) and turn the whole update
+   * region into invalid tiles. The reads below then render exactly the
+   * tiles they touch; the rest stays invalid until something reads it.
+   * The buffer is allocated on first use, which queues the whole image. */
   buffer = gimp_pickable_get_buffer (GIMP_PICKABLE (projection));
+  gimp_projection_stop_rendering (projection);
+  gimp_projection_flush_now (projection, FALSE);
+  if (scale < 1.0)
+    validate_full_resolution (buffer, scale, area);
 
   /* Babl converts from the image's working space to sRGB. Display profiles
    * are not applied yet. */

@@ -4,6 +4,7 @@
 #
 #   scripts/build-adapter.sh [GIMP_REF]          # default: the pinned engine (first set)
 #   scripts/build-adapter.sh --test [GIMP_REF]   # build, then run the conformance tests
+#   scripts/build-adapter.sh --perf [GIMP_REF]   # build, then run the performance pass
 #   scripts/build-adapter.sh --check [GIMP_REF]  # print the resolved configuration
 #
 # Output in _engine/adapter/<GIMP_REF>/: libglimsengine.dylib, which exports
@@ -25,6 +26,7 @@ REF=""
 for arg in "$@"; do
   case "$arg" in
     --test) MODE=test ;;
+    --perf) MODE=perf ;;
     --check) MODE=check ;;
     -h|--help) awk 'NR==1 && /^#!/ {next} /^#/ {sub(/^# ?/,""); print; next} {exit}' "$0"; exit 0 ;;
     -*) die "unknown option '$arg' (see --help)" ;;
@@ -77,9 +79,11 @@ xcrun clang++ -dynamiclib -o "$OUT/libglimsengine.dylib" \
   -install_name @rpath/libglimsengine.dylib \
   -Wl,-exported_symbol,_glims_engine_get_api || die "linking the adapter failed"
 
-echo "==> Building the conformance tests"
-xcrun clang -std=c11 -Wall -Wextra -Werror -I"$INCLUDE" \
-  "$ROOT/Engine/tests/engine-tests.c" -o "$OUT/glims-engine-tests" || die "building the tests failed"
+echo "==> Building the conformance tests and the performance pass"
+for program in engine-tests engine-perf; do
+  xcrun clang -std=c11 -O2 -Wall -Wextra -Werror -I"$INCLUDE" \
+    "$ROOT/Engine/tests/$program.c" -o "$OUT/glims-$program" || die "building $program failed"
+done
 
 exported="$(nm -gU "$OUT/libglimsengine.dylib" | awk '{print $3}')"
 [[ "$exported" == "_glims_engine_get_api" ]] || die "the adapter exports more than glims_engine_get_api: $exported"
@@ -101,4 +105,31 @@ if [[ "$MODE" == test ]]; then
     die "plug-ins reported load errors during the tests; see $OUT/test.log"
   criticals="$(grep -c "CRITICAL" "$OUT/test.log" || true)"
   (( criticals == 0 )) || echo "!! $criticals GLib CRITICAL message(s) during the tests; see $OUT/test.log"
+fi
+
+if [[ "$MODE" == perf ]]; then
+  # The 24 MP test image is made once by GIMP 3.2.0's gimp-console, which
+  # every later engine also opens.
+  PERF_IMAGE="$ENGINE_DIR/perf/perf-24mp-20-layers.xcf"
+  MAKER="$ENGINE_DIR/install/GIMP_3_2_0"
+  if [[ ! -s "$PERF_IMAGE" ]]; then
+    [[ -x "$MAKER/bin/gimp-console" ]] || die "the performance image is made with GIMP_3_2_0; build that engine first."
+    echo "==> Making the 24 MP performance image (once)"
+    mkdir -p "$ENGINE_DIR/perf/home"
+    status=0
+    run_with_timeout 1800 "$ENGINE_DIR/perf/make.log" \
+      env HOME="$ENGINE_DIR/perf/home" XDG_CACHE_HOME="$ENGINE_DIR/perf/home/.cache" \
+          GIMP3_DIRECTORY="$ENGINE_DIR/perf/home/gimp" PATH="$MAKER/bin:$PREFIX/bin:$CLEAN_PATH" \
+          GI_TYPELIB_PATH="$MAKER/lib/girepository-1.0:$PREFIX/lib/girepository-1.0" \
+          GLIMS_PERF_IMAGE="$PERF_IMAGE" \
+          "$MAKER/bin/gimp-console" -i --quit --batch-interpreter=python-fu-eval \
+          -b "exec(open('$ROOT/Engine/tests/make-perf-image.py').read())" || status=$?
+    (( status == 0 )) && [[ -s "$PERF_IMAGE" ]] || { cat "$ENGINE_DIR/perf/make.log"; die "making the performance image failed"; }
+  fi
+  echo "==> Running the performance pass on $(sysctl -n hw.model), $(sysctl -n hw.ncpu) cores"
+  WORK="$OUT/perf-work"
+  rm -rf "$WORK"
+  mkdir -p "$WORK/home"
+  env HOME="$WORK/home" XDG_CACHE_HOME="$WORK/cache" \
+    "$OUT/glims-engine-perf" "$OUT/libglimsengine.dylib" "$WORK" "$PERF_IMAGE" 2>&1 | tee "$OUT/perf.log"
 fi

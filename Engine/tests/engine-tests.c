@@ -364,6 +364,28 @@ test_fixture (const char *fixtures, const char *work)
   if (! image)
     return;
 
+  /* Zoomed out before anything was rendered at full resolution: the engine
+   * builds zoomed-out pixels from full-resolution tiles, so a first 50 %
+   * render must equal a 50 % render made after the whole image has been
+   * rendered at 100 %, instead of showing unrendered (transparent) areas. */
+  {
+    uint8_t *first = calloc (160 * 120, 4), *later = calloc (160 * 120, 4), *full = NULL;
+    int32_t  fw = 0, fh = 0;
+    int      transparent = 0, i;
+
+    CHECK (api->image_render (engine, image, 0.5, (GlimsRect) { 0, 0, 160, 120 }, first, 160 * 4) == GLIMS_STATUS_OK,
+           "render a freshly opened image at 50%% first");
+    for (i = 0; i < 160 * 120; i++)
+      transparent += first[i * 4 + 3] == 0;
+    full = render_all (image, &fw, &fh);
+    api->image_render (engine, image, 0.5, (GlimsRect) { 0, 0, 160, 120 }, later, 160 * 4);
+    CHECK (full && transparent == 0 && count_differences (first, later, 160 * 120 * 4) == 0,
+           "the first 50%% render equals one made after a full render (%d transparent pixels)", transparent);
+    free (first);
+    free (later);
+    free (full);
+  }
+
   CHECK (api->image_layers (engine, image, rows, 16, &count) == GLIMS_STATUS_OK && count == 5 &&
          strcmp (rows[0].name, "Glims") == 0 && rows[0].kind == GLIMS_LAYER_TEXT &&
          strcmp (rows[1].name, "Shapes") == 0 && rows[1].kind == GLIMS_LAYER_GROUP &&
