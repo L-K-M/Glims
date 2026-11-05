@@ -26,6 +26,10 @@
 #include "core/gimp.h"
 #include "core/gimp-user-install.h"
 #include "core/gimpimage.h"
+#include "core/gimpprojection.h"
+
+#include "paint/gimppaintcore.h"
+#include "paint/gimppaintoptions.h"
 
 #include "errors.h"
 #include "gimpconsoleapp.h"
@@ -166,6 +170,80 @@ init_status_noop (const gchar *text1,
 {
 }
 
+/* ---- Interface checks -------------------------------------------------- */
+
+/* The compiler checks the engine functions the adapter calls, and
+ * scripts/interface-diff.py their prototypes. GObject signals and properties
+ * are looked up by name at run time, so an engine update that renames one
+ * or changes a signal's arguments would otherwise fail silently. Every name
+ * the adapter uses is checked here before the engine is declared started. */
+static void
+check_signal (GString     *problems,
+              GType        type,
+              const gchar *name,
+              guint        n_params)
+{
+  /* Signals are registered in class_init; make sure it has run. */
+  gpointer     klass = g_type_class_ref (type);
+  GSignalQuery query;
+  guint        id = g_signal_lookup (name, type);
+
+  if (! id)
+    g_string_append_printf (problems, "\n  signal %s::%s is missing", g_type_name (type), name);
+  else
+    {
+      g_signal_query (id, &query);
+      if (query.n_params != n_params)
+        g_string_append_printf (problems, "\n  signal %s::%s has %u arguments, the adapter expects %u",
+                                g_type_name (type), name, query.n_params, n_params);
+    }
+  g_type_class_unref (klass);
+}
+
+static void
+check_property (GString     *problems,
+                GType        type,
+                const gchar *name,
+                GType        value_type)
+{
+  GObjectClass *klass = g_type_class_ref (type);
+  GParamSpec   *pspec = g_object_class_find_property (klass, name);
+
+  if (! pspec)
+    g_string_append_printf (problems, "\n  property %s:%s is missing", g_type_name (type), name);
+  else if (! g_type_is_a (G_PARAM_SPEC_VALUE_TYPE (pspec), value_type))
+    g_string_append_printf (problems, "\n  property %s:%s is a %s, the adapter expects %s",
+                            g_type_name (type), name, g_type_name (G_PARAM_SPEC_VALUE_TYPE (pspec)),
+                            g_type_name (value_type));
+  g_type_class_unref (klass);
+}
+
+static gboolean
+check_engine_interface (Gimp    *gimp,
+                        GError **error)
+{
+  GString *problems = g_string_new (NULL);
+  gboolean ok;
+
+  check_signal (problems, GIMP_TYPE_PROJECTION, "update", 5);
+  check_signal (problems, GIMP_TYPE_IMAGE, "undo-event", 2);
+  check_signal (problems, GIMP_TYPE_IMAGE, "selected-layers-changed", 0);
+  check_property (problems, GIMP_TYPE_PAINT_OPTIONS, "brush-size", G_TYPE_DOUBLE);
+  check_property (problems, GIMP_TYPE_PAINT_CORE, "undo-desc", G_TYPE_STRING);
+  check_property (problems, G_OBJECT_TYPE (gimp->edit_config), "prev-language", G_TYPE_STRING);
+  check_property (problems, G_OBJECT_TYPE (gimp->edit_config), "config-version", G_TYPE_STRING);
+  check_property (problems, G_OBJECT_TYPE (gegl_config ()), "use-opencl", G_TYPE_BOOLEAN);
+  check_property (problems, G_OBJECT_TYPE (gegl_config ()), "application-license", G_TYPE_STRING);
+
+  ok = problems->len == 0;
+  if (! ok)
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                 "The engine's interface changed; the adapter needs updating:%s", problems->str);
+  g_string_free (problems, TRUE);
+
+  return ok;
+}
+
 /* ---- Start-up and shut-down (engine thread) --------------------------- */
 
 static gboolean
@@ -296,7 +374,7 @@ engine_initialize (GlimsEngine  *engine,
 
   gimp->initialized = TRUE;
 
-  return TRUE;
+  return check_engine_interface (gimp, error);
 }
 
 static void
