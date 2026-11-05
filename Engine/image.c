@@ -19,7 +19,9 @@
 #include "core/gimpitemstack.h"
 #include "core/gimplayer.h"
 #include "core/gimplayer-new.h"
+#if GIMP_CHECK_VERSION (3, 2, 0)
 #include "core/gimplinklayer.h"
+#endif
 #include "core/gimppickable.h"
 #include "core/gimpprojection.h"
 #include "core/gimpundostack.h"
@@ -27,7 +29,9 @@
 #include "file/file-open.h"
 #include "file/file-save.h"
 
+#if GIMP_CHECK_VERSION (3, 2, 0)
 #include "path/gimpvectorlayer.h"
+#endif
 
 #include "plug-in/gimppluginmanager.h"
 #include "plug-in/gimppluginmanager-file.h"
@@ -175,9 +179,17 @@ glims_image_open (GlimsEngine   *engine,
 
   /* Loading a non-XCF file runs a plug-in, which nests a main loop. */
   engine->busy++;
+#if GIMP_CHECK_VERSION (3, 2, 0)
   image = file_open_image (engine->gimp, gimp_get_user_context (engine->gimp), NULL, file,
                            0, 0, FALSE, FALSE, NULL, GIMP_RUN_NONINTERACTIVE,
                            &handles_vector, &status, &mime_type, &gerror);
+#else
+  /* GIMP 3.0 has no vector aspect-ratio option and no vector-handling report. */
+  image = file_open_image (engine->gimp, gimp_get_user_context (engine->gimp), NULL, file,
+                           0, 0, FALSE, NULL, GIMP_RUN_NONINTERACTIVE,
+                           &status, &mime_type, &gerror);
+  (void) handles_vector;
+#endif
   engine->busy--;
 
   g_object_unref (file);
@@ -219,10 +231,13 @@ layer_kind (GimpLayer *layer)
 
   if (gimp_item_is_text_layer (item))
     return GLIMS_LAYER_TEXT;
+#if GIMP_CHECK_VERSION (3, 2, 0)
+  /* Link and vector layers arrived in GIMP 3.2. */
   if (GIMP_IS_LINK_LAYER (layer))
     return GLIMS_LAYER_LINK;
   if (GIMP_IS_VECTOR_LAYER (layer))
     return GLIMS_LAYER_VECTOR;
+#endif
   if (GIMP_IS_GROUP_LAYER (layer))
     return GLIMS_LAYER_GROUP;
 

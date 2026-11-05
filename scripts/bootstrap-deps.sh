@@ -162,6 +162,14 @@ if find "$PREFIX/lib" -maxdepth 1 -name 'libX11*.dylib' | grep -q .; then
   echo "!! X11 libraries are installed in $PREFIX/lib; a port in all-deps-uni.txt pulled in X11 (upstream warns about the same)." >&2
 fi
 
+if [[ -n "${EXTRA_PORTS:-}" ]]; then
+  log="$DEPS_DIR/logs/ports-extra.log"
+  echo "==> Installing the extra ports: $EXTRA_PORTS (log: $log)"
+  # shellcheck disable=SC2086 # a word-split list of port names
+  env PATH="$PREFIX/bin:$CLEAN_PATH" "$PORT" -N install $EXTRA_PORTS > "$log" 2>&1 ||
+    die "port install of the extra ports failed; see $log"
+fi
+
 echo "==> Summary"
 echo "-- $(env PATH="$PREFIX/bin:$CLEAN_PATH" "$PORT" -q installed active | wc -l | tr -d ' ') active ports in $PREFIX"
 echo "-- $(du -sh "$PREFIX" | cut -f1) on disk"
