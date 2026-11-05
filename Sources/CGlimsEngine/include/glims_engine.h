@@ -61,7 +61,8 @@ typedef enum GlimsEventKind {
   GLIMS_EVENT_UNDO_CHANGED       = 3, /* image */
   GLIMS_EVENT_MESSAGE            = 4, /* text */
   GLIMS_EVENT_PROGRESS           = 5, /* text (may be NULL), value, active */
-  GLIMS_EVENT_SELECTION_CHANGED  = 6  /* image */
+  GLIMS_EVENT_SELECTION_CHANGED  = 6, /* image */
+  GLIMS_EVENT_SIZE_CHANGED       = 7  /* image: its width or height changed */
 } GlimsEventKind;
 
 typedef struct GlimsEvent {
@@ -222,6 +223,68 @@ typedef struct GlimsSegment {
   int32_t x1, y1, x2, y2;
 } GlimsSegment;
 
+/* Editing. */
+typedef struct GlimsColor {
+  double red, green, blue, alpha; /* sRGB, 0 ... 1 */
+} GlimsColor;
+
+typedef enum GlimsFillMode {
+  GLIMS_FILL_SIMILAR_COLORS = 1,  /* the area of similar color around the point */
+  GLIMS_FILL_SELECTION      = 2   /* the selection, or the whole layer */
+} GlimsFillMode;
+
+typedef struct GlimsFillSettings {
+  uint32_t   struct_size;    /* sizeof (GlimsFillSettings) */
+  uint32_t   mode;           /* GlimsFillMode */
+  GlimsColor color;
+  double     opacity;        /* 0 ... 1 */
+  double     threshold;      /* similar colors: 0 ... 1 */
+  bool       sample_merged;  /* similar colors: compare the composite image */
+  bool       antialias;
+} GlimsFillSettings;
+
+typedef enum GlimsGradientShape {
+  GLIMS_GRADIENT_LINEAR   = 0,
+  GLIMS_GRADIENT_BILINEAR = 1,
+  GLIMS_GRADIENT_RADIAL   = 2
+} GlimsGradientShape;
+
+typedef struct GlimsGradientSettings {
+  uint32_t   struct_size;    /* sizeof (GlimsGradientSettings) */
+  uint32_t   shape;          /* GlimsGradientShape */
+  GlimsColor from, to;
+  double     opacity;        /* 0 ... 1 */
+} GlimsGradientSettings;
+
+typedef enum GlimsLayerCommand {
+  GLIMS_LAYER_NEW        = 1,  /* transparent, image-sized, above the layer */
+  GLIMS_LAYER_DUPLICATE  = 2,
+  GLIMS_LAYER_DELETE     = 3,
+  GLIMS_LAYER_RAISE      = 4,
+  GLIMS_LAYER_LOWER      = 5,
+  GLIMS_LAYER_TO_TOP     = 6,
+  GLIMS_LAYER_TO_BOTTOM  = 7,
+  GLIMS_LAYER_MERGE_DOWN = 8,
+  GLIMS_LAYER_FLATTEN    = 9   /* the whole image into one layer */
+} GlimsLayerCommand;
+
+/* Which fields of GlimsLayerChange apply. */
+typedef enum GlimsLayerProperty {
+  GLIMS_LAYER_NAME    = 1 << 0,
+  GLIMS_LAYER_VISIBLE = 1 << 1,
+  GLIMS_LAYER_OPACITY = 1 << 2,
+  GLIMS_LAYER_MODE    = 1 << 3
+} GlimsLayerProperty;
+
+typedef struct GlimsLayerChange {
+  uint32_t struct_size;      /* sizeof (GlimsLayerChange) */
+  uint32_t properties;       /* GlimsLayerProperty bits */
+  char     name[256];        /* UTF-8 */
+  bool     visible;
+  double   opacity;          /* 0 ... 1 */
+  char     mode[64];         /* blend mode nick, as GlimsLayerInfo reports it */
+} GlimsLayerChange;
+
 typedef enum GlimsRunMode {
   GLIMS_RUN_INTERACTIVE      = 1, /* the plug-in may show its dialog */
   GLIMS_RUN_WITH_LAST_VALUES = 2  /* repeat with the last settings, no dialog */
@@ -345,6 +408,29 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*selection_outline)(GlimsEngine *engine, GlimsImageID image,
                                     GlimsSegment *segments, int32_t capacity,
                                     int32_t *count);
+
+  /* Editing. Each change is one undo step; fills and gradients act on the
+   * selected layer and stay inside the selection. */
+  GlimsStatus  (*fill)             (GlimsEngine *engine, GlimsImageID image,
+                                    GlimsPoint point, const GlimsFillSettings *settings,
+                                    char **error);
+  GlimsStatus  (*gradient)         (GlimsEngine *engine, GlimsImageID image,
+                                    GlimsPoint from, GlimsPoint to,
+                                    const GlimsGradientSettings *settings, char **error);
+  /* Makes `layer` the selected layer, which plug-ins, fills, gradients and
+   * the Layer commands act on. */
+  GlimsStatus  (*layer_select)     (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer);
+  /* `layer` 0 means the selected layer. `result` (may be NULL) receives
+   * the new layer of NEW, DUPLICATE, MERGE_DOWN and FLATTEN. */
+  GlimsStatus  (*layer_command)    (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                                    uint32_t command, GlimsItemID *result, char **error);
+  GlimsStatus  (*layer_change)     (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                                    const GlimsLayerChange *change, char **error);
+  GlimsStatus  (*layer_move)       (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                                    double dx, double dy);
+  /* Crops the image and its layers to `rect` (image pixels); SIZE_CHANGED follows. */
+  GlimsStatus  (*image_crop)       (GlimsEngine *engine, GlimsImageID image, GlimsRect rect,
+                                    char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

@@ -530,6 +530,7 @@ check_engine_interface (Gimp    *gimp,
   check_signal (problems, GIMP_TYPE_IMAGE, "undo-event", 2);
   check_signal (problems, GIMP_TYPE_IMAGE, "selected-layers-changed", 0);
   check_signal (problems, GIMP_TYPE_IMAGE, "mask-changed", 0);
+  check_signal (problems, GIMP_TYPE_IMAGE, "size-changed", 0);
   check_property (problems, GIMP_TYPE_PAINT_OPTIONS, "brush-size", G_TYPE_DOUBLE);
   check_property (problems, GIMP_TYPE_PAINT_CORE, "undo-desc", G_TYPE_STRING);
   check_property (problems, G_OBJECT_TYPE (gimp->edit_config), "prev-language", G_TYPE_STRING);
@@ -801,6 +802,8 @@ open_image_free (gpointer data)
         g_signal_handler_disconnect (open->image, open->layers_changed_handler);
       if (open->mask_changed_handler)
         g_signal_handler_disconnect (open->image, open->mask_changed_handler);
+      if (open->size_changed_handler)
+        g_signal_handler_disconnect (open->image, open->size_changed_handler);
 
       g_object_unref (open->image);
     }
@@ -940,6 +943,7 @@ typedef struct
   const void       *in;
   const void       *in2;
   void             *in_out;
+  double            number2;
   size_t            n;
   char            **error;
 } GlimsArgs;
@@ -979,6 +983,17 @@ MARSHAL (select_color, {
 MARSHAL (select_command, return glims_select_command (e, a->image, (uint32_t) a->width, a->number, a->error);)
 MARSHAL (selection_bounds, return glims_selection_bounds (e, a->image, a->out, a->in_out);)
 MARSHAL (selection_outline, return glims_selection_outline (e, a->image, a->out, a->capacity, a->count);)
+MARSHAL (fill, {
+  const GlimsPoint *point = a->in;
+  return glims_fill (e, a->image, *point, a->in2, a->error); })
+MARSHAL (gradient, {
+  const GlimsPoint *points = a->in;
+  return glims_gradient (e, a->image, points[0], points[1], a->in2, a->error); })
+MARSHAL (layer_select, return glims_layer_select (e, a->image, a->item);)
+MARSHAL (layer_command, return glims_layer_command (e, a->image, a->item, (uint32_t) a->width, a->out, a->error);)
+MARSHAL (layer_change, return glims_layer_change (e, a->image, a->item, a->in, a->error);)
+MARSHAL (layer_move, return glims_layer_move (e, a->image, a->item, a->number, a->number2);)
+MARSHAL (image_crop, return glims_image_crop (e, a->image, a->area, a->error);)
 MARSHAL (procedure_run, return glims_procedure_run (e, a->image, a->string, (uint32_t) a->width, a->error);)
 
 static GlimsStatus
@@ -1179,6 +1194,60 @@ api_selection_outline (GlimsEngine *e, GlimsImageID image, GlimsSegment *segment
   return glims_engine_call (e, selection_outline_on_engine, &a);
 }
 
+static GlimsStatus
+api_fill (GlimsEngine *e, GlimsImageID image, GlimsPoint point, const GlimsFillSettings *settings,
+          char **error)
+{
+  GlimsArgs a = { .image = image, .in = &point, .in2 = settings, .error = error };
+  return glims_engine_call (e, fill_on_engine, &a);
+}
+
+static GlimsStatus
+api_gradient (GlimsEngine *e, GlimsImageID image, GlimsPoint from, GlimsPoint to,
+              const GlimsGradientSettings *settings, char **error)
+{
+  GlimsPoint points[2] = { from, to };
+  GlimsArgs  a = { .image = image, .in = points, .in2 = settings, .error = error };
+  return glims_engine_call (e, gradient_on_engine, &a);
+}
+
+static GlimsStatus
+api_layer_select (GlimsEngine *e, GlimsImageID image, GlimsItemID layer)
+{
+  GlimsArgs a = { .image = image, .item = layer };
+  return glims_engine_call (e, layer_select_on_engine, &a);
+}
+
+static GlimsStatus
+api_layer_command (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, uint32_t command,
+                   GlimsItemID *result, char **error)
+{
+  GlimsArgs a = { .image = image, .item = layer, .width = (int32_t) command, .out = result, .error = error };
+  return glims_engine_call (e, layer_command_on_engine, &a);
+}
+
+static GlimsStatus
+api_layer_change (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, const GlimsLayerChange *change,
+                  char **error)
+{
+  GlimsArgs a = { .image = image, .item = layer, .in = change, .error = error };
+  return glims_engine_call (e, layer_change_on_engine, &a);
+}
+
+static GlimsStatus
+api_layer_move (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, double dx, double dy)
+{
+  GlimsArgs a = { .image = image, .item = layer, .number = dx, .number2 = dy };
+  return glims_engine_call (e, layer_move_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_crop (GlimsEngine *e, GlimsImageID image, GlimsRect rect, char **error)
+{
+  GlimsArgs a = { .image = image, .area = rect, .error = error };
+  return glims_engine_call (e, image_crop_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1212,6 +1281,13 @@ static const GlimsEngineAPI api_v1 = {
   .select_command    = api_select_command,
   .selection_bounds  = api_selection_bounds,
   .selection_outline = api_selection_outline,
+  .fill              = api_fill,
+  .gradient          = api_gradient,
+  .layer_select      = api_layer_select,
+  .layer_command     = api_layer_command,
+  .layer_change      = api_layer_change,
+  .layer_move        = api_layer_move,
+  .image_crop        = api_image_crop,
 };
 
 __attribute__ ((visibility ("default")))

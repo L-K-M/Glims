@@ -24,6 +24,10 @@
 #endif
 #include "core/gimppickable.h"
 #include "core/gimpprojection.h"
+
+#include <cairo.h>
+
+#include "gegl/gimptilehandlervalidate.h"
 #include "core/gimpundostack.h"
 
 #include "file/file-open.h"
@@ -96,6 +100,13 @@ selected_layers_changed (GimpImage      *image,
 
 /* Takes over the caller's reference to `image`. */
 static void
+size_changed (GimpImage      *image,
+              GlimsOpenImage *open)
+{
+  glims_emit (open->engine, GLIMS_EVENT_SIZE_CHANGED, image, NULL, NULL);
+}
+
+static void
 mask_changed (GimpImage      *image,
               GlimsOpenImage *open)
 {
@@ -120,6 +131,8 @@ glims_adopt_image (GlimsEngine  *engine,
     g_signal_connect (image, "selected-layers-changed", G_CALLBACK (selected_layers_changed), open);
   open->mask_changed_handler =
     g_signal_connect (image, "mask-changed", G_CALLBACK (mask_changed), open);
+  open->size_changed_handler =
+    g_signal_connect (image, "size-changed", G_CALLBACK (size_changed), open);
 
   g_hash_table_insert (engine->images, GINT_TO_POINTER (gimp_image_get_id (image)), open);
 
@@ -356,25 +369,22 @@ glims_image_info (GlimsEngine    *engine,
 
 /* ---- Rendering --------------------------------------------------------- */
 
-/* Rows per read when validating; bounds the scratch memory. */
-#define VALIDATE_STRIP_ROWS 128
-
-/* GIMP's projection renders an invalid tile only when level 0 (full
- * resolution) of it is read (GimpTileHandlerValidate validates on level-0
- * reads). Reads at a smaller scale come from GEGL's mipmap levels, which are
- * built from whatever level 0 holds, so they would show unrendered areas as
- * transparent. Reading the level-0 area under `area` first renders it;
- * GIMP's own display does the same work in idle chunks before drawing. */
+/* Renders, at full resolution, whatever is invalid under `area` (scaled
+ * pixels) in GIMP's projection buffer. Reads at a smaller scale come from
+ * GEGL's mipmap levels, which are built from level 0 (full resolution), so
+ * level 0 must be current first; GIMP's own display does the same work in
+ * idle chunks before drawing. */
 static void
-validate_full_resolution (GeglBuffer *buffer,
-                          double      scale,
-                          GlimsRect   area)
+validate_area (GeglBuffer *buffer,
+               double      scale,
+               GlimsRect   area)
 {
-  const Babl          *format = gegl_buffer_get_format (buffer);
-  const GeglRectangle *extent = gegl_buffer_get_extent (buffer);
-  GeglRectangle        full;
-  guchar              *scratch;
-  gint                 y;
+  GimpTileHandlerValidate *validate = gimp_tile_handler_validate_get_assigned (buffer);
+  const GeglRectangle     *extent   = gegl_buffer_get_extent (buffer);
+  GeglRectangle            full;
+
+  if (! validate)
+    return;
 
   full.x      = (gint) floor (area.x / scale);
   full.y      = (gint) floor (area.y / scale);
@@ -383,14 +393,9 @@ validate_full_resolution (GeglBuffer *buffer,
   if (! gegl_rectangle_intersect (&full, &full, extent))
     return;
 
-  scratch = g_malloc ((gsize) full.width * VALIDATE_STRIP_ROWS * babl_format_get_bytes_per_pixel (format));
-  for (y = full.y; y < full.y + full.height; y += VALIDATE_STRIP_ROWS)
-    {
-      GeglRectangle strip = { full.x, y, full.width, MIN (VALIDATE_STRIP_ROWS, full.y + full.height - y) };
-
-      gegl_buffer_get (buffer, &strip, 1.0, format, scratch, GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
-    }
-  g_free (scratch);
+  /* Renders the invalid parts of the area, synchronously, as GIMP's chunk
+   * renderer does. */
+  gimp_tile_handler_validate_validate (validate, buffer, &full, TRUE, FALSE);
 }
 
 GlimsStatus
@@ -429,8 +434,15 @@ glims_image_render (GlimsEngine  *engine,
   buffer = gimp_pickable_get_buffer (GIMP_PICKABLE (projection));
   gimp_projection_stop_rendering (projection);
   gimp_projection_flush_now (projection, FALSE);
-  if (scale < 1.0)
-    validate_full_resolution (buffer, scale, area);
+
+  /* Then render the invalid tiles under the area, at full resolution, before
+   * reading. Relying on reads to do it was not enough: GEGL renders an
+   * invalid tile it reads, but now and then a read returned the tile as it
+   * was before the change (seen after layer property changes and strokes,
+   * about one read in thirty in a probe), and the tile stayed that way. A
+   * zoomed-out read would also take mipmaps of unrendered tiles. Explicit
+   * validation, as GIMP's chunk renderer uses, has shown neither. */
+  validate_area (buffer, scale, area);
 
   /* Babl converts from the image's working space to sRGB. Display profiles
    * are not applied yet. */

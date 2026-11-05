@@ -33,6 +33,7 @@ static atomic_int            progress_starts;
 static atomic_int            progress_ends;
 static atomic_bool           progress_active;
 static atomic_int            selection_events;
+static atomic_int            size_events;
 
 #define CHECK(condition, ...)                       \
   do {                                              \
@@ -65,6 +66,8 @@ on_event (void *context, const GlimsEvent *event)
     atomic_fetch_add (&undo_events, 1);
   else if (event->kind == GLIMS_EVENT_MESSAGE && event->text)
     printf ("      engine message: %s\n", event->text);
+  else if (event->kind == GLIMS_EVENT_SIZE_CHANGED)
+    atomic_fetch_add (&size_events, 1);
   else if (event->kind == GLIMS_EVENT_SELECTION_CHANGED)
     atomic_fetch_add (&selection_events, 1);
   else if (event->kind == GLIMS_EVENT_PROGRESS)
@@ -186,6 +189,16 @@ red_at (GlimsImageID image, int32_t x, int32_t y)
   if (api->image_render (engine, image, 1.0, (GlimsRect) { x, y, 1, 1 }, pixel, 4) != GLIMS_STATUS_OK)
     return -1;
   return pixel[0];
+}
+
+/* For a failed check after a stroke: the stroke's status and the pixel
+ * read again after a pause, which tells a stroke that did not apply from a
+ * render that was stale (both seen intermittently, not yet explained). */
+static void
+explain_stroke (GlimsStatus status, GlimsImageID image, int32_t x, int32_t y, int first)
+{
+  usleep (200 * 1000);
+  printf ("      (stroke status %d; pixel %d, %d after 200 ms)\n", status, first, red_at (image, x, y));
 }
 
 static int
@@ -320,6 +333,157 @@ test_selections (void)
   api->image_close (engine, image);
 }
 
+static int
+layer_count (GlimsImageID image)
+{
+  GlimsImageInfo info;
+  return api->image_info (engine, image, &info) == GLIMS_STATUS_OK ? info.layer_count : -1;
+}
+
+static void
+test_editing (void)
+{
+  GlimsImageID          image = 0;
+  GlimsItemID           background, layer = 0, copy = 0, merged = 0;
+  GlimsLayerInfo        rows[4];
+  GlimsImageInfo        info;
+  int32_t               n = 0, before;
+  uint8_t               pixel[4];
+  int                   sizes = atomic_load (&size_events);
+  char                 *error = NULL;
+  GlimsFillSettings     fill = { .struct_size = sizeof fill, .mode = GLIMS_FILL_SELECTION,
+                                 .color = { 1, 0, 0, 1 }, .opacity = 1, .threshold = 0.1, .antialias = true };
+  GlimsGradientSettings gradient = { .struct_size = sizeof gradient, .shape = GLIMS_GRADIENT_LINEAR,
+                                     .from = { 0, 0, 0, 1 }, .to = { 1, 1, 1, 1 }, .opacity = 1 };
+  GlimsLayerChange      change = { .struct_size = sizeof change };
+
+  api->image_new (engine, 100, 80, &image, NULL);
+  background = first_layer (image);
+  before     = undo_depth (image);
+
+  CHECK (api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer, NULL) == GLIMS_STATUS_OK && layer > 0 &&
+         layer_count (image) == 2 && undo_depth (image) == before + 1,
+         "New Layer adds a layer as one undo step");
+  api->image_layers (engine, image, rows, 4, &n);
+  CHECK (n == 2 && rows[0].id == layer && rows[0].selected, "the new layer is on top and selected");
+
+  CHECK (api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 50, 40, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 0,
+         "filling the selection with no selection fills the whole layer red");
+
+  change.properties = GLIMS_LAYER_OPACITY | GLIMS_LAYER_NAME;
+  change.opacity    = 0.5;
+  strcpy (change.name, "Tint");
+  CHECK (api->layer_change (engine, image, layer, &change, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &n) == GLIMS_STATUS_OK &&
+         strcmp (rows[0].name, "Tint") == 0 && rows[0].opacity > 0.49 && rows[0].opacity < 0.51 &&
+         red_at (image, 50, 40) == 255 && api->image_render (engine, image, 1.0, (GlimsRect) { 50, 40, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[1] > 180 && pixel[1] < 196,
+         "half opacity blends in linear light, as GIMP's Normal mode does (green %d, 188 expected)", pixel[1]);
+  change.properties = GLIMS_LAYER_MODE;
+  strcpy (change.mode, "multiply");
+  CHECK (api->layer_change (engine, image, layer, &change, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &n) == GLIMS_STATUS_OK && strcmp (rows[0].mode, "multiply") == 0,
+         "the blend mode changes by its nick");
+  strcpy (change.mode, "no-such-mode");
+  CHECK (api->layer_change (engine, image, layer, &change, &error) == GLIMS_STATUS_FAILED && error,
+         "an unknown blend mode is refused (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  change.properties = GLIMS_LAYER_VISIBLE;
+  change.visible    = false;
+  CHECK (api->layer_change (engine, image, layer, &change, NULL) == GLIMS_STATUS_OK && red_at (image, 50, 40) == 255 &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 50, 40, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK && pixel[1] == 255,
+         "hiding the layer shows the white background");
+
+  CHECK (api->layer_select (engine, image, background) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &n) == GLIMS_STATUS_OK && rows[1].selected && ! rows[0].selected,
+         "selecting the background in the engine");
+  CHECK (api->layer_select (engine, image, 4242) == GLIMS_STATUS_NOT_FOUND, "selecting an unknown layer is reported");
+
+  fill.mode  = GLIMS_FILL_SIMILAR_COLORS;
+  fill.color = (GlimsColor) { 0, 0, 1, 1 };
+  CHECK (api->fill (engine, image, (GlimsPoint) { 5, 5 }, &fill, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 90, 70, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[2] == 255 && pixel[0] == 0,
+         "a bucket fill of similar colors floods the white background blue (%d,%d,%d,%d at 90,70)",
+         pixel[0], pixel[1], pixel[2], pixel[3]);
+
+  CHECK (api->gradient (engine, image, (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 }, &gradient, NULL) == GLIMS_STATUS_OK &&
+         red_at (image, 10, 40) < 60 && red_at (image, 90, 40) > 190,
+         "a black-to-white linear gradient (%d at the left, %d at the right)", red_at (image, 10, 40), red_at (image, 90, 40));
+  CHECK (api->gradient (engine, image, (GlimsPoint) { 5, 5 }, (GlimsPoint) { 5, 5 }, &gradient, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a gradient needs two distinct points");
+
+  CHECK (api->layer_move (engine, image, layer, 10, 5) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &n) == GLIMS_STATUS_OK && rows[0].bounds.x == 10 && rows[0].bounds.y == 5,
+         "moving the layer by 10,5");
+
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_DUPLICATE, &copy, NULL) == GLIMS_STATUS_OK && copy > 0 &&
+         layer_count (image) == 3, "duplicating the layer");
+  CHECK (api->layer_command (engine, image, copy, GLIMS_LAYER_TO_BOTTOM, NULL, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &n) == GLIMS_STATUS_OK && rows[2].id == copy,
+         "sending the copy to the bottom");
+  CHECK (api->layer_command (engine, image, copy, GLIMS_LAYER_RAISE, NULL, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &n) == GLIMS_STATUS_OK && rows[1].id == copy,
+         "raising it one step");
+  CHECK (api->layer_command (engine, image, copy, GLIMS_LAYER_DELETE, NULL, NULL) == GLIMS_STATUS_OK && layer_count (image) == 2,
+         "deleting it");
+  change.properties = GLIMS_LAYER_VISIBLE;
+  change.visible    = true;
+  api->layer_change (engine, image, layer, &change, NULL);
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_MERGE_DOWN, &merged, NULL) == GLIMS_STATUS_OK && merged > 0 &&
+         layer_count (image) == 1, "merging the top layer down");
+  CHECK (api->layer_command (engine, image, 0, GLIMS_LAYER_FLATTEN, NULL, NULL) == GLIMS_STATUS_OK && layer_count (image) == 1,
+         "flattening");
+  CHECK (api->layer_command (engine, image, 0, 99, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT, "an unknown layer command is rejected");
+
+  CHECK (api->image_crop (engine, image, (GlimsRect) { 10, 10, 50, 40 }, NULL) == GLIMS_STATUS_OK &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK && info.width == 50 && info.height == 40 &&
+         atomic_load (&size_events) > sizes,
+         "cropping to 50x40 changes the size and reports it (%dx%d)", info.width, info.height);
+  CHECK (api->image_crop (engine, image, (GlimsRect) { 500, 500, 10, 10 }, &error) == GLIMS_STATUS_FAILED && error,
+         "a crop outside the image is refused");
+  api->free_string (error);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK && info.width == 100 && info.height == 80,
+         "undo restores the uncropped size");
+
+  api->image_close (engine, image);
+}
+
+/* A render right after a change must show it. Validating tiles only as
+ * reads touched them returned the old pixels now and then (about one round
+ * in 23 here), and they stayed that way. */
+static void
+test_render_freshness (void)
+{
+  int rounds = 60, stale = 0, r;
+
+  for (r = 0; r < rounds; r++)
+    {
+      GlimsImageID      image = 0;
+      GlimsItemID       layer = 0;
+      GlimsFillSettings fill = { .struct_size = sizeof fill, .mode = GLIMS_FILL_SELECTION,
+                                 .color = { 1, 0, 0, 1 }, .opacity = 1, .antialias = true };
+      GlimsLayerChange  change = { .struct_size = sizeof change, .properties = GLIMS_LAYER_OPACITY, .opacity = 0.5 };
+      uint8_t           pixel[4];
+
+      api->image_new (engine, 100, 80, &image, NULL);
+      api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer, NULL);
+      api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL);
+      api->image_render (engine, image, 1.0, (GlimsRect) { 50, 40, 1, 1 }, pixel, 4);
+      api->layer_change (engine, image, layer, &change, NULL);
+      api->image_render (engine, image, 1.0, (GlimsRect) { 50, 40, 1, 1 }, pixel, 4);
+      if (pixel[1] < 180)
+        stale++;
+      api->image_close (engine, image);
+    }
+
+  CHECK (stale == 0, "renders right after %d changes all show them (%d stale)", rounds, stale);
+}
+
 static void
 test_paint_tools (void)
 {
@@ -328,7 +492,8 @@ test_paint_tools (void)
   GlimsBrushSettings brush;
   int32_t            before;
   char              *error = NULL;
-  int                y, hard = 1, quick, rested;
+  int                y, hard = 1, quick, rested, value;
+  GlimsStatus        status;
 
   api->image_new (engine, 128, 64, &image, NULL);
   layer  = first_layer (image);
@@ -349,9 +514,13 @@ test_paint_tools (void)
       hard = 0;
   CHECK (hard, "the pencil's edge is hard (only black and white across the line)");
 
-  brush = brush_for (GLIMS_PAINT_ERASER, 14.0);
-  CHECK (stroke_line (image, layer, &brush, 8, 8, 120, 8, NULL) == GLIMS_STATUS_OK && red_at (image, 64, 8) == 255,
-         "the eraser restores the background on a layer without alpha (%d)", red_at (image, 64, 8));
+  brush  = brush_for (GLIMS_PAINT_ERASER, 14.0);
+  status = stroke_line (image, layer, &brush, 8, 8, 120, 8, NULL);
+  value  = red_at (image, 64, 8);
+  CHECK (status == GLIMS_STATUS_OK && value == 255,
+         "the eraser restores the background on a layer without alpha (%d)", value);
+  if (status != GLIMS_STATUS_OK || value != 255)
+    explain_stroke (status, image, 64, 8, value);
 
   brush = brush_for (GLIMS_PAINT_BLUR, 10.0);
   brush.rate = 100.0;
@@ -368,8 +537,11 @@ test_paint_tools (void)
   /* Narrower than the line, so the paint it picks up is the line's. */
   brush = brush_for (GLIMS_PAINT_SMUDGE, 4.0);
   brush.rate = 100.0;
-  CHECK (stroke_line (image, layer, &brush, 96, 20, 96, 40, NULL) == GLIMS_STATUS_OK && red_at (image, 96, 30) < 255,
-         "smudge drags the line's paint (%d below it)", red_at (image, 96, 30));
+  status = stroke_line (image, layer, &brush, 96, 20, 96, 40, NULL);
+  value  = red_at (image, 96, 30);
+  CHECK (status == GLIMS_STATUS_OK && value < 255, "smudge drags the line's paint (%d below it)", value);
+  if (status != GLIMS_STATUS_OK || value == 255)
+    explain_stroke (status, image, 96, 30, value);
 
   /* The airbrush keeps painting while the pointer rests. */
   brush = brush_for (GLIMS_PAINT_AIRBRUSH, 10.0);
@@ -963,6 +1135,8 @@ main (int argc, char **argv)
   test_fixture (argv[3], argv[2]);
   test_paint_tools ();
   test_selections ();
+  test_editing ();
+  test_render_freshness ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 

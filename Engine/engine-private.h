@@ -61,6 +61,7 @@ typedef struct
   gulong     undo_event_handler;
   gulong     layers_changed_handler;
   gulong     mask_changed_handler;
+  gulong     size_changed_handler;
 } GlimsOpenImage;
 
 typedef GlimsStatus (*GlimsEngineFunc) (GlimsEngine *engine, gpointer data);
@@ -126,6 +127,20 @@ GlimsStatus glims_select_command   (GlimsEngine *e, GlimsImageID image, uint32_t
 GlimsStatus glims_selection_bounds (GlimsEngine *e, GlimsImageID image, bool *empty, GlimsRect *bounds);
 GlimsStatus glims_selection_outline(GlimsEngine *e, GlimsImageID image, GlimsSegment *segments,
                                     int32_t capacity, int32_t *count);
+
+/* edit.c */
+GlimsStatus glims_fill             (GlimsEngine *e, GlimsImageID image, GlimsPoint point,
+                                    const GlimsFillSettings *settings, char **error);
+GlimsStatus glims_gradient         (GlimsEngine *e, GlimsImageID image, GlimsPoint from, GlimsPoint to,
+                                    const GlimsGradientSettings *settings, char **error);
+GlimsStatus glims_layer_select     (GlimsEngine *e, GlimsImageID image, GlimsItemID layer);
+GlimsStatus glims_layer_command    (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                    uint32_t command, GlimsItemID *result, char **error);
+GlimsStatus glims_layer_change     (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                    const GlimsLayerChange *change, char **error);
+GlimsStatus glims_layer_move       (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                    double dx, double dy);
+GlimsStatus glims_image_crop       (GlimsEngine *e, GlimsImageID image, GlimsRect rect, char **error);
 
 /* procedure.c */
 GlimsStatus glims_procedures       (GlimsEngine *e, GlimsImageID image, GlimsProcedureInfo *rows,
