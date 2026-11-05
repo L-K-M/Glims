@@ -552,13 +552,30 @@ In this order (reasons in `phase0-report.md`):
   check that the notices match the bundle.
 - Accessibility, localization and help content for the new interface.
 
+## Known issues, not to fix yet
+
+- **Slower first renders at 100 %** (2026-11-05). Rendering now validates
+  the requested area explicitly (`validate_area` in `Engine/image.c`),
+  because letting reads validate GIMP's projection tiles sometimes
+  returned pixels from before a change, and kept them. It costs 3.5 to 5
+  times more for never-rendered areas at 100 % on a loaded machine (first
+  frame of a 24 MP image 580 ms instead of 167). The root cause is
+  somewhere in GEGL's tile handling (`GimpTileHandlerValidate` and GEGL's
+  tile cache), probably a cached or swapped-out tile served after it was
+  damaged. Finding it would allow the fast path again. Decided with the
+  user: note it, do not fix it yet. Reproduction: the
+  `renders right after 60 changes` conformance check, with
+  `validate_area` limited to zoomed-out reads.
+
 ## Open decisions
 
 - Whether new generic controls go into Rigi immediately or incubate here
   first. Provisionally (2026-11-05): they incubate in
   `Sources/GlimsKit/RigiIncubator/` (generic, AppKit and RigiUI only) and
   move to Rigi, with its gallery, guidelines and tests, once they settle.
-  `ClassicToolGrid` is the first.
+  `ClassicToolGrid` is the first. Decided by the user for the palette
+  system: tabbed palette groups and docking go into Rigi directly and are
+  adopted by Lucerne, Sion and Glims.
 - Rigi currently mandates light Aqua; `design.md` proposes neutral gray and
   dark schemes for image work.
 - Save and Export model (see `design.md`).
