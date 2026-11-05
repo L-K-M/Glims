@@ -11,10 +11,12 @@ GIMP image engine.
 **Version:** v<!-- version -->0.1.0<!-- /version -->
 
 **Status:** phase 0 is finished with a go verdict
-([`docs/phase0-report.md`](docs/phase0-report.md)). GIMP's engine builds
+([`docs/phase0-report.md`](docs/phase0-report.md)) and phase 1 is under
+way. GIMP's engine builds
 unmodified and runs behind the C adapter in `Engine/`; the app opens, paints,
-filters and exports images through it in a development setup. Nothing has
-been released.
+filters, runs GIMP's plug-ins with their own dialogs and exports images
+through it, and `scripts/build-app.sh --engine` builds a self-contained app
+with the engine inside. Nothing has been released.
 
 Glims pairs GIMP's GUI-free engine (layers, masks, painting, selections,
 non-destructive filters, XCF, plug-ins) with a new AppKit interface made with

@@ -1,8 +1,8 @@
 # Glims plan
 
 Status as of 2026-11-05: phase 0 finished with a go verdict
-([`phase0-report.md`](phase0-report.md)); phase 1 is under way, item 1
-(interactive plug-ins) done. Evidence labels: **[M]**
+([`phase0-report.md`](phase0-report.md)); phase 1 is under way, items 1
+(interactive plug-ins) and 2 (a self-contained app) done. Evidence labels: **[M]**
 measured from GIMP source or history, **[I]** inferred or estimated. Sources
 are in [`research/`](research/README.md); the round 2 memo and its two reviews
 are the main inputs.
@@ -441,6 +441,36 @@ In this order (reasons in `phase0-report.md`):
   the adapter names, after master renamed `GimpProgressInterface`'s
   `get_window_id` slot to `get_window_handle` (upstream ed668b3e2d), which
   only the compiler caught. It reports that rename now.
+- 2026-11-05: item 2, a self-contained app, works.
+  `scripts/build-app.sh --engine GIMP_REF` runs `scripts/bundle-engine.py`,
+  which copies the engine and everything it needs into `Glims.app`: the
+  adapter in `Contents/Frameworks`, 124 MacPorts libraries flat in
+  `Contents/lib` with GEGL, babl, GTK and GIO modules, the plug-ins, a
+  pruned Python 3.13 framework with `gi` and `cairo`, 19 typelibs
+  recompiled with `@rpath` library names, and GIMP's data, fontconfig
+  and GTK data. Every Mach-O file gets `@rpath` names and one rpath back
+  to `Contents/lib`, and is signed ad hoc; the bundler fails if any load
+  command still names a build path. GIMP 3.2.8's bundle is 318 MB, 106 MB
+  zipped. The adapter recognizes the layout and does what GIMP's own
+  `app/main.c` does for its relocatable build: it points the engine,
+  GEGL, babl, GTK, GIO, fontconfig, Python and Ghostscript at the bundle
+  through the environment, which plug-ins inherit, and moves the MyPaint
+  brush folder; a development build keeps using the install tree. The
+  engine build itself is unchanged (`relocatable-bundle=no`).
+  `Contents/Resources/Engine-Notices.txt` lists 119 components (GIMP,
+  GEGL, babl and every MacPorts port owning a bundled file) with version,
+  license, homepage and license text, from the port's docs or source
+  archive; a license outside the reviewed list in `bundle-engine.py`
+  stops the build. `scripts/check-bundle.sh` runs the conformance tests
+  and the app's smoke test against the bundle under a sandbox profile
+  that denies every read of `_engine/` and `_deps/`: 74 and 24 checks pass
+  for bundles of GIMP 3.0.8, 3.2.0, 3.2.8 and master (3.0.8's older GEGL
+  needed `GEGL_PATH` and `BABL_PATH`). Not done or not checked: Developer
+  ID signing and notarization, running on another Mac, engine
+  translations (left out; Glims is English-only), aom's license text (its
+  port fetched the source with git, so there is no archive), Poppler's
+  CJK data and iso-codes language names (compiled-in prefix paths), and
+  the source offer the GPL and LGPL components need before any release.
 
 ## Later, before any public release
 
@@ -450,9 +480,10 @@ In this order (reasons in `phase0-report.md`):
 - A process for shipping engine security fixes within days. GIMP's file
   loaders had high-severity bugs in 2025 (for example CVE-2025-14424 in XCF
   and CVE-2025-10925 in ILBM).
-- Third-party notices for everything bundled with the engine (GIMP, GEGL,
-  babl, GTK3, Python and the other MacPorts packages), generated from the
-  dependency prefix and checked like the Swift package notices (`CICD.md`).
+- A written offer or download of the complete corresponding source for
+  every GPL, LGPL and AGPL component in the bundle (the engine notices,
+  generated since phase 1, list them), aom's license text, and a release
+  check that the notices match the bundle.
 - Accessibility, localization and help content for the new interface.
 
 ## Open decisions

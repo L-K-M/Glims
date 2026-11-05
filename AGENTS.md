@@ -10,7 +10,8 @@ both is in [`docs/research/`](docs/research/README.md).
 
 Phase 0 (spike) is finished with a go verdict
 ([`docs/phase0-report.md`](docs/phase0-report.md)); phase 1 is under way
-(`docs/plan.md`, "Phase 1"); plug-in commands with their own dialogs work. The engine dependency prefix is built (`_deps/macports`);
+(`docs/plan.md`, "Phase 1"): plug-in commands with their own dialogs work,
+and `scripts/build-app.sh --engine` makes a self-contained app. The engine dependency prefix is built (`_deps/macports`);
 the four engine sets in `scripts/engine.env` (GIMP 3.2.8, 3.2.0, master and
 3.0.8) build unmodified into `_engine/install/<ref>`; adapter v1 (`Engine/`)
 passes its 74 conformance checks against all four. The app loads the adapter
@@ -39,9 +40,17 @@ Keep `docs/plan.md` current as the work proceeds.
   Swift 5 language mode, macOS 13 deployment target (Rigi's minimum; GIMP
   itself needs macOS 11).
 - `swift build` and `swift test`.
-- `scripts/build-app.sh [--debug]` assembles `dist/Glims.app`: it checks the
-  third-party notices, copies `LICENSE` in as `LICENSE.txt`, and signs ad-hoc
-  or with `CODE_SIGN_IDENTITY`.
+- `scripts/build-app.sh [--debug] [--engine GIMP_REF]` assembles
+  `dist/Glims.app`: it checks the third-party notices, copies `LICENSE` in as
+  `LICENSE.txt`, and signs ad-hoc or with `CODE_SIGN_IDENTITY`. `--engine`
+  bundles a built engine set and its adapter with
+  `scripts/bundle-engine.py` (libraries relinked to `@rpath`, typelibs
+  recompiled, `Engine-Notices.txt` generated, every license checked
+  against a reviewed list), so the app runs without `_engine/` or `_deps/`.
+- `scripts/check-bundle.sh [APP]` runs the conformance tests and the app's
+  `--engine-smoke-test` against a bundled engine with `_engine/` and
+  `_deps/` unreadable (sandbox-exec). Run it after changing the bundler,
+  the adapter's bundle paths, or the engine set.
 - `dist/Glims.app/Contents/MacOS/Glims --smoke-test` builds the workspace
   window, checks it and exits; `--version` prints the bundle version.
 - `GLIMS_ENGINE_LIBRARY=<adapter dylib> dist/Glims.app/Contents/MacOS/Glims`

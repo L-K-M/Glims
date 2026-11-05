@@ -4,7 +4,13 @@
 # signs it and verifies the signature. Fails before assembling when the
 # committed notices no longer match the resolved packages.
 #
-#   scripts/build-app.sh [--debug]
+#   scripts/build-app.sh [--debug] [--engine GIMP_REF]
+#
+# --engine bundles a built engine set (scripts/build-engine.sh and
+# scripts/build-adapter.sh GIMP_REF) into the app with
+# scripts/bundle-engine.py, so it runs on its own; scripts/check-bundle.sh
+# tests that. Without it the app has no engine and looks for one through
+# GLIMS_ENGINE_LIBRARY (Sources/GlimsKit/Engine/EngineLibrary.swift).
 #
 # --debug builds the Debug configuration (scripts/build.sh --debug reaches this
 # through lkm-build's swiftpm kind). The app builds for the host architecture
@@ -23,12 +29,25 @@ APP_NAME="Glims"
 APP_PATH="$OUTPUT_DIR/$APP_NAME.app"
 
 CONFIGURATION=release
-for arg in "$@"; do
-  case "$arg" in
+ENGINE_REF=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --debug) CONFIGURATION=debug ;;
-    *) echo "error: unknown option '$arg' (expected --debug)" >&2; exit 2 ;;
+    --engine)
+      [[ $# -ge 2 ]] || { echo "error: --engine needs a GIMP_REF" >&2; exit 2; }
+      ENGINE_REF="$2"; shift ;;
+    *) echo "error: unknown option '$1' (expected --debug or --engine GIMP_REF)" >&2; exit 2 ;;
   esac
+  shift
 done
+
+if [[ -n "$ENGINE_REF" ]]; then
+  ENGINE_INSTALL="$PROJECT_ROOT/_engine/install/$ENGINE_REF"
+  ENGINE_ADAPTER="$PROJECT_ROOT/_engine/adapter/$ENGINE_REF/libglimsengine.dylib"
+  DEPS_PREFIX="$PROJECT_ROOT/_deps/macports"
+  [[ -d "$ENGINE_INSTALL" ]] || { echo "error: no engine at $ENGINE_INSTALL; run scripts/build-engine.sh $ENGINE_REF" >&2; exit 1; }
+  [[ -f "$ENGINE_ADAPTER" ]] || { echo "error: no adapter at $ENGINE_ADAPTER; run scripts/build-adapter.sh $ENGINE_REF" >&2; exit 1; }
+fi
 
 if [[ "$(uname -s)" != Darwin ]]; then
   echo "error: Glims requires macOS and AppKit." >&2
@@ -61,6 +80,12 @@ for bundle in "$BIN_DIR"/*.bundle; do
 done
 cp "$PROJECT_ROOT/LICENSE" "$APP_PATH/Contents/Resources/LICENSE.txt"
 cp "$PROJECT_ROOT/Resources/Third-Party-Notices.txt" "$APP_PATH/Contents/Resources/Third-Party-Notices.txt"
+
+if [[ -n "$ENGINE_REF" ]]; then
+  echo "==> Bundling the engine ($ENGINE_REF)"
+  python3 -I "$PROJECT_ROOT/scripts/bundle-engine.py" "$APP_PATH" "$ENGINE_INSTALL" "$DEPS_PREFIX" \
+    "$ENGINE_ADAPTER" "$PROJECT_ROOT/_engine/src/$ENGINE_REF"
+fi
 
 echo "==> Signing"
 if [[ -n "${CODE_SIGN_IDENTITY:-}" ]]; then

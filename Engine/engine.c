@@ -14,6 +14,7 @@
  */
 #include "engine-private.h"
 
+#include <dlfcn.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -271,6 +272,205 @@ init_status_noop (const gchar *text1,
 {
 }
 
+/* ---- Where the engine's files are -------------------------------------- */
+
+/* Inside Glims.app, scripts/bundle-engine.py puts this library in
+ * Contents/Frameworks and the engine beside it in Contents/lib, share and
+ * etc. Returns Contents in that layout, or NULL for a development build,
+ * which uses the engine's install tree through its compiled-in paths. */
+static gchar *
+bundle_contents (void)
+{
+  Dl_info  info;
+  gchar   *frameworks;
+  gchar   *contents;
+  gchar   *plug_ins;
+  gboolean bundled;
+
+  if (! dladdr ((const void *) glims_engine_get_api, &info) || ! info.dli_fname)
+    return NULL;
+
+  frameworks = g_path_get_dirname (info.dli_fname);
+  contents   = g_path_get_dirname (frameworks);
+  plug_ins   = g_build_filename (contents, "lib", "gimp", "3.0", "plug-ins", NULL);
+  bundled    = (g_str_has_suffix (frameworks, "/Frameworks") &&
+                g_file_test (plug_ins, G_FILE_TEST_IS_DIR));
+
+  g_free (frameworks);
+  g_free (plug_ins);
+  if (bundled)
+    return contents;
+
+  g_free (contents);
+  return NULL;
+}
+
+static void
+set_path (const gchar *variable,
+          const gchar *contents,
+          const gchar *relative)
+{
+  gchar *path = g_build_filename (contents, relative, NULL);
+
+  g_setenv (variable, path, TRUE);
+  g_free (path);
+}
+
+static void
+prepend_to_path (const gchar *directory)
+{
+  const gchar *path = g_getenv ("PATH");
+
+  if (! path || ! strstr (path, directory))
+    {
+      gchar *joined = g_strconcat (directory, path ? ":" : "", path ? path : "", NULL);
+
+      g_setenv ("PATH", joined, TRUE);
+      g_free (joined);
+    }
+}
+
+/* The single version folder under Contents/<relative>, e.g. Python's 3.13. */
+static gchar *
+only_subdirectory (const gchar *contents,
+                   const gchar *relative)
+{
+  gchar       *parent = g_build_filename (contents, relative, NULL);
+  GDir        *dir    = g_dir_open (parent, 0, NULL);
+  const gchar *name;
+  gchar       *found  = NULL;
+
+  while (dir && (name = g_dir_read_name (dir)))
+    if (g_ascii_isdigit (name[0]))
+      {
+        g_free (found);
+        found = g_build_filename (parent, name, NULL);
+      }
+
+  if (dir)
+    g_dir_close (dir);
+  g_free (parent);
+
+  return found;
+}
+
+/* gdk-pixbuf wants absolute loader paths; the bundle ships the cache with
+ * a placeholder for Contents/lib, filled in here. */
+static void
+write_pixbuf_loaders (GlimsEngine *engine,
+                      const gchar *contents)
+{
+  gchar  *template = g_build_filename (contents, "lib", "gdk-pixbuf-2.0", "2.10.0",
+                                       "loaders.cache.in", NULL);
+  gchar  *text     = NULL;
+  gchar  *lib      = g_build_filename (contents, "lib", NULL);
+  gchar  *cache    = g_build_filename (engine->cache_directory, "gdk-pixbuf-loaders.cache", NULL);
+
+  if (g_file_get_contents (template, &text, NULL, NULL))
+    {
+      gchar  **parts  = g_strsplit (text, "@GLIMS_LIB@", -1);
+      gchar   *filled = g_strjoinv (lib, parts);
+
+      g_mkdir_with_parents (engine->cache_directory, 0700);
+      if (g_file_set_contents (cache, filled, -1, NULL))
+        g_setenv ("GDK_PIXBUF_MODULE_FILE", cache, TRUE);
+
+      g_strfreev (parts);
+      g_free (filled);
+      g_free (text);
+    }
+
+  g_free (template);
+  g_free (lib);
+  g_free (cache);
+}
+
+/* Points the engine, and the plug-ins it starts (they inherit this
+ * environment), at the bundle: what GIMP's own app/main.c does for its
+ * relocatable macOS build, which Glims does not link. */
+static void
+use_bundle (GlimsEngine *engine,
+            const gchar *contents)
+{
+  gchar *macos = g_build_filename (contents, "MacOS", NULL);
+  gchar *python;
+  gchar *ghostscript;
+
+  set_path ("GIMP3_DATADIR",      contents, "share/gimp/3.0");
+  set_path ("GIMP3_SYSCONFDIR",   contents, "etc/gimp/3.0");
+  set_path ("GIMP3_PLUGINDIR",    contents, "lib/gimp/3.0");
+  set_path ("GIMP3_LOCALEDIR",    contents, "share/locale");
+  /* GEGL 0.4.72 and babl 0.1.128 find their modules beside their
+   * libraries, but older releases (GIMP 3.0.8's) use compiled-in paths. */
+  set_path ("GEGL_PATH",          contents, "lib/gegl-0.4");
+  set_path ("BABL_PATH",          contents, "lib/babl-0.1");
+  set_path ("GI_TYPELIB_PATH",    contents, "lib/girepository-1.0");
+  set_path ("XDG_DATA_DIRS",      contents, "share");
+  set_path ("GSETTINGS_SCHEMA_DIR", contents, "share/glib-2.0/schemas");
+  set_path ("GIO_MODULE_DIR",     contents, "lib/gio/modules");
+  set_path ("GTK_PATH",           contents, "lib/gtk-3.0");
+  set_path ("FONTCONFIG_PATH",    contents, "etc/fonts");
+  set_path ("LIBTHAI_DICTDIR",    contents, "share/libthai");
+  g_setenv ("GTK_IM_MODULE", "quartz", TRUE);
+  g_setenv ("PYTHONDONTWRITEBYTECODE", "1", TRUE);
+
+  python = only_subdirectory (contents, "lib/Python.framework/Versions");
+  if (python)
+    g_setenv ("PYTHONHOME", python, TRUE);
+
+  ghostscript = only_subdirectory (contents, "share/ghostscript");
+  if (ghostscript)
+    {
+      gchar *init = g_build_filename (ghostscript, "Resource", "Init", NULL);
+
+      g_setenv ("GS_LIB", init, TRUE);
+      g_free (init);
+    }
+
+  /* Python and the Script-Fu interpreter, for "#!/usr/bin/env" plug-ins. */
+  prepend_to_path (macos);
+  write_pixbuf_loaders (engine, contents);
+
+  g_free (macos);
+  g_free (python);
+  g_free (ghostscript);
+}
+
+/* Settings whose defaults name the build machine's dependency prefix: the
+ * MyPaint brush folder (MYPAINT_BRUSHES_DIR, ".../share/mypaint-data/<version>/
+ * brushes", 1.0 for GIMP 3.0 and 2.0 for 3.2) is moved into the bundle. */
+static void
+use_bundle_config (Gimp        *gimp,
+                   const gchar *contents)
+{
+  gchar  *path     = NULL;
+  gchar **elements;
+  gint    i;
+
+  g_object_get (gimp->config, "mypaint-brush-path", &path, NULL);
+  elements = g_strsplit (path ? path : "", G_SEARCHPATH_SEPARATOR_S, -1);
+
+  for (i = 0; elements[i]; i++)
+    {
+      const gchar *data = strstr (elements[i], "/share/mypaint-data/");
+
+      if (data)
+        {
+          gchar *moved = g_strconcat (contents, data, NULL);
+
+          g_free (elements[i]);
+          elements[i] = moved;
+        }
+    }
+
+  g_free (path);
+  path = g_strjoinv (G_SEARCHPATH_SEPARATOR_S, elements);
+  g_object_set (gimp->config, "mypaint-brush-path", path, NULL);
+
+  g_strfreev (elements);
+  g_free (path);
+}
+
 /* ---- Interface checks -------------------------------------------------- */
 
 /* The compiler checks the engine functions the adapter calls, and
@@ -337,6 +537,7 @@ check_engine_interface (Gimp    *gimp,
   check_property (problems, G_OBJECT_TYPE (gimp->config), "module-path", G_TYPE_STRING);
   check_property (problems, G_OBJECT_TYPE (gimp->config), "tool-preset-path", G_TYPE_STRING);
   check_property (problems, G_OBJECT_TYPE (gimp->config), "tool-preset-path-writable", G_TYPE_STRING);
+  check_property (problems, G_OBJECT_TYPE (gimp->config), "mypaint-brush-path", G_TYPE_STRING);
   check_property (problems, G_OBJECT_TYPE (gegl_config ()), "use-opencl", G_TYPE_BOOLEAN);
   check_property (problems, G_OBJECT_TYPE (gegl_config ()), "application-license", G_TYPE_STRING);
 
@@ -361,6 +562,7 @@ engine_initialize (GlimsEngine  *engine,
   const gchar *current_language;
   gchar       *prev_language = NULL;
   GError      *font_error    = NULL;
+  gchar       *contents;
 
   /* The engine's settings and caches live in Glims-owned directories; the
    * user's own GIMP settings and ~/.cache are never touched. GLib reads
@@ -368,22 +570,19 @@ engine_initialize (GlimsEngine  *engine,
   g_setenv ("GIMP3_DIRECTORY", engine->user_directory, TRUE);
   g_setenv ("XDG_CACHE_HOME", engine->cache_directory, TRUE);
 
-  if (! g_getenv ("GI_TYPELIB_PATH"))
-    g_setenv ("GI_TYPELIB_PATH", GLIMS_ENGINE_TYPELIB_PATH, TRUE);
-
-  /* Script plug-ins start with "#!/usr/bin/env <interpreter>", and those
-   * interpreters live in the engine's bin directory. */
-  {
-    const gchar *path = g_getenv ("PATH");
-
-    if (! path || ! strstr (path, GLIMS_ENGINE_BIN_PATH))
-      {
-        gchar *joined = g_strconcat (GLIMS_ENGINE_BIN_PATH, path ? ":" : "", path ? path : "", NULL);
-
-        g_setenv ("PATH", joined, TRUE);
-        g_free (joined);
-      }
-  }
+  contents = bundle_contents ();
+  if (contents)
+    {
+      use_bundle (engine, contents);
+    }
+  else
+    {
+      /* A development build: plug-ins need the install tree's typelibs,
+       * and script plug-ins ("#!/usr/bin/env <interpreter>") its bin. */
+      if (! g_getenv ("GI_TYPELIB_PATH"))
+        g_setenv ("GI_TYPELIB_PATH", GLIMS_ENGINE_TYPELIB_PATH, TRUE);
+      prepend_to_path (GLIMS_ENGINE_BIN_PATH);
+    }
 
   /* gimp-console's main() names the program; GLib and GIMP derive paths
    * from that name, so a host that does not set one must get one. */
@@ -459,8 +658,11 @@ engine_initialize (GlimsEngine  *engine,
                 "tool-preset-path",          "",
                 "tool-preset-path-writable", "",
                 NULL);
+  if (contents)
+    use_bundle_config (gimp, contents);
   g_signal_handlers_unblock_matched (gimp->config, G_SIGNAL_MATCH_DATA,
                                      0, 0, NULL, NULL, gimp->edit_config);
+  g_free (contents);
 
   engine->icon_theme_dir = find_icon_theme_dir (gimp);
   write_plug_in_theme ();
