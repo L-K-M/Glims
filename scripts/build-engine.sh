@@ -180,7 +180,7 @@ build babl
 build gegl
 build gimp "${GIMP_OPTIONS[@]}"
 
-# Packaging workaround for GIMP 3.2.0 to 3.2.4 (fixed upstream in 3.2.6):
+# Packaging workaround for GIMP 3.0.8 to 3.2.4 (fixed upstream in 3.2.6):
 # repair typelib library paths in the install tree; a no-op otherwise.
 echo "==> Checking the installed typelibs"
 repairs="$(python3 -I "$ROOT/scripts/fix-typelibs.py" "$INSTALL" "$PREFIX")" ||

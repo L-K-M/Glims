@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Repair macOS typelibs that point at libraries outside the engine install.
 
-GIMP 3.2.0 to 3.2.4 install GObject-introspection typelibs whose
+GIMP 3.0.8 to 3.2.4 install GObject-introspection typelibs whose
 shared-library paths name the dependency prefix instead of the engine's own
-lib directory, so Python plug-ins cannot load libgimp. Upstream fixed this in
+lib directory, so Python plug-ins cannot load libgimp (seen at 3.0.8 and
+3.2.0; at 3.0.8 the babl and GEGL typelibs too). Upstream fixed this in
 GIMP 3.2.6 (commit 481bf7a998, "libgimp: Fix installed .typelib on macOS
 builds"). This is a packaging workaround on the install tree only; the GIMP
 sources stay untouched (AGENTS.md, zero-patch rule).

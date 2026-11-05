@@ -8,13 +8,15 @@ both is in [`docs/research/`](docs/research/README.md).
 
 ## Status
 
-Phase 0 (spike). A RigiUI app shell exists: the workspace window, a
-placeholder canvas, status-strip zoom, and a `--smoke-test` mode. The engine
-dependency prefix is built (`_deps/macports`), GIMP 3.2.8 and 3.2.0 build
-unmodified (`_engine/install/<ref>`), and adapter v1 (`Engine/`) passes its
-conformance tests against 3.2.0, 3.2.8 and master. The app loads the adapter
-at run time and edits real images through it.
-Keep `docs/plan.md` current as the spike proceeds.
+Phase 0 (spike) is finished with a go verdict
+([`docs/phase0-report.md`](docs/phase0-report.md)); phase 1 is next
+(`docs/plan.md`). The engine dependency prefix is built (`_deps/macports`);
+the four engine sets in `scripts/engine.env` (GIMP 3.2.8, 3.2.0, master and
+3.0.8) build unmodified into `_engine/install/<ref>`; adapter v1 (`Engine/`)
+passes its 52 conformance checks against all four. The app loads the adapter
+at run time and edits real images through it: tiled canvas, painting, a
+Layers palette, Gaussian Blur, undo, save and export.
+Keep `docs/plan.md` current as the work proceeds.
 
 ## Layout
 
@@ -73,12 +75,20 @@ Keep `docs/plan.md` current as the spike proceeds.
   (made with ChatGPT's image tool, prompt in `media-sources/IconPrompt.txt`);
   `swift scripts/generate-icons.swift` writes `Resources/AppIcon.png` and
   `Resources/AppIcon.icns`. Commit all three together.
-- `scripts/build-adapter.sh [--test] [--check] [GIMP_REF]` builds
+- `scripts/build-adapter.sh [--test|--perf|--check] [GIMP_REF]` builds
   `_engine/adapter/<GIMP_REF>/libglimsengine.dylib` with GIMP's own
   gimp-console flags and objects (read by `scripts/adapter-flags.py`), checks
   it exports only `glims_engine_get_api`, and with `--test` runs the
-  conformance tests with a throwaway home. Any facade change that is not
-  purely additive bumps `GLIMS_ENGINE_API_VERSION`.
+  conformance tests with a throwaway home. `--perf` times rendering, panning
+  and painting on a GIMP-made 24 MP, 20-layer image (made once with
+  `GIMP_3_2_0`). Any facade change that is not purely additive bumps
+  `GLIMS_ENGINE_API_VERSION`.
+- `python3 -I scripts/interface-diff.py _engine/adapter/<ref>/obj
+  _engine/src/<old>/gimp _engine/src/<new>/gimp` lists the GIMP functions the
+  compiled adapter calls whose prototypes differ between two engine trees.
+  Run it before building against a new engine.
+- `scripts/make-fixtures.sh [GIMP_REF]` regenerates the conformance fixtures
+  in `Engine/tests/fixtures` with GIMP's own engine (default `GIMP_3_2_0`).
 - [`CICD.md`](CICD.md) describes the workflows.
 
 ## Architecture boundaries
@@ -136,16 +146,20 @@ those directories.
 
 ## Verification
 
-Today: `swift test`, the `--smoke-test` launch of the assembled app, the
-notices check in `build-app.sh`, and CI's license and bundle assertions.
+In CI: `swift test`, the `--smoke-test` launch of the assembled app, the
+notices check in `build-app.sh`, and the license and bundle assertions.
 
-Planned with the adapter (see `docs/plan.md`):
+Locally, on every engine set (the engine is not built in CI):
 
-- Engine conformance tests through the facade: render goldens, XCF
-  round-trips, recorded stroke replays, filter undo accounting, file
-  import/export through plug-ins.
-- An interface diff of the GIMP symbols the adapter uses, run on every engine
-  bump.
+- The conformance tests (`scripts/build-adapter.sh --test`): renders against
+  GIMP's own composite, XCF round trips, strokes and filters with their undo
+  accounting, and import and export through the file plug-ins.
+- The interface diff (`scripts/interface-diff.py`) on every engine bump.
+- The app's `--engine-smoke-test` with `GLIMS_ENGINE_LIBRARY` set, which also
+  measures main-thread stalls during plug-in calls.
+
+Not yet covered: recorded stroke replays against goldens, and a latency
+comparison with GIMP's own interface.
 
 State exactly what was and was not checked. A successful compile of the
 adapter is not evidence that engine behavior is unchanged.

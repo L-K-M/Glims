@@ -6,9 +6,11 @@ running `scripts/build-app.sh` into `dist/Glims.app` and launching the bundle
 with `--smoke-test`. The release workflow does the same on a tag and publishes
 an unsigned, ad-hoc-signed `.zip` and `.dmg` as a GitHub Release.
 
-The GIMP engine is not built in CI yet. When the adapter lands, its build and
-conformance tests join `ci.yml`, and the nightly engine matrix described in
-[`docs/plan.md`](docs/plan.md) gets its own workflow.
+The GIMP engine and the adapter are not built in CI: the dependency prefix
+takes hours to build from source. Their build and conformance tests run
+locally (`scripts/build-engine.sh`, `scripts/build-adapter.sh --test`). Phase
+1 in [`docs/plan.md`](docs/plan.md) plans a nightly engine matrix on a
+self-hosted runner with a prebuilt prefix.
 
 ## Workflows
 

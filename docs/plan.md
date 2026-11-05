@@ -1,7 +1,7 @@
 # Glims plan
 
-Status as of 2026-11-04: phase 0. The app shell, build, release and CI setup
-exist; no engine work has started. Evidence labels: **[M]**
+Status as of 2026-11-05: phase 0 finished with a go verdict
+([`phase0-report.md`](phase0-report.md)); phase 1 is next. Evidence labels: **[M]**
 measured from GIMP source or history, **[I]** inferred or estimated. Sources
 are in [`research/`](research/README.md); the round 2 memo and its two reviews
 are the main inputs.
@@ -298,6 +298,54 @@ Week 3
   engine call from the main thread: 9.3, 3.3 and 15.1 ms. The engine thread
   keeps GIMP's nested loops off the main thread entirely, so the
   GPollFunc integration planned under "Event loop" is not needed.
+- 2026-11-05: renders checked against GIMP itself. `scripts/make-fixtures.sh`
+  has GIMP 3.2.0's `gimp-console` build a layered fixture (a group with a
+  masked multiply layer, a non-destructively blurred layer, a text layer) and
+  GIMP's own composite of it. The adapter's render equals that composite with
+  no differing pixels, and an XCF save and reopen keeps pixels and structure.
+- 2026-11-05: rendering fixed. Flushing the whole projection before every
+  read made the first frame of a 24 MP image take 3.4 s; reading it directly
+  was fast but returned empty tiles on first use and transparent areas when
+  zoomed out. The adapter now stops GIMP's chunk renderer, turns its pending
+  work into invalid tiles and renders the full-resolution area under a
+  zoomed-out view before reading (first frame at 100 %: about 150 ms). A new
+  check, that a fresh first render at 50 % equals one made after a full
+  render, failed on the old code. The canvas now keeps 256-pixel device tiles
+  and draws them as they arrive, from the viewport centre outwards.
+- 2026-11-05: guards. `scripts/interface-diff.py` compares the prototypes of
+  every GIMP function the compiled adapter calls (101 now) between two engine
+  source trees; none changed from 3.2.0 to 3.2.8 or from 3.2.8 to master. At
+  start-up the adapter checks the GObject signals it connects to (with
+  argument counts) and the properties it sets, and refuses to start on a
+  mismatch.
+- 2026-11-05: minor-release drill, run in reverse: the adapter, written for
+  3.2, moved to GIMP 3.0.8 with babl 0.1.120 and GEGL 0.4.66, across the same
+  interface difference as the planned 3.0.8 to 3.2.0 move.
+  `interface-diff.py` predicted all three breaks before compiling:
+  `file_open_image` has two fewer parameters before 3.2, and link and vector
+  layers do not exist. Fix: 15 added lines of `GIMP_CHECK_VERSION`
+  conditionals in `Engine/image.c`, one edit round, no facade or Swift change.
+  GIMP 3.0.8 builds unmodified once the prefix also has `mypaint-brushes1`
+  (MacPorts moved `mypaint-brushes` to 2.0 after 3.0.8), and it needs the
+  typelib repair as well (its babl and GEGL typelibs too).
+- 2026-11-05: performance pass (`scripts/build-adapter.sh --perf GIMP_3_2_8`)
+  on a GIMP-made 6000 × 4000 image with 20 layers in ten blend modes and a
+  1440 × 900 device-pixel viewport: panning over rendered areas costs 1.2 to
+  7.9 ms per frame (p95) and painting 1.8 ms (p95) from pointer sample to
+  pixels, within a 60 fps budget; the first frame of a freshly opened image
+  takes 147 ms at 100 % and 1.8 s at fit. Not compared side by side with GIMP
+  3.2.8's GTK interface. Full figures in `phase0-report.md`.
+- 2026-11-05: final run on all four engines with the finished code: the 52
+  conformance checks pass on 3.0.8, 3.2.0, 3.2.8 and master, and so does the
+  app's engine smoke test. Worst main-thread stall during 100 plug-in calls:
+  3.5, 3.3, 2.0 and 2.0 ms (5.1 ms in an earlier run); worst main-thread
+  engine call: 4.8, 3.3, 0.3 and 0.4 ms.
+- 2026-11-05: the 58 editor-relevant upstream UI commits from 3.2.0 to 3.2.8
+  triaged ([`phase0-triage-3.2.md`](phase0-triage-3.2.md); classified by two
+  helper models from the diffs, spot-checked by hand): 28 port, 3 new
+  feature, 26 ignore, and 1 that touches behavior the adapter reproduces
+  (`d125895a18`, the clip value when committing an existing filter, which the
+  adapter does not do yet).
 
 ### Go only if all hold
 
@@ -315,6 +363,25 @@ Week 3
 **No-go:** an engine-source patch is required, a micro release forces a
 facade change, or the GLib and Cocoa loop integration does not work in
 process. Then try the helper-process fallback before reconsidering the plan.
+
+**Result, 2026-11-05: go.** Criteria 1 to 5 hold. Criterion 6 holds for
+plug-in stalls; latency is within a 60 fps budget but was not compared side
+by side with GIMP 3.2.8. Evidence, findings and open risks:
+[`phase0-report.md`](phase0-report.md).
+
+## Phase 1
+
+In this order (reasons in `phase0-report.md`):
+
+1. Interactive plug-ins: try the engine with `no_interface` off and a
+   `GimpGui` hook table, so plug-ins can show their own dialogs.
+2. A self-contained, still unsigned `Glims.app`: engine, dependencies and
+   plug-ins bundled with relocatable paths, plus their third-party notices.
+3. The palette system and tool palette in Rigi (`design.md`, section 2).
+4. Native tools beyond the paintbrush, porting the triaged fixes as each tool
+   lands.
+5. A nightly engine matrix (pinned tag, latest stable, master) on a
+   self-hosted runner with a prebuilt dependency prefix.
 
 ## Later, before any public release
 
@@ -342,4 +409,6 @@ process. Then try the helper-process fallback before reconsidering the plan.
 
 | Date | From | To | Adapter lines/files | Facade change | Agent-hours | Caught by | Notes |
 |---|---|---|---|---|---|---|---|
-| | | | | | | | |
+| 2026-11-05 | GIMP_3_2_0 | GIMP_3_2_8 | 0 / 0 | none | not timed; build and tests about 3 min | no break | Found two host-environment gaps (`PATH`, `GI_TYPELIB_PATH`), fixed in the adapter, and the upstream typelib bug |
+| 2026-11-05 | GIMP_3_2_8 | master `32c1ddaa2d` (3.3.1-dev) | 0 / 0 | none | not timed; build under 3 min | no break | babl and GEGL master |
+| 2026-11-05 | GIMP_3_2_x | GIMP_3_0_8 | +15 / 1 | none | not timed; one edit round | `interface-diff.py` (all 3, before compiling), then the compiler | Reverse minor-release drill; environment: `mypaint-brushes1` port, typelib repair |
