@@ -51,6 +51,11 @@ Keep `docs/plan.md` current as the work proceeds.
   `--engine-smoke-test` against a bundled engine with `_engine/` and
   `_deps/` unreadable (sandbox-exec). Run it after changing the bundler,
   the adapter's bundle paths, or the engine set.
+- `scripts/engine-matrix.sh [GIMP_REF ...]` runs the whole chain (engine
+  build, adapter tests, interface diff against the pinned engine, app with
+  the engine bundled, bundle check) for each set in `MATRIX_SETS`
+  (`scripts/engine.env`: the pinned engine and master) and prints a table.
+  The nightly workflow runs it on a self-hosted Mac (`CICD.md`).
 - `dist/Glims.app/Contents/MacOS/Glims --smoke-test` builds the workspace
   window, checks it and exits; `--version` prints the bundle version.
 - `GLIMS_ENGINE_LIBRARY=<adapter dylib> dist/Glims.app/Contents/MacOS/Glims`

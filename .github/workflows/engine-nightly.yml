@@ -1,0 +1,46 @@
+name: Engine nightly
+
+# Builds the pinned GIMP engine and upstream master every night and runs the
+# whole engine check chain on each (scripts/engine-matrix.sh): engine build,
+# adapter conformance tests, interface diff, app with the engine bundled, and
+# the bundle check with the build trees unreadable. A failure on master is
+# the early warning the engine update model relies on (docs/plan.md).
+#
+# It needs a self-hosted Mac with the engine's dependency prefix already
+# built (scripts/bootstrap-deps.sh takes hours, too long for a hosted
+# runner); see CICD.md. Only schedule and manual runs start it, never pull
+# requests: a self-hosted runner must not run code from forks.
+on:
+  schedule:
+    - cron: '17 2 * * *'   # 02:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One engine build at a time on the runner; never cancel a running one.
+concurrency:
+  group: engine-nightly
+  cancel-in-progress: false
+
+jobs:
+  matrix:
+    name: Engine matrix (pinned and master)
+    runs-on: [self-hosted, macOS, ARM64, glims-engine]
+    timeout-minutes: 240
+    steps:
+      # Pinned to an immutable commit SHA, as in ci.yml.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          clean: false   # keep the ignored _deps/ and _engine/ trees between runs
+
+      - name: Build and check the engine matrix
+        run: scripts/engine-matrix.sh
+
+      - name: Publish the summary
+        if: always()
+        run: |
+          if [ -f _engine/matrix/latest/summary.md ]; then
+            cat _engine/matrix/latest/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi

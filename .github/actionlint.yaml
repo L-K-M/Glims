@@ -1,0 +1,4 @@
+# Labels of this project's self-hosted runners, for actionlint.
+self-hosted-runner:
+  labels:
+    - glims-engine   # a Mac with the engine's dependency prefix (CICD.md)

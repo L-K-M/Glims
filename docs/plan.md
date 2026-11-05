@@ -2,7 +2,8 @@
 
 Status as of 2026-11-05: phase 0 finished with a go verdict
 ([`phase0-report.md`](phase0-report.md)); phase 1 is under way, items 1
-(interactive plug-ins) and 2 (a self-contained app) done. Evidence labels: **[M]**
+(interactive plug-ins), 2 (a self-contained app) and 5 (the nightly engine
+matrix) done. Evidence labels: **[M]**
 measured from GIMP source or history, **[I]** inferred or estimated. Sources
 are in [`research/`](research/README.md); the round 2 memo and its two reviews
 are the main inputs.
@@ -471,6 +472,16 @@ In this order (reasons in `phase0-report.md`):
   port fetched the source with git, so there is no archive), Poppler's
   CJK data and iso-codes language names (compiled-in prefix paths), and
   the source offer the GPL and LGPL components need before any release.
+- 2026-11-05: item 5, the nightly engine matrix. `scripts/engine-matrix.sh`
+  runs the whole update chain for each set in `MATRIX_SETS` (the pinned
+  GIMP 3.2.8 and master): engine build, adapter conformance tests,
+  interface diff against the pinned engine, the app with that engine
+  bundled, and the bundle check with the build trees unreadable.
+  `.github/workflows/engine-nightly.yml` runs it every night on a
+  self-hosted Mac labelled `glims-engine` (setup in `CICD.md`), never on
+  pull requests. Run locally: both sets pass every step in 8.5 minutes,
+  including master moved to `5374deeec1`. Not checked: the workflow itself,
+  which needs the runner to be registered.
 
 ## Later, before any public release
 
@@ -503,3 +514,4 @@ In this order (reasons in `phase0-report.md`):
 | 2026-11-05 | GIMP_3_2_8 | master `32c1ddaa2d` (3.3.1-dev) | 0 / 0 | none | not timed; build under 3 min | no break | babl and GEGL master |
 | 2026-11-05 | GIMP_3_2_x | GIMP_3_0_8 | +15 / 1 | none | not timed; one edit round | `interface-diff.py` (all 3, before compiling), then the compiler | Reverse minor-release drill; environment: `mypaint-brushes1` port, typelib repair |
 | 2026-11-05 | GIMP_3_2_8 (adapter with plug-in procedures) | master `32c1ddaa2d` | +5 / 1 | none | minutes | the compiler; `interface-diff.py` did not compare struct members then, and does now | `GimpProgressInterface.get_window_id` renamed `get_window_handle` (ed668b3e2d); 3.0.8 and 3.2.0 needed nothing |
+| 2026-11-05 | master `32c1ddaa2d` | master `5374deeec1` | 0 / 0 | none | none (matrix run) | no break; `interface-diff.py` reports only the known rename | First run of `scripts/engine-matrix.sh` |

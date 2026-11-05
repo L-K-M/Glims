@@ -6,12 +6,12 @@ running `scripts/build-app.sh` into `dist/Glims.app` and launching the bundle
 with `--smoke-test`. The release workflow does the same on a tag and publishes
 an unsigned, ad-hoc-signed `.zip` and `.dmg` as a GitHub Release.
 
-The GIMP engine and the adapter are not built in CI: the dependency prefix
-takes hours to build from source. Their build and conformance tests run
-locally (`scripts/build-engine.sh`, `scripts/build-adapter.sh --test`, and
-`scripts/check-bundle.sh` for an app built with `--engine`). Phase
-1 in [`docs/plan.md`](docs/plan.md) plans a nightly engine matrix on a
-self-hosted runner with a prebuilt prefix.
+The GIMP engine and the adapter are not built on GitHub's hosted runners: the
+dependency prefix takes hours to build from source. They are checked locally
+(`scripts/engine-matrix.sh`, or its steps `scripts/build-engine.sh`,
+`scripts/build-adapter.sh --test` and `scripts/check-bundle.sh`) and nightly
+on a self-hosted Mac (`engine-nightly.yml`, below). The released app does not
+contain the engine yet.
 
 ## Workflows
 
@@ -19,6 +19,7 @@ self-hosted runner with a prebuilt prefix.
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | Pull requests, pushes to `main`, manual dispatch | License and bundle-id assertions, script syntax, `swift build`, `swift test`, `.app` assembly with the notices check, a smoke launch, on a pinned Xcode toolchain. |
 | `.github/workflows/zai-code-review.yml` | Pull requests (opened / reopened / synchronize / ready for review) | Automated review pass with GLM 5.3 (deep) and StepFun step-5-preview (fast tier), with MiMo as the outage fallback. |
+| `.github/workflows/engine-nightly.yml` | Nightly (02:17 UTC), manual dispatch | On a self-hosted Mac: `scripts/engine-matrix.sh` builds the pinned engine and upstream master, runs the adapter conformance tests, the interface diff, builds the app with each engine bundled and checks the bundle with the build trees unreadable. Never runs on pull requests. |
 | `.github/workflows/release.yml` | Pushing a `v*` tag (e.g. `v0.2.0`) | Check the tag against the committed versions, re-run tests, build the `.app`, package `.zip` + `.dmg`, check the notices inside both archives, publish a GitHub Release, then byte-compare the published assets. |
 
 ## Continuous integration (`ci.yml`)
@@ -76,6 +77,33 @@ hardening:
   that introduces this file is not itself reviewed; reviews start with the next.
 
 Findings are advice, not a gate. `CLAUDE.md` describes how to triage them.
+
+## Engine nightly (`engine-nightly.yml`)
+
+The job runs on a self-hosted runner labelled `glims-engine`
+(`.github/actionlint.yaml` declares the label). To set one up on an Apple
+Silicon Mac:
+
+1. Register a GitHub Actions runner for the repository with the labels
+   `self-hosted`, `macOS`, `ARM64` and `glims-engine`, and run it as a
+   dedicated user.
+2. In the runner's checkout of the repository, run
+   `scripts/bootstrap-deps.sh` once (hours) and then
+   `scripts/build-engine.sh` for each set in `MATRIX_SETS`
+   (`scripts/engine.env`). The checkout step keeps the ignored `_deps/` and
+   `_engine/` trees (`clean: false`), so later runs rebuild only what
+   upstream changed.
+3. Install Xcode at the version `ci.yml` pins.
+
+The workflow has no `pull_request` trigger on purpose: a self-hosted runner
+must never run code from forks. The summary table goes to the run's summary
+page, and the logs stay on the runner under `_engine/matrix/`.
+
+The same run works locally: `scripts/engine-matrix.sh [GIMP_REF ...]`
+(default: `MATRIX_SETS`). It writes `_engine/matrix/<time>/summary.md`, keeps
+its test app outside the build trees, and exits non-zero when a build, test or
+bundle check fails. An interface change reported by `interface-diff.py` alone
+does not fail it; it is the cue to read the log.
 
 ## Releases (`release.yml`)
 

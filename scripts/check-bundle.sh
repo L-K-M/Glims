@@ -13,6 +13,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${1:-$ROOT/dist/Glims.app}"
 ADAPTER="$APP/Contents/Frameworks/libglimsengine.dylib"
 [[ -f "$ADAPTER" ]] || { echo "error: $APP has no engine; build it with scripts/build-app.sh --engine GIMP_REF" >&2; exit 1; }
+case "$(cd "$APP" && pwd -P)/" in
+  "$ROOT/_engine/"*|"$ROOT/_deps/"*) echo "error: $APP is inside a build tree the check makes unreadable" >&2; exit 1 ;;
+esac
 
 TESTS="$(ls -t "$ROOT"/_engine/adapter/*/glims-engine-tests 2>/dev/null | head -1)"
 [[ -n "$TESTS" ]] || { echo "error: no conformance test binary; run scripts/build-adapter.sh first" >&2; exit 1; }
