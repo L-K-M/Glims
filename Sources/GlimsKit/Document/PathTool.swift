@@ -21,7 +21,13 @@ final class PathTool {
     private var working: VectorPath?
     private var drag: Drag?
     /// The subpath new anchors extend.
-    private(set) var extending: Int?
+    private(set) var extending: Int? {
+        didSet { if extending == nil { extendsFromStart = false } }
+    }
+    /// New anchors go before the subpath's first anchor rather than after its
+    /// last. The subpath is reversed when the next anchor is added, so a
+    /// click on its start alone changes nothing.
+    private var extendsFromStart = false
     /// The anchor whose handles show and Delete removes.
     private(set) var selected: VectorPath.AnchorIndex?
     /// The path the state above belongs to.
@@ -84,23 +90,29 @@ final class PathTool {
         let tolerance = Self.reach / canvas.scale
 
         switch path.part(at: point, tolerance: tolerance, handlesOf: selected.map { [$0] } ?? []) {
-        case .anchor(var index)?:
+        case .anchor(let index)?:
             let subpath = path.subpaths[index.subpath]
-            let isOpenEnd = !subpath.isClosed && subpath.anchors.count > 1
-            if extending == index.subpath, index.anchor == 0, isOpenEnd, !flags.contains(.option) {
+            let last = subpath.anchors.count - 1
+            // The anchor the subpath being drawn started from closes it.
+            let origin = extendsFromStart ? last : 0
+            if extending == index.subpath, !subpath.isClosed, last > 0, index.anchor == origin,
+               !flags.contains(.option) {
                 path.subpaths[index.subpath].isClosed = true
                 extending = nil
                 selected = index
                 drag = .closed
                 break
             }
-            if isOpenEnd, index.anchor == 0 {
-                // Continuing from the start: reverse, so new anchors append.
-                path.reverseSubpath(index.subpath)
-                index.anchor = subpath.anchors.count - 1
+            // Picking an end of an open subpath continues it from that end.
+            if !subpath.isClosed, index.anchor == last {
+                extending = index.subpath
+                extendsFromStart = false
+            } else if !subpath.isClosed, index.anchor == 0 {
+                extending = index.subpath
+                extendsFromStart = true
+            } else {
+                extending = nil
             }
-            extending = !subpath.isClosed && index.anchor == path.subpaths[index.subpath].anchors.count - 1
-                ? index.subpath : nil
             selected = index
             drag = flags.contains(.option) ? .pullHandles(index)
                 : .anchor(index, start: point, original: path[index])
@@ -112,6 +124,10 @@ final class PathTool {
             let anchor = VectorPath.Anchor(point)
             let index: VectorPath.AnchorIndex
             if let extending, !flags.contains(.shift) {
+                if extendsFromStart {
+                    path.reverseSubpath(extending)
+                    extendsFromStart = false
+                }
                 path.subpaths[extending].anchors.append(anchor)
                 index = VectorPath.AnchorIndex(subpath: extending, anchor: path.subpaths[extending].anchors.count - 1)
             } else {

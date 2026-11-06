@@ -573,6 +573,38 @@ enum EngineSmokeTest {
                   "Delete during a drag leaves the anchors alone")
         }
 
+        // Clicking the start of an open subpath only picks it up; the next
+        // anchor then extends it from that end.
+        func key(_ code: UInt16) {
+            if let press = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                            windowNumber: window.windowNumber, context: nil, characters: "\r",
+                                            charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: code) {
+                canvas.keyDown(with: press)
+            }
+        }
+        key(36)
+        if let down = event(.leftMouseDown, at: CGPoint(x: 150, y: 100), flags: .shift),
+           let up = event(.leftMouseUp, at: CGPoint(x: 150, y: 100), flags: .shift) {
+            canvas.mouseDown(with: down)
+            canvas.mouseUp(with: up)
+            settle()
+        }
+        drag([CGPoint(x: 180, y: 100)])
+        key(36)
+        let stepsBefore = document.undoInfo.undoCount
+        drag([CGPoint(x: 150, y: 100)])
+        check(document.undoInfo.undoCount == stepsBefore, "clicking a subpath's start anchor is not an edit")
+        drag([CGPoint(x: 150, y: 60)])
+        let extended = document.pathShapes[path]?.subpaths.last
+        check(extended?.anchors.count == 3 && extended?.anchors.first?.point == CGPoint(x: 180, y: 100)
+                && extended?.anchors.last?.point == CGPoint(x: 150, y: 60),
+              "the next anchor extends the subpath from its start")
+        key(36)
+        document.undo()
+        document.undo()
+        document.undo()
+        settle()
+
         // A rename in progress survives a reload of the palette's list.
         let renaming = PathsPaletteController()
         renaming.retarget(to: document)
