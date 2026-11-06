@@ -6,14 +6,19 @@
  * Opens IMAGE (the 24 MP, 20-layer image from make-perf-image.py) and times
  * what the canvas does: rendering a 1440 x 900 device-pixel viewport while
  * panning at several zooms, and painting, measured from one pointer sample
- * to its pixels being rendered. Prints the numbers and a verdict against a
- * 60 fps frame budget (16.7 ms).
+ * to its pixels being rendered, and how long viewport renders wait while
+ * a long stroke paints on another thread at pointer rate, as the app's
+ * input queue does. Prints the numbers and a verdict against a 60 fps
+ * frame budget (16.7 ms).
  */
 #include <dlfcn.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "glims_engine.h"
 
@@ -22,6 +27,9 @@
 #define FRAME_BUDGET_MS 16.7
 #define PAN_STEPS 30
 #define STROKE_POINTS 120
+#define LONG_STROKE_POINTS 500   /* 4 s of pointer samples at 125 Hz */
+#define POINTER_INTERVAL_US 8000
+#define MAX_RENDER_SAMPLES 2000
 
 static const GlimsEngineAPI *api;
 static GlimsEngine          *engine;
@@ -56,6 +64,40 @@ report (const char *what, double *samples, int n, int budgeted)
           budgeted ? (samples[(int) (n * 0.95)] <= FRAME_BUDGET_MS ? "  within budget" : "  OVER BUDGET") : "");
   if (budgeted && samples[(int) (n * 0.95)] > FRAME_BUDGET_MS)
     over_budget++;
+}
+
+/* A long stroke at pointer rate on its own thread, like the app's input
+ * queue sending each pointer sample as it arrives. */
+typedef struct
+{
+  GlimsImageID              image;
+  GlimsItemID               layer;
+  const GlimsBrushSettings *brush;
+  atomic_bool               done;
+} LongStroke;
+
+static void *
+paint_long_stroke (void *data)
+{
+  LongStroke      *job   = data;
+  GlimsStrokePoint point = { 600, 700, 0.8, 0, 0, 0 };
+  GlimsStrokeID    stroke = 0;
+  int              i;
+
+  if (api->stroke_begin (engine, job->image, job->layer, job->brush, &point, &stroke, NULL) == GLIMS_STATUS_OK)
+    {
+      for (i = 0; i < LONG_STROKE_POINTS; i++)
+        {
+          point.x = 600 + (i * 5) % 1200;
+          point.y = 700 + 150 * ((i / 240) % 3);
+          point.time_ms += 8;
+          api->stroke_continue (engine, stroke, &point, 1);
+          usleep (POINTER_INTERVAL_US);
+        }
+      api->stroke_end (engine, stroke);
+    }
+  atomic_store (&job->done, true);
+  return NULL;
 }
 
 int
@@ -190,6 +232,50 @@ main (int argc, char **argv)
         }
       else
         fprintf (stderr, "stroke failed: %s\n", error ? error : "?");
+    }
+
+  /* Renders of the viewport over a long stroke, idle and while it paints:
+   * the engine runs one call at a time, so a render waits for the dabs
+   * queued before it. */
+  if (api->image_layers (engine, image, &top, 1, &count) == GLIMS_STATUS_OK && count > 0)
+    {
+      GlimsBrushSettings brush = { .struct_size = sizeof brush, .size = 60.0, .opacity = 1.0,
+                                   .red = 0.9, .green = 0.2, .blue = 0.1, .pressure_size = true,
+                                   .tool = GLIMS_PAINT_PAINTBRUSH, .hardness = -1.0, .rate = -1.0,
+                                   .flow = -1.0, .exposure = -1.0 };
+      GlimsRect   view = { 400, 400, VIEW_W, VIEW_H };
+      LongStroke  job = { .image = image, .layer = top.id, .brush = &brush };
+      pthread_t   thread;
+      double     *renders = malloc (MAX_RENDER_SAMPLES * sizeof *renders);
+      double      began;
+      int         n = 0;
+
+      api->image_render (engine, image, 1.0, view, pixels, VIEW_W * 4);
+      for (i = 0; i < PAN_STEPS; i++)
+        {
+          t = now_ms ();
+          api->image_render (engine, image, 1.0, view, pixels, VIEW_W * 4);
+          samples[i] = now_ms () - t;
+        }
+      printf ("\n");
+      report ("viewport render at 100%, idle", samples, PAN_STEPS, 1);
+
+      atomic_store (&job.done, false);
+      began = now_ms ();
+      pthread_create (&thread, NULL, paint_long_stroke, &job);
+      while (! atomic_load (&job.done) && n < MAX_RENDER_SAMPLES)
+        {
+          t = now_ms ();
+          api->image_render (engine, image, 1.0, view, pixels, VIEW_W * 4);
+          renders[n++] = now_ms () - t;
+        }
+      pthread_join (thread, NULL);
+      if (n > 0)
+        report ("viewport render while a stroke paints", renders, n, 1);
+      printf ("%-44s %.0f ms for %d samples (%.0f ms of pointer input)\n", "long stroke: painted in",
+              now_ms () - began, LONG_STROKE_POINTS, LONG_STROKE_POINTS * POINTER_INTERVAL_US / 1000.0);
+      free (renders);
+      api->image_undo (engine, image);
     }
 
   api->stop (engine);
