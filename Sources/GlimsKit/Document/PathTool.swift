@@ -179,7 +179,7 @@ final class PathTool {
         }
         guard let path = working, drag != nil, let base = dragBase else { return }
         let current = document.activePath.flatMap { document.pathShapes[$0] } ?? VectorPath()
-        guard document.activePath == base.path, current == base.shape else {
+        guard document.activePath == base.path, current.isUnchanged(from: base.shape) else {
             onStatus?("The path changed during the drag, so the drag was not applied.")
             return
         }

@@ -70,6 +70,17 @@ final class VectorPathTests: XCTestCase {
         XCTAssertEqual(path.subpaths[0].anchors[1].handleOut, CGPoint(x: -1, y: 0))
     }
 
+    func testAShapeWithANaNCoordinateStillMatchesItself() {
+        // Two copies with their own storage, as a reload of the same path
+        // produces; equal arrays sharing storage compare equal without
+        // looking at their elements.
+        func damaged() -> VectorPath {
+            VectorPath(subpaths: [.init(anchors: [.init(CGPoint(x: CGFloat.nan, y: 1))])])
+        }
+        XCTAssertTrue(damaged().isUnchanged(from: damaged()))
+        XCTAssertFalse(damaged().isUnchanged(from: triangle()))
+    }
+
     func testTheOutlineScalesAndClosesThroughTheFirstAnchor() {
         let outline = triangle().cgPath(scale: 2)
         XCTAssertEqual(outline.boundingBoxOfPath, CGRect(x: 0, y: 0, width: 200, height: 160))

@@ -127,6 +127,23 @@ struct VectorPath: Equatable {
         }
     }
 
+    /// Whether `other` has exactly the same anchors, handles and closings,
+    /// bit for bit. Unlike `==`, a NaN coordinate (a damaged file can hold
+    /// one) matches itself, so a drag on such a path is not taken for a
+    /// change made elsewhere.
+    func isUnchanged(from other: VectorPath) -> Bool {
+        guard subpaths.count == other.subpaths.count else { return false }
+        let same = { (a: CGPoint, b: CGPoint) in
+            a.x.bitPattern == b.x.bitPattern && a.y.bitPattern == b.y.bitPattern
+        }
+        return zip(subpaths, other.subpaths).allSatisfy { mine, theirs in
+            mine.isClosed == theirs.isClosed && mine.anchors.count == theirs.anchors.count
+                && zip(mine.anchors, theirs.anchors).allSatisfy {
+                    same($0.point, $1.point) && same($0.handleIn, $1.handleIn) && same($0.handleOut, $1.handleOut)
+                }
+        }
+    }
+
     /// The outline at `scale` view points per image pixel, for drawing:
     /// one cubic curve between neighboring anchors, through the first's
     /// out handle and the second's in handle.

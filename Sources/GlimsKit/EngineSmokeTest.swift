@@ -631,6 +631,55 @@ enum EngineSmokeTest {
         } else {
             check(false, "the Paths palette's name field can be edited")
         }
+
+        // A path that goes away while its name is being typed: the list
+        // catches up when the rename ends, and a click on a stale row is
+        // ignored rather than indexing past the paths.
+        let spare = document.addPath(VectorPath(subpaths: [.init(anchors: [.init(CGPoint(x: 5, y: 5))])]))
+        settle()
+        renaming.reload()
+        let table = descendant(of: renaming.view, as: NSTableView.self)
+        let spareRow = document.paths.firstIndex { $0.id == spare } ?? 0
+        let lastRow = (table?.numberOfRows ?? 1) - 1
+        let spareField = table?.view(atColumn: 0, row: spareRow, makeIfNecessary: true)
+            .flatMap { descendant(of: $0, as: NSTextField.self) }
+        if let spare, let spareField, host.makeFirstResponder(spareField) {
+            spareField.currentEditor()?.string = "Gone soon"
+            document.deletePath(spare)
+            settle()
+            renaming.reload()
+            host.makeFirstResponder(nil)
+            spin()
+            check(table?.numberOfRows == document.paths.count,
+                  "the list catches up after a rename whose path went away (\(table?.numberOfRows ?? -1) rows)")
+            table?.selectRowIndexes(IndexSet(integer: lastRow), byExtendingSelection: false)
+            check(true, "a click on a row past the paths does not crash")
+        } else {
+            check(false, "a second path's name field can be edited")
+        }
+
+        // Selecting a path while a plug-in runs is refused, and the list
+        // keeps showing the path that stays active.
+        let other = document.addPath(VectorPath(subpaths: [.init(anchors: [.init(CGPoint(x: 9, y: 9))])]))
+        settle()
+        if let other {
+            document.selectPath(path)
+            settle()
+            renaming.reload()
+            let running = EngineSession.Procedure(name: "smoke-busy", label: "Busy", menuPath: "", blurb: "",
+                                                  isSensitive: true)
+            PlugInCommands.willRun(running, on: document)
+            if let row = document.paths.firstIndex(where: { $0.id == other }) {
+                table?.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            }
+            spin()
+            let shown = (table?.selectedRow).flatMap { document.paths.indices.contains($0) ? document.paths[$0].id : nil }
+            check(document.activePath == path && shown == path,
+                  "a path picked while a plug-in runs is refused and the list shows the active one")
+            PlugInCommands.didRun(running, outcome: nil)
+            document.deletePath(other)
+            settle()
+        }
         host.close()
 
         if let down = event(.leftMouseDown, at: CGPoint(x: 20, y: 90)),

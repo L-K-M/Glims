@@ -204,6 +204,9 @@ final class PathsPaletteController: NSViewController, PaletteContent, NSTableVie
     }
 
     func controlTextDidEndEditing(_ notification: Notification) {
+        // Changes that arrived while the name was being typed, including the
+        // path going away or the palette moving to another document.
+        defer { DispatchQueue.main.async { [weak self] in self?.reload() } }
         guard let field = notification.object as? NSTextField, let document else { return }
         let id = Int32(field.tag)
         let name = field.stringValue.trimmingCharacters(in: .whitespaces)
@@ -213,12 +216,19 @@ final class PathsPaletteController: NSViewController, PaletteContent, NSTableVie
         } else if name != path.name {
             document.renamePath(id, to: name)
         }
-        // Changes that arrived while the name was being typed.
-        DispatchQueue.main.async { [weak self] in self?.reload() }
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
-        guard !reloading, let document, table.selectedRow >= 0 else { return }
-        document.selectPath(document.paths[table.selectedRow].id)
+        guard !reloading, let document else { return }
+        // Rows can lag the paths while a rename holds the list still.
+        guard document.paths.indices.contains(table.selectedRow) else { return reload() }
+
+        let id = document.paths[table.selectedRow].id
+        document.selectPath(id)
+        // A refused pick (a plug-in is running) leaves the active path; the
+        // list shows that one again.
+        if document.activePath != id {
+            DispatchQueue.main.async { [weak self] in self?.reload() }
+        }
     }
 }
