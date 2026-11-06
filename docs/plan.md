@@ -561,13 +561,21 @@ In this order (reasons in `phase0-report.md`):
   from the incubator into Rigi with `ClassicColorPair`
   (L-K-M/Rigi#10, merged as `6a2d830`); the Tools palette uses both, and
   the color pair's swap and reset share X and D's code. Palette menus and
-  named workspaces (L-K-M/Rigi#11) and `ClassicValueSlider`,
+  named workspaces (L-K-M/Rigi#11, `cb32da9`) and `ClassicValueSlider`,
   `ClassicPaletteButtonBar` and status bar progress, accessories and an
-  editable zoom (L-K-M/Rigi#12) are in review. Each Rigi PR went through
-  helper-model review rounds with a second model verifying every finding;
-  they found 9 real defects so far, all fixed with regression tests,
-  among them palette title bar menu items that raised an exception
-  (`perform(_:)` resolved to NSObject's `performSelector:`).
+  editable zoom (L-K-M/Rigi#12, `084e116`) are merged, and Glims uses
+  them: menus on the Layers and Paths palettes, Window ▸ Workspaces, value
+  sliders in Tool Options, button bars on Layers and Paths, a zoom typed
+  into the status bar, and plug-in progress with Stop in the status bar
+  (Glims's own progress view is gone). Each Rigi PR went through
+  helper-model review rounds with a second model verifying every finding
+  until a round found nothing; every confirmed defect was fixed with a
+  regression test, among them palette title bar menu items that raised an
+  exception (`perform(_:)` resolved to NSObject's `performSelector:`) and
+  a typed zoom of "-1e20" that trapped converting to Int. Trying the
+  menus by hand found one more: AppKit's own resize zones on a resizable
+  borderless panel swallowed clicks on the menu triangle
+  (L-K-M/Rigi#13, in review).
 - 2026-11-06: item 4, Transform and Text tools. Engine: an additive facade
   call applies an affine matrix to a layer with `gimp_item_transform` as
   one undo step (`layer_transform_matrix`, five interpolations), and

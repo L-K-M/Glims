@@ -3,13 +3,13 @@ import RigiUI
 
 /// The Paths palette: the front document's paths, top first. Selecting a
 /// row makes that path the one the Path tool edits; the checkbox shows or
-/// hides it on the canvas; double-clicking the name renames it. The
-/// buttons add an empty path, delete the selected one, make its area the
-/// selection, and draw it on the active layer in the foreground color at
-/// the Path tool's stroke width.
+/// hides it on the canvas; double-clicking the name renames it. The button
+/// bar and the title bar menu add an empty path, make the selected one's
+/// area the selection, draw it on the active layer in the foreground color
+/// at the Path tool's stroke width, and delete it.
 @MainActor
 final class PathsPaletteController: NSViewController, PaletteContent, NSTableViewDataSource,
-                                     NSTableViewDelegate, NSTextFieldDelegate {
+                                     NSTableViewDelegate, NSTextFieldDelegate, NSMenuItemValidation {
     typealias Target = ImageDocument
 
     static let definition = PaletteDefinition(
@@ -19,32 +19,37 @@ final class PathsPaletteController: NSViewController, PaletteContent, NSTableVie
         sizing: .resizable(minimumContentSize: NSSize(width: 200, height: 140)),
         frameAutosaveName: "Glims.palette.paths")
 
-    /// The commands under the list, in order.
+    /// The palette's commands.
     enum Command: Int, CaseIterable {
         case new, delete, toSelection, stroke
 
-        var title: String {
+        /// SF Symbols names, first available wins.
+        var symbolNames: [String] {
             switch self {
-            case .new: return "New"
-            case .delete: return "Delete"
-            case .toSelection: return "Select"
-            case .stroke: return "Stroke"
+            case .new: return ["plus"]
+            case .delete: return ["trash"]
+            case .toSelection: return ["rectangle.dashed", "lasso"]
+            case .stroke: return ["scribble", "pencil"]
             }
         }
 
-        var help: String {
+        /// The command's name in the palette's menu, as its button's tool
+        /// tip and to VoiceOver.
+        var menuTitle: String {
             switch self {
-            case .new: return "Add an empty path for the Path tool to draw in"
-            case .delete: return "Delete the selected path"
-            case .toSelection: return "Make the area the path encloses the selection"
-            case .stroke: return "Draw the path on the active layer in the foreground color"
+            case .new: return "New Path"
+            case .delete: return "Delete Path"
+            case .toSelection: return "Path to Selection"
+            case .stroke: return "Stroke Path"
             }
         }
     }
 
     private weak var document: ImageDocument?
     private let table = NSTableView()
-    private var buttons: [Command: NSButton] = [:]
+    private lazy var buttonBar = ClassicPaletteButtonBar(
+        items: [Command.new, .toSelection, .stroke].map(barItem),
+        trailingItems: [barItem(.delete)])
     private var reloading = false
 
     override func loadView() {
@@ -62,27 +67,53 @@ final class PathsPaletteController: NSViewController, PaletteContent, NSTableVie
         scroll.hasVerticalScroller = true
         scroll.borderType = .noBorder
 
-        let bar = NSStackView(views: Command.allCases.map(makeButton))
-        bar.spacing = 4
-        bar.edgeInsets = NSEdgeInsets(top: 4, left: 6, bottom: 4, right: 6)
-
-        let stack = NSStackView(views: [scroll, bar])
+        let stack = NSStackView(views: [scroll, buttonBar])
         stack.orientation = .vertical
         stack.spacing = 0
         stack.alignment = .leading
         scroll.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        buttonBar.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         view = stack
     }
 
-    private func makeButton(_ command: Command) -> NSButton {
-        let button = NSButton(title: command.title, target: self, action: #selector(runCommand(_:)))
-        button.tag = command.rawValue
-        button.controlSize = .small
-        button.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        button.bezelStyle = .rounded
-        button.toolTip = command.help
-        buttons[command] = button
-        return button
+    private func barItem(_ command: Command) -> ClassicPaletteButtonBar.Item {
+        let image = command.symbolNames.lazy
+            .compactMap { NSImage(systemSymbolName: $0, accessibilityDescription: command.menuTitle) }
+            .first ?? NSImage()
+        image.isTemplate = true
+        return ClassicPaletteButtonBar.Item(id: "\(command)", title: command.menuTitle, image: image) { [weak self] in
+            self?.run(command)
+        }
+    }
+
+    /// The title bar triangle's menu: the same commands as the buttons.
+    var paletteMenu: NSMenu? {
+        let menu = NSMenu(title: "Paths")
+        for command in Command.allCases {
+            if command == .toSelection { menu.addItem(.separator()) }
+            let item = NSMenuItem(title: command.menuTitle, action: #selector(runMenuCommand(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = command.rawValue
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    @objc private func runMenuCommand(_ sender: NSMenuItem) {
+        guard let command = Command(rawValue: sender.tag) else { return }
+        run(command)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem.action == #selector(runMenuCommand(_:)), let command = Command(rawValue: menuItem.tag) else {
+            return true
+        }
+        return isEnabled(command)
+    }
+
+    private func isEnabled(_ command: Command) -> Bool {
+        guard let document else { return false }
+        return command == .new || document.activePath != nil
     }
 
     func retarget(to target: ImageDocument?) {
@@ -101,19 +132,12 @@ final class PathsPaletteController: NSViewController, PaletteContent, NSTableVie
         }
         reloading = false
 
-        let hasPath = document?.activePath != nil
-        buttons[.new]?.isEnabled = document != nil
-        for command in [Command.delete, .toSelection, .stroke] {
-            buttons[command]?.isEnabled = hasPath
+        for command in Command.allCases {
+            buttonBar.setEnabled(isEnabled(command), forItem: "\(command)")
         }
     }
 
     // MARK: Commands
-
-    @objc private func runCommand(_ sender: NSButton) {
-        guard let command = Command(rawValue: sender.tag) else { return }
-        run(command)
-    }
 
     /// One command on the front document, also used by the menus and the
     /// engine smoke test.

@@ -16,4 +16,9 @@ public enum ZoomLadder {
     public static func zoomOut(from percent: Int) -> Int {
         steps.last { $0 < percent } ?? steps[0]
     }
+
+    /// A typed zoom, kept within the ladder's smallest and largest steps.
+    public static func clamped(_ percent: Int) -> Int {
+        min(max(percent, steps[0]), steps[steps.count - 1])
+    }
 }

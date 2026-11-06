@@ -90,6 +90,7 @@ enum EngineSmokeTest {
             try exerciseTools(session, documents: documents)
             try exerciseEditing(session, documents: documents)
             try exercisePaths(session, documents: documents)
+            try exercisePaletteControls(session, documents: documents)
             try exercisePlugInCommands(session, documents: documents)
             try measurePluginStalls(session, work: work)
         } catch {
@@ -398,6 +399,63 @@ enum EngineSmokeTest {
     /// The plug-in menus and a plug-in command run through a document
     /// window, without a dialog (with last values), as Filter ▸ Last Filter
     /// runs one.
+    /// The Rigi controls the palettes and status bar use: a typed zoom, the
+    /// palettes' button bars and menus, and Tool Options' value sliders.
+    private static func exercisePaletteControls(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 120, height: 80)
+        let document = try ImageDocument(session: session, image: image, name: "Controls")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+
+        controller.statusBar.onZoomTo?(250)
+        check(controller.canvas.zoomPercent == 250, "a zoom typed into the status bar applies")
+        controller.statusBar.onZoomTo?(100_000)
+        check(controller.canvas.zoomPercent == ZoomLadder.steps.last, "a typed zoom stays within the ladder")
+        controller.zoom(to: ZoomLadder.actualPixels)
+
+        let layers = LayersPaletteController()
+        layers.retarget(to: document)
+        let layerBar = descendant(of: layers.view, as: ClassicPaletteButtonBar.self)
+        check(layerBar?.isEnabled(item: "new") == true && layerBar?.isEnabled(item: "delete") == true,
+              "the Layers palette's button bar offers New and Delete")
+        layerBar.flatMap { buttons(in: $0).first { $0.toolTip == "New Layer" } }?.performClick(nil)
+        settle()
+        check(document.layers.count == 2, "its New button adds a layer")
+        check(layers.paletteMenu?.items.contains { $0.action == #selector(DocumentWindowController.duplicateLayer(_:)) } == true,
+              "the Layers palette's menu holds the Layer commands")
+
+        let paths = PathsPaletteController()
+        paths.retarget(to: document)
+        let pathBar = descendant(of: paths.view, as: ClassicPaletteButtonBar.self)
+        check(pathBar?.isEnabled(item: "new") == true && pathBar?.isEnabled(item: "stroke") == false,
+              "the Paths palette's bar enables only New without a path")
+        let strokeItem = paths.paletteMenu?.items.first { $0.title == "Stroke Path" }
+        check(strokeItem.map { paths.validateMenuItem($0) } == false, "its menu disables Stroke Path without a path")
+
+        let previousTool = ToolState.shared.current
+        ToolState.shared.select(.paintbrush)
+        let options = ToolOptionsPaletteController()
+        check(descendant(of: options.view, as: ClassicValueSlider.self) != nil,
+              "Tool Options shows value sliders for a painting tool")
+        ToolState.shared.select(previousTool)
+    }
+
+    private static func buttons(in view: NSView) -> [NSButton] {
+        ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(buttons)
+    }
+
+    private static func descendant<View: NSView>(of view: NSView, as type: View.Type) -> View? {
+        if let match = view as? View { return match }
+        for child in view.subviews {
+            if let match = descendant(of: child, as: type) { return match }
+        }
+        return nil
+    }
+
     /// The Path tool driven through the canvas, then the Paths palette's
     /// commands and the engine's undo of path edits.
     private static func exercisePaths(_ session: EngineSession, documents: DocumentList) throws {
@@ -542,6 +600,7 @@ enum EngineSmokeTest {
         spin()
         check(!PlugInCommands.isRunning && document.undoInfo.undoCount == 1,
               "the command finished as one undo step (\(document.undoInfo.undoCount))")
+        check(!controller.statusBar.isShowingProgress, "the status bar's progress goes away when it ends")
         let first = pixel(session, image, x: 5, y: 5), second = pixel(session, image, x: 15, y: 5)
         check(first != nil && first != second, "the image changed (\(first ?? []) vs \(second ?? []))")
         check(documents.progressEvents.count > progressBefore && documents.progressEvents.last == .some(nil),

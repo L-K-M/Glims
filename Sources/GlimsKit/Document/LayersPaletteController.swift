@@ -3,7 +3,8 @@ import RigiUI
 
 /// The Layers palette: the front document's layer tree, top of the stack
 /// first. Selecting a row makes that layer the paint and filter target.
-/// Groups cannot be painted on and are not selectable.
+/// Groups cannot be painted on and are not selectable. The button bar adds,
+/// duplicates and deletes layers.
 @MainActor
 final class LayersPaletteController: NSViewController, PaletteContent, NSTableViewDataSource, NSTableViewDelegate {
     typealias Target = ImageDocument
@@ -18,6 +19,34 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
     private weak var document: ImageDocument?
     private let table = NSTableView()
     private var reloading = false
+    private lazy var buttonBar = ClassicPaletteButtonBar(
+        items: [Self.item("new", "New Layer", ["plus"]) { $0.layerCommand(.new) },
+                Self.item("duplicate", "Duplicate Layer", ["plus.square.on.square"]) { $0.layerCommand(.duplicate) }]
+            .map(bind),
+        trailingItems: [bind(Self.item("delete", "Delete Layer", ["trash"]) { $0.layerCommand(.delete) })])
+
+    /// A button bar command before it knows the palette's document.
+    private struct Command {
+        let id: String
+        let title: String
+        let image: NSImage
+        let run: (ImageDocument) -> Void
+    }
+
+    private static func item(_ id: String, _ title: String, _ symbols: [String],
+                             _ run: @escaping (ImageDocument) -> Void) -> Command {
+        let image = symbols.lazy.compactMap { NSImage(systemSymbolName: $0, accessibilityDescription: title) }
+            .first ?? NSImage()
+        image.isTemplate = true
+        return Command(id: id, title: title, image: image, run: run)
+    }
+
+    private func bind(_ command: Command) -> ClassicPaletteButtonBar.Item {
+        ClassicPaletteButtonBar.Item(id: command.id, title: command.title, image: command.image) { [weak self] in
+            guard let document = self?.document else { return }
+            command.run(document)
+        }
+    }
 
     override func loadView() {
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("layer"))
@@ -34,7 +63,33 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
         scroll.documentView = table
         scroll.hasVerticalScroller = true
         scroll.borderType = .noBorder
-        view = scroll
+
+        let stack = NSStackView(views: [scroll, buttonBar])
+        stack.orientation = .vertical
+        stack.spacing = 0
+        stack.alignment = .leading
+        scroll.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        buttonBar.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        view = stack
+    }
+
+    /// The title bar triangle's menu: the Layer menu's commands, which the
+    /// front document window answers through the responder chain.
+    var paletteMenu: NSMenu? {
+        let menu = NSMenu(title: "Layers")
+        let commands: [(String, Selector)] = [
+            ("New Layer", #selector(DocumentWindowController.newLayer(_:))),
+            ("Duplicate Layer", #selector(DocumentWindowController.duplicateLayer(_:))),
+            ("Delete Layer", #selector(DocumentWindowController.deleteLayer(_:))),
+            ("Layer Properties…", #selector(DocumentWindowController.layerProperties(_:))),
+            ("Bring Forward", #selector(DocumentWindowController.bringLayerForward(_:))),
+            ("Send Backward", #selector(DocumentWindowController.sendLayerBackward(_:))),
+        ]
+        for (index, (title, action)) in commands.enumerated() {
+            if index == 3 || index == 4 { menu.addItem(.separator()) }
+            menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+        }
+        return menu
     }
 
     func retarget(to target: ImageDocument?) {
@@ -52,6 +107,11 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
             table.deselectAll(nil)
         }
         reloading = false
+
+        let hasLayer = document?.activeLayer != nil
+        buttonBar.setEnabled(document != nil, forItem: "new")
+        buttonBar.setEnabled(hasLayer, forItem: "duplicate")
+        buttonBar.setEnabled(hasLayer, forItem: "delete")
     }
 
     /// The text of one row, also used by the engine smoke test.

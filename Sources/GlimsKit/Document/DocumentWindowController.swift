@@ -11,7 +11,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     let canvas: EngineCanvasView
     let statusBar = StatusBarView(frame: .zero)
     private let scrollView = NSScrollView()
-    private let progressView = PlugInProgressView(frame: .zero)
     private lazy var engineUndoManager = EngineUndoManager(document: imageDocument)
     private var blurPanel: GaussianBlurPanel?
     var onClose: ((DocumentWindowController) -> Void)?
@@ -49,6 +48,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         statusBar.onZoomIn = { [weak self] in self?.zoom(to: ZoomLadder.zoomIn(from: self?.canvas.zoomPercent ?? 100)) }
         statusBar.onZoomOut = { [weak self] in self?.zoom(to: ZoomLadder.zoomOut(from: self?.canvas.zoomPercent ?? 100)) }
         statusBar.onZoomReset = { [weak self] in self?.zoom(to: ZoomLadder.actualPixels) }
+        statusBar.isZoomEditable = true
+        statusBar.onZoomTo = { [weak self] percent in self?.zoom(to: ZoomLadder.clamped(percent)) }
         statusBar.setZoom(percent: canvas.zoomPercent)
         stateDidChange()
         window.center()
@@ -96,14 +97,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             statusBar.heightAnchor.constraint(equalToConstant: ClassicMetrics.statusBarHeight),
         ])
 
-        progressView.translatesAutoresizingMaskIntoConstraints = false
-        progressView.onStop = { [weak self] in self?.imageDocument.session.cancelProcedure() }
-        statusBar.addSubview(progressView)
-        NSLayoutConstraint.activate([
-            progressView.trailingAnchor.constraint(equalTo: statusBar.trailingAnchor,
-                                                   constant: -PlugInProgressView.zoomControlAllowance),
-            progressView.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
-        ])
         window.contentView = content
     }
 
@@ -350,7 +343,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         imageDocument.run(procedure, mode: mode) { [weak self] result in
             PlugInCommands.didRun(procedure, outcome: try? result.get())
             guard let self else { return }
-            self.progressView.show(nil)
+            self.statusBar.hideProgress()
             switch result {
             case .success(.completed): self.stateDidChange()
             case .success(.cancelled): self.statusBar.message = "\(title) was cancelled."
@@ -361,8 +354,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     /// Progress of the plug-in command running on this document.
     func showProgress(_ progress: EngineSession.Progress?) {
-        progressView.show(progress)
-        if let progress, !progress.text.isEmpty {
+        guard let progress else { return statusBar.hideProgress() }
+        statusBar.showProgress(fraction: progress.fraction) { [weak self] in
+            _ = self?.imageDocument.session.cancelProcedure()
+        }
+        if !progress.text.isEmpty {
             statusBar.message = progress.text
         }
     }

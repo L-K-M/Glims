@@ -13,6 +13,12 @@ final class ZoomLadderTests: XCTestCase {
         XCTAssertEqual(ZoomLadder.zoomOut(from: 100), 67)
     }
 
+    func testATypedZoomStaysWithinTheLadder() {
+        XCTAssertEqual(ZoomLadder.clamped(1), 5)
+        XCTAssertEqual(ZoomLadder.clamped(250), 250)
+        XCTAssertEqual(ZoomLadder.clamped(100_000), 3200)
+    }
+
     func testStepsFromBetweenTwoValues() {
         XCTAssertEqual(ZoomLadder.zoomIn(from: 61), 67)
         XCTAssertEqual(ZoomLadder.zoomOut(from: 61), 50)

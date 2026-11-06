@@ -137,7 +137,6 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         shownTool = tool
         shownFontCount = state.fontNames.count
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        bindings.removeAll()
         actionBindings.removeAll()
 
         let title = NSTextField(labelWithString: tool.name)
@@ -317,26 +316,14 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
     }
 
     /// A labelled slider with a number field beside it (design principle 6).
+    /// A labelled slider with its number field: Rigi's ClassicValueSlider.
+    /// Tool settings are not undo steps, so every change applies at once.
     private func slider(_ label: String, _ range: ClosedRange<Double>, _ value: Double, unit: String,
                         _ onChange: @escaping (Double) -> Void) -> NSView {
-        let slider = NSSlider(value: min(max(value, range.lowerBound), range.upperBound),
-                              minValue: range.lowerBound, maxValue: range.upperBound, target: nil, action: nil)
-        slider.controlSize = .small
-        let field = NSTextField(string: Self.format(slider.doubleValue))
-        field.controlSize = .small
-        field.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        field.alignment = .right
-        let unitLabel = NSTextField(labelWithString: unit)
-        unitLabel.font = .systemFont(ofSize: 11)
-
-        let binding = ValueBinding(slider: slider, field: field, range: range, onChange: onChange)
-        bindings.append(binding)
-
-        let container = NSStackView(views: [slider, field, unitLabel])
-        container.spacing = 4
-        slider.widthAnchor.constraint(equalToConstant: 110).isActive = true
-        field.widthAnchor.constraint(equalToConstant: 40).isActive = true
-        return row(label, container, onChange: nil)
+        let slider = ClassicValueSlider(title: label, range: range, value: value, unit: unit)
+        slider.titleWidth = Self.labelWidth
+        slider.onChange = { value, _ in onChange(value) }
+        return slider
     }
 
     private func checkbox(_ title: String, _ on: Bool, _ onChange: @escaping (Bool) -> Void) -> NSView {
@@ -361,11 +348,14 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         return row(label, menu) { control in onChange((control as! NSPopUpButton).indexOfSelectedItem) }
     }
 
+    /// The width of the row labels, so the controls line up.
+    private static let labelWidth: CGFloat = 62
+
     private func row(_ label: String, _ control: NSView, onChange: ((NSControl) -> Void)?) -> NSView {
         let title = NSTextField(labelWithString: label)
         title.font = .systemFont(ofSize: 11)
         title.alignment = .right
-        title.widthAnchor.constraint(equalToConstant: 62).isActive = true
+        title.widthAnchor.constraint(equalToConstant: Self.labelWidth).isActive = true
         if let onChange, let control = control as? NSControl {
             actionBindings.append(ActionBinding(control: control, onChange: onChange))
         }
@@ -374,45 +364,8 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         return row
     }
 
-    private static func format(_ value: Double) -> String {
-        value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
-    }
 
-    private var bindings: [ValueBinding] = []
     private var actionBindings: [ActionBinding] = []
-
-    /// Keeps a slider and its field in step and reports each change.
-    @MainActor
-    private final class ValueBinding: NSObject {
-        let slider: NSSlider
-        let field: NSTextField
-        let range: ClosedRange<Double>
-        let onChange: (Double) -> Void
-
-        init(slider: NSSlider, field: NSTextField, range: ClosedRange<Double>, onChange: @escaping (Double) -> Void) {
-            self.slider = slider
-            self.field = field
-            self.range = range
-            self.onChange = onChange
-            super.init()
-            slider.target = self
-            slider.action = #selector(sliderMoved)
-            field.target = self
-            field.action = #selector(fieldEdited)
-        }
-
-        @objc private func sliderMoved() {
-            field.stringValue = ToolOptionsPaletteController.format(slider.doubleValue.rounded())
-            onChange(slider.doubleValue.rounded())
-        }
-
-        @objc private func fieldEdited() {
-            let value = min(max(field.doubleValue, range.lowerBound), range.upperBound)
-            slider.doubleValue = value
-            field.stringValue = ToolOptionsPaletteController.format(value)
-            onChange(value)
-        }
-    }
 
     @MainActor
     private final class ActionBinding: NSObject {
