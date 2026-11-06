@@ -575,7 +575,8 @@ In this order (reasons in `phase0-report.md`):
   a typed zoom of "-1e20" that trapped converting to Int. Trying the
   menus by hand found one more: AppKit's own resize zones on a resizable
   borderless panel swallowed clicks on the menu triangle
-  (L-K-M/Rigi#13, in review).
+  (L-K-M/Rigi#13, merged as `9cc460d` after four review rounds; Glims
+  pins it, and the Layers menu now opens from its triangle).
 - 2026-11-06: item 4, Transform and Text tools. Engine: an additive facade
   call applies an affine matrix to a layer with `gimp_item_transform` as
   one undo step (`layer_transform_matrix`, five interpolations), and
