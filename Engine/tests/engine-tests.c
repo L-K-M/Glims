@@ -902,6 +902,21 @@ test_groups_and_text_units (const char *fixtures)
          fabs (read.size - 48) < 0.5 && fabs (read.line_spacing - 24) < 0.5,
          "a text layer sized in points reads back in pixels: 24 pt is %.1f px, 12 pt spacing is %.1f px",
          read.size, read.line_spacing);
+  /* Writing its own look back turns the layer to pixels; the indent it
+   * keeps (36 pt, 72 px) must not shrink to 36 px with it. */
+  if (count == 2 && rows[0].kind == GLIMS_LAYER_TEXT)
+    {
+      GlimsRect before = rows[0].bounds;
+
+      CHECK (api->text_layer_set (engine, image, rows[0].id, NULL, &read, &error) == GLIMS_STATUS_OK &&
+             api->image_layers (engine, image, rows, 8, &count) == GLIMS_STATUS_OK &&
+             abs (rows[0].bounds.width - before.width) <= 1 && abs (rows[0].bounds.height - before.height) <= 1,
+             "writing a points layer's own look back keeps its size (%dx%d, was %dx%d)%s%s",
+             rows[0].bounds.width, rows[0].bounds.height, before.width, before.height,
+             error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+    }
   if (image)
     api->image_close (engine, image);
 }

@@ -323,6 +323,8 @@ glims_text_layer_set (GlimsEngine             *engine,
   GimpFont              *font = NULL;
   GimpTextJustification  justify = GIMP_TEXT_JUSTIFY_LEFT;
   GeglColor             *color;
+  GimpText              *current;
+  gdouble                indent = 0.0;
 
   if (! image)
     return status;
@@ -334,6 +336,20 @@ glims_text_layer_set (GlimsEngine             *engine,
     return GLIMS_STATUS_NOT_FOUND;
   if (! string && ! settings)
     return GLIMS_STATUS_OK;
+
+  /* Settings arrive in pixels and move the text to pixels; the first-line
+   * indent, which the facade does not carry, is kept in the text's unit
+   * too (app/text/gimptextlayout.c), so it moves to pixels with them. */
+  current = gimp_text_layer_get_text (layer);
+  if (current)
+    {
+      gdouble xres, yres;
+
+      gimp_image_get_resolution (image, &xres, &yres);
+      indent = current->unit == gimp_unit_pixel ()
+        ? current->indent
+        : gimp_units_to_pixels (current->indent, current->unit, xres);
+    }
 
   if (settings)
     {
@@ -357,6 +373,7 @@ glims_text_layer_set (GlimsEngine             *engine,
                            "line-spacing",   settings->line_spacing,
                            "letter-spacing", settings->letter_spacing,
                            "antialias",      (gboolean) settings->antialias,
+                           "indent",         indent,
                            NULL);
       g_object_unref (color);
     }
@@ -372,6 +389,7 @@ glims_text_layer_set (GlimsEngine             *engine,
                            "line-spacing",   settings->line_spacing,
                            "letter-spacing", settings->letter_spacing,
                            "antialias",      (gboolean) settings->antialias,
+                           "indent",         indent,
                            NULL);
       g_object_unref (color);
     }

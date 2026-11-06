@@ -9,7 +9,8 @@
 #                  a duplicate, then exported (the reference renders are
 #                  compared against)
 #   text-units.xcf a 144 dpi image with a text layer sized in points: 24 pt
-#                  type with 12 pt line spacing, which is 48 px and 24 px
+#                  type with 12 pt line spacing and a 36 pt first-line
+#                  indent, which is 48 px, 24 px and 72 px
 import os
 
 from gi.repository import Gegl, Gimp, Gio
@@ -79,5 +80,6 @@ fill(paper, "#ffffff")
 points = Gimp.TextLayer.new(units, "Glims\nText", Gimp.Font.get_by_name("Sans-serif"), 24.0, Gimp.Unit.point())
 units.insert_layer(points, None, 0)
 points.set_line_spacing(12.0)
+points.set_indent(36.0)
 Gimp.file_save(Gimp.RunMode.NONINTERACTIVE, units,
                Gio.File.new_for_path(os.path.join(out, "text-units.xcf")), None)

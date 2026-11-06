@@ -194,7 +194,9 @@ final class PathTool {
     /// path makes a new path.
     private func commit(_ path: VectorPath) {
         if let id = document.activePath {
-            guard path != document.pathShapes[id] else { return }
+            // Compared bit for bit, so an unchanged shape holding a NaN (a
+            // damaged file) is not sent back, where the engine refuses it.
+            if let current = document.pathShapes[id], path.isUnchanged(from: current) { return }
             document.updatePath(id, to: path)
         } else {
             guard !path.isEmpty, let id = document.addPath(path) else { return }
