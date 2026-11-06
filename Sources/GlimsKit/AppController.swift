@@ -46,28 +46,25 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         return nil
     }
 
-    /// The classic first-launch layout: Tools at the top left, Tool Options
-    /// beside it, Layers at the right. Applied only to a palette without a
-    /// saved frame (NSWindow frame autosave), right after it first opens,
-    /// so a palette the user moved stays where they put it.
-    private static func hasSavedFrame(_ definition: PaletteDefinition) -> Bool {
-        guard let name = definition.frameAutosaveName else { return true }
-        return UserDefaults.standard.persistentDomain(forName: AppIdentity.bundleIdentifier)?["NSWindow Frame \(name)"] != nil
-    }
+    /// The first-launch layout (docs/design.md, section 2): Tools at the
+    /// top left with Tool Options docked under it as one column, Layers at
+    /// the top right. Rigi keeps whatever the person arranges since, and a
+    /// frame saved by an earlier build still places its palette once.
+    static let defaultPaletteLayout = [
+        PaletteGroupDefault([ToolsPaletteController.definition.kind], placement: .topLeading),
+        PaletteGroupDefault([ToolOptionsPaletteController.definition.kind],
+                            placement: .docked(below: ToolsPaletteController.definition.kind)),
+        PaletteGroupDefault([LayersPaletteController.definition.kind], placement: .topTrailing),
+    ]
 
-    private func placeOnFirstLaunch(_ definitions: [PaletteDefinition]) {
-        guard let visible = NSScreen.main?.visibleFrame else { return }
-        let margin: CGFloat = 8
-        var left = visible.minX + margin
-        for definition in definitions {
-            guard let name = definition.frameAutosaveName,
-                  let panel = NSApp.windows.first(where: { $0.frameAutosaveName == name }) else { continue }
-            if definition.kind == LayersPaletteController.definition.kind {
-                panel.setFrameTopLeftPoint(NSPoint(x: visible.maxX - margin - panel.frame.width, y: visible.maxY - margin))
-            } else {
-                panel.setFrameTopLeftPoint(NSPoint(x: left, y: visible.maxY - margin))
-                left += panel.frame.width + margin
-            }
+    /// Tab hides every palette and Shift-Tab every palette but Tools; either
+    /// brings them back while they are hidden (docs/design.md, rule 8).
+    static func togglePalettes(keepingTools: Bool) {
+        let center = PaletteCenter.shared
+        if center.isHidingPalettes {
+            center.restoreAll()
+        } else {
+            center.hideAll(except: keepingTools ? [ToolsPaletteController.definition.kind] : [])
         }
     }
 
@@ -152,12 +149,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         documents.append(controller)
         controller.showWindow(nil)
         PaletteCenter.shared.frontDocumentDidChange()
-        let unplaced = [ToolsPaletteController.definition, ToolOptionsPaletteController.definition,
-                        LayersPaletteController.definition].filter { !Self.hasSavedFrame($0) }
+        PaletteCenter.shared.setDefaultLayout(Self.defaultPaletteLayout)
         for palette in [toolsPalette, toolOptionsPalette, layersPalette] where !palette.isPresented {
             palette.showPanel()
         }
-        placeOnFirstLaunch(unplaced)
     }
 
     // MARK: Menu commands
@@ -202,12 +197,23 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         layersPalette.isPresented ? layersPalette.bringToFront() : layersPalette.showPanel()
     }
 
+    @objc func togglePaletteVisibility(_ sender: Any?) {
+        Self.togglePalettes(keepingTools: false)
+    }
+
+    @objc func resetPaletteLayout(_ sender: Any?) {
+        PaletteCenter.shared.resetLayout()
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
         case #selector(newDocument(_:)), #selector(openDocument(_:)):
             // A plug-in dialog is modal for the engine (glims_engine.h).
             return session != nil && !PlugInCommands.isRunning
         case #selector(showLayers(_:)), #selector(showTools(_:)), #selector(showToolOptions(_:)):
+            return session != nil
+        case #selector(togglePaletteVisibility(_:)):
+            menuItem.title = PaletteCenter.shared.isHidingPalettes ? "Show Palettes" : "Hide Palettes"
             return session != nil
         default:
             return true

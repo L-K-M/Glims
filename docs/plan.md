@@ -1,6 +1,6 @@
 # Glims plan
 
-Status as of 2026-11-05: phase 0 finished with a go verdict
+Status as of 2026-11-06: phase 0 finished with a go verdict
 ([`phase0-report.md`](phase0-report.md)); phase 1 is under way, items 1
 (interactive plug-ins), 2 (a self-contained app) and 5 (the nightly engine
 matrix) done; 3 (palettes) and 4 (native tools) partly done. Evidence labels: **[M]**
@@ -537,6 +537,26 @@ In this order (reasons in `phase0-report.md`):
   classic editors), Rotate and Flip for the image, and Layer ▸ Transform
   (rotate and flip around the layer's center). 142 conformance checks on
   all four engines and the app's smoke test (45 checks) pass.
+- 2026-11-06: item 3, palette groups and docking, built in Rigi as the
+  user decided (L-K-M/Rigi#8, merged as `833170b`): tabs in the palette
+  title bar with drag to reorder, tear off and merge; magnetic snapping;
+  docked columns; double-click collapse; `hideAll`/`restoreAll`; default
+  groups and placements; a saved, validated layout seeded once from the
+  old frame autosave names. Five review rounds by helper models (Devin,
+  GLM 5.3 and others, each finding checked by a second model) found 12
+  real defects, all fixed with regression tests; the last round found
+  none. Checked by hand in Rigi's gallery with real pointer drags.
+  Rigi's CI had to move to `macos-15` first (L-K-M/Rigi#9): GitHub now
+  rejects `macos-14` jobs. Sion (L-K-M/Sion#99) and Lucerne
+  (L-K-M/Lucerne#85, after L-K-M/Lucerne#86 moved its CI to `macos-15`
+  and fixed a macOS 15 paste bug that move exposed) adopted it; all
+  merged. Glims pins `833170b`: Tools at the top left
+  with Tool Options docked under it, Layers at the top right, replacing
+  the hand-written first-launch placement; Tab and Shift-Tab hide all
+  palettes or all but Tools while the canvas has focus; Window ▸ Hide
+  Palettes and Reset Palettes. Not done: workspaces (named layouts) and
+  the per-palette flyout menu (`design.md`, section 2), and Glims run by
+  hand with the new arrangement.
 
 ## Later, before any public release
 

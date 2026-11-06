@@ -115,6 +115,8 @@ enum MainMenu {
             item("Tools", #selector(AppController.showTools(_:))),
             item("Tool Options", #selector(AppController.showToolOptions(_:))),
             item("Layers", #selector(AppController.showLayers(_:))),
+            item("Hide Palettes", #selector(AppController.togglePaletteVisibility(_:))),
+            item("Reset Palettes", #selector(AppController.resetPaletteLayout(_:))),
         ])
         NSApplication.shared.windowsMenu = windowMenu
 

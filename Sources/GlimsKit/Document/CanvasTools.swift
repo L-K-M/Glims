@@ -208,6 +208,7 @@ final class CanvasToolController {
 
     private static let returnKeys: Set<Int> = [36, 76]      // Return, keypad Enter
     private static let escapeKey = 53
+    private static let tabKey = 48
     /// Arrow key codes and the direction each nudges (the canvas is flipped).
     private static let arrowDirections: [Int: CGSize] = [
         123: CGSize(width: -1, height: 0), 124: CGSize(width: 1, height: 0),
@@ -221,6 +222,11 @@ final class CanvasToolController {
         guard flags.isEmpty, let key = event.charactersIgnoringModifiers else { return false }
 
         let keyCode = Int(event.keyCode)
+        // Only while the canvas has focus: a text field keeps Tab for itself.
+        if keyCode == Self.tabKey {
+            AppController.togglePalettes(keepingTools: event.modifierFlags.contains(.shift))
+            return true
+        }
         if let rect = pendingCrop, Self.returnKeys.contains(keyCode) {
             document.crop(to: rect)
             pendingCrop = nil
