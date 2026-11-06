@@ -57,6 +57,18 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    /// How far each new document window steps from the previous one.
+    static let cascadeStep: CGFloat = 22
+
+    /// Where a new document window's top-left goes, given the previous
+    /// window's frame: one step down and right, or back near the top-left
+    /// of the visible screen area when that step would leave it.
+    static func cascadedTopLeft(after previous: CGRect, size: CGSize, in visible: CGRect) -> CGPoint {
+        let stepped = CGPoint(x: previous.minX + cascadeStep, y: previous.maxY - cascadeStep)
+        let fits = stepped.x + size.width <= visible.maxX && stepped.y - size.height >= visible.minY
+        return fits ? stepped : CGPoint(x: visible.minX + cascadeStep, y: visible.maxY)
+    }
+
     private func layOutContent(in window: NSWindow) {
         scrollView.documentView = canvas
         scrollView.hasVerticalScroller = true

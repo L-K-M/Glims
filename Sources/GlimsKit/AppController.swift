@@ -148,6 +148,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     func open(_ document: ImageDocument) {
         let controller = DocumentWindowController(document: document)
+        if let previous = documents.last?.window, previous.isVisible, let window = controller.window,
+           let visible = (previous.screen ?? NSScreen.main)?.visibleFrame {
+            window.setFrameTopLeftPoint(DocumentWindowController.cascadedTopLeft(
+                after: previous.frame, size: window.frame.size, in: visible))
+        }
         controller.onClose = { [weak self] closed in
             self?.documents.removeAll { $0 === closed }
             PaletteCenter.shared.frontDocumentDidChange()

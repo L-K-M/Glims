@@ -598,10 +598,18 @@ In this order (reasons in `phase0-report.md`):
   names (the list is now deduplicated, without macOS's private
   "."-fonts). The app's engine smoke test (56 checks) drives the Text
   tool through the canvas and checks the checks. Painting already runs on its own
-  queue (`ImageDocument.inputQueue`); whether long strokes still delay
-  renders on the engine thread is not measured. Noticed, not fixed: a new
-  document window opens exactly over the previous one instead of
-  cascading.
+  queue (`ImageDocument.inputQueue`). Fixed since: a new document window
+  opened exactly over the previous one; it now cascades.
+- 2026-11-06: item 4, painting off the main thread, measured
+  (`build-adapter.sh --perf GIMP_3_2_8`, 24 MP, 20 layers, Mac16,9). While
+  another thread paints a 500-sample stroke at pointer rate (8 ms apart),
+  back-to-back 1440 × 900 renders at 100 % take 3.6 ms on average and
+  12.5 ms at p95 (1.2 ms idle), within the 60 fps budget, with one
+  180 ms outlier. The engine runs one call at a time, so the stroke
+  falls behind instead: its 4 s of input took 6.9 s under that
+  continuous rendering. The canvas renders only damaged tiles at most
+  once a frame, so real use sits between the two; a stroke that lags
+  its pointer under heavy redraws is the cost to watch.
 - 2026-11-06: item 4, paths. Engine: seven additive facade calls list
   paths, read and replace their Bézier subpaths (each anchor with its two
   handles, GIMP's control, anchor, control), rename, show, select and
