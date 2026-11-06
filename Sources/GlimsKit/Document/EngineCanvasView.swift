@@ -82,6 +82,7 @@ final class EngineCanvasView: NSView {
         tiles.removeAll()
         staleTiles.removeAll()
         updateFrameSize()
+        tools.canvasScaleDidChange()
         needsDisplay = true
         setNeedsRender()
     }

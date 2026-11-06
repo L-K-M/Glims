@@ -164,7 +164,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
             stack.addArrangedSubview(hint("Drag a corner or edge to scale (Shift keeps the proportions), "
                 + "inside to move, outside to rotate (Shift: 15° steps). Return applies; Escape cancels."))
         } else if tool == .path {
-            stack.addArrangedSubview(slider("Stroke", 1...200, state.pathLineWidth, unit: "px") { value in
+            stack.addArrangedSubview(slider("Stroke", 1...200, state.pathLineWidth, unit: "px", fractionDigits: 1) { value in
                 ToolState.shared.pathLineWidth = value
             })
             stack.addArrangedSubview(hint("Click to add corners, drag for curves; click the first anchor to "
@@ -206,7 +206,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
                 ToolState.shared.textSettings.font = fonts[index]
             })
         }
-        stack.addArrangedSubview(slider("Size", 1...1000, settings.size, unit: "px") { value in
+        stack.addArrangedSubview(slider("Size", 1...1000, settings.size, unit: "px", fractionDigits: 1) { value in
             ToolState.shared.textSettings.size = value
         })
         let alignments = EngineSession.TextSettings.Justify.allCases
@@ -214,10 +214,10 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
                                        selected: alignments.firstIndex(of: settings.justify) ?? 0) { index in
             ToolState.shared.textSettings.justify = alignments[index]
         })
-        stack.addArrangedSubview(slider("Lines", -100...200, settings.lineSpacing, unit: "px") { value in
+        stack.addArrangedSubview(slider("Lines", -100...200, settings.lineSpacing, unit: "px", fractionDigits: 1) { value in
             ToolState.shared.textSettings.lineSpacing = value
         })
-        stack.addArrangedSubview(slider("Letters", -50...100, settings.letterSpacing, unit: "px") { value in
+        stack.addArrangedSubview(slider("Letters", -50...100, settings.letterSpacing, unit: "px", fractionDigits: 1) { value in
             ToolState.shared.textSettings.letterSpacing = value
         })
         stack.addArrangedSubview(checkbox("Antialias", settings.antialias) { on in
@@ -228,7 +228,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
     }
 
     private func addPaintRows(for tool: ToolID, brush: EngineSession.Brush) {
-        stack.addArrangedSubview(slider("Size", 1...500, brush.size, unit: "px") { value in
+        stack.addArrangedSubview(slider("Size", 1...500, brush.size, unit: "px", fractionDigits: 1) { value in
             ToolState.shared.update(tool) { $0.size = value }
         })
         stack.addArrangedSubview(slider("Opacity", 0...100, brush.opacity * 100, unit: "%") { value in
@@ -284,14 +284,14 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
             ToolState.shared.selectOptions.operation =
                 EngineSession.SelectOperation(rawValue: UInt32((control as! NSSegmentedControl).selectedSegment)) ?? .replace
         })
-        stack.addArrangedSubview(slider("Feather", 0...100, options.feather, unit: "px") { value in
+        stack.addArrangedSubview(slider("Feather", 0...100, options.feather, unit: "px", fractionDigits: 1) { value in
             ToolState.shared.selectOptions.feather = value
         })
         stack.addArrangedSubview(checkbox("Antialiasing", options.antialias) { on in
             ToolState.shared.selectOptions.antialias = on
         })
         if tool == .rectangleSelect {
-            stack.addArrangedSubview(slider("Corners", 0...100, options.cornerRadius, unit: "px") { value in
+            stack.addArrangedSubview(slider("Corners", 0...100, options.cornerRadius, unit: "px", fractionDigits: 1) { value in
                 ToolState.shared.selectOptions.cornerRadius = value
             })
         }
@@ -318,9 +318,12 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
     /// A labelled slider with a number field beside it (design principle 6).
     /// A labelled slider with its number field: Rigi's ClassicValueSlider.
     /// Tool settings are not undo steps, so every change applies at once.
+    /// Pixel measures take tenths, as the engine does; percentages, rates
+    /// and thresholds stay whole.
     private func slider(_ label: String, _ range: ClosedRange<Double>, _ value: Double, unit: String,
-                        _ onChange: @escaping (Double) -> Void) -> NSView {
-        let slider = ClassicValueSlider(title: label, range: range, value: value, unit: unit)
+                        fractionDigits: Int = 0, _ onChange: @escaping (Double) -> Void) -> NSView {
+        let slider = ClassicValueSlider(title: label, range: range, value: value, unit: unit,
+                                        fractionDigits: fractionDigits)
         slider.titleWidth = Self.labelWidth
         slider.onChange = { value, _ in onChange(value) }
         return slider

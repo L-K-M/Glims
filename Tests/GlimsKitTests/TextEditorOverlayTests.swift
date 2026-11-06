@@ -45,4 +45,32 @@ final class TextEditorOverlayTests: XCTestCase {
         XCTAssertEqual(editor.string, "Hi")
         XCTAssertFalse(engineUndo.manager.canUndo)
     }
+
+    /// The editor previews the alignment the layer will get: a shorter
+    /// second line lines up with the longest one at the left, in the middle
+    /// or at the right.
+    func testTheEditorShowsTheTextsAlignment() throws {
+        /// Each line's start and width, in the editor's coordinates.
+        func lines(_ justify: EngineSession.TextSettings.Justify) throws -> [(start: CGFloat, width: CGFloat)] {
+            var settings = EngineSession.TextSettings()
+            settings.justify = justify
+            let text = "Hello there\nHi"
+            let editor = TextEditorOverlay(layer: nil, text: text, origin: .zero, settings: settings, scale: 1)
+            let layout = try XCTUnwrap(editor.layoutManager)
+            return try [0, ("Hello there\n" as NSString).length].map { character in
+                let glyph = layout.glyphIndexForCharacter(at: character)
+                let start = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minX
+                    + layout.location(forGlyphAt: glyph).x
+                let width = layout.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil).width
+                XCTAssertLessThanOrEqual(start + width, editor.frame.width + 0.5, "\(justify) runs past the editor")
+                return try XCTUnwrap((start, width))
+            }
+        }
+
+        let left = try lines(.left), center = try lines(.center), right = try lines(.right)
+        XCTAssertEqual(left[1].start, left[0].start, accuracy: 0.5)
+        XCTAssertEqual(center[1].start + center[1].width / 2, center[0].start + center[0].width / 2, accuracy: 1)
+        XCTAssertEqual(right[1].start + right[1].width, right[0].start + right[0].width, accuracy: 1)
+        XCTAssertGreaterThan(center[1].start, left[1].start + 10, "centering moves the short line")
+    }
 }

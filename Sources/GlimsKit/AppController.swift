@@ -244,7 +244,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         case #selector(newDocument(_:)), #selector(openDocument(_:)):
             // A plug-in dialog is modal for the engine (glims_engine.h).
             return session != nil && !PlugInCommands.isRunning
-        case #selector(showLayers(_:)), #selector(showTools(_:)), #selector(showToolOptions(_:)):
+        case #selector(showLayers(_:)), #selector(showPaths(_:)), #selector(showTools(_:)),
+             #selector(showToolOptions(_:)):
             return session != nil
         case #selector(togglePaletteVisibility(_:)):
             menuItem.title = PaletteCenter.shared.isHidingPalettes ? "Show Palettes" : "Hide Palettes"

@@ -472,6 +472,11 @@ final class CanvasToolController {
         canvas.needsDisplay = true
     }
 
+    /// Whether `session` still describes its layer as the document has it.
+    private func isCurrent(_ session: LayerTransformSession) -> Bool {
+        document.layers.first { $0.id == session.layer }?.bounds == session.original
+    }
+
     private func currentLayerSession() -> LayerTransformSession? {
         guard let layer = document.layers.first(where: { $0.id == document.activeLayer }),
               layer.bounds.width > 0, layer.bounds.height > 0 else { return nil }
@@ -485,6 +490,12 @@ final class CanvasToolController {
             canvas.needsDisplay = true
         }
         guard let session = transformSession, !session.isIdentity else { return }
+        // The box describes the layer as it was when the drag began; an
+        // undo, or a change from a menu, may have moved or resized it since.
+        guard isCurrent(session) else {
+            onStatus?("The layer changed, so the transform was not applied.")
+            return
+        }
 
         document.transformLayer(session.layer, matrix: session.matrix,
                                 interpolation: ToolState.shared.transformInterpolation)
@@ -504,7 +515,8 @@ final class CanvasToolController {
         // Before the first press, the selected layer's own box shows where
         // the handles are.
         guard ToolState.shared.current == .transform,
-              let session = transformSession ?? currentLayerSession() else { return }
+              let session = transformSession.flatMap({ isCurrent($0) ? $0 : nil }) ?? currentLayerSession()
+        else { return }
         let toView = { (point: CGPoint) in NSPoint(x: point.x * scale, y: point.y * scale) }
         let corners = session.corners.map(toView)
 

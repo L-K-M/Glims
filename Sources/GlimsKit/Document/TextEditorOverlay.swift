@@ -146,6 +146,13 @@ final class TextEditorOverlay: NSTextView {
     /// top-left at `origin`.
     private func fit() {
         guard let layout = layoutManager, let container = textContainer else { return }
+        // Laid out unbounded to find the longest line, then again in a box
+        // that wide: in an unbounded box TextKit ignores the alignment, and
+        // the engine's dynamic text box is as wide as the longest line.
+        container.size = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        layout.ensureLayout(for: container)
+        let natural = ceil(layout.usedRect(for: container).width) + 1
+        container.size = NSSize(width: natural, height: CGFloat.greatestFiniteMagnitude)
         layout.ensureLayout(for: container)
         let used = layout.usedRect(for: container)
         let minimum = max(1, settings.size * scale)

@@ -1,4 +1,5 @@
 import AppKit
+import RigiUI
 import XCTest
 @testable import GlimsKit
 
@@ -61,5 +62,19 @@ final class ToolOptionsFontTests: XCTestCase {
             return stack.arrangedSubviews.compactMap { $0 as? NSPopUpButton }.first
         }
         return nil
+    }
+
+    /// Spacing, feather and sizes take fractions, as the engine does.
+    func testTheLetterSpacingSliderKeepsAFraction() throws {
+        ToolState.shared.select(.text)
+        let options = ToolOptionsPaletteController()
+        let sliders = Self.sliders(in: options.view)
+        let letters = try XCTUnwrap(sliders.first { $0.range == -50...100 }, "the Letters slider")
+        letters.value = 1.5
+        XCTAssertEqual(letters.value, 1.5)
+    }
+
+    private static func sliders(in view: NSView) -> [ClassicValueSlider] {
+        ((view as? ClassicValueSlider).map { [$0] } ?? []) + view.subviews.flatMap { sliders(in: $0) }
     }
 }

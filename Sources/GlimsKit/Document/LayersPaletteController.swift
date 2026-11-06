@@ -6,7 +6,8 @@ import RigiUI
 /// Groups cannot be painted on and are not selectable. The button bar adds,
 /// duplicates and deletes layers.
 @MainActor
-final class LayersPaletteController: NSViewController, PaletteContent, NSTableViewDataSource, NSTableViewDelegate {
+final class LayersPaletteController: NSViewController, PaletteContent, NSTableViewDataSource, NSTableViewDelegate,
+                                     NSMenuItemValidation {
     typealias Target = ImageDocument
 
     static let definition = PaletteDefinition(
@@ -73,23 +74,43 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
         view = stack
     }
 
-    /// The title bar triangle's menu: the Layer menu's commands, which the
-    /// front document window answers through the responder chain.
+    /// The title bar triangle's menu: the layer commands, on the document
+    /// the palette shows, as its buttons are, so they work while that
+    /// document's window is minimized. Layer Properties… opens the document
+    /// window's dialog and goes there through the responder chain.
     var paletteMenu: NSMenu? {
         let menu = NSMenu(title: "Layers")
-        let commands: [(String, Selector)] = [
-            ("New Layer", #selector(DocumentWindowController.newLayer(_:))),
-            ("Duplicate Layer", #selector(DocumentWindowController.duplicateLayer(_:))),
-            ("Delete Layer", #selector(DocumentWindowController.deleteLayer(_:))),
-            ("Layer Properties…", #selector(DocumentWindowController.layerProperties(_:))),
-            ("Bring Forward", #selector(DocumentWindowController.bringLayerForward(_:))),
-            ("Send Backward", #selector(DocumentWindowController.sendLayerBackward(_:))),
+        let commands: [(String, EngineSession.LayerCommand)] = [
+            ("New Layer", .new), ("Duplicate Layer", .duplicate), ("Delete Layer", .delete),
         ]
-        for (index, (title, action)) in commands.enumerated() {
-            if index == 3 || index == 4 { menu.addItem(.separator()) }
-            menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+        for (title, command) in commands {
+            menu.addItem(commandItem(title, command))
         }
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Layer Properties…", action: #selector(DocumentWindowController.layerProperties(_:)),
+                     keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(commandItem("Bring Forward", .raise))
+        menu.addItem(commandItem("Send Backward", .lower))
         return menu
+    }
+
+    private func commandItem(_ title: String, _ command: EngineSession.LayerCommand) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: #selector(runLayerCommand(_:)), keyEquivalent: "")
+        item.target = self
+        item.tag = Int(command.rawValue)
+        return item
+    }
+
+    @objc private func runLayerCommand(_ sender: NSMenuItem) {
+        guard let command = EngineSession.LayerCommand(rawValue: UInt32(sender.tag)) else { return }
+        document?.layerCommand(command)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem.action == #selector(runLayerCommand(_:)) else { return true }
+        guard let document else { return false }
+        return menuItem.tag == Int(EngineSession.LayerCommand.new.rawValue) || document.activeLayer != nil
     }
 
     func retarget(to target: ImageDocument?) {

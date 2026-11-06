@@ -343,6 +343,10 @@ enum EngineSmokeTest {
             check(editor != nil && window.firstResponder === editor,
                   "a Text tool click opens the editor with the keyboard focus")
             editor?.insertText("Hi", replacementRange: NSRange(location: NSNotFound, length: 0))
+            controller.zoom(to: 200)
+            check(editor?.frame.origin == CGPoint(x: click.x * 2, y: click.y * 2),
+                  "the text editor follows the canvas zoom (\(editor?.frame.origin ?? .zero))")
+            controller.zoom(to: ZoomLadder.actualPixels)
             editor?.cancelOperation(nil)
             settle()
             let typed = document.layers.first
@@ -425,8 +429,14 @@ enum EngineSmokeTest {
         layerBar.flatMap { buttons(in: $0).first { $0.toolTip == "New Layer" } }?.performClick(nil)
         settle()
         check(document.layers.count == 2, "its New button adds a layer")
-        check(layers.paletteMenu?.items.contains { $0.action == #selector(DocumentWindowController.duplicateLayer(_:)) } == true,
-              "the Layers palette's menu holds the Layer commands")
+        let duplicate = layers.paletteMenu?.items.first { $0.title == "Duplicate Layer" }
+        check(duplicate.map { $0.target === layers && layers.validateMenuItem($0) } == true,
+              "the Layers palette's menu runs the layer commands itself, enabled for the shown document")
+        if let duplicate, let action = duplicate.action {
+            NSApp.sendAction(action, to: duplicate.target, from: duplicate)
+            settle()
+            check(document.layers.count == 3, "its Duplicate Layer duplicates the layer")
+        }
 
         let paths = PathsPaletteController()
         paths.retarget(to: document)
@@ -435,6 +445,43 @@ enum EngineSmokeTest {
               "the Paths palette's bar enables only New without a path")
         let strokeItem = paths.paletteMenu?.items.first { $0.title == "Stroke Path" }
         check(strokeItem.map { paths.validateMenuItem($0) } == false, "its menu disables Stroke Path without a path")
+
+        // A pending transform whose layer an undo moved is not applied with
+        // the old box: Return refuses it.
+        if let window = controller.window {
+            func send(_ type: NSEvent.EventType, _ point: CGPoint) {
+                guard let event = NSEvent.mouseEvent(
+                    with: type, location: controller.canvas.convert(point, to: nil), modifierFlags: [],
+                    timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                    clickCount: 1, pressure: 1) else { return }
+                switch type {
+                case .leftMouseDown: controller.canvas.mouseDown(with: event)
+                case .leftMouseDragged: controller.canvas.mouseDragged(with: event)
+                default: controller.canvas.mouseUp(with: event)
+                }
+            }
+            document.moveActiveLayer(by: CGSize(width: 10, height: 5))
+            settle()
+            let toolBefore = ToolState.shared.current
+            ToolState.shared.select(.transform)
+            send(.leftMouseDown, CGPoint(x: 60, y: 40))
+            send(.leftMouseDragged, CGPoint(x: 70, y: 40))
+            send(.leftMouseUp, CGPoint(x: 70, y: 40))
+            document.undo()
+            settle()
+            let undone = document.layers.first { $0.id == document.activeLayer }?.bounds
+            let steps = document.undoInfo.undoCount
+            if let enter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                            windowNumber: window.windowNumber, context: nil, characters: "\r",
+                                            charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36) {
+                controller.canvas.keyDown(with: enter)
+            }
+            settle()
+            check(document.undoInfo.undoCount == steps
+                    && document.layers.first { $0.id == document.activeLayer }?.bounds == undone,
+                  "a transform whose layer an undo changed is not applied")
+            ToolState.shared.select(toolBefore)
+        }
 
         let previousTool = ToolState.shared.current
         ToolState.shared.select(.paintbrush)
