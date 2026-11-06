@@ -27,8 +27,8 @@
 
 #include "gimp-intl.h"
 
-static GimpChannelOps
-channel_op (uint32_t operation)
+GimpChannelOps
+glims_channel_op (uint32_t operation)
 {
   switch (operation)
     {
@@ -114,7 +114,7 @@ glims_select_shape (GlimsEngine              *engine,
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
   mask    = gimp_image_get_mask (image);
-  op      = channel_op (settings.operation);
+  op      = glims_channel_op (settings.operation);
   feather = settings.feather > 0.0;
 
   switch (shape)
@@ -232,7 +232,7 @@ glims_select_color (GlimsEngine              *engine,
       gimp_channel_select_fuzzy (mask, drawable, settings.sample_merged, x, y,
                                  (gfloat) settings.threshold, TRUE,
                                  GIMP_SELECT_CRITERION_COMPOSITE, FALSE,
-                                 channel_op (settings.operation), settings.antialias,
+                                 glims_channel_op (settings.operation), settings.antialias,
                                  feather, settings.feather, settings.feather);
     }
   else
@@ -266,7 +266,7 @@ glims_select_color (GlimsEngine              *engine,
       gimp_channel_select_by_color (mask, drawables, settings.sample_merged, color,
                                     (gfloat) settings.threshold, TRUE,
                                     GIMP_SELECT_CRITERION_COMPOSITE,
-                                    channel_op (settings.operation), settings.antialias,
+                                    glims_channel_op (settings.operation), settings.antialias,
                                     feather, settings.feather, settings.feather);
       g_list_free (drawables);
       g_object_unref (color);

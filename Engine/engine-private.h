@@ -127,6 +127,27 @@ GlimsStatus glims_select_command   (GlimsEngine *e, GlimsImageID image, uint32_t
 GlimsStatus glims_selection_bounds (GlimsEngine *e, GlimsImageID image, bool *empty, GlimsRect *bounds);
 GlimsStatus glims_selection_outline(GlimsEngine *e, GlimsImageID image, GlimsSegment *segments,
                                     int32_t capacity, int32_t *count);
+GimpChannelOps glims_channel_op   (uint32_t operation);  /* a GlimsSelectOperation */
+
+/* path.c */
+GlimsStatus glims_paths            (GlimsEngine *e, GlimsImageID image, GlimsPathInfo *rows,
+                                    int32_t capacity, int32_t *count);
+GlimsStatus glims_path_get         (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
+                                    GlimsSubpath *subpaths, int32_t subpath_capacity,
+                                    int32_t *subpath_count, GlimsPathPoint *points,
+                                    int32_t point_capacity, int32_t *point_count);
+GlimsStatus glims_path_set         (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
+                                    const char *name, const GlimsSubpath *subpaths,
+                                    int32_t subpath_count, const GlimsPathPoint *points,
+                                    int32_t point_count, GlimsItemID *result, char **error);
+GlimsStatus glims_path_change      (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
+                                    const GlimsPathChange *change, char **error);
+GlimsStatus glims_path_delete      (GlimsEngine *e, GlimsImageID image, GlimsItemID path);
+GlimsStatus glims_path_to_selection(GlimsEngine *e, GlimsImageID image, GlimsItemID path,
+                                    const GlimsSelectOptions *options);
+GlimsStatus glims_path_stroke      (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
+                                    GlimsItemID layer, const GlimsLineSettings *settings,
+                                    char **error);
 
 /* edit.c */
 GlimsStatus glims_fill             (GlimsEngine *e, GlimsImageID image, GlimsPoint point,

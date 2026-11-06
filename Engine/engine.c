@@ -1009,6 +1009,48 @@ MARSHAL (layer_transform_matrix, return glims_layer_transform_matrix (e, a->imag
 MARSHAL (image_resize_canvas, return glims_image_resize_canvas (e, a->image, a->area.width, a->area.height,
                                                                 a->area.x, a->area.y, a->in, a->error);)
 MARSHAL (procedure_run, return glims_procedure_run (e, a->image, a->string, (uint32_t) a->width, a->error);)
+MARSHAL (paths, return glims_paths (e, a->image, a->out, a->capacity, a->count);)
+MARSHAL (path_change, return glims_path_change (e, a->image, a->item, a->in, a->error);)
+MARSHAL (path_delete, return glims_path_delete (e, a->image, a->item);)
+MARSHAL (path_to_selection, return glims_path_to_selection (e, a->image, a->item, a->in);)
+MARSHAL (path_stroke, return glims_path_stroke (e, a->image, a->item, (GlimsItemID) a->width, a->in,
+                                                a->error);)
+
+/* A path's geometry takes more arguments than GlimsArgs holds. */
+typedef struct
+{
+  GlimsImageID          image;
+  GlimsItemID           path;
+  const char           *name;
+  GlimsSubpath         *subpaths;
+  const GlimsSubpath   *subpaths_in;
+  int32_t               subpath_capacity;
+  int32_t              *subpath_count;
+  GlimsPathPoint       *points;
+  const GlimsPathPoint *points_in;
+  int32_t               point_capacity;
+  int32_t              *point_count;
+  GlimsItemID          *result;
+  char                **error;
+} GlimsPathArgs;
+
+static GlimsStatus
+path_get_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsPathArgs *a = data;
+
+  return glims_path_get (e, a->image, a->path, a->subpaths, a->subpath_capacity, a->subpath_count,
+                         a->points, a->point_capacity, a->point_count);
+}
+
+static GlimsStatus
+path_set_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsPathArgs *a = data;
+
+  return glims_path_set (e, a->image, a->path, a->name, a->subpaths_in, a->subpath_capacity,
+                         a->points_in, a->point_capacity, a->result, a->error);
+}
 
 static GlimsStatus
 procedure_cancel_on_engine (GlimsEngine *e, gpointer data)
@@ -1333,6 +1375,68 @@ api_text_layer_set (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, const
   return glims_engine_call (e, text_layer_set_on_engine, &a);
 }
 
+static GlimsStatus
+api_paths (GlimsEngine *e, GlimsImageID image, GlimsPathInfo *rows, int32_t capacity, int32_t *count)
+{
+  GlimsArgs a = { .image = image, .out = rows, .capacity = capacity, .count = count };
+  return glims_engine_call (e, paths_on_engine, &a);
+}
+
+static GlimsStatus
+api_path_get (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
+              GlimsSubpath *subpaths, int32_t subpath_capacity, int32_t *subpath_count,
+              GlimsPathPoint *points, int32_t point_capacity, int32_t *point_count)
+{
+  GlimsPathArgs a = { .image = image, .path = path, .subpaths = subpaths,
+                      .subpath_capacity = subpath_capacity, .subpath_count = subpath_count,
+                      .points = points, .point_capacity = point_capacity,
+                      .point_count = point_count };
+  return glims_engine_call (e, path_get_on_engine, &a);
+}
+
+static GlimsStatus
+api_path_set (GlimsEngine *e, GlimsImageID image, GlimsItemID path, const char *name,
+              const GlimsSubpath *subpaths, int32_t subpath_count,
+              const GlimsPathPoint *points, int32_t point_count,
+              GlimsItemID *result, char **error)
+{
+  GlimsPathArgs a = { .image = image, .path = path, .name = name, .subpaths_in = subpaths,
+                      .subpath_capacity = subpath_count, .points_in = points,
+                      .point_capacity = point_count, .result = result, .error = error };
+  return glims_engine_call (e, path_set_on_engine, &a);
+}
+
+static GlimsStatus
+api_path_change (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
+                 const GlimsPathChange *change, char **error)
+{
+  GlimsArgs a = { .image = image, .item = path, .in = change, .error = error };
+  return glims_engine_call (e, path_change_on_engine, &a);
+}
+
+static GlimsStatus
+api_path_delete (GlimsEngine *e, GlimsImageID image, GlimsItemID path)
+{
+  GlimsArgs a = { .image = image, .item = path };
+  return glims_engine_call (e, path_delete_on_engine, &a);
+}
+
+static GlimsStatus
+api_path_to_selection (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
+                       const GlimsSelectOptions *options)
+{
+  GlimsArgs a = { .image = image, .item = path, .in = options };
+  return glims_engine_call (e, path_to_selection_on_engine, &a);
+}
+
+static GlimsStatus
+api_path_stroke (GlimsEngine *e, GlimsImageID image, GlimsItemID path, GlimsItemID layer,
+                 const GlimsLineSettings *settings, char **error)
+{
+  GlimsArgs a = { .image = image, .item = path, .width = layer, .in = settings, .error = error };
+  return glims_engine_call (e, path_stroke_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1382,6 +1486,13 @@ static const GlimsEngineAPI api_v1 = {
   .text_layer_new    = api_text_layer_new,
   .text_layer_get    = api_text_layer_get,
   .text_layer_set    = api_text_layer_set,
+  .paths             = api_paths,
+  .path_get          = api_path_get,
+  .path_set          = api_path_set,
+  .path_change       = api_path_change,
+  .path_delete       = api_path_delete,
+  .path_to_selection = api_path_to_selection,
+  .path_stroke       = api_path_stroke,
 };
 
 __attribute__ ((visibility ("default")))

@@ -715,6 +715,146 @@ test_text_layers (const char *work)
   api->image_close (engine, image);
 }
 
+/* Paths: adding one from anchors and handles, reading it back, replacing
+ * its subpaths, renaming and showing it, each an undo step; drawing it as
+ * a line and turning it into a selection; refusals; deleting; and an XCF
+ * round trip. */
+static GlimsPathPoint
+corner (double x, double y)
+{
+  return (GlimsPathPoint) { { x, y }, { x, y }, { x, y } };
+}
+
+static void
+test_paths (const char *work)
+{
+  GlimsImageID      image = 0, reopened = 0;
+  GlimsItemID       path = 0;
+  GlimsPathInfo     rows[2];
+  GlimsSubpath      square[1] = { { .count = 4, .closed = true } };
+  GlimsPathPoint    points[6] = { corner (20, 20), corner (80, 20), corner (80, 80), corner (20, 80) };
+  GlimsSubpath      both[2]   = { { .count = 4, .closed = true }, { .count = 2, .closed = false } };
+  GlimsSubpath      read_subpaths[4];
+  GlimsPathPoint    read_points[8];
+  GlimsPathChange   change = { .struct_size = sizeof change, .visible = -1 };
+  GlimsLineSettings line = { .struct_size = sizeof line, .width = 4, .color = { 0, 0, 0, 1 },
+                             .antialias = false };
+  GlimsSelectOptions select = { .struct_size = sizeof select, .operation = GLIMS_SELECT_REPLACE };
+  GlimsRect         bounds;
+  int32_t           count = -1, subpath_count = -1, point_count = -1, before;
+  bool              empty = true;
+  char             *error = NULL, xcf[1024];
+
+  /* An open curve from (100,50) to (180,50) whose handles lift its middle
+   * to (140,20). */
+  points[4] = (GlimsPathPoint) { { 100, 50 }, { 100, 50 }, { 120, 10 } };
+  points[5] = (GlimsPathPoint) { { 160, 10 }, { 180, 50 }, { 180, 50 } };
+
+  api->image_new (engine, 200, 100, &image, NULL);
+  CHECK (api->paths (engine, image, rows, 2, &count) == GLIMS_STATUS_OK && count == 0,
+         "a new image has no paths");
+
+  before = undo_depth (image);
+  CHECK (api->path_set (engine, image, 0, "Outline", square, 1, points, 4, &path, &error)
+           == GLIMS_STATUS_OK && path != 0,
+         "a path is added from anchors%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (undo_depth (image) == before + 1, "adding it is one undo step");
+  CHECK (api->paths (engine, image, rows, 2, &count) == GLIMS_STATUS_OK && count == 1 &&
+         rows[0].id == path && strcmp (rows[0].name, "Outline") == 0 && rows[0].selected &&
+         ! rows[0].visible,
+         "it is listed by name, selected and hidden, as GIMP adds paths");
+  CHECK (api->path_get (engine, image, path, read_subpaths, 4, &subpath_count, read_points, 8,
+                        &point_count) == GLIMS_STATUS_OK &&
+         subpath_count == 1 && point_count == 4 && read_subpaths[0].count == 4 && read_subpaths[0].closed &&
+         read_points[2].anchor.x == 80 && read_points[2].anchor.y == 80 &&
+         read_points[2].in.x == 80 && read_points[2].out.y == 80,
+         "its closed subpath reads back with corner anchors");
+
+  before = undo_depth (image);
+  CHECK (api->path_set (engine, image, path, NULL, both, 2, points, 6, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->path_get (engine, image, path, read_subpaths, 4, &subpath_count, read_points, 8,
+                        &point_count) == GLIMS_STATUS_OK &&
+         subpath_count == 2 && point_count == 6 && ! read_subpaths[1].closed &&
+         read_points[4].out.x == 120 && read_points[4].out.y == 10 &&
+         read_points[5].in.x == 160 && read_points[5].anchor.x == 180,
+         "replacing the subpaths is one undo step and keeps the handles");
+  CHECK (api->path_get (engine, image, path, NULL, 0, &subpath_count, NULL, 0, &point_count)
+           == GLIMS_STATUS_OK && subpath_count == 2 && point_count == 6,
+         "the counts alone can be asked for");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->path_get (engine, image, path, NULL, 0, &subpath_count, NULL, 0, &point_count)
+           == GLIMS_STATUS_OK && subpath_count == 1 && point_count == 4,
+         "undo brings back the single square");
+  api->image_redo (engine, image);
+
+  before = undo_depth (image);
+  change.name = "Square";
+  change.visible = 1;
+  CHECK (api->path_change (engine, image, path, &change, NULL) == GLIMS_STATUS_OK &&
+         api->paths (engine, image, rows, 2, &count) == GLIMS_STATUS_OK &&
+         strcmp (rows[0].name, "Square") == 0 && rows[0].visible && undo_depth (image) == before + 2,
+         "renaming and showing it are undo steps");
+
+  before = undo_depth (image);
+  CHECK (api->path_stroke (engine, image, path, 0, &line, &error) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "drawing it as a line is one undo step%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (red_at (image, 20, 50) < 64 && red_at (image, 140, 20) < 64 && red_at (image, 50, 50) > 200,
+         "the line follows the square and the curve's bulge (%d, %d), not the inside (%d)",
+         red_at (image, 20, 50), red_at (image, 140, 20), red_at (image, 50, 50));
+
+  before = undo_depth (image);
+  CHECK (api->path_to_selection (engine, image, path, &select) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && ! empty &&
+         abs (bounds.x - 20) <= 1 && abs (bounds.y - 20) <= 1 &&
+         abs (bounds.x + bounds.width - 180) <= 1 && abs (bounds.y + bounds.height - 80) <= 1,
+         "its area becomes the selection, open curve included (%d,%d %dx%d)",
+         bounds.x, bounds.y, bounds.width, bounds.height);
+
+  CHECK (api->path_set (engine, image, path, NULL, both, 2, points, 5, NULL, NULL)
+           == GLIMS_STATUS_INVALID_ARGUMENT,
+         "subpath counts that do not add up are refused");
+  points[1].out.x = NAN;
+  CHECK (api->path_set (engine, image, 0, NULL, square, 1, points, 4, NULL, NULL)
+           == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a point that is not finite is refused");
+  points[1].out.x = 80;
+  CHECK (api->path_get (engine, image, first_layer (image), NULL, 0, &subpath_count, NULL, 0, &point_count)
+           == GLIMS_STATUS_NOT_FOUND,
+         "a layer is not a path");
+  line.width = 0;
+  CHECK (api->path_stroke (engine, image, path, 0, &line, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a line without width is refused");
+
+  snprintf (xcf, sizeof xcf, "%s/paths.xcf", work);
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK &&
+         api->paths (engine, reopened, rows, 2, &count) == GLIMS_STATUS_OK && count == 1 &&
+         strcmp (rows[0].name, "Square") == 0 &&
+         api->path_get (engine, reopened, rows[0].id, read_subpaths, 4, &subpath_count, read_points, 8,
+                        &point_count) == GLIMS_STATUS_OK &&
+         subpath_count == 2 && point_count == 6 && read_points[4].out.y == 10,
+         "an XCF round trip keeps the path");
+
+  before = undo_depth (image);
+  CHECK (api->path_delete (engine, image, path) == GLIMS_STATUS_OK && undo_depth (image) == before + 1 &&
+         api->paths (engine, image, rows, 2, &count) == GLIMS_STATUS_OK && count == 0,
+         "deleting it is one undo step");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->paths (engine, image, rows, 2, &count) == GLIMS_STATUS_OK && count == 1,
+         "undo brings it back");
+
+  if (reopened)
+    api->image_close (engine, reopened);
+  api->image_close (engine, image);
+}
+
 /* A render right after a change must show it. Validating tiles only as
  * reads touched them returned the old pixels now and then (about one round
  * in 23 here), and they stayed that way. */
@@ -1396,6 +1536,7 @@ main (int argc, char **argv)
     }
   test_fixture (argv[3], argv[2]);
   test_text_layers (argv[2]);
+  test_paths (argv[2]);
   test_paint_tools ();
   test_selections ();
   test_editing ();

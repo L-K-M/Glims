@@ -327,6 +327,44 @@ typedef struct GlimsTextSettings {
   bool       antialias;
 } GlimsTextSettings;
 
+/* One anchor of a path with its two handles, in image pixels. A handle on
+ * its anchor makes a sharp corner. */
+typedef struct GlimsPathPoint {
+  GlimsPoint in;       /* the handle toward the previous anchor */
+  GlimsPoint anchor;
+  GlimsPoint out;      /* the handle toward the next anchor */
+} GlimsPathPoint;
+
+/* One subpath: the next `count` points of the path's point list. A closed
+ * subpath runs from its last point back to its first. */
+typedef struct GlimsSubpath {
+  int32_t count;       /* >= 1 */
+  bool    closed;
+} GlimsSubpath;
+
+/* One row of the Paths list, top first. */
+typedef struct GlimsPathInfo {
+  GlimsItemID id;
+  char        name[256];     /* UTF-8, truncated */
+  bool        visible;
+  bool        selected;
+} GlimsPathInfo;
+
+typedef struct GlimsPathChange {
+  uint32_t    struct_size;   /* sizeof (GlimsPathChange) */
+  const char *name;          /* NULL keeps the name */
+  int32_t     visible;       /* -1 keeps it, 0 hides, 1 shows */
+  bool        select;        /* makes it the selected path */
+} GlimsPathChange;
+
+/* How path_stroke draws a path: a line of one color. */
+typedef struct GlimsLineSettings {
+  uint32_t   struct_size;    /* sizeof (GlimsLineSettings) */
+  double     width;          /* image pixels, > 0 */
+  GlimsColor color;
+  bool       antialias;
+} GlimsLineSettings;
+
 typedef enum GlimsRunMode {
   GLIMS_RUN_INTERACTIVE      = 1, /* the plug-in may show its dialog */
   GLIMS_RUN_WITH_LAST_VALUES = 2  /* repeat with the last settings, no dialog */
@@ -513,6 +551,42 @@ typedef struct GlimsEngineAPI {
    * keeps the text, NULL settings keep the look. */
   GlimsStatus  (*text_layer_set)   (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
                                     const char *text, const GlimsTextSettings *settings,
+                                    char **error);
+
+  /* Paths. The image's paths, top first; `count` receives how many there
+   * are, `rows` at most `capacity` of them. */
+  GlimsStatus  (*paths)            (GlimsEngine *engine, GlimsImageID image,
+                                    GlimsPathInfo *rows, int32_t capacity, int32_t *count);
+  /* A path's subpaths and points. `subpath_count` and `point_count`
+   * receive the full counts; the arrays (either may be NULL) receive at
+   * most their capacity. NOT_FOUND for an unknown path. */
+  GlimsStatus  (*path_get)         (GlimsEngine *engine, GlimsImageID image, GlimsItemID path,
+                                    GlimsSubpath *subpaths, int32_t subpath_capacity,
+                                    int32_t *subpath_count, GlimsPathPoint *points,
+                                    int32_t point_capacity, int32_t *point_count);
+  /* Replaces a path's subpaths as one undo step. With `path` 0, adds a new
+   * path named `name` (NULL: the engine's default name) above the selected
+   * path and selects it, as one undo step. `result` (may be NULL) receives
+   * the path. The subpath counts must add up to `point_count`. */
+  GlimsStatus  (*path_set)         (GlimsEngine *engine, GlimsImageID image, GlimsItemID path,
+                                    const char *name, const GlimsSubpath *subpaths,
+                                    int32_t subpath_count, const GlimsPathPoint *points,
+                                    int32_t point_count, GlimsItemID *result, char **error);
+  /* Renames, shows or hides, or selects a path. Renaming and showing or
+   * hiding are undo steps; selecting is not. */
+  GlimsStatus  (*path_change)      (GlimsEngine *engine, GlimsImageID image, GlimsItemID path,
+                                    const GlimsPathChange *change, char **error);
+  /* Deletes a path as one undo step. */
+  GlimsStatus  (*path_delete)      (GlimsEngine *engine, GlimsImageID image, GlimsItemID path);
+  /* Makes the area the path encloses the selection, combined by
+   * `options->operation`, with its antialias and feather, as one undo
+   * step. Open subpaths count as closed. */
+  GlimsStatus  (*path_to_selection)(GlimsEngine *engine, GlimsImageID image, GlimsItemID path,
+                                    const GlimsSelectOptions *options);
+  /* Draws the path as a line on `layer` (0: the selected layer), inside
+   * the selection if there is one, as one undo step. */
+  GlimsStatus  (*path_stroke)      (GlimsEngine *engine, GlimsImageID image, GlimsItemID path,
+                                    GlimsItemID layer, const GlimsLineSettings *settings,
                                     char **error);
 } GlimsEngineAPI;
 
