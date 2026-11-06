@@ -34,7 +34,7 @@ run_with_timeout 600 "$WORK/gimp-console.log" \
       -b "exec(open('$ROOT/Engine/tests/make-fixtures.py').read())" || status=$?
 (( status == 0 )) || { cat "$WORK/gimp-console.log"; die "gimp-console failed (status $status)"; }
 ! grep -qE "Traceback|Error" "$WORK/gimp-console.log" || { cat "$WORK/gimp-console.log"; die "the fixture script reported errors"; }
-for file in composite.xcf composite.png; do
+for file in composite.xcf composite.png text-units.xcf; do
   [[ -s "$FIXTURES/$file" ]] || die "$file was not written"
 done
 echo "-- fixtures written with $("$CONSOLE" --version) into $FIXTURES"

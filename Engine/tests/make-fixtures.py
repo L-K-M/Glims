@@ -8,6 +8,8 @@
 #   composite.png  GIMP's own composite of it: the visible layers merged in
 #                  a duplicate, then exported (the reference renders are
 #                  compared against)
+#   text-units.xcf a 144 dpi image with a text layer sized in points: 24 pt
+#                  type with 12 pt line spacing, which is 48 px and 24 px
 import os
 
 from gi.repository import Gegl, Gimp, Gio
@@ -67,3 +69,15 @@ merged = image.duplicate()
 merged.merge_visible_layers(Gimp.MergeType.CLIP_TO_IMAGE)
 Gimp.file_save(Gimp.RunMode.NONINTERACTIVE, merged,
                Gio.File.new_for_path(os.path.join(out, "composite.png")), None)
+
+units = Gimp.Image.new(240, 120, Gimp.ImageBaseType.RGB)
+units.set_resolution(144.0, 144.0)
+paper = Gimp.Layer.new(units, "Background", 240, 120,
+                       Gimp.ImageType.RGB_IMAGE, 100.0, Gimp.LayerMode.NORMAL)
+units.insert_layer(paper, None, 0)
+fill(paper, "#ffffff")
+points = Gimp.TextLayer.new(units, "Glims\nText", Gimp.Font.get_by_name("Sans-serif"), 24.0, Gimp.Unit.point())
+units.insert_layer(points, None, 0)
+points.set_line_spacing(12.0)
+Gimp.file_save(Gimp.RunMode.NONINTERACTIVE, units,
+               Gio.File.new_for_path(os.path.join(out, "text-units.xcf")), None)

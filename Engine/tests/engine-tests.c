@@ -855,6 +855,57 @@ test_paths (const char *work)
   api->image_close (engine, image);
 }
 
+/* GIMP-made files the app must read and change as GIMP does: a layer
+ * group's own blend mode, pass-through, and a text layer sized in points. */
+static void
+test_groups_and_text_units (const char *fixtures)
+{
+  char              path[1024];
+  GlimsImageID      image = 0;
+  GlimsLayerInfo    rows[8];
+  GlimsLayerChange  change = { .struct_size = sizeof change, .properties = GLIMS_LAYER_MODE };
+  GlimsTextSettings read = { .struct_size = sizeof read };
+  int32_t           count = 0;
+  char             *error = NULL;
+
+  snprintf (path, sizeof path, "%s/composite.xcf", fixtures);
+  if (api->image_open (engine, path, &image, NULL) == GLIMS_STATUS_OK &&
+      api->image_layers (engine, image, rows, 8, &count) == GLIMS_STATUS_OK && count > 1 &&
+      rows[1].kind == GLIMS_LAYER_GROUP)
+    {
+      GlimsItemID group = rows[1].id;
+
+      strcpy (change.mode, "normal");
+      api->layer_change (engine, image, group, &change, NULL);
+      strcpy (change.mode, "pass-through");
+      CHECK (api->layer_change (engine, image, group, &change, &error) == GLIMS_STATUS_OK &&
+             api->image_layers (engine, image, rows, 8, &count) == GLIMS_STATUS_OK &&
+             strcmp (rows[1].mode, "pass-through") == 0,
+             "a layer group takes pass-through back%s%s", error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      strcpy (change.mode, "pass-through");
+      CHECK (api->layer_change (engine, image, rows[2].id, &change, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+             "pass-through is refused for a layer that is not a group");
+    }
+  else
+    CHECK (false, "the fixture's layer group is found");
+  if (image)
+    api->image_close (engine, image);
+
+  image = 0;
+  snprintf (path, sizeof path, "%s/text-units.xcf", fixtures);
+  CHECK (api->image_open (engine, path, &image, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 8, &count) == GLIMS_STATUS_OK && count == 2 &&
+         rows[0].kind == GLIMS_LAYER_TEXT &&
+         api->text_layer_get (engine, image, rows[0].id, NULL, &read) == GLIMS_STATUS_OK &&
+         fabs (read.size - 48) < 0.5 && fabs (read.line_spacing - 24) < 0.5,
+         "a text layer sized in points reads back in pixels: 24 pt is %.1f px, 12 pt spacing is %.1f px",
+         read.size, read.line_spacing);
+  if (image)
+    api->image_close (engine, image);
+}
+
 /* A deleted item lives on in the undo stack until the undo is dropped,
  * still under its id. Calls must not reach it: an edit would change what
  * undoing the delete brings back, outside any undo step. */
@@ -1600,6 +1651,7 @@ main (int argc, char **argv)
   test_text_layers (argv[2]);
   test_paths (argv[2]);
   test_deleted_items ();
+  test_groups_and_text_units (argv[3]);
   test_paint_tools ();
   test_selections ();
   test_editing ();

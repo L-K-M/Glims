@@ -297,7 +297,11 @@ glims_text_layer_get (GlimsEngine       *engine,
         gegl_color_get_pixel (text->color, babl_format ("R'G'B'A double"), rgba);
       settings->color          = (GlimsColor) { rgba[0], rgba[1], rgba[2], rgba[3] };
       settings->justify        = glims_justification (text->justify);
-      settings->line_spacing   = text->line_spacing;
+      /* Line spacing is kept in the text's unit, like the size; letter
+       * spacing is always pixels (app/text/gimptextlayout.c). */
+      settings->line_spacing   = text->unit == gimp_unit_pixel ()
+        ? text->line_spacing
+        : gimp_units_to_pixels (text->line_spacing, text->unit, yres);
       settings->letter_spacing = text->letter_spacing;
       settings->antialias      = text->antialias ? true : false;
     }

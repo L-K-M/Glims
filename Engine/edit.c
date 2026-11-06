@@ -410,17 +410,23 @@ glims_layer_change (GlimsEngine            *engine,
 
   if (change->properties & GLIMS_LAYER_MODE)
     {
-      GEnumClass *modes = g_type_class_ref (GIMP_TYPE_LAYER_MODE);
-      GEnumValue *mode  = g_enum_get_value_by_nick (modes, change->mode);
+      GEnumClass           *modes = g_type_class_ref (GIMP_TYPE_LAYER_MODE);
+      GEnumValue           *mode  = g_enum_get_value_by_nick (modes, change->mode);
+      /* Some modes (behind, erase, merge, split) are for painting only, and
+       * pass-through is for groups only; gimp_layer_set_mode asserts on a
+       * mode outside the layer's context (a group's or a layer's) and
+       * changes nothing. */
+      GimpLayerModeContext  context = gimp_viewable_get_children (GIMP_VIEWABLE (layer))
+        ? GIMP_LAYER_MODE_CONTEXT_GROUP : GIMP_LAYER_MODE_CONTEXT_LAYER;
 
       g_type_class_unref (modes);
       if (! mode)
         return glims_fail (error, NULL, "The engine has no such blend mode.");
-      /* Some modes (behind, erase, merge, split) are for painting only;
-       * gimp_layer_set_mode asserts on them and changes nothing. */
-      if (! (gimp_layer_mode_get_context (mode->value) & GIMP_LAYER_MODE_CONTEXT_LAYER))
+      if (! (gimp_layer_mode_get_context (mode->value) & context))
         {
-          glims_fail (error, NULL, "That blend mode is for painting, not for layers.");
+          glims_fail (error, NULL, context == GIMP_LAYER_MODE_CONTEXT_GROUP
+                                   ? "That blend mode does not apply to layer groups."
+                                   : "That blend mode is for painting, not for layers.");
           return GLIMS_STATUS_INVALID_ARGUMENT;
         }
       gimp_layer_set_mode (layer, mode->value, TRUE);
