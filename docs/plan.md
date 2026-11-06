@@ -608,6 +608,19 @@ In this order (reasons in `phase0-report.md`):
   tool through the canvas and checks the checks. Painting already runs on its own
   queue (`ImageDocument.inputQueue`). Fixed since: a new document window
   opened exactly over the previous one; it now cascades.
+- 2026-11-06: item 4, the triaged upstream fixes
+  ([`phase0-triage-3.2.md`](phase0-triage-3.2.md)) checked against the
+  tools that landed. None needed code: the text tool fixes for Alt
+  shortcuts, span font sizes and cursor stepping with negative kerning
+  concern GIMP's own text editor, which Glims replaces with NSTextView;
+  clicking a text layer's mask already picks the text layer, since the
+  Text tool hit-tests the layer list; selections read Shift and Option
+  when the press starts, which is what GIMP issue #1589 fixed; the crop
+  change is in the engine (`gimp_image_crop`), and Glims's crop has no Delete
+  Pixels option; the canvas does not rotate, so the checkerboard fix does
+  not apply. Still to port with their features: the vector layer
+  commits (path tool undo grouping, fill visibility), filters refused on
+  invisible layers (`6a33e2998e`), and the rest of the list.
 - 2026-11-06: item 4, painting off the main thread, measured
   (`build-adapter.sh --perf GIMP_3_2_8`, 24 MP, 20 layers, Mac16,9). While
   another thread paints a 500-sample stroke at pointer rate (8 ms apart),
