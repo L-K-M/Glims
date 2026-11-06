@@ -37,6 +37,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         target: { [weak self] in self?.frontDocument },
         makeContent: { LayersPaletteController() })
 
+    private lazy var pathsPalette: Palette = PaletteCenter.shared.palette(
+        for: PathsPaletteController.definition,
+        target: { [weak self] in self?.frontDocument },
+        makeContent: { PathsPaletteController() })
+
     var frontDocument: ImageDocument? {
         (NSApp.mainWindow?.windowController as? DocumentWindowController)?.imageDocument ?? documents.last?.imageDocument
     }
@@ -54,7 +59,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         PaletteGroupDefault([ToolsPaletteController.definition.kind], placement: .topLeading),
         PaletteGroupDefault([ToolOptionsPaletteController.definition.kind],
                             placement: .docked(below: ToolsPaletteController.definition.kind)),
-        PaletteGroupDefault([LayersPaletteController.definition.kind], placement: .topTrailing),
+        PaletteGroupDefault([LayersPaletteController.definition.kind, PathsPaletteController.definition.kind],
+                            placement: .topTrailing),
     ]
 
     /// Tab hides every palette and Shift-Tab every palette but Tools; either
@@ -150,7 +156,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         controller.showWindow(nil)
         PaletteCenter.shared.frontDocumentDidChange()
         PaletteCenter.shared.setDefaultLayout(Self.defaultPaletteLayout)
-        for palette in [toolsPalette, toolOptionsPalette, layersPalette] where !palette.isPresented {
+        // Paths before Layers, so Layers is the tab their group shows.
+        for palette in [toolsPalette, toolOptionsPalette, pathsPalette, layersPalette] where !palette.isPresented {
             palette.showPanel()
         }
         loadFontsIfNeeded(using: document)
@@ -213,6 +220,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     @objc func showLayers(_ sender: Any?) {
         layersPalette.isPresented ? layersPalette.bringToFront() : layersPalette.showPanel()
+    }
+
+    @objc func showPaths(_ sender: Any?) {
+        pathsPalette.isPresented ? pathsPalette.bringToFront() : pathsPalette.showPanel()
     }
 
     @objc func togglePaletteVisibility(_ sender: Any?) {

@@ -599,10 +599,31 @@ In this order (reasons in `phase0-report.md`):
   "."-fonts). The app's engine smoke test (56 checks) drives the Text
   tool through the canvas and checks the checks. Painting already runs on its own
   queue (`ImageDocument.inputQueue`); whether long strokes still delay
-  renders on the engine thread is not measured. Still to do in item 4:
-  paths (pen tool and a Paths palette). Noticed, not fixed: a new
+  renders on the engine thread is not measured. Noticed, not fixed: a new
   document window opens exactly over the previous one instead of
   cascading.
+- 2026-11-06: item 4, paths. Engine: seven additive facade calls list
+  paths, read and replace their Bézier subpaths (each anchor with its two
+  handles, GIMP's control, anchor, control), rename, show, select and
+  delete them, and make a path the selection or draw it as a line, each
+  change one undo step; GIMP 3.2 moved `app/vectors` to `app/path`, the
+  only version difference. 187 conformance checks pass on all four
+  engines, an XCF round trip included. Interface: a Path tool (P) that
+  adds corners by clicking and smooth anchors by dragging, closes on the
+  first anchor, moves anchors and handles, pulls out handles with
+  Option, starts subpaths with Shift and deletes anchors with Delete,
+  every press-drag-release one undo step; visible paths draw on the
+  canvas with any tool; a Paths palette, tabbed with Layers by default,
+  with visibility, renaming, New, Delete, Select (path to selection) and
+  Stroke (foreground color, the tool's width); Select ▸ From Path and
+  Edit ▸ Stroke Path. The path geometry is a value type with unit tests,
+  and the engine smoke test (66 checks, all four engines) drives the
+  tool through the canvas and the palette's commands. Checked by hand:
+  drawing, closing, Select and Stroke. Not done: filling a path, paths to
+  vector layers (GIMP 3.2), and editing several anchors at once. A
+  layout saved before the Paths palette existed shows it as its own
+  panel rather than as a tab of Layers; Rigi places a new kind by its
+  default group only when the other kinds have no group yet.
 
 ## Later, before any public release
 

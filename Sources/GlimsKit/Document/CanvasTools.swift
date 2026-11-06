@@ -25,6 +25,12 @@ final class CanvasToolController {
     private static let handleReach: Double = 6
     /// The Text tool's editor while text is being typed.
     private(set) var textEditor: TextEditorOverlay?
+    /// The Path tool's state: the subpath being drawn, the selected anchor.
+    private(set) lazy var pathTool: PathTool = {
+        let tool = PathTool(canvas: canvas)
+        tool.onStatus = { [weak self] message in self?.onStatus?(message) }
+        return tool
+    }()
 
     /// Shows a short message in the document's status strip.
     var onStatus: ((String) -> Void)?
@@ -107,6 +113,8 @@ final class CanvasToolController {
         case .text:
             beginTextEditing(at: point)
             dragTool = nil
+        case .path:
+            pathTool.mouseDown(at: point, flags: event.modifierFlags)
         case .move, .gradient, .crop:
             dragStart = point
             dragCurrent = point
@@ -143,6 +151,8 @@ final class CanvasToolController {
             canvas.needsDisplay = true
         case .eyedropper:
             pickColor(at: point)
+        case .path:
+            pathTool.mouseDragged(to: point, flags: event.modifierFlags)
         case .hand:
             guard let origin = handOrigin, let scroll = canvas.enclosingScrollView else { return }
             let delta = NSPoint(x: event.locationInWindow.x - origin.window.x,
@@ -175,6 +185,8 @@ final class CanvasToolController {
         options.operation = dragOperation
         let end = canvas.imagePoint(for: event)
         switch tool {
+        case .path:
+            pathTool.mouseUp()
         case .transform:
             transformDrag = nil
             if transformSession?.isIdentity == false {
@@ -290,6 +302,9 @@ final class CanvasToolController {
             onStatus?("Crop cancelled.")
             return true
         }
+        if ToolState.shared.current == .path, pathTool.keyDown(keyCode: keyCode) {
+            return true
+        }
         if ToolState.shared.current == .move, let direction = Self.arrowDirections[keyCode] {
             let step: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
             document.moveActiveLayer(by: CGSize(width: direction.width * step, height: direction.height * step))
@@ -372,6 +387,7 @@ final class CanvasToolController {
         default:
             drawPendingCrop(scale: scale)
             drawTransform(scale: scale)
+            if ToolState.shared.current == .path || dragTool == .path { pathTool.draw(scale: scale) }
             return
         }
         EngineCanvasView.strokeMarchingAnts(path, phase: 0)

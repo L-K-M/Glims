@@ -22,6 +22,16 @@ final class ImageDocument {
     private(set) var activeLayer: Int32?
     /// The selection outline in image pixels, for marching ants.
     private(set) var selectionOutline: [EngineSession.Segment] = []
+    /// The image's paths, top first.
+    private(set) var paths: [EngineSession.PathInfo] = []
+    /// The path the Path tool edits and the Paths palette's commands use.
+    private(set) var activePath: Int32?
+    /// The shapes the canvas draws: visible paths and the active one.
+    private(set) var pathShapes: [Int32: VectorPath] = [:]
+    /// Edits sent to the engine and not yet done, per path; until they
+    /// are, a reload keeps the shape the edit set rather than the engine's
+    /// older one.
+    private var pendingPathEdits: [Int32: Int] = [:]
 
     /// Called after layers or undo state changed.
     var onStateChange: (() -> Void)?
@@ -62,7 +72,24 @@ final class ImageDocument {
             activeLayer = layers.first(where: { $0.isSelected && $0.kind != .group })?.id
                 ?? layers.first(where: { $0.kind != .group })?.id
         }
+        reloadPaths()
         onStateChange?()
+    }
+
+    private func reloadPaths() {
+        paths = (try? session.paths(image)) ?? []
+        if activePath == nil || !paths.contains(where: { $0.id == activePath }) {
+            activePath = paths.first(where: \.isSelected)?.id
+        }
+        var shapes: [Int32: VectorPath] = [:]
+        for path in paths where path.isVisible || path.id == activePath {
+            if pendingPathEdits[path.id, default: 0] > 0, let pending = pathShapes[path.id] {
+                shapes[path.id] = pending
+            } else {
+                shapes[path.id] = try? session.path(path.id, image: image)
+            }
+        }
+        pathShapes = shapes
     }
 
     /// Makes `id` the layer painting, fills, filters, plug-ins and the
@@ -241,6 +268,85 @@ final class ImageDocument {
     func crop(to rect: CGRect) {
         guard !refuseWhilePlugInRuns() else { return }
         run { session, image in try session.crop(image: image, to: rect) }
+    }
+
+    // MARK: Paths
+
+    /// Makes `id` the path the Path tool edits, here and in the engine.
+    func selectPath(_ id: Int32) {
+        guard paths.contains(where: { $0.id == id }) else { return }
+        activePath = id
+        if pathShapes[id] == nil { pathShapes[id] = try? session.path(id, image: image) }
+        run { session, image in try session.changePath(id, image: image, select: true) }
+        onStateChange?()
+    }
+
+    /// Adds a path with `shape` and makes it the active one. Waits for the
+    /// engine, so the next edit knows the path.
+    @discardableResult
+    func addPath(_ shape: VectorPath) -> Int32? {
+        guard !refuseWhilePlugInRuns() else { return nil }
+        let result = inputQueue.sync { [session, image] in
+            Result { try session.setPath(nil, image: image, shape) }
+        }
+        switch result {
+        case .success(let id):
+            activePath = id
+            pathShapes[id] = shape
+            try? reload()
+            return id
+        case .failure(let error):
+            report(error)
+            return nil
+        }
+    }
+
+    /// Replaces the shape of path `id` as one undo step. The canvas shows
+    /// the new shape at once.
+    func updatePath(_ id: Int32, to shape: VectorPath) {
+        guard !refuseWhilePlugInRuns() else { return }
+        pathShapes[id] = shape
+        pendingPathEdits[id, default: 0] += 1
+        inputQueue.async { [session, image] in
+            let result = Result { try session.setPath(id, image: image, shape) }
+            DispatchQueue.main.async {
+                self.pendingPathEdits[id, default: 1] -= 1
+                if case .failure(let error) = result {
+                    self.report(error)
+                    try? self.reload()
+                }
+            }
+        }
+        onStateChange?()
+    }
+
+    func renamePath(_ id: Int32, to name: String) {
+        guard !name.isEmpty, !refuseWhilePlugInRuns() else { return }
+        run { session, image in try session.changePath(id, image: image, name: name) }
+    }
+
+    func setPathVisible(_ id: Int32, _ visible: Bool) {
+        guard !refuseWhilePlugInRuns() else { return }
+        run { session, image in try session.changePath(id, image: image, visible: visible) }
+    }
+
+    func deletePath(_ id: Int32) {
+        guard !refuseWhilePlugInRuns() else { return }
+        run { session, image in try session.deletePath(id, image: image) }
+    }
+
+    /// Select ▸ From Path: the active path's area, combined by `operation`.
+    func selectFromPath(_ id: Int32, operation: EngineSession.SelectOperation = .replace) {
+        guard !refuseWhilePlugInRuns() else { return }
+        var options = EngineSession.SelectOptions()
+        options.operation = operation
+        run { session, image in try session.selectPath(id, image: image, options: options) }
+    }
+
+    /// Edit ▸ Stroke Path: draws the path on the active layer.
+    func strokePath(_ id: Int32, settings: EngineSession.LineSettings) {
+        guard !refuseWhilePlugInRuns() else { return }
+        run { session, image in try session.strokePath(id, image: image, settings: settings) }
     }
 
     /// Re-reads the outline; the engine caches it until the selection changes.

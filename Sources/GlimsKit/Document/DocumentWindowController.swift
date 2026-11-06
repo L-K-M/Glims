@@ -122,6 +122,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         let undo = imageDocument.undoInfo.nextUndo.isEmpty ? "" : " · Undo \(imageDocument.undoInfo.nextUndo)"
         statusBar.message = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(imageDocument.info.layerCount) layer\(imageDocument.info.layerCount == 1 ? "" : "s")\(undo)"
         (PaletteCenter.shared.registeredPalette(for: LayersPaletteController.definition.kind))?.retarget()
+        (PaletteCenter.shared.registeredPalette(for: PathsPaletteController.definition.kind))?.retarget()
+        // Path shapes arrive with the state; the canvas draws them.
+        canvas.needsDisplay = true
     }
 
     // MARK: Menu commands
@@ -352,8 +355,23 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    /// Select ▸ From Path: the active path's area becomes the selection.
+    @objc func selectFromPath(_ sender: Any?) {
+        guard let path = imageDocument.activePath else { return }
+        imageDocument.selectFromPath(path)
+    }
+
+    /// Edit ▸ Stroke Path: draws the active path on the active layer in the
+    /// foreground color at the Path tool's stroke width.
+    @objc func strokePath(_ sender: Any?) {
+        guard let path = imageDocument.activePath else { return }
+        imageDocument.strokePath(path, settings: ToolState.shared.pathLine)
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case #selector(selectFromPath(_:)), #selector(strokePath(_:)):
+            return imageDocument.activePath != nil && !PlugInCommands.isRunning
         case #selector(gaussianBlur(_:)):
             return !PlugInCommands.isRunning
         case #selector(runPlugIn(_:)):

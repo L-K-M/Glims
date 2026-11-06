@@ -7,7 +7,7 @@ enum ToolID: String, CaseIterable {
     case move, transform, crop
     case rectangleSelect, ellipseSelect, lasso
     case magicWand, selectByColor
-    case eyedropper, text
+    case eyedropper, text, path
     case paintbrush, pencil, airbrush
     case eraser
     case clone, heal
@@ -30,6 +30,7 @@ enum ToolID: String, CaseIterable {
         case .selectByColor: return "Select by Color"
         case .eyedropper: return "Eyedropper"
         case .text: return "Text"
+        case .path: return "Path"
         case .paintbrush: return "Brush"
         case .pencil: return "Pencil"
         case .airbrush: return "Airbrush"
@@ -57,6 +58,7 @@ enum ToolID: String, CaseIterable {
         case .magicWand, .selectByColor: return "W"
         case .eyedropper: return "I"
         case .text: return "T"
+        case .path: return "P"
         case .paintbrush, .pencil, .airbrush: return "B"
         case .eraser: return "E"
         case .clone, .heal: return "S"
@@ -82,6 +84,7 @@ enum ToolID: String, CaseIterable {
         case .selectByColor: return ["paintpalette", "drop.triangle"]
         case .eyedropper: return ["eyedropper"]
         case .text: return ["textformat", "character"]
+        case .path: return ["point.topleft.down.to.point.bottomright.curvepath", "scribble"]
         case .paintbrush: return ["paintbrush.pointed", "paintbrush"]
         case .pencil: return ["pencil"]
         case .airbrush: return ["aqi.medium", "sparkles"]
@@ -150,8 +153,8 @@ enum ToolID: String, CaseIterable {
         [.paintbrush, .pencil, .airbrush], [.eraser],
         [.clone, .heal], [.smudge, .blur, .sharpen],
         [.dodge, .burn], [.gradient, .bucketFill],
-        [.text], [.hand],
-        [.zoom],
+        [.text], [.path],
+        [.hand], [.zoom],
     ]
 
     /// The group a shortcut letter picks.
@@ -177,6 +180,11 @@ final class ToolState {
     var background = NSColor.white
     var gradientShape = EngineSession.GradientShape.linear
     var transformInterpolation = EngineSession.Interpolation.cubic
+    /// How Stroke Path draws; its color is the foreground color.
+    var pathLineWidth: Double = 2
+    var pathLine: EngineSession.LineSettings {
+        EngineSession.LineSettings(width: pathLineWidth, color: foreground)
+    }
     /// The look of the next text; its color is the foreground color.
     var textSettings = EngineSession.TextSettings()
     /// The fonts a person can pick, once the engine's have loaded (in the

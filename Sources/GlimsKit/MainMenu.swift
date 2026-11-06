@@ -28,6 +28,8 @@ enum MainMenu {
             // Answered by the key window from its undo manager.
             item("Undo", Selector(("undo:")), "z"),
             item("Redo", Selector(("redo:")), "Z"),
+            .separator(),
+            item("Stroke Path", #selector(DocumentWindowController.strokePath(_:))),
         ])
         // Plug-in commands are appended to Image, Layer and Select (PlugInMenus).
         add(menu, "Image", [
@@ -89,6 +91,7 @@ enum MainMenu {
             item("Remove Antialiasing", #selector(DocumentWindowController.sharpenSelection(_:))),
             .separator(),
             item("From Layer Transparency", #selector(DocumentWindowController.selectFromAlpha(_:))),
+            item("From Path", #selector(DocumentWindowController.selectFromPath(_:))),
         ])
         add(menu, "View", [
             item("Zoom In", #selector(DocumentWindowController.zoomIn(_:)), "+"),
@@ -115,6 +118,7 @@ enum MainMenu {
             item("Tools", #selector(AppController.showTools(_:))),
             item("Tool Options", #selector(AppController.showToolOptions(_:))),
             item("Layers", #selector(AppController.showLayers(_:))),
+            item("Paths", #selector(AppController.showPaths(_:))),
             item("Hide Palettes", #selector(AppController.togglePaletteVisibility(_:))),
             item("Reset Palettes", #selector(AppController.resetPaletteLayout(_:))),
         ])

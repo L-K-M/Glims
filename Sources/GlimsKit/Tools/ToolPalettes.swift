@@ -164,6 +164,13 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
             })
             stack.addArrangedSubview(hint("Drag a corner or edge to scale (Shift keeps the proportions), "
                 + "inside to move, outside to rotate (Shift: 15° steps). Return applies; Escape cancels."))
+        } else if tool == .path {
+            stack.addArrangedSubview(slider("Stroke", 1...200, state.pathLineWidth, unit: "px") { value in
+                ToolState.shared.pathLineWidth = value
+            })
+            stack.addArrangedSubview(hint("Click to add corners, drag for curves; click the first anchor to "
+                + "close. Drag anchors and handles to reshape (Option-drag an anchor pulls out handles). "
+                + "Shift-click starts a new subpath; Return ends one; Delete removes the selected anchor."))
         } else if tool == .bucketFill {
             stack.addArrangedSubview(popUp("Fill", ["Similar colors", "Whole selection"],
                                            selected: state.fillMode == .similarColors ? 0 : 1) { index in

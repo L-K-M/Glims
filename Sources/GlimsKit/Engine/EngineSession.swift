@@ -622,6 +622,119 @@ final class EngineSession: @unchecked Sendable {
         return values
     }
 
+    // MARK: Paths
+
+    struct PathInfo: Equatable {
+        let id: Int32
+        let name: String
+        let isVisible: Bool
+        let isSelected: Bool
+    }
+
+    /// How `strokePath` draws a path: a line of one color.
+    struct LineSettings: Equatable {
+        var width: Double = 2
+        var color: NSColor = .black
+        var antialias = true
+    }
+
+    func paths(_ image: Int32) throws -> [PathInfo] {
+        var count: Int32 = 0
+        try check(api.paths(engine, image, nil, 0, &count), nil)
+        var rows = [GlimsPathInfo](repeating: GlimsPathInfo(), count: Int(count))
+        var filled: Int32 = 0
+        try rows.withUnsafeMutableBufferPointer { buffer in
+            try check(api.paths(engine, image, buffer.baseAddress, count, &filled), nil)
+        }
+        return rows.prefix(Int(min(count, filled))).map {
+            PathInfo(id: $0.id, name: Self.string($0.name), isVisible: $0.visible, isSelected: $0.selected)
+        }
+    }
+
+    func path(_ path: Int32, image: Int32) throws -> VectorPath {
+        var subpathCount: Int32 = 0
+        var pointCount: Int32 = 0
+        try check(api.path_get(engine, image, path, nil, 0, &subpathCount, nil, 0, &pointCount), nil)
+        var subpaths = [GlimsSubpath](repeating: GlimsSubpath(), count: Int(subpathCount))
+        var points = [GlimsPathPoint](repeating: GlimsPathPoint(), count: Int(pointCount))
+        var readSubpaths: Int32 = 0
+        var readPoints: Int32 = 0
+        try subpaths.withUnsafeMutableBufferPointer { subpathBuffer in
+            try points.withUnsafeMutableBufferPointer { pointBuffer in
+                try check(api.path_get(engine, image, path, subpathBuffer.baseAddress, subpathCount, &readSubpaths,
+                                       pointBuffer.baseAddress, pointCount, &readPoints), nil)
+            }
+        }
+        // The path may have grown between the two calls; read what fits.
+        var result = VectorPath()
+        var next = 0
+        for subpath in subpaths.prefix(Int(min(subpathCount, readSubpaths))) {
+            let end = next + Int(subpath.count)
+            guard end <= min(Int(pointCount), Int(readPoints)) else { break }
+            let anchors = points[next..<end].map {
+                VectorPath.Anchor(point: CGPoint(x: $0.anchor.x, y: $0.anchor.y),
+                                  handleIn: CGPoint(x: $0.in.x, y: $0.in.y),
+                                  handleOut: CGPoint(x: $0.out.x, y: $0.out.y))
+            }
+            result.subpaths.append(VectorPath.Subpath(anchors: anchors, isClosed: subpath.closed))
+            next = end
+        }
+        return result
+    }
+
+    /// Replaces a path's shape, or with a nil `path` adds a new path and
+    /// selects it; one undo step either way. Returns the path.
+    @discardableResult
+    func setPath(_ path: Int32?, image: Int32, name: String? = nil, _ shape: VectorPath) throws -> Int32 {
+        let subpaths = shape.subpaths.map { GlimsSubpath(count: Int32($0.anchors.count), closed: $0.isClosed) }
+        let points = shape.subpaths.flatMap(\.anchors).map {
+            GlimsPathPoint(in: GlimsPoint(x: $0.handleIn.x, y: $0.handleIn.y),
+                           anchor: GlimsPoint(x: $0.point.x, y: $0.point.y),
+                           out: GlimsPoint(x: $0.handleOut.x, y: $0.handleOut.y))
+        }
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.path_set(engine, image, path ?? 0, name, subpaths, Int32(subpaths.count),
+                               points, Int32(points.count), &result, &error), error)
+        return result
+    }
+
+    /// Nil keeps a property; renaming and showing or hiding are undo steps.
+    func changePath(_ path: Int32, image: Int32, name: String? = nil, visible: Bool? = nil,
+                    select: Bool = false) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        let visibility: Int32 = visible.map { $0 ? 1 : 0 } ?? -1
+        try withOptionalCString(name) { name in
+            var change = GlimsPathChange(struct_size: UInt32(MemoryLayout<GlimsPathChange>.size),
+                                         name: name, visible: visibility, select: select)
+            try check(api.path_change(engine, image, path, &change, &error), error)
+        }
+    }
+
+    func deletePath(_ path: Int32, image: Int32) throws {
+        try check(api.path_delete(engine, image, path), nil)
+    }
+
+    func selectPath(_ path: Int32, image: Int32, options: SelectOptions = SelectOptions()) throws {
+        var values = Self.selectOptions(options)
+        try check(api.path_to_selection(engine, image, path, &values), nil)
+    }
+
+    /// Draws the path on `layer` (nil: the selected layer).
+    func strokePath(_ path: Int32, image: Int32, layer: Int32? = nil, settings: LineSettings) throws {
+        var values = GlimsLineSettings(struct_size: UInt32(MemoryLayout<GlimsLineSettings>.size),
+                                       width: settings.width, color: Self.color(settings.color),
+                                       antialias: settings.antialias)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.path_stroke(engine, image, path, layer ?? 0, &values, &error), error)
+    }
+
+    private func withOptionalCString(_ string: String?,
+                                     _ body: (UnsafePointer<CChar>?) throws -> Void) rethrows {
+        guard let string else { return try body(nil) }
+        try string.withCString { try body($0) }
+    }
+
     func scaleImage(_ image: Int32, width: Int, height: Int) throws {
         var error: UnsafeMutablePointer<CChar>?
         try check(api.image_scale(engine, image, Int32(width), Int32(height), &error), error)

@@ -264,7 +264,21 @@ final class EngineCanvasView: NSView {
             context.restoreGState()
         }
         drawSelectionOutline()
+        drawVisiblePaths()
         tools.drawOverlay(scale: scale)
+    }
+
+    /// Visible paths as thin lines, as GIMP shows them with any tool. The
+    /// Path tool draws the active path itself, with its anchors.
+    private func drawVisiblePaths() {
+        let editing = ToolState.shared.current == .path ? document.activePath : nil
+        for path in document.paths where path.isVisible && path.id != editing {
+            guard let shape = document.pathShapes[path.id] else { continue }
+            let outline = NSBezierPath(cgPath: shape.cgPath(scale: scale))
+            outline.lineWidth = 1
+            PathTool.pathColor.setStroke()
+            outline.stroke()
+        }
     }
 
     // MARK: Events

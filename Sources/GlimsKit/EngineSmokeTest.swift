@@ -89,6 +89,7 @@ enum EngineSmokeTest {
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseTools(session, documents: documents)
             try exerciseEditing(session, documents: documents)
+            try exercisePaths(session, documents: documents)
             try exercisePlugInCommands(session, documents: documents)
             try measurePluginStalls(session, work: work)
         } catch {
@@ -397,6 +398,107 @@ enum EngineSmokeTest {
     /// The plug-in menus and a plug-in command run through a document
     /// window, without a dialog (with last values), as Filter ▸ Last Filter
     /// runs one.
+    /// The Path tool driven through the canvas, then the Paths palette's
+    /// commands and the engine's undo of path edits.
+    private static func exercisePaths(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 200, height: 120)
+        let document = try ImageDocument(session: session, image: image, name: "Paths")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        let canvas = controller.canvas
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+        guard let window = controller.window else { return check(false, "the Paths document has a window") }
+        func event(_ type: NSEvent.EventType, at point: CGPoint, flags: NSEvent.ModifierFlags = []) -> NSEvent? {
+            NSEvent.mouseEvent(with: type, location: canvas.convert(CGPoint(x: point.x * canvas.scale,
+                                                                             y: point.y * canvas.scale), to: nil),
+                               modifierFlags: flags, timestamp: 0, windowNumber: window.windowNumber,
+                               context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+        }
+        func drag(_ points: [CGPoint], flags: NSEvent.ModifierFlags = []) {
+            guard let first = points.first, let last = points.last,
+                  let down = event(.leftMouseDown, at: first, flags: flags),
+                  let up = event(.leftMouseUp, at: last, flags: flags) else { return }
+            canvas.mouseDown(with: down)
+            for point in points.dropFirst() {
+                if let moved = event(.leftMouseDragged, at: point, flags: flags) { canvas.mouseDragged(with: moved) }
+            }
+            canvas.mouseUp(with: up)
+            settle()
+        }
+
+        let previousTool = ToolState.shared.current
+        defer { ToolState.shared.select(previousTool) }
+        ToolState.shared.select(.path)
+
+        drag([CGPoint(x: 20, y: 20)])
+        check(document.paths.count == 1 && document.activePath == document.paths.first?.id,
+              "the Path tool's first click adds a path and makes it active")
+        drag([CGPoint(x: 100, y: 20)])
+        drag([CGPoint(x: 100, y: 90), CGPoint(x: 110, y: 90), CGPoint(x: 120, y: 90)])
+        drag([CGPoint(x: 20, y: 90)])
+        drag([CGPoint(x: 20, y: 20)])
+        let undoBefore = document.undoInfo.undoCount
+        let closed = document.activePath.flatMap { try? session.path($0, image: image) }
+        check(closed?.subpaths.count == 1 && closed?.subpaths.first?.isClosed == true
+                && closed?.subpaths.first?.anchors.count == 4,
+              "clicks add corners and clicking the first anchor closes the subpath "
+                + "(\(closed?.subpaths.first?.anchors.count ?? 0) anchors)")
+        check(closed?.subpaths.first?.anchors[2].handleOut == CGPoint(x: 120, y: 90),
+              "a drag pulls out the new anchor's handles")
+
+        document.undo()
+        settle()
+        let reopened = document.activePath.flatMap { document.pathShapes[$0] }
+        check(document.undoInfo.undoCount == undoBefore - 1 && reopened?.subpaths.first?.isClosed == false,
+              "undo takes back the closing click, one edit at a time")
+        document.redo()
+        settle()
+
+        guard let path = document.activePath else { return check(false, "the path stays active") }
+        let paths = PathsPaletteController()
+        paths.retarget(to: document)
+        check((paths.view.subviews.first as? NSScrollView)?.documentView.map { ($0 as? NSTableView)?.numberOfRows == 1 } == true,
+              "the Paths palette lists the path")
+
+        paths.run(.toSelection)
+        settle()
+        let bounds = try session.selectionBounds(image: image)
+        check(bounds.map { abs($0.minX - 20) <= 1 && abs($0.minY - 20) <= 1 && $0.maxX >= 100 } == true,
+              "To Selection selects the path's area (\(bounds.map { "\($0)" } ?? "none"))")
+        try session.select(.none, image: image)
+
+        ToolState.shared.foreground = .black
+        ToolState.shared.pathLineWidth = 4
+        paths.run(.stroke)
+        settle()
+        check((pixel(session, image, x: 60, y: 20)?[0] ?? 255) < 64 && (pixel(session, image, x: 60, y: 50)?[0] ?? 0) > 200,
+              "Stroke draws the path on the layer in the foreground color")
+
+        document.renamePath(path, to: "Outline")
+        settle()
+        check(document.paths.first?.name == "Outline", "a path can be renamed")
+
+        if let down = event(.leftMouseDown, at: CGPoint(x: 20, y: 90)),
+           let up = event(.leftMouseUp, at: CGPoint(x: 20, y: 90)) {
+            canvas.mouseDown(with: down)
+            canvas.mouseUp(with: up)
+        }
+        if let delete = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                         windowNumber: window.windowNumber, context: nil, characters: "\u{7F}",
+                                         charactersIgnoringModifiers: "\u{7F}", isARepeat: false, keyCode: 51) {
+            canvas.keyDown(with: delete)
+        }
+        settle()
+        check(document.pathShapes[path]?.subpaths.first?.anchors.count == 3, "Delete removes the selected anchor")
+
+        paths.run(.delete)
+        settle()
+        check(document.paths.isEmpty && document.activePath == nil, "the palette deletes the path")
+    }
+
     private static func exercisePlugInCommands(_ session: EngineSession, documents: DocumentList) throws {
         let mainMenu = MainMenu.make()
         NSApp.mainMenu = mainMenu
