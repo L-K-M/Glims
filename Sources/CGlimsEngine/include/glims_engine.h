@@ -293,6 +293,40 @@ typedef enum GlimsTransform {
   GLIMS_TRANSFORM_FLIP_VERTICAL   = 5
 } GlimsTransform;
 
+typedef enum GlimsInterpolation {
+  GLIMS_INTERPOLATION_DEFAULT = 0,  /* the engine's preference */
+  GLIMS_INTERPOLATION_NONE    = 1,
+  GLIMS_INTERPOLATION_LINEAR  = 2,
+  GLIMS_INTERPOLATION_CUBIC   = 3,
+  GLIMS_INTERPOLATION_NOHALO  = 4,
+  GLIMS_INTERPOLATION_LOHALO  = 5
+} GlimsInterpolation;
+
+/* A transform of image pixel coordinates, row-major, applied to column
+ * vectors (x, y, 1): x' = m[0][0] x + m[0][1] y + m[0][2]. */
+typedef struct GlimsMatrix {
+  double m[3][3];
+} GlimsMatrix;
+
+typedef enum GlimsJustify {
+  GLIMS_JUSTIFY_LEFT   = 1,
+  GLIMS_JUSTIFY_RIGHT  = 2,
+  GLIMS_JUSTIFY_CENTER = 3,
+  GLIMS_JUSTIFY_FILL   = 4
+} GlimsJustify;
+
+/* A text layer's look. Sizes and spacings are in image pixels. */
+typedef struct GlimsTextSettings {
+  uint32_t   struct_size;     /* sizeof (GlimsTextSettings) */
+  char       font[256];       /* a name from fonts(), UTF-8 */
+  double     size;            /* > 0 */
+  GlimsColor color;
+  uint32_t   justify;         /* GlimsJustify */
+  double     line_spacing;    /* added between lines; may be negative */
+  double     letter_spacing;  /* added between letters; may be negative */
+  bool       antialias;
+} GlimsTextSettings;
+
 typedef enum GlimsRunMode {
   GLIMS_RUN_INTERACTIVE      = 1, /* the plug-in may show its dialog */
   GLIMS_RUN_WITH_LAST_VALUES = 2  /* repeat with the last settings, no dialog */
@@ -454,6 +488,32 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*image_resize_canvas)(GlimsEngine *engine, GlimsImageID image, int32_t width,
                                     int32_t height, int32_t offset_x, int32_t offset_y,
                                     const GlimsColor *fill, char **error);
+  /* Applies `matrix` to `layer` (0: the selected layer) as one undo step,
+   * as the engine's transform tools do; the layer grows to hold the
+   * result. `interpolation` is a GlimsInterpolation. INVALID_ARGUMENT for
+   * a matrix that is not finite or flattens the layer. */
+  GlimsStatus  (*layer_transform_matrix)(GlimsEngine *engine, GlimsImageID image,
+                                    GlimsItemID layer, const GlimsMatrix *matrix,
+                                    uint32_t interpolation, char **error);
+
+  /* Text. The font names text settings take, one per line, sorted; free
+   * with free_string. Waits for the engine to finish loading its fonts. */
+  GlimsStatus  (*fonts)            (GlimsEngine *engine, char **names);
+  /* Adds a text layer with its top-left at `position` (image pixels) above
+   * the selected layer and selects it, as one undo step. `layer` (may be
+   * NULL) receives it. NOT_FOUND for an unknown font. */
+  GlimsStatus  (*text_layer_new)   (GlimsEngine *engine, GlimsImageID image, const char *text,
+                                    const GlimsTextSettings *settings, GlimsPoint position,
+                                    GlimsItemID *layer, char **error);
+  /* A text layer's plain text (free with free_string) and settings.
+   * NOT_FOUND when `layer` is not a text layer. */
+  GlimsStatus  (*text_layer_get)   (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                                    char **text, GlimsTextSettings *settings);
+  /* Changes a text layer's text and settings as one undo step; NULL text
+   * keeps the text, NULL settings keep the look. */
+  GlimsStatus  (*text_layer_set)   (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                                    const char *text, const GlimsTextSettings *settings,
+                                    char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

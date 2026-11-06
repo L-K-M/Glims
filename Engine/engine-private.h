@@ -143,6 +143,18 @@ GlimsStatus glims_layer_move       (GlimsEngine *e, GlimsImageID image, GlimsIte
 GlimsStatus glims_image_crop       (GlimsEngine *e, GlimsImageID image, GlimsRect rect, char **error);
 GlimsStatus glims_image_transform  (GlimsEngine *e, GlimsImageID image, uint32_t transform);
 GlimsStatus glims_layer_transform  (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, uint32_t transform);
+GlimsStatus glims_fonts          (GlimsEngine *e, char **names);
+GlimsStatus glims_text_layer_new (GlimsEngine *e, GlimsImageID image, const char *text,
+                                  const GlimsTextSettings *settings, GlimsPoint position,
+                                  GlimsItemID *layer, char **error);
+GlimsStatus glims_text_layer_get (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                  char **text, GlimsTextSettings *settings);
+GlimsStatus glims_text_layer_set (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                  const char *text, const GlimsTextSettings *settings,
+                                  char **error);
+GlimsStatus glims_layer_transform_matrix (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                          const GlimsMatrix *matrix, uint32_t interpolation,
+                                          char **error);
 GlimsStatus glims_image_scale      (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t height,
                                     char **error);
 GlimsStatus glims_image_resize_canvas (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t height,

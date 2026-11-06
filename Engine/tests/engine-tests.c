@@ -15,6 +15,7 @@
 #include <stddef.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -391,6 +392,11 @@ test_editing (void)
          "an unknown blend mode is refused (%s)", error ? error : "");
   api->free_string (error);
   error = NULL;
+  strcpy (change.mode, "behind");
+  CHECK (api->layer_change (engine, image, layer, &change, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "a paint-only blend mode (behind) is refused for a layer");
+  api->free_string (error);
+  error = NULL;
   change.properties = GLIMS_LAYER_VISIBLE;
   change.visible    = false;
   CHECK (api->layer_change (engine, image, layer, &change, NULL) == GLIMS_STATUS_OK && red_at (image, 50, 40) == 255 &&
@@ -510,6 +516,202 @@ test_transforms (void)
   CHECK (api->layer_transform (engine, image, 4242, GLIMS_TRANSFORM_FLIP_VERTICAL) == GLIMS_STATUS_NOT_FOUND,
          "transforming an unknown layer is reported");
 
+  api->image_close (engine, image);
+}
+
+/* The matrix transform the Transform tool commits: layer bounds follow
+ * the matrix, pixels move with it, one undo step, bad input refused. */
+static void
+test_matrix_transform (void)
+{
+  GlimsImageID       image = 0;
+  GlimsLayerInfo     row;
+  int32_t            count = 0, before;
+  GlimsSelectOptions none = { .struct_size = sizeof none };
+  GlimsFillSettings  fill = { .struct_size = sizeof fill, .mode = GLIMS_FILL_SELECTION,
+                              .color = { 0, 0, 0, 1 }, .opacity = 1, .antialias = true };
+  GlimsMatrix        half = { { { 0.5, 0, 0 }, { 0, 0.5, 0 }, { 0, 0, 1 } } };
+  GlimsMatrix        shift = { { { 1, 0, 10 }, { 0, 1, 5 }, { 0, 0, 1 } } };
+  GlimsMatrix        flat = { { { 1, 0, 0 }, { 2, 0, 0 }, { 0, 0, 1 } } };
+  GlimsMatrix        broken = { { { NAN, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } } };
+  double             c = cos (M_PI / 4), s = sin (M_PI / 4);
+  GlimsMatrix        turn = { { { c, -s, 50 - 50 * c + 30 * s }, { s, c, 30 - 50 * s - 30 * c }, { 0, 0, 1 } } };
+  char              *error = NULL;
+
+  /* A black square in the top-left quarter of a white 100x60 image. */
+  api->image_new (engine, 100, 60, &image, NULL);
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 0, 0 }, { 50, 30 } }, 2, &none);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL);
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  before = undo_depth (image);
+
+  CHECK (api->layer_transform_matrix (engine, image, 0, &half, GLIMS_INTERPOLATION_LINEAR, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, &row, 1, &count) == GLIMS_STATUS_OK &&
+         row.bounds.x == 0 && row.bounds.y == 0 && row.bounds.width == 50 && row.bounds.height == 30,
+         "scaling by half shrinks the layer to 50x30 at the origin (%d,%d %dx%d)",
+         row.bounds.x, row.bounds.y, row.bounds.width, row.bounds.height);
+  CHECK (undo_depth (image) == before + 1, "the transform is one undo step");
+  CHECK (red_at (image, 10, 5) == 0 && red_at (image, 40, 25) == 255,
+         "the black quarter now fills the scaled layer's top-left quarter");
+
+  CHECK (api->layer_transform_matrix (engine, image, 0, &shift, GLIMS_INTERPOLATION_NONE, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, &row, 1, &count) == GLIMS_STATUS_OK &&
+         row.bounds.x == 10 && row.bounds.y == 5,
+         "a translation moves the layer to (10,5) (%d,%d)", row.bounds.x, row.bounds.y);
+
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, &row, 1, &count) == GLIMS_STATUS_OK &&
+         row.bounds.width == 100 && row.bounds.height == 60 && red_at (image, 40, 25) == 0,
+         "undoing both restores the full-size layer and its pixels");
+
+  CHECK (api->layer_transform_matrix (engine, image, 0, &turn, GLIMS_INTERPOLATION_DEFAULT, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, &row, 1, &count) == GLIMS_STATUS_OK &&
+         row.bounds.width > 100 && row.bounds.height > 60,
+         "a 45° turn around the center grows the layer to hold its corners (%dx%d)",
+         row.bounds.width, row.bounds.height);
+
+  before = undo_depth (image);
+  CHECK (api->layer_transform_matrix (engine, image, 0, &flat, 0, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error &&
+         undo_depth (image) == before,
+         "a matrix that flattens the layer is refused, with no undo step");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->layer_transform_matrix (engine, image, 0, &broken, 0, &error) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a matrix that is not finite is refused");
+  api->free_string (error);
+  CHECK (api->layer_transform_matrix (engine, image, 0, &half, 99, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown interpolation is refused");
+  CHECK (api->layer_transform_matrix (engine, image, 4242, &half, 0, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an unknown layer is reported");
+  CHECK (api->layer_transform_matrix (engine, image, 0, NULL, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a missing matrix is refused");
+
+  api->image_close (engine, image);
+}
+
+/* Text layers: the font list, creating a layer from settings, reading it
+ * back, changing text and look as undo steps, refusals, and an XCF round
+ * trip keeping the text editable. */
+static void
+test_text_layers (const char *work)
+{
+  GlimsImageID      image = 0, reopened = 0;
+  GlimsItemID       layer = 0, background;
+  GlimsTextSettings settings = { .struct_size = sizeof settings, .size = 24,
+                                 .color = { 0, 0, 0, 1 }, .justify = GLIMS_JUSTIFY_LEFT,
+                                 .antialias = true };
+  GlimsTextSettings read = { .struct_size = sizeof read };
+  GlimsLayerInfo    rows[2];
+  int32_t           count = 0, before;
+  char             *fonts = NULL, *text = NULL, *error = NULL, *newline, xcf[1024];
+  double            first_width;
+  int32_t           darkest = 255, x, y;
+
+  CHECK (api->fonts (engine, &fonts) == GLIMS_STATUS_OK && fonts && *fonts, "the engine lists fonts");
+  if (! fonts || ! *fonts)
+    {
+      api->free_string (fonts);
+      return;
+    }
+  /* Sans-serif is GIMP's default font; any listed font will do otherwise. */
+  if (strstr (fonts, "Sans-serif\n") == fonts || strstr (fonts, "\nSans-serif\n"))
+    strcpy (settings.font, "Sans-serif");
+  else
+    {
+      newline = strchr (fonts, '\n');
+      snprintf (settings.font, sizeof settings.font, "%.*s",
+                (int) (newline ? newline - fonts : (ptrdiff_t) strlen (fonts)), fonts);
+    }
+  api->free_string (fonts);
+
+  api->image_new (engine, 300, 120, &image, NULL);
+  background = first_layer (image);
+  before = undo_depth (image);
+
+  CHECK (api->text_layer_new (engine, image, "Hello", &settings, (GlimsPoint) { 10, 20 }, &layer, &error)
+           == GLIMS_STATUS_OK && layer != 0,
+         "a text layer is added in %s%s%s", settings.font, error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (undo_depth (image) == before + 1, "adding it is one undo step");
+  CHECK (api->image_layers (engine, image, rows, 2, &count) == GLIMS_STATUS_OK && count == 2 &&
+         rows[0].id == layer && rows[0].kind == GLIMS_LAYER_TEXT && rows[0].selected &&
+         rows[0].bounds.x == 10 && rows[0].bounds.y == 20 && rows[0].bounds.width > 20,
+         "it sits on top at (10,20), selected, as a text layer (%d,%d %dx%d)",
+         rows[0].bounds.x, rows[0].bounds.y, rows[0].bounds.width, rows[0].bounds.height);
+  first_width = rows[0].bounds.width;
+
+  for (y = rows[0].bounds.y; y < rows[0].bounds.y + rows[0].bounds.height; y += 2)
+    for (x = rows[0].bounds.x; x < rows[0].bounds.x + rows[0].bounds.width; x += 2)
+      darkest = MIN (darkest, red_at (image, x, y));
+  CHECK (darkest < 64, "the text draws in its color (darkest red %d)", darkest);
+
+  CHECK (api->text_layer_get (engine, image, layer, &text, &read) == GLIMS_STATUS_OK &&
+         text && strcmp (text, "Hello") == 0 && strcmp (read.font, settings.font) == 0 &&
+         fabs (read.size - 24) < 0.01 && read.justify == GLIMS_JUSTIFY_LEFT &&
+         read.color.red < 0.01 && read.color.alpha > 0.99 && read.antialias,
+         "the text and its settings read back (%s, %s, %.2f px)", text ? text : "", read.font, read.size);
+  api->free_string (text);
+  text = NULL;
+
+  before = undo_depth (image);
+  CHECK (api->text_layer_set (engine, image, layer, "Hello, world", NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->image_layers (engine, image, rows, 2, &count) == GLIMS_STATUS_OK &&
+         rows[0].bounds.width > first_width,
+         "changing the text is one undo step and widens the layer (%d)", rows[0].bounds.width);
+  settings.size = 48;
+  settings.justify = GLIMS_JUSTIFY_CENTER;
+  CHECK (api->text_layer_set (engine, image, layer, NULL, &settings, NULL) == GLIMS_STATUS_OK &&
+         api->text_layer_get (engine, image, layer, &text, &read) == GLIMS_STATUS_OK &&
+         strcmp (text, "Hello, world") == 0 && fabs (read.size - 48) < 0.01 &&
+         read.justify == GLIMS_JUSTIFY_CENTER,
+         "changing the look keeps the text");
+  api->free_string (text);
+  text = NULL;
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->text_layer_get (engine, image, layer, &text, &read) == GLIMS_STATUS_OK &&
+         strcmp (text, "Hello") == 0 && fabs (read.size - 24) < 0.01,
+         "undo brings back the first text and size");
+  api->free_string (text);
+  text = NULL;
+  settings.size = 24;
+  settings.justify = GLIMS_JUSTIFY_LEFT;
+
+  strcpy (read.font, "No Such Font Anywhere");
+  read.size = 12;
+  read.justify = GLIMS_JUSTIFY_LEFT;
+  CHECK (api->text_layer_new (engine, image, "x", &read, (GlimsPoint) { 0, 0 }, NULL, &error)
+           == GLIMS_STATUS_NOT_FOUND && error,
+         "an unknown font is reported");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->text_layer_new (engine, image, "", &settings, (GlimsPoint) { 0, 0 }, NULL, NULL)
+           == GLIMS_STATUS_INVALID_ARGUMENT,
+         "empty text is refused");
+  read = settings;
+  read.size = -3;
+  CHECK (api->text_layer_set (engine, image, layer, NULL, &read, &error) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a negative size is refused");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->text_layer_get (engine, image, background, &text, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a pixel layer is not a text layer");
+
+  snprintf (xcf, sizeof xcf, "%s/text.xcf", work);
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, reopened, rows, 2, &count) == GLIMS_STATUS_OK &&
+         rows[0].kind == GLIMS_LAYER_TEXT &&
+         api->text_layer_get (engine, reopened, rows[0].id, &text, &read) == GLIMS_STATUS_OK &&
+         strcmp (text, "Hello") == 0 && strcmp (read.font, settings.font) == 0,
+         "an XCF round trip keeps the text layer editable");
+  api->free_string (text);
+
+  if (reopened)
+    api->image_close (engine, reopened);
   api->image_close (engine, image);
 }
 
@@ -1193,11 +1395,13 @@ main (int argc, char **argv)
       CHECK (api->image_close (engine, image) == GLIMS_STATUS_NOT_FOUND, "closing twice is reported");
     }
   test_fixture (argv[3], argv[2]);
+  test_text_layers (argv[2]);
   test_paint_tools ();
   test_selections ();
   test_editing ();
   test_render_freshness ();
   test_transforms ();
+  test_matrix_transform ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 

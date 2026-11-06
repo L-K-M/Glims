@@ -10,9 +10,13 @@
  */
 #include "engine-private.h"
 
+#include <math.h>
 #include <string.h>
 
+#include "libgimpmath/gimpmath.h"
+
 #include "core/gimp.h"
+#include "operations/layer-modes/gimp-layer-modes.h"
 #include "core/gimp-gradients.h"
 #include "core/gimpcontext.h"
 #include "core/gimpdrawable.h"
@@ -412,6 +416,13 @@ glims_layer_change (GlimsEngine            *engine,
       g_type_class_unref (modes);
       if (! mode)
         return glims_fail (error, NULL, "The engine has no such blend mode.");
+      /* Some modes (behind, erase, merge, split) are for painting only;
+       * gimp_layer_set_mode asserts on them and changes nothing. */
+      if (! (gimp_layer_mode_get_context (mode->value) & GIMP_LAYER_MODE_CONTEXT_LAYER))
+        {
+          glims_fail (error, NULL, "That blend mode is for painting, not for layers.");
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        }
       gimp_layer_set_mode (layer, mode->value, TRUE);
     }
   if ((change->properties & GLIMS_LAYER_NAME) &&
@@ -592,6 +603,70 @@ glims_image_scale (GlimsEngine  *engine,
 
   /* With the interpolation the engine's preferences name. */
   gimp_image_scale (image, width, height, engine->gimp->config->interpolation_type, NULL);
+  gimp_image_flush (image);
+
+  return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_layer_transform_matrix (GlimsEngine       *engine,
+                              GlimsImageID       id,
+                              GlimsItemID        layer_id,
+                              const GlimsMatrix *matrix,
+                              uint32_t           interpolation,
+                              char             **error)
+{
+  GlimsStatus            status;
+  GimpImage             *image = writable_image (engine, id, &status);
+  GimpLayer             *layer;
+  GimpMatrix3            transform;
+  GimpInterpolationType  type;
+  gint                   row, column;
+
+  if (! image)
+    return status;
+  if (! matrix)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  for (row = 0; row < 3; row++)
+    for (column = 0; column < 3; column++)
+      {
+        if (! isfinite (matrix->m[row][column]))
+          {
+            glims_fail (error, NULL, "The transform is not a finite matrix.");
+            return GLIMS_STATUS_INVALID_ARGUMENT;
+          }
+        transform.coeff[row][column] = matrix->m[row][column];
+      }
+
+  /* A matrix that maps the layer onto a line or a point has nothing to
+   * invert, and the engine's transform needs its inverse. */
+  if (fabs (gimp_matrix3_determinant (&transform)) < 1e-9)
+    {
+      glims_fail (error, NULL, "The transform would flatten the layer.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  switch (interpolation)
+    {
+    case GLIMS_INTERPOLATION_DEFAULT: type = engine->gimp->config->interpolation_type; break;
+    case GLIMS_INTERPOLATION_NONE:    type = GIMP_INTERPOLATION_NONE;   break;
+    case GLIMS_INTERPOLATION_LINEAR:  type = GIMP_INTERPOLATION_LINEAR; break;
+    case GLIMS_INTERPOLATION_CUBIC:   type = GIMP_INTERPOLATION_CUBIC;  break;
+    case GLIMS_INTERPOLATION_NOHALO:  type = GIMP_INTERPOLATION_NOHALO; break;
+    case GLIMS_INTERPOLATION_LOHALO:  type = GIMP_INTERPOLATION_LOHALO; break;
+    default:                          return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  layer = find_layer (image, layer_id);
+  if (! layer)
+    return GLIMS_STATUS_NOT_FOUND;
+
+  /* Forward, grown to the result, as the unified transform tool commits
+   * a layer (app/tools/gimptransformgridtool.c). gimp_item_transform opens
+   * its own undo group. */
+  gimp_item_transform (GIMP_ITEM (layer), gimp_get_user_context (engine->gimp), &transform,
+                       GIMP_TRANSFORM_FORWARD, type, GIMP_TRANSFORM_RESIZE_ADJUST, NULL);
   gimp_image_flush (image);
 
   return GLIMS_STATUS_OK;

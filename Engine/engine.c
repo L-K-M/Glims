@@ -997,6 +997,15 @@ MARSHAL (image_crop, return glims_image_crop (e, a->image, a->area, a->error);)
 MARSHAL (image_transform, return glims_image_transform (e, a->image, (uint32_t) a->width);)
 MARSHAL (layer_transform, return glims_layer_transform (e, a->image, a->item, (uint32_t) a->width);)
 MARSHAL (image_scale, return glims_image_scale (e, a->image, a->width, a->height, a->error);)
+MARSHAL (fonts, return glims_fonts (e, a->out);)
+MARSHAL (text_layer_new, return glims_text_layer_new (e, a->image, a->string, a->in,
+                                                      (GlimsPoint) { a->number, a->number2 },
+                                                      a->out, a->error);)
+MARSHAL (text_layer_get, return glims_text_layer_get (e, a->image, a->item, a->out, a->in_out);)
+MARSHAL (text_layer_set, return glims_text_layer_set (e, a->image, a->item, a->string, a->in,
+                                                      a->error);)
+MARSHAL (layer_transform_matrix, return glims_layer_transform_matrix (e, a->image, a->item, a->in,
+                                                                      (uint32_t) a->width, a->error);)
 MARSHAL (image_resize_canvas, return glims_image_resize_canvas (e, a->image, a->area.width, a->area.height,
                                                                 a->area.x, a->area.y, a->in, a->error);)
 MARSHAL (procedure_run, return glims_procedure_run (e, a->image, a->string, (uint32_t) a->width, a->error);)
@@ -1282,6 +1291,48 @@ api_image_resize_canvas (GlimsEngine *e, GlimsImageID image, int32_t width, int3
   return glims_engine_call (e, image_resize_canvas_on_engine, &a);
 }
 
+static GlimsStatus
+api_layer_transform_matrix (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                            const GlimsMatrix *matrix, uint32_t interpolation, char **error)
+{
+  GlimsArgs a = { .image = image, .item = layer, .in = matrix, .width = (int32_t) interpolation,
+                  .error = error };
+  return glims_engine_call (e, layer_transform_matrix_on_engine, &a);
+}
+
+static GlimsStatus
+api_fonts (GlimsEngine *e, char **names)
+{
+  GlimsArgs a = { .out = names };
+  return glims_engine_call (e, fonts_on_engine, &a);
+}
+
+static GlimsStatus
+api_text_layer_new (GlimsEngine *e, GlimsImageID image, const char *text,
+                    const GlimsTextSettings *settings, GlimsPoint position,
+                    GlimsItemID *layer, char **error)
+{
+  GlimsArgs a = { .image = image, .string = text, .in = settings, .number = position.x,
+                  .number2 = position.y, .out = layer, .error = error };
+  return glims_engine_call (e, text_layer_new_on_engine, &a);
+}
+
+static GlimsStatus
+api_text_layer_get (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, char **text,
+                    GlimsTextSettings *settings)
+{
+  GlimsArgs a = { .image = image, .item = layer, .out = text, .in_out = settings };
+  return glims_engine_call (e, text_layer_get_on_engine, &a);
+}
+
+static GlimsStatus
+api_text_layer_set (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, const char *text,
+                    const GlimsTextSettings *settings, char **error)
+{
+  GlimsArgs a = { .image = image, .item = layer, .string = text, .in = settings, .error = error };
+  return glims_engine_call (e, text_layer_set_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1326,6 +1377,11 @@ static const GlimsEngineAPI api_v1 = {
   .layer_transform   = api_layer_transform,
   .image_scale       = api_image_scale,
   .image_resize_canvas = api_image_resize_canvas,
+  .layer_transform_matrix = api_layer_transform_matrix,
+  .fonts             = api_fonts,
+  .text_layer_new    = api_text_layer_new,
+  .text_layer_get    = api_text_layer_get,
+  .text_layer_set    = api_text_layer_set,
 };
 
 __attribute__ ((visibility ("default")))
