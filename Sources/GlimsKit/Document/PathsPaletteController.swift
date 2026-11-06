@@ -122,6 +122,13 @@ final class PathsPaletteController: NSViewController, PaletteContent, NSTableVie
     }
 
     func reload() {
+        for command in Command.allCases {
+            buttonBar.setEnabled(isEnabled(command), forItem: "\(command)")
+        }
+        // Reloading the rows would end a rename being typed and commit it
+        // half done; the list catches up when the rename ends.
+        guard !isRenaming else { return }
+
         reloading = true
         table.reloadData()
         if let document, let active = document.activePath,
@@ -131,10 +138,13 @@ final class PathsPaletteController: NSViewController, PaletteContent, NSTableVie
             table.deselectAll(nil)
         }
         reloading = false
+    }
 
-        for command in Command.allCases {
-            buttonBar.setEnabled(isEnabled(command), forItem: "\(command)")
-        }
+    /// Whether a path name in the list is being edited.
+    private var isRenaming: Bool {
+        guard let editor = table.window?.firstResponder as? NSText,
+              let field = editor.delegate as? NSTextField else { return false }
+        return field.isDescendant(of: table)
     }
 
     // MARK: Commands
@@ -203,6 +213,8 @@ final class PathsPaletteController: NSViewController, PaletteContent, NSTableVie
         } else if name != path.name {
             document.renamePath(id, to: name)
         }
+        // Changes that arrived while the name was being typed.
+        DispatchQueue.main.async { [weak self] in self?.reload() }
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {

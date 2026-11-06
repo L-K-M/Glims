@@ -26,6 +26,10 @@ final class PathTool {
     private(set) var selected: VectorPath.AnchorIndex?
     /// The path the state above belongs to.
     private var statePath: Int32?
+    /// The active path and its shape when the press began. An undo or
+    /// another path's selection during the drag changes them, and then the
+    /// drag is dropped rather than written over the change.
+    private var dragBase: (path: Int32?, shape: VectorPath)?
 
     var onStatus: ((String) -> Void)?
 
@@ -76,6 +80,7 @@ final class PathTool {
     func mouseDown(at point: CGPoint, flags: NSEvent.ModifierFlags) {
         syncWithDocument()
         var path = shape
+        dragBase = (document.activePath, path)
         let tolerance = Self.reach / canvas.scale
 
         switch path.part(at: point, tolerance: tolerance, handlesOf: selected.map { [$0] } ?? []) {
@@ -153,9 +158,15 @@ final class PathTool {
         defer {
             working = nil
             drag = nil
+            dragBase = nil
             canvas.needsDisplay = true
         }
-        guard let path = working, drag != nil else { return }
+        guard let path = working, drag != nil, let base = dragBase else { return }
+        let current = document.activePath.flatMap { document.pathShapes[$0] } ?? VectorPath()
+        guard document.activePath == base.path, current == base.shape else {
+            onStatus?("The path changed during the drag, so the drag was not applied.")
+            return
+        }
         commit(path)
     }
 
@@ -183,6 +194,12 @@ final class PathTool {
     private static let deleteKeys: Set<Int> = [51, 117]   // Delete, Forward Delete
 
     func keyDown(keyCode: Int) -> Bool {
+        // While the pointer holds an anchor or handle, keys wait: an edit now
+        // would be undone by the drag's own edit on release.
+        if drag != nil, Self.deleteKeys.contains(keyCode) || Self.returnKeys.contains(keyCode)
+            || keyCode == Self.escapeKey {
+            return true
+        }
         syncWithDocument()
         if Self.returnKeys.contains(keyCode) || keyCode == Self.escapeKey {
             guard extending != nil || selected != nil else { return false }

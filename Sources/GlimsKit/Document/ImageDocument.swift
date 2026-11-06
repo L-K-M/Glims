@@ -274,7 +274,7 @@ final class ImageDocument {
 
     /// Makes `id` the path the Path tool edits, here and in the engine.
     func selectPath(_ id: Int32) {
-        guard paths.contains(where: { $0.id == id }) else { return }
+        guard paths.contains(where: { $0.id == id }), !refuseWhilePlugInRuns() else { return }
         activePath = id
         if pathShapes[id] == nil { pathShapes[id] = try? session.path(id, image: image) }
         run { session, image in try session.changePath(id, image: image, select: true) }

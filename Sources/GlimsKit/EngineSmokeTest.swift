@@ -539,6 +539,68 @@ enum EngineSmokeTest {
         settle()
         check(document.paths.first?.name == "Outline", "a path can be renamed")
 
+        // An undo that lands while an anchor is held wins over the drag.
+        drag([CGPoint(x: 100, y: 20), CGPoint(x: 110, y: 20)])
+        let moved = document.pathShapes[path]
+        if let down = event(.leftMouseDown, at: CGPoint(x: 110, y: 20)),
+           let dragged = event(.leftMouseDragged, at: CGPoint(x: 140, y: 40)),
+           let up = event(.leftMouseUp, at: CGPoint(x: 140, y: 40)) {
+            canvas.mouseDown(with: down)
+            canvas.mouseDragged(with: dragged)
+            document.undo()
+            settle()
+            let undone = document.pathShapes[path]
+            canvas.mouseUp(with: up)
+            settle()
+            check(undone != moved && document.pathShapes[path] == undone,
+                  "an undo during a drag is not overwritten when the drag ends")
+            document.redo()
+            settle()
+        }
+
+        // Delete while an anchor is held does nothing; the drag goes on.
+        if let down = event(.leftMouseDown, at: CGPoint(x: 110, y: 20)),
+           let up = event(.leftMouseUp, at: CGPoint(x: 110, y: 20)),
+           let delete = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                         windowNumber: window.windowNumber, context: nil, characters: "\u{7F}",
+                                         charactersIgnoringModifiers: "\u{7F}", isARepeat: false, keyCode: 51) {
+            let anchors = document.pathShapes[path]?.anchorCount
+            canvas.mouseDown(with: down)
+            canvas.keyDown(with: delete)
+            canvas.mouseUp(with: up)
+            settle()
+            check(anchors == 4 && document.pathShapes[path]?.anchorCount == anchors,
+                  "Delete during a drag leaves the anchors alone")
+        }
+
+        // A rename in progress survives a reload of the palette's list.
+        let renaming = PathsPaletteController()
+        renaming.retarget(to: document)
+        let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 260, height: 300), styleMask: [.titled],
+                            backing: .buffered, defer: false)
+        host.isReleasedWhenClosed = false
+        host.contentView = renaming.view
+        host.contentView?.layoutSubtreeIfNeeded()
+        let nameField = descendant(of: renaming.view, as: NSTableView.self)?
+            .view(atColumn: 0, row: 0, makeIfNecessary: true)
+            .flatMap { descendant(of: $0, as: NSTextField.self) }
+        let nameBefore = document.paths.first?.name
+        if let nameField, host.makeFirstResponder(nameField), let editor = nameField.currentEditor() {
+            editor.string = "Half"
+            renaming.reload()
+            spin()
+            check(nameField.currentEditor() != nil && document.paths.first?.name == nameBefore,
+                  "a rename being typed survives a reload and commits nothing yet")
+            host.makeFirstResponder(nil)
+            settle()
+            check(document.paths.first?.name == "Half", "ending the rename commits it")
+            document.undo()
+            settle()
+        } else {
+            check(false, "the Paths palette's name field can be edited")
+        }
+        host.close()
+
         if let down = event(.leftMouseDown, at: CGPoint(x: 20, y: 90)),
            let up = event(.leftMouseUp, at: CGPoint(x: 20, y: 90)) {
             canvas.mouseDown(with: down)
