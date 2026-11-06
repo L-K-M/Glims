@@ -1,15 +1,23 @@
 import AppKit
 import RigiUI
 
-/// The Tools palette: the tool grid and the foreground color.
+/// The Tools palette: the tool grid and the foreground/background color pair.
 @MainActor
 final class ToolsPaletteController: NSViewController, PaletteContent {
     typealias Target = ImageDocument
 
+    private enum Metrics {
+        static let margin: CGFloat = 6
+        static let gridToColors: CGFloat = 8
+    }
+
     static let definition = PaletteDefinition(
         kind: PaletteKind("ch.lkmc.Glims.tools"),
         title: "Tools",
-        contentSize: NSSize(width: 61, height: 218),
+        contentSize: NSSize(
+            width: 61,
+            height: Metrics.margin + ClassicToolGridLayout().size(forSlotCount: ToolID.paletteSlots.count).height
+                + Metrics.gridToColors + ClassicColorPairLayout.size.height + Metrics.margin),
         sizing: .fixed,
         frameAutosaveName: "Glims.palette.tools")
 
@@ -18,8 +26,9 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
             ClassicToolGrid.Tool(id: $0.rawValue, name: $0.name, shortcut: $0.shortcut, image: $0.image)
         })
     })
-    private let colorWell = NSColorWell()
-    private let backgroundWell = NSColorWell()
+    private let colors = ClassicColorPair()
+    /// Which color the shared color panel is editing for this palette.
+    private var editedColor: ReferenceWritableKeyPath<ToolState, NSColor>?
     private var observer: UUID?
 
     override func loadView() {
@@ -27,35 +36,26 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
         grid.target = self
         grid.action = #selector(toolChosen(_:))
         grid.setAccessibilityLabel("Tools")
-        colorWell.color = ToolState.shared.foreground
-        colorWell.target = self
-        colorWell.action = #selector(colorChosen(_:))
-        colorWell.toolTip = "Foreground color"
-        colorWell.setAccessibilityLabel("Foreground color")
-        backgroundWell.color = ToolState.shared.background
-        backgroundWell.target = self
-        backgroundWell.action = #selector(backgroundChosen(_:))
-        backgroundWell.toolTip = "Background color (X swaps the two)"
-        backgroundWell.setAccessibilityLabel("Background color")
+        colors.swapShortcut = "X"
+        colors.resetShortcut = "D"
+        colors.onSwap = { ToolState.shared.swapColors() }
+        colors.onReset = { ToolState.shared.resetColors() }
+        colors.onEditForeground = { [weak self] in self?.editColor(\.foreground) }
+        colors.onEditBackground = { [weak self] in self?.editColor(\.background) }
 
-        for view in [grid, colorWell, backgroundWell] as [NSView] {
+        for view in [grid, colors] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
         NSLayoutConstraint.activate([
-            grid.topAnchor.constraint(equalTo: root.topAnchor, constant: 6),
+            grid.topAnchor.constraint(equalTo: root.topAnchor, constant: Metrics.margin),
             grid.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            colorWell.topAnchor.constraint(equalTo: grid.bottomAnchor, constant: 8),
-            colorWell.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            colorWell.widthAnchor.constraint(equalToConstant: 40),
-            colorWell.heightAnchor.constraint(equalToConstant: 20),
-            backgroundWell.topAnchor.constraint(equalTo: colorWell.bottomAnchor, constant: 3),
-            backgroundWell.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            backgroundWell.widthAnchor.constraint(equalToConstant: 40),
-            backgroundWell.heightAnchor.constraint(equalToConstant: 20),
+            colors.topAnchor.constraint(equalTo: grid.bottomAnchor, constant: Metrics.gridToColors),
+            colors.centerXAnchor.constraint(equalTo: root.centerXAnchor),
         ])
         view = root
         grid.selectTool(id: ToolState.shared.current.rawValue)
+        stateChanged()
         observer = ToolState.shared.observe { [weak self] in self?.stateChanged() }
     }
 
@@ -65,11 +65,11 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
         if grid.selectedToolID != ToolState.shared.current.rawValue {
             grid.selectTool(id: ToolState.shared.current.rawValue)
         }
-        if colorWell.color != ToolState.shared.foreground {
-            colorWell.color = ToolState.shared.foreground
+        if colors.foreground != ToolState.shared.foreground {
+            colors.foreground = ToolState.shared.foreground
         }
-        if backgroundWell.color != ToolState.shared.background {
-            backgroundWell.color = ToolState.shared.background
+        if colors.background != ToolState.shared.background {
+            colors.background = ToolState.shared.background
         }
     }
 
@@ -78,13 +78,20 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
         ToolState.shared.select(tool)
     }
 
-    @objc private func colorChosen(_ sender: NSColorWell) {
-        ToolState.shared.foreground = sender.color
-        ToolState.shared.notifyChange()
+    /// Opens the shared color panel on one of the two colors; its changes
+    /// go straight to `ToolState`.
+    private func editColor(_ keyPath: ReferenceWritableKeyPath<ToolState, NSColor>) {
+        editedColor = keyPath
+        let panel = NSColorPanel.shared
+        panel.setTarget(self)
+        panel.setAction(#selector(colorPanelChanged(_:)))
+        panel.color = ToolState.shared[keyPath: keyPath]
+        panel.orderFront(nil)
     }
 
-    @objc private func backgroundChosen(_ sender: NSColorWell) {
-        ToolState.shared.background = sender.color
+    @objc private func colorPanelChanged(_ sender: NSColorPanel) {
+        guard let keyPath = editedColor else { return }
+        ToolState.shared[keyPath: keyPath] = sender.color
         ToolState.shared.notifyChange()
     }
 }
@@ -104,6 +111,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
 
     private let stack = NSStackView()
     private var shownTool: ToolID?
+    private var shownFontCount = 0
     private var observer: UUID?
 
     override func loadView() {
@@ -114,7 +122,9 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         view = stack
         rebuild()
         observer = ToolState.shared.observe { [weak self] in
-            guard let self, self.shownTool != ToolState.shared.current else { return }
+            guard let self else { return }
+            let fontsArrived = self.shownTool == .text && self.shownFontCount != ToolState.shared.fontNames.count
+            guard self.shownTool != ToolState.shared.current || fontsArrived else { return }
             self.rebuild()
         }
     }
@@ -125,6 +135,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         let state = ToolState.shared
         let tool = state.current
         shownTool = tool
+        shownFontCount = state.fontNames.count
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         bindings.removeAll()
         actionBindings.removeAll()
@@ -143,6 +154,16 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
                 ToolState.shared.gradientShape = EngineSession.GradientShape(rawValue: UInt32(index)) ?? .linear
             })
             stack.addArrangedSubview(hint("Drag across the image: foreground to background color."))
+        } else if tool == .text {
+            addTextRows(state.textSettings)
+        } else if tool == .transform {
+            let methods = EngineSession.Interpolation.allCases
+            stack.addArrangedSubview(popUp("Resample", methods.map(\.name),
+                                           selected: methods.firstIndex(of: state.transformInterpolation) ?? 2) { index in
+                ToolState.shared.transformInterpolation = methods[index]
+            })
+            stack.addArrangedSubview(hint("Drag a corner or edge to scale (Shift keeps the proportions), "
+                + "inside to move, outside to rotate (Shift: 15° steps). Return applies; Escape cancels."))
         } else if tool == .bucketFill {
             stack.addArrangedSubview(popUp("Fill", ["Similar colors", "Whole selection"],
                                            selected: state.fillMode == .similarColors ? 0 : 1) { index in
@@ -167,6 +188,38 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
     }
 
     // MARK: Rows
+
+    /// The next text's look. The text takes the foreground color; Return
+    /// starts a new line and Escape applies, in the canvas editor.
+    private func addTextRows(_ settings: EngineSession.TextSettings) {
+        let fonts = ToolState.shared.fontNames
+        if fonts.isEmpty {
+            stack.addArrangedSubview(hint("Loading the engine's fonts…"))
+        } else {
+            stack.addArrangedSubview(popUp("Font", fonts, selected: fonts.firstIndex(of: settings.font) ?? 0) { index in
+                ToolState.shared.textSettings.font = fonts[index]
+            })
+        }
+        stack.addArrangedSubview(slider("Size", 1...1000, settings.size, unit: "px") { value in
+            ToolState.shared.textSettings.size = value
+        })
+        let alignments = EngineSession.TextSettings.Justify.allCases
+        stack.addArrangedSubview(popUp("Align", alignments.map(\.name),
+                                       selected: alignments.firstIndex(of: settings.justify) ?? 0) { index in
+            ToolState.shared.textSettings.justify = alignments[index]
+        })
+        stack.addArrangedSubview(slider("Lines", -100...200, settings.lineSpacing, unit: "px") { value in
+            ToolState.shared.textSettings.lineSpacing = value
+        })
+        stack.addArrangedSubview(slider("Letters", -50...100, settings.letterSpacing, unit: "px") { value in
+            ToolState.shared.textSettings.letterSpacing = value
+        })
+        stack.addArrangedSubview(checkbox("Antialias", settings.antialias) { on in
+            ToolState.shared.textSettings.antialias = on
+        })
+        stack.addArrangedSubview(hint("Click the image to type new text in the foreground color, or a text "
+            + "layer to edit it. Escape or a click outside applies."))
+    }
 
     private func addPaintRows(for tool: ToolID, brush: EngineSession.Brush) {
         stack.addArrangedSubview(slider("Size", 1...500, brush.size, unit: "px") { value in
@@ -289,7 +342,10 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         return box
     }
 
+    /// `items` must be distinct: NSPopUpButton drops repeated titles,
+    /// which would shift every index after them.
     private func popUp(_ label: String, _ items: [String], selected: Int, _ onChange: @escaping (Int) -> Void) -> NSView {
+        assert(Set(items).count == items.count, "repeated pop-up titles in \(label)")
         let menu = NSPopUpButton(frame: .zero, pullsDown: false)
         menu.controlSize = .small
         menu.font = .systemFont(ofSize: 11)

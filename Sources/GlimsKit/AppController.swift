@@ -153,7 +153,25 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         for palette in [toolsPalette, toolOptionsPalette, layersPalette] where !palette.isPresented {
             palette.showPanel()
         }
+        loadFontsIfNeeded(using: document)
     }
+
+    /// The engine finishes loading fonts in the background after it starts;
+    /// asking waits for that, so it happens off the main thread, once.
+    private func loadFontsIfNeeded(using document: ImageDocument) {
+        guard ToolState.shared.fontNames.isEmpty, !fontsRequested else { return }
+        fontsRequested = true
+        let session = document.session
+        document.longQueue.async {
+            let names = (try? session.fonts()) ?? []
+            DispatchQueue.main.async {
+                ToolState.shared.setEngineFonts(names)
+                ToolState.shared.notifyChange()
+            }
+        }
+    }
+
+    private var fontsRequested = false
 
     // MARK: Menu commands
 

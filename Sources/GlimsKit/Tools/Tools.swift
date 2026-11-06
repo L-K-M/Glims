@@ -4,10 +4,10 @@ import AppKit
 /// (docs/design.md, section 2): two columns, related tools grouped behind
 /// one cell, a single-letter shortcut per group (Shift-letter cycles).
 enum ToolID: String, CaseIterable {
-    case move, crop
+    case move, transform, crop
     case rectangleSelect, ellipseSelect, lasso
     case magicWand, selectByColor
-    case eyedropper
+    case eyedropper, text
     case paintbrush, pencil, airbrush
     case eraser
     case clone, heal
@@ -19,6 +19,7 @@ enum ToolID: String, CaseIterable {
     var name: String {
         switch self {
         case .move: return "Move"
+        case .transform: return "Transform"
         case .crop: return "Crop"
         case .gradient: return "Gradient"
         case .bucketFill: return "Paint Bucket"
@@ -28,6 +29,7 @@ enum ToolID: String, CaseIterable {
         case .magicWand: return "Magic Wand"
         case .selectByColor: return "Select by Color"
         case .eyedropper: return "Eyedropper"
+        case .text: return "Text"
         case .paintbrush: return "Brush"
         case .pencil: return "Pencil"
         case .airbrush: return "Airbrush"
@@ -47,13 +49,14 @@ enum ToolID: String, CaseIterable {
     /// The key that picks the tool's group; repeated with Shift it cycles.
     var shortcut: String {
         switch self {
-        case .move: return "V"
+        case .move, .transform: return "V"
         case .crop: return "C"
         case .gradient, .bucketFill: return "G"
         case .rectangleSelect, .ellipseSelect: return "M"
         case .lasso: return "L"
         case .magicWand, .selectByColor: return "W"
         case .eyedropper: return "I"
+        case .text: return "T"
         case .paintbrush, .pencil, .airbrush: return "B"
         case .eraser: return "E"
         case .clone, .heal: return "S"
@@ -68,6 +71,7 @@ enum ToolID: String, CaseIterable {
     private var symbolNames: [String] {
         switch self {
         case .move: return ["arrow.up.and.down.and.arrow.left.and.right", "move.3d"]
+        case .transform: return ["arrow.up.left.and.arrow.down.right", "rotate.right"]
         case .crop: return ["crop"]
         case .gradient: return ["square.lefthalf.filled", "circle.lefthalf.filled"]
         case .bucketFill: return ["drop.fill", "paintbrush.fill"]
@@ -77,6 +81,7 @@ enum ToolID: String, CaseIterable {
         case .magicWand: return ["wand.and.stars"]
         case .selectByColor: return ["paintpalette", "drop.triangle"]
         case .eyedropper: return ["eyedropper"]
+        case .text: return ["textformat", "character"]
         case .paintbrush: return ["paintbrush.pointed", "paintbrush"]
         case .pencil: return ["pencil"]
         case .airbrush: return ["aqi.medium", "sparkles"]
@@ -139,13 +144,14 @@ enum ToolID: String, CaseIterable {
 
     /// The palette's cells, row by row; a cell with several tools is a group.
     static let paletteSlots: [[ToolID]] = [
-        [.rectangleSelect, .ellipseSelect], [.move],
+        [.rectangleSelect, .ellipseSelect], [.move, .transform],
         [.lasso], [.crop],
         [.magicWand, .selectByColor], [.eyedropper],
         [.paintbrush, .pencil, .airbrush], [.eraser],
         [.clone, .heal], [.smudge, .blur, .sharpen],
         [.dodge, .burn], [.gradient, .bucketFill],
-        [.hand], [.zoom],
+        [.text], [.hand],
+        [.zoom],
     ]
 
     /// The group a shortcut letter picks.
@@ -170,6 +176,29 @@ final class ToolState {
     var foreground = NSColor.black
     var background = NSColor.white
     var gradientShape = EngineSession.GradientShape.linear
+    var transformInterpolation = EngineSession.Interpolation.cubic
+    /// The look of the next text; its color is the foreground color.
+    var textSettings = EngineSession.TextSettings()
+    /// The fonts a person can pick, once the engine's have loaded (in the
+    /// background, at the first document); see `setEngineFonts(_:)`.
+    private(set) var fontNames: [String] = []
+
+    /// Takes the engine's font list. It names some fonts twice and includes
+    /// macOS's private fonts (names starting with "."), which font menus
+    /// leave out. When the current text font is not among them, the first
+    /// font takes its place.
+    func setEngineFonts(_ names: [String]) {
+        fontNames = Self.pickableFontNames(names)
+        if let first = fontNames.first, !fontNames.contains(textSettings.font) {
+            textSettings.font = first
+        }
+    }
+
+    /// Each name once, in the engine's order, without private fonts.
+    static func pickableFontNames(_ names: [String]) -> [String] {
+        var seen = Set<String>()
+        return names.filter { !$0.hasPrefix(".") && seen.insert($0).inserted }
+    }
     /// Paint bucket: similar colors around the click, or the whole selection.
     var fillMode = EngineSession.FillMode.similarColors
     var fillThreshold: Double = 15.0 / 255.0
@@ -219,6 +248,19 @@ final class ToolState {
     }
 
     func notifyChange() { notify() }
+
+    /// X: the foreground and background colors trade places.
+    func swapColors() {
+        (foreground, background) = (background, foreground)
+        notify()
+    }
+
+    /// D: black on white.
+    func resetColors() {
+        foreground = .black
+        background = .white
+        notify()
+    }
 
     private static func defaultBrush(for tool: ToolID) -> EngineSession.Brush {
         var brush = EngineSession.Brush()

@@ -11,6 +11,21 @@ import AppKit
 @MainActor
 final class EngineCanvasView: NSView {
     private static let surround = NSColor(calibratedWhite: 0.42, alpha: 1)
+    /// Transparent pixels show over light checks (GIMP's "Light checks"),
+    /// so they read apart from the surround and from tiles still rendering,
+    /// which stay the surround's gray.
+    static let transparencyChecks: NSColor = {
+        let check: CGFloat = 8
+        let pattern = NSImage(size: NSSize(width: check * 2, height: check * 2), flipped: false) { rect in
+            NSColor(calibratedWhite: 1, alpha: 1).setFill()
+            rect.fill()
+            NSColor(calibratedWhite: 0.8, alpha: 1).setFill()
+            NSRect(x: 0, y: 0, width: check, height: check).fill()
+            NSRect(x: check, y: check, width: check, height: check).fill()
+            return true
+        }
+        return NSColor(patternImage: pattern)
+    }()
     /// Tile edge in device pixels.
     static let tileSize = 256
     /// Cached tiles kept across panning (about 64 MB of pixels).
@@ -239,6 +254,8 @@ final class EngineCanvasView: NSView {
         for (key, image) in tiles {
             let rect = viewRect(for: key)
             guard rect.intersects(dirtyRect) else { continue }
+            Self.transparencyChecks.setFill()
+            rect.intersection(dirtyRect).fill()
             context.saveGState()
             // The view is flipped; CGImage draws bottom-up.
             context.translateBy(x: rect.minX, y: rect.maxY)

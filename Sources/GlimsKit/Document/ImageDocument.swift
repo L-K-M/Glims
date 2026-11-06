@@ -190,6 +190,44 @@ final class ImageDocument {
         run { session, image in try session.transformLayer(layer, image: image, transform) }
     }
 
+    // MARK: Text
+
+    /// Adds a text layer at `position` and makes it the active layer.
+    func addText(_ text: String, settings: EngineSession.TextSettings, at position: CGPoint) {
+        guard !text.isEmpty, !refuseWhilePlugInRuns() else { return }
+        inputQueue.async { [session, image] in
+            do {
+                let layer = try session.addTextLayer(image: image, text: text, settings: settings, at: position)
+                DispatchQueue.main.async { self.selectLayer(layer) }
+            } catch {
+                self.report(error)
+            }
+        }
+    }
+
+    /// Changes a text layer's text, its look, or both, as one undo step.
+    func updateText(_ layer: Int32, text: String?, settings: EngineSession.TextSettings?) {
+        guard text != nil || settings != nil, !refuseWhilePlugInRuns() else { return }
+        run { session, image in
+            try session.setTextLayer(image: image, layer: layer, text: text, settings: settings)
+        }
+    }
+
+    /// A text layer's text and look, read on the engine thread's queue.
+    func textLayer(_ layer: Int32) -> (text: String, settings: EngineSession.TextSettings)? {
+        inputQueue.sync { [session, image] in try? session.textLayer(image: image, layer: layer) }
+    }
+
+    /// Commits the Transform tool: `matrix` maps the layer's pixels to
+    /// where its handles put them.
+    func transformLayer(_ layer: Int32, matrix: CGAffineTransform,
+                        interpolation: EngineSession.Interpolation) {
+        guard !matrix.isIdentity, !refuseWhilePlugInRuns() else { return }
+        run { session, image in
+            try session.transformLayer(layer, image: image, matrix: matrix, interpolation: interpolation)
+        }
+    }
+
     func scale(toWidth width: Int, height: Int) {
         guard !refuseWhilePlugInRuns() else { return }
         run { session, image in try session.scaleImage(image, width: width, height: height) }

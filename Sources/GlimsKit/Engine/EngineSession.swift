@@ -47,6 +47,45 @@ final class EngineSession: @unchecked Sendable {
         case rotate90 = 1, rotate180, rotate270, flipHorizontal, flipVertical
     }
 
+    /// A text layer's look; sizes and spacings in image pixels.
+    struct TextSettings: Equatable {
+        enum Justify: UInt32, CaseIterable {
+            case left = 1, right, center, fill
+
+            var name: String {
+                switch self {
+                case .left: return "Left"
+                case .right: return "Right"
+                case .center: return "Center"
+                case .fill: return "Justified"
+                }
+            }
+        }
+
+        var font = "Sans-serif"
+        var size: Double = 36
+        var color = NSColor.black
+        var justify = Justify.left
+        var lineSpacing: Double = 0
+        var letterSpacing: Double = 0
+        var antialias = true
+    }
+
+    /// How transformed pixels are resampled (GlimsInterpolation).
+    enum Interpolation: UInt32, CaseIterable {
+        case none = 1, linear, cubic, noHalo, loHalo
+
+        var name: String {
+            switch self {
+            case .none: return "None"
+            case .linear: return "Linear"
+            case .cubic: return "Cubic"
+            case .noHalo: return "NoHalo"
+            case .loHalo: return "LoHalo"
+            }
+        }
+    }
+
     enum LayerCommand: UInt32 {
         case new = 1, duplicate, delete, raise, lower, toTop, toBottom, mergeDown, flatten
     }
@@ -511,6 +550,76 @@ final class EngineSession: @unchecked Sendable {
 
     func transformLayer(_ layer: Int32, image: Int32, _ transform: Transform) throws {
         try check(api.layer_transform(engine, image, layer, transform.rawValue), nil)
+    }
+
+    /// Applies `matrix` (image pixels, y down) to the layer as one undo step.
+    func transformLayer(_ layer: Int32, image: Int32, matrix: CGAffineTransform,
+                        interpolation: Interpolation) throws {
+        var values = GlimsMatrix(m: ((Double(matrix.a), Double(matrix.c), Double(matrix.tx)),
+                                     (Double(matrix.b), Double(matrix.d), Double(matrix.ty)),
+                                     (0, 0, 1)))
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.layer_transform_matrix(engine, image, layer, &values, interpolation.rawValue, &error),
+                  error)
+    }
+
+    // MARK: Text
+
+    /// The font names text settings take, sorted.
+    func fonts() throws -> [String] {
+        var names: UnsafeMutablePointer<CChar>?
+        try check(api.fonts(engine, &names), nil)
+        defer { api.free_string(names) }
+        return names.map { String(cString: $0).split(separator: "\n").map(String.init) } ?? []
+    }
+
+    /// Adds a text layer with its top-left at `position`; returns it.
+    func addTextLayer(image: Int32, text: String, settings: TextSettings, at position: CGPoint) throws -> Int32 {
+        var values = Self.textSettings(settings)
+        var layer: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.text_layer_new(engine, image, text, &values, GlimsPoint(x: position.x, y: position.y),
+                                     &layer, &error), error)
+        return layer
+    }
+
+    func textLayer(image: Int32, layer: Int32) throws -> (text: String, settings: TextSettings) {
+        var values = GlimsTextSettings()
+        values.struct_size = UInt32(MemoryLayout<GlimsTextSettings>.size)
+        var text: UnsafeMutablePointer<CChar>?
+        try check(api.text_layer_get(engine, image, layer, &text, &values), nil)
+        defer { api.free_string(text) }
+        let settings = TextSettings(
+            font: Self.string(values.font), size: values.size,
+            color: NSColor(srgbRed: values.color.red, green: values.color.green,
+                           blue: values.color.blue, alpha: values.color.alpha),
+            justify: TextSettings.Justify(rawValue: values.justify) ?? .left,
+            lineSpacing: values.line_spacing, letterSpacing: values.letter_spacing,
+            antialias: values.antialias)
+        return (text.map { String(cString: $0) } ?? "", settings)
+    }
+
+    /// Nil text keeps the text; nil settings keep the look.
+    func setTextLayer(image: Int32, layer: Int32, text: String?, settings: TextSettings?) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        if var values = settings.map(Self.textSettings) {
+            try check(api.text_layer_set(engine, image, layer, text, &values, &error), error)
+        } else {
+            try check(api.text_layer_set(engine, image, layer, text, nil, &error), error)
+        }
+    }
+
+    private static func textSettings(_ settings: TextSettings) -> GlimsTextSettings {
+        var values = GlimsTextSettings()
+        values.struct_size = UInt32(MemoryLayout<GlimsTextSettings>.size)
+        copy(settings.font, into: &values.font)
+        values.size = settings.size
+        values.color = color(settings.color)
+        values.justify = settings.justify.rawValue
+        values.line_spacing = settings.lineSpacing
+        values.letter_spacing = settings.letterSpacing
+        values.antialias = settings.antialias
+        return values
     }
 
     func scaleImage(_ image: Int32, width: Int, height: Int) throws {

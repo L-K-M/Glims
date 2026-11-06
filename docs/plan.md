@@ -557,6 +557,52 @@ In this order (reasons in `phase0-report.md`):
   Palettes and Reset Palettes. Not done: workspaces (named layouts) and
   the per-palette flyout menu (`design.md`, section 2), and Glims run by
   hand with the new arrangement.
+- 2026-11-06: item 3, the rest of the Rigi side. `ClassicToolGrid` moved
+  from the incubator into Rigi with `ClassicColorPair`
+  (L-K-M/Rigi#10, merged as `6a2d830`); the Tools palette uses both, and
+  the color pair's swap and reset share X and D's code. Palette menus and
+  named workspaces (L-K-M/Rigi#11) and `ClassicValueSlider`,
+  `ClassicPaletteButtonBar` and status bar progress, accessories and an
+  editable zoom (L-K-M/Rigi#12) are in review. Each Rigi PR went through
+  helper-model review rounds with a second model verifying every finding;
+  they found 9 real defects so far, all fixed with regression tests,
+  among them palette title bar menu items that raised an exception
+  (`perform(_:)` resolved to NSObject's `performSelector:`).
+- 2026-11-06: item 4, Transform and Text tools. Engine: an additive facade
+  call applies an affine matrix to a layer with `gimp_item_transform` as
+  one undo step (`layer_transform_matrix`, five interpolations), and
+  text layers through GIMP's own text code: the font list, adding a text
+  layer, reading its plain text and look, and changing them
+  (`fonts`, `text_layer_new`, `text_layer_get`, `text_layer_set`). Fixed
+  on the way: Layer Properties offered the paint-only Behind mode, which
+  GIMP asserts on and ignores for layers; the adapter now refuses paint-only
+  modes and the menu leaves Behind out. 168 conformance checks pass on
+  all four engines. Interface: a Transform tool (Shift-V from Move) with
+  corner and edge handles (Shift keeps proportions), move inside, rotate
+  outside (Shift: 15° steps), a live outline and grid, Return or a
+  double-click to apply and Escape to cancel; its geometry is a value type
+  with unit tests. A Text tool (T): click to type new text in the
+  foreground color, or click a text layer to edit it, in an editor laid
+  over the canvas; font, size, alignment and spacing in Tool Options; the
+  engine's fonts load in the background at the first document. The
+  canvas now draws light checks under transparent pixels, so what a
+  transform uncovers reads apart from the gray around the image. Checked
+  by hand with a real pointer and keys: scaling the background layer by
+  its corner and applying with a double-click, typing new text and
+  editing it. That found two defects, fixed with regression tests: the
+  first keystroke in the text editor crashed the app (the editor
+  registered typing undo with the document window's undo manager, the
+  engine's, which raises; the editor now keeps its own typing history,
+  which Edit ▸ Undo uses while typing), and the font popup showed and
+  set the wrong font because the engine repeats some of its 2622 font
+  names (the list is now deduplicated, without macOS's private
+  "."-fonts). The app's engine smoke test (56 checks) drives the Text
+  tool through the canvas and checks the checks. Painting already runs on its own
+  queue (`ImageDocument.inputQueue`); whether long strokes still delay
+  renders on the engine thread is not measured. Still to do in item 4:
+  paths (pen tool and a Paths palette). Noticed, not fixed: a new
+  document window opens exactly over the previous one instead of
+  cascading.
 
 ## Later, before any public release
 

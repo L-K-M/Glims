@@ -1,4 +1,5 @@
 import AppKit
+import RigiUI
 
 /// `--engine-smoke-test`: drives a document end to end through the same code
 /// the interface uses, with the engine named by `GLIMS_ENGINE_LIBRARY` and
@@ -32,6 +33,19 @@ enum EngineSmokeTest {
     private static func XCTUnwrapWindow(_ controller: DocumentWindowController) throws -> NSWindow {
         guard let window = controller.window else { throw NoWindow() }
         return window
+    }
+
+    /// How bright the canvas draws `point` (image pixels at the canvas's
+    /// zoom), from the view's own drawing.
+    private static func canvasBrightness(_ canvas: EngineCanvasView, at point: CGPoint) -> Double? {
+        let viewPoint = CGPoint(x: point.x * canvas.scale, y: point.y * canvas.scale)
+        guard canvas.bounds.contains(viewPoint),
+              let rep = canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds) else { return nil }
+        canvas.cacheDisplay(in: canvas.bounds, to: rep)
+        let factor = Double(rep.pixelsWide) / Double(canvas.bounds.width)
+        // The canvas is flipped, like the bitmap's rows: no y flip.
+        return (rep.colorAt(x: Int(viewPoint.x * factor), y: Int(viewPoint.y * factor))?
+            .usingColorSpace(.genericGray)?.whiteComponent).map(Double.init)
     }
 
     private static func pixel(_ session: EngineSession, _ image: Int32, x: Int, y: Int) -> [UInt8]? {
@@ -245,6 +259,101 @@ enum EngineSmokeTest {
         document.moveActiveLayer(by: CGSize(width: 20, height: 10))
         settle()
         check(document.layers.first?.bounds.origin == CGPoint(x: 20, y: 10), "the Move tool's drag moves the layer")
+
+        // The Transform tool: drag the bottom-right corner halfway in, apply.
+        if let moved = document.layers.first {
+            var transform = LayerTransformSession(layer: moved.id, bounds: moved.bounds)
+            let corner = transform.corners[2]
+            let target = CGPoint(x: moved.bounds.midX, y: moved.bounds.midY)
+            transform.update(transform.beginDrag(.corner(2), at: corner), to: target, constrained: false)
+            let undoBefore = document.undoInfo.undoCount
+            document.transformLayer(moved.id, matrix: transform.matrix, interpolation: .cubic)
+            settle()
+            let bounds = document.layers.first?.bounds ?? .zero
+            check(bounds.origin == moved.bounds.origin
+                    && abs(bounds.width - moved.bounds.width / 2) <= 1 && abs(bounds.height - moved.bounds.height / 2) <= 1,
+                  "the Transform tool scales the layer from its fixed corner (\(bounds))")
+            check(document.undoInfo.undoCount == undoBefore + 1, "the transform is one undo step")
+            document.undo()
+            settle()
+            check(document.layers.first?.bounds == moved.bounds, "undo restores the layer's size")
+        }
+
+        // What a transformed lone layer no longer covers is transparent:
+        // the canvas shows checks there, not the gray around the image.
+        let lone = try ImageDocument(session: session, image: session.newImage(width: 64, height: 64), name: "Checks")
+        documents.items.append(lone)
+        let loneController = DocumentWindowController(document: lone)
+        if let only = lone.layers.first {
+            var shrink = LayerTransformSession(layer: only.id, bounds: only.bounds)
+            shrink.update(shrink.beginDrag(.corner(2), at: shrink.corners[2]), to: CGPoint(x: 32, y: 32), constrained: false)
+            lone.transformLayer(only.id, matrix: shrink.matrix, interpolation: .none)
+            lone.inputQueue.sync {}
+            spin()
+            _ = try loneController.canvas.renderVisibleTilesNow()
+            let shade = canvasBrightness(loneController.canvas, at: CGPoint(x: 60, y: 60))
+            check(lone.layers.first.map { $0.bounds.width <= 33 } == true && shade.map { $0 >= 0.75 } == true,
+                  "the canvas shows checks where a transformed layer left transparency (\(shade.map { String(format: "%.2f", $0) } ?? "nil"))")
+        }
+
+        // The Text tool's engine side: fonts, a new text layer, editing it.
+        let fonts = (try? session.fonts()) ?? []
+        check(!fonts.isEmpty, "the engine lists \(fonts.count) fonts")
+        var textSettings = EngineSession.TextSettings()
+        textSettings.font = fonts.contains("Sans-serif") ? "Sans-serif" : (fonts.first ?? "Sans-serif")
+        textSettings.size = 24
+        let layersBefore = document.layers.count
+        document.addText("Glims", settings: textSettings, at: CGPoint(x: 12, y: 14))
+        settle()
+        let added = document.layers.first
+        check(document.layers.count == layersBefore + 1 && added?.kind == .text
+                && added?.bounds.origin == CGPoint(x: 12, y: 14) && document.activeLayer == added?.id,
+              "the Text tool adds a text layer where it was clicked and selects it")
+        if let added, let read = document.textLayer(added.id) {
+            check(read.text == "Glims" && read.settings.font == textSettings.font && abs(read.settings.size - 24) < 0.01,
+                  "the text layer reads back its text and look")
+            document.updateText(added.id, text: "Glims text", settings: nil)
+            settle()
+            check(document.textLayer(added.id)?.text == "Glims text"
+                    && (document.layers.first?.bounds.width ?? 0) > added.bounds.width,
+                  "editing the text changes the layer")
+            document.undo()
+            document.undo()
+            settle()
+            check(document.layers.count == layersBefore, "undo removes the text again")
+        } else {
+            check(false, "the text layer reads back")
+        }
+
+        // The Text tool through the canvas: a click opens the editor with
+        // the keyboard focus, typing goes into it, Escape applies it.
+        let canvas = controller.canvas
+        let previousTool = ToolState.shared.current
+        ToolState.shared.select(.text)
+        ToolState.shared.textSettings = textSettings
+        let click = CGPoint(x: 40, y: 30)
+        if let window = controller.window,
+           let press = NSEvent.mouseEvent(with: .leftMouseDown, location: canvas.convert(click, to: nil),
+                                          modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                          context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+            canvas.mouseDown(with: press)
+            let editor = canvas.tools.textEditor
+            check(editor != nil && window.firstResponder === editor,
+                  "a Text tool click opens the editor with the keyboard focus")
+            editor?.insertText("Hi", replacementRange: NSRange(location: NSNotFound, length: 0))
+            editor?.cancelOperation(nil)
+            settle()
+            let typed = document.layers.first
+            check(canvas.tools.textEditor == nil && window.firstResponder === canvas
+                    && typed?.kind == .text && typed?.bounds.origin == click
+                    && typed.flatMap { document.textLayer($0.id)?.text } == "Hi",
+                  "Escape applies the typed text as a text layer at the click")
+            if typed?.kind == .text { document.undo() }
+            settle()
+        } else {
+            check(false, "a Text tool click reaches the canvas")
+        }
+        ToolState.shared.select(previousTool)
 
         if let background = document.layers.last?.id { document.selectLayer(background) }
         document.gradient(from: CGPoint(x: 0, y: 5), to: CGPoint(x: 300, y: 5), shape: .linear,

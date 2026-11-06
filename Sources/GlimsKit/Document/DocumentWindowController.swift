@@ -195,7 +195,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// GIMP's default (non-legacy) layer modes by their engine nicks
     /// (GimpLayerMode in app/operations/operations-enums.c), in the order
     /// GIMP's mode menu groups them.
-    static let blendModes = ["normal", "dissolve", "behind",
+    /// Layer blend modes only: the engine's paint-only modes (behind,
+    /// erase, merge, split) do not apply to layers.
+    static let blendModes = ["normal", "dissolve",
                              "lighten-only", "luma-lighten-only", "screen", "dodge", "addition",
                              "darken-only", "luma-darken-only", "multiply", "burn", "linear-burn",
                              "overlay", "softlight", "hardlight", "vivid-light", "pin-light", "linear-light", "hard-mix",
