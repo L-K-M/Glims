@@ -61,7 +61,11 @@ glims_lookup_drawable (GlimsOpenImage *open,
 {
   GimpItem *item = gimp_item_get_by_id (open->engine->gimp, id);
 
-  if (! item || ! GIMP_IS_DRAWABLE (item) || gimp_item_get_image (item) != open->image)
+  /* A deleted item keeps its id while the undo stack holds it; it is no
+   * longer part of the image (gimp_item_is_attached), as GIMP's own
+   * procedures check (app/pdb/gimppdb-utils.c). */
+  if (! item || ! GIMP_IS_DRAWABLE (item) || gimp_item_get_image (item) != open->image ||
+      ! gimp_item_is_attached (item))
     return NULL;
 
   return GIMP_DRAWABLE (item);

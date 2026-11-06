@@ -74,7 +74,7 @@ find_layer (GimpImage   *image,
     }
 
   item = gimp_item_get_by_id (image->gimp, id);
-  if (! GIMP_IS_LAYER (item) || gimp_item_get_image (item) != image)
+  if (! GIMP_IS_LAYER (item) || gimp_item_get_image (item) != image || ! gimp_item_is_attached (item))
     return NULL;
 
   return GIMP_LAYER (item);

@@ -74,7 +74,8 @@ find_path (GimpImage   *image,
 {
   GimpItem *item = gimp_item_get_by_id (image->gimp, id);
 
-  if (! GIMP_IS_PATH (item) || gimp_item_get_image (item) != image)
+  /* A deleted path keeps its id while the undo stack holds it. */
+  if (! GIMP_IS_PATH (item) || gimp_item_get_image (item) != image || ! gimp_item_is_attached (item))
     return NULL;
 
   return GIMP_PATH (item);
@@ -120,7 +121,8 @@ glims_paths (GlimsEngine   *engine,
       row->id       = gimp_item_get_id (item);
       row->visible  = gimp_item_get_visible (item) ? true : false;
       row->selected = g_list_find (selected, item) ? true : false;
-      g_strlcpy (row->name, gimp_object_get_name (item), sizeof row->name);
+      g_strlcpy (row->name, gimp_object_get_name (item) ? gimp_object_get_name (item) : "",
+                 sizeof row->name);
     }
   g_list_free (paths);
 
@@ -387,7 +389,7 @@ glims_path_change (GlimsEngine           *engine,
   if (! path)
     return GLIMS_STATUS_NOT_FOUND;
 
-  if (change->name && strcmp (change->name, gimp_object_get_name (path)) != 0 &&
+  if (change->name && g_strcmp0 (change->name, gimp_object_get_name (path)) != 0 &&
       ! gimp_item_rename (GIMP_ITEM (path), change->name, &gerror))
     return glims_fail (error, gerror, "The path could not be renamed.");
 
@@ -446,6 +448,7 @@ glims_path_to_selection (GlimsEngine              *engine,
     return status;
   /* Only the fields every version of the struct has are read. */
   if (! options || options->struct_size < offsetof (GlimsSelectOptions, corner_radius) ||
+      options->operation > GLIMS_SELECT_INTERSECT ||
       ! isfinite (options->feather) || options->feather < 0)
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
@@ -507,7 +510,7 @@ glims_path_stroke (GlimsEngine             *engine,
   else
     {
       layer = gimp_item_get_by_id (image->gimp, layer_id);
-      if (! GIMP_IS_LAYER (layer) || gimp_item_get_image (layer) != image)
+      if (! GIMP_IS_LAYER (layer) || gimp_item_get_image (layer) != image || ! gimp_item_is_attached (layer))
         layer = NULL;
     }
   if (! layer)

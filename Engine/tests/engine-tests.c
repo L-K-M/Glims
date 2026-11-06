@@ -855,6 +855,68 @@ test_paths (const char *work)
   api->image_close (engine, image);
 }
 
+/* A deleted item lives on in the undo stack until the undo is dropped,
+ * still under its id. Calls must not reach it: an edit would change what
+ * undoing the delete brings back, outside any undo step. */
+static void
+test_deleted_items (void)
+{
+  GlimsImageID       image = 0;
+  GlimsItemID        layer = 0, path = 0, text = 0;
+  GlimsSubpath       subpath = { .count = 1, .closed = false };
+  GlimsPathPoint     point = { { 5, 5 }, { 5, 5 }, { 5, 5 } };
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 5);
+  GlimsStrokePoint   first = { 10, 10, 1, 0, 0, 0 };
+  GlimsStrokeID      stroke = 0;
+  GlimsLayerChange   change = { .struct_size = sizeof change, .properties = GLIMS_LAYER_OPACITY, .opacity = 0.5 };
+  GlimsTextSettings  settings = { .struct_size = sizeof settings, .size = 12, .color = { 0, 0, 0, 1 },
+                                  .justify = GLIMS_JUSTIFY_LEFT, .antialias = true };
+  GlimsSelectOptions select = { .struct_size = sizeof select, .operation = GLIMS_SELECT_REPLACE };
+  int32_t            count = 0, depth;
+
+  api->image_new (engine, 64, 64, &image, NULL);
+
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer, NULL);
+  api->layer_command (engine, image, layer, GLIMS_LAYER_DELETE, NULL, NULL);
+  depth = undo_depth (image);
+  CHECK (api->stroke_begin (engine, image, layer, &brush, &first, &stroke, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a deleted layer cannot be painted on");
+  if (stroke)
+    api->stroke_end (engine, stroke);
+  CHECK (api->layer_change (engine, image, layer, &change, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         undo_depth (image) == depth,
+         "a deleted layer cannot be changed");
+
+  strcpy (settings.font, "Sans-serif");
+  if (api->text_layer_new (engine, image, "x", &settings, (GlimsPoint) { 0, 0 }, &text, NULL) == GLIMS_STATUS_OK)
+    {
+      api->layer_command (engine, image, text, GLIMS_LAYER_DELETE, NULL, NULL);
+      depth = undo_depth (image);
+      CHECK (api->text_layer_set (engine, image, text, "y", NULL, NULL) == GLIMS_STATUS_NOT_FOUND &&
+             undo_depth (image) == depth,
+             "a deleted text layer cannot be edited");
+    }
+
+  api->path_set (engine, image, 0, "Gone", &subpath, 1, &point, 1, &path, NULL);
+  api->path_delete (engine, image, path);
+  depth = undo_depth (image);
+  CHECK (api->path_set (engine, image, path, NULL, &subpath, 1, &point, 1, NULL, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->path_get (engine, image, path, NULL, 0, &count, NULL, 0, &count) == GLIMS_STATUS_NOT_FOUND &&
+         api->path_to_selection (engine, image, path, &select) == GLIMS_STATUS_NOT_FOUND &&
+         api->path_delete (engine, image, path) == GLIMS_STATUS_NOT_FOUND &&
+         undo_depth (image) == depth,
+         "a deleted path cannot be edited, read, selected or deleted again");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->path_get (engine, image, path, NULL, 0, &count, NULL, 0, NULL) == GLIMS_STATUS_OK && count == 1,
+         "undoing the delete brings the path back as it was");
+
+  select.operation = 99;
+  CHECK (api->path_to_selection (engine, image, path, &select) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown selection operation is refused");
+
+  api->image_close (engine, image);
+}
+
 /* A render right after a change must show it. Validating tiles only as
  * reads touched them returned the old pixels now and then (about one round
  * in 23 here), and they stayed that way. */
@@ -1537,6 +1599,7 @@ main (int argc, char **argv)
   test_fixture (argv[3], argv[2]);
   test_text_layers (argv[2]);
   test_paths (argv[2]);
+  test_deleted_items ();
   test_paint_tools ();
   test_selections ();
   test_editing ();

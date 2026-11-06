@@ -298,7 +298,7 @@ glims_stroke_begin (GlimsEngine              *engine,
     {
       GimpItem *item = gimp_item_get_by_id (engine->gimp, brush->source_drawable);
 
-      if (! GIMP_IS_DRAWABLE (item) || GIMP_IS_GROUP_LAYER (item))
+      if (! GIMP_IS_DRAWABLE (item) || GIMP_IS_GROUP_LAYER (item) || ! gimp_item_is_attached (item))
         return glims_fail (error, NULL, "Choose a source point on a layer first.");
       source = GIMP_DRAWABLE (item);
     }

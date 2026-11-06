@@ -60,7 +60,8 @@ find_text_layer (GimpImage   *image,
 {
   GimpItem *item = gimp_item_get_by_id (image->gimp, id);
 
-  if (! item || gimp_item_get_image (item) != image || ! gimp_item_is_text_layer (item))
+  if (! item || gimp_item_get_image (item) != image || ! gimp_item_is_attached (item) ||
+      ! gimp_item_is_text_layer (item))
     return NULL;
 
   return GIMP_TEXT_LAYER (item);
