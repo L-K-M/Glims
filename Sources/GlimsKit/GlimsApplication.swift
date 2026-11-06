@@ -27,6 +27,11 @@ public enum GlimsApplication {
         }
 
         let app = NSApplication.shared
+        // Rigi draws its chrome light, so the whole app keeps the light
+        // Aqua appearance even when the Mac uses Dark Mode; system-colored
+        // text would otherwise turn white on light bars (Rigi's interface
+        // guidelines, "Appearance").
+        app.appearance = NSAppearance(named: .aqua)
         app.setActivationPolicy(mode == .interactive ? .regular : .accessory)
         app.mainMenu = MainMenu.make()
 

@@ -16,6 +16,10 @@ enum SmokeTest {
         }
         content.layoutSubtreeIfNeeded()
 
+        // Rigi's chrome is drawn light; system-colored text on it must be
+        // too, whatever the Mac's own appearance (docs/design.md).
+        check(controller.window?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .aqua,
+              "the window is not in the light Aqua appearance")
         check(controller.canvas.frame.height > 0, "canvas has no height")
         check(controller.statusBar.frame.height > 0, "status bar has no height")
         check(controller.canvas.frame.minY >= controller.statusBar.frame.maxY
