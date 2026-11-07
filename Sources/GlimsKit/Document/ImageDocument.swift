@@ -22,9 +22,33 @@ final class ImageDocument {
     private(set) var info: EngineSession.ImageInfo
     private(set) var layers: [EngineSession.Layer] = []
     private(set) var undoInfo = EngineSession.UndoInfo(undoCount: 0, redoCount: 0, nextUndo: "", nextRedo: "")
+    /// The undo history last read with the rest of the state: the
+    /// revision these rows and the current position were seen with, so a
+    /// palette pick can only name a state the engine still holds.
+    private(set) var history: EngineSession.History?
 
-    /// The layer painting and filters apply to.
+    /// The layer painting and filters apply to. It may be a group:
+    /// groups cannot be painted on but stay valid metadata and filter
+    /// targets.
     private(set) var activeLayer: Int32?
+    /// The lock state the engine reported per layer id at the last reload:
+    /// the item's own locks and the locks enforced on it.
+    private(set) var layerLocks: [Int32: EngineSession.LayerLockState] = [:]
+    /// While the window's filter preview is open, layer changes are
+    /// refused — the preview owns its drawable. Set by the controller.
+    var filterPreviewIsOpen = false
+    /// User selection intents, bumped by every user pick and by commands
+    /// that create a layer. An asynchronous creation auto-selects its new
+    /// layer only while the intent it captured still stands, so a later
+    /// user selection is never overridden.
+    private(set) var selectionIntent = 0
+    /// Bound by the window controller: commits in-flight field and text
+    /// edits and ends an active stroke before a user selection or a
+    /// structural/lock change.
+    var onWillChangeLayers: (() -> Void)?
+    /// Called at the start of each user command, so the window can let a
+    /// remembered error message go.
+    var onUserCommand: (() -> Void)?
     /// The selection outline in image pixels, for marching ants.
     private(set) var selectionOutline: [EngineSession.Segment] = []
     /// The image's paths, top first.
@@ -69,6 +93,7 @@ final class ImageDocument {
 
     var acceptsEdits: Bool {
         !isClosing && !isSavingForClose && !isTransferringClipboard && !PlugInCommands.isRunning
+            && !filterPreviewIsOpen
     }
 
     /// Touched only on `inputQueue`.
@@ -96,10 +121,13 @@ final class ImageDocument {
         info = try session.info(image)
         fileState.syncDirty(info.isDirty)
         layers = try session.layers(image)
+        var locks: [Int32: EngineSession.LayerLockState] = [:]
+        for layer in layers { locks[layer.id] = try? session.layerState(layer.id, image: image) }
+        layerLocks = locks
         undoInfo = try session.undoInfo(image)
+        history = try session.history(image)
         if activeLayer == nil || !layers.contains(where: { $0.id == activeLayer }) {
-            activeLayer = layers.first(where: { $0.isSelected && $0.kind != .group })?.id
-                ?? layers.first(where: { $0.kind != .group })?.id
+            activeLayer = layers.first(where: \.isSelected)?.id ?? layers.first?.id
         }
         reloadPaths()
         onStateChange?()
@@ -122,13 +150,32 @@ final class ImageDocument {
     }
 
     /// Makes `id` the layer painting, fills, filters, plug-ins and the
-    /// Layer commands act on, here and in the engine.
+    /// Layer commands act on, here and in the engine. Groups can be
+    /// selected: they are valid metadata and filter targets.
     enum SelectionSource { case user, engine }
+
+    /// The intent a creation command captured; auto-selection applies
+    /// only while `selectLayerIfLatest` sees it unchanged.
+    func noteSelectionIntent() -> Int {
+        selectionIntent += 1
+        return selectionIntent
+    }
+
+    /// Selects `id` as an engine-side completion of a creation command —
+    /// only when the user has not picked another layer since `intent`.
+    func selectLayerIfLatest(_ id: Int32, intent: Int) {
+        guard selectionIntent == intent else { return }
+        selectLayer(id, source: .engine)
+    }
 
     func selectLayer(_ id: Int32, source: SelectionSource = .user) {
         guard !isClosing else { return }
-        if source == .user && refuseWhileEditingUnavailable() { return }
-        guard layers.contains(where: { $0.id == id && $0.kind != .group }) else { return }
+        if source == .user {
+            guard !refuseWhileEditingUnavailable() else { return }
+            endPendingUserEdits()
+            _ = noteSelectionIntent()
+        }
+        guard layers.contains(where: { $0.id == id }) else { return }
         activeLayer = id
         run(effect: .readsPixels) { session, image in try session.selectLayer(id, image: image) }
         onStateChange?()
@@ -155,6 +202,11 @@ final class ImageDocument {
 
     func beginStroke(at point: EngineSession.StrokePoint, brush: EngineSession.Brush = EngineSession.Brush()) {
         guard let layer = activeLayer, !refuseWhileEditingUnavailable() else { return }
+        guard layers.first(where: { $0.id == layer })?.kind != .group else {
+            onError?("Layer groups cannot be painted on; select a layer.")
+            NSSound.beep()
+            return
+        }
         strokeIsActive = true
         enqueue(on: inputQueue, input: true) { [session, image] in
             do {
@@ -219,6 +271,11 @@ final class ImageDocument {
 
     func layerCommand(_ command: EngineSession.LayerCommand) {
         guard !refuseWhileEditingUnavailable() else { return }
+        endPendingUserEdits()
+        // A creation counts as a selection intent; other commands take
+        // the current one, so an engine-side result is still selected
+        // unless the user picked another layer meanwhile.
+        let intent = command == .new || command == .duplicate ? noteSelectionIntent() : selectionIntent
         let layer = activeLayer ?? 0
         run { session, image in
             let created = try session.layerCommand(command, image: image, layer: layer)
@@ -226,14 +283,73 @@ final class ImageDocument {
                 // The engine selects what it created; keep the interface in step.
                 DispatchQueue.main.async {
                     try? self.reload()
-                    if self.layers.contains(where: { $0.id == created }) { self.selectLayer(created, source: .engine) }
+                    self.selectLayerIfLatest(created, intent: intent)
                 }
             }
         }
     }
 
+    /// Layer ▸ New Layer Group: inside the active group as its first
+    /// child, else directly above the active layer in the same parent.
+    /// The engine selects the new group.
+    func createGroup() {
+        guard !refuseWhileEditingUnavailable() else { return }
+        endPendingUserEdits()
+        let placement = LayerTree(layers: layers).newGroupPlacement(nearActive: activeLayer)
+        let intent = noteSelectionIntent()
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            do {
+                let group = try session.createGroup(image: image, parent: placement.parent,
+                                                    index: Int32(placement.index))
+                DispatchQueue.main.async {
+                    try? self.reload()
+                    self.selectLayerIfLatest(group, intent: intent)
+                }
+            } catch {
+                self.report(error)
+            }
+        }
+    }
+
+    /// A drop in the Layers outline: `item` to `rawIndex` among
+    /// `parent`'s children (`parent` 0: the top level). `rawIndex` is the
+    /// position in the child list as displayed; the tree validates the
+    /// same-document ids, groups, cycles and range and adjusts the index
+    /// for the item's removal before the engine is asked.
+    func moveLayer(_ item: Int32, toParent parent: Int32, atIndex rawIndex: Int32) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        switch LayerTree(layers: layers).resolveDrop(item: item, ontoParent: parent, at: rawIndex) {
+        case .unchanged:
+            return
+        case .invalid:
+            onError?("The layer cannot be moved there.")
+            NSSound.beep()
+            return
+        case .move(let parent, let index):
+            endPendingUserEdits()
+            run { session, image in try session.reparentLayer(item, image: image, toParent: parent, index: index) }
+        }
+    }
+
+    /// Sets `item`'s locks in `lock` to `locked` as one undo step.
+    func setLayerLocks(_ item: Int32, _ lock: EngineSession.LayerLocks, to locked: Bool) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        endPendingUserEdits()
+        run { session, image in
+            try session.setLayerLocks(item, image: image, mask: lock, values: locked ? lock : [])
+        }
+    }
+
+    /// Toggles `item`'s own `lock`, reading the state the engine last
+    /// reported (an inherited lock is left alone — toggles act on the
+    /// item's own bits).
+    func toggleLocks(_ item: Int32, _ lock: EngineSession.LayerLocks) {
+        setLayerLocks(item, lock, to: !(layerLocks[item]?.local.contains(lock) ?? false))
+    }
+
     func changeLayer(_ layer: Int32, _ change: EngineSession.LayerChange) {
         guard !refuseWhileEditingUnavailable() else { return }
+        endPendingUserEdits()
         run { session, image in try session.changeLayer(layer, image: image, change) }
     }
 
@@ -257,10 +373,11 @@ final class ImageDocument {
     /// Adds a text layer at `position` and makes it the active layer.
     func addText(_ text: String, settings: EngineSession.TextSettings, at position: CGPoint) {
         guard !text.isEmpty, !refuseWhileEditingUnavailable() else { return }
+        let intent = noteSelectionIntent()
         enqueue(on: inputQueue, input: true) { [session, image] in
             do {
                 let layer = try session.addTextLayer(image: image, text: text, settings: settings, at: position)
-                DispatchQueue.main.async { self.selectLayer(layer, source: .engine) }
+                DispatchQueue.main.async { self.selectLayerIfLatest(layer, intent: intent) }
             } catch {
                 self.report(error)
             }
@@ -402,11 +519,67 @@ final class ImageDocument {
         run { session, image in try session.redo(image) }
     }
 
+    // MARK: History and snapshots
+
+    /// The app's entry point for opening a snapshot as a document, wired
+    /// by whoever owns document lifetime; nil without one.
+    var snapshotHandler: ((ImageDocument) -> Void)?
+
+    /// Image ▸ New Snapshot and the History palette's Snapshot button:
+    /// asks the app for an independent copy of this image opened as a new
+    /// document.
+    func newSnapshot() {
+        guard !refuseWhileEditingUnavailable(), let snapshotHandler else { return }
+        snapshotHandler(self)
+    }
+
+    /// Queues a native duplicate behind pending input — in-flight
+    /// strokes and text edits are part of the copy. The callback runs on
+    /// the main actor bound to this document with the new engine image
+    /// or the error, whoever is front document then. The work is counted,
+    /// so a close waits for it before freeing this image.
+    func snapshot(completion: @escaping @MainActor (Result<Int32, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard acceptsEdits else { return completion(.failure(DocumentError.busy)) }
+        endPendingUserEdits()
+        enqueueAfterInput { [session, image] in
+            let result = Result { try session.duplicateImage(image) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// A History palette pick: move the image to the state `position` had
+    /// under `revision`, queued through input so pending text, field and
+    /// stroke edits end first. When those land as a newer revision the
+    /// engine refuses the pick without changing the image; the refusal
+    /// is reported and the list reloads — it is never retried under the
+    /// newer revision.
+    func moveToHistoryState(_ position: Int32, revision: UInt64) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        endPendingUserEdits()
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let result = Result { try session.moveHistory(image, revision: revision, to: position) }
+            DispatchQueue.main.async {
+                if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                try? self.reload()
+            }
+        }
+    }
+
     /// The engine refuses edits while a plug-in command runs (its dialog
-    /// acts as a modal filter dialog); say why instead of failing later.
-    private func refuseWhileEditingUnavailable() -> Bool {
+    /// acts as a modal filter dialog), and the interface refuses them
+    /// while its own filter preview is open; say why instead of failing
+    /// later. `forPreviewWork` lets the preview's own updates and its
+    /// commit through.
+    private func refuseWhileEditingUnavailable(forPreviewWork: Bool = false) -> Bool {
+        onUserCommand?()
         if isClosing || isSavingForClose || isTransferringClipboard {
             onError?(isClosing ? DocumentError.closed.localizedDescription : DocumentError.busy.localizedDescription)
+            return true
+        }
+        if filterPreviewIsOpen, !forPreviewWork {
+            onError?("Apply or cancel the filter preview first.")
+            NSSound.beep()
             return true
         }
         guard let running = PlugInCommands.running else { return false }
@@ -414,6 +587,17 @@ final class ImageDocument {
         onError?("Finish or cancel \u{201C}\(title)\u{201D} first.")
         NSSound.beep()
         return true
+    }
+
+    /// Asks the window to commit in-flight field and text edits and end
+    /// an active stroke; the callback itself can run document commands
+    /// (committing text does), so it never re-enters.
+    private var endingPendingEdits = false
+    private func endPendingUserEdits() {
+        guard let callback = onWillChangeLayers, !endingPendingEdits else { return }
+        endingPendingEdits = true
+        callback()
+        endingPendingEdits = false
     }
 
     // MARK: Plug-in commands
@@ -593,7 +777,7 @@ final class ImageDocument {
     /// A commit is an edit and leaves its session available if refused.
     func finishFilter(_ filter: Int32, commit: Bool, completion: @escaping @MainActor (Bool) -> Void) {
         guard !isClosing else { return completion(false) }
-        if commit && refuseWhileEditingUnavailable() { return completion(false) }
+        if commit && refuseWhileEditingUnavailable(forPreviewWork: true) { return completion(false) }
         enqueue(on: inputQueue, input: commit) { [session] in
             let success: Bool
             do {
@@ -610,7 +794,9 @@ final class ImageDocument {
     @discardableResult
     func run(effect: CommandEffect = .changesImage, _ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
         guard !isClosing else { return false }
-        if effect != .readsPixels && refuseWhileEditingUnavailable() { return false }
+        if effect != .readsPixels && refuseWhileEditingUnavailable(forPreviewWork: effect == .changesPreview) {
+            return false
+        }
         enqueue(on: inputQueue, input: effect == .changesImage) { [session, image] in
             do { try work(session, image) } catch { self.report(error) }
         }

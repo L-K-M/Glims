@@ -95,8 +95,11 @@ enum EngineSmokeTest {
             try exerciseDisplayDensity(session, documents: documents)
             try exerciseTools(session, documents: documents)
             try exerciseEditing(session, documents: documents)
+            try exerciseLayerTree(session, documents: documents)
             try exercisePaths(session, documents: documents)
             try exercisePaletteControls(session, documents: documents)
+            try exercisePendingEditScope(session, documents: documents)
+            try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
             try exercisePlugInCommands(session, documents: documents)
             try measurePluginStalls(session, work: work)
         } catch {
@@ -594,6 +597,240 @@ enum EngineSmokeTest {
         controller.window?.orderOut(nil)
     }
 
+    /// Groups, tree moves and locks through the same document APIs the
+    /// Layers palette and the Layer menu use: group creation, selection
+    /// and nesting, an undoable reparent, lock toggles and the paint/move
+    /// refusals they cause, a queued creation losing to a later user
+    /// pick, and the filter preview gating layer changes.
+    private static func exerciseLayerTree(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Layers")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+
+        // Layer ▸ New Layer Group lands above the active layer and is selected.
+        controller.newLayerGroup(nil)
+        settle()
+        guard let group = document.layers.first(where: { $0.kind == .group }) else {
+            check(false, "Layer ▸ New Layer Group inserts a group")
+            controller.window?.orderOut(nil)
+            return
+        }
+        check(document.layers.count == 2 && document.activeLayer == group.id,
+              "Layer ▸ New Layer Group inserts a group and selects it")
+
+        // A group row is a valid selection target for metadata and filters.
+        guard let background = document.layers.last?.id else { return }
+        document.selectLayer(background)
+        settle()
+        document.selectLayer(group.id)
+        settle()
+        check(document.activeLayer == group.id, "a group can be the selected item")
+
+        // ...but it cannot be painted on.
+        document.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
+        check(!document.strokeIsActive && controller.statusBar.message.contains("cannot be painted"),
+              "painting on a group is refused before the engine is asked")
+        document.endStroke()
+
+        // A new layer with a group active lands inside it; dropping it to
+        // the top level reparents it, undoably.
+        controller.newLayer(nil)
+        settle()
+        guard let moved = document.layers.first(where: { $0.kind == .pixel && $0.parent == group.id }) else {
+            check(false, "Layer ▸ New Layer with a group active adds the layer inside it")
+            controller.window?.orderOut(nil)
+            return
+        }
+        check(moved.depth == 1, "Layer ▸ New Layer with a group active adds the layer inside it")
+        document.moveLayer(moved.id, toParent: 0, atIndex: 0)
+        settle()
+        check(document.layers.first(where: { $0.id == moved.id })?.parent == 0
+                && document.layers.first(where: { $0.id == moved.id })?.depth == 0,
+              "dropping a layer to the top level reparents it")
+        document.undo()
+        settle()
+        check(document.layers.first(where: { $0.id == moved.id })?.parent == group.id,
+              "undo restores the layer's parent")
+        document.redo()
+        settle()
+        check(document.layers.first(where: { $0.id == moved.id })?.parent == 0,
+              "redo repeats the reparent")
+        document.moveLayer(moved.id, toParent: group.id, atIndex: 0)
+        settle()
+        check(document.layers.first(where: { $0.id == moved.id })?.parent == group.id
+                && document.layers.first(where: { $0.id == moved.id })?.depth == 1,
+              "a layer drops back into the group")
+
+        let layerPalette = LayersPaletteController()
+        _ = layerPalette.view
+        layerPalette.retarget(to: document)
+        if let outline = descendant(of: layerPalette.view, as: NSOutlineView.self),
+           let groupNode = (0..<outline.numberOfRows).compactMap({ outline.item(atRow: $0) as? LayerTree.Node })
+                .first(where: { $0.id == group.id }) {
+            outline.expandItem(groupNode)
+            outline.collapseItem(groupNode)
+            check(!outline.isItemExpanded(groupNode), "a user can collapse the selected layer's group")
+            layerPalette.retarget(to: document)
+            let refreshed = (0..<outline.numberOfRows).compactMap { outline.item(atRow: $0) as? LayerTree.Node }
+                .first { $0.id == group.id }
+            check(refreshed.map { !outline.isItemExpanded($0) } == true,
+                  "retargeting the unchanged document preserves a collapsed selected group")
+        } else {
+            check(false, "the layer outline exposes the created group")
+        }
+
+        // A group created while a group is active nests inside it; a
+        // group cannot be dropped into its own subtree.
+        document.selectLayer(group.id)
+        settle()
+        controller.newLayerGroup(nil)
+        settle()
+        let inner = document.layers.first(where: { $0.kind == .group && $0.id != group.id })
+        check(inner?.parent == group.id && inner?.depth == 1,
+              "a group created with a group active becomes its first child")
+        if let inner {
+            document.moveLayer(group.id, toParent: inner.id, atIndex: 0)
+            settle()
+            check(controller.statusBar.message.contains("cannot be moved")
+                    && document.layers.first(where: { $0.id == group.id })?.parent == 0,
+                  "dropping a group into its own subtree is refused with an actionable message")
+
+            // Moving a layer into `inner` makes it an expandable nested
+            // group: group > inner > moved. AppKit keeps a child's
+            // expansion under a collapsed parent; the reload a retarget
+            // runs must keep it too.
+            document.moveLayer(moved.id, toParent: inner.id, atIndex: 0)
+            settle()
+            layerPalette.retarget(to: document)
+            if let outline = descendant(of: layerPalette.view, as: NSOutlineView.self) {
+                func rowNode(_ id: Int32) -> LayerTree.Node? {
+                    (0..<outline.numberOfRows).compactMap { outline.item(atRow: $0) as? LayerTree.Node }
+                        .first { $0.id == id }
+                }
+                if let outerNode = rowNode(group.id) {
+                    outline.expandItem(outerNode)
+                    if let innerNode = rowNode(inner.id) {
+                        outline.expandItem(innerNode)
+                        outline.collapseItem(outerNode)
+                        outline.expandItem(outerNode)
+                        check(rowNode(inner.id).map { outline.isItemExpanded($0) } == true,
+                              "collapsing a parent keeps a nested group's expansion")
+                        outline.collapseItem(outerNode)
+                        layerPalette.retarget(to: document)
+                        if let outerAgain = rowNode(group.id) {
+                            outline.expandItem(outerAgain)
+                            check(rowNode(inner.id).map { outline.isItemExpanded($0) } == true,
+                                  "a reload preserves a group's expansion inside a collapsed parent")
+                        } else {
+                            check(false, "the collapsed parent is still in the outline")
+                        }
+                    } else {
+                        check(false, "the outline shows the moved layer inside the nested group")
+                    }
+                } else {
+                    check(false, "the outline shows the outer group")
+                }
+            } else {
+                check(false, "the layer palette has an outline")
+            }
+        }
+
+        // Layer ▸ Lock items toggle the item's own locks; the engine and
+        // the interface refuse editing through them.
+        document.selectLayer(moved.id)
+        settle()
+        let lockPixels = NSMenuItem(title: "Lock Pixels", action: nil, keyEquivalent: "")
+        lockPixels.tag = Int(EngineSession.LayerLocks.pixels.rawValue)
+        controller.toggleLayerLock(lockPixels)
+        settle()
+        check(document.layerLocks[moved.id]?.local == [.pixels]
+                && document.layerLocks[moved.id]?.effective.contains(.pixels) == true,
+              "Layer ▸ Lock ▸ Lock Pixels sets the layer's own lock")
+        document.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
+        document.continueStroke([.init(x: 9, y: 8, pressure: 1)])
+        document.endStroke()
+        settle()
+        check(controller.statusBar.message.contains("Unlock")
+                && (pixel(session, image, x: 8, y: 8)?[0] ?? 255) > 200,
+              "a pixel lock refuses the stroke with an actionable message")
+
+        let lockPosition = NSMenuItem(title: "Lock Position", action: nil, keyEquivalent: "")
+        lockPosition.tag = Int(EngineSession.LayerLocks.position.rawValue)
+        controller.toggleLayerLock(lockPosition)
+        settle()
+        document.moveActiveLayer(by: CGSize(width: 6, height: 6))
+        settle()
+        check(controller.statusBar.message.contains("Unlock"),
+              "a position lock refuses the Move tool's drag")
+        document.setLayerLocks(moved.id, [.pixels, .position], to: false)
+        settle()
+        check(document.layerLocks[moved.id]?.local.isEmpty == true,
+              "unlocking clears the layer's own locks")
+        document.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
+        document.continueStroke([.init(x: 9, y: 8, pressure: 1)])
+        document.endStroke()
+        settle()
+        check((pixel(session, image, x: 8, y: 8)?[0] ?? 255) < 64, "unlocked, the stroke paints")
+
+        // A queued layer creation must not override a pick the user made
+        // while it was queued.
+        document.inputQueue.async { Thread.sleep(forTimeInterval: 0.4) }
+        let countBeforeNew = document.layers.count
+        document.layerCommand(.new)
+        document.selectLayer(background)
+        settle()
+        check(document.layers.count == countBeforeNew + 1 && document.activeLayer == background,
+              "a late new-layer completion keeps the user's selection")
+
+        var textSettings = EngineSession.TextSettings()
+        let fonts = (try? session.fonts()) ?? []
+        textSettings.font = fonts.contains("Sans-serif") ? "Sans-serif" : (fonts.first ?? "Sans-serif")
+        document.inputQueue.async { Thread.sleep(forTimeInterval: 0.4) }
+        document.addText("Late", settings: textSettings, at: CGPoint(x: 6, y: 30))
+        document.selectLayer(background)
+        settle()
+        check(document.layers.contains(where: { $0.kind == .text }) && document.activeLayer == background,
+              "a late text-layer creation keeps the user's selection")
+        if let text = document.layers.first(where: { $0.kind == .text })?.id {
+            document.selectLayer(text)
+            settle()
+            document.layerCommand(.delete)
+            settle()
+        }
+
+        // The blur preview gates every layer command until it finishes.
+        if let pixelLayer = document.layers.first(where: { $0.kind == .pixel })?.id {
+            document.selectLayer(pixelLayer)
+            settle()
+        }
+        controller.gaussianBlur(nil)
+        settle()
+        check(document.filterPreviewIsOpen, "the blur preview marks the document previewing")
+        let countBeforeRefused = document.layers.count
+        document.createGroup()
+        settle()
+        check(document.layers.count == countBeforeRefused
+                && controller.statusBar.message.contains("preview"),
+              "a filter preview refuses New Layer Group with an actionable message")
+        if let other = document.layers.first(where: { $0.id != document.activeLayer })?.id {
+            let active = document.activeLayer
+            document.selectLayer(other)
+            check(document.activeLayer == active && controller.statusBar.message.contains("preview"),
+                  "a filter preview refuses layer picks")
+        }
+        controller.cancelOperation(nil)
+        settle()
+        check(!document.filterPreviewIsOpen, "canceling the preview reopens layer commands")
+
+        controller.window?.orderOut(nil)
+    }
+
     /// The Layer menu, the paint bucket and gradient, layer moves, and a
     /// crop that resizes the canvas, through the document as the menus and
     /// tools drive them.
@@ -861,6 +1098,119 @@ enum EngineSmokeTest {
         ToolState.shared.select(previousTool)
     }
 
+    /// Two documents side by side: a routine layer command on one must
+    /// finish only its own pending edits. A field in each document's
+    /// window and a rename in a Layers palette aimed at each document
+    /// hold real field editors; the other document's keep typing.
+    private static func exercisePendingEditScope(_ session: EngineSession, documents: DocumentList) throws {
+        let documentA = try ImageDocument(session: session, image: session.newImage(width: 32, height: 32), name: "A")
+        documents.items.append(documentA)
+        let controllerA = DocumentWindowController(document: documentA)
+        controllerA.showWindow(nil)
+        let windowA = try XCTUnwrapWindow(controllerA)
+        let documentB = try ImageDocument(session: session, image: session.newImage(width: 32, height: 32), name: "B")
+        documents.items.append(documentB)
+        let controllerB = DocumentWindowController(document: documentB)
+        controllerB.showWindow(nil)
+        let windowB = try XCTUnwrapWindow(controllerB)
+        func settle() {
+            documentA.inputQueue.sync {}
+            documentB.inputQueue.sync {}
+            spin()
+        }
+
+        // A second layer makes the pick a real change of the active one.
+        controllerA.newLayer(nil)
+        settle()
+        guard let active = documentA.layers.first, let other = documentA.layers.last,
+              active.id != other.id else {
+            check(false, "document A has two layers to pick between")
+            return
+        }
+
+        // Editable fields own each document window's field editor.
+        let fieldA = NSTextField(string: "100")
+        fieldA.isEditable = true
+        fieldA.frame = NSRect(x: 0, y: 0, width: 80, height: 18)
+        windowA.contentView?.addSubview(fieldA)
+        let fieldB = NSTextField(string: "200")
+        fieldB.isEditable = true
+        fieldB.frame = NSRect(x: 0, y: 0, width: 80, height: 18)
+        windowB.contentView?.addSubview(fieldB)
+
+        // Each Layers palette aims at its document from its own window,
+        // as the floating panels host them.
+        func layersInWindow(_ document: ImageDocument) -> (LayersPaletteController, NSWindow) {
+            let palette = LayersPaletteController()
+            palette.retarget(to: document)
+            let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 260, height: 300),
+                                styleMask: [.titled], backing: .buffered, defer: false)
+            host.isReleasedWhenClosed = false
+            host.contentView = palette.view
+            host.contentView?.layoutSubtreeIfNeeded()
+            return (palette, host)
+        }
+        let (paletteA, hostA) = layersInWindow(documentA)
+        let (paletteB, hostB) = layersInWindow(documentB)
+        func renameRow(_ palette: LayersPaletteController, _ name: String) -> NSTextField? {
+            guard let outline = descendant(of: palette.view, as: NSOutlineView.self),
+                  let row = outline.view(atColumn: 0, row: 0, makeIfNecessary: true) as? LayerRowView
+            else { return nil }
+            row.startEditingName()
+            row.nameField.currentEditor()?.string = name
+            return row.nameField
+        }
+        let nameFieldA = renameRow(paletteA, "Renamed A")
+        let nameFieldB = renameRow(paletteB, "Renamed B")
+
+        windowA.makeFirstResponder(fieldA)
+        fieldA.currentEditor()?.string = "150"
+        windowB.makeFirstResponder(fieldB)
+        fieldB.currentEditor()?.string = "250"
+
+        // A canvas text draft and a stroke are mid-edit on document A too.
+        var textSettings = EngineSession.TextSettings()
+        textSettings.font = ((try? session.fonts()) ?? []).first ?? "Sans-serif"
+        textSettings.size = 18
+        let previousTool = ToolState.shared.current
+        ToolState.shared.select(.text)
+        ToolState.shared.textSettings = textSettings
+        if let press = NSEvent.mouseEvent(with: .leftMouseDown,
+                                          location: controllerA.canvas.convert(CGPoint(x: 6, y: 6), to: nil),
+                                          modifierFlags: [], timestamp: 0, windowNumber: windowA.windowNumber,
+                                          context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+            controllerA.canvas.mouseDown(with: press)
+        }
+        controllerA.canvas.tools.textEditor?.insertText("Draft", replacementRange: NSRange(location: NSNotFound, length: 0))
+        documentA.beginStroke(at: .init(x: 2, y: 2, pressure: 1))
+        check(controllerA.canvas.tools.textEditor != nil && documentA.strokeIsActive,
+              "document A holds a text draft and a stroke while edits are pending")
+
+        let nameBeforeB = documentB.layers.first?.name
+        documentA.selectLayer(other.id)
+        settle()
+
+        check(fieldA.currentEditor() == nil && fieldA.stringValue == "150",
+              "a layer pick commits the field edit in its own window")
+        check(nameFieldA?.currentEditor() == nil && documentA.layers.contains { $0.name == "Renamed A" },
+              "a layer pick commits a rename in a palette aimed at its document")
+        check(controllerA.canvas.tools.textEditor == nil,
+              "a layer pick finishes its document's canvas text edit")
+        check(!documentA.strokeIsActive, "a layer pick ends its document's stroke")
+        check(fieldB.currentEditor() != nil,
+              "a layer pick leaves the other document's field editor running")
+        check(nameFieldB?.currentEditor() != nil && documentB.layers.first?.name == nameBeforeB,
+              "a layer pick leaves a palette aimed at the other document renaming")
+
+        ToolState.shared.select(previousTool)
+        windowB.makeFirstResponder(nil)
+        hostB.makeFirstResponder(nil)
+        hostA.close()
+        hostB.close()
+        windowA.orderOut(nil)
+        windowB.orderOut(nil)
+    }
+
     private static func buttons(in view: NSView) -> [NSButton] {
         ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(buttons)
     }
@@ -872,6 +1222,251 @@ enum EngineSmokeTest {
         }
         return nil
     }
+
+    /// The History palette and image snapshots: exact states backward and
+    /// forward, a no-op pick of the current state, a stale pick refused
+    /// after a new edit, queued stroke and text edits in a snapshot, a
+    /// closing source and a Quit coordinating with snapshot work, and the
+    /// copy's file identity and undo independence.
+    private static func exerciseHistoryAndSnapshots(_ session: EngineSession, work: URL,
+                                                    documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "History")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        var messages: [String] = []
+        let reportError = document.onError
+        document.onError = { reportError?($0); messages.append($0) }
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+        func wait(_ condition: @escaping () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin() }
+        }
+
+        check(document.history?.rows.count == 1 && document.history?.currentPosition == 0
+                && document.history?.rows.first?.name.isEmpty == false,
+              "a new document lists its earliest history state")
+        document.fill(at: .zero, mode: .selection, color: .red, threshold: 0, sampleMerged: false)
+        document.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
+        document.continueStroke([.init(x: 24, y: 24, pressure: 1)])
+        document.endStroke()
+        settle()
+        guard let filled = document.history, filled.rows.count == 3, filled.currentPosition == 2 else {
+            check(false, "a fill and a stroke list three history states (\(document.history?.rows.count ?? -1))")
+            return
+        }
+        check(true, "a fill and a stroke list three history states")
+
+        // Backward and forward through the palette's own pick path; the
+        // pixels show the states are the exact ones, not approximations.
+        let palette = HistoryPaletteController()
+        palette.retarget(to: document)
+        let table = descendant(of: palette.view, as: NSTableView.self)
+        let bar = descendant(of: palette.view, as: ClassicPaletteButtonBar.self)
+        check(table?.numberOfRows == 3, "the History palette lists the states")
+        check(bar?.isEnabled(item: "snapshot") == false,
+              "the Snapshot button waits for something to adopt the copy")
+        /// A registered palette reloads on every document state change;
+        /// this freestanding one does the same after a pick settles.
+        func pickRow(_ row: Int) {
+            table?.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            settle()
+            palette.reload()
+        }
+        pickRow(0)
+        check(document.history?.currentPosition == 0 && (pixel(session, image, x: 2, y: 2)?[1] ?? 0) > 200
+                && (pixel(session, image, x: 12, y: 12)?[0] ?? 0) > 200,
+              "picking the earliest row undoes the fill and the stroke")
+        check(table?.numberOfRows == 3, "undone future states stay listed")
+        pickRow(2)
+        check(document.history?.currentPosition == 2 && (pixel(session, image, x: 2, y: 2)?[1] ?? 255) == 0
+                && (pixel(session, image, x: 12, y: 12)?[0] ?? 255) < 64,
+              "picking an undone row redoes to it")
+
+        // Picking the current state is a no-op: no new revision, same spot.
+        let beforeNoOp = document.history
+        document.moveToHistoryState(beforeNoOp?.currentPosition ?? -1, revision: beforeNoOp?.revision ?? 0)
+        settle()
+        check(document.history?.revision == beforeNoOp?.revision
+                && document.history?.currentPosition == beforeNoOp?.currentPosition,
+              "picking the current state changes nothing")
+
+        // A pick whose revision went stale is refused, keeps the state and
+        // reports why; after the reload a fresh pick goes through.
+        document.fill(at: .zero, mode: .selection, color: .green, threshold: 0, sampleMerged: false)
+        settle()
+        check(document.history?.currentPosition == 3 && document.history?.revision != beforeNoOp?.revision,
+              "a new edit advances the history revision")
+        document.moveToHistoryState(0, revision: beforeNoOp?.revision ?? 0)
+        settle()
+        check(messages.contains { $0.contains("history changed") } && document.history?.currentPosition == 3,
+              "a stale pick is refused with its reason and the state stays")
+        // The palette's own stale row, rendered before that edit landed.
+        document.fill(at: .zero, mode: .selection, color: .blue, threshold: 0, sampleMerged: false)
+        settle()
+        pickRow(0)
+        check(messages.last == HistoryPaletteController.staleMessage && document.history?.currentPosition == 4,
+              "a stale palette row reports why and does not move the state")
+        check(table?.numberOfRows == 5, "the refusal reloads the palette")
+        pickRow(0)
+        check(document.history?.currentPosition == 0 && (pixel(session, image, x: 2, y: 2)?[1] ?? 0) > 200,
+              "selecting again after the reload moves to the state")
+
+        // Snapshot controls disable while the engine cannot duplicate.
+        document.filterPreviewIsOpen = true
+        palette.reload()
+        check(bar?.isEnabled(item: "snapshot") == false,
+              "the Snapshot button is disabled during a filter preview")
+        document.filterPreviewIsOpen = false
+        palette.reload()
+
+        // A snapshot queued behind a stroke contains it; the source's
+        // history is untouched.
+        document.beginStroke(at: .init(x: 40, y: 40, pressure: 1))
+        document.continueStroke([.init(x: 50, y: 50, pressure: 1)])
+        document.endStroke()
+        var copyID: Int32 = 0
+        var copyDone = false
+        document.snapshot { result in
+            copyID = (try? result.get()) ?? 0
+            copyDone = true
+        }
+        wait { copyDone }
+        check(copyID != 0, "the queued snapshot produced an image")
+        check((pixel(session, copyID, x: 45, y: 45)?[0] ?? 255) < 64,
+              "the snapshot contains the just-finished stroke")
+        check((try? session.undoInfo(copyID))?.undoCount == 0 && (try? session.info(copyID))?.isDirty == true,
+              "the snapshot is unsaved with an empty history")
+        try session.closeImage(copyID)
+        settle()
+        check(document.history?.currentPosition == 1 && document.undoInfo.undoCount == 1,
+              "the snapshot left the source's pixels and history alone")
+
+        // Text still being typed is committed through the document's hook
+        // before the copy; the result opens as a new document bound to its
+        // source, whoever is front document then.
+        let app = AppController()
+        document.snapshotHandler = { [weak app] document in app?.snapshot(document) }
+        let previousTool = ToolState.shared.current
+        let previousText = ToolState.shared.textSettings
+        ToolState.shared.textSettings.font = ToolState.pickableFontNames(try session.fonts()).first ?? "Sans-serif"
+        ToolState.shared.textSettings.size = 12
+        ToolState.shared.select(.text)
+        if let window = controller.window,
+           let press = NSEvent.mouseEvent(with: .leftMouseDown,
+                                          location: controller.canvas.convert(CGPoint(x: 4, y: 4), to: nil),
+                                          modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                          context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+            controller.canvas.mouseDown(with: press)
+            controller.canvas.tools.textEditor?.insertText("Snap", replacementRange: NSRange(location: NSNotFound, length: 0))
+            document.newSnapshot()
+            wait { app.frontDocument != nil }
+            let snapshotDoc = app.frontDocument
+            // The real app routes engine events to its documents; the
+            // smoke test's list stands in for that.
+            if let snapshotDoc { documents.items.append(snapshotDoc) }
+            check(controller.canvas.tools.textEditor == nil, "the snapshot committed the pending text first")
+            check(snapshotDoc != nil && snapshotDoc !== document
+                    && snapshotDoc?.layers.contains { $0.kind == .text } == true,
+                  "the snapshot opens as a new document containing the typed text")
+            check(snapshotDoc?.name == "History snapshot" && snapshotDoc?.fileState.nativeURL == nil
+                    && snapshotDoc?.fileState.importedSourceURL == nil && snapshotDoc?.hasUnsavedChanges == true,
+                  "the snapshot is a fresh unsaved document without the source's file")
+            check(snapshotDoc?.undoInfo.undoCount == 0 && snapshotDoc?.history?.rows.count == 1,
+                  "the snapshot's own history starts empty")
+            // Editing the copy does not reach the source (a fill needs a
+            // pixel layer: the copy's text layer is still selected).
+            let sourceSteps = document.undoInfo.undoCount
+            if let background = snapshotDoc?.layers.last?.id { snapshotDoc?.selectLayer(background) }
+            snapshotDoc?.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+            snapshotDoc?.inputQueue.sync {}
+            spin()
+            check(snapshotDoc?.undoInfo.undoCount == 1 && document.undoInfo.undoCount == sourceSteps
+                    && document.layers.contains { $0.kind == .text },
+                  "editing the snapshot leaves the source untouched")
+            snapshotDoc?.undo()
+            snapshotDoc?.inputQueue.sync {}
+            spin()
+            check(snapshotDoc?.undoInfo.undoCount == 0 && document.undoInfo.undoCount == sourceSteps,
+                  "the snapshot's own undo works on it alone")
+            NSApp.windows
+                .first { ($0.windowController as? DocumentWindowController)?.imageDocument === snapshotDoc }?
+                .orderOut(nil)
+            PaletteCenter.shared.closeAll()
+            // The first real document open loads the engine's fonts in the
+            // background; drain it so it cannot straddle later checks.
+            snapshotDoc?.longQueue.sync {}
+            spin()
+        } else {
+            check(false, "text editing can be started before a snapshot")
+        }
+        ToolState.shared.textSettings = previousText
+        ToolState.shared.select(previousTool)
+
+        // A snapshot of a saved document keeps none of its file identity.
+        let filedImage = try session.newImage(width: 32, height: 32)
+        let native = work.appendingPathComponent("snapshot-source.xcf")
+        try session.save(filedImage, to: native.path)
+        let filed = try ImageDocument(session: session, image: filedImage, name: "Filed", openedFrom: native)
+        documents.items.append(filed)
+        var filedResult: Result<Int32, Error>?
+        filed.snapshot { filedResult = $0 }
+        wait { filedResult != nil }
+        if let copyImage = try? filedResult?.get() {
+            let copy = try ImageDocument(session: session, image: copyImage, name: "Filed snapshot")
+            check(copy.fileState.nativeURL == nil && copy.fileState.importedSourceURL == nil
+                    && copy.fileState.saveRoute == .askForFile && copy.hasUnsavedChanges,
+                  "a snapshot of a saved document keeps no file identity")
+            try session.closeImage(copyImage)
+        } else {
+            check(false, "the filed document's snapshot produced an image")
+        }
+        documents.items.removeAll { $0 === filed }
+
+        // A closing source holds its engine image until the snapshot ran.
+        let closingImage = try session.newImage(width: 32, height: 32)
+        let closing = try ImageDocument(session: session, image: closingImage, name: "Closing")
+        documents.items.append(closing)
+        let closingController = DocumentWindowController(document: closing)
+        closingController.showWindow(nil)
+        var closingResult: Result<Int32, Error>?
+        closing.snapshot { closingResult = $0 }
+        var sourceClosed: Bool?
+        closingController.requestClose { sourceClosed = $0 }
+        if let sheet = closingController.window?.attachedSheet {
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+        }
+        wait { sourceClosed != nil && closingResult != nil }
+        check(sourceClosed == true && (try? closingResult?.get()) != nil,
+              "a queued snapshot runs before its closing source frees the image")
+        if let orphan = try? closingResult?.get() { try session.closeImage(orphan) }
+        documents.items.removeAll { $0 === closing }
+
+        // The whole transaction is a file operation: Quit waits for it and
+        // a copy finishing during Quit is closed, not opened.
+        let quittingApp = AppController()
+        let quittingImage = try session.newImage(width: 32, height: 32)
+        let quitting = try ImageDocument(session: session, image: quittingImage, name: "Quit")
+        documents.items.append(quitting)
+        check(quittingApp.applicationShouldTerminate(NSApp) == .terminateNow,
+              "Quit proceeds while nothing is pending")
+        quittingApp.snapshot(quitting)
+        check(quittingApp.applicationShouldTerminate(NSApp) == .terminateLater,
+              "a pending snapshot makes Quit wait")
+        wait { quittingApp.applicationShouldTerminate(NSApp) == .terminateNow }
+        check(quittingApp.frontDocument == nil,
+              "a snapshot finishing during Quit is closed, not opened")
+        documents.items.removeAll { $0 === quitting }
+
+        document.snapshotHandler = nil
+        controller.window?.orderOut(nil)
+        documents.items.removeAll { $0 === document }
+    }
+
 
     /// The Path tool driven through the canvas, then the Paths palette's
     /// commands and the engine's undo of path edits.

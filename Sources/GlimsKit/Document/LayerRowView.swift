@@ -1,9 +1,10 @@
 import AppKit
 
-/// One Layers palette row: a visibility checkbox and the layer's name,
-/// editable in place. The row keeps the document and layer it was made for
-/// for the whole edit, so a rename cannot land on another document or on a
-/// layer that went away while the name was being typed.
+/// One Layers palette row: a visibility checkbox, a lock badge when the
+/// engine enforces locks on the item, and the layer's name, editable in
+/// place. The row keeps the document and layer it was made for for the
+/// whole edit, so a rename cannot land on another document or on a layer
+/// that went away while the name was being typed.
 @MainActor
 final class LayerRowView: NSStackView, NSTextFieldDelegate {
     /// The document and layer an edit belongs to. The document is compared
@@ -19,11 +20,13 @@ final class LayerRowView: NSStackView, NSTextFieldDelegate {
     /// gone). The row then shows the layer it last showed again.
     typealias Commit = (Context, EngineSession.LayerChange) -> Bool
 
-    /// The row's height; the palette's table uses it too.
+    /// The row's height; the palette's outline uses it too.
     static let rowHeight: CGFloat = 22
 
     let checkbox: NSButton
     let nameField: NSTextField
+    /// The lock badge; nil when nothing locks the layer.
+    let lockView: NSImageView?
     /// Called after a name edit ends, so the palette can catch the list up
     /// after reloads were held off while typing.
     var onEditEnded: (() -> Void)?
@@ -34,7 +37,7 @@ final class LayerRowView: NSStackView, NSTextFieldDelegate {
     private var shownVisible: Bool
 
     init(layer: EngineSession.Layer, context: Context, details: String = "",
-         commit: @escaping Commit) {
+         locks: LayerTree.LockSources? = nil, commit: @escaping Commit) {
         self.context = context
         self.commit = commit
         self.shownName = layer.name
@@ -56,8 +59,22 @@ final class LayerRowView: NSStackView, NSTextFieldDelegate {
         // than pushing the details out.
         nameField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         nameField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        nameField.setAccessibilityLabel("Layer name")
+        nameField.setAccessibilityLabel(layer.kind == .group ? "Group name" : "Layer name")
         self.nameField = nameField
+
+        var badge: NSImageView?
+        if let locks, !locks.effective.isEmpty {
+            let view = NSImageView()
+            view.image = NSImage(systemSymbolName: "lock.fill", accessibilityDescription: nil)
+            // Full color for the item's own lock, secondary when the lock
+            // reaches it through an ancestor or a locked layer inside.
+            view.contentTintColor = locks.local.isEmpty ? .secondaryLabelColor : .labelColor
+            let accessibility = Self.lockAccessibility(locks, name: layer.name)
+            view.setAccessibilityLabel(accessibility.label)
+            view.setAccessibilityHelp(accessibility.help)
+            badge = view
+        }
+        self.lockView = badge
 
         super.init(frame: .zero)
 
@@ -70,12 +87,7 @@ final class LayerRowView: NSStackView, NSTextFieldDelegate {
         spacing = 2
         edgeInsets = NSEdgeInsets(top: 2, left: 2, bottom: 2, right: 4)
         addArrangedSubview(checkbox)
-        if layer.depth > 0 {
-            let indent = NSView()
-            indent.setContentHuggingPriority(.required, for: .horizontal)
-            indent.widthAnchor.constraint(equalToConstant: CGFloat(layer.depth) * 12).isActive = true
-            addArrangedSubview(indent)
-        }
+        if let badge { addArrangedSubview(badge) }
         addArrangedSubview(nameField)
         if !details.isEmpty {
             let detailsLabel = NSTextField(labelWithString: details)
@@ -90,7 +102,31 @@ final class LayerRowView: NSStackView, NSTextFieldDelegate {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
-    /// Starts an inline name edit, as the table's double-click does.
+    /// What the lock badge says: the lock names and where they come
+    /// from — the item itself, a parent group, or a layer inside a group.
+    static func lockAccessibility(_ sources: LayerTree.LockSources,
+                                  name: String) -> (label: String, help: String) {
+        var parts: [String] = []
+        if !sources.local.isEmpty {
+            parts.append("locked \(lockNames(sources.local))")
+        }
+        if !sources.inherited.isEmpty {
+            parts.append("\(lockNames(sources.inherited)) locked by a parent group")
+        }
+        if !sources.descendant.isEmpty {
+            parts.append("a layer inside has locked \(lockNames(sources.descendant))")
+        }
+        let help = "\(name): " + parts.joined(separator: "; ")
+        return ("Locked: \(lockNames(sources.effective))", help)
+    }
+
+    /// The lock names in menu order ("pixels, transparency").
+    static func lockNames(_ locks: EngineSession.LayerLocks) -> String {
+        EngineSession.LayerLocks.menuOrder.compactMap { locks.contains($0.lock) ? $0.lock.name : nil }
+            .joined(separator: ", ")
+    }
+
+    /// Starts an inline name edit, as the outline's double-click does.
     func startEditingName() {
         guard let window = nameField.window else { return }
         window.makeKey()
@@ -98,7 +134,7 @@ final class LayerRowView: NSStackView, NSTextFieldDelegate {
     }
 
     func controlTextDidBeginEditing(_ notification: Notification) {
-        // A table's programmatic field editor can start in a nonactivating
+        // An outline's programmatic field editor can start in a nonactivating
         // palette while the document still owns the keyboard.
         nameField.window?.makeKey()
     }
@@ -148,12 +184,12 @@ final class LayerRowView: NSStackView, NSTextFieldDelegate {
         return layers.contains { $0.id == context.layerID }
     }
 
-    /// Whether a name in `table` is being edited. The palette holds its
+    /// Whether a name in `outline` is being edited. The palette holds its
     /// reloads while this is true, so a rename being typed is never
     /// committed half done.
-    static func isRenaming(in table: NSTableView) -> Bool {
-        guard let editor = table.window?.firstResponder as? NSText,
+    static func isRenaming(in outline: NSOutlineView) -> Bool {
+        guard let editor = outline.window?.firstResponder as? NSText,
               let field = editor.delegate as? NSTextField else { return false }
-        return field.isDescendant(of: table)
+        return field.isDescendant(of: outline)
     }
 }

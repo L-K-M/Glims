@@ -155,11 +155,61 @@ final class EngineSession: @unchecked Sendable {
         let filterCount: Int
     }
 
+    /// The locks a layer or group can hold (GlimsLayerLock).
+    struct LayerLocks: OptionSet, Equatable {
+        let rawValue: UInt32
+        static let pixels = LayerLocks(rawValue: GLIMS_LOCK_PIXELS.rawValue)
+        static let position = LayerLocks(rawValue: GLIMS_LOCK_POSITION.rawValue)
+        static let alpha = LayerLocks(rawValue: GLIMS_LOCK_ALPHA.rawValue)
+
+        /// What each lock is called in the Layer menu, in display order.
+        static let menuOrder: [(lock: LayerLocks, title: String)] = [
+            (.pixels, "Pixels"), (.position, "Position"), (.alpha, "Transparency"),
+        ]
+
+        /// The lock's short name for rows and VoiceOver.
+        var name: String {
+            switch self {
+            case .pixels: return "pixels"
+            case .position: return "position"
+            case .alpha: return "transparency"
+            default: return "lock"
+            }
+        }
+    }
+
+    /// A layer's or group's lock state (GlimsLayerState): `local` is the
+    /// item's own locks, `effective` what the engine enforces on it — an
+    /// ancestor group's lock counts too, and for a group the PIXELS and
+    /// POSITION bits also cover a locked descendant.
+    struct LayerLockState: Equatable {
+        let local: LayerLocks
+        let effective: LayerLocks
+    }
+
     struct UndoInfo: Equatable {
         let undoCount: Int
         let redoCount: Int
         let nextUndo: String
         let nextRedo: String
+    }
+
+    /// One state of an image's undo history (GlimsHistoryRow): `position`
+    /// orders states from the earliest retained one; `name` is the action
+    /// that produced the state.
+    struct HistoryRow: Equatable {
+        let position: Int32
+        let name: String
+    }
+
+    /// A consistent read of an image's undo history (GlimsHistoryInfo):
+    /// the revision these rows and the current position were seen
+    /// together with. It changes whenever the history changes, so moving
+    /// to a state is only valid while the revision matches.
+    struct History: Equatable {
+        let revision: UInt64
+        let currentPosition: Int32
+        let rows: [HistoryRow]
     }
 
     /// A paint stroke's tool and settings. `nil` numbers keep the engine's
@@ -413,6 +463,57 @@ final class EngineSession: @unchecked Sendable {
     func undo(_ image: Int32) throws { try check(api.image_undo(engine, image), nil) }
     func redo(_ image: Int32) throws { try check(api.image_redo(engine, image), nil) }
 
+    // MARK: History and snapshots
+
+    /// How many times `history` re-reads with the size the engine last
+    /// reported before giving up.
+    private static let historyReadAttempts = 4
+
+    /// The image's undo history as one consistent list (image_history).
+    /// The engine can grow the list between the size probe and the fill;
+    /// the read is retried a bounded number of times with the size it
+    /// last reported, never indexing past the rows allocated.
+    func history(_ image: Int32) throws -> History {
+        var info = GlimsHistoryInfo()
+        try check(api.image_history(engine, image, nil, 0, &info), nil)
+        var capacity = info.count
+        for _ in 0..<Self.historyReadAttempts {
+            var rows = [GlimsHistoryRow](repeating: GlimsHistoryRow(), count: Int(capacity))
+            try rows.withUnsafeMutableBufferPointer { buffer in
+                try check(api.image_history(engine, image, buffer.baseAddress, capacity, &info), nil)
+            }
+            guard info.count > capacity else {
+                // `info` pairs this exact read's revision with its rows.
+                return History(revision: info.revision, currentPosition: info.current_position,
+                               rows: rows.prefix(Int(info.count)).map {
+                                   HistoryRow(position: $0.position, name: Self.string($0.name)) })
+            }
+            capacity = info.count
+        }
+        throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                          message: "The image history kept changing while it was being read.")
+    }
+
+    /// Moves through undo/redo to a state from `history`. A stale
+    /// `revision` or an invalid position is refused without changing the
+    /// image; BUSY while a stroke, preview or plug-in is active
+    /// (image_history_move).
+    func moveHistory(_ image: Int32, revision: UInt64, to position: Int32) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_history_move(engine, image, revision, position, &error), error)
+    }
+
+    /// An independent unsaved image with the source's layers, filters and
+    /// paths and an empty history (image_duplicate). The source's file
+    /// identity, pixels and history are unchanged. BUSY while a stroke,
+    /// preview or plug-in is active.
+    func duplicateImage(_ image: Int32) throws -> Int32 {
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_duplicate(engine, image, &result, &error), error)
+        return result
+    }
+
     // MARK: Painting
 
     func beginStroke(image: Int32, layer: Int32, brush: Brush, first: StrokePoint) throws -> Int32 {
@@ -589,6 +690,46 @@ final class EngineSession: @unchecked Sendable {
 
     func moveLayer(_ layer: Int32, image: Int32, by offset: CGSize) throws {
         try check(api.layer_move(engine, image, layer, offset.width, offset.height), nil)
+    }
+
+    // MARK: Layer tree structure
+
+    /// The item's own locks and the locks the engine enforces on it
+    /// (`layer` 0: the selected layer).
+    func layerState(_ layer: Int32, image: Int32) throws -> LayerLockState {
+        var state = GlimsLayerState()
+        try check(api.layer_state(engine, image, layer, &state), nil)
+        return LayerLockState(local: LayerLocks(rawValue: state.locks),
+                              effective: LayerLocks(rawValue: state.locked))
+    }
+
+    /// Adds a layer group at `index` among `parent`'s children (`parent`
+    /// 0: the image's top level), pass-through and selected, as one undo
+    /// step. Returns it.
+    @discardableResult
+    func createGroup(image: Int32, parent: Int32 = 0, index: Int32, name: String? = nil) throws -> Int32 {
+        var group: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try withOptionalCString(name) { name in
+            try check(api.create_group(engine, image, parent, index, name, &group, &error), error)
+        }
+        return group
+    }
+
+    /// Moves `item` to `index` among `newParent`'s children (`newParent`
+    /// 0: the image's top level) as one undo step; undo and redo restore
+    /// the exact position. `index` counts the children as they are after
+    /// removing `item` when it is among them.
+    func reparentLayer(_ item: Int32, image: Int32, toParent newParent: Int32, index: Int32) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.reparent_layer(engine, image, item, newParent, index, &error), error)
+    }
+
+    /// Sets the lock bits in `mask` on `item` (0: the selected layer) to
+    /// `values`' bits as one undo step; locks outside `mask` stay.
+    func setLayerLocks(_ item: Int32, image: Int32, mask: LayerLocks, values: LayerLocks) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.set_layer_locks(engine, image, item, mask.rawValue, values.rawValue, &error), error)
     }
 
     func crop(image: Int32, to rect: CGRect) throws {

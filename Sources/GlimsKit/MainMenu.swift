@@ -58,6 +58,7 @@ enum MainMenu {
             .separator(),
             item("Crop to Selection", #selector(DocumentWindowController.cropToSelection(_:))),
             item("Flatten Image", #selector(DocumentWindowController.flattenImage(_:))),
+            item("New Snapshot", #selector(DocumentWindowController.newSnapshot(_:))),
         ])
         let newLayer = item("New Layer", #selector(DocumentWindowController.newLayer(_:)), "n")
         newLayer.keyEquivalentModifierMask = [.command, .shift]
@@ -71,13 +72,22 @@ enum MainMenu {
          item("Bring Forward", #selector(DocumentWindowController.bringLayerForward(_:)), "]"),
          item("Send Backward", #selector(DocumentWindowController.sendLayerBackward(_:)), "["),
          toBack].forEach { arrange.submenu?.addItem($0) }
+        let lock = NSMenuItem(title: "Lock", action: nil, keyEquivalent: "")
+        lock.submenu = NSMenu(title: "Lock")
+        for (bit, title) in EngineSession.LayerLocks.menuOrder {
+            let lockItem = item("Lock \(title)", #selector(DocumentWindowController.toggleLayerLock(_:)))
+            lockItem.tag = Int(bit.rawValue)
+            lock.submenu?.addItem(lockItem)
+        }
         add(menu, "Layer", [
             newLayer,
+            item("New Layer Group", #selector(DocumentWindowController.newLayerGroup(_:))),
             item("Duplicate Layer", #selector(DocumentWindowController.duplicateLayer(_:)), "j"),
             item("Delete Layer", #selector(DocumentWindowController.deleteLayer(_:))),
             .separator(),
             item("Layer Properties…", #selector(DocumentWindowController.layerProperties(_:))),
             arrange,
+            lock,
             submenu("Transform", [
                 item("Rotate 90° Clockwise", #selector(DocumentWindowController.rotateLayer90(_:))),
                 item("Rotate 90° Counter-Clockwise", #selector(DocumentWindowController.rotateLayer270(_:))),
@@ -132,6 +142,7 @@ enum MainMenu {
             item("Tool Options", #selector(AppController.showToolOptions(_:))),
             item("Layers", #selector(AppController.showLayers(_:))),
             item("Paths", #selector(AppController.showPaths(_:))),
+            item("History", #selector(AppController.showHistory(_:))),
             item("Hide Palettes", #selector(AppController.togglePaletteVisibility(_:))),
             item("Reset Palettes", #selector(AppController.resetPaletteLayout(_:))),
             WorkspaceMenu.shared.makeItem(),

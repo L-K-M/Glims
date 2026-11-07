@@ -62,6 +62,7 @@ typedef struct
   gulong     layers_changed_handler;
   gulong     mask_changed_handler;
   gulong     size_changed_handler;
+  guint64    history_revision;
 } GlimsOpenImage;
 
 /* A live filter session, owned by `filters` until commit or abort.
@@ -142,6 +143,13 @@ GlimsStatus glims_filter_get_property (GlimsEngine *e, GlimsFilterID id,
                                        const char *property, GlimsFilterValue *value);
 GlimsStatus glims_filter_set_property (GlimsEngine *e, GlimsFilterID id,
                                        const char *property, const GlimsFilterValue *value);
+
+/* history.c */
+GlimsStatus glims_image_history (GlimsEngine *, GlimsImageID, GlimsHistoryRow *,
+                                 int32_t, GlimsHistoryInfo *);
+GlimsStatus glims_image_history_move (GlimsEngine *, GlimsImageID, uint64_t,
+                                      int32_t, char **);
+GlimsStatus glims_image_duplicate (GlimsEngine *, GlimsImageID, GlimsImageID *, char **);
 
 /* progress.c */
 GlimsProgress * glims_progress_new (GlimsEngine *engine);

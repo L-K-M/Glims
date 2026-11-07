@@ -944,6 +944,7 @@ typedef struct
   const void       *in2;
   void             *in_out;
   double            number2;
+  uint64_t          revision;
   size_t            n;
   char            **error;
 } GlimsArgs;
@@ -1030,6 +1031,9 @@ MARSHAL (filter_enum_choices, return glims_filter_enum_choices (e, a->string, a-
                                                                 a->capacity, a->count);)
 MARSHAL (filter_get_property, return glims_filter_get_property (e, a->item, a->string, a->out);)
 MARSHAL (filter_set_property, return glims_filter_set_property (e, a->item, a->string, a->in);)
+MARSHAL (image_history, return glims_image_history (e, a->image, a->out, a->capacity, a->in_out);)
+MARSHAL (image_history_move, return glims_image_history_move (e, a->image, a->revision, a->width, a->error);)
+MARSHAL (image_duplicate, return glims_image_duplicate (e, a->image, a->out, a->error);)
 
 /* A path's geometry takes more arguments than GlimsArgs holds. */
 typedef struct
@@ -1569,6 +1573,29 @@ api_filter_set_property (GlimsEngine *e, GlimsFilterID filter, const char *prope
   return glims_engine_call (e, filter_set_property_on_engine, &a);
 }
 
+static GlimsStatus
+api_image_history (GlimsEngine *e, GlimsImageID image, GlimsHistoryRow *rows,
+                    int32_t capacity, GlimsHistoryInfo *info)
+{
+  GlimsArgs a = { .image = image, .out = rows, .capacity = capacity, .in_out = info };
+  return glims_engine_call (e, image_history_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_history_move (GlimsEngine *e, GlimsImageID image, uint64_t revision,
+                         int32_t position, char **error)
+{
+  GlimsArgs a = { .image = image, .revision = revision, .width = position, .error = error };
+  return glims_engine_call (e, image_history_move_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_duplicate (GlimsEngine *e, GlimsImageID image, GlimsImageID *result, char **error)
+{
+  GlimsArgs a = { .image = image, .out = result, .error = error };
+  return glims_engine_call (e, image_duplicate_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1640,6 +1667,9 @@ static const GlimsEngineAPI api_v1 = {
   .filter_enum_choices = api_filter_enum_choices,
   .filter_get_property = api_filter_get_property,
   .filter_set_property = api_filter_set_property,
+  .image_history = api_image_history,
+  .image_history_move = api_image_history_move,
+  .image_duplicate = api_image_duplicate,
 };
 
 __attribute__ ((visibility ("default")))

@@ -91,6 +91,7 @@ undo_event (GimpImage      *image,
             GimpUndo       *undo,
             GlimsOpenImage *open)
 {
+  open->history_revision++;
   glims_emit (open->engine, GLIMS_EVENT_UNDO_CHANGED, image, NULL, NULL);
   glims_emit (open->engine, GLIMS_EVENT_LAYERS_CHANGED, image, NULL, NULL);
 }
@@ -126,6 +127,7 @@ glims_adopt_image (GlimsEngine  *engine,
 
   open->image  = image;
   open->engine = engine;
+  open->history_revision = 1;
   open->projection_update_handler =
     g_signal_connect (gimp_image_get_projection (image), "update",
                       G_CALLBACK (projection_update), open);

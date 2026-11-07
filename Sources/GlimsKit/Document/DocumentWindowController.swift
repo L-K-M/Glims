@@ -32,7 +32,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         layOutContent(in: window)
         imageDocument.onProjectionChange = { [weak self] rect in self?.canvas.imageDidChange(in: rect) }
         imageDocument.onStateChange = { [weak self] in self?.stateDidChange() }
-        imageDocument.onError = { [weak self] message in self?.statusBar.message = message }
+        imageDocument.onError = { [weak self] message in self?.showStatusError(message) }
+        // Palette picks and structural or lock changes first commit any
+        // field/text edit and end an active stroke; each command also
+        // lets a remembered refusal go.
+        imageDocument.onWillChangeLayers = { [weak self] in self?.endPendingEdits() }
+        imageDocument.onUserCommand = { [weak self] in self?.statusIsError = false }
         imageDocument.onSelectionChange = { [weak self] in
             guard let self else { return }
             self.canvas.selectionOutline = self.imageDocument.selectionOutline
@@ -41,7 +46,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             self?.canvas.imageSizeDidChange()
             self?.stateDidChange()
         }
-        canvas.tools.onStatus = { [weak self] message in self?.statusBar.message = message }
+        canvas.tools.onStatus = { [weak self] message in
+            self?.statusIsError = false
+            self?.statusBar.message = message
+        }
         canvas.tools.onZoom = { [weak self] zoomIn, point in
             guard let self else { return }
             self.zoom(to: zoomIn ? ZoomLadder.zoomIn(from: self.canvas.zoomPercent)
@@ -129,14 +137,42 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         "\(isDirty ? "• " : "")\(name) @ \(zoomPercent)% (RGB, \(precision))"
     }
 
+    /// While true the status bar shows a refusal the user should read;
+    /// generic state reloads leave it alone until the next command.
+    private var statusIsError = false
+
+    private func showStatusError(_ message: String) {
+        statusIsError = true
+        statusBar.message = message
+    }
+
+    /// Commits in-flight field and canvas-text edits and ends an active
+    /// stroke; runs before a user layer selection or a structural/lock
+    /// change so those never race a half-committed edit. Only edits that
+    /// belong to this document end: its own window and dialogs plus the
+    /// palettes aimed at it — a routine layer command must not commit
+    /// another document's field or palette edits.
+    private func endPendingEdits() {
+        window?.endEditing(for: nil)
+        blurPanel?.window?.endEditing(for: nil)
+        for paletteWindow in PaletteEditScope.windowsEditing(imageDocument) {
+            paletteWindow.endEditing(for: nil)
+        }
+        canvas.tools.finishTextEditing()
+        if imageDocument.strokeIsActive { imageDocument.endStroke() }
+    }
+
     private func stateDidChange() {
         window?.title = Self.title(name: imageDocument.name, zoomPercent: canvas.zoomPercent,
                                    isDirty: imageDocument.hasUnsavedChanges,
                                    precision: imageDocument.info.precision)
         let undo = imageDocument.undoInfo.nextUndo.isEmpty ? "" : " · Undo \(imageDocument.undoInfo.nextUndo)"
-        statusBar.message = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(imageDocument.info.layerCount) layer\(imageDocument.info.layerCount == 1 ? "" : "s")\(undo)"
+        if !statusIsError {
+            statusBar.message = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(imageDocument.info.layerCount) layer\(imageDocument.info.layerCount == 1 ? "" : "s")\(undo)"
+        }
         (PaletteCenter.shared.registeredPalette(for: LayersPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: PathsPaletteController.definition.kind))?.retarget()
+        (PaletteCenter.shared.registeredPalette(for: HistoryPaletteController.definition.kind))?.retarget()
         // Path shapes arrive with the state; the canvas draws them.
         canvas.needsDisplay = true
     }
@@ -176,10 +212,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             NSSound.beep()
             return
         }
-        panel.onFinish = { [weak self] in self?.blurPanel = nil }
+        panel.onFinish = { [weak self] in
+            self?.blurPanel = nil
+            self?.imageDocument.filterPreviewIsOpen = false
+        }
         blurPanel = panel
+        imageDocument.filterPreviewIsOpen = true
         panel.showWindow(nil)
     }
+
+    /// Image ▸ New Snapshot: an independent copy opened as a new document.
+    @objc func newSnapshot(_ sender: Any?) { imageDocument.newSnapshot() }
 
     // MARK: Layer menu
 
@@ -192,6 +235,27 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func sendLayerToBack(_ sender: Any?) { imageDocument.layerCommand(.toBottom) }
     @objc func mergeDown(_ sender: Any?) { imageDocument.layerCommand(.mergeDown) }
     @objc func flattenImage(_ sender: Any?) { imageDocument.layerCommand(.flatten) }
+
+    /// Layer ▸ New Layer Group.
+    @objc func newLayerGroup(_ sender: Any?) { imageDocument.createGroup() }
+
+    /// Layer ▸ Lock ▸ …: toggles the active item's own lock; the item's
+    /// tag carries the lock's raw value.
+    @objc func toggleLayerLock(_ sender: NSMenuItem) {
+        guard let id = imageDocument.activeLayer else { return }
+        imageDocument.toggleLocks(id, EngineSession.LayerLocks(rawValue: UInt32(sender.tag)))
+    }
+
+    /// What a lock item cannot see from its checkmark alone: locks a
+    /// parent group or a layer inside enforces.
+    static func lockNote(_ lock: EngineSession.LayerLocks,
+                         sources: LayerTree.LockSources?) -> String? {
+        guard let sources else { return nil }
+        var notes: [String] = []
+        if sources.inherited.contains(lock) { notes.append("locked by a parent group") }
+        if sources.descendant.contains(lock) { notes.append("a layer inside is locked") }
+        return notes.isEmpty ? nil : "\(LayerRowView.lockNames(lock).capitalized): \(notes.joined(separator: "; "))"
+    }
 
     /// Name, opacity, blend mode and visibility of the selected layer.
     @objc func layerProperties(_ sender: Any?) {
@@ -421,6 +485,19 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return canPerformClipboardCommand(menuItem.action)
         case #selector(selectFromPath(_:)), #selector(strokePath(_:)):
             return imageDocument.activePath != nil && !editingBlocked
+        case #selector(newLayerGroup(_:)):
+            return !editingBlocked && blurPanel == nil
+        case #selector(toggleLayerLock(_:)):
+            guard !editingBlocked, blurPanel == nil, let id = imageDocument.activeLayer else { return false }
+            let lock = EngineSession.LayerLocks(rawValue: UInt32(menuItem.tag))
+            let tree = LayerTree(layers: imageDocument.layers)
+            let sources = tree.nodesByID[id].map { tree.lockSources(for: $0, states: imageDocument.layerLocks) }
+            menuItem.state = sources?.local.contains(lock) == true ? .on : .off
+            menuItem.toolTip = Self.lockNote(lock, sources: sources)
+            return true
+        case #selector(newSnapshot(_:)):
+            // Without an app to adopt the copy there is nothing to run.
+            return imageDocument.snapshotHandler != nil && !editingBlocked && blurPanel == nil
         case #selector(gaussianBlur(_:)):
             return !editingBlocked
         case #selector(repeatExport(_:)):
