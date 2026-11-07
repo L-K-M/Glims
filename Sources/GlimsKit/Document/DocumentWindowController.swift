@@ -612,7 +612,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return true
         case #selector(newSnapshot(_:)):
             // Without an app to adopt the copy there is nothing to run.
-            return imageDocument.snapshotHandler != nil && !editingBlocked && blurPanel == nil
+            return imageDocument.snapshotHandler != nil && !editingBlocked && !previewBusy
         case #selector(gaussianBlur(_:)):
             return !editingBlocked && !previewBusy
         case #selector(runNativeFilter(_:)):
