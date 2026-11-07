@@ -1,4 +1,5 @@
 import AppKit
+import CGlimsEngine
 import Darwin
 import RigiUI
 
@@ -90,16 +91,20 @@ enum EngineSmokeTest {
         do {
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
+            try exerciseFileAdmission(session, work: work, documents: documents)
             try exerciseClipboard(session, documents: documents)
             try exercisePreviewLifetimes(session, work: work, documents: documents)
             try exerciseDisplayDensity(session, documents: documents)
             try exerciseTools(session, documents: documents)
             try exerciseEditing(session, documents: documents)
             try exerciseLayerTree(session, documents: documents)
+            try exercisePreferences(session, documents: documents)
             try exercisePaths(session, documents: documents)
             try exercisePaletteControls(session, documents: documents)
             try exercisePendingEditScope(session, documents: documents)
+            try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
             try exercisePlugInCommands(session, documents: documents)
+            try exerciseNativeFilterForms(session, work: work, documents: documents)
             try measurePluginStalls(session, work: work)
         } catch {
             check(false, "unexpected engine error: \(error)")
@@ -107,6 +112,76 @@ enum EngineSmokeTest {
 
         print(failures == 0 ? "PASSED" : "FAILED: \(failures) failure(s)")
         return failures == 0 ? 0 : 1
+    }
+
+    /// A file plug-in holds the engine across all documents. Its admission
+    /// must drain accepted input and refuse later edits before the call starts.
+    private static func exerciseFileAdmission(_ session: EngineSession, work: URL,
+                                               documents: DocumentList) throws {
+        let a = try ImageDocument(session: session, image: session.newImage(width: 64, height: 64), name: "Writing")
+        let b = try ImageDocument(session: session, image: session.newImage(width: 64, height: 64), name: "Painting")
+        let closing = try ImageDocument(session: session, image: session.newImage(width: 16, height: 16), name: "Close during write")
+        documents.items += [a, b, closing]
+        let controller = DocumentWindowController(document: b)
+        let closingController = DocumentWindowController(document: closing)
+        closingController.showWindow(nil)
+        defer {
+            documents.items.removeAll { $0 === a || $0 === b || $0 === closing }
+            a.closeImageWhenDrained()
+            b.closeImageWhenDrained()
+            closing.closeImageWhenDrained()
+        }
+        var errors: [String] = []
+        b.onError = { errors.append($0) }
+        b.inputQueue.async { usleep(200_000) }
+        let brush = EngineSession.Brush(size: 10, opacity: 1, red: 0, green: 0, blue: 0, pressureSize: false)
+        b.beginStroke(at: .init(x: 12, y: 12, pressure: 1), brush: brush)
+        b.endStroke()
+        var finished = false
+        var writeError: Error?
+        let started = DispatchTime.now()
+        a.export(to: work.appendingPathComponent("admission.png")) { error in
+            writeError = error
+            finished = true
+        }
+        check(milliseconds(since: started) < 100, "file admission returns without waiting for accepted input")
+        check(!a.acceptsEdits && !b.acceptsEdits, "a pending file write gates edits in every document")
+        b.beginStroke(at: .init(x: 44, y: 44, pressure: 1), brush: brush)
+        check(!b.strokeIsActive, "a later pointer stroke is refused before it becomes active")
+        if b.strokeIsActive { b.endStroke() }
+        check(!errors.isEmpty, "the refused edit explains the pending file operation")
+        let editing = NSMenuItem(title: "Group", action: #selector(DocumentWindowController.newLayerGroup(_:)), keyEquivalent: "")
+        let navigation = NSMenuItem(title: "Fit", action: #selector(DocumentWindowController.fitImage(_:)), keyEquivalent: "")
+        check(!controller.validateMenuItem(editing) && controller.validateMenuItem(navigation),
+              "file activity disables edits while canvas navigation remains available")
+        var closed: Bool?
+        closingController.requestClose { closed = $0 }
+        check(closed == nil && !closing.isClosing, "another document waits for file activity before closing")
+        let deadline = Date().addingTimeInterval(8)
+        while (!finished || closed == nil) && Date() < deadline { spin(0.01) }
+        check(finished && writeError == nil, "the file operation completes after accepted input drains")
+        spin()
+        check(pixel(session, b.image, x: 12, y: 12)?.first == 0,
+              "input accepted in another document before the write is preserved")
+        check(pixel(session, b.image, x: 44, y: 44)?.first == 255,
+              "the refused stroke made no pixel change")
+        check(a.acceptsEdits && b.acceptsEdits, "all documents resume editing after the write")
+        check(closed == true && (try? session.info(closing.image)) == nil,
+              "the deferred close destroys its image after the file operation")
+
+        controller.gaussianBlur(nil)
+        while b.pendingWork > 0 && Date() < deadline { spin(0.01) }
+        check(controller.previewPanel != nil, "a second document can hold a preview before the write")
+        b.inputQueue.async { usleep(100_000) }
+        finished = false
+        a.export(to: work.appendingPathComponent("admission-preview.png")) { error in
+            writeError = error
+            finished = true
+        }
+        controller.cancelOperation(nil)
+        while (!finished || b.pendingWork > 0 || b.filterPreviewIsOpen) && Date() < deadline { spin(0.01) }
+        check(finished && writeError == nil && !b.filterPreviewIsOpen && controller.previewPanel == nil,
+              "preview cancellation in another document waits safely for the file operation")
     }
 
     /// Saving/closing must use the same asynchronous queues and sheets as
@@ -378,7 +453,10 @@ enum EngineSmokeTest {
         documents.items.append(document)
         let controller = DocumentWindowController(document: document)
         controller.showWindow(nil)
-        guard let blur = GaussianBlurPanel(document: document) else { throw NoWindow() }
+        guard let layer = document.activeLayer,
+              let blurFilter = try? session.beginFilter(image: image, drawable: layer,
+                                                        operation: GaussianBlurPanel.operation) else { throw NoWindow() }
+        let blur = GaussianBlurPanel(document: document, filter: blurFilter)
         document.inputQueue.sync {}
         spin()
         document.copyPixels(.merged, background: .white, consume: { _ in }, completion: { _ in })
@@ -498,10 +576,13 @@ enum EngineSmokeTest {
         check(rows == ["● Background"], "Layers palette rows: \(rows)")
 
         // The Gaussian Blur dialog: preview, then OK.
-        guard let blur = GaussianBlurPanel(document: document) else {
+        guard let blurLayer = document.activeLayer,
+              let blurFilter = try? session.beginFilter(image: image, drawable: blurLayer,
+                                                        operation: GaussianBlurPanel.operation) else {
             check(false, "Gaussian Blur dialog opens a filter session")
             return
         }
+        let blur = GaussianBlurPanel(document: document, filter: blurFilter)
         blur.apply(radius: 6)
         document.inputQueue.sync {}
         check(document.undoInfo.undoCount == 1, "the blur preview adds no undo step")
@@ -601,6 +682,32 @@ enum EngineSmokeTest {
     /// and nesting, an undoable reparent, lock toggles and the paint/move
     /// refusals they cause, a queued creation losing to a later user
     /// pick, and the filter preview gating layer changes.
+    private static func exercisePreferences(_ session: EngineSession, documents: DocumentList) throws {
+        let suite = "ch.lkmc.Glims.smoke.preferences.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = EditorPreferences(defaults: defaults)
+        let image = try session.newImage(width: 32, height: 24)
+        let document = try ImageDocument(session: session, image: image, name: "Preferences")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document, preferences: preferences)
+        controller.showWindow(nil)
+        let before = pixel(session, image, x: 8, y: 8)
+        preferences.surround = .dark
+        let scroll = controller.window?.contentView.flatMap { descendant(of: $0, as: NSScrollView.self) }
+        check(controller.canvas.surroundColor == EditorPreferences.Surround.dark.color &&
+                scroll?.backgroundColor == EditorPreferences.Surround.dark.color,
+              "changing canvas surround updates an already-open document and its viewport")
+        preferences.reset()
+        check(controller.canvas.surroundColor == EditorPreferences.Surround.medium.color &&
+                scroll?.backgroundColor == EditorPreferences.Surround.medium.color,
+              "restoring preferences updates existing canvas surrounds")
+        check(pixel(session, image, x: 8, y: 8) == before &&
+                !document.hasUnsavedChanges && document.undoInfo.undoCount == 0,
+              "display preferences leave image pixels and undo history unchanged")
+        controller.window?.orderOut(nil)
+    }
+
     private static func exerciseLayerTree(_ session: EngineSession, documents: DocumentList) throws {
         let image = try session.newImage(width: 64, height: 64)
         let document = try ImageDocument(session: session, image: image, name: "Layers")
@@ -1222,6 +1329,251 @@ enum EngineSmokeTest {
         return nil
     }
 
+    /// The History palette and image snapshots: exact states backward and
+    /// forward, a no-op pick of the current state, a stale pick refused
+    /// after a new edit, queued stroke and text edits in a snapshot, a
+    /// closing source and a Quit coordinating with snapshot work, and the
+    /// copy's file identity and undo independence.
+    private static func exerciseHistoryAndSnapshots(_ session: EngineSession, work: URL,
+                                                    documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "History")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        var messages: [String] = []
+        let reportError = document.onError
+        document.onError = { reportError?($0); messages.append($0) }
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+        func wait(_ condition: @escaping () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin() }
+        }
+
+        check(document.history?.rows.count == 1 && document.history?.currentPosition == 0
+                && document.history?.rows.first?.name.isEmpty == false,
+              "a new document lists its earliest history state")
+        document.fill(at: .zero, mode: .selection, color: .red, threshold: 0, sampleMerged: false)
+        document.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
+        document.continueStroke([.init(x: 24, y: 24, pressure: 1)])
+        document.endStroke()
+        settle()
+        guard let filled = document.history, filled.rows.count == 3, filled.currentPosition == 2 else {
+            check(false, "a fill and a stroke list three history states (\(document.history?.rows.count ?? -1))")
+            return
+        }
+        check(true, "a fill and a stroke list three history states")
+
+        // Backward and forward through the palette's own pick path; the
+        // pixels show the states are the exact ones, not approximations.
+        let palette = HistoryPaletteController()
+        palette.retarget(to: document)
+        let table = descendant(of: palette.view, as: NSTableView.self)
+        let bar = descendant(of: palette.view, as: ClassicPaletteButtonBar.self)
+        check(table?.numberOfRows == 3, "the History palette lists the states")
+        check(bar?.isEnabled(item: "snapshot") == false,
+              "the Snapshot button waits for something to adopt the copy")
+        /// A registered palette reloads on every document state change;
+        /// this freestanding one does the same after a pick settles.
+        func pickRow(_ row: Int) {
+            table?.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            settle()
+            palette.reload()
+        }
+        pickRow(0)
+        check(document.history?.currentPosition == 0 && (pixel(session, image, x: 2, y: 2)?[1] ?? 0) > 200
+                && (pixel(session, image, x: 12, y: 12)?[0] ?? 0) > 200,
+              "picking the earliest row undoes the fill and the stroke")
+        check(table?.numberOfRows == 3, "undone future states stay listed")
+        pickRow(2)
+        check(document.history?.currentPosition == 2 && (pixel(session, image, x: 2, y: 2)?[1] ?? 255) == 0
+                && (pixel(session, image, x: 12, y: 12)?[0] ?? 255) < 64,
+              "picking an undone row redoes to it")
+
+        // Picking the current state is a no-op: no new revision, same spot.
+        let beforeNoOp = document.history
+        document.moveToHistoryState(beforeNoOp?.currentPosition ?? -1, revision: beforeNoOp?.revision ?? 0)
+        settle()
+        check(document.history?.revision == beforeNoOp?.revision
+                && document.history?.currentPosition == beforeNoOp?.currentPosition,
+              "picking the current state changes nothing")
+
+        // A pick whose revision went stale is refused, keeps the state and
+        // reports why; after the reload a fresh pick goes through.
+        document.fill(at: .zero, mode: .selection, color: .green, threshold: 0, sampleMerged: false)
+        settle()
+        check(document.history?.currentPosition == 3 && document.history?.revision != beforeNoOp?.revision,
+              "a new edit advances the history revision")
+        document.moveToHistoryState(0, revision: beforeNoOp?.revision ?? 0)
+        settle()
+        check(messages.contains { $0.contains("history changed") } && document.history?.currentPosition == 3,
+              "a stale pick is refused with its reason and the state stays")
+        // The palette's own stale row, rendered before that edit landed.
+        document.fill(at: .zero, mode: .selection, color: .blue, threshold: 0, sampleMerged: false)
+        settle()
+        pickRow(0)
+        check(messages.last == HistoryPaletteController.staleMessage && document.history?.currentPosition == 4,
+              "a stale palette row reports why and does not move the state")
+        check(table?.numberOfRows == 5, "the refusal reloads the palette")
+        pickRow(0)
+        check(document.history?.currentPosition == 0 && (pixel(session, image, x: 2, y: 2)?[1] ?? 0) > 200,
+              "selecting again after the reload moves to the state")
+
+        // Snapshot controls disable while the engine cannot duplicate.
+        document.filterPreviewIsOpen = true
+        palette.reload()
+        check(bar?.isEnabled(item: "snapshot") == false,
+              "the Snapshot button is disabled during a filter preview")
+        document.filterPreviewIsOpen = false
+        palette.reload()
+
+        // A snapshot queued behind a stroke contains it; the source's
+        // history is untouched.
+        document.beginStroke(at: .init(x: 40, y: 40, pressure: 1))
+        document.continueStroke([.init(x: 50, y: 50, pressure: 1)])
+        document.endStroke()
+        var copyID: Int32 = 0
+        var copyDone = false
+        document.snapshot { result in
+            copyID = (try? result.get()) ?? 0
+            copyDone = true
+        }
+        wait { copyDone }
+        check(copyID != 0, "the queued snapshot produced an image")
+        check((pixel(session, copyID, x: 45, y: 45)?[0] ?? 255) < 64,
+              "the snapshot contains the just-finished stroke")
+        check((try? session.undoInfo(copyID))?.undoCount == 0 && (try? session.info(copyID))?.isDirty == true,
+              "the snapshot is unsaved with an empty history")
+        try session.closeImage(copyID)
+        settle()
+        check(document.history?.currentPosition == 1 && document.undoInfo.undoCount == 1,
+              "the snapshot left the source's pixels and history alone")
+
+        // Text still being typed is committed through the document's hook
+        // before the copy; the result opens as a new document bound to its
+        // source, whoever is front document then.
+        let app = AppController()
+        document.snapshotHandler = { [weak app] document in app?.snapshot(document) }
+        let previousTool = ToolState.shared.current
+        let previousText = ToolState.shared.textSettings
+        ToolState.shared.textSettings.font = ToolState.pickableFontNames(try session.fonts()).first ?? "Sans-serif"
+        ToolState.shared.textSettings.size = 12
+        ToolState.shared.select(.text)
+        if let window = controller.window,
+           let press = NSEvent.mouseEvent(with: .leftMouseDown,
+                                          location: controller.canvas.convert(CGPoint(x: 4, y: 4), to: nil),
+                                          modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                          context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+            controller.canvas.mouseDown(with: press)
+            controller.canvas.tools.textEditor?.insertText("Snap", replacementRange: NSRange(location: NSNotFound, length: 0))
+            document.newSnapshot()
+            wait { app.frontDocument != nil }
+            let snapshotDoc = app.frontDocument
+            // The real app routes engine events to its documents; the
+            // smoke test's list stands in for that.
+            if let snapshotDoc { documents.items.append(snapshotDoc) }
+            check(controller.canvas.tools.textEditor == nil, "the snapshot committed the pending text first")
+            check(snapshotDoc != nil && snapshotDoc !== document
+                    && snapshotDoc?.layers.contains { $0.kind == .text } == true,
+                  "the snapshot opens as a new document containing the typed text")
+            check(snapshotDoc?.name == "History snapshot" && snapshotDoc?.fileState.nativeURL == nil
+                    && snapshotDoc?.fileState.importedSourceURL == nil && snapshotDoc?.hasUnsavedChanges == true,
+                  "the snapshot is a fresh unsaved document without the source's file")
+            check(snapshotDoc?.undoInfo.undoCount == 0 && snapshotDoc?.history?.rows.count == 1,
+                  "the snapshot's own history starts empty")
+            // Editing the copy does not reach the source (a fill needs a
+            // pixel layer: the copy's text layer is still selected).
+            let sourceSteps = document.undoInfo.undoCount
+            if let background = snapshotDoc?.layers.last?.id { snapshotDoc?.selectLayer(background) }
+            snapshotDoc?.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+            snapshotDoc?.inputQueue.sync {}
+            spin()
+            check(snapshotDoc?.undoInfo.undoCount == 1 && document.undoInfo.undoCount == sourceSteps
+                    && document.layers.contains { $0.kind == .text },
+                  "editing the snapshot leaves the source untouched")
+            snapshotDoc?.undo()
+            snapshotDoc?.inputQueue.sync {}
+            spin()
+            check(snapshotDoc?.undoInfo.undoCount == 0 && document.undoInfo.undoCount == sourceSteps,
+                  "the snapshot's own undo works on it alone")
+            NSApp.windows
+                .first { ($0.windowController as? DocumentWindowController)?.imageDocument === snapshotDoc }?
+                .orderOut(nil)
+            PaletteCenter.shared.closeAll()
+            // The first real document open loads the engine's fonts in the
+            // background; drain it so it cannot straddle later checks.
+            snapshotDoc?.longQueue.sync {}
+            spin()
+        } else {
+            check(false, "text editing can be started before a snapshot")
+        }
+        ToolState.shared.textSettings = previousText
+        ToolState.shared.select(previousTool)
+
+        // A snapshot of a saved document keeps none of its file identity.
+        let filedImage = try session.newImage(width: 32, height: 32)
+        let native = work.appendingPathComponent("snapshot-source.xcf")
+        try session.save(filedImage, to: native.path)
+        let filed = try ImageDocument(session: session, image: filedImage, name: "Filed", openedFrom: native)
+        documents.items.append(filed)
+        var filedResult: Result<Int32, Error>?
+        filed.snapshot { filedResult = $0 }
+        wait { filedResult != nil }
+        if let copyImage = try? filedResult?.get() {
+            let copy = try ImageDocument(session: session, image: copyImage, name: "Filed snapshot")
+            check(copy.fileState.nativeURL == nil && copy.fileState.importedSourceURL == nil
+                    && copy.fileState.saveRoute == .askForFile && copy.hasUnsavedChanges,
+                  "a snapshot of a saved document keeps no file identity")
+            try session.closeImage(copyImage)
+        } else {
+            check(false, "the filed document's snapshot produced an image")
+        }
+        documents.items.removeAll { $0 === filed }
+
+        // A closing source holds its engine image until the snapshot ran.
+        let closingImage = try session.newImage(width: 32, height: 32)
+        let closing = try ImageDocument(session: session, image: closingImage, name: "Closing")
+        documents.items.append(closing)
+        let closingController = DocumentWindowController(document: closing)
+        closingController.showWindow(nil)
+        var closingResult: Result<Int32, Error>?
+        closing.snapshot { closingResult = $0 }
+        var sourceClosed: Bool?
+        closingController.requestClose { sourceClosed = $0 }
+        if let sheet = closingController.window?.attachedSheet {
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+        }
+        wait { sourceClosed != nil && closingResult != nil }
+        check(sourceClosed == true && (try? closingResult?.get()) != nil,
+              "a queued snapshot runs before its closing source frees the image")
+        if let orphan = try? closingResult?.get() { try session.closeImage(orphan) }
+        documents.items.removeAll { $0 === closing }
+
+        // The whole transaction is a file operation: Quit waits for it and
+        // a copy finishing during Quit is closed, not opened.
+        let quittingApp = AppController()
+        let quittingImage = try session.newImage(width: 32, height: 32)
+        let quitting = try ImageDocument(session: session, image: quittingImage, name: "Quit")
+        documents.items.append(quitting)
+        check(quittingApp.applicationShouldTerminate(NSApp) == .terminateNow,
+              "Quit proceeds while nothing is pending")
+        quittingApp.snapshot(quitting)
+        check(quittingApp.applicationShouldTerminate(NSApp) == .terminateLater,
+              "a pending snapshot makes Quit wait")
+        wait { quittingApp.applicationShouldTerminate(NSApp) == .terminateNow }
+        check(quittingApp.frontDocument == nil,
+              "a snapshot finishing during Quit is closed, not opened")
+        documents.items.removeAll { $0 === quitting }
+
+        document.snapshotHandler = nil
+        controller.window?.orderOut(nil)
+        documents.items.removeAll { $0 === document }
+    }
+
+
     /// The Path tool driven through the canvas, then the Paths palette's
     /// commands and the engine's undo of path edits.
     private static func exercisePaths(_ session: EngineSession, documents: DocumentList) throws {
@@ -1517,6 +1869,353 @@ enum EngineSmokeTest {
         check(PlugInCommands.last?.name == checkerboard.name &&
               submenu(["Filter", MainMenu.recentlyUsedTitle])?.items.first?.title == checkerboard.label,
               "Last Filter and Recently Used remember the command")
+        controller.window?.orderOut(nil)
+    }
+
+    /// The native-filter catalog, its Filter ▸ Native menu and the
+    /// generic form: typed preview writes for the supported kinds, a
+    /// refused value keeping the preview alive, cancel/apply semantics,
+    /// the edit/layer/save gates and a clean close without an orphaned
+    /// session.
+    private static func exerciseNativeFilterForms(_ session: EngineSession, work: URL,
+                                                  documents: DocumentList) throws {
+        let operations = try session.filterOperations()
+        check(operations.count > 40, "the catalog lists the engine's operations (\(operations.count))")
+        let gaussian = operations.first { $0.name == GaussianBlurPanel.operation }
+        check(gaussian?.support == .supported, "Gaussian Blur is a supported native operation")
+        let displace = operations.first { $0.name == "gegl:displace" }
+        check(displace?.support == .needsAuxInput, "Displace is flagged as needing a second input")
+        let curves = operations.first { $0.name == "gimp:curves" }
+        check(curves?.support == .needsConfig, "Curves is flagged as needing a dedicated editor")
+        let median = operations.first { $0.name == "gegl:median-blur" }
+        let overlay = operations.first { $0.name == "gegl:color-overlay" }
+        check(median?.support == .supported && overlay?.support == .supported,
+              "Median Blur and Color Overlay are supported native operations")
+
+        // The catalog merges into the Filter categories next to the
+        // dedicated Gaussian command and the plug-in items.
+        let mainMenu = MainMenu.make()
+        NSApp.mainMenu = mainMenu
+        PlugInMenus.install(try session.procedures(), in: mainMenu)
+        NativeFilterMenus.install(operations, in: mainMenu)
+        func submenu(_ path: [String]) -> NSMenu? {
+            path.reduce(mainMenu as NSMenu?) { menu, title in menu?.item(withTitle: title)?.submenu }
+        }
+        func nativeItem(_ name: String) -> NSMenuItem? {
+            for category in submenu(["Filter"])?.items ?? [] {
+                if let found = category.submenu?.items.first(where: {
+                    ($0.representedObject as? NativeFilterCommand)?.operation.name == name
+                }) { return found }
+            }
+            return nil
+        }
+        check(submenu(["Filter"])?.item(withTitle: "Native") == nil,
+              "the catalog merges into the Filter categories without a Native submenu")
+        let blurItems = submenu(["Filter", "Blur"])?.items.map(\.title) ?? []
+        check(blurItems.first == "Gaussian Blur…" && blurItems.contains("Median Blur…"),
+              "Filter ▸ Blur keeps the dedicated command and gains the catalog's operations (\(blurItems))")
+        check(nativeItem("gegl:gaussian-blur") == nil, "the catalog's own Gaussian Blur stays out")
+        check(nativeItem("gegl:displace")?.title == "Displace (needs a second layer as its source)"
+                && nativeItem("gimp:curves")?.title == "Curves (needs a dedicated editor)",
+              "inapplicable operations stay listed with their reason")
+        check(submenu(["Filter", "Render", "Pattern"])?.items.isEmpty == false,
+              "the plug-in categories are intact after the native install")
+
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Native Forms")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        document.beginStroke(at: .init(x: 8, y: 32, pressure: 1))
+        document.continueStroke([.init(x: 56, y: 32, pressure: 1, timeMilliseconds: 40)])
+        document.endStroke()
+        document.inputQueue.sync {}
+        spin()
+        let painted = pixel(session, image, x: 8, y: 30)
+
+        func wait() {
+            let deadline = Date().addingTimeInterval(10)
+            while document.pendingWork > 0 && Date() < deadline { spin(0.02) }
+            spin()
+        }
+        func open(_ operation: EngineSession.FilterOperation) -> NativeFilterPanel? {
+            controller.openNativeFilter(operation)
+            let deadline = Date().addingTimeInterval(10)
+            while controller.previewPanel == nil && Date() < deadline { spin(0.02) }
+            return controller.previewPanel as? NativeFilterPanel
+        }
+
+        // Menu validation: supported operations enable, the others don't.
+        if let item = nativeItem("gegl:median-blur") {
+            check(controller.validateMenuItem(item), "a supported operation's menu item is enabled")
+        } else { check(false, "Median Blur has a menu item") }
+        if let item = nativeItem("gegl:displace") {
+            check(!controller.validateMenuItem(item), "an auxiliary-input operation stays disabled")
+        } else { check(false, "Displace has a menu item") }
+
+        // The generic form on the same operation the dedicated panel
+        // covers: number, bool and enum roundtrips through typed writes.
+        guard let gaussianOp = gaussian, let panel = open(gaussianOp), let filter = panel.filter else {
+            check(false, "the generic Gaussian form opens")
+            return
+        }
+        check(document.filterPreviewIsOpen, "the form marks the preview open")
+        panel.setProperty("std-dev-x", .number(20))
+        panel.setProperty("std-dev-y", .number(20))
+        wait()
+        check((try? session.filterProperty(filter, "std-dev-x")) == .number(20)
+                && (try? session.filterProperty(filter, "std-dev-y")) == .number(20),
+              "the typed number write round-trips through the session")
+        let blurred = pixel(session, image, x: 8, y: 30)
+        check(blurred != nil && blurred != painted, "the number preview changes pixels (\(painted ?? []) → \(blurred ?? []))")
+
+        // A programmatic NaN write rides the same request path: whatever
+        // the engine answers must land — a NaN request never equals
+        // itself, so value-equality staleness would drop its answer.
+        panel.setProperty("std-dev-x", .number(.nan))
+        wait()
+        if case .number(let stored) = try? session.filterProperty(filter, "std-dev-x"), stored == 20 {
+            check(panel.lastError?.isEmpty == false,
+                  "a refused NaN write keeps the form's error visible")
+        } else {
+            check(controller.previewPanel === panel && document.filterPreviewIsOpen,
+                  "a NaN write the engine accepts leaves the form alive")
+        }
+        panel.setProperty("std-dev-x", .number(20))
+        wait()
+        check((try? session.filterProperty(filter, "std-dev-x")) == .number(20),
+              "the form keeps taking writes after a NaN one")
+
+        let choices = (try? session.filterEnumChoices("gegl:gaussian-blur", property: "filter")) ?? []
+        check(choices.count >= 2 && choices.contains(where: { !$0.label.isEmpty }),
+              "the enum property lists its choices with labels (\(choices.map(\.nick)))")
+        if let nick = choices.first(where: { $0.nick == "fir" })?.nick ?? choices.last?.nick {
+            panel.setProperty("filter", .enumeration(nick))
+            wait()
+            check((try? session.filterProperty(filter, "filter")) == .enumeration(nick),
+                  "the typed enum write round-trips by nick (\(nick))")
+        }
+        let clipDefault = (try? session.filterProperty(filter, "clip-extent")) == .boolean(false)
+        panel.setProperty("clip-extent", .boolean(!clipDefault))
+        wait()
+        check((try? session.filterProperty(filter, "clip-extent")) == .boolean(!clipDefault),
+              "the typed bool write round-trips")
+
+        // Cancel restores the layer and leaves no session or history.
+        let undoBeforeCancel = document.undoInfo.undoCount
+        controller.cancelOperation(nil)
+        wait()
+        check(controller.previewPanel == nil && !document.filterPreviewIsOpen,
+              "Escape cancels the form")
+        check(document.undoInfo.undoCount == undoBeforeCancel,
+              "cancel adds no undo step")
+        check(pixel(session, image, x: 8, y: 30) == painted, "cancel restores the layer's pixels")
+        check((try? session.filterProperty(filter, "std-dev-x")) == nil,
+              "the aborted session is gone")
+
+        // Apply commits once: one undo step, named after the operation.
+        guard let again = open(gaussianOp) else {
+            check(false, "the generic form reopens for Apply")
+            return
+        }
+        again.setProperty("std-dev-x", .number(10))
+        again.setProperty("std-dev-y", .number(10))
+        wait()
+        let undoBeforeApply = document.undoInfo.undoCount
+        again.commit()
+        let applyDeadline = Date().addingTimeInterval(10)
+        while controller.previewPanel != nil && Date() < applyDeadline { spin(0.02) }
+        wait()
+        check(document.undoInfo.undoCount == undoBeforeApply + 1,
+              "Apply adds exactly one undo step")
+        check(document.undoInfo.nextUndo.contains("Gaussian Blur"),
+              "the undo step names the operation (\(document.undoInfo.nextUndo))")
+
+        // Median Blur: an integer write, then a refused one that must
+        // keep the preview available and leave the error visible.
+        guard let medianOp = median, let medianPanel = open(medianOp), let medianFilter = medianPanel.filter else {
+            check(false, "the Median Blur form opens")
+            return
+        }
+        medianPanel.setProperty("radius", .integer(12))
+        wait()
+        check((try? session.filterProperty(medianFilter, "radius")) == .integer(12),
+              "the typed integer write round-trips")
+        medianPanel.setProperty("radius", .integer(.max))
+        wait()
+        check(medianPanel.lastError != nil && controller.previewPanel === medianPanel,
+              "a refused value keeps the form open with its error visible (\(medianPanel.lastError ?? "no error"))")
+        medianPanel.setProperty("radius", .integer(6))
+        wait()
+        check((try? session.filterProperty(medianFilter, "radius")) == .integer(6),
+              "the preview still accepts writes after a refused one")
+
+        // While the form previews, layer changes, edits and file writes
+        // are gated with a reason; pan/zoom stay free.
+        document.selectLayer(document.activeLayer ?? 0)
+        check(controller.statusBar.message.contains("preview"), "a layer pick is refused with a reason")
+        document.createGroup()
+        check(controller.statusBar.message.contains("preview"), "a layer change is refused with a reason")
+        controller.saveDocument(nil)
+        check(controller.statusBar.message.contains("saving or exporting") && document.fileState.nativeURL == nil,
+              "Save is refused while the preview is open")
+        controller.zoom(to: 200)
+        check(controller.canvas.zoomPercent == 200, "zoom stays usable during the preview")
+
+        // A refused commit (a clipboard transfer owns the document) keeps
+        // the form; cancellation still works.
+        document.copyPixels(.merged, background: .white, consume: { _ in }, completion: { _ in })
+        check(document.isTransferringClipboard, "a clipboard transfer runs during the preview")
+        medianPanel.commit()
+        spin(0.2)
+        check(controller.previewPanel === medianPanel && medianPanel.lastError != nil,
+              "a refused Apply keeps the form and reports the error")
+        medianPanel.cancel()
+        wait()
+        check(controller.previewPanel == nil && !document.filterPreviewIsOpen,
+              "Cancel still ends the preview after a refused Apply")
+        check((try? session.filterProperty(medianFilter, "radius")) == nil,
+              "the cancelled session is gone")
+
+        // Color Overlay: an sRGBA color write and readback.
+        guard let overlayOp = overlay, let colorPanel = open(overlayOp), let colorFilter = colorPanel.filter else {
+            check(false, "the Color Overlay form opens")
+            return
+        }
+        colorPanel.setProperty("value", .color(NSColor(srgbRed: 1, green: 0.25, blue: 0.5, alpha: 1)))
+        wait()
+        if case .color(let color) = try? session.filterProperty(colorFilter, "value"),
+           let srgb = color.usingColorSpace(.sRGB) {
+            check(abs(srgb.redComponent - 1) < 0.01 && abs(srgb.greenComponent - 0.25) < 0.01
+                    && abs(srgb.blueComponent - 0.5) < 0.01,
+                  "the typed color write round-trips (\(srgb.redComponent),\(srgb.greenComponent),\(srgb.blueComponent))")
+        } else { check(false, "the color property reads back") }
+        let covered = pixel(session, image, x: 40, y: 40)
+        check((covered?[0] ?? 0) > 200 && (covered?[1] ?? 255) < 160,
+              "the color preview changes pixels (\(covered ?? []))")
+        colorPanel.cancel()
+        wait()
+        check((try? session.filterProperty(colorFilter, "value")) == nil,
+              "the cancelled color session is gone")
+
+        // Value Invert has no editable properties: the form shows a note
+        // instead of a settings grid, and the preview still commits and
+        // cancels like any other — no empty grid, no immediate apply.
+        let invert = operations.first { $0.name == "gegl:value-invert" }
+        check(invert?.support == .supported, "Value Invert is a supported native operation")
+        let preInvert = pixel(session, image, x: 8, y: 30)
+        guard let invertOp = invert, let invertPanel = open(invertOp) else {
+            check(false, "the no-settings form opens")
+            return
+        }
+        let undoBeforeInvert = document.undoInfo.undoCount
+        check(pixel(session, image, x: 8, y: 30) != preInvert,
+              "the no-settings preview changes pixels")
+        invertPanel.cancel()
+        wait()
+        check(pixel(session, image, x: 8, y: 30) == preInvert
+                && document.undoInfo.undoCount == undoBeforeInvert
+                && !document.filterPreviewIsOpen,
+              "cancel on a no-settings form restores pixels and leaves no history")
+        guard let invertAgain = open(invertOp) else {
+            check(false, "the no-settings form reopens")
+            return
+        }
+        invertAgain.commit()
+        let invertDeadline = Date().addingTimeInterval(10)
+        while controller.previewPanel != nil && Date() < invertDeadline { spin(0.02) }
+        wait()
+        try? document.reload()
+        check(document.undoInfo.undoCount == undoBeforeInvert + 1
+                && document.undoInfo.nextUndo.contains("Invert"),
+              "Apply on a no-settings form adds one named undo step (\(document.undoInfo.nextUndo))")
+        check(pixel(session, image, x: 8, y: 30) != preInvert,
+              "the committed no-settings filter changed the layer")
+
+        // A begin must queue behind pending input: a blocked job stands
+        // in for a committed stroke still on its way to the engine. The
+        // open returns at once; session and panel land only after the
+        // input has drained. Median Blur's properties are warm in the
+        // catalog, so nothing but the input can delay the start.
+        let beforePending = pixel(session, image, x: 8, y: 30)
+        let gate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { gate.wait() }
+        // Released from a background queue after a beat: a synchronous
+        // begin would stall measurably here, a queued one returns at once.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.8) { gate.signal() }
+        let openStart = DispatchTime.now()
+        controller.openNativeFilter(medianOp)
+        let openMilliseconds = milliseconds(since: openStart)
+        check(controller.previewPanel == nil && document.filterPreviewIsOpen,
+              "a filter open behind pending input returns before its panel exists")
+        check(openMilliseconds < 500,
+              "the open does not wait on the input queue (\(Int(openMilliseconds)) ms)")
+        // Escape cancels the pending start before its session is used.
+        controller.cancelOperation(nil)
+        check(controller.previewPanel == nil && !document.filterPreviewIsOpen,
+              "Escape cancels a pending filter start")
+        let undoBeforePending = document.undoInfo.undoCount
+        wait()
+        check(document.undoInfo.undoCount == undoBeforePending && controller.previewPanel == nil,
+              "a cancelled pending start leaves no session, panel or undo step")
+        check(pixel(session, image, x: 8, y: 30) == beforePending, "…and changes no pixels")
+
+        // A document close during a pending start drains the counted
+        // begin and the image takes the begun session with it.
+        let pendingImage = try session.newImage(width: 16, height: 16)
+        let pendingNative = work.appendingPathComponent("pending-start.xcf")
+        try session.save(pendingImage, to: pendingNative.path)
+        let pendingDocument = try ImageDocument(session: session, image: pendingImage,
+                                                name: "Pending", openedFrom: pendingNative)
+        documents.items.append(pendingDocument)
+        let pendingController = DocumentWindowController(document: pendingDocument)
+        pendingController.showWindow(nil)
+        let pendingGate = DispatchSemaphore(value: 0)
+        pendingDocument.inputQueue.async { pendingGate.wait() }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.8) { pendingGate.signal() }
+        let pendingStart = DispatchTime.now()
+        pendingController.openNativeFilter(medianOp)
+        check(pendingController.previewPanel == nil && milliseconds(since: pendingStart) < 500,
+              "a pending start on a clean image returns promptly too")
+        var pendingClosed: Bool?
+        pendingController.requestClose { pendingClosed = $0 }
+        check(pendingClosed == nil, "the close waits for the pending begin")
+        let pendingDeadline = Date().addingTimeInterval(10)
+        while pendingClosed == nil && Date() < pendingDeadline { spin(0.02) }
+        check(pendingClosed == true && !pendingDocument.hasUnsavedChanges,
+              "closing during a pending start asks nothing and finishes")
+        let destroyDeadline = Date().addingTimeInterval(10)
+        while (try? session.info(pendingImage)) != nil && Date() < destroyDeadline { spin(0.02) }
+        check((try? session.info(pendingImage)) == nil,
+              "the image is destroyed and the begun session goes with it")
+        documents.items.removeAll { $0 === pendingDocument }
+
+        // A clean close cancels the open preview and leaves no session
+        // behind: the image's own close path is the drain.
+        let cleanImage = try session.newImage(width: 16, height: 16)
+        let native = work.appendingPathComponent("native-clean.xcf")
+        try session.save(cleanImage, to: native.path)
+        let cleanDocument = try ImageDocument(session: session, image: cleanImage,
+                                              name: "Clean", openedFrom: native)
+        documents.items.append(cleanDocument)
+        let cleanController = DocumentWindowController(document: cleanDocument)
+        cleanController.showWindow(nil)
+        cleanController.openNativeFilter(overlayOp)
+        let cleanDeadline = Date().addingTimeInterval(10)
+        while cleanController.previewPanel == nil && Date() < cleanDeadline { spin(0.02) }
+        let cleanFilter = cleanController.previewPanel?.filter
+        var closed: Bool?
+        cleanController.requestClose { closed = $0 }
+        while closed == nil && cleanController.window?.attachedSheet == nil && Date() < cleanDeadline { spin(0.02) }
+        check(closed == true && cleanController.window?.attachedSheet == nil,
+              "closing a clean image cancels the generic preview without prompting")
+        if let sheet = cleanController.window?.attachedSheet {
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+        }
+        while (try? session.info(cleanImage)) != nil && Date() < cleanDeadline { spin(0.02) }
+        check((try? session.filterProperty(cleanFilter ?? 0, "value")) == nil,
+              "the closed image's filter session is gone")
+        documents.items.removeAll { $0 === cleanDocument }
         controller.window?.orderOut(nil)
     }
 

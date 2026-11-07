@@ -22,13 +22,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private var documents: [DocumentWindowController] = []
     private var workspace: WorkspaceWindowController?
     private var newImagePanel: NewImagePanel?
+    private var preferencesWindow: PreferencesWindowController?
     private var pendingOpenURLs: [URL] = []
     private var openingURLs: Set<URL> = []
     private var pendingFileOperations = 0
     private var terminationRequested = false
     private let fileWrites = FileWriteCoordinator()
     private var terminationClosingDocument: DocumentWindowController?
-    private let openQueue = DispatchQueue(label: "ch.lkmc.Glims.open", qos: .userInitiated)
 
     private lazy var toolsPalette: Palette = PaletteCenter.shared.palette(
         for: ToolsPaletteController.definition,
@@ -50,6 +50,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         target: { [weak self] in self?.frontDocument },
         makeContent: { PathsPaletteController() })
 
+    private lazy var historyPalette: Palette = PaletteCenter.shared.palette(
+        for: HistoryPaletteController.definition,
+        target: { [weak self] in self?.frontDocument },
+        makeContent: { HistoryPaletteController() })
+
     var frontDocument: ImageDocument? {
         (NSApp.mainWindow?.windowController as? DocumentWindowController)?.imageDocument ?? documents.last?.imageDocument
     }
@@ -61,13 +66,15 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     /// The first-launch layout (docs/design.md, section 2): Tools at the
     /// top left with Tool Options docked under it as one column, Layers at
-    /// the top right. Rigi keeps whatever the person arranges since, and a
-    /// frame saved by an earlier build still places its palette once.
+    /// the top right. History shares Layers' and Paths' group rather than
+    /// adding a column. Rigi keeps whatever the person arranges since, and
+    /// a frame saved by an earlier build still places its palette once.
     static let defaultPaletteLayout = [
         PaletteGroupDefault([ToolsPaletteController.definition.kind], placement: .topLeading),
         PaletteGroupDefault([ToolOptionsPaletteController.definition.kind],
                             placement: .docked(below: ToolsPaletteController.definition.kind)),
-        PaletteGroupDefault([LayersPaletteController.definition.kind, PathsPaletteController.definition.kind],
+        PaletteGroupDefault([LayersPaletteController.definition.kind, PathsPaletteController.definition.kind,
+                             HistoryPaletteController.definition.kind],
                             placement: .topTrailing),
     ]
 
@@ -83,6 +90,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        ClassicChrome.apply(scheme: EditorPreferences.shared.appearance)
+        NotificationCenter.default.addObserver(self, selector: #selector(preferencesChanged),
+                                               name: EditorPreferences.didChange, object: EditorPreferences.shared)
+        NotificationCenter.default.addObserver(self, selector: #selector(auxiliaryWindowBecameKey(_:)),
+                                               name: NSWindow.didBecomeKeyNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(openPendingFiles),
                                                name: PlugInCommands.didFinishNotification, object: nil)
         guard let path = EngineLibrary.configuredPath() else {
@@ -105,6 +117,26 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             DispatchQueue.main.async { self?.engineDidStart(result) }
         }
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func preferencesChanged() {
+        ClassicChrome.apply(scheme: EditorPreferences.shared.appearance)
+        NSApp.windows.forEach { applyAuxiliaryAppearance($0) }
+    }
+
+    @objc private func auxiliaryWindowBecameKey(_ notification: Notification) {
+        if let window = notification.object as? NSWindow { applyAuxiliaryAppearance(window) }
+    }
+
+    private func applyAuxiliaryAppearance(_ window: NSWindow) {
+        guard !(window.windowController is DocumentWindowController) else { return }
+        window.appearance = EditorPreferences.shared.chromeAppearance
+    }
+
+    @objc func showPreferences(_ sender: Any?) {
+        if preferencesWindow == nil { preferencesWindow = PreferencesWindowController() }
+        preferencesWindow?.showWindow(nil)
+        preferencesWindow?.window?.makeKeyAndOrderFront(nil)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -160,6 +192,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             if let mainMenu = NSApp.mainMenu, let procedures = try? session.procedures() {
                 PlugInMenus.install(procedures, in: mainMenu)
             }
+            // The operation catalog is slower: fetched off-main, its menu
+            // lands whenever it is ready.
+            NativeFilterCatalog.shared.load(using: session)
             workspace?.close()
             workspace = nil
             if pendingOpenURLs.isEmpty {
@@ -207,6 +242,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     func open(_ document: ImageDocument) {
+        document.snapshotHandler = { [weak self] document in self?.snapshot(document) }
         let controller = DocumentWindowController(document: document)
         controller.reserveWrite = { [weak self, weak controller] url in
             guard let self, let controller else { throw ImageDocument.DocumentError.closed }
@@ -229,11 +265,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         }
         documents.append(controller)
         controller.showWindow(nil)
-        controller.fitImage(nil)
+        if EditorPreferences.shared.initialView == .fit { controller.fitImage(nil) }
         PaletteCenter.shared.frontDocumentDidChange()
         PaletteCenter.shared.setDefaultLayout(Self.defaultPaletteLayout)
-        // Paths before Layers, so Layers is the tab their group shows.
-        for palette in [toolsPalette, toolOptionsPalette, pathsPalette, layersPalette] where !palette.isPresented {
+        // Paths and History before Layers, so Layers is the tab their
+        // shared group shows.
+        for palette in [toolsPalette, toolOptionsPalette, pathsPalette, historyPalette, layersPalette]
+        where !palette.isPresented {
             palette.showPanel()
         }
         loadFontsIfNeeded(using: document)
@@ -273,7 +311,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private func createDocument(width: Int, height: Int) {
         guard let session, !terminationRequested else { return }
         pendingFileOperations += 1
-        openQueue.async {
+        EngineActivity.shared.performWhenReady(label: "Creating an image", work: {
             let result = Result { try session.newImage(width: width, height: height) }
             DispatchQueue.main.async {
                 self.pendingFileOperations -= 1
@@ -284,7 +322,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                     NSAlert(error: error).runModal()
                 }
             }
-        }
+        })
     }
 
     @objc func pasteAsNewImage(_ sender: Any?) {
@@ -295,7 +333,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             return
         }
         pendingFileOperations += 1
-        openQueue.async {
+        EngineActivity.shared.performWhenReady(label: "Creating an image from the clipboard", work: {
             let result = Result { try session.newImage(pixels: payload.decoded()) }
             DispatchQueue.main.async {
                 self.pendingFileOperations -= 1
@@ -308,7 +346,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                     NSAlert(error: error).runModal()
                 }
             }
-        }
+        })
     }
 
     @objc func openRecentDocument(_ sender: Any?) {
@@ -371,7 +409,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             guard openingURLs.insert(url).inserted else { continue }
             pendingFileOperations += 1
             // File plug-ins must not block the AppKit thread.
-            openQueue.async {
+            EngineActivity.shared.performWhenReady(label: "Opening \(url.lastPathComponent)", work: {
                 let result = Result { try session.openImage(path: url.path) }
                 DispatchQueue.main.async {
                     self.openingURLs.remove(url)
@@ -384,7 +422,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                         NSAlert(error: error).runModal()
                     }
                 }
-            }
+            })
         }
     }
 
@@ -404,6 +442,52 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         pathsPalette.isPresented ? pathsPalette.bringToFront() : pathsPalette.showPanel()
     }
 
+    @objc func showHistory(_ sender: Any?) {
+        historyPalette.isPresented ? historyPalette.bringToFront() : historyPalette.showPanel()
+    }
+
+    /// Image ▸ New Snapshot and the History palette's button: queues a
+    /// native copy on the source document, then opens it as a fresh
+    /// unsaved document. The whole transaction counts as a file operation
+    /// so Quit waits; a copy nobody can adopt — a failed ImageDocument or
+    /// a Quit that already started — is closed again. The callback stays
+    /// bound to the source document, whoever is front document then.
+    func snapshot(_ document: ImageDocument) {
+        guard !terminationRequested else { return }
+        guard document.acceptsEdits else {
+            document.onError?(document.isClosing
+                ? ImageDocument.DocumentError.closed.localizedDescription
+                : ImageDocument.DocumentError.busy.localizedDescription)
+            return
+        }
+        let session = document.session
+        pendingFileOperations += 1
+        document.snapshot { [weak self] result in
+            guard let self else {
+                if case .success(let image) = result { try? session.closeImage(image) }
+                return
+            }
+            self.pendingFileOperations -= 1
+            defer { self.closeNextDocumentForTermination() }
+            switch result {
+            case .success(let image):
+                if self.terminationRequested {
+                    try? session.closeImage(image)
+                    return
+                }
+                do {
+                    self.open(try ImageDocument(session: session, image: image,
+                                                name: "\(document.name) snapshot"))
+                } catch {
+                    try? session.closeImage(image)
+                    NSAlert(error: error).runModal()
+                }
+            case .failure(let error):
+                document.onError?(String(describing: error))
+            }
+        }
+    }
+
     @objc func togglePaletteVisibility(_ sender: Any?) {
         Self.togglePalettes(keepingTools: false)
     }
@@ -420,8 +504,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         case #selector(newDocument(_:)), #selector(openDocument(_:)), #selector(openRecentDocument(_:)):
             // A plug-in dialog is modal for the engine (glims_engine.h).
             return session != nil && !PlugInCommands.isRunning && !terminationRequested
-        case #selector(showLayers(_:)), #selector(showPaths(_:)), #selector(showTools(_:)),
-             #selector(showToolOptions(_:)):
+        case #selector(showLayers(_:)), #selector(showPaths(_:)), #selector(showHistory(_:)),
+             #selector(showTools(_:)), #selector(showToolOptions(_:)):
             return session != nil
         case #selector(togglePaletteVisibility(_:)):
             menuItem.title = PaletteCenter.shared.isHidingPalettes ? "Show Palettes" : "Hide Palettes"

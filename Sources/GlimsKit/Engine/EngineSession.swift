@@ -194,6 +194,24 @@ final class EngineSession: @unchecked Sendable {
         let nextRedo: String
     }
 
+    /// One state of an image's undo history (GlimsHistoryRow): `position`
+    /// orders states from the earliest retained one; `name` is the action
+    /// that produced the state.
+    struct HistoryRow: Equatable {
+        let position: Int32
+        let name: String
+    }
+
+    /// A consistent read of an image's undo history (GlimsHistoryInfo):
+    /// the revision these rows and the current position were seen
+    /// together with. It changes whenever the history changes, so moving
+    /// to a state is only valid while the revision matches.
+    struct History: Equatable {
+        let revision: UInt64
+        let currentPosition: Int32
+        let rows: [HistoryRow]
+    }
+
     /// A paint stroke's tool and settings. `nil` numbers keep the engine's
     /// default for that tool.
     struct Brush: Equatable {
@@ -445,6 +463,57 @@ final class EngineSession: @unchecked Sendable {
     func undo(_ image: Int32) throws { try check(api.image_undo(engine, image), nil) }
     func redo(_ image: Int32) throws { try check(api.image_redo(engine, image), nil) }
 
+    // MARK: History and snapshots
+
+    /// How many times `history` re-reads with the size the engine last
+    /// reported before giving up.
+    private static let historyReadAttempts = 4
+
+    /// The image's undo history as one consistent list (image_history).
+    /// The engine can grow the list between the size probe and the fill;
+    /// the read is retried a bounded number of times with the size it
+    /// last reported, never indexing past the rows allocated.
+    func history(_ image: Int32) throws -> History {
+        var info = GlimsHistoryInfo()
+        try check(api.image_history(engine, image, nil, 0, &info), nil)
+        var capacity = info.count
+        for _ in 0..<Self.historyReadAttempts {
+            var rows = [GlimsHistoryRow](repeating: GlimsHistoryRow(), count: Int(capacity))
+            try rows.withUnsafeMutableBufferPointer { buffer in
+                try check(api.image_history(engine, image, buffer.baseAddress, capacity, &info), nil)
+            }
+            guard info.count > capacity else {
+                // `info` pairs this exact read's revision with its rows.
+                return History(revision: info.revision, currentPosition: info.current_position,
+                               rows: rows.prefix(Int(info.count)).map {
+                                   HistoryRow(position: $0.position, name: Self.string($0.name)) })
+            }
+            capacity = info.count
+        }
+        throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                          message: "The image history kept changing while it was being read.")
+    }
+
+    /// Moves through undo/redo to a state from `history`. A stale
+    /// `revision` or an invalid position is refused without changing the
+    /// image; BUSY while a stroke, preview or plug-in is active
+    /// (image_history_move).
+    func moveHistory(_ image: Int32, revision: UInt64, to position: Int32) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_history_move(engine, image, revision, position, &error), error)
+    }
+
+    /// An independent unsaved image with the source's layers, filters and
+    /// paths and an empty history (image_duplicate). The source's file
+    /// identity, pixels and history are unchanged. BUSY while a stroke,
+    /// preview or plug-in is active.
+    func duplicateImage(_ image: Int32) throws -> Int32 {
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_duplicate(engine, image, &result, &error), error)
+        return result
+    }
+
     // MARK: Painting
 
     func beginStroke(image: Int32, layer: Int32, brush: Brush, first: StrokePoint) throws -> Int32 {
@@ -496,6 +565,221 @@ final class EngineSession: @unchecked Sendable {
 
     func abortFilter(_ filter: Int32) throws {
         try check(api.filter_abort(engine, filter), nil)
+    }
+
+    // MARK: Filter metadata
+
+    /// Whether a native property form can drive the operation
+    /// (GlimsFilterOpSupport).
+    enum FilterOpSupport: Equatable {
+        case supported
+        /// Needs a second input layer; a later slice.
+        case needsAuxInput
+        /// Its settings live on a config object (Curves & co.); a later slice.
+        case needsConfig
+    }
+
+    /// One filter operation of the engine catalog (GlimsOperationInfo).
+    struct FilterOperation: Equatable {
+        /// The engine's name, e.g. "gegl:gaussian-blur".
+        let name: String
+        /// The operation's human title, e.g. "Gaussian Blur".
+        let title: String
+        /// The engine's categories, split on ':'.
+        let categories: [String]
+        let blurb: String
+        let support: FilterOpSupport
+    }
+
+    /// The property kinds the facade can read and write
+    /// (GlimsFilterValueKind); `unsupported` rows show as disabled.
+    enum FilterValueKind: Equatable {
+        case unsupported, number, integer, boolean, enumeration, string, color
+    }
+
+    /// One editable property of an operation (GlimsFilterProperty).
+    /// `minimum`/`maximum` are the absolute limits; `uiMinimum`…`uiGamma`
+    /// the engine's suggested form range and mapping. Fields a kind does
+    /// not use are zero.
+    struct FilterProperty: Equatable {
+        let name: String
+        let label: String
+        let blurb: String
+        /// The engine's unit hint key, e.g. "pixel-distance"; "" when none.
+        let unit: String
+        let kind: FilterValueKind
+        let minimum: Double
+        let maximum: Double
+        let uiMinimum: Double
+        let uiMaximum: Double
+        let uiStepSmall: Double
+        let uiStepBig: Double
+        let uiGamma: Double
+        /// Suggested decimals; -1 for the default.
+        let uiDigits: Int
+        let defaultNumber: Double
+        let defaultBool: Bool
+        /// An enum's default nick, a string's default text.
+        let defaultString: String
+        let defaultColor: NSColor
+        /// The enum's valid nick count.
+        let choiceCount: Int
+        /// The enum's choices; the catalog fills them in.
+        var choices: [FilterEnumChoice] = []
+    }
+
+    /// One valid value of an enum property: `nick` is what the setter
+    /// accepts, `label` what the user reads.
+    struct FilterEnumChoice: Equatable {
+        let nick: String
+        let label: String
+    }
+
+    /// A typed property value of an open filter session.
+    enum FilterValue: Equatable {
+        case number(Double)
+        case integer(Int64)
+        case boolean(Bool)
+        /// The choice's nick.
+        case enumeration(String)
+        case string(String)
+        case color(NSColor)
+    }
+
+    /// The catalog's filter operations, sorted by name.
+    func filterOperations() throws -> [FilterOperation] {
+        var count: Int32 = 0
+        try check(api.filter_operations(engine, nil, 0, &count), nil)
+        var rows = [GlimsOperationInfo](repeating: GlimsOperationInfo(), count: Int(count))
+        var filled: Int32 = 0
+        try rows.withUnsafeMutableBufferPointer { buffer in
+            try check(api.filter_operations(engine, buffer.baseAddress, count, &filled), nil)
+        }
+        return rows.prefix(Int(min(count, filled))).map(Self.filterOperation)
+    }
+
+    /// One operation's editable properties in declaration order.
+    func filterOperationProperties(_ operation: String) throws -> [FilterProperty] {
+        var count: Int32 = 0
+        try check(api.filter_operation_properties(engine, operation, nil, 0, &count), nil)
+        var rows = [GlimsFilterProperty](repeating: GlimsFilterProperty(), count: Int(count))
+        var filled: Int32 = 0
+        try rows.withUnsafeMutableBufferPointer { buffer in
+            try check(api.filter_operation_properties(engine, operation, buffer.baseAddress, count, &filled), nil)
+        }
+        return rows.prefix(Int(min(count, filled))).map(Self.property)
+    }
+
+    /// An enum property's valid nicks and labels.
+    func filterEnumChoices(_ operation: String, property: String) throws -> [FilterEnumChoice] {
+        var count: Int32 = 0
+        try check(api.filter_enum_choices(engine, operation, property, nil, 0, &count), nil)
+        var rows = [GlimsFilterEnumChoice](repeating: GlimsFilterEnumChoice(), count: Int(count))
+        var filled: Int32 = 0
+        try rows.withUnsafeMutableBufferPointer { buffer in
+            try check(api.filter_enum_choices(engine, operation, property, buffer.baseAddress, count, &filled), nil)
+        }
+        return rows.prefix(Int(min(count, filled)))
+            .map { FilterEnumChoice(nick: Self.string($0.nick), label: Self.string($0.label)) }
+    }
+
+    /// One property's current value in an open filter session.
+    func filterProperty(_ filter: Int32, _ property: String) throws -> FilterValue {
+        var value = GlimsFilterValue()
+        try check(api.filter_get_property(engine, filter, property, &value), nil)
+        guard let converted = Self.value(value) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The engine returned a value kind the form cannot read.")
+        }
+        return converted
+    }
+
+    /// Sets one property of an open filter session; the preview updates
+    /// without an undo step.
+    func setFilterProperty(_ filter: Int32, _ property: String, to value: FilterValue) throws {
+        var raw = try Self.rawValue(value)
+        try check(api.filter_set_property(engine, filter, property, &raw), nil)
+    }
+
+    private static func filterOperation(_ row: GlimsOperationInfo) -> FilterOperation {
+        let support: FilterOpSupport
+        switch Int(row.support) {
+        case Int(GLIMS_FILTER_OP_AUX_INPUT.rawValue): support = .needsAuxInput
+        case Int(GLIMS_FILTER_OP_CONFIG.rawValue): support = .needsConfig
+        default: support = .supported
+        }
+        return FilterOperation(name: string(row.name), title: string(row.title),
+                               categories: string(row.categories).split(separator: ":").map(String.init),
+                               blurb: string(row.blurb), support: support)
+    }
+
+    private static func property(_ row: GlimsFilterProperty) -> FilterProperty {
+        let kind: FilterValueKind
+        switch Int(row.kind) {
+        case Int(GLIMS_FILTER_VALUE_NUMBER.rawValue): kind = .number
+        case Int(GLIMS_FILTER_VALUE_INTEGER.rawValue): kind = .integer
+        case Int(GLIMS_FILTER_VALUE_BOOL.rawValue): kind = .boolean
+        case Int(GLIMS_FILTER_VALUE_ENUM.rawValue): kind = .enumeration
+        case Int(GLIMS_FILTER_VALUE_STRING.rawValue): kind = .string
+        case Int(GLIMS_FILTER_VALUE_COLOR.rawValue): kind = .color
+        default: kind = .unsupported
+        }
+        return FilterProperty(name: string(row.name), label: string(row.label),
+                              blurb: string(row.blurb), unit: string(row.unit), kind: kind,
+                              minimum: row.min, maximum: row.max,
+                              uiMinimum: row.ui_min, uiMaximum: row.ui_max,
+                              uiStepSmall: row.ui_step_small, uiStepBig: row.ui_step_big,
+                              uiGamma: row.ui_gamma, uiDigits: Int(row.ui_digits),
+                              defaultNumber: row.default_number, defaultBool: row.default_bool,
+                              defaultString: string(row.default_string),
+                              defaultColor: Self.nsColor(row.default_color),
+                              choiceCount: Int(row.choice_count))
+    }
+
+    private static func value(_ raw: GlimsFilterValue) -> FilterValue? {
+        switch Int(raw.kind) {
+        case Int(GLIMS_FILTER_VALUE_NUMBER.rawValue): return .number(raw.number)
+        case Int(GLIMS_FILTER_VALUE_INTEGER.rawValue): return .integer(raw.integer)
+        case Int(GLIMS_FILTER_VALUE_BOOL.rawValue): return .boolean(raw.boolean)
+        case Int(GLIMS_FILTER_VALUE_ENUM.rawValue): return .enumeration(string(raw.string))
+        case Int(GLIMS_FILTER_VALUE_STRING.rawValue): return .string(string(raw.string))
+        case Int(GLIMS_FILTER_VALUE_COLOR.rawValue): return .color(Self.nsColor(raw.color))
+        default: return nil
+        }
+    }
+
+    private static func rawValue(_ value: FilterValue) throws -> GlimsFilterValue {
+        var raw = GlimsFilterValue()
+        switch value {
+        case .number(let number):
+            guard number.isFinite else {
+                throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                                  message: "The filter setting needs a finite number.")
+            }
+            raw.kind = GLIMS_FILTER_VALUE_NUMBER.rawValue
+            raw.number = number
+        case .integer(let integer):
+            raw.kind = GLIMS_FILTER_VALUE_INTEGER.rawValue
+            raw.integer = integer
+        case .boolean(let boolean):
+            raw.kind = GLIMS_FILTER_VALUE_BOOL.rawValue
+            raw.boolean = boolean
+        case .enumeration(let nick):
+            raw.kind = GLIMS_FILTER_VALUE_ENUM.rawValue
+            copy(nick, into: &raw.string)
+        case .string(let text):
+            raw.kind = GLIMS_FILTER_VALUE_STRING.rawValue
+            copy(text, into: &raw.string)
+        case .color(let color):
+            raw.kind = GLIMS_FILTER_VALUE_COLOR.rawValue
+            raw.color = Self.color(color)
+        }
+        return raw
+    }
+
+    private static func nsColor(_ color: GlimsColor) -> NSColor {
+        NSColor(srgbRed: CGFloat(color.red), green: CGFloat(color.green),
+                blue: CGFloat(color.blue), alpha: CGFloat(color.alpha))
     }
 
     // MARK: Selections
