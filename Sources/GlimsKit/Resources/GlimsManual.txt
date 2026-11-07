@@ -184,7 +184,7 @@ Groups open and close with the disclosure triangle.
 The Layer menu: New Layer (Shift-Command-N), New Layer Group,
 Duplicate Layer (Command-J), Delete Layer, Layer Properties…,
 Arrange > (Bring to Front Shift-Command-], Bring Forward Command-],
-Send Backward Command-[, Send to Backward Shift-Command-[),
+Send Backward Command-[, Send to Back Shift-Command-[),
 Transform > (rotate and flip the layer), and Merge Down.
 Image > Flatten Image merges everything into one layer.
 
@@ -293,7 +293,7 @@ Menu commands:
   Bring to Front          Shift-Command-]
   Bring Forward           Command-]
   Send Backward           Command-[
-  Send to Backward        Shift-Command-[
+  Send to Back        Shift-Command-[
   All                     Command-A
   Deselect                Command-D
   Inverse                 Shift-Command-I
