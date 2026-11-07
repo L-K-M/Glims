@@ -764,8 +764,9 @@ typedef struct GlimsEngineAPI {
    * one of filter_enum_choices() and color channels finite inside
    * 0...1. NOT_FOUND for an unknown property or a finished session;
    * INVALID_ARGUMENT for pad, read-only or unsupported-kind properties
-   * and failed validation; BUSY while a plug-in runs. No undo step is
-   * added; filter_commit() covers the session's changes as one. */
+   * and failed validation; BUSY while a plug-in runs; LOCKED if the
+   * target acquires a pixel lock. No undo step is added;
+   * filter_commit() covers the session's changes as one. */
   GlimsStatus  (*filter_set_property)(GlimsEngine *engine, GlimsFilterID filter,
                                       const char *property, const GlimsFilterValue *value);
 } GlimsEngineAPI;

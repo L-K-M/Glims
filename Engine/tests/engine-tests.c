@@ -1793,6 +1793,20 @@ test_filter_properties (void)
 
   filter = 0;
   CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK &&
+         api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL) == GLIMS_STATUS_OK,
+         "a typed-preview target can acquire a pixel lock");
+  value = (GlimsFilterValue) { .kind = GLIMS_FILTER_VALUE_NUMBER, .number = 4.0 };
+  CHECK (api->filter_set_property (engine, filter, "std-dev-x", &value) == GLIMS_STATUS_LOCKED &&
+         api->filter_get_property (engine, filter, "std-dev-x", &value) == GLIMS_STATUS_OK &&
+         value.number == 1.5,
+         "typed preview changes refuse newly locked targets without changing the value");
+  CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK &&
+         api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, 0, NULL) == GLIMS_STATUS_OK,
+         "cancelling a typed preview remains available after locking");
+  before = undo_depth (image);
+
+  filter = 0;
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK &&
          api->filter_commit (engine, filter, NULL) == GLIMS_STATUS_OK &&
          undo_depth (image) == before + 1,
          "commit still lands as one undo step");

@@ -492,11 +492,11 @@ glims_filter_operation_properties (GlimsEngine          *engine,
     {
       GParamSpec *pspec = pspecs[i];
 
-      /* Editable, non-pad properties only: the same filter
-       * app/operations/gimp-operation-config.c applies. */
+      /* Match app/operations/gimp-operation-config.c. GEGL marks even
+       * ordinary numeric settings with GEGL_PARAM_PAD_INPUT, so those
+       * flags do not distinguish graph pads from editable settings. */
       if (! (pspec->flags & G_PARAM_READABLE) ||
           ! (pspec->flags & G_PARAM_WRITABLE) ||
-          (pspec->flags & (GEGL_PARAM_PAD_INPUT | GEGL_PARAM_PAD_OUTPUT)) ||
           ! strcmp (pspec->name, "input") || ! strcmp (pspec->name, "output"))
         continue;
 
@@ -581,7 +581,7 @@ glims_filter_get_property (GlimsEngine       *engine,
       return gegl_node_has_pad (session->operation, property) ? GLIMS_STATUS_INVALID_ARGUMENT
                                                             : GLIMS_STATUS_NOT_FOUND;
     }
-  if ((pspec->flags & (GEGL_PARAM_PAD_INPUT | GEGL_PARAM_PAD_OUTPUT)) ||
+  if (gegl_node_has_pad (session->operation, property) ||
       ! (pspec->flags & G_PARAM_READABLE))
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
@@ -807,19 +807,17 @@ glims_filter_set_property (GlimsEngine            *engine,
 {
   GlimsFilter *session = g_hash_table_lookup (engine->filters, GINT_TO_POINTER (id));
   GParamSpec  *pspec;
+  GlimsStatus status = glims_filter_check_edit (engine, id, NULL);
 
-  if (! session)
-    return GLIMS_STATUS_NOT_FOUND;
+  if (status != GLIMS_STATUS_OK) return status;
   if (! property || ! value)
     return GLIMS_STATUS_INVALID_ARGUMENT;
-  if (engine->busy > 0)
-    return GLIMS_STATUS_BUSY;
 
   pspec = session_property (session->operation, property);
   if (! pspec)
     return gegl_node_has_pad (session->operation, property) ? GLIMS_STATUS_INVALID_ARGUMENT
                                                           : GLIMS_STATUS_NOT_FOUND;
-  if ((pspec->flags & (GEGL_PARAM_PAD_INPUT | GEGL_PARAM_PAD_OUTPUT)) ||
+  if (gegl_node_has_pad (session->operation, property) ||
       ! (pspec->flags & G_PARAM_WRITABLE))
     return GLIMS_STATUS_INVALID_ARGUMENT;
   if (property_kind (pspec) != value->kind ||
