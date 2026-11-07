@@ -516,7 +516,10 @@ final class EngineSession: @unchecked Sendable {
 
     // MARK: Painting
 
-    func beginStroke(image: Int32, layer: Int32, brush: Brush, first: StrokePoint) throws -> Int32 {
+    /// Starts a stroke on `drawable` — a layer or a layer mask's drawable
+    /// id — and returns the stroke session `continueStroke`/`endStroke`
+    /// take.
+    func beginStroke(image: Int32, drawable: Int32, brush: Brush, first: StrokePoint) throws -> Int32 {
         var settings = GlimsBrushSettings(struct_size: UInt32(MemoryLayout<GlimsBrushSettings>.size),
                                           size: brush.size, opacity: brush.opacity,
                                           red: brush.red, green: brush.green, blue: brush.blue,
@@ -530,7 +533,7 @@ final class EngineSession: @unchecked Sendable {
         var point = Self.point(first)
         var stroke: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
-        try check(api.stroke_begin(engine, image, layer, &settings, &point, &stroke, &error), error)
+        try check(api.stroke_begin(engine, image, drawable, &settings, &point, &stroke, &error), error)
         return stroke
     }
 
@@ -971,6 +974,123 @@ final class EngineSession: @unchecked Sendable {
         var error: UnsafeMutablePointer<CChar>?
         try check(api.layer_transform_matrix(engine, image, layer, &values, interpolation.rawValue, &error),
                   error)
+    }
+
+    // MARK: Layer masks
+
+    /// A layer's mask state (GlimsMaskState): `mask` is the mask's
+    /// drawable id — usable as the drawable argument of `beginStroke`,
+    /// `beginFilter` and `drawableThumbnail` — or 0 when the layer has
+    /// none. `enabled` gates the mask's effect on the composite,
+    /// `editing` makes it the target of painting, fills and gradients
+    /// while its layer is the only selected one, and `showing` displays
+    /// the mask itself instead of the composite.
+    struct MaskState: Equatable {
+        var mask: Int32 = 0
+        var enabled = false
+        var editing = false
+        var showing = false
+    }
+
+    /// What a new layer mask is made from (GlimsMaskSource), in the
+    /// order the Add Mask form lists them.
+    enum MaskSource: UInt32, CaseIterable {
+        case white = 1, black, alpha, alphaTransfer = 4, selection, grayscale
+
+        var title: String {
+            switch self {
+            case .white: return "White (full opacity)"
+            case .black: return "Black (full transparency)"
+            case .alpha: return "Layer's alpha channel"
+            case .alphaTransfer: return "Layer's alpha channel (transparency transferred to layer)"
+            case .selection: return "Selection"
+            case .grayscale: return "Grayscale copy of the layer"
+            }
+        }
+    }
+
+    /// What `applyLayerMask` does with a mask (GlimsMaskApply).
+    enum MaskApply: UInt32 {
+        /// Bakes the mask into the layer, then removes it.
+        case apply = 1
+        /// Removes the mask without applying it.
+        case discard
+    }
+
+    /// The mask flags `setLayerMask` touches (GlimsMaskFlag).
+    struct MaskFlags: OptionSet, Equatable {
+        let rawValue: UInt32
+        static let enabled = MaskFlags(rawValue: GLIMS_MASK_ENABLED.rawValue)
+        static let editing = MaskFlags(rawValue: GLIMS_MASK_EDITING.rawValue)
+        static let showing = MaskFlags(rawValue: GLIMS_MASK_SHOWING.rawValue)
+    }
+
+    /// Reads `layer`'s mask state; `mask` is 0 when it has none.
+    func layerMask(_ layer: Int32, image: Int32) throws -> MaskState {
+        var state = GlimsMaskState()
+        try check(api.layer_mask(engine, image, layer, &state), nil)
+        return MaskState(mask: state.mask, enabled: state.enabled,
+                         editing: state.editing, showing: state.showing)
+    }
+
+    /// Adds a mask made from `source` to `layer` and returns its drawable
+    /// id. With `edit` the mask also becomes the edit target of painting,
+    /// fills and gradients while `layer` stays the only selected layer.
+    /// Fails when `layer` already has a mask or is empty.
+    @discardableResult
+    func addLayerMask(_ layer: Int32, image: Int32, source: MaskSource,
+                      edit: Bool = false) throws -> Int32 {
+        var mask: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.layer_mask_add(engine, image, layer, source.rawValue, edit, &mask, &error), error)
+        return mask
+    }
+
+    /// Sets the `MaskFlags` bits named by `flags` to `values`'s bits;
+    /// flags outside `flags` keep their state.
+    func setLayerMask(_ layer: Int32, image: Int32, flags: MaskFlags, values: MaskFlags) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.layer_mask_set(engine, image, layer, flags.rawValue, values.rawValue, &error), error)
+    }
+
+    /// Applies `layer`'s mask into the layer or discards it. Applying is
+    /// refused on groups and text, link and vector layers.
+    func applyLayerMask(_ layer: Int32, image: Int32, mode: MaskApply) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.layer_mask_apply(engine, image, layer, mode.rawValue, &error), error)
+    }
+
+    /// Combines `layer`'s mask into the selection by `operation`.
+    func layerMaskToSelection(_ layer: Int32, image: Int32,
+                              operation: SelectOperation) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.layer_mask_to_selection(engine, image, layer, operation.rawValue, &error), error)
+    }
+
+    /// `drawable`'s pixels (a layer, layer mask or channel id) scaled down
+    /// to fit `maxSize` × `maxSize`, never up-scaled: straight-alpha
+    /// 8-bit sRGB RGBA. Nil when the drawable is gone or empty.
+    func drawableThumbnail(_ drawable: Int32, image: Int32,
+                           maxSize: Int32 = 32) throws -> CGImage? {
+        var width: Int32 = 0
+        var height: Int32 = 0
+        // The written size never exceeds maxSize on an edge, so this
+        // buffer always holds the whole image in one call.
+        var pixels = [UInt8](repeating: 0, count: Int(maxSize) * Int(maxSize) * 4)
+        try pixels.withUnsafeMutableBufferPointer { buffer in
+            try check(api.drawable_thumbnail(engine, image, drawable, maxSize,
+                                            buffer.baseAddress, buffer.count, &width, &height), nil)
+        }
+        let w = Int(width), h = Int(height)
+        guard w > 0, h > 0 else { return nil }
+        let data = Data(bytes: pixels, count: w * h * 4) as CFData
+        guard let provider = CGDataProvider(data: data),
+              let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32,
+                       bytesPerRow: w * 4, space: space,
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: true,
+                       intent: .defaultIntent)
     }
 
     // MARK: Text

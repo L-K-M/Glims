@@ -492,6 +492,13 @@ final class CanvasToolController {
     /// Starts or continues the session on the selected layer and grabs the
     /// handle under the pointer. A double-click applies.
     private func beginTransformDrag(at point: CGPoint, clickCount: Int) {
+        if document.isMaskTargetActive {
+            // The transform session describes the layer's bounds; a mask
+            // target cannot be moved or transformed on its own.
+            onStatus?("Select the layer to transform; a mask cannot be moved or transformed.")
+            dragTool = nil
+            return
+        }
         guard let layer = document.layers.first(where: { $0.id == document.activeLayer }),
               layer.bounds.width > 0, layer.bounds.height > 0 else {
             onStatus?("Select a layer to transform.")

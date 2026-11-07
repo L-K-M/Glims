@@ -80,12 +80,36 @@ enum MainMenu {
             lockItem.tag = Int(bit.rawValue)
             lock.submenu?.addItem(lockItem)
         }
+
+        let maskToSelection = NSMenuItem(title: "Mask to Selection", action: nil, keyEquivalent: "")
+        maskToSelection.submenu = NSMenu(title: "Mask to Selection")
+        let maskOperations: [(String, EngineSession.SelectOperation)] = [
+            ("Replace Selection", .replace), ("Add to Selection", .add),
+            ("Subtract from Selection", .subtract), ("Intersect with Selection", .intersect),
+        ]
+        for (title, operation) in maskOperations {
+            let op = item(title, #selector(DocumentWindowController.maskToSelection(_:)))
+            op.tag = Int(operation.rawValue)
+            maskToSelection.submenu?.addItem(op)
+        }
+        let mask = submenu("Mask", [
+            item("Add Layer Mask…", #selector(DocumentWindowController.addLayerMask(_:))),
+            item("Apply Mask", #selector(DocumentWindowController.applyLayerMask(_:))),
+            item("Delete Mask", #selector(DocumentWindowController.deleteLayerMask(_:))),
+            .separator(),
+            item("Enable Mask", #selector(DocumentWindowController.toggleMaskEnabled(_:))),
+            item("Edit Mask", #selector(DocumentWindowController.toggleMaskEditing(_:))),
+            item("Show Mask", #selector(DocumentWindowController.toggleMaskShowing(_:))),
+            .separator(),
+            maskToSelection,
+        ])
         add(menu, "Layer", [
             newLayer,
             item("New Layer Group", #selector(DocumentWindowController.newLayerGroup(_:))),
             item("Duplicate Layer", #selector(DocumentWindowController.duplicateLayer(_:)), "j"),
             item("Delete Layer", #selector(DocumentWindowController.deleteLayer(_:))),
             .separator(),
+            mask,
             item("Layer Properties…", #selector(DocumentWindowController.layerProperties(_:))),
             arrange,
             lock,

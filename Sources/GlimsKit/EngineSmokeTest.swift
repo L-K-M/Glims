@@ -98,6 +98,7 @@ enum EngineSmokeTest {
             try exerciseTools(session, documents: documents)
             try exerciseEditing(session, documents: documents)
             try exerciseLayerTree(session, documents: documents)
+            try exerciseLayerMasks(session, documents: documents)
             try exercisePreferences(session, documents: documents)
             try exercisePaths(session, documents: documents)
             try exercisePaletteControls(session, documents: documents)
@@ -951,6 +952,291 @@ enum EngineSmokeTest {
         controller.cancelOperation(nil)
         settle()
         check(!document.filterPreviewIsOpen, "canceling the preview reopens layer commands")
+
+        controller.window?.orderOut(nil)
+    }
+
+    /// Layer masks end to end through the document: the mask thumbnail
+    /// pick and its queued ordering, mask painting, disabled and shown
+    /// masks, Copy/Clear targeting, mask-to-selection, apply and undo,
+    /// group masks, filter preview on a mask, and the refusals for edits
+    /// a mask cannot take.
+    private static func exerciseLayerMasks(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Masks")
+        documents.items.append(document)
+        defer {
+            document.onWillChangeLayers = nil
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        let controller = DocumentWindowController(document: document)
+        var errors: [String] = []
+        let previousError = document.onError
+        document.onError = { message in errors.append(message); previousError?(message) }
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+        /// One pixel of the rendered composite at image coordinates.
+        func composite(_ x: Int, _ y: Int) -> [UInt8]? { pixel(session, image, x: x, y: y) }
+        /// One pixel of `drawable`'s bounded thumbnail; thumbnails come
+        /// back at half size for this 64 px image.
+        func thumbPixel(_ drawable: Int32, _ x: Int, _ y: Int) -> [UInt8]? {
+            guard let cg = try? session.drawableThumbnail(drawable, image: image, maxSize: 32),
+                  let data = cg.dataProvider?.data as Data? else { return nil }
+            let offset = (y * cg.width + x) * 4
+            guard offset + 4 <= data.count else { return nil }
+            return Array(data[offset..<offset + 4])
+        }
+        func luminance(_ rgba: [UInt8]?) -> Int {
+            guard let rgba else { return -1 }
+            return (Int(rgba[0]) + Int(rgba[1]) + Int(rgba[2])) / 3
+        }
+        let black = EngineSession.Brush(size: 8, opacity: 1, red: 0, green: 0, blue: 0, pressureSize: false)
+        guard let layer = document.activeLayer else {
+            check(false, "a new image has a layer to mask")
+            return
+        }
+
+        // A dark mark on the layer the mask tests must not lose.
+        document.beginStroke(at: .init(x: 10, y: 10, pressure: 1), brush: black)
+        document.continueStroke((11...20).map { .init(x: Double($0), y: 10, pressure: 1) })
+        document.endStroke()
+        settle()
+        check(luminance(composite(15, 10)) < 64, "the layer carries a dark mark before masking")
+
+        // Add Mask: white source with Edit Mask Immediately, as the form
+        // offers; the mask becomes the active drawable.
+        document.addMask(layer, source: .white, edit: true)
+        settle()
+        guard let mask = document.maskStates[layer], mask.mask != 0, mask.editing else {
+            check(false, "Add Mask with Edit Mask Immediately creates an editing mask")
+            return
+        }
+        check(document.activeDrawable == mask.mask && document.isMaskTargetActive,
+              "the mask pick makes the mask the active drawable")
+        check(document.layers.first(where: { $0.id == layer })?.hasMask == true,
+              "the layer reports its mask")
+
+        // Painting on the mask: black over a white mask hides the layer
+        // there while the layer's own pixels stay untouched.
+        document.beginStroke(at: .init(x: 38, y: 38, pressure: 1), brush: black)
+        document.continueStroke((39...46).map { .init(x: Double($0), y: 38, pressure: 1) })
+        document.endStroke()
+        settle()
+        check(luminance(thumbPixel(mask.mask, 21, 19)) < 64,
+              "the stroke landed on the mask (dark at the thumbnail)")
+        check((composite(42, 38)?[3] ?? 255) < 64,
+              "the composite is masked out where the mask is black")
+        check(luminance(composite(15, 10)) < 64,
+              "the layer's dark mark still shows through the white mask")
+
+        // Copy while the mask is the target copies the mask: its black
+        // patch reads dark where the layer's dark mark reads light.
+        if let copied = try? session.copyPixels(image, merged: false) {
+            func copyPixel(_ x: Int, _ y: Int) -> Int {
+                let bx = x - Int(copied.origin.x), by = y - Int(copied.origin.y)
+                guard bx >= 0, by >= 0, bx < copied.width, by < copied.height else { return -1 }
+                let offset = (by * copied.width + bx) * 4
+                guard offset + 3 < copied.pixels.count else { return -1 }
+                let px = copied.pixels
+                return (Int(px[offset]) + Int(px[offset + 1]) + Int(px[offset + 2])) / 3
+            }
+            check(copyPixel(42, 38) >= 0 && copyPixel(15, 10) >= 0
+                    && copyPixel(42, 38) < copyPixel(15, 10),
+                  "Copy targeted the mask (patch \(copyPixel(42, 38)) vs mark \(copyPixel(15, 10)))")
+        } else {
+            check(false, "Copy while mask editing reads the mask")
+        }
+
+        // A disabled mask stops affecting the composite but keeps its
+        // pixels; re-enabling restores the masked view.
+        document.toggleMaskEnabled()
+        settle()
+        check((composite(42, 38)?[3] ?? 0) > 200 && luminance(composite(42, 38)) > 200,
+              "a disabled mask shows the layer unchanged")
+        check(luminance(thumbPixel(mask.mask, 21, 19)) < 64,
+              "the disabled mask kept its painted pixels")
+        document.toggleMaskEnabled()
+        settle()
+        check((composite(42, 38)?[3] ?? 255) < 64, "re-enabling restores the masked composite")
+
+        // View Mask (the Option-click flag): the canvas shows the mask's
+        // gray levels instead of the composite.
+        document.toggleMaskShowing(layer)
+        settle()
+        check(document.maskStates[layer]?.showing == true, "Show Mask sets the flag")
+        check(luminance(composite(15, 10)) > 200 && (composite(15, 10)?[3] ?? 0) > 200,
+              "View Mask shows the white mask where the layer is dark")
+        check(luminance(composite(42, 38)) < 64, "View Mask shows the black mask patch")
+        document.toggleMaskShowing(layer)
+        settle()
+        check(luminance(composite(15, 10)) < 64, "hiding the mask restores the composite")
+
+        // Multi-layer View Mask: natively the shown mask composites in
+        // the layer's own slot, so a layer above still covers it — it
+        // is not an isolation view that hides the rest of the stack.
+        controller.newLayer(nil)
+        settle()
+        guard let top = document.activeLayer, top != layer else {
+            check(false, "a second layer exists above the masked layer")
+            return
+        }
+        document.fill(at: .zero, mode: .selection, color: .red, threshold: 0, sampleMerged: false)
+        settle()
+        document.toggleMaskShowing(layer)
+        settle()
+        check(document.maskStates[layer]?.showing == true
+                && (composite(15, 10)?[0] ?? 0) > 200
+                && (composite(15, 10)?[1] ?? 0) < 64,
+              "View Mask stays in the layer's slot; the layer above composites over it")
+        document.toggleMaskShowing(layer)
+        settle()
+        document.layerCommand(.delete)
+        settle()
+        document.editMask(layer)
+        settle()
+        check(document.isMaskTargetActive,
+              "the mask target is restored for the remaining checks")
+
+        // Clear while the mask is the target hits the mask: the layer's
+        // dark mark survives, the mask's patch does not.
+        _ = document.run { session, img in try session.clearPixels(img, background: .white) }
+        settle()
+        check(luminance(composite(15, 10)) < 64,
+              "Clear targeted the mask; the layer's pixels are intact")
+        check((composite(42, 38)?[3] ?? 0) > 200, "the cleared mask shows the layer again")
+
+        // A fill queued right behind the mask pick lands on the mask:
+        // the pick's engine-side flag is already set when the fill runs.
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        settle()
+        check(luminance(thumbPixel(mask.mask, 10, 10)) < 64,
+              "a fill queued after the mask pick lands on the mask")
+        check((composite(30, 30)?[3] ?? 255) < 64,
+              "the mask fill hid the layer composite-wide")
+
+        // Mask to Selection: a black mask selects nothing; paint a white
+        // patch back and the selection follows it.
+        document.maskToSelection(.replace)
+        settle()
+        check((try? session.selectionBounds(image: image)) == nil
+                || (try? session.selectionBounds(image: image))?.isEmpty == true,
+              "an empty (black) mask gives an empty selection")
+        document.beginStroke(at: .init(x: 20, y: 50, pressure: 1), brush: EngineSession.Brush(size: 8, opacity: 1, red: 1, green: 1, blue: 1, pressureSize: false))
+        document.continueStroke((21...28).map { .init(x: Double($0), y: 50, pressure: 1) })
+        document.endStroke()
+        settle()
+        document.maskToSelection(.replace)
+        settle()
+        if let bounds = try? session.selectionBounds(image: image) {
+            check(bounds.width < 40 && bounds.height < 40 && bounds.contains(CGPoint(x: 24, y: 50)),
+                  "Mask to Selection outlines the mask's white patch (\(bounds))")
+        } else {
+            check(false, "Mask to Selection on a white patch selects it")
+        }
+        document.select(.none)
+        settle()
+
+        // Refusals while the mask is the target: moves, transforms and
+        // path strokes have no mask backend and must not touch pixels.
+        let markBefore = luminance(composite(15, 10))
+        document.moveActiveLayer(by: CGSize(width: 4, height: 4))
+        document.transformLayer(layer, matrix: CGAffineTransform(scaleX: 2, y: 2),
+                                interpolation: .linear)
+        document.strokePath(1, settings: EngineSession.LineSettings())
+        settle()
+        check(errors.contains { $0.contains("mask") },
+              "move, transform and path stroke refuse on a mask target (\(errors.suffix(3))")
+        check(luminance(composite(15, 10)) == markBefore,
+              "the refused edits left the layer's pixels alone")
+
+        // Apply bakes the mask into the layer: only the white patch
+        // survives, and the mask is gone.
+        document.applyMask()
+        settle()
+        check(document.maskStates[layer] == nil
+                && document.layers.first(where: { $0.id == layer })?.hasMask == false,
+              "Apply Mask removes the mask")
+        check((composite(24, 50)?[3] ?? 0) > 200 && (composite(30, 30)?[3] ?? 255) < 64,
+              "Apply Mask bakes the mask into the layer's alpha")
+
+        // Undo and redo cover the apply.
+        document.undo()
+        settle()
+        check(document.maskStates[layer]?.mask != 0
+                && document.layers.first(where: { $0.id == layer })?.hasMask == true,
+              "undo restores the mask")
+        document.redo()
+        settle()
+        check(document.maskStates[layer] == nil, "redo re-applies the mask removal")
+
+        // Delete discards a mask without baking it.
+        document.addMask(layer, source: .black, edit: false)
+        settle()
+        check(document.maskStates[layer]?.mask != 0, "a second mask can be added")
+        document.deleteMask()
+        settle()
+        check(document.maskStates[layer] == nil
+                && document.layers.first(where: { $0.id == layer })?.hasMask == false,
+              "Delete Mask removes the mask")
+
+        // A group mask is editable: the group itself still refuses paint.
+        controller.newLayerGroup(nil)
+        settle()
+        guard let group = document.layers.first(where: { $0.kind == .group }) else {
+            check(false, "a group exists for the group-mask checks")
+            return
+        }
+        document.moveLayer(layer, toParent: group.id, atIndex: 0)
+        settle()
+        document.addMask(group.id, source: .white, edit: true)
+        settle()
+        guard let groupMask = document.maskStates[group.id], groupMask.editing else {
+            check(false, "a group can carry an editing mask")
+            return
+        }
+        check(document.activeDrawable == groupMask.mask,
+              "the group's mask is the active drawable while editing")
+        document.beginStroke(at: .init(x: 30, y: 30, pressure: 1), brush: black)
+        document.endStroke()
+        settle()
+        check(luminance(thumbPixel(groupMask.mask, 15, 15)) < 64,
+              "painting lands on the group's mask")
+        document.selectLayer(layer)
+        settle()
+        check(!document.isMaskTargetActive, "picking the layer leaves mask editing")
+
+        // A stale EDITING flag on one layer cannot hijack another's
+        // target: editing layer A's mask then picking layer B clears it.
+        document.addMask(layer, source: .white, edit: true)
+        settle()
+        check(document.maskStates[layer]?.editing == true,
+              "Add Mask with edit starts mask editing on the nested layer")
+        document.selectLayer(group.id)
+        settle()
+        check(document.activeLayer == group.id && !document.isMaskTargetActive
+                && document.maskStates[layer]?.editing == false,
+              "picking another layer clears the previous mask's edit target")
+        document.editMask(layer)
+        settle()
+        check(document.maskStates[layer]?.editing == true && document.isMaskTargetActive,
+              "the mask thumbnail pick restores the mask target")
+
+        // A filter preview begins on the mask drawable.
+        var preview: Result<ImageDocument.FilterPreviewStart, Error>?
+        document.beginFilterPreview(operation: GaussianBlurPanel.operation, properties: []) {
+            preview = $0
+        }
+        settle()
+        if case .success(let start) = preview {
+            document.finishFilter(start.filter, commit: false) { _ in }
+            settle()
+            check(true, "a filter preview begins on the mask drawable")
+        } else {
+            check(false, "a filter preview begins on the mask drawable: \(String(describing: preview))")
+        }
 
         controller.window?.orderOut(nil)
     }
