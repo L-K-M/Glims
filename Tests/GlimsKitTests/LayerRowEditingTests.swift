@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import RigiUI
 @testable import GlimsKit
 
 /// The Layers palette's row interactions without an engine: the visibility
@@ -265,5 +266,23 @@ final class LayerRowEditingTests: XCTestCase {
 
         XCTAssertEqual(commit.changes, [nameChange("Renamed")])
         XCTAssertEqual(row.nameField.stringValue, "Renamed")
+    }
+
+    func testInlineRenameTakesKeyboardFocusFromDocument() {
+        _ = NSApplication.shared
+        let documentWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
+                                      styleMask: [.titled], backing: .buffered, defer: false)
+        documentWindow.isReleasedWhenClosed = false
+        let panel = ClassicPaletteWindow(contentSize: NSSize(width: 240, height: 100))
+        let row = LayerRowView(layer: makeLayer(),
+                               context: .init(document: NSObject(), layerID: 1),
+                               commit: { _, _ in true })
+        panel.contentView = row
+        panel.orderFront(nil)
+        documentWindow.makeKeyAndOrderFront(nil)
+        defer { panel.close(); documentWindow.close() }
+        row.startEditingName()
+        XCTAssertTrue(panel.isKeyWindow, "typing a layer name must reach the palette rather than canvas shortcuts")
+        XCTAssertNotNil(row.nameField.currentEditor())
     }
 }

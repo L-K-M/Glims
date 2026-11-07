@@ -13,9 +13,9 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 - [x] New Image asks for pixel dimensions; Finder opens wait for startup.
 - [x] Save, Save As and native/imported file identity behave consistently.
 - [x] Closing and quitting protect unsaved work and drain queued operations.
-- [ ] Cut, Copy, Copy Merged, Paste, Paste in Place and Clear use the system
-      clipboard, honor selection alpha and preserve undo. Implemented and
-      covered through the engine/interface harness; final keyboard checks pending.
+- [x] Cut, Copy, Copy Merged, Paste, Paste in Place and Clear use the system
+      clipboard, honor selection alpha and preserve undo. Keyboard Copy/Paste,
+      menu Undo and layer visibility changes were also checked on screen.
 - [ ] Fit Image, Open Recent, repeat export and basic file command validation.
 - [ ] A bundled app passes engine checks with development trees inaccessible,
       and actual pointer/keyboard editing, save, reopen and export work.
@@ -66,7 +66,7 @@ Save, close Cancel, failed Save on close and teardown after queued work.
 The unit suite currently passes 60 checks. Quit still needs an on-screen
 check and independent lifecycle review before this slice is closed.
 
-Current completion slice: 95 unit checks and eight packaging checks pass.
+Current completion slice: 98 unit checks and eight packaging checks pass.
 Clipboard transport preserves straight-alpha bytes through a native private
 format and standard PNG/TIFF for other apps. Its 210 adapter checks and 104
 interface checks passed on all four engine sets before the final save guards.
@@ -84,3 +84,15 @@ pointer stroke. Quit Cancel preserved the edited image, and Don't Save
 completed the quit. Layer rows now offer visibility and inline rename; their
 stable snapshot rejects removed/retargeted rows while reloads are deferred.
 Final review and updated bundle/matrix checks are in progress.
+
+Stabilization: cancellation during clipboard transfer reproduced an orphaned
+preview that prevented saving and running plug-ins. Preview finalization now
+keeps refused/failed commits editable and always queues cancellation as
+non-dirty cleanup. Image destruction also releases unfinished sessions. A
+clean document with a preview closes without a false save prompt. All 212
+adapter checks and the expanded interface smoke pass on the pinned engine.
+Inline rename reproduced a separate focus defect in nonactivating palettes;
+the field now makes its panel key before typing. Its regression passes.
+Registered `.xcfgz`/`.xcfbz2` aliases preserve native file identity too.
+The actual bundled Save As panel wrote a new XCF and updated the window's
+name and represented file. A final on-screen rename check remains pending.

@@ -107,6 +107,7 @@ void        glims_strokes_free     (gpointer stroke);
 
 /* filter.c */
 gboolean glims_filters_active_for_image (GlimsEngine *, GimpImage *);
+void glims_filters_abort_for_image (GlimsEngine *, GimpImage *);
 GlimsStatus glims_filter_begin     (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
                                     const char *operation, GlimsFilterID *out, char **error);
 GlimsStatus glims_filter_set_double(GlimsEngine *e, GlimsFilterID id, const char *property, double value);

@@ -91,6 +91,7 @@ enum EngineSmokeTest {
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseClipboard(session, documents: documents)
+            try exercisePreviewLifetimes(session, work: work, documents: documents)
             try exerciseTools(session, documents: documents)
             try exerciseEditing(session, documents: documents)
             try exercisePaths(session, documents: documents)
@@ -335,6 +336,45 @@ enum EngineSmokeTest {
         let deadline = Date().addingTimeInterval(10)
         while ((try? session.info(image)) != nil || (try? session.info(targetImage)) != nil) && Date() < deadline { spin() }
         documents.items.removeAll { $0 === document || $0 === target }
+    }
+
+    private static func exercisePreviewLifetimes(_ session: EngineSession, work: URL,
+                                                 documents: DocumentList) throws {
+        let image = try session.newImage(width: 32, height: 32)
+        let native = work.appendingPathComponent("preview-lifetime.xcf")
+        try session.save(image, to: native.path)
+        let document = try ImageDocument(session: session, image: image, name: "Preview Lifetime", openedFrom: native)
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        guard let blur = GaussianBlurPanel(document: document) else { throw NoWindow() }
+        document.inputQueue.sync {}
+        spin()
+        document.copyPixels(.merged, background: .white, consume: { _ in }, completion: { _ in })
+        check(document.isTransferringClipboard, "preview cancellation is exercised during a clipboard transfer")
+        var finished = false
+        blur.onFinish = { finished = true }
+        blur.commit()
+        check(!finished, "a refused filter commit leaves its preview available for cancellation")
+        blur.cancel()
+        check(!document.hasUnsavedChanges, "canceling a preview does not mark a clean document dirty")
+        let deadline = Date().addingTimeInterval(10)
+        while document.pendingWork > 0 && Date() < deadline { spin() }
+        check((try? session.save(image, to: native.path)) != nil,
+              "cancel during Copy releases the preview so the image remains savable")
+        controller.gaussianBlur(nil)
+        document.inputQueue.sync {}
+        spin()
+        var closed: Bool?
+        controller.requestClose { closed = $0 }
+        while closed == nil && controller.window?.attachedSheet == nil && Date() < deadline { spin() }
+        check(closed == true && controller.window?.attachedSheet == nil,
+              "closing a clean image cancels its preview without an unsaved-changes prompt")
+        if let sheet = controller.window?.attachedSheet {
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+        }
+        while (try? session.info(image)) != nil && Date() < deadline { spin() }
+        documents.items.removeAll { $0 === document }
     }
 
     private static func exerciseDocument(_ session: EngineSession, work: URL,

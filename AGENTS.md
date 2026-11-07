@@ -18,7 +18,7 @@ and paths (a Path tool and a Paths palette). The engine dependency prefix is
 built (`_deps/macports`);
 the four engine sets in `scripts/engine.env` (GIMP 3.2.8, 3.2.0, master and
 3.0.8) build unmodified into `_engine/install/<ref>`; adapter v1 (`Engine/`)
-passes its 198 conformance checks against all four. The app loads the adapter
+passes conformance checks against all four. The app loads the adapter
 at run time and edits real images through it: tiled canvas, painting, a
 Layers palette, Gaussian Blur, undo, save and export.
 Keep `docs/plan.md` current as the work proceeds.

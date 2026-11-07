@@ -93,7 +93,14 @@ final class LayerRowView: NSStackView, NSTextFieldDelegate {
     /// Starts an inline name edit, as the table's double-click does.
     func startEditingName() {
         guard let window = nameField.window else { return }
+        window.makeKey()
         window.makeFirstResponder(nameField)
+    }
+
+    func controlTextDidBeginEditing(_ notification: Notification) {
+        // A table's programmatic field editor can start in a nonactivating
+        // palette while the document still owns the keyboard.
+        nameField.window?.makeKey()
     }
 
     /// Ends the name edit and commits a changed name. Called when the field

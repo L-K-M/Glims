@@ -576,13 +576,35 @@ final class ImageDocument {
     // MARK: Helpers
 
     /// Runs engine work on the input queue, after any pending pointer input.
-    enum CommandEffect { case readsPixels, changesImage }
+    enum CommandEffect { case readsPixels, changesImage, changesPreview }
 
-    func run(effect: CommandEffect = .changesImage, _ work: @escaping (EngineSession, Int32) throws -> Void) {
-        if effect == .changesImage && refuseWhileEditingUnavailable() { return }
+    /// Aborting a preview is cleanup, so clipboard/save edit gates must
+    /// never suppress it. It still joins pending work to protect teardown.
+    /// A commit is an edit and leaves its session available if refused.
+    func finishFilter(_ filter: Int32, commit: Bool, completion: @escaping @MainActor (Bool) -> Void) {
+        guard !isClosing else { return completion(false) }
+        if commit && refuseWhileEditingUnavailable() { return completion(false) }
+        enqueue(on: inputQueue, input: commit) { [session] in
+            let success: Bool
+            do {
+                if commit { try session.commitFilter(filter) } else { try session.abortFilter(filter) }
+                success = true
+            } catch {
+                if commit { self.report(error) }
+                success = false
+            }
+            DispatchQueue.main.async { completion(success) }
+        }
+    }
+
+    @discardableResult
+    func run(effect: CommandEffect = .changesImage, _ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
+        guard !isClosing else { return false }
+        if effect != .readsPixels && refuseWhileEditingUnavailable() { return false }
         enqueue(on: inputQueue, input: effect == .changesImage) { [session, image] in
             do { try work(session, image) } catch { self.report(error) }
         }
+        return true
     }
 
     /// Queues engine work; the document counts it until it ran so a close

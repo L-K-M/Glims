@@ -1285,6 +1285,15 @@ test_filters (GlimsImageID image, const char *work)
 
   CHECK (api->filter_begin (engine, image, layer, "gegl:no-such-op", &filter, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
          "unknown operation is rejected");
+  {
+    GlimsImageID closing = 0;
+    GlimsFilterID preview = 0;
+    api->image_new (engine, 16, 16, &closing, NULL);
+    api->filter_begin (engine, closing, first_layer (closing), "gegl:gaussian-blur", &preview, NULL);
+    CHECK (api->image_close (engine, closing) == GLIMS_STATUS_OK &&
+           api->filter_abort (engine, preview) == GLIMS_STATUS_NOT_FOUND,
+           "closing an image releases its unfinished filter sessions");
+  }
 }
 
 static void

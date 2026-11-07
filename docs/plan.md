@@ -6,7 +6,9 @@ five phase 1 items is complete. Rendering follow-up below restores the
 100% viewport fast path without giving up fresh pixels. Evidence labels: **[M]**
 measured from GIMP source or history, **[I]** inferred or estimated. Sources
 are in [`research/`](research/README.md); the round 2 memo and its two reviews
-are the main inputs.
+are the main inputs. The active editor-completion work and its remaining
+features are tracked in [`completion.md`](completion.md). The phase 1 spike
+is not the finished editor.
 
 ## Goals
 

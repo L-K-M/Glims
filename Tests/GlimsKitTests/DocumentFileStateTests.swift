@@ -65,6 +65,33 @@ final class DocumentFileStateTests: XCTestCase {
         }
     }
 
+    /// GIMP registers the compressed XCF types under the dotless
+    /// suffixes too: those files are native, not imports.
+    func testRegisteredCompressedSuffixesAreNative() {
+        for name in ["drawing.xcfgz", "drawing.xcfbz2", "DRAWING.XCFGZ", "DRAWING.XCFBZ2"] {
+            let url = URL(fileURLWithPath: "/tmp/" + name)
+            XCTAssertTrue(DocumentFileState.isNative(url), name)
+            let state = DocumentFileState(openedFrom: url)
+            XCTAssertEqual(state.saveRoute, .write(url), name)
+            XCTAssertFalse(state.hasUnsavedChanges, name)
+            XCTAssertNil(state.importedSourceURL, name)
+        }
+    }
+
+    /// A compressed file that is not XCF data stays an import: never a
+    /// save target, and unsaved until a native save exists.
+    func testANonXCFCompressedFileIsImported() {
+        for name in ["photo.gz", "photo.GZ", "photo.tar.gz"] {
+            let url = URL(fileURLWithPath: "/tmp/" + name)
+            XCTAssertFalse(DocumentFileState.isNative(url), name)
+            let state = DocumentFileState(openedFrom: url)
+            XCTAssertNil(state.nativeURL, name)
+            XCTAssertEqual(state.importedSourceURL, url, name)
+            XCTAssertTrue(state.hasUnsavedChanges, name)
+            XCTAssertEqual(state.saveRoute, .askForFile, name)
+        }
+    }
+
     func testSaveAsCanRetargetAnExistingNativeFile() {
         var state = DocumentFileState(openedFrom: xcf)
         state.syncDirty(true)

@@ -150,6 +150,12 @@ void
 glims_release_image (GlimsEngine  *engine,
                      GlimsImageID  id)
 {
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+
+  /* Sessions own image/drawable refs. Do not let an unfinished preview
+   * retain a closed image or block subsequent plug-in commands. */
+  if (open)
+    glims_filters_abort_for_image (engine, open->image);
   g_hash_table_remove (engine->images, GINT_TO_POINTER (id));
 }
 

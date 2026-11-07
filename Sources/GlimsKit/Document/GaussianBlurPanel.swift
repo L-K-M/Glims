@@ -16,6 +16,8 @@ final class GaussianBlurPanel: NSWindowController {
     private let field = NSTextField()
     private var filter: Int32?
     private var finished = false
+    private var committing = false
+    private var appliedRadius = 4.0
     var onFinish: (() -> Void)?
 
     init?(document imageDocument: ImageDocument) {
@@ -87,9 +89,15 @@ final class GaussianBlurPanel: NSWindowController {
 
     func apply(radius: Double) {
         guard let filter else { return }
-        imageDocument.run { session, _ in
+        let accepted = imageDocument.run(effect: .changesPreview) { session, _ in
             try session.setFilter(filter, "std-dev-x", to: radius)
             try session.setFilter(filter, "std-dev-y", to: radius)
+        }
+        if accepted {
+            appliedRadius = radius
+        } else {
+            slider.doubleValue = appliedRadius
+            field.doubleValue = appliedRadius
         }
     }
 
@@ -103,13 +111,26 @@ final class GaussianBlurPanel: NSWindowController {
 
     private func finish(commit: Bool) {
         guard !finished, let filter else { return }
-        finished = true
-        self.filter = nil
-        imageDocument.run { session, _ in
-            if commit { try session.commitFilter(filter) } else { try session.abortFilter(filter) }
+        if commit {
+            guard !committing else { return }
+            committing = true
+            imageDocument.finishFilter(filter, commit: true) { [self] success in
+                committing = false
+                guard success, !finished else { return }
+                finished = true
+                self.filter = nil
+                window?.orderOut(nil)
+                onFinish?()
+            }
+        } else {
+            // Cancel may arrive while an accepted commit is still queued.
+            // The serial queue then either aborts it or finds it committed.
+            finished = true
+            self.filter = nil
+            imageDocument.finishFilter(filter, commit: false) { _ in }
+            window?.orderOut(nil)
+            onFinish?()
         }
-        window?.orderOut(nil)
-        onFinish?()
     }
 }
 

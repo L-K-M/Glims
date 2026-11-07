@@ -40,7 +40,11 @@ struct DocumentFileState: Equatable {
 
     static func isNative(_ url: URL) -> Bool {
         let name = url.lastPathComponent.lowercased()
-        return name.hasSuffix(".xcf") || name.hasSuffix(".xcf.gz") || name.hasSuffix(".xcf.bz2")
+        // GIMP registers the compressed XCF types under both the
+        // dotted ("xcf.gz") and dotless ("xcfgz") suffixes; files from
+        // either registration are native and keep their save target.
+        let nativeSuffixes = [".xcf", ".xcf.gz", ".xcfgz", ".xcf.bz2", ".xcfbz2"]
+        return nativeSuffixes.contains { name.hasSuffix($0) }
     }
 
     /// How a plain Save proceeds.
