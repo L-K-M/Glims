@@ -37,6 +37,13 @@ final class EngineActivity {
     /// accepted open requests and their lifecycle counts remain intact.
     func performWhenReady(label: String, work: @escaping () -> Void,
                           completion: @escaping @MainActor () -> Void = {}) {
+        // A delegate may request more exclusive work while input is
+        // being flushed. Queue that request without delaying the edits
+        // emitted by the delegate itself.
+        if preparing {
+            idleActions.append { self.performWhenReady(label: label, work: work, completion: completion) }
+            return
+        }
         guard perform(label: label, work: work, completion: completion) else {
             whenIdle { self.performWhenReady(label: label, work: work, completion: completion) }
             return
@@ -78,7 +85,7 @@ final class EngineActivity {
     /// Cleanup (preview cancellation and image destruction) must wait
     /// for the engine, even though new user edits are refused meanwhile.
     func whenIdle(_ action: @escaping @MainActor () -> Void) {
-        if isBusy || preparing { idleActions.append(action) } else { action() }
+        if isBusy { idleActions.append(action) } else { action() }
     }
 
     /// Destruction follows file calls on the same queue. It needs no new
