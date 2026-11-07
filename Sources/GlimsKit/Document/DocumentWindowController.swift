@@ -191,7 +191,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                    precision: imageDocument.info.precision)
         let undo = imageDocument.undoInfo.nextUndo.isEmpty ? "" : " · Undo \(imageDocument.undoInfo.nextUndo)"
         if !statusIsError {
-            statusBar.message = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(imageDocument.info.layerCount) layer\(imageDocument.info.layerCount == 1 ? "" : "s")\(undo)"
+            statusBar.message = EngineActivity.shared.label.map { "\($0)…" } ?? "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(imageDocument.info.layerCount) layer\(imageDocument.info.layerCount == 1 ? "" : "s")\(undo)"
         }
         (PaletteCenter.shared.registeredPalette(for: LayersPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: PathsPaletteController.definition.kind))?.retarget()
@@ -281,7 +281,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func gaussianBlur(_ sender: Any?) {
-        guard !previewBusy, !imageDocument.isClosing, !PlugInCommands.isRunning,
+        guard !previewBusy, !imageDocument.isClosing, !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
               !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
         endPendingEdits()
         startFilterPreview(title: "Gaussian Blur", operation: GaussianBlurPanel.operation) { [imageDocument] filter, _ in
@@ -301,7 +301,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// start then queues the session's begin and initial reads behind
     /// pending input, and the panel builds when they land.
     func openNativeFilter(_ operation: EngineSession.FilterOperation) {
-        guard !previewBusy, !imageDocument.isClosing, !PlugInCommands.isRunning,
+        guard !previewBusy, !imageDocument.isClosing, !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
               !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
         guard operation.support == .supported else {
             if let reason = NativeFilterMenuLayout.unavailableReason(operation.support) {
@@ -319,7 +319,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 return
             }
             // The gates can have changed while the catalog answered.
-            guard !self.previewBusy, !PlugInCommands.isRunning,
+            guard !self.previewBusy, !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
                   !self.imageDocument.isSavingForClose, !self.imageDocument.isTransferringClipboard else {
                 self.statusBar.message = "Apply or cancel the current filter first."
                 return
@@ -541,7 +541,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     /// Runs a plug-in command on this document, as its menu item does.
     func run(_ procedure: EngineSession.Procedure, mode: EngineSession.RunMode) {
-        guard !PlugInCommands.isRunning, !imageDocument.isClosing else { return }
+        guard !PlugInCommands.isRunning, !EngineActivity.shared.isBusy, !imageDocument.isClosing else { return }
         guard !imageDocument.filterPreviewIsOpen else {
             statusBar.message = "Apply or cancel the filter preview first."
             return
@@ -550,6 +550,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         canvas.tools.finishTextEditing()
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
         let title = procedure.label.replacingOccurrences(of: "…", with: "")
+        EngineActivity.shared.finishPendingInput()
         PlugInCommands.willRun(procedure, on: imageDocument)
         statusBar.message = mode == .interactive && procedure.label.hasSuffix("…")
             ? "\(title): waiting for its settings window" : "\(title)…"
@@ -591,7 +592,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
-            || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || window?.attachedSheet != nil
+            || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || EngineActivity.shared.isBusy || window?.attachedSheet != nil
         switch menuItem.action {
         case #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)):
             return !imageDocument.isClosing
@@ -702,7 +703,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             defer { release() }
             guard let self else { return done(false) }
             if let error {
-                self.statusBar.message = String(describing: error)
+                self.imageDocument.onError?(String(describing: error))
                 return done(false)
             }
             self.imageDocument.noteSaved(to: url)
@@ -715,7 +716,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     private func canStartFileWrite(purpose: WritePurpose = .ordinary) -> Bool {
-        guard !previewBusy, !PlugInCommands.isRunning, !imageDocument.isClosing,
+        guard !previewBusy, !PlugInCommands.isRunning, !EngineActivity.shared.isBusy, !imageDocument.isClosing,
               !imageDocument.isTransferringClipboard,
               !imageDocument.isSavingForClose || purpose == .closing else {
             statusBar.message = "Apply or cancel the current operation before saving or exporting."
@@ -757,7 +758,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         statusBar.message = "Exporting \(url.lastPathComponent)…"
         imageDocument.export(to: url) { [self] error in
             defer { release() }
-            statusBar.message = error.map { String(describing: $0) } ?? "Exported \(url.lastPathComponent)"
+            if let error { imageDocument.onError?(String(describing: error)) }
+            else { statusBar.message = "Exported \(url.lastPathComponent)" }
         }
     }
 
@@ -779,7 +781,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             self.statusBar.message = "Saving a copy…"
             self.imageDocument.saveCopy(to: url) { error in
                 defer { release() }
-                self.statusBar.message = error.map { String(describing: $0) } ?? "Saved a copy to \(url.lastPathComponent)"
+                if let error { self.imageDocument.onError?(String(describing: error)) }
+                else { self.statusBar.message = "Saved a copy to \(url.lastPathComponent)" }
             }
         }
     }
@@ -790,6 +793,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var savePromptVisible = false
     private var closeCompletion: ((Bool) -> Void)?
     private var closeStarted = false
+    private var waitingForActivityToClose = false
 
     /// Quit and Close All share the same save/cancel flow as the close dot.
     /// Completion waits for both render reads and engine work to finish.
@@ -808,6 +812,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if EngineActivity.shared.isBusy {
+            if !waitingForActivityToClose {
+                waitingForActivityToClose = true
+                EngineActivity.shared.whenIdle { [weak self, weak sender] in
+                    guard let self, let sender else { return }
+                    self.waitingForActivityToClose = false
+                    if self.windowShouldClose(sender) { sender.close() }
+                }
+            }
+            return false
+        }
         if imageDocument.isSavingForClose || savePromptVisible { return false }
         if sender.attachedSheet != nil {
             statusBar.message = "Finish or cancel the dialog before closing this image."
