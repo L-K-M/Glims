@@ -1,0 +1,281 @@
+import XCTest
+@testable import GlimsKit
+
+/// The on-disk recovery store: private folders and manifests, atomic
+/// temp-then-rename writes, strict manifest validation, dead-run
+/// discovery and stale-file sweeping. Everything runs in a unique
+/// temporary folder per test.
+@MainActor
+final class RecoveryStoreTests: XCTestCase {
+    private var base: URL!
+    private let files = FileManager.default
+
+    override func setUp() {
+        base = files.temporaryDirectory
+            .appendingPathComponent("glims-recovery-tests-\(UUID().uuidString)", isDirectory: true)
+        try? files.createDirectory(at: base, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() {
+        try? files.removeItem(at: base)
+        base = nil
+    }
+
+    private func permissions(_ url: URL) -> Int {
+        (try? files.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int) ?? -1
+    }
+
+    /// A record payload for hand-writing manifests.
+    private func metadata(name: String = "Drawing", native: String? = nil,
+                          imported: String? = nil, revision: UInt64? = 3) -> RecoveryStore.Metadata {
+        RecoveryStore.Metadata(name: name,
+                               nativeURL: native.map { URL(fileURLWithPath: $0) },
+                               importedSourceURL: imported.map { URL(fileURLWithPath: $0) },
+                               revision: revision)
+    }
+
+    /// Writes a committed copy+manifest through the store's own path.
+    @discardableResult
+    private func commit(_ store: RecoveryStore, id: UUID, content: String,
+                        metadata: RecoveryStore.Metadata) throws -> RecoveryStore.Record {
+        let temp = store.temporaryCopyURL(for: id)
+        try Data(content.utf8).write(to: temp)
+        return try store.commitCopy(at: temp, for: id, metadata: metadata)
+    }
+
+    /// Writes `run.json` into a run folder belonging to another run.
+    private func writeRun(_ runID: UUID, pid: Int32) throws -> URL {
+        let dir = base.appendingPathComponent(runID.uuidString, isDirectory: true)
+        try files.createDirectory(at: dir, withIntermediateDirectories: true)
+        let run = RecoveryStore.Run(runID: runID, pid: pid, started: Date())
+        try JSONEncoder().encode(run).write(to: dir.appendingPathComponent(RecoveryStore.runFilename))
+        return dir
+    }
+
+    /// Writes a manifest (already encoded JSON) and an optional copy
+    /// file directly into a run folder, bypassing the store's writes.
+    private func writeRawManifest(_ json: String, copy: Data?, named name: String, in dir: URL) throws {
+        try json.write(to: dir.appendingPathComponent(name), atomically: false, encoding: .utf8)
+        if let copy {
+            let id = name.replacingOccurrences(of: ".json", with: "")
+            try copy.write(to: dir.appendingPathComponent("\(id).xcf"))
+        }
+    }
+
+    private func manifestJSON(id: UUID, name: String = "Drawing", copyFilename: String? = nil,
+                              schemaVersion: Int = 1, native: String? = nil, revision: Int = 3) -> String {
+        let filename = copyFilename ?? "\(id.uuidString).xcf"
+        let nativeField = native.map { "\"\($0)\"" } ?? "null"
+        return """
+        {"schemaVersion":\(schemaVersion),"documentID":"\(id.uuidString)","name":"\(name)",\
+        "nativeURL":\(nativeField),"importedSourceURL":null,"copyFilename":"\(filename)",\
+        "date":700000000.0,"revision":\(revision)}
+        """
+    }
+
+    func testFoldersAndFilesArePrivate() throws {
+        let store = RecoveryStore(base: base, runID: UUID())
+        try store.prepare()
+        XCTAssertEqual(permissions(base), 0o700)
+        XCTAssertEqual(permissions(store.runDirectory), 0o700)
+        XCTAssertEqual(permissions(store.runDirectory.appendingPathComponent(RecoveryStore.runFilename)), 0o600)
+
+        let id = UUID()
+        try commit(store, id: id, content: "xcf-v1", metadata: metadata())
+        XCTAssertEqual(permissions(store.copyURL(for: id)), 0o600)
+        XCTAssertEqual(permissions(store.runDirectory.appendingPathComponent("\(id.uuidString).json")), 0o600)
+    }
+
+    func testCommitRecordsIdentityAndReplacesTheSameDocumentsCopy() throws {
+        let store = RecoveryStore(base: base, runID: UUID())
+        try store.prepare()
+        let id = UUID()
+        let first = try commit(store, id: id, content: "v1", metadata: metadata(revision: 4))
+        XCTAssertEqual(first.documentID, id)
+        XCTAssertEqual(first.copyFilename, "\(id.uuidString).xcf")
+        XCTAssertEqual(first.revision, 4)
+        XCTAssertEqual(String(data: try Data(contentsOf: store.copyURL(for: id)), encoding: .utf8), "v1")
+
+        let second = try commit(store, id: id, content: "v2-longer", metadata: metadata(revision: 9))
+        XCTAssertEqual(second.revision, 9)
+        XCTAssertEqual(String(data: try Data(contentsOf: store.copyURL(for: id)), encoding: .utf8), "v2-longer")
+        // One copy and one manifest per document, replaced not appended.
+        let names = try files.contentsOfDirectory(at: store.runDirectory, includingPropertiesForKeys: nil)
+            .map(\.lastPathComponent)
+        XCTAssertEqual(names.filter { $0.contains(id.uuidString) }.sorted(),
+                       ["\(id.uuidString).json", "\(id.uuidString).xcf"])
+    }
+
+    /// A failed copy keeps the last committed copy and its manifest —
+    /// the recoverable state never gets worse.
+    func testAFailedCommitKeepsTheEarlierCopyAndRecord() throws {
+        let store = RecoveryStore(base: base, runID: UUID())
+        try store.prepare()
+        let id = UUID()
+        try commit(store, id: id, content: "v1", metadata: metadata(revision: 4))
+
+        // The engine wrote nothing this round: no temp exists to commit.
+        let missingTemp = store.temporaryCopyURL(for: id)
+        XCTAssertThrowsError(try store.commitCopy(at: missingTemp, for: id, metadata: metadata(revision: 9)))
+        XCTAssertEqual(String(data: try Data(contentsOf: store.copyURL(for: id)), encoding: .utf8), "v1")
+        XCTAssertEqual(store.record(for: id)?.revision, 4)
+
+        // A temp abandoned mid-write is discarded without touching the
+        // committed pair.
+        let abandoned = store.temporaryCopyURL(for: id)
+        try Data("partial".utf8).write(to: abandoned)
+        store.discardTemporary(abandoned)
+        XCTAssertFalse(files.fileExists(atPath: abandoned.path))
+        XCTAssertEqual(String(data: try Data(contentsOf: store.copyURL(for: id)), encoding: .utf8), "v1")
+        XCTAssertEqual(store.record(for: id)?.revision, 4)
+    }
+
+    /// Decoding must never turn manifest text into paths: traversal and
+    /// wrong names are refused record by record.
+    func testManifestValidationRefusesTraversalAndSchemaViolations() throws {
+        let deadRun = UUID()
+        let dir = try writeRun(deadRun, pid: 4242)
+
+        let traversal = UUID()
+        try writeRawManifest(manifestJSON(id: traversal, copyFilename: "../escape.xcf"),
+                             copy: Data("x".utf8), named: "\(traversal.uuidString).json", in: dir)
+        let absolute = UUID()
+        try writeRawManifest(manifestJSON(id: absolute, copyFilename: "/tmp/escape.xcf"),
+                             copy: Data("x".utf8), named: "\(absolute.uuidString).json", in: dir)
+        let mismatch = UUID()
+        try writeRawManifest(manifestJSON(id: UUID()),
+                             copy: Data("x".utf8), named: "\(mismatch.uuidString).json", in: dir)
+        let wrongSchema = UUID()
+        try writeRawManifest(manifestJSON(id: wrongSchema, schemaVersion: 99),
+                             copy: Data("x".utf8), named: "\(wrongSchema.uuidString).json", in: dir)
+        let nonFileURL = UUID()
+        try writeRawManifest(manifestJSON(id: nonFileURL, native: "https://example.com/x.xcf"),
+                             copy: Data("x".utf8), named: "\(nonFileURL.uuidString).json", in: dir)
+        let noCopy = UUID()
+        try writeRawManifest(manifestJSON(id: noCopy),
+                             copy: nil, named: "\(noCopy.uuidString).json", in: dir)
+        let good = UUID()
+        try writeRawManifest(manifestJSON(id: good, name: "Kept", native: "file:///tmp/kept.xcf", revision: 7),
+                             copy: Data("x".utf8), named: "\(good.uuidString).json", in: dir)
+
+        let store = RecoveryStore(base: base, runID: UUID(),
+                                  processIsAlive: { $0 == ProcessInfo.processInfo.processIdentifier })
+        try store.prepare()
+        let found = store.discoverRecoverableDocuments()
+        XCTAssertEqual(found.map(\.documentID), [good])
+        let record = try XCTUnwrap(found.first)
+        XCTAssertEqual(record.runID, deadRun)
+        XCTAssertEqual(record.name, "Kept")
+        XCTAssertEqual(record.nativeURL, URL(fileURLWithPath: "/tmp/kept.xcf"))
+        XCTAssertEqual(record.copyURL.resolvingSymlinksInPath().path,
+                       dir.resolvingSymlinksInPath().appendingPathComponent("\(good.uuidString).xcf").path)
+        XCTAssertTrue(record.copyURL.resolvingSymlinksInPath().path
+            .hasPrefix(dir.resolvingSymlinksInPath().path))
+    }
+
+    func testDiscoverySkipsLiveOwnersAndTheCurrentRun() throws {
+        let liveRun = UUID()
+        let liveDir = try writeRun(liveRun, pid: 4242)
+        let liveDoc = UUID()
+        try writeRawManifest(manifestJSON(id: liveDoc, name: "Live"),
+                             copy: Data("x".utf8), named: "\(liveDoc.uuidString).json", in: liveDir)
+
+        let deadRun = UUID()
+        let deadDir = try writeRun(deadRun, pid: 7777)
+        let deadDoc = UUID()
+        try writeRawManifest(manifestJSON(id: deadDoc, name: "Dead"),
+                             copy: Data("x".utf8), named: "\(deadDoc.uuidString).json", in: deadDir)
+
+        let ownRun = UUID()
+        let store = RecoveryStore(base: base, runID: ownRun,
+                                  processIsAlive: { $0 == 4242 })
+        try store.prepare()
+        let ownDoc = UUID()
+        try commit(store, id: ownDoc, content: "x", metadata: metadata())
+
+        let found = store.discoverRecoverableDocuments()
+        XCTAssertEqual(found.map(\.name), ["Dead"])
+        XCTAssertEqual(found.first?.documentID, deadDoc)
+    }
+
+    /// Orphan temporaries and content-free folders of provably dead
+    /// runs are swept; live or unknown-owner folders are untouched.
+    func testSweepCleansStaleFilesOnlyForDeadOrOwnRuns() throws {
+        let deadRun = UUID()
+        let deadDir = try writeRun(deadRun, pid: 7777)
+        let deadDoc = UUID()
+        try writeRawManifest(manifestJSON(id: deadDoc), copy: Data("x".utf8),
+                             named: "\(deadDoc.uuidString).json", in: deadDir)
+        try Data("t".utf8).write(to: deadDir.appendingPathComponent(".\(deadDoc.uuidString).tmp-abc.xcf"))
+
+        let liveRun = UUID()
+        let liveDir = try writeRun(liveRun, pid: 4242)
+        let liveTemp = liveDir.appendingPathComponent(".\(UUID().uuidString).tmp-def.xcf")
+        try Data("t".utf8).write(to: liveTemp)
+
+        let emptyRun = UUID()
+        _ = try writeRun(emptyRun, pid: 8888)
+        let emptyDir = base.appendingPathComponent(emptyRun.uuidString)
+
+        let unownedRun = UUID()
+        let unownedDir = base.appendingPathComponent(unownedRun.uuidString)
+        try files.createDirectory(at: unownedDir, withIntermediateDirectories: true)
+        let unownedTemp = unownedDir.appendingPathComponent(".\(UUID().uuidString).tmp-ghi.xcf")
+        try Data("t".utf8).write(to: unownedTemp)
+
+        let store = RecoveryStore(base: base, runID: UUID(),
+                                  processIsAlive: { $0 == 4242 })
+        try store.prepare()
+
+        XCTAssertFalse(files.fileExists(atPath: deadDir.appendingPathComponent(".\(deadDoc.uuidString).tmp-abc.xcf").path),
+                       "a dead run's temp is swept")
+        XCTAssertTrue(files.fileExists(atPath: deadDir.appendingPathComponent("\(deadDoc.uuidString).json").path),
+                      "a dead run's record remains")
+        XCTAssertTrue(files.fileExists(atPath: liveTemp.path),
+                      "a live run's temp is never touched")
+        XCTAssertFalse(files.fileExists(atPath: emptyDir.path),
+                       "a dead run folder without records is removed")
+        XCTAssertTrue(files.fileExists(atPath: unownedTemp.path),
+                      "a folder whose owner cannot be read is left alone")
+    }
+
+    /// Closing a tracked document deletes its record, copy and temps —
+    /// other documents' files are untouched.
+    func testDiscardRemovesOnlyThatDocumentsFiles() throws {
+        let store = RecoveryStore(base: base, runID: UUID())
+        try store.prepare()
+        let closed = UUID()
+        let open = UUID()
+        try commit(store, id: closed, content: "v1", metadata: metadata())
+        try commit(store, id: open, content: "v1", metadata: metadata())
+        try Data("t".utf8).write(to: store.temporaryCopyURL(for: closed))
+
+        store.discard(closed)
+        XCTAssertNil(store.record(for: closed))
+        XCTAssertFalse(files.fileExists(atPath: store.copyURL(for: closed).path))
+        let remaining = try files.contentsOfDirectory(at: store.runDirectory, includingPropertiesForKeys: nil)
+            .map(\.lastPathComponent)
+        XCTAssertFalse(remaining.contains { $0.contains(closed.uuidString) })
+        XCTAssertNotNil(store.record(for: open))
+        XCTAssertTrue(files.fileExists(atPath: store.copyURL(for: open).path))
+    }
+
+    func testSourceFilesAreNeverRemovedByTheStore() throws {
+        let source = base.appendingPathComponent("original.png")
+        try Data("png".utf8).write(to: source)
+        let store = RecoveryStore(base: base, runID: UUID())
+        try store.prepare()
+        let id = UUID()
+        try commit(store, id: id, content: "v1", metadata: metadata(imported: source.path))
+        store.discard(id)
+        XCTAssertTrue(files.fileExists(atPath: source.path),
+                      "discarding a record never touches the document's source")
+    }
+
+    func testReadRecordRejectsAMissingManifest() throws {
+        let store = RecoveryStore(base: base, runID: UUID())
+        try store.prepare()
+        XCTAssertNil(store.record(for: UUID()))
+        XCTAssertFalse(store.copyExists(for: UUID()))
+    }
+}

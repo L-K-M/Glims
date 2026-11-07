@@ -29,6 +29,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private var terminationRequested = false
     private let fileWrites = FileWriteCoordinator()
     private var terminationClosingDocument: DocumentWindowController?
+    /// Periodic recovery copies into the private store; starts with the
+    /// engine and stays off when the store cannot be created.
+    private var recovery: RecoveryScheduler?
 
     private lazy var toolsPalette: Palette = PaletteCenter.shared.palette(
         for: ToolsPaletteController.definition,
@@ -170,6 +173,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        recovery?.stop()
         session?.stop()
     }
 
@@ -185,6 +189,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 caches.appendingPathComponent("Glims/Engine", isDirectory: true))
     }
 
+    /// Where recovery copies live: Application Support, beside the
+    /// engine's own directory.
+    static func recoveryDirectory() -> URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Glims/Recovery", isDirectory: true)
+    }
+
     private func engineDidStart(_ result: Result<EngineSession, Error>) {
         switch result {
         case .success(let session):
@@ -195,6 +206,15 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             // The operation catalog is slower: fetched off-main, its menu
             // lands whenever it is ready.
             NativeFilterCatalog.shared.load(using: session)
+            let store = RecoveryStore(base: Self.recoveryDirectory())
+            do {
+                try store.prepare()
+                recovery = RecoveryScheduler(store: store)
+                recovery?.start()
+            } catch {
+                // Recovery stays off; the documents are unaffected.
+                FileHandle.standardError.write(Data("Glims: recovery store unavailable: \(error)\n".utf8))
+            }
             workspace?.close()
             workspace = nil
             if pendingOpenURLs.isEmpty {
@@ -261,9 +281,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         }
         controller.onClose = { [weak self] closed in
             self?.documents.removeAll { $0 === closed }
+            self?.recovery?.untrack(closed.imageDocument)
             PaletteCenter.shared.frontDocumentDidChange()
         }
         documents.append(controller)
+        recovery?.track(document, isReady: { [weak controller] in
+            controller?.isReadyForRecoveryCopy ?? false
+        })
         controller.showWindow(nil)
         if EditorPreferences.shared.initialView == .fit { controller.fitImage(nil) }
         PaletteCenter.shared.frontDocumentDidChange()

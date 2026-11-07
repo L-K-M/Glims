@@ -92,6 +92,7 @@ enum EngineSmokeTest {
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseFileAdmission(session, work: work, documents: documents)
+            try exerciseRecovery(session, work: work, documents: documents)
             try exerciseClipboard(session, documents: documents)
             try exercisePreviewLifetimes(session, work: work, documents: documents)
             try exerciseDisplayDensity(session, documents: documents)
@@ -200,6 +201,107 @@ enum EngineSmokeTest {
         while (!finished || b.pendingWork > 0 || b.filterPreviewIsOpen) && Date() < deadline { spin(0.01) }
         check(finished && writeError == nil && !b.filterPreviewIsOpen && controller.previewPanel == nil,
               "preview cancellation in another document waits safely for the file operation")
+    }
+
+    /// A recovery pass writes a real native copy through the same
+    /// engine-wide admission as the interface, then commits it into the
+    /// private store — without touching the document's file identity,
+    /// dirty state or undo history. Closing the document while a write
+    /// is counted as its work removes the record, so no recovery copy
+    /// survives a successful close.
+    private static func exerciseRecovery(_ session: EngineSession, work: URL,
+                                         documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Recovery")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        let window = try XCTUnwrapWindow(controller)
+
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin() }
+        }
+        func paint(_ x: Double) {
+            document.beginStroke(at: .init(x: x, y: 20, pressure: 1))
+            document.endStroke()
+            document.inputQueue.sync {}
+            spin()
+        }
+
+        let native = work.appendingPathComponent("recovery-source.xcf")
+        var saved = false
+        document.save(to: native) { error in
+            if error == nil { document.noteSaved(to: native); saved = true }
+        }
+        wait { saved && document.pendingWork == 0 }
+        check(saved && document.fileState.nativeURL == native && !document.hasUnsavedChanges,
+              "the document saves natively before recovery begins")
+
+        let store = RecoveryStore(base: work.appendingPathComponent("recovery-store"))
+        try store.prepare()
+        var tickFire: (@MainActor () -> Void)?
+        let scheduler = RecoveryScheduler(store: store) { _, fire in tickFire = fire; return {} }
+        controller.onClose = { closed in scheduler.untrack(closed.imageDocument) }
+        scheduler.track(document, isReady: { [weak controller] in
+            controller?.isReadyForRecoveryCopy ?? false
+        })
+        scheduler.start()
+
+        paint(20)
+        let revision = document.history?.revision
+        let undoSteps = document.undoInfo.undoCount
+        check(document.hasUnsavedChanges && revision != nil, "a new edit makes the document dirty")
+
+        tickFire?()
+        wait { store.record(for: document.recoveryID) != nil && scheduler.copying == nil
+                && document.pendingWork == 0 }
+        let record = store.record(for: document.recoveryID)
+        check(record?.documentID == document.recoveryID && record?.nativeURL == native
+                && record?.importedSourceURL == nil && record?.revision == revision
+                && record?.name == "recovery-source.xcf",
+              "a recovery pass commits a manifest naming the native file and revision")
+        let copy = store.copyURL(for: document.recoveryID)
+        if let copyImage = try? session.openImage(path: copy.path) {
+            check((pixel(session, copyImage, x: 20, y: 20)?[0] ?? 255) < 128,
+                  "the recovery copy holds the painted pixels")
+            try session.closeImage(copyImage)
+        } else {
+            check(false, "the recovery copy reopens as an XCF")
+        }
+        let copyMode = (try? FileManager.default.attributesOfItem(atPath: copy.path)[.posixPermissions]) as? Int
+        check(copyMode == 0o600, "the committed recovery copy is private")
+        check(document.fileState.nativeURL == native && document.hasUnsavedChanges
+                && document.undoInfo.undoCount == undoSteps && document.history?.revision == revision,
+              "the recovery copy preserves file identity, dirty state and undo history")
+
+        let firstDate = record?.date
+        tickFire?()
+        wait { scheduler.copying == nil && document.pendingWork == 0 }
+        check(store.record(for: document.recoveryID)?.date == firstDate,
+              "an unchanged revision is not copied again")
+
+        // A close asked for while the write is counted as document work
+        // finishes only after it; the store then holds no record.
+        paint(40)
+        document.inputQueue.async { usleep(400_000) }
+        tickFire?()
+        check(document.pendingWork > 0, "the recovery write counts as document work")
+        var closed: Bool?
+        controller.requestClose { closed = $0 }
+        let deadline = Date().addingTimeInterval(10)
+        while closed == nil && Date() < deadline {
+            spin(0.02)
+            if let sheet = window.attachedSheet {
+                NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+            }
+        }
+        check(closed == true, "a close asked for during the recovery write finishes after it")
+        check(store.record(for: document.recoveryID) == nil && !store.copyExists(for: document.recoveryID),
+              "a successful close removes the document's recovery record")
+        check((try? session.info(image)) == nil, "the closed image is destroyed")
+        documents.items.removeAll { $0 === document }
+        scheduler.stop()
     }
 
     /// Saving/closing must use the same asynchronous queues and sheets as
