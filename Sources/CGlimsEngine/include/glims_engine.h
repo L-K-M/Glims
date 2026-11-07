@@ -490,6 +490,44 @@ typedef struct GlimsFilterValue {
   GlimsColor color;        /* COLOR: finite components inside 0...1 */
 } GlimsFilterValue;
 
+/* A layer's mask flags: ENABLED gates the mask's effect on the
+ * composite; EDITING makes the mask the target of painting, fills and
+ * gradients while its layer is the only selected one; SHOWING displays
+ * the mask itself instead of the composite. The bits layer_mask_set's
+ * `flags` names and `values` carries. */
+typedef enum GlimsMaskFlag {
+  GLIMS_MASK_ENABLED = 1 << 0,
+  GLIMS_MASK_EDITING = 1 << 1,
+  GLIMS_MASK_SHOWING = 1 << 2
+} GlimsMaskFlag;
+
+/* What a new layer mask is made from, as the engine's Add Layer Mask
+ * choices. */
+typedef enum GlimsMaskSource {
+  GLIMS_MASK_WHITE          = 1,  /* fully opaque mask */
+  GLIMS_MASK_BLACK          = 2,  /* fully transparent mask */
+  GLIMS_MASK_ALPHA          = 3,  /* the layer's alpha channel */
+  GLIMS_MASK_ALPHA_TRANSFER = 4,  /* the layer's alpha; the layer turns opaque */
+  GLIMS_MASK_SELECTION      = 5,  /* the current selection */
+  GLIMS_MASK_GRAYSCALE      = 6   /* a grayscale copy of the layer */
+} GlimsMaskSource;
+
+/* What layer_mask_apply does with a mask. */
+typedef enum GlimsMaskApply {
+  GLIMS_MASK_APPLY   = 1,  /* bakes the mask into the layer, then removes it */
+  GLIMS_MASK_DISCARD = 2   /* removes the mask without applying it */
+} GlimsMaskApply;
+
+/* A layer's mask state; `mask` is the mask's drawable id, usable as the
+ * drawable argument of stroke_begin and drawable_thumbnail, or 0 when
+ * the layer has no mask. */
+typedef struct GlimsMaskState {
+  GlimsItemID mask;
+  bool        enabled;
+  bool        editing;
+  bool        showing;
+} GlimsMaskState;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -799,6 +837,51 @@ typedef struct GlimsEngineAPI {
    * pending edits, a preview or a plug-in. */
   GlimsStatus  (*image_duplicate) (GlimsEngine *engine, GlimsImageID image,
                                    GlimsImageID *result, char **error);
+
+  /* Layer masks. `layer` 0 means the selected layer. Adding a mask,
+   * setting its flags and applying or discarding it are each one undo
+   * step, except that EDITING alone adds none (the engine keeps no undo
+   * for the edit target). Mask changes report BUSY while a stroke, a
+   * filter preview or a plug-in is running. */
+  /* Reads `layer`'s mask state; `state->mask` is 0 when it has none. */
+  GlimsStatus  (*layer_mask)      (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                                   GlimsMaskState *state);
+  /* Adds a mask made from `source` (a GlimsMaskSource) to `layer`;
+   * `mask` (may be NULL) receives its drawable id. With `edit` the mask
+   * also becomes the edit target of painting, fills and gradients while
+   * `layer` stays the only selected layer. FAILED when `layer` already
+   * has a mask or is empty, INVALID_ARGUMENT for an unknown `source`. */
+  GlimsStatus  (*layer_mask_add)  (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                                   uint32_t source, bool edit, GlimsItemID *mask, char **error);
+  /* Sets the GlimsMaskFlag bits named by `flags` to `values`'s bits;
+   * flags outside `flags` keep their state. INVALID_ARGUMENT for an
+   * empty `flags` or bits that are no mask flag; FAILED with no mask. */
+  GlimsStatus  (*layer_mask_set)  (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                                   uint32_t flags, uint32_t values, char **error);
+  /* Applies `layer`'s mask into the layer or discards it (`mode` is a
+   * GlimsMaskApply). INVALID_ARGUMENT for APPLY on a group or a text,
+   * link or vector layer, or for an unknown `mode`; LOCKED when a pixel
+   * lock of the layer or a group containing it protects APPLY; FAILED
+   * when `layer` has no mask. */
+  GlimsStatus  (*layer_mask_apply)(GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                                   uint32_t mode, char **error);
+  /* Combines `layer`'s mask into the selection by `operation` (a
+   * GlimsSelectOperation), as one undo step honoring the mask's offset.
+   * FAILED when `layer` has no mask. */
+  GlimsStatus  (*layer_mask_to_selection)(GlimsEngine *engine, GlimsImageID image,
+                                          GlimsItemID layer, uint32_t operation, char **error);
+
+  /* Renders `drawable` (a layer, layer mask or channel id) scaled down
+   * to fit `max_size` x `max_size` image pixels, keeping its aspect
+   * ratio and never up-scaling it. `width` and `height` receive the
+   * written size; `pixels` receives `width * height * 4` bytes of
+   * straight-alpha 8-bit sRGB RGBA, or may be NULL to query the size.
+   * `max_size` is 1 ... 256. A layer group's thumbnail shows its
+   * composited children, a mask's its gray levels as opaque gray. */
+  GlimsStatus  (*drawable_thumbnail)(GlimsEngine *engine, GlimsImageID image,
+                                     GlimsItemID drawable, int32_t max_size,
+                                     uint8_t *pixels, size_t byte_count,
+                                     int32_t *width, int32_t *height);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

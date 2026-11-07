@@ -1034,6 +1034,18 @@ MARSHAL (filter_set_property, return glims_filter_set_property (e, a->item, a->s
 MARSHAL (image_history, return glims_image_history (e, a->image, a->out, a->capacity, a->in_out);)
 MARSHAL (image_history_move, return glims_image_history_move (e, a->image, a->revision, a->width, a->error);)
 MARSHAL (image_duplicate, return glims_image_duplicate (e, a->image, a->out, a->error);)
+MARSHAL (layer_mask,   return glims_layer_mask (e, a->image, a->item, a->out);)
+MARSHAL (layer_mask_add, return glims_layer_mask_add (e, a->image, a->item, (uint32_t) a->width,
+                                                      a->height != 0, a->out, a->error);)
+MARSHAL (layer_mask_set, return glims_layer_mask_set (e, a->image, a->item, (uint32_t) a->width,
+                                                      (uint32_t) a->height, a->error);)
+MARSHAL (layer_mask_apply, return glims_layer_mask_apply (e, a->image, a->item, (uint32_t) a->width,
+                                                          a->error);)
+MARSHAL (layer_mask_to_selection, return glims_layer_mask_to_selection (e, a->image, a->item,
+                                                                        (uint32_t) a->width, a->error);)
+MARSHAL (drawable_thumbnail, return glims_drawable_thumbnail (e, a->image, a->item, a->width,
+                                                              a->pixels, a->n, a->count,
+                                                              (int32_t *) a->in_out);)
 
 /* A path's geometry takes more arguments than GlimsArgs holds. */
 typedef struct
@@ -1596,6 +1608,56 @@ api_image_duplicate (GlimsEngine *e, GlimsImageID image, GlimsImageID *result, c
   return glims_engine_call (e, image_duplicate_on_engine, &a);
 }
 
+static GlimsStatus
+api_layer_mask (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, GlimsMaskState *state)
+{
+  GlimsArgs a = { .image = image, .item = layer, .out = state };
+  return glims_engine_call (e, layer_mask_on_engine, &a);
+}
+
+static GlimsStatus
+api_layer_mask_add (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, uint32_t source,
+                    bool edit, GlimsItemID *mask, char **error)
+{
+  GlimsArgs a = { .image = image, .item = layer, .width = (int32_t) source, .height = edit,
+                  .out = mask, .error = error };
+  return glims_engine_call (e, layer_mask_add_on_engine, &a);
+}
+
+static GlimsStatus
+api_layer_mask_set (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, uint32_t flags,
+                    uint32_t values, char **error)
+{
+  GlimsArgs a = { .image = image, .item = layer, .width = (int32_t) flags, .height = (int32_t) values,
+                  .error = error };
+  return glims_engine_call (e, layer_mask_set_on_engine, &a);
+}
+
+static GlimsStatus
+api_layer_mask_apply (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, uint32_t mode,
+                      char **error)
+{
+  GlimsArgs a = { .image = image, .item = layer, .width = (int32_t) mode, .error = error };
+  return glims_engine_call (e, layer_mask_apply_on_engine, &a);
+}
+
+static GlimsStatus
+api_layer_mask_to_selection (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                             uint32_t operation, char **error)
+{
+  GlimsArgs a = { .image = image, .item = layer, .width = (int32_t) operation, .error = error };
+  return glims_engine_call (e, layer_mask_to_selection_on_engine, &a);
+}
+
+static GlimsStatus
+api_drawable_thumbnail (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable, int32_t max_size,
+                        uint8_t *pixels, size_t byte_count, int32_t *width, int32_t *height)
+{
+  GlimsArgs a = { .image = image, .item = drawable, .width = max_size, .pixels = pixels,
+                  .n = byte_count, .count = width, .in_out = height };
+  return glims_engine_call (e, drawable_thumbnail_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1670,6 +1732,12 @@ static const GlimsEngineAPI api_v1 = {
   .image_history = api_image_history,
   .image_history_move = api_image_history_move,
   .image_duplicate = api_image_duplicate,
+  .layer_mask = api_layer_mask,
+  .layer_mask_add = api_layer_mask_add,
+  .layer_mask_set = api_layer_mask_set,
+  .layer_mask_apply = api_layer_mask_apply,
+  .layer_mask_to_selection = api_layer_mask_to_selection,
+  .drawable_thumbnail = api_drawable_thumbnail,
 };
 
 __attribute__ ((visibility ("default")))

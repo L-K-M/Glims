@@ -42,8 +42,11 @@ glims_image_history (GlimsEngine *engine, GlimsImageID id,
   return GLIMS_STATUS_OK;
 }
 
-static GlimsStatus
-history_edit_ready (GlimsEngine *engine, GlimsOpenImage *open, char **error)
+/* The image may be edited now: no plug-in, stroke session or filter
+ * preview is running against it. Refusing here keeps live sessions
+ * intact. */
+GlimsStatus
+glims_edit_ready (GlimsEngine *engine, GlimsOpenImage *open, char **error)
 {
   if (engine->busy > 0 || g_hash_table_size (engine->strokes) > 0 ||
       glims_filters_active_for_image (engine, open->image))
@@ -64,7 +67,7 @@ glims_image_history_move (GlimsEngine *engine, GlimsImageID id,
   gint i;
 
   if (! open) return GLIMS_STATUS_NOT_FOUND;
-  status = history_edit_ready (engine, open, error);
+  status = glims_edit_ready (engine, open, error);
   if (status != GLIMS_STATUS_OK) return status;
   glims_image_history (engine, id, NULL, 0, &info);
   if (revision != info.revision || position < 0 || position >= info.count)
@@ -93,7 +96,7 @@ glims_image_duplicate (GlimsEngine *engine, GlimsImageID id,
   if (result) *result = 0;
   if (! open) return GLIMS_STATUS_NOT_FOUND;
   if (! result) return GLIMS_STATUS_INVALID_ARGUMENT;
-  status = history_edit_ready (engine, open, error);
+  status = glims_edit_ready (engine, open, error);
   if (status != GLIMS_STATUS_OK) return status;
   copy = gimp_image_duplicate (open->image);
   if (! copy) return glims_fail (error, NULL, "The image snapshot could not be created.");
