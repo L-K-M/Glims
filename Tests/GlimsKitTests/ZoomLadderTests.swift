@@ -24,6 +24,17 @@ final class ZoomLadderTests: XCTestCase {
         XCTAssertEqual(ZoomLadder.zoomOut(from: 61), 50)
     }
 
+    func testFitUsesBothAxesAndDoesNotEnlargeSmallImages() {
+        XCTAssertEqual(ZoomLadder.fit(imageWidth: 1600, imageHeight: 1200,
+                                     viewportWidth: 900, viewportHeight: 600), 50)
+        XCTAssertEqual(ZoomLadder.fit(imageWidth: 100, imageHeight: 100,
+                                     viewportWidth: 900, viewportHeight: 600), 100)
+        XCTAssertEqual(ZoomLadder.fit(imageWidth: 0, imageHeight: 1,
+                                     viewportWidth: 900, viewportHeight: 600), 100)
+        XCTAssertEqual(ZoomLadder.fit(imageWidth: .infinity, imageHeight: 1,
+                                     viewportWidth: 900, viewportHeight: 600), 100)
+    }
+
     func testClampsAtTheEnds() {
         XCTAssertEqual(ZoomLadder.zoomIn(from: 3200), 3200)
         XCTAssertEqual(ZoomLadder.zoomOut(from: 5), 5)

@@ -41,7 +41,10 @@ final class EngineCanvasView: NSView {
 
     private(set) var zoomPercent = ZoomLadder.actualPixels
     private var tiles: [TileKey: CGImage] = [:]
+    var renderedTileCount: Int { tiles.count }
     private var staleTiles: Set<TileKey> = []
+    private var failedTiles: Set<TileKey> = []
+    private var renderingStopped = false
     private var renderInFlight = false
     /// Bumped on zoom changes; results of an older generation are dropped.
     private var generation = 0
@@ -81,6 +84,7 @@ final class EngineCanvasView: NSView {
         generation += 1
         tiles.removeAll()
         staleTiles.removeAll()
+        failedTiles.removeAll()
         updateFrameSize()
         tools.canvasScaleDidChange()
         needsDisplay = true
@@ -92,6 +96,7 @@ final class EngineCanvasView: NSView {
         generation += 1
         tiles.removeAll()
         staleTiles.removeAll()
+        failedTiles.removeAll()
         updateFrameSize()
         needsDisplay = true
         setNeedsRender()
@@ -110,26 +115,45 @@ final class EngineCanvasView: NSView {
         for key in tiles.keys where device.map({ deviceRect(for: key).intersects($0) }) ?? true {
             staleTiles.insert(key)
         }
+        failedTiles = failedTiles.filter { key in
+            !(device.map { deviceRect(for: key).intersects($0) } ?? true)
+        }
         setNeedsRender()
     }
 
     /// Renders whatever visible tiles are missing or stale.
     func setNeedsRender() {
-        guard !renderInFlight, let key = nextTileToRender() else { return }
+        guard !renderingStopped, !document.isClosing, !renderInFlight, let key = nextTileToRender() else { return }
         renderInFlight = true
         let area = deviceRect(for: key)
         let session = document.session, image = document.image, scale = deviceScale, generation = generation
         renderQueue.async {
-            let result = try? session.render(image, scale: scale, area: area)
+            let result = Result { try session.render(image, scale: scale, area: area) }
             DispatchQueue.main.async {
                 self.renderInFlight = false
-                if generation == self.generation, let result {
-                    self.store(result, for: key)
-                    self.setNeedsDisplay(self.viewRect(for: key))
+                if generation == self.generation, !self.renderingStopped {
+                    switch result {
+                    case .success(let image):
+                        self.store(image, for: key)
+                        self.setNeedsDisplay(self.viewRect(for: key))
+                    case .failure(let error):
+                        // Retry when the image or zoom changes, not in
+                        // an unbounded background loop for the same bad tile.
+                        self.failedTiles.insert(key)
+                        self.document.onError?("The image could not be drawn: \(error)")
+                    }
                 }
                 self.setNeedsRender()
             }
         }
+    }
+
+    /// Drains any in-flight read before the engine image is destroyed.
+    func stopRendering(completion: @escaping @MainActor () -> Void) {
+        renderingStopped = true
+        antsTimer?.invalidate()
+        antsTimer = nil
+        renderQueue.async { DispatchQueue.main.async { completion() } }
     }
 
     /// Renders every visible tile synchronously; used by the engine smoke
@@ -197,7 +221,7 @@ final class EngineCanvasView: NSView {
     }
 
     private func nextTileToRender() -> TileKey? {
-        visibleTileKeys().first { tiles[$0] == nil || staleTiles.contains($0) }
+        visibleTileKeys().first { !failedTiles.contains($0) && (tiles[$0] == nil || staleTiles.contains($0)) }
     }
 
     override func viewDidMoveToWindow() {
@@ -248,6 +272,10 @@ final class EngineCanvasView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        // Attaching to a window can happen before the scroll view has a
+        // visible rectangle. The first draw is the first reliable chance
+        // to request tiles; viewDidMoveToWindow alone leaves a gray canvas.
+        setNeedsRender()
         Self.surround.setFill()
         dirtyRect.fill()
         guard let context = NSGraphicsContext.current?.cgContext else { return }
@@ -302,6 +330,10 @@ final class EngineCanvasView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard !document.isClosing else {
+            document.onError?(ImageDocument.DocumentError.busy.localizedDescription)
+            return
+        }
         window?.makeFirstResponder(self)
         tools.mouseDown(with: event)
     }
@@ -315,7 +347,13 @@ final class EngineCanvasView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        if !tools.keyDown(with: event) { super.keyDown(with: event) }
+        if tools.keyDown(with: event) { return }
+        if event.keyCode == 51, event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
+           let controller = window?.windowController as? DocumentWindowController {
+            controller.deleteBackward(nil)
+            return
+        }
+        super.keyDown(with: event)
     }
 
     override func keyUp(with event: NSEvent) {

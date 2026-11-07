@@ -17,10 +17,12 @@ enum MainMenu {
             item("Quit \(AppIdentity.name)", #selector(NSApplication.terminate(_:)), "q"),
         ])
         add(menu, "File", [
-            item("New", #selector(AppController.newDocument(_:)), "n"),
+            item("New…", #selector(AppController.newDocument(_:)), "n"),
             item("Open…", #selector(AppController.openDocument(_:)), "o"),
+            RecentDocumentsMenu.shared.makeItem(),
             .separator(),
             item("Close", #selector(NSWindow.performClose(_:)), "w"),
+            item("Save", #selector(DocumentWindowController.saveDocument(_:)), "s"),
             item("Save As…", #selector(DocumentWindowController.saveDocumentAs(_:)), "S"),
             item("Export…", #selector(DocumentWindowController.exportDocument(_:)), "E"),
         ])
@@ -28,6 +30,13 @@ enum MainMenu {
             // Answered by the key window from its undo manager.
             item("Undo", Selector(("undo:")), "z"),
             item("Redo", Selector(("redo:")), "Z"),
+            .separator(),
+            item("Cut", #selector(DocumentWindowController.cut(_:)), "x"),
+            item("Copy", #selector(DocumentWindowController.copy(_:)), "c"),
+            item("Copy Merged", #selector(DocumentWindowController.copyMerged(_:)), "C"),
+            item("Paste", #selector(DocumentWindowController.paste(_:)), "v"),
+            item("Paste in Place", #selector(DocumentWindowController.pasteInPlace(_:)), "V"),
+            clearItem(),
             .separator(),
             item("Stroke Path", #selector(DocumentWindowController.strokePath(_:))),
         ])
@@ -96,6 +105,7 @@ enum MainMenu {
         add(menu, "View", [
             item("Zoom In", #selector(DocumentWindowController.zoomIn(_:)), "+"),
             item("Zoom Out", #selector(DocumentWindowController.zoomOut(_:)), "-"),
+            item("Fit Image", #selector(DocumentWindowController.fitImage(_:)), "0"),
             item("Actual Pixels", #selector(DocumentWindowController.actualPixels(_:)), "1"),
         ])
         let lastFilterSettings = item("Last Filter Settings…", #selector(DocumentWindowController.reshowLastFilter(_:)), "f")
@@ -126,6 +136,12 @@ enum MainMenu {
         NSApplication.shared.windowsMenu = windowMenu
 
         return menu
+    }
+
+    private static func clearItem() -> NSMenuItem {
+        let clear = item("Clear", #selector(DocumentWindowController.deleteBackward(_:)), "\u{7f}")
+        clear.keyEquivalentModifierMask = []
+        return clear
     }
 
     private static func submenu(_ title: String, _ items: [NSMenuItem]) -> NSMenuItem {

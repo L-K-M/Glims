@@ -18,7 +18,7 @@ and paths (a Path tool and a Paths palette). The engine dependency prefix is
 built (`_deps/macports`);
 the four engine sets in `scripts/engine.env` (GIMP 3.2.8, 3.2.0, master and
 3.0.8) build unmodified into `_engine/install/<ref>`; adapter v1 (`Engine/`)
-passes its 198 conformance checks against all four. The app loads the adapter
+passes conformance checks against all four. The app loads the adapter
 at run time and edits real images through it: tiled canvas, painting, a
 Layers palette, Gaussian Blur, undo, save and export.
 Keep `docs/plan.md` current as the work proceeds.
@@ -45,10 +45,10 @@ Keep `docs/plan.md` current as the work proceeds.
   Swift 5 language mode, macOS 13 deployment target (Rigi's minimum; GIMP
   itself needs macOS 11).
 - `swift build` and `swift test`.
-- `scripts/build-app.sh [--debug] [--engine GIMP_REF]` assembles
+- `scripts/build-app.sh [--debug] [--engine GIMP_REF | --shell-only]` assembles
   `dist/Glims.app`: it checks the third-party notices, copies `LICENSE` in as
-  `LICENSE.txt`, and signs ad-hoc or with `CODE_SIGN_IDENTITY`. `--engine`
-  bundles a built engine set and its adapter with
+  `LICENSE.txt`, and signs ad-hoc or with `CODE_SIGN_IDENTITY`. Normal builds
+  bundle the pinned engine; `--engine` selects another built engine set and its adapter with
   `scripts/bundle-engine.py` (libraries relinked to `@rpath`, typelibs
   recompiled, `Engine-Notices.txt` generated, every license checked
   against a reviewed list), so the app runs without `_engine/` or `_deps/`.
@@ -66,7 +66,8 @@ Keep `docs/plan.md` current as the work proceeds.
 - `GLIMS_ENGINE_LIBRARY=<adapter dylib> dist/Glims.app/Contents/MacOS/Glims`
   runs the app on an engine; `--engine-smoke-test` drives a document through
   the interface code and measures main-thread stalls during plug-in calls.
-  Without an engine library the app shows the placeholder workspace.
+  Engine-free interface development requires `build-app.sh --shell-only`;
+  never distribute that bundle.
 - `scripts/build.sh [--clean] [--debug] [--run] [--install] [--zip] [--dmg] [--check]`
   wraps `build-app.sh` through the shared `lkm-build` engine.
 - `scripts/release.sh [X.Y.Z] [--push]` bumps `Resources/Info.plist` and the

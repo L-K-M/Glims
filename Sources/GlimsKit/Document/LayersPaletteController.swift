@@ -3,7 +3,8 @@ import RigiUI
 
 /// The Layers palette: the front document's layer tree, top of the stack
 /// first. Selecting a row makes that layer the paint and filter target.
-/// Groups cannot be painted on and are not selectable. The button bar adds,
+/// Groups cannot be painted on and are not selectable. Each row carries a
+/// visibility checkbox and a name that edits in place. The button bar adds,
 /// duplicates and deletes layers.
 @MainActor
 final class LayersPaletteController: NSViewController, PaletteContent, NSTableViewDataSource, NSTableViewDelegate,
@@ -20,6 +21,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
     private weak var document: ImageDocument?
     private let table = NSTableView()
     private var reloading = false
+    private var snapshot = LayerListSnapshot(document: nil, layers: [])
     private lazy var buttonBar = ClassicPaletteButtonBar(
         items: [Self.item("new", "New Layer", ["plus"]) { $0.layerCommand(.new) },
                 Self.item("duplicate", "Duplicate Layer", ["plus.square.on.square"]) { $0.layerCommand(.duplicate) }]
@@ -54,10 +56,12 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
         column.resizingMask = .autoresizingMask
         table.addTableColumn(column)
         table.headerView = nil
-        table.rowHeight = 22
         table.usesAlternatingRowBackgroundColors = false
         table.dataSource = self
         table.delegate = self
+        table.target = self
+        table.doubleAction = #selector(editNameOfClickedRow(_:))
+        table.rowHeight = LayerRowView.rowHeight
         table.setAccessibilityLabel("Layers")
 
         let scroll = NSScrollView()
@@ -109,7 +113,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         guard menuItem.action == #selector(runLayerCommand(_:)) else { return true }
-        guard let document else { return false }
+        guard let document, document.acceptsEdits else { return false }
         return menuItem.tag == Int(EngineSession.LayerCommand.new.rawValue) || document.activeLayer != nil
     }
 
@@ -119,7 +123,18 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
     }
 
     func reload() {
+        let editable = document?.acceptsEdits == true
+        let hasLayer = editable && document?.activeLayer != nil
+        buttonBar.setEnabled(editable, forItem: "new")
+        buttonBar.setEnabled(hasLayer, forItem: "duplicate")
+        buttonBar.setEnabled(hasLayer, forItem: "delete")
+
+        // Reloading the rows would end a rename being typed and commit it
+        // half done; the list catches up when the rename ends.
+        guard !isRenaming else { return }
+
         reloading = true
+        snapshot = LayerListSnapshot(document: document, layers: document?.layers ?? [])
         table.reloadData()
         if let document, let active = document.activeLayer,
            let row = document.layers.firstIndex(where: { $0.id == active }) {
@@ -128,17 +143,40 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
             table.deselectAll(nil)
         }
         reloading = false
+    }
 
-        let hasLayer = document?.activeLayer != nil
-        buttonBar.setEnabled(document != nil, forItem: "new")
-        buttonBar.setEnabled(hasLayer, forItem: "duplicate")
-        buttonBar.setEnabled(hasLayer, forItem: "delete")
+    /// Whether a layer name in the list is being edited.
+    private var isRenaming: Bool {
+        LayerRowView.isRenaming(in: table)
+    }
+
+    /// The table's double-click: edit the clicked row's name in place.
+    @objc private func editNameOfClickedRow(_ sender: NSTableView) {
+        guard sender.clickedRow >= 0,
+              let row = sender.view(atColumn: 0, row: sender.clickedRow, makeIfNecessary: true) as? LayerRowView else { return }
+        row.startEditingName()
+    }
+
+    /// Applies a row's change to the layer it was made for, and only while
+    /// that layer is still in the document the palette shows. Returns false
+    /// when the change was refused, so the row shows the layer's
+    /// authoritative state again.
+    private func commitLayerChange(_ context: LayerRowView.Context, _ change: EngineSession.LayerChange) -> Bool {
+        guard let document, document.acceptsEdits,
+              LayerRowView.canChange(context, document: document, layers: document.layers) else { return false }
+        document.changeLayer(context.layerID, change)
+        return true
     }
 
     /// The text of one row, also used by the engine smoke test.
     static func title(for layer: EngineSession.Layer) -> String {
         let indent = String(repeating: "    ", count: layer.depth)
         let eye = layer.isVisible ? "●" : "○"
+        return "\(indent)\(eye) \(layer.name)\(Self.detailsSuffix(for: layer))"
+    }
+
+    /// The trailing row details: kind, mask and filter count.
+    static func detailsSuffix(for layer: EngineSession.Layer) -> String {
         var details: [String] = []
         switch layer.kind {
         case .group: details.append("group")
@@ -149,30 +187,39 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
         }
         if layer.hasMask { details.append("mask") }
         if layer.filterCount > 0 { details.append("\(layer.filterCount) filter\(layer.filterCount == 1 ? "" : "s")") }
-        let suffix = details.isEmpty ? "" : "  (\(details.joined(separator: ", ")))"
-        return "\(indent)\(eye) \(layer.name)\(suffix)"
+        return details.isEmpty ? "" : "  (\(details.joined(separator: ", ")))"
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {
-        document?.layers.count ?? 0
+        snapshot.layers.count
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard let layer = document?.layers[row] else { return nil }
-        let field = NSTextField(labelWithString: Self.title(for: layer))
-        field.font = .systemFont(ofSize: 12)
-        field.lineBreakMode = .byTruncatingTail
-        field.textColor = layer.kind == .group ? .secondaryLabelColor : .labelColor
-        field.setAccessibilityLabel("\(layer.name), \(layer.isVisible ? "visible" : "hidden")")
-        return field
+        guard let document,
+              let layer = snapshot.layer(at: row, for: document, currentLayers: document.layers) else { return nil }
+        let rowView = LayerRowView(layer: layer,
+                                   context: LayerRowView.Context(document: document, layerID: layer.id),
+                                   details: Self.detailsSuffix(for: layer)) { [weak self] context, change in
+            self?.commitLayerChange(context, change) ?? false
+        }
+        rowView.checkbox.isEnabled = document.acceptsEdits
+        rowView.nameField.isEditable = document.acceptsEdits
+        rowView.onEditEnded = { [weak self] in
+            DispatchQueue.main.async { self?.reload() }
+        }
+        return rowView
     }
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
-        document?.layers[row].kind != .group
+        guard let document, document.acceptsEdits,
+              let layer = snapshot.layer(at: row, for: document, currentLayers: document.layers) else { return false }
+        return layer.kind != .group
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
-        guard !reloading, let document, table.selectedRow >= 0 else { return }
-        document.selectLayer(document.layers[table.selectedRow].id)
+        guard !reloading, let document,
+              let layer = snapshot.layer(at: table.selectedRow, for: document, currentLayers: document.layers) else { return }
+        document.selectLayer(layer.id)
+        if document.activeLayer != layer.id { reload() }
     }
 }

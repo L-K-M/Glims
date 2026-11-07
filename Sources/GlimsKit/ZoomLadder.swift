@@ -17,6 +17,16 @@ public enum ZoomLadder {
         steps.last { $0 < percent } ?? steps[0]
     }
 
+    /// Fit inside the viewport without enlarging a smaller image.
+    public static func fit(imageWidth: Double, imageHeight: Double,
+                           viewportWidth: Double, viewportHeight: Double) -> Int {
+        guard imageWidth.isFinite, imageHeight.isFinite,
+              viewportWidth.isFinite, viewportHeight.isFinite,
+              imageWidth > 0, imageHeight > 0, viewportWidth > 0, viewportHeight > 0 else { return actualPixels }
+        let percent = min(100, min(viewportWidth / imageWidth, viewportHeight / imageHeight) * 100)
+        return max(steps[0], Int(percent.rounded(.down)))
+    }
+
     /// A typed zoom, kept within the ladder's smallest and largest steps.
     public static func clamped(_ percent: Int) -> Int {
         min(max(percent, steps[0]), steps[steps.count - 1])

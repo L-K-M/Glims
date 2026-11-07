@@ -5,6 +5,7 @@ import AppKit
 @MainActor
 enum PlugInCommands {
     static let maximumRecent = 8
+    static let didFinishNotification = Notification.Name("ch.lkmc.Glims.plugInDidFinish")
 
     /// The running command and the document it works on.
     private(set) static var running: (procedure: EngineSession.Procedure, document: ImageDocument)?
@@ -20,6 +21,10 @@ enum PlugInCommands {
 
     static func didRun(_ procedure: EngineSession.Procedure, outcome: EngineSession.RunOutcome?) {
         running = nil
+        // Defer queued Finder opens until the command completion updates its UI.
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: didFinishNotification, object: nil)
+        }
         guard outcome == .completed else { return }
         recent.removeAll { $0.name == procedure.name }
         recent.insert(procedure, at: 0)

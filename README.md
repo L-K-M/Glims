@@ -11,12 +11,10 @@ GIMP image engine.
 **Version:** v<!-- version -->0.1.0<!-- /version -->
 
 **Status:** phase 0 is finished with a go verdict
-([`docs/phase0-report.md`](docs/phase0-report.md)) and phase 1 is under
-way. GIMP's engine builds
+([`docs/phase0-report.md`](docs/phase0-report.md)) and the native editor is under active development. GIMP's engine builds
 unmodified and runs behind the C adapter in `Engine/`; the app opens, paints,
 filters, runs GIMP's plug-ins with their own dialogs and exports images
-through it, and `scripts/build-app.sh --engine` builds a self-contained app
-with the engine inside. Nothing has been released.
+through it, and normal app builds include the engine. Nothing has been released.
 
 Glims pairs GIMP's GUI-free engine (layers, masks, painting, selections,
 non-destructive filters, XCF, plug-ins) with a new AppKit interface made with
@@ -51,11 +49,27 @@ Xcode 26.0). The shared build and release engines come from
 `./install.sh`.
 
 ```sh
-scripts/build.sh              # Release build into dist/Glims.app, revealed in Finder
+scripts/build.sh              # Editor with engine in dist/Glims.app, revealed in Finder
 scripts/build.sh --run        # …and launch it
 swift test                    # unit tests
 dist/Glims.app/Contents/MacOS/Glims --smoke-test
 ```
+
+The editor requires its engine, built once on the development Mac:
+
+```sh
+scripts/bootstrap-deps.sh     # First setup takes hours; builds dependencies from source
+scripts/build-engine.sh       # Builds the pinned engine from unmodified sources
+scripts/build-adapter.sh      # Builds Glims's C facade
+scripts/build.sh --run        # Bundles the engine and launches the working editor
+```
+
+A normal build fails with setup instructions if the engine is missing; it
+never silently produces an editor with disabled commands. To build only the
+interface on a machine without the engine, explicitly use
+`scripts/build-app.sh --shell-only`. That development bundle needs
+`GLIMS_ENGINE_LIBRARY` to edit images and must not be distributed.
+`scripts/build-app.sh --engine GIMP_REF` selects another built engine set.
 
 `scripts/build.sh` also takes `--clean`, `--debug`, `--install`, `--zip`,
 `--dmg` and `--check`. [`CICD.md`](CICD.md) describes CI and releases.

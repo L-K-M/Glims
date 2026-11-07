@@ -4,13 +4,11 @@
 # signs it and verifies the signature. Fails before assembling when the
 # committed notices no longer match the resolved packages.
 #
-#   scripts/build-app.sh [--debug] [--engine GIMP_REF]
+#   scripts/build-app.sh [--debug] [--engine GIMP_REF | --shell-only]
 #
-# --engine bundles a built engine set (scripts/build-engine.sh and
-# scripts/build-adapter.sh GIMP_REF) into the app with
-# scripts/bundle-engine.py, so it runs on its own; scripts/check-bundle.sh
-# tests that. Without it the app has no engine and looks for one through
-# GLIMS_ENGINE_LIBRARY (Sources/GlimsKit/Engine/EngineLibrary.swift).
+# Normal builds bundle the pinned engine. --engine selects another built
+# engine set; --shell-only explicitly builds the interface for hosted CI or
+# development with GLIMS_ENGINE_LIBRARY. Never distribute a shell-only build.
 #
 # --debug builds the Debug configuration (scripts/build.sh --debug reaches this
 # through lkm-build's swiftpm kind). The app builds for the host architecture
@@ -26,26 +24,37 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="${GLIMS_BUILD_DIR:-$PROJECT_ROOT/.build}"
 OUTPUT_DIR="${GLIMS_OUTPUT_DIR:-$PROJECT_ROOT/dist}"
 APP_NAME="Glims"
-APP_PATH="$OUTPUT_DIR/$APP_NAME.app"
+FINAL_APP_PATH="$OUTPUT_DIR/$APP_NAME.app"
 
 CONFIGURATION=release
-ENGINE_REF=""
+source "$PROJECT_ROOT/scripts/engine.env"
+ENGINE_REF="${ENGINE_SETS%%:*}"
+ENGINE_OPTION_SET=false
+SHELL_ONLY=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --debug) CONFIGURATION=debug ;;
     --engine)
       [[ $# -ge 2 ]] || { echo "error: --engine needs a GIMP_REF" >&2; exit 2; }
-      ENGINE_REF="$2"; shift ;;
-    *) echo "error: unknown option '$1' (expected --debug or --engine GIMP_REF)" >&2; exit 2 ;;
+      [[ "$SHELL_ONLY" == false ]] || { echo "error: --engine and --shell-only cannot be combined" >&2; exit 2; }
+      ENGINE_REF="$2"; ENGINE_OPTION_SET=true; shift ;;
+    --shell-only)
+      [[ "$ENGINE_OPTION_SET" == false ]] || { echo "error: --engine and --shell-only cannot be combined" >&2; exit 2; }
+      SHELL_ONLY=true ;;
+    *) echo "error: unknown option '$1' (expected --debug, --engine GIMP_REF or --shell-only)" >&2; exit 2 ;;
   esac
   shift
 done
 
-if [[ -n "$ENGINE_REF" ]]; then
+if [[ "$SHELL_ONLY" == false ]]; then
   ENGINE_INSTALL="$PROJECT_ROOT/_engine/install/$ENGINE_REF"
   ENGINE_ADAPTER="$PROJECT_ROOT/_engine/adapter/$ENGINE_REF/libglimsengine.dylib"
   DEPS_PREFIX="$PROJECT_ROOT/_deps/macports"
-  [[ -d "$ENGINE_INSTALL" ]] || { echo "error: no engine at $ENGINE_INSTALL; run scripts/build-engine.sh $ENGINE_REF" >&2; exit 1; }
+  [[ -d "$ENGINE_INSTALL" ]] || {
+    echo "error: Glims needs its image engine. Run scripts/bootstrap-deps.sh, scripts/build-engine.sh $ENGINE_REF and scripts/build-adapter.sh $ENGINE_REF, then build again." >&2
+    echo "For interface-only development, use scripts/build-app.sh --shell-only." >&2
+    exit 1
+  }
   [[ -f "$ENGINE_ADAPTER" ]] || { echo "error: no adapter at $ENGINE_ADAPTER; run scripts/build-adapter.sh $ENGINE_REF" >&2; exit 1; }
 fi
 
@@ -55,6 +64,19 @@ if [[ "$(uname -s)" != Darwin ]]; then
 fi
 
 mkdir -p "$BUILD_DIR" "$OUTPUT_DIR"
+ASSEMBLY_LOCK="$OUTPUT_DIR/.glims-assemble.lock"
+mkdir "$ASSEMBLY_LOCK" 2>/dev/null || {
+  echo "error: another app build holds $ASSEMBLY_LOCK" >&2
+  exit 1
+}
+STAGE_DIR=""
+cleanup() {
+  [[ -z "$STAGE_DIR" ]] || rm -rf "$STAGE_DIR"
+  rmdir "$ASSEMBLY_LOCK"
+}
+trap cleanup EXIT
+STAGE_DIR="$(mktemp -d "$OUTPUT_DIR/.glims-build.XXXXXX")"
+APP_PATH="$STAGE_DIR/$APP_NAME.app"
 export CLANG_MODULE_CACHE_PATH="$BUILD_DIR/clang-cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$BUILD_DIR/module-cache"
 SWIFT_ARGS=(--configuration "$CONFIGURATION" --scratch-path "$BUILD_DIR"
@@ -68,8 +90,7 @@ BIN_DIR="$(swift build "${SWIFT_ARGS[@]}" --show-bin-path)"
 echo "==> Checking third-party notices"
 "$PROJECT_ROOT/scripts/third-party-notices.sh" --check "$BUILD_DIR"
 
-echo "==> Assembling $APP_PATH"
-rm -rf "$APP_PATH"
+echo "==> Assembling $FINAL_APP_PATH"
 mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
 cp "$BIN_DIR/$APP_NAME" "$APP_PATH/Contents/MacOS/$APP_NAME"
 cp "$PROJECT_ROOT/Resources/Info.plist" "$APP_PATH/Contents/Info.plist"
@@ -81,7 +102,9 @@ done
 cp "$PROJECT_ROOT/LICENSE" "$APP_PATH/Contents/Resources/LICENSE.txt"
 cp "$PROJECT_ROOT/Resources/Third-Party-Notices.txt" "$APP_PATH/Contents/Resources/Third-Party-Notices.txt"
 
-if [[ -n "$ENGINE_REF" ]]; then
+if [[ "$SHELL_ONLY" == false ]]; then
+  echo "==> Building the current engine adapter ($ENGINE_REF)"
+  "$PROJECT_ROOT/scripts/build-adapter.sh" "$ENGINE_REF"
   echo "==> Bundling the engine ($ENGINE_REF)"
   python3 -I "$PROJECT_ROOT/scripts/bundle-engine.py" "$APP_PATH" "$ENGINE_INSTALL" "$DEPS_PREFIX" \
     "$ENGINE_ADAPTER" "$PROJECT_ROOT/_engine/src/$ENGINE_REF"
@@ -94,4 +117,12 @@ else
   codesign --force --sign - "$APP_PATH"
 fi
 codesign --verify --strict --verbose=2 "$APP_PATH"
-printf '\nBuilt %s\n' "$APP_PATH"
+# Publish only a signed, complete app. Finder or a running plug-in can
+# write caches in the old bundle, so deleting it in place is unreliable.
+PREVIOUS_APP="$STAGE_DIR/previous.app"
+if [[ -e "$FINAL_APP_PATH" ]]; then mv "$FINAL_APP_PATH" "$PREVIOUS_APP"; fi
+if ! mv "$APP_PATH" "$FINAL_APP_PATH"; then
+  [[ ! -e "$PREVIOUS_APP" ]] || mv "$PREVIOUS_APP" "$FINAL_APP_PATH"
+  exit 1
+fi
+printf '\nBuilt %s\n' "$FINAL_APP_PATH"

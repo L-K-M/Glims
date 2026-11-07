@@ -150,6 +150,12 @@ void
 glims_release_image (GlimsEngine  *engine,
                      GlimsImageID  id)
 {
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+
+  /* Sessions own image/drawable refs. Do not let an unfinished preview
+   * retain a closed image or block subsequent plug-in commands. */
+  if (open)
+    glims_filters_abort_for_image (engine, open->image);
   g_hash_table_remove (engine->images, GINT_TO_POINTER (id));
 }
 
@@ -481,6 +487,11 @@ save_with_group (GlimsEngine            *engine,
     return GLIMS_STATUS_INVALID_ARGUMENT;
   if (engine->busy > 0)
     return GLIMS_STATUS_BUSY;
+  if (saving && glims_filters_active_for_image (engine, open->image))
+    {
+      if (error) *error = g_strdup ("Apply or cancel the filter preview before saving.");
+      return GLIMS_STATUS_BUSY;
+    }
 
   file = g_file_new_for_path (path);
   proc = gimp_plug_in_manager_file_procedure_find (engine->gimp->plug_in_manager, group, file, &gerror);

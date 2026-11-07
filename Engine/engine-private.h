@@ -106,6 +106,8 @@ GlimsStatus glims_stroke_end       (GlimsEngine *e, GlimsStrokeID id);
 void        glims_strokes_free     (gpointer stroke);
 
 /* filter.c */
+gboolean glims_filters_active_for_image (GlimsEngine *, GimpImage *);
+void glims_filters_abort_for_image (GlimsEngine *, GimpImage *);
 GlimsStatus glims_filter_begin     (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
                                     const char *operation, GlimsFilterID *out, char **error);
 GlimsStatus glims_filter_set_double(GlimsEngine *e, GlimsFilterID id, const char *property, double value);
@@ -181,6 +183,11 @@ GlimsStatus glims_image_scale      (GlimsEngine *e, GlimsImageID image, int32_t 
 GlimsStatus glims_image_resize_canvas (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t height,
                                        int32_t offset_x, int32_t offset_y, const GlimsColor *fill,
                                        char **error);
+
+/* clipboard.c */
+GlimsStatus glims_image_copy_pixels (GlimsEngine *, GlimsImageID, gboolean, GlimsPixelBuffer *, char **);
+GlimsStatus glims_image_clear (GlimsEngine *, GlimsImageID, const GlimsColor *, char **);
+GlimsStatus glims_image_paste_pixels (GlimsEngine *, GlimsImageID, GlimsRect, const uint8_t *, size_t, GlimsItemID *, char **);
 
 /* procedure.c */
 GlimsStatus glims_procedures       (GlimsEngine *e, GlimsImageID image, GlimsProcedureInfo *rows,

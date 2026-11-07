@@ -1437,6 +1437,34 @@ api_path_stroke (GlimsEngine *e, GlimsImageID image, GlimsItemID path, GlimsItem
   return glims_engine_call (e, path_stroke_on_engine, &a);
 }
 
+MARSHAL (image_copy_pixels, return glims_image_copy_pixels (e, a->image, a->width, a->out, a->error);)
+MARSHAL (image_clear, return glims_image_clear (e, a->image, a->in, a->error);)
+MARSHAL (image_paste_pixels, return glims_image_paste_pixels (e, a->image, a->area, a->in, a->n, a->out, a->error);)
+
+static GlimsStatus
+api_image_copy_pixels (GlimsEngine *e, GlimsImageID image, bool merged, GlimsPixelBuffer *out, char **error)
+{
+  GlimsArgs a = { .image = image, .width = merged, .out = out, .error = error };
+  return glims_engine_call (e, image_copy_pixels_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_clear (GlimsEngine *e, GlimsImageID image, const GlimsColor *background, char **error)
+{
+  GlimsArgs a = { .image = image, .in = background, .error = error };
+  return glims_engine_call (e, image_clear_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_paste_pixels (GlimsEngine *e, GlimsImageID image, GlimsRect bounds, const uint8_t *pixels,
+                        size_t count, GlimsItemID *result, char **error)
+{
+  GlimsArgs a = { .image = image, .area = bounds, .in = pixels, .n = count, .out = result, .error = error };
+  return glims_engine_call (e, image_paste_pixels_on_engine, &a);
+}
+
+static void api_free_pixels (uint8_t *pixels) { g_free (pixels); }
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1493,6 +1521,10 @@ static const GlimsEngineAPI api_v1 = {
   .path_delete       = api_path_delete,
   .path_to_selection = api_path_to_selection,
   .path_stroke       = api_path_stroke,
+  .image_copy_pixels = api_image_copy_pixels,
+  .free_pixels       = api_free_pixels,
+  .image_clear       = api_image_clear,
+  .image_paste_pixels = api_image_paste_pixels,
 };
 
 __attribute__ ((visibility ("default")))

@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import RigiUI
 
 /// `--engine-smoke-test`: drives a document end to end through the same code
@@ -16,6 +17,7 @@ enum EngineSmokeTest {
 
     private static func check(_ condition: Bool, _ message: String) {
         print("\(condition ? "ok  " : "FAIL") \(message)")
+        fflush(stdout)
         if !condition { failures += 1 }
     }
 
@@ -87,6 +89,9 @@ enum EngineSmokeTest {
 
         do {
             try exerciseDocument(session, work: work, documents: documents)
+            try exerciseFileSafety(session, work: work, documents: documents)
+            try exerciseClipboard(session, documents: documents)
+            try exercisePreviewLifetimes(session, work: work, documents: documents)
             try exerciseTools(session, documents: documents)
             try exerciseEditing(session, documents: documents)
             try exercisePaths(session, documents: documents)
@@ -101,6 +106,277 @@ enum EngineSmokeTest {
         return failures == 0 ? 0 : 1
     }
 
+    /// Saving/closing must use the same asynchronous queues and sheets as
+    /// real input. In particular a compile-only file-state test cannot prove
+    /// that the last stroke reached the file or Cancel preserved the image.
+    private static func exerciseFileSafety(_ session: EngineSession, work: URL,
+                                           documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "File Safety")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        let window = try XCTUnwrapWindow(controller)
+        let directory = work.appendingPathComponent("file-safety")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let native = directory.appendingPathComponent("drawing.xcf")
+        let exported = work.appendingPathComponent("file-safety.png")
+
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin() }
+        }
+        var paintPosition = 15.0
+        func paint() {
+            paintPosition += 5
+            document.beginStroke(at: .init(x: paintPosition, y: 20, pressure: 1))
+            document.endStroke()
+        }
+        paint()
+        var saved = false
+        document.save(to: native) { error in
+            if error == nil { document.noteSaved(to: native); saved = true }
+        }
+        wait { saved && document.pendingWork == 0 }
+        check(saved && document.fileState.nativeURL == native && !document.hasUnsavedChanges,
+              "saving queued input sets the native file and clears unsaved changes")
+        let reopened = try session.openImage(path: native.path)
+        check((pixel(session, reopened, x: 20, y: 20)?[0] ?? 255) < 128,
+              "the saved XCF includes the last queued stroke")
+        try session.closeImage(reopened)
+        for suffix in ["xcf.gz", "xcf.bz2"] {
+            let compressed = work.appendingPathComponent("compressed." + suffix)
+            try session.save(image, to: compressed.path)
+            let compressedImage = try session.openImage(path: compressed.path)
+            check((try session.info(compressedImage)).width == 64 &&
+                    DocumentFileState(openedFrom: compressed).saveRoute == .write(compressed),
+                  "compressed \(suffix) saves, reopens and remains a native document")
+            try session.closeImage(compressedImage)
+        }
+
+        paint()
+        var exportedOK = false
+        document.export(to: exported) { exportedOK = $0 == nil }
+        wait { exportedOK && document.pendingWork == 0 }
+        check(exportedOK && document.hasUnsavedChanges && document.fileState.nativeURL == native,
+              "export preserves native identity and unsaved changes")
+        controller.saveDocument(nil)
+        wait { document.pendingWork == 0 }
+        check(!document.hasUnsavedChanges && window.representedURL == native,
+              "plain Save writes the current XCF without a save panel")
+
+        let previousTool = ToolState.shared.current
+        let previousText = ToolState.shared.textSettings
+        ToolState.shared.textSettings.font = ToolState.pickableFontNames(try session.fonts()).first ?? "Sans-serif"
+        ToolState.shared.textSettings.size = 12
+        ToolState.shared.select(.text)
+        if let press = NSEvent.mouseEvent(with: .leftMouseDown,
+                                          location: controller.canvas.convert(CGPoint(x: 4, y: 4), to: nil),
+                                          modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                          context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+            controller.canvas.mouseDown(with: press)
+            controller.canvas.tools.textEditor?.insertText("Saved text", replacementRange: NSRange(location: NSNotFound, length: 0))
+            controller.saveDocument(nil)
+            wait { document.pendingWork == 0 }
+            let savedImage = try session.openImage(path: native.path)
+            let savedLayers = try session.layers(savedImage)
+            check(controller.canvas.tools.textEditor == nil && savedLayers.contains(where: { $0.kind == .text }),
+                  "Save commits text still being edited into the XCF")
+            try session.closeImage(savedImage)
+            controller.canvas.mouseDown(with: press)
+            controller.canvas.tools.textEditor?.string = ""
+            controller.saveDocument(nil)
+            wait { document.pendingWork == 0 }
+            let withoutText = try session.openImage(path: native.path)
+            check(!(try session.layers(withoutText)).contains(where: { $0.kind == .text }),
+                  "Save preserves deletion of all text in the active editor")
+            try session.closeImage(withoutText)
+        } else {
+            check(false, "text editing can be started before Save")
+        }
+        ToolState.shared.textSettings = previousText
+        ToolState.shared.select(previousTool)
+        if let background = document.layers.last?.id { document.selectLayer(background) }
+        paint()
+        document.inputQueue.sync {}
+        spin()
+        var closeResult: Bool?
+        controller.requestClose { closeResult = $0 }
+        if let sheet = window.attachedSheet { NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertSecondButtonReturn.rawValue) }
+        wait { closeResult != nil }
+        check(closeResult == false && window.isVisible && !document.isClosing,
+              "Cancel in the close prompt leaves the edited image open")
+
+        // A native file's parent can disappear between saves. Save on close
+        // must report failure and keep the edited image available.
+        try FileManager.default.removeItem(at: directory)
+        closeResult = nil
+        controller.requestClose { closeResult = $0 }
+        if let sheet = window.attachedSheet { NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue) }
+        wait { closeResult != nil }
+        check(closeResult == false && window.isVisible && document.hasUnsavedChanges,
+              "a failed Save on close keeps the document and its dirty state")
+
+        check(!document.isSavingForClose && document.acceptsEdits &&
+                !controller.statusBar.message.hasPrefix("64 × 64 px"),
+              "a failed close-save restores editing and keeps its error visible")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        controller.saveDocument(nil)
+        wait { document.pendingWork == 0 }
+        paint()
+        document.inputQueue.sync {}
+        spin()
+        var attemptedEdit = false
+        var rejectedEdit = false
+        let stateChange = document.onStateChange
+        document.onStateChange = {
+            stateChange?()
+            guard document.isSavingForClose, !attemptedEdit else { return }
+            attemptedEdit = true
+            let pending = document.pendingWork
+            document.moveActiveLayer(by: CGSize(width: 10, height: 0))
+            document.beginStroke(at: .init(x: 60, y: 60, pressure: 1))
+            rejectedEdit = document.pendingWork == pending && !document.strokeIsActive
+        }
+        closeResult = nil
+        controller.requestClose { closeResult = $0 }
+        if let sheet = window.attachedSheet {
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue)
+        }
+        wait { closeResult != nil }
+        check(closeResult == true && attemptedEdit && rejectedEdit,
+              "Save on close refuses later edits until the written image closes")
+        check((try? session.info(image)) == nil, "the saved-and-closed image is destroyed after its work")
+        documents.items.removeAll { $0 === document }
+
+        let discardImage = try session.newImage(width: 64, height: 64)
+        let discarded = try ImageDocument(session: session, image: discardImage, name: "Discard Stroke")
+        documents.items.append(discarded)
+        let discardController = DocumentWindowController(document: discarded)
+        discardController.showWindow(nil)
+        // The pointer may still be down when Close is invoked by a key.
+        discarded.beginStroke(at: .init(x: 48, y: 20, pressure: 1))
+        closeResult = nil
+        discardController.requestClose { closeResult = $0 }
+        if let sheet = discardController.window?.attachedSheet {
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+        }
+        wait { closeResult != nil }
+        check(closeResult == true && discarded.pendingWork == 0 && discarded.isClosing && !discarded.strokeIsActive,
+              "Don't Save drains input and rendering before reporting the image closed")
+        check((try? session.info(discardImage)) == nil, "the discarded image is destroyed after its queued work")
+        var closedSaveFailed = false
+        discarded.save(to: native) { closedSaveFailed = $0 != nil }
+        check(closedSaveFailed, "a save requested after close reports an error through its completion")
+        documents.items.removeAll { $0 === discarded }
+    }
+
+    private static func exerciseClipboard(_ session: EngineSession, documents: DocumentList) throws {
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Clipboard Source")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        let source = ClipboardImage(width: 2, height: 2,
+                                    pixels: Data([255, 0, 0, 255, 0, 255, 0, 128,
+                                                  0, 0, 255, 255, 0, 0, 0, 0]),
+                                    origin: CGPoint(x: 8, y: 10))
+        try source.write(to: board)
+        func waitForWork(_ item: ImageDocument) {
+            let deadline = Date().addingTimeInterval(10)
+            while item.pendingWork > 0 && Date() < deadline { spin() }
+            spin()
+        }
+        controller.pasteImage(.originalPosition, from: board)
+        waitForWork(document)
+        check(document.layers.count == 2 && document.layers.first?.bounds == CGRect(x: 8, y: 10, width: 2, height: 2)
+                && document.activeLayer == document.layers.first?.id,
+              "Paste in Place creates and selects a layer at the clipboard's original position")
+        var options = EngineSession.SelectOptions()
+        options.antialias = false
+        document.select(.rectangle(CGRect(x: 8, y: 10, width: 1, height: 1)), options: options)
+        waitForWork(document)
+        let undoBeforeCopy = document.undoInfo.undoCount
+        controller.copyImage(.layer, to: board)
+        // Text and path tools have synchronous metadata reads on this
+        // queue. A clipboard worker must never wait for the main queue.
+        _ = document.textLayer(document.activeLayer ?? 0)
+        waitForWork(document)
+        let copied = try ClipboardImage.read(from: board)
+        check(copied.width == 1 && copied.height == 1 && copied.origin == CGPoint(x: 8, y: 10)
+                && Array(copied.pixels) == [255, 0, 0, 255] && document.undoInfo.undoCount == undoBeforeCopy,
+              "Copy writes selection pixels and origin to the system clipboard without an undo step")
+        controller.copyImage(.cutLayer, to: board)
+        waitForWork(document)
+        let cut = try ClipboardImage.read(from: board)
+        let cleared = try session.copyPixels(image, merged: false)
+        check(Array(cut.pixels) == [255, 0, 0, 255] && cleared.pixels.last == 0
+                && document.undoInfo.undoCount == undoBeforeCopy + 1,
+              "Cut keeps the copied pixels and clears the selection as one undo step")
+        document.undo()
+        waitForWork(document)
+        check((try session.copyPixels(image, merged: false)).pixels.last == 255,
+              "Undo Cut restores the selected pixels")
+
+        let targetImage = try session.newImage(width: 64, height: 64)
+        let target = try ImageDocument(session: session, image: targetImage, name: "Clipboard Target")
+        documents.items.append(target)
+        let targetController = DocumentWindowController(document: target)
+        targetController.showWindow(nil)
+        targetController.pasteImage(.originalPosition, from: board)
+        waitForWork(target)
+        check(target.layers.count == 2 && target.undoInfo.undoCount == 1 &&
+                (pixel(session, targetImage, x: 8, y: 10)?[0] ?? 0) == 255 &&
+                (pixel(session, targetImage, x: 8, y: 10)?[1] ?? 255) == 0,
+              "clipboard pixels paste into another document as an undoable independent layer")
+        controller.window?.close()
+        targetController.window?.close()
+        let deadline = Date().addingTimeInterval(10)
+        while ((try? session.info(image)) != nil || (try? session.info(targetImage)) != nil) && Date() < deadline { spin() }
+        documents.items.removeAll { $0 === document || $0 === target }
+    }
+
+    private static func exercisePreviewLifetimes(_ session: EngineSession, work: URL,
+                                                 documents: DocumentList) throws {
+        let image = try session.newImage(width: 32, height: 32)
+        let native = work.appendingPathComponent("preview-lifetime.xcf")
+        try session.save(image, to: native.path)
+        let document = try ImageDocument(session: session, image: image, name: "Preview Lifetime", openedFrom: native)
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        guard let blur = GaussianBlurPanel(document: document) else { throw NoWindow() }
+        document.inputQueue.sync {}
+        spin()
+        document.copyPixels(.merged, background: .white, consume: { _ in }, completion: { _ in })
+        check(document.isTransferringClipboard, "preview cancellation is exercised during a clipboard transfer")
+        var finished = false
+        blur.onFinish = { finished = true }
+        blur.commit()
+        check(!finished, "a refused filter commit leaves its preview available for cancellation")
+        blur.cancel()
+        check(!document.hasUnsavedChanges, "canceling a preview does not mark a clean document dirty")
+        let deadline = Date().addingTimeInterval(10)
+        while document.pendingWork > 0 && Date() < deadline { spin() }
+        check((try? session.save(image, to: native.path)) != nil,
+              "cancel during Copy releases the preview so the image remains savable")
+        controller.gaussianBlur(nil)
+        document.inputQueue.sync {}
+        spin()
+        var closed: Bool?
+        controller.requestClose { closed = $0 }
+        while closed == nil && controller.window?.attachedSheet == nil && Date() < deadline { spin() }
+        check(closed == true && controller.window?.attachedSheet == nil,
+              "closing a clean image cancels its preview without an unsaved-changes prompt")
+        if let sheet = controller.window?.attachedSheet {
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+        }
+        while (try? session.info(image)) != nil && Date() < deadline { spin() }
+        documents.items.removeAll { $0 === document }
+    }
+
     private static func exerciseDocument(_ session: EngineSession, work: URL,
                                          documents: DocumentList) throws {
         let image = try session.newImage(width: 2400, height: 1600)
@@ -110,8 +386,14 @@ enum EngineSmokeTest {
         controller.window?.orderFront(nil)
         controller.window?.contentView?.layoutSubtreeIfNeeded()
 
+        // Do not prime the cache here: the real window must request its
+        // first tiles itself after AppKit has laid out the scroll view.
+        controller.window?.displayIfNeeded()
+        let firstDrawDeadline = Date().addingTimeInterval(5)
+        while controller.canvas.renderedTileCount == 0 && Date() < firstDrawDeadline { spin() }
+        check(controller.canvas.renderedTileCount > 0, "first draw schedules canvas tiles without a zoom command")
         let tilesRendered = try controller.canvas.renderVisibleTilesNow()
-        check(tilesRendered > 0, "canvas renders its visible tiles (\(tilesRendered))")
+        check(controller.canvas.renderedTileCount > 0, "canvas has visible tiles (\(tilesRendered) rendered synchronously)")
         check(controller.window?.title.hasPrefix("Smoke @ 100% (RGB, ") == true, "document title: \(controller.window?.title ?? "")")
 
         // A stroke through the same path mouse and tablet events take.

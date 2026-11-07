@@ -51,6 +51,9 @@ jobs:
       - name: Check the scripts parse
         run: bash -n scripts/*.sh
 
+      - name: Check packaging preflight
+        run: python3 -m unittest discover -s scripts/tests -v
+
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
         with:
@@ -62,11 +65,11 @@ jobs:
       - name: Test
         run: swift test
 
-      # Same invocation release.yml uses, so the release path is exercised on
-      # every change rather than first failing under a tag. It also fails when
+      # Hosted runners check interface-only packaging; the engine matrix and
+      # release workflow verify the complete app. This also fails when
       # Resources/Third-Party-Notices.txt no longer matches Package.resolved.
       - name: Assemble Glims.app
-        run: ./scripts/build-app.sh
+        run: ./scripts/build-app.sh --shell-only
 
       - name: Check the built app
         run: |

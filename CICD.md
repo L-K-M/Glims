@@ -2,16 +2,17 @@
 
 Glims is a SwiftPM package with an AppKit app and no `.xcodeproj`. CI builds
 and tests with `swift build` / `swift test`, then proves the packaging path by
-running `scripts/build-app.sh` into `dist/Glims.app` and launching the bundle
-with `--smoke-test`. The release workflow does the same on a tag and publishes
+running `scripts/build-app.sh --shell-only` into `dist/Glims.app` and launching the bundle
+with `--smoke-test`. The release workflow uses the self-hosted engine Mac to build and verify
+a complete editor on a tag and publishes
 an unsigned, ad-hoc-signed `.zip` and `.dmg` as a GitHub Release.
 
 The GIMP engine and the adapter are not built on GitHub's hosted runners: the
 dependency prefix takes hours to build from source. They are checked locally
 (`scripts/engine-matrix.sh`, or its steps `scripts/build-engine.sh`,
 `scripts/build-adapter.sh --test` and `scripts/check-bundle.sh`) and nightly
-on a self-hosted Mac (`engine-nightly.yml`, below). The released app does not
-contain the engine yet.
+on a self-hosted Mac (`engine-nightly.yml`, below). Normal app builds and release artifacts include the pinned engine; a hosted
+CI shell build is explicitly for interface verification only.
 
 ## Workflows
 
@@ -39,7 +40,7 @@ Third-party actions are pinned to immutable commit SHAs for the same reason
 bash -n scripts/*.sh
 swift build
 swift test
-./scripts/build-app.sh
+./scripts/build-app.sh --shell-only
 dist/Glims.app/Contents/MacOS/Glims --smoke-test
 ```
 
@@ -58,8 +59,9 @@ scripts/third-party-notices.sh
 `build-app.sh` runs the same script with `--check` and fails when the committed
 file is stale. The app ships it with the GPL text (`LICENSE.txt`) in
 `Contents/Resources`, and CI and the release workflow assert both are present.
-The notices cover Swift packages only; the GIMP engine and its dependencies must
-be added before any build bundles them.
+These notices cover Swift packages. The engine bundler generates a separate
+`Engine-Notices.txt` covering the engine and bundled dependencies; release
+archive checks require both files.
 
 ## PR review (`zai-code-review.yml`)
 
@@ -113,7 +115,9 @@ scripts/release.sh 0.2.0 --push   # bump Resources/Info.plist + README marker, c
 
 The tag triggers `release.yml`. It refuses a tag that disagrees with the
 committed `CFBundleShortVersionString` or the README version marker, gates
-publication on `swift test`, builds the app with `scripts/build-app.sh`, checks
+publication on `swift test`, builds the engine and adapter, assembles the complete app with
+`scripts/build-app.sh`, runs `scripts/check-bundle.sh` with the build trees
+unreadable, checks
 that the binary is arm64-only, stamps `CFBundleVersion` with the run number,
 and packages `Glims-v<X.Y.Z>-macos-arm64.zip` and `.dmg`. It checks the GPL text
 and the notices inside both archives before publishing, and after publishing it

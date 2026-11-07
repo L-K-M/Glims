@@ -6,7 +6,9 @@ five phase 1 items is complete. Rendering follow-up below restores the
 100% viewport fast path without giving up fresh pixels. Evidence labels: **[M]**
 measured from GIMP source or history, **[I]** inferred or estimated. Sources
 are in [`research/`](research/README.md); the round 2 memo and its two reviews
-are the main inputs.
+are the main inputs. The active editor-completion work and its remaining
+features are tracked in [`completion.md`](completion.md). The phase 1 spike
+is not the finished editor.
 
 ## Goals
 
@@ -661,6 +663,14 @@ In this order (reasons in `phase0-report.md`):
   pickers remember their invoking editor; changing window activation
   invalidates chrome, not document content. Rigi's 103 tests, gallery
   smoke test and release build pass at this revision.
+
+## Completion work (2026-11-07)
+
+The user requested the complete editor after a normal build opened the
+engine-free placeholder. The remaining work and evidence are tracked in
+[`completion.md`](completion.md). Phase 1's implemented tools did not make
+the application complete: basic file lifecycle and clipboard workflows,
+and substantial parts of `design.md`, still need implementation and checks.
 
 ## Later, before any public release
 
