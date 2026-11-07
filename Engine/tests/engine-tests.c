@@ -1592,6 +1592,109 @@ test_filters (GlimsImageID image, const char *work)
  * enum and a boolean), gegl:median-blur (an int), gegl:color-overlay (a
  * color), gegl:displace (auxiliary input), gimp:curves (config object). */
 static void
+test_history_and_snapshots (void)
+{
+  GlimsImageID image = 0, copy = 0;
+  GlimsHistoryInfo info = { 0 }, prior;
+  GlimsHistoryRow rows[8];
+  GlimsImageInfo image_info;
+  GlimsLayerInfo layers[4];
+  GlimsItemID group = 0, layer;
+  GlimsFilterID filter = 0;
+  int32_t count = 0, w, h, cw, ch;
+  uint8_t *pixels, *copy_pixels;
+  char *error = NULL;
+  char second_label[256];
+  GlimsLayerChange change = { .struct_size = sizeof change, .properties = GLIMS_LAYER_NAME };
+
+  api->image_new (engine, 16, 16, &image, NULL);
+  layer = first_layer (image);
+  CHECK (api->image_history (engine, image, NULL, 0, &info) == GLIMS_STATUS_OK &&
+         info.count == 1 && info.current_position == 0 && info.revision != 0,
+         "a new image has one earliest history state");
+  CHECK (api->image_history (engine, image, NULL, -1, &info) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_history (engine, image, NULL, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "history refuses invalid output arguments");
+  prior = info;
+  strcpy (change.name, "Snapshot layer");
+  api->layer_change (engine, image, layer, &change, NULL);
+  api->create_group (engine, image, 0, 0, "Snapshot group", &group, NULL);
+  api->reparent_layer (engine, image, layer, group, 0, NULL);
+  CHECK (api->image_history (engine, image, rows, 8, &info) == GLIMS_STATUS_OK &&
+         info.count == 4 && info.current_position == 3 && info.revision != prior.revision &&
+         rows[0].position == 0 && rows[1].position == 1 && rows[1].name[0] &&
+         rows[3].position == 3 && rows[3].name[0],
+         "history lists chronological native undo states");
+  prior = info;
+  strcpy (second_label, rows[2].name);
+  CHECK (api->image_history_move (engine, image, info.revision, 1, &error) == GLIMS_STATUS_OK &&
+         undo_depth (image) == 1 &&
+         api->image_layers (engine, image, layers, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && strcmp (layers[0].name, "Snapshot layer") == 0,
+         "history moves backward through native reparent and group undos (%s)", error ? error : "");
+  CHECK (api->image_history_move (engine, image, prior.revision, 3, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == 1,
+         "a stale history selection changes nothing");
+  api->image_history (engine, image, rows, 8, &info);
+  CHECK (info.count == 4 && info.current_position == 1 &&
+         strcmp (rows[2].name, second_label) == 0,
+         "future redo states remain in chronological order (%s)", rows[2].name);
+  CHECK (api->image_history_move (engine, image, info.revision, 3, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, layers, 4, &count) == GLIMS_STATUS_OK && count == 2 &&
+         layers[0].id == group && layers[1].id == layer && layers[1].parent == group,
+         "history moving forward restores the exact native group tree");
+  api->image_history (engine, image, NULL, 0, &info);
+  prior = info;
+  CHECK (api->image_history_move (engine, image, info.revision, 3, NULL) == GLIMS_STATUS_OK &&
+         api->image_history (engine, image, NULL, 0, &info) == GLIMS_STATUS_OK &&
+         info.revision == prior.revision,
+         "selecting the current history state creates no edit or revision");
+  CHECK (api->image_history_move (engine, image, info.revision, 4, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_history_move (engine, image, info.revision, -1, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == 3,
+         "history rejects out-of-range states without changing the image");
+  pixels = render_all (image, &w, &h);
+  CHECK (api->image_duplicate (engine, image, &copy, &error) == GLIMS_STATUS_OK && copy != image && copy != 0 &&
+         api->image_info (engine, copy, &image_info) == GLIMS_STATUS_OK && image_info.dirty &&
+         image_info.layer_count == 2 && undo_depth (copy) == 0 && undo_depth (image) == 3,
+         "a snapshot is an independent unsaved layered image with empty history (%s)", error ? error : "");
+  copy_pixels = render_all (copy, &cw, &ch);
+  CHECK (pixels && copy_pixels && w == cw && h == ch && memcmp (pixels, copy_pixels, (size_t) w * h * 4) == 0,
+         "snapshot pixels match the source");
+  free (pixels);
+  free (copy_pixels);
+  CHECK (api->image_layers (engine, copy, layers, 4, &count) == GLIMS_STATUS_OK && count == 2 &&
+         layers[0].id != group && layers[1].id != layer && layers[1].parent == layers[0].id &&
+         strcmp (layers[1].name, "Snapshot layer") == 0,
+         "snapshots own distinct layer identities while preserving names and parenting");
+  strcpy (change.name, "Independent");
+  api->layer_change (engine, copy, layers[1].id, &change, NULL);
+  api->image_layers (engine, image, layers, 4, &count);
+  CHECK (strcmp (layers[1].name, "Snapshot layer") == 0 && undo_depth (image) == 3,
+         "editing a snapshot leaves source layers and history unchanged");
+  api->image_close (engine, copy);
+
+  api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL);
+  api->image_history (engine, image, NULL, 0, &info);
+  CHECK (api->image_history_move (engine, image, info.revision, 0, NULL) == GLIMS_STATUS_BUSY &&
+         api->image_duplicate (engine, image, &copy, NULL) == GLIMS_STATUS_BUSY && copy == 0 &&
+         undo_depth (image) == 3,
+         "history moves and snapshots refuse an uncommitted preview");
+  api->filter_abort (engine, filter);
+  api->image_history_move (engine, image, info.revision, 1, NULL);
+  strcpy (change.name, "New branch");
+  api->layer_change (engine, image, layer, &change, NULL);
+  api->image_history (engine, image, NULL, 0, &info);
+  CHECK (info.count == 3 && info.current_position == 2,
+         "new edits after undo discard unreachable redo states");
+  api->image_close (engine, image);
+  CHECK (api->image_history (engine, image, NULL, 0, &info) == GLIMS_STATUS_NOT_FOUND &&
+         api->image_duplicate (engine, image, &copy, NULL) == GLIMS_STATUS_NOT_FOUND && copy == 0,
+         "history and snapshot calls reject closed images");
+  if (error) api->free_string (error);
+}
+
+static void
 test_filter_properties (void)
 {
   GlimsImageID          image = 0;
@@ -2337,6 +2440,7 @@ main (int argc, char **argv)
       test_paint_and_undo (image);
       test_filters (image, argv[2]);
       test_filter_properties ();
+      test_history_and_snapshots ();
       test_save_reopen_export (image, argv[2]);
       test_save_copy (argv[2]);
       test_image_from_pixels ();

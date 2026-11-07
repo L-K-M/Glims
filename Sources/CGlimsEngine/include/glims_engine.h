@@ -126,6 +126,20 @@ typedef struct GlimsUndoInfo {
   char    next_redo[256];
 } GlimsUndoInfo;
 
+/* History positions are ordered from the earliest retained state (0) to
+ * the last redo state. A revision is valid for this open image only and
+ * changes whenever its native undo/redo history changes. */
+typedef struct GlimsHistoryInfo {
+  uint64_t revision;
+  int32_t  count;             /* includes the earliest retained state */
+  int32_t  current_position;
+} GlimsHistoryInfo;
+
+typedef struct GlimsHistoryRow {
+  int32_t position;
+  char    name[256];          /* action that produced this state */
+} GlimsHistoryRow;
+
 /* The engine's paint tools; each paints with GIMP's own paint core. */
 typedef enum GlimsPaintTool {
   GLIMS_PAINT_PAINTBRUSH = 0,
@@ -769,6 +783,22 @@ typedef struct GlimsEngineAPI {
    * filter_commit() covers the session's changes as one. */
   GlimsStatus  (*filter_set_property)(GlimsEngine *engine, GlimsFilterID filter,
                                       const char *property, const GlimsFilterValue *value);
+
+  /* Reads a consistent history snapshot; rows may be NULL to query count.
+   * The first row is the earliest state still retained by the engine. */
+  GlimsStatus  (*image_history) (GlimsEngine *engine, GlimsImageID image,
+                                 GlimsHistoryRow *rows, int32_t capacity, GlimsHistoryInfo *info);
+  /* Moves through native undo/redo to a state from image_history(). A stale
+   * revision or invalid position is refused without changing the image.
+   * BUSY while editing, a preview or a plug-in is active. */
+  GlimsStatus  (*image_history_move) (GlimsEngine *engine, GlimsImageID image,
+                                      uint64_t revision, int32_t position, char **error);
+  /* Creates an independent unsaved image snapshot, including native layer
+   * structure, filters, channels, paths and color state, with no undo history.
+   * Source file identity, pixels and history remain unchanged. BUSY during
+   * pending edits, a preview or a plug-in. */
+  GlimsStatus  (*image_duplicate) (GlimsEngine *engine, GlimsImageID image,
+                                   GlimsImageID *result, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
