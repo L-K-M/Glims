@@ -193,7 +193,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// scope instead of committing, and the scheduler checks every
     /// tracked window before it admits any.
     var isReadyForRecoveryCopy: Bool {
-        guard canvas.tools.textEditor == nil else { return false }
+        guard !canvas.tools.hasPendingInteraction else { return false }
         let scoped = [window, previewPanel?.window].compactMap { $0 }
             + PaletteEditScope.windowsEditing(imageDocument)
         return scoped.allSatisfy { !PaletteEditScope.isFieldEditing($0) }

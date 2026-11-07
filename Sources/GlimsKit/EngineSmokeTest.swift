@@ -248,14 +248,76 @@ enum EngineSmokeTest {
         })
         scheduler.start()
 
+        let previousTool = ToolState.shared.current
+        ToolState.shared.select(.rectangleSelect)
+        func pointer(_ type: NSEvent.EventType, _ point: CGPoint) -> NSEvent? {
+            NSEvent.mouseEvent(with: type,
+                location: controller.canvas.convert(CGPoint(x: point.x * controller.canvas.scale,
+                                                             y: point.y * controller.canvas.scale), to: nil),
+                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+        }
+        if let down = pointer(.leftMouseDown, CGPoint(x: 8, y: 8)),
+           let dragged = pointer(.leftMouseDragged, CGPoint(x: 40, y: 40)),
+           let up = pointer(.leftMouseUp, CGPoint(x: 40, y: 40)) {
+            controller.canvas.mouseDown(with: down)
+            controller.canvas.mouseDragged(with: dragged)
+            check(!controller.isReadyForRecoveryCopy,
+                  "recovery waits for an accepted selection gesture to finish")
+            controller.canvas.mouseUp(with: up)
+            document.inputQueue.sync {}
+            spin()
+            check(controller.isReadyForRecoveryCopy,
+                  "a finished selection gesture permits recovery again")
+            document.select(.none)
+            document.inputQueue.sync {}
+            spin()
+            ToolState.shared.select(.crop)
+            controller.canvas.mouseDown(with: down)
+            controller.canvas.mouseDragged(with: dragged)
+            controller.canvas.mouseUp(with: up)
+            check(!controller.isReadyForRecoveryCopy,
+                  "recovery waits for a crop preview awaiting Return")
+            if let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                    characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                    isARepeat: false, keyCode: 53) {
+                _ = controller.canvas.tools.keyDown(with: escape)
+            }
+            check(controller.isReadyForRecoveryCopy,
+                  "cancelling a crop preview permits recovery again")
+        } else {
+            check(false, "the recovery gesture readiness check receives pointer events")
+        }
+        ToolState.shared.select(previousTool)
+
         paint(20)
         let revision = document.history?.revision
         let undoSteps = document.undoInfo.undoCount
         check(document.hasUnsavedChanges && revision != nil, "a new edit makes the document dirty")
 
+        let second = try ImageDocument(session: session, image: session.newImage(width: 32, height: 32), name: "Recovery 2")
+        documents.items.append(second)
+        let secondController = DocumentWindowController(document: second)
+        scheduler.track(second, isReady: { [weak secondController] in
+            secondController?.isReadyForRecoveryCopy ?? false
+        })
+        second.beginStroke(at: .init(x: 12, y: 12, pressure: 1))
+        second.endStroke()
+        second.inputQueue.sync {}
+        spin()
+        defer {
+            scheduler.untrack(second)
+            secondController.window?.orderOut(nil)
+            documents.items.removeAll { $0 === second }
+            second.closeImageWhenDrained()
+        }
+
         tickFire?()
         wait { store.record(for: document.recoveryID) != nil && scheduler.copying == nil
-                && document.pendingWork == 0 }
+                && document.pendingWork == 0 && second.pendingWork == 0 }
+        check(store.record(for: second.recoveryID) != nil,
+              "one recovery pass copies both dirty documents through real engine admission")
         let record = store.record(for: document.recoveryID)
         check(record?.documentID == document.recoveryID && record?.nativeURL == native
                 && record?.importedSourceURL == nil && record?.revision == revision
