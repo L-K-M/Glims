@@ -93,6 +93,7 @@ enum EngineSmokeTest {
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseFileAdmission(session, work: work, documents: documents)
             try exerciseRecovery(session, work: work, documents: documents)
+            try exerciseRecoveryInterface(session, work: work, documents: documents)
             try exerciseClipboard(session, documents: documents)
             try exercisePreviewLifetimes(session, work: work, documents: documents)
             try exerciseDisplayDensity(session, documents: documents)
@@ -364,6 +365,197 @@ enum EngineSmokeTest {
         check((try? session.info(image)) == nil, "the closed image is destroyed")
         documents.items.removeAll { $0 === document }
         scheduler.stop()
+    }
+
+    /// The recovery interface end to end: a dead run's real committed
+    /// records are listed by the panel, a selected one opens as an
+    /// unsaved recovered document through counted engine admission, the
+    /// prior record stays until that document explicitly closes, and a
+    /// recovery finishing during Quit is cleaned up instead of opened.
+    private static func exerciseRecoveryInterface(_ session: EngineSession, work: URL,
+                                                  documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin() }
+        }
+
+        // A document with real pixels saved natively: the "crashed" run's
+        // copies are committed through the store's own atomic path.
+        let sourceImage = try session.newImage(width: 64, height: 64)
+        let source = try ImageDocument(session: session, image: sourceImage, name: "Crash Source")
+        documents.items.append(source)
+        source.beginStroke(at: .init(x: 16, y: 16, pressure: 1))
+        source.endStroke()
+        source.inputQueue.sync {}
+        spin()
+        let native = work.appendingPathComponent("original.xcf")
+        try session.save(sourceImage, to: native.path)
+        source.noteSaved(to: native)
+        let nativeBytes = try Data(contentsOf: native)
+        let sourceLayers = source.layers.count
+        defer {
+            documents.items.removeAll { $0 === source }
+            source.closeImageWhenDrained()
+        }
+
+        let storeBase = work.appendingPathComponent("recovery-ui-store")
+        let priorStore = RecoveryStore(base: storeBase, runID: UUID(), ownerPID: Int32.max - 1234,
+                                       processIsAlive: { _ in false })
+        try priorStore.prepare()
+        func commitPrior(_ id: UUID, _ name: String, imported: URL? = nil,
+                         native nativeURL: URL? = nil, revision: UInt64 = 1) throws {
+            let temp = priorStore.temporaryCopyURL(for: id)
+            try session.saveCopy(sourceImage, to: temp.path)
+            _ = try priorStore.commitCopy(at: temp, for: id, metadata: .init(
+                name: name, nativeURL: nativeURL, importedSourceURL: imported, revision: revision))
+        }
+        let firstID = UUID(), otherID = UUID(), quitID = UUID(), badID = UUID()
+        try commitPrior(firstID, "original.xcf", native: native, revision: 7)
+        let ghost = work.appendingPathComponent("ghost.png")
+        try Data("png".utf8).write(to: ghost)
+        try commitPrior(otherID, "other.xcf", imported: ghost, revision: 2)
+        try commitPrior(quitID, "quit.xcf")
+        let badTemp = priorStore.temporaryCopyURL(for: badID)
+        try Data("not an xcf".utf8).write(to: badTemp)
+        _ = try priorStore.commitCopy(at: badTemp, for: badID, metadata: .init(
+            name: "bad.xcf", nativeURL: nil, importedSourceURL: nil, revision: 1))
+
+        // A foreign run whose owner is this live process is never offered.
+        let liveRunID = UUID()
+        let liveDir = storeBase.appendingPathComponent(liveRunID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: liveDir, withIntermediateDirectories: true)
+        try JSONEncoder().encode(RecoveryStore.Run(runID: liveRunID,
+                                                 pid: ProcessInfo.processInfo.processIdentifier,
+                                                 started: Date()))
+            .write(to: liveDir.appendingPathComponent(RecoveryStore.runFilename))
+        try Data("live".utf8).write(to: liveDir.appendingPathComponent("\(UUID().uuidString).xcf"))
+
+        let store = RecoveryStore(base: storeBase, runID: UUID(),
+                                  processIsAlive: { $0 == ProcessInfo.processInfo.processIdentifier })
+        try store.prepare()
+        let app = AppController()
+        app.recoveryStore = store
+        let found = store.discoverRecoverableDocuments()
+        check(found.count == 4 && !found.contains { $0.runID == liveRunID },
+              "dead runs' committed records are discoverable; live runs' are not")
+        guard let candidate = found.first(where: { $0.documentID == firstID }) else { return }
+
+        app.recoverDocuments(nil)
+        let panel = app.recoveryPanel
+        check(panel != nil && panel?.window?.canBecomeMain == false && panel?.records.count == 4,
+              "the recovery panel lists prior records without taking main")
+
+        // A repeated click while the recovery is counted cannot
+        // duplicate it.
+        app.recover([candidate], using: session)
+        check(!app.inFlightRecoveries.isEmpty, "the recovery is counted in flight")
+        app.recover([candidate], using: session)
+        wait { app.inFlightRecoveries.isEmpty }
+        let recovered = app.documents.last?.imageDocument
+        if let recovered { documents.items.append(recovered) }
+        check(app.documents.count == 1 && recovered?.name == "original.xcf recovered",
+              "the record opens once as 'name recovered'")
+        check(recovered?.hasUnsavedChanges == true && recovered?.fileState.nativeURL == nil
+                && recovered?.fileState.importedSourceURL == nil
+                && recovered?.fileState.saveRoute == .askForFile,
+              "the recovered document is unsaved with no file identity, so Save asks a destination")
+        check(recovered?.undoInfo.undoCount == 0,
+              "the recovered image carries fresh undo")
+        if let image = recovered?.image {
+            check((pixel(session, image, x: 16, y: 16)?[0] ?? 255) < 128
+                    && recovered?.layers.count == sourceLayers,
+                  "the recovered document holds the same pixels and layers")
+        }
+        check((try? Data(contentsOf: native)) == nativeBytes,
+              "the original file is never opened or overwritten")
+        check(!NSDocumentController.shared.recentDocumentURLs.contains {
+            $0.path.hasPrefix(storeBase.path)
+        }, "recovery copies are never marked recent")
+        check(store.discoverRecoverableDocuments().contains { $0.documentID == firstID },
+              "a recovered record is kept while its document is open")
+
+        app.recover([candidate], using: session)
+        wait { app.inFlightRecoveries.isEmpty }
+        check(app.documents.count == 1,
+              "recovering an already-open record brings its window forward")
+        app.discardSelected([candidate])
+        check(store.discoverRecoverableDocuments().contains { $0.documentID == firstID }
+                && app.lastRecoveryFailure != nil,
+              "a record open as a recovered document refuses discard visibly")
+
+        // Only an explicit close (Save or Don't Save) retires the prior
+        // record and deletes its copy.
+        let recoveredController = app.documents.last
+        var recoveredClosed: Bool?
+        recoveredController?.requestClose { recoveredClosed = $0 }
+        let closeDeadline = Date().addingTimeInterval(10)
+        while recoveredClosed == nil && Date() < closeDeadline {
+            spin(0.02)
+            if let sheet = recoveredController?.window?.attachedSheet {
+                NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+            }
+        }
+        wait { app.documents.isEmpty }
+        check(recoveredClosed == true
+                && !store.discoverRecoverableDocuments().contains { $0.documentID == firstID }
+                && !FileManager.default.fileExists(atPath: candidate.copyURL.path),
+              "an explicit close retires the prior record and deletes its copy")
+        if let recovered { documents.items.removeAll { $0 === recovered } }
+        recovered?.longQueue.sync {}
+        PaletteCenter.shared.closeAll()
+
+        // A failed open keeps the record and reports it; a stale row and
+        // a live run refuse without deleting anything.
+        guard let bad = store.discoverRecoverableDocuments().first(where: { $0.documentID == badID }) else { return }
+        app.recover([bad], using: session)
+        wait { app.inFlightRecoveries.isEmpty }
+        check(app.documents.isEmpty && app.lastRecoveryFailure?.contains("bad.xcf") == true,
+              "a failed recovery shows an error and opens nothing")
+        check(store.discoverRecoverableDocuments().contains { $0.documentID == badID },
+              "a failed recovery keeps the record available")
+
+        guard let other = store.discoverRecoverableDocuments().first(where: { $0.documentID == otherID }),
+              let quitCandidate = store.discoverRecoverableDocuments().first(where: { $0.documentID == quitID })
+        else { return }
+        var stale = quitCandidate
+        stale.name = "changed.xcf"
+        app.recover([stale], using: session)
+        wait { app.inFlightRecoveries.isEmpty }
+        check(app.documents.isEmpty && app.lastRecoveryFailure?.contains("no longer available") == true,
+              "a stale record refuses visibly instead of opening")
+        check(store.discoverRecoverableDocuments().contains { $0.documentID == quitID },
+              "a refused record stays on disk")
+
+        app.discardSelected([other])
+        check(!store.discoverRecoverableDocuments().contains { $0.documentID == otherID }
+                && !FileManager.default.fileExists(atPath: other.copyURL.path),
+              "Discard deletes the prior record and its copy")
+        check((try? String(contentsOf: ghost, encoding: .utf8)) == "png",
+              "an informational source URL is never a deletion target")
+
+        let liveCandidate = RecoveryStore.RecoveredDocument(
+            runID: liveRunID, documentID: UUID(), name: "live.xcf",
+            nativeURL: nil, importedSourceURL: nil,
+            copyURL: liveDir.appendingPathComponent("planted.xcf"),
+            date: Date(), revision: 1)
+        app.discardSelected([liveCandidate])
+        check(app.lastRecoveryFailure != nil && FileManager.default.fileExists(atPath: liveDir.path),
+              "a live run's folder is never deleted")
+
+        // Quit ordering: an in-flight recovery holds Quit; a recovery
+        // that finishes during Quit is closed again, not opened, and its
+        // record survives for the next launch.
+        check(app.applicationShouldTerminate(NSApp) == .terminateNow,
+              "with nothing open and nothing in flight, Quit proceeds")
+        app.recover([quitCandidate], using: session)
+        check(app.applicationShouldTerminate(NSApp) == .terminateLater,
+              "an in-flight recovery holds Quit")
+        wait { app.inFlightRecoveries.isEmpty }
+        wait { app.applicationShouldTerminate(NSApp) == .terminateNow }
+        check(app.documents.isEmpty,
+              "a recovery finished during Quit is cleaned up, not opened")
+        check(store.discoverRecoverableDocuments().contains { $0.documentID == quitID },
+              "the record survives a recovery interrupted by Quit")
     }
 
     /// Saving/closing must use the same asynchronous queues and sheets as

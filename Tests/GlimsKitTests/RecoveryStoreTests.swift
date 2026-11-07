@@ -293,9 +293,172 @@ final class RecoveryStoreTests: XCTestCase {
         XCTAssertNil(store.record(for: UUID()))
         XCTAssertFalse(store.copyExists(for: UUID()))
     }
+
+    /// A prior run's generations are discoverable by the copy name the
+    /// manifest records, and a replaced generation is not resurrected.
+    func testDiscoveryReturnsTheCommittedGenerationFromAPriorRun() throws {
+        let prior = RecoveryStore(base: base, runID: UUID(), ownerPID: 4242,
+                                  processIsAlive: { _ in false })
+        try prior.prepare()
+        let id = UUID()
+        let first = try commit(prior, id: id, content: "v1", metadata: metadata(name: "Gen"))
+        let newer = try commit(prior, id: id, content: "v2", metadata: metadata(name: "Gen", revision: 5))
+        XCTAssertNotEqual(first.copyFilename, newer.copyFilename)
+
+        let store = RecoveryStore(base: base, runID: UUID(),
+                                  processIsAlive: { $0 == ProcessInfo.processInfo.processIdentifier })
+        try store.prepare()
+        let found = try XCTUnwrap(store.discoverRecoverableDocuments().first)
+        XCTAssertEqual(found.documentID, id)
+        XCTAssertEqual(found.copyURL.lastPathComponent, newer.copyFilename)
+        XCTAssertEqual(found.revision, 5)
+        XCTAssertTrue(files.fileExists(atPath: found.copyURL.path))
+        XCTAssertFalse(files.fileExists(atPath: prior.runDirectory.appendingPathComponent(first.copyFilename).path),
+                       "the superseded generation is not offered")
+    }
+
+    /// A recoverable candidate is re-read from disk every time: a stale
+    /// row — changed name, date or copy — is refused instead of opened.
+    func testRecoverableDocumentRevalidatesTheCandidate() throws {
+        let prior = RecoveryStore(base: base, runID: UUID(), ownerPID: 4242,
+                                  processIsAlive: { _ in false })
+        try prior.prepare()
+        let id = UUID()
+        try commit(prior, id: id, content: "v1", metadata: metadata(name: "Kept", native: "/tmp/kept.xcf"))
+
+        let store = RecoveryStore(base: base, runID: UUID(), processIsAlive: { _ in false })
+        try store.prepare()
+        let candidate = try XCTUnwrap(store.discoverRecoverableDocuments().first)
+        XCTAssertEqual(store.recoverableDocument(matching: candidate)?.documentID, id)
+
+        var stale = candidate
+        stale.name = "Renamed"
+        XCTAssertNil(store.recoverableDocument(matching: stale))
+        stale = candidate
+        stale.date = candidate.date.addingTimeInterval(60)
+        XCTAssertNil(store.recoverableDocument(matching: stale))
+        stale = candidate
+        stale.copyURL = candidate.copyURL.deletingLastPathComponent().appendingPathComponent("other.xcf")
+        XCTAssertNil(store.recoverableDocument(matching: stale))
+        stale = candidate
+        stale.runID = store.runID
+        XCTAssertNil(store.recoverableDocument(matching: stale), "this run's records are never recoverable")
+        try files.removeItem(at: candidate.copyURL)
+        XCTAssertNil(store.recoverableDocument(matching: candidate),
+                     "a deleted copy cannot be recovered")
+    }
+
+    /// Discarding a prior record removes its manifest, its copy and its
+    /// leftover temporaries — never the document's own source file.
+    func testDiscardRecoverableRemovesTheRecordAndCopyOnly() throws {
+        let outside = files.temporaryDirectory
+            .appendingPathComponent("glims-recovery-source-\(UUID().uuidString)", isDirectory: true)
+        try files.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? files.removeItem(at: outside) }
+        let source = outside.appendingPathComponent("photo.png")
+        try Data("png".utf8).write(to: source)
+
+        let prior = RecoveryStore(base: base, runID: UUID(), ownerPID: 4242,
+                                  processIsAlive: { _ in false })
+        try prior.prepare()
+        let id = UUID()
+        try commit(prior, id: id, content: "v1", metadata: metadata(imported: source.path))
+        let runDir = prior.runDirectory
+        try Data("t".utf8).write(to: runDir.appendingPathComponent(".\(id.uuidString).tmp-zzz.xcf"))
+
+        let store = RecoveryStore(base: base, runID: UUID(), processIsAlive: { _ in false })
+        try store.prepare()
+        let candidate = try XCTUnwrap(store.discoverRecoverableDocuments().first { $0.documentID == id })
+
+        try store.discardRecoverable(candidate)
+        XCTAssertTrue(store.discoverRecoverableDocuments().isEmpty)
+        XCTAssertFalse(files.fileExists(atPath: runDir.path),
+                       "a run folder emptied of records is pruned")
+        XCTAssertEqual(try? String(contentsOf: source, encoding: .utf8), "png",
+                       "the source file is never a deletion target")
+    }
+
+    /// Live, unverifiable and current runs are refused wholesale: a
+    /// candidate can never delete a foreign or live run's files, and
+    /// nothing is removed outside the store.
+    func testDiscardRecoverableRefusesLiveUnverifiableAndCurrentRuns() throws {
+        let liveRun = UUID()
+        let liveDir = try writeRun(liveRun, pid: 4242)
+        let liveDoc = UUID()
+        try writeRawManifest(manifestJSON(id: liveDoc, name: "Live"), copy: Data("x".utf8),
+                             named: "\(liveDoc.uuidString).json", in: liveDir)
+
+        let unmarkedRun = UUID()
+        let unmarkedDir = base.appendingPathComponent(unmarkedRun.uuidString, isDirectory: true)
+        try files.createDirectory(at: unmarkedDir, withIntermediateDirectories: true)
+        let unmarkedDoc = UUID()
+        try writeRawManifest(manifestJSON(id: unmarkedDoc, name: "Unmarked"), copy: Data("x".utf8),
+                             named: "\(unmarkedDoc.uuidString).json", in: unmarkedDir)
+
+        let store = RecoveryStore(base: base, runID: UUID(),
+                                  processIsAlive: { $0 == 4242 })
+        try store.prepare()
+        let ownDoc = UUID()
+        try commit(store, id: ownDoc, content: "x", metadata: metadata())
+
+        func candidate(_ runID: UUID, _ docID: UUID, _ name: String) -> RecoveryStore.RecoveredDocument {
+            RecoveryStore.RecoveredDocument(runID: runID, documentID: docID, name: name,
+                                            nativeURL: nil, importedSourceURL: nil,
+                                            copyURL: base.appendingPathComponent(runID.uuidString)
+                                                .appendingPathComponent("\(docID.uuidString).xcf"),
+                                            date: Date(timeIntervalSinceReferenceDate: 700000000),
+                                            revision: 3)
+        }
+        for (runID, docID, name) in [(liveRun, liveDoc, "Live"),
+                                     (unmarkedRun, unmarkedDoc, "Unmarked"),
+                                     (store.runID, ownDoc, "Fake")] {
+            XCTAssertThrowsError(try store.discardRecoverable(candidate(runID, docID, name))) {
+                guard case RecoveryStore.StoreError.runUnavailable = $0 else {
+                    return XCTFail("expected runUnavailable, got \($0)")
+                }
+            }
+        }
+        XCTAssertTrue(files.fileExists(atPath: liveDir.appendingPathComponent("\(liveDoc.uuidString).json").path))
+        XCTAssertTrue(files.fileExists(atPath: liveDir.appendingPathComponent("\(liveDoc.uuidString).xcf").path))
+        XCTAssertTrue(files.fileExists(atPath: unmarkedDir.appendingPathComponent("\(unmarkedDoc.uuidString).xcf").path))
+        XCTAssertNotNil(store.record(for: ownDoc))
+    }
+
+    /// A stale row can never delete a changed record: the manifest is
+    /// re-validated field by field before anything is removed.
+    func testDiscardRecoverableRefusesChangedOrVanishedRecords() throws {
+        let prior = RecoveryStore(base: base, runID: UUID(), ownerPID: 4242,
+                                  processIsAlive: { _ in false })
+        try prior.prepare()
+        let id = UUID()
+        try commit(prior, id: id, content: "v1", metadata: metadata(name: "First", revision: 3))
+
+        let store = RecoveryStore(base: base, runID: UUID(), processIsAlive: { _ in false })
+        try store.prepare()
+        let candidate = try XCTUnwrap(store.discoverRecoverableDocuments().first)
+
+        // The record changes under the row the UI was shown.
+        try commit(prior, id: id, content: "v2", metadata: metadata(name: "Second", revision: 9))
+        XCTAssertThrowsError(try store.discardRecoverable(candidate)) {
+            guard case RecoveryStore.StoreError.recordMismatch = $0 else {
+                return XCTFail("expected recordMismatch, got \($0)")
+            }
+        }
+        XCTAssertEqual(store.discoverRecoverableDocuments().count, 1,
+                       "the changed record was not deleted")
+
+        // A vanished record refuses the same way.
+        let gone = try XCTUnwrap(store.discoverRecoverableDocuments().first)
+        try files.removeItem(at: prior.runDirectory.appendingPathComponent("\(id.uuidString).json"))
+        XCTAssertThrowsError(try store.discardRecoverable(gone)) {
+            guard case RecoveryStore.StoreError.recordMismatch = $0 else {
+                return XCTFail("expected recordMismatch, got \($0)")
+            }
+        }
+    }
 }
 
-private final class FailingManifestFiles: FileManager, @unchecked Sendable {
+final class FailingManifestFiles: FileManager, @unchecked Sendable {
     var failManifest = false
     override func setAttributes(_ attributes: [FileAttributeKey: Any], ofItemAtPath path: String) throws {
         if failManifest && path.hasSuffix(".json") && URL(fileURLWithPath: path).lastPathComponent.hasPrefix(".") {

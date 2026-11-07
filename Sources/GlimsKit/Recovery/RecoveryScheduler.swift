@@ -78,7 +78,12 @@ final class RecoveryScheduler {
     }
 
     let store: RecoveryStore
-    let interval: TimeInterval
+    /// The idle gap between passes; `setInterval` retunes it live.
+    private(set) var interval: TimeInterval
+    /// Reports a failed copy write or store commit with the document it
+    /// concerned, so a missed backup is visible instead of silently
+    /// dropped. Copy retries keep running on later passes either way.
+    var onFailure: (@MainActor (any RecoveryCandidate, String) -> Void)?
     private let arm: Arm
     private var entries: [UUID: Entry] = [:]
     /// Registration order; the pass cursor walks it round-robin.
@@ -125,6 +130,18 @@ final class RecoveryScheduler {
         cancelTick = nil
     }
 
+    /// Retunes the idle gap between passes. A pending tick is re-armed
+    /// at the new interval; a pass or copy in flight is left alone — its
+    /// end still arms the next tick, now at the new interval — so
+    /// reconfiguring never overlaps passes or strands a copy.
+    func setInterval(_ newValue: TimeInterval) {
+        guard newValue != interval else { return }
+        interval = newValue
+        cancelTick?()
+        guard running, cancelTick != nil else { return }
+        armNext()
+    }
+
     /// Registers a document's window-scoped readiness. Documents hold
     /// weakly: registration is per open document, and `untrack` on a
     /// real close drops its record.
@@ -158,7 +175,12 @@ final class RecoveryScheduler {
 
     private func armNext() {
         guard running else { return }
-        cancelTick = arm(interval) { [weak self] in self?.tick() }
+        // The handle means a tick is pending: the fired tick clears it
+        // so `cancelTick != nil` always says a tick is actually waiting.
+        cancelTick = arm(interval) { [weak self] in
+            self?.cancelTick = nil
+            self?.tick()
+        }
     }
 
     /// Ends a pass and schedules the next one after the idle interval.
@@ -241,9 +263,13 @@ final class RecoveryScheduler {
                     entry?.copiedRevision = record.revision
                 } catch {
                     self.store.discardTemporary(temp)
+                    self.onFailure?(live, "Could not keep a recovery copy of \u{201C}\(snapshot.name)\u{201D}: \(error)")
                 }
             } else {
                 self.store.discardTemporary(temp)
+                if let error, let live = entry?.document, !live.recoverySnapshot.isClosing {
+                    self.onFailure?(live, "Could not write a recovery copy of \u{201C}\(snapshot.name)\u{201D}: \(error)")
+                }
             }
         }
     }

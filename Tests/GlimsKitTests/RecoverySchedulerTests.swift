@@ -55,8 +55,9 @@ final class RecoverySchedulerTests: XCTestCase {
         }
     }
 
-    private func makeScheduler(interval: TimeInterval = 120) throws -> RecoveryScheduler {
-        let store = RecoveryStore(base: base, runID: UUID())
+    private func makeScheduler(interval: TimeInterval = 120,
+                               fileManager: FileManager = .default) throws -> RecoveryScheduler {
+        let store = RecoveryStore(base: base, runID: UUID(), fileManager: fileManager)
         try store.prepare()
         let scheduler = RecoveryScheduler(store: store, interval: interval) { [self] interval, fire in
             armed.append((interval, fire))
@@ -282,6 +283,90 @@ final class RecoverySchedulerTests: XCTestCase {
         XCTAssertNotNil(scheduler.store.record(for: document.recoveryID),
                         "the counted finalize still commits the finished copy")
         XCTAssertTrue(armed.isEmpty, "nothing is scheduled after stop")
+    }
+
+    /// Retuning the interval re-arms a pending tick at the new gap; a
+    /// stopped scheduler takes the value for its next start without
+    /// arming anything.
+    func testSetIntervalRearmsTheIdleGap() throws {
+        let scheduler = try makeScheduler()
+        scheduler.start()
+        XCTAssertEqual(armed.last?.interval, 120)
+        scheduler.setInterval(60)
+        XCTAssertEqual(armed.last?.interval, 60,
+                       "an armed tick is re-armed at the new interval")
+        scheduler.setInterval(60)
+        scheduler.stop()
+        armed.removeAll()
+        scheduler.setInterval(30)
+        XCTAssertTrue(armed.isEmpty, "a stopped scheduler arms nothing")
+        scheduler.start()
+        XCTAssertEqual(armed.last?.interval, 30)
+    }
+
+    /// A retune while a copy is in flight neither cancels the copy nor
+    /// arms a second pass; the finished copy still commits and the next
+    /// pass uses the new interval.
+    func testSetIntervalDuringACopyDoesNotOverlapPasses() throws {
+        let scheduler = try makeScheduler()
+        let document = FakeDocument()
+        document.hold = true
+        scheduler.track(document, isReady: ready())
+        scheduler.start()
+        tick()
+        XCTAssertNotNil(scheduler.copying)
+        armed.removeAll()
+        scheduler.setInterval(45)
+        XCTAssertTrue(armed.isEmpty, "a copy in flight is never overlapped by a retune")
+        try Data("final".utf8).write(to: try XCTUnwrap(document.copies.first))
+        document.pending?(nil)
+        XCTAssertNil(scheduler.copying)
+        XCTAssertNotNil(scheduler.store.record(for: document.recoveryID),
+                        "the in-flight copy still commits after a retune")
+        XCTAssertEqual(armed.last?.interval, 45)
+    }
+
+    /// A failed write is reported with the document it concerned, so a
+    /// missed backup is visible; a document that closed mid-write is
+    /// not an error to surface.
+    func testFailuresAreReportedPerDocument() throws {
+        let scheduler = try makeScheduler()
+        var failures: [(UUID, String)] = []
+        scheduler.onFailure = { candidate, message in failures.append((candidate.recoveryID, message)) }
+        let failing = FakeDocument(name: "Bad")
+        failing.nextError = FakeError()
+        let good = FakeDocument()
+        scheduler.track(failing, isReady: ready())
+        scheduler.track(good, isReady: ready())
+        scheduler.start()
+        tick()
+        XCTAssertEqual(failures.map(\.0), [failing.recoveryID])
+        XCTAssertTrue(failures[0].1.contains("Bad"))
+        XCTAssertEqual(good.copies.count, 1)
+
+        failures.removeAll()
+        failing.hold = true
+        tick()
+        failing.recoverySnapshot.isClosing = true
+        failing.pending?(FakeError())
+        XCTAssertTrue(failures.isEmpty, "a closing document's aborted copy is not reported")
+    }
+
+    /// A commit that fails after the write still reports the failure and
+    /// keeps no half-published record.
+    func testAFailedCommitIsReported() throws {
+        let failingFiles = FailingManifestFiles()
+        let scheduler = try makeScheduler(fileManager: failingFiles)
+        var failures: [(UUID, String)] = []
+        scheduler.onFailure = { candidate, message in failures.append((candidate.recoveryID, message)) }
+        let document = FakeDocument(name: "Fragile")
+        scheduler.track(document, isReady: ready())
+        scheduler.start()
+        failingFiles.failManifest = true
+        tick()
+        XCTAssertEqual(failures.map(\.0), [document.recoveryID])
+        XCTAssertTrue(failures[0].1.contains("Fragile"))
+        XCTAssertNil(scheduler.store.record(for: document.recoveryID))
     }
 
     /// `PaletteEditScope.isFieldEditing` detects a live field editor —

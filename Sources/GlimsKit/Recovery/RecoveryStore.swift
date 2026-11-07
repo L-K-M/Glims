@@ -78,10 +78,20 @@ final class RecoveryStore {
 
     enum StoreError: LocalizedError {
         case invalidTemporaryName(String)
+        /// The candidate's run is this run, is still alive, or its owner
+        /// marker can no longer be read — its files are left alone.
+        case runUnavailable(UUID)
+        /// The manifest on disk is gone or no longer describes the
+        /// candidate the caller was shown.
+        case recordMismatch(UUID)
         var errorDescription: String? {
             switch self {
             case .invalidTemporaryName(let name):
                 return "\(name) is not a recovery temporary this run issued."
+            case .runUnavailable(let id):
+                return "The recovery record's run \(id.uuidString) is still running or cannot be verified to have ended."
+            case .recordMismatch(let id):
+                return "The recovery record \(id.uuidString) is no longer the one that was selected."
             }
         }
     }
@@ -263,6 +273,76 @@ final class RecoveryStore {
             }
         }
         return found.sorted { ($0.date, $0.documentID.uuidString) < ($1.date, $1.documentID.uuidString) }
+    }
+
+    /// Re-reads a discovered candidate against the store: its run is
+    /// still a dead foreign run, its manifest still decodes to the same
+    /// record, and the copy it names is still there. A candidate is a
+    /// snapshot — a later discard or another run's crash can make it
+    /// stale, so every action on it re-validates instead of trusting the
+    /// row.
+    func recoverableDocument(matching candidate: RecoveredDocument) -> RecoveredDocument? {
+        let dir = base.appendingPathComponent(candidate.runID.uuidString, isDirectory: true)
+        guard candidate.runID != runID,
+              let owner = readRun(dir)?.pid, !processIsAlive(owner),
+              let record = readRecord(at: dir.appendingPathComponent(Self.manifestName(for: candidate.documentID)),
+                                      expectedID: candidate.documentID),
+              matches(record, candidate),
+              files.fileExists(atPath: dir.appendingPathComponent(record.copyFilename).path)
+        else { return nil }
+        return RecoveredDocument(runID: candidate.runID, documentID: candidate.documentID,
+                                 name: record.name,
+                                 nativeURL: record.nativeURL,
+                                 importedSourceURL: record.importedSourceURL,
+                                 copyURL: dir.appendingPathComponent(record.copyFilename),
+                                 date: record.date, revision: record.revision)
+    }
+
+    /// Deletes a prior run's recovery record and its copy. Only names
+    /// this store forms from the candidate's validated UUIDs are
+    /// removed: `candidate.copyURL` and the record's source URLs are
+    /// never deletion targets, so a crafted candidate can never delete
+    /// outside the private store. The run's owner is re-checked dead and
+    /// the manifest re-validated against the candidate, so a stale row
+    /// cannot delete a changed record or a live run's files.
+    func discardRecoverable(_ candidate: RecoveredDocument) throws {
+        guard candidate.runID != runID else { throw StoreError.runUnavailable(candidate.runID) }
+        let dir = base.appendingPathComponent(candidate.runID.uuidString, isDirectory: true)
+        guard let owner = readRun(dir)?.pid else {
+            throw StoreError.runUnavailable(candidate.runID)
+        }
+        guard !processIsAlive(owner) else { throw StoreError.runUnavailable(candidate.runID) }
+        let manifest = dir.appendingPathComponent(Self.manifestName(for: candidate.documentID))
+        guard let record = readRecord(at: manifest, expectedID: candidate.documentID),
+              matches(record, candidate)
+        else { throw StoreError.recordMismatch(candidate.documentID) }
+        // The copy goes first: a failure keeps the whole record intact
+        // rather than orphaning large pixels next to a live manifest.
+        let copy = dir.appendingPathComponent(record.copyFilename)
+        if files.fileExists(atPath: copy.path) { try files.removeItem(at: copy) }
+        try files.removeItem(at: manifest)
+        // Leftover temporaries of the same document are swept too.
+        for entry in (try? files.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        where entry.lastPathComponent.hasPrefix(".\(candidate.documentID.uuidString).tmp-") {
+            try? files.removeItem(at: entry)
+        }
+        // A run folder holding only its marker has nothing recoverable left.
+        let remaining = (try? files.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        if remaining.allSatisfy({ $0.lastPathComponent == Self.runFilename
+                || ($0.lastPathComponent.hasPrefix(".") && $0.lastPathComponent.contains(".tmp-")) }) {
+            try? files.removeItem(at: dir)
+        }
+    }
+
+    /// Whether the record decoded from disk still describes the
+    /// candidate the UI showed — same copy, name, date, revision and
+    /// source fields.
+    private func matches(_ record: Record, _ candidate: RecoveredDocument) -> Bool {
+        record.name == candidate.name && record.date == candidate.date
+            && record.revision == candidate.revision
+            && record.nativeURL == candidate.nativeURL
+            && record.importedSourceURL == candidate.importedSourceURL
+            && record.copyFilename == candidate.copyURL.lastPathComponent
     }
 
     // MARK: Internal
