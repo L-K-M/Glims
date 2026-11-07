@@ -179,6 +179,22 @@ main (int argc, char **argv)
       first = now_ms () - t;
       printf ("zoom %.1f%%: first frame of a freshly opened image %.0f ms\n", scale * 100, first);
 
+      /* Repeat the 1:1 cold viewport on fresh projections, so one-time babl
+       * setup or a busy machine's first sample doesn't hide a regression. */
+      if (z == 0)
+        {
+          samples[0] = first;
+          for (i = 1; i < 5; i++)
+            {
+              api->image_close (engine, image);
+              api->image_open (engine, argv[3], &image, NULL);
+              t = now_ms ();
+              api->image_render (engine, image, scale, start, pixels, VIEW_W * 4);
+              samples[i] = now_ms () - t;
+            }
+          report ("  first frame at 100%, five fresh images", samples, 5, 0);
+        }
+
       for (pass = 0; pass < 2; pass++)
         {
           area = start;
