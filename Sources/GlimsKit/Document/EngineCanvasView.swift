@@ -15,7 +15,9 @@ import AppKit
 /// display, and panning shows cached tiles at once while new ones fill in.
 @MainActor
 final class EngineCanvasView: NSView {
-    private static let surround = NSColor(calibratedWhite: 0.42, alpha: 1)
+    var surroundColor = EditorPreferences.shared.surround.color {
+        didSet { needsDisplay = true }
+    }
     /// Transparent pixels show over light checks (GIMP's "Light checks"),
     /// so they read apart from the surround and from tiles still rendering,
     /// which stay the surround's gray.
@@ -320,7 +322,7 @@ final class EngineCanvasView: NSView {
         // visible rectangle. The first draw is the first reliable chance
         // to request tiles; viewDidMoveToWindow alone leaves a gray canvas.
         setNeedsRender()
-        Self.surround.setFill()
+        surroundColor.setFill()
         dirtyRect.fill()
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         context.interpolationQuality = .none

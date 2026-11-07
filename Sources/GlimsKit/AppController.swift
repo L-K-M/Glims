@@ -22,6 +22,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private var documents: [DocumentWindowController] = []
     private var workspace: WorkspaceWindowController?
     private var newImagePanel: NewImagePanel?
+    private var preferencesWindow: PreferencesWindowController?
     private var pendingOpenURLs: [URL] = []
     private var openingURLs: Set<URL> = []
     private var pendingFileOperations = 0
@@ -83,6 +84,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        ClassicChrome.apply(scheme: EditorPreferences.shared.appearance)
+        NotificationCenter.default.addObserver(self, selector: #selector(preferencesChanged),
+                                               name: EditorPreferences.didChange, object: EditorPreferences.shared)
         NotificationCenter.default.addObserver(self, selector: #selector(openPendingFiles),
                                                name: PlugInCommands.didFinishNotification, object: nil)
         guard let path = EngineLibrary.configuredPath() else {
@@ -105,6 +109,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             DispatchQueue.main.async { self?.engineDidStart(result) }
         }
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func preferencesChanged() {
+        ClassicChrome.apply(scheme: EditorPreferences.shared.appearance)
+    }
+
+    @objc func showPreferences(_ sender: Any?) {
+        if preferencesWindow == nil { preferencesWindow = PreferencesWindowController() }
+        preferencesWindow?.showWindow(nil)
+        preferencesWindow?.window?.makeKeyAndOrderFront(nil)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -229,7 +243,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         }
         documents.append(controller)
         controller.showWindow(nil)
-        controller.fitImage(nil)
+        if EditorPreferences.shared.initialView == .fit { controller.fitImage(nil) }
         PaletteCenter.shared.frontDocumentDidChange()
         PaletteCenter.shared.setDefaultLayout(Self.defaultPaletteLayout)
         // Paths before Layers, so Layers is the tab their group shows.
