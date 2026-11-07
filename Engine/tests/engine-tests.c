@@ -1197,6 +1197,14 @@ test_layer_edit_locks (void)
   CHECK (api->layer_move (engine, image, layer, 5, 4) == GLIMS_STATUS_OK &&
          api->image_layers (engine, image, &row, 1, &count) == GLIMS_STATUS_OK,
          "unlocking restores ordinary layer editing");
+  api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL);
+  api->set_layer_locks (engine, image, group, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL);
+  depth = undo_depth (image);
+  CHECK (api->filter_set_double (engine, filter, "std-dev-x", 3) == GLIMS_STATUS_LOCKED,
+         "a new inherited lock protects an already open preview from parameter edits");
+  CHECK (api->filter_commit (engine, filter, NULL) == GLIMS_STATUS_LOCKED &&
+         api->filter_abort (engine, filter) == GLIMS_STATUS_OK && undo_depth (image) == depth,
+         "a protected preview refuses commit while cancellation remains available without an undo step");
   api->image_close (engine, image);
 }
 
