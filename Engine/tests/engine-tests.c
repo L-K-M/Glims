@@ -1213,6 +1213,35 @@ test_layer_edit_locks (void)
  * mask to selection, locks inherited through the owner, id and buffer
  * refusals, small thumbnails of drawables and masks, and XCF. */
 static void
+test_mask_clipboard_target (void)
+{
+  GlimsImageID image = 0;
+  GlimsItemID layer, mask = 0;
+  GlimsPixelBuffer copied = { 0 };
+  GlimsColor black = { 0, 0, 0, 1 };
+  uint8_t *pixels;
+  int width, height;
+
+  api->image_new (engine, 16, 16, &image, NULL);
+  layer = first_layer (image);
+  api->layer_mask_add (engine, image, layer, GLIMS_MASK_BLACK, true, &mask, NULL);
+  CHECK (api->image_copy_pixels (engine, image, false, &copied, NULL) == GLIMS_STATUS_OK &&
+         copied.byte_count == 16 * 16 * 4 && copied.pixels[0] == 0 && copied.pixels[3] == 255,
+         "Copy targets a selected black mask rather than its white layer");
+  api->free_pixels (copied.pixels);
+  api->layer_mask_apply (engine, image, layer, GLIMS_MASK_DISCARD, NULL);
+  api->layer_mask_add (engine, image, layer, GLIMS_MASK_WHITE, true, &mask, NULL);
+  CHECK (api->image_clear (engine, image, &black, NULL) == GLIMS_STATUS_OK,
+         "Clear accepts the selected mask as its edit target");
+  api->layer_mask_set (engine, image, layer, GLIMS_MASK_ENABLED, 0, NULL);
+  pixels = render_all (image, &width, &height);
+  CHECK (pixels && pixels[0] == 255 && pixels[3] == 255,
+         "clearing a mask preserves its layer's actual pixels");
+  api->free_pixels (pixels);
+  api->image_close (engine, image);
+}
+
+static void
 test_layer_masks (const char *work)
 {
   GlimsImageID       image = 0, src = 0, other = 0, copy = 0, reopened = 0;
@@ -2846,6 +2875,7 @@ main (int argc, char **argv)
   test_layer_structure ();
   test_layer_edit_locks ();
   test_layer_masks (argv[2]);
+  test_mask_clipboard_target ();
   test_paint_tools ();
   test_selections ();
   test_editing ();
