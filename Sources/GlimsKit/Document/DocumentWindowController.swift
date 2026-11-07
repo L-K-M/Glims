@@ -14,6 +14,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private lazy var engineUndoManager = EngineUndoManager(document: imageDocument)
     private var blurPanel: GaussianBlurPanel?
     var onClose: ((DocumentWindowController) -> Void)?
+    let fileAccessID = UUID()
+    var reserveWrite: ((URL) throws -> (() -> Void))?
 
     init(document imageDocument: ImageDocument) {
         self.imageDocument = imageDocument
@@ -72,6 +74,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     private func layOutContent(in window: NSWindow) {
+        scrollView.contentView = CanvasClipView()
         scrollView.documentView = canvas
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
@@ -140,6 +143,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     // MARK: Menu commands
 
+    @objc override func deleteBackward(_ sender: Any?) { clearPixels(sender) }
+    @objc override func cancelOperation(_ sender: Any?) {
+        if let blurPanel { blurPanel.cancel() } else { super.cancelOperation(sender) }
+    }
+
     @objc func zoomIn(_ sender: Any?) { zoom(to: ZoomLadder.zoomIn(from: canvas.zoomPercent)) }
     @objc func zoomOut(_ sender: Any?) { zoom(to: ZoomLadder.zoomOut(from: canvas.zoomPercent)) }
     @objc func actualPixels(_ sender: Any?) { zoom(to: ZoomLadder.actualPixels) }
@@ -152,7 +160,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func gaussianBlur(_ sender: Any?) {
-        guard blurPanel == nil else { return }
+        guard blurPanel == nil, !imageDocument.isClosing, !PlugInCommands.isRunning,
+              !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
+        if canvas.tools.textEditor != nil {
+            canvas.tools.finishTextEditing()
+            imageDocument.inputQueue.async { [weak self] in
+                DispatchQueue.main.async { self?.gaussianBlur(sender) }
+            }
+            return
+        }
+        if imageDocument.strokeIsActive { imageDocument.endStroke() }
         guard let panel = GaussianBlurPanel(document: imageDocument) else {
             statusBar.message = "Gaussian Blur could not start on this layer."
             NSSound.beep()
@@ -348,7 +365,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     /// Runs a plug-in command on this document, as its menu item does.
     func run(_ procedure: EngineSession.Procedure, mode: EngineSession.RunMode) {
-        guard !PlugInCommands.isRunning else { return }
+        guard !PlugInCommands.isRunning, !imageDocument.isClosing else { return }
+        NSApp.windows.forEach { $0.endEditing(for: nil) }
+        canvas.tools.finishTextEditing()
+        if imageDocument.strokeIsActive { imageDocument.endStroke() }
         let title = procedure.label.replacingOccurrences(of: "…", with: "")
         PlugInCommands.willRun(procedure, on: imageDocument)
         statusBar.message = mode == .interactive && procedure.label.hasSuffix("…")
@@ -390,18 +410,25 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
+            || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || window?.attachedSheet != nil
         switch menuItem.action {
+        case #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)):
+            return !imageDocument.isClosing
+        case #selector(cut(_:)), #selector(copy(_:)), #selector(copyMerged(_:)),
+             #selector(paste(_:)), #selector(pasteInPlace(_:)), #selector(deleteBackward(_:)):
+            return canPerformClipboardCommand(menuItem.action)
         case #selector(selectFromPath(_:)), #selector(strokePath(_:)):
-            return imageDocument.activePath != nil && !PlugInCommands.isRunning
+            return imageDocument.activePath != nil && !editingBlocked
         case #selector(gaussianBlur(_:)):
-            return !PlugInCommands.isRunning
+            return !editingBlocked
         case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(exportDocument(_:)):
             // A plug-in dialog is modal for the engine; file calls get BUSY.
-            return !PlugInCommands.isRunning
+            return !editingBlocked && blurPanel == nil
         case #selector(runPlugIn(_:)):
             // The engine runs no plug-in while a filter preview is open.
             guard let command = menuItem.representedObject as? PlugInCommand else { return false }
-            return !PlugInCommands.isRunning && blurPanel == nil && imageDocument.canRun(command.procedure)
+            return !editingBlocked && blurPanel == nil && imageDocument.canRun(command.procedure)
         case #selector(repeatLastFilter(_:)), #selector(reshowLastFilter(_:)):
             let base = menuItem.action == #selector(repeatLastFilter(_:)) ? "Last Filter" : "Last Filter Settings…"
             guard let last = PlugInCommands.last else {
@@ -411,9 +438,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let title = last.label.replacingOccurrences(of: "…", with: "")
             menuItem.title = menuItem.action == #selector(repeatLastFilter(_:))
                 ? "Last Filter: \(title)" : "Last Filter Settings: \(title)…"
-            return !PlugInCommands.isRunning && blurPanel == nil && imageDocument.canRun(last)
+            return !editingBlocked && blurPanel == nil && imageDocument.canRun(last)
         default:
-            return true
+            return !editingBlocked
         }
     }
 
@@ -432,14 +459,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     /// The save flow Cmd-S and the close prompt share; `done` gets
     /// whether a file was actually written.
-    private func performSave(done: @escaping @MainActor (Bool) -> Void) {
+    private enum WritePurpose { case ordinary, closing }
+
+    private func performSave(purpose: WritePurpose = .ordinary, done: @escaping @MainActor (Bool) -> Void) {
+        guard canStartFileWrite(purpose: purpose) else { return done(false) }
+        canvas.tools.finishTextEditing()
+        if imageDocument.strokeIsActive { imageDocument.endStroke() }
         switch imageDocument.fileState.saveRoute {
-        case .write(let url): saveTo(url, done: done)
-        case .askForFile: askSaveTarget(done: done)
+        case .write(let url): saveTo(url, purpose: purpose, done: done)
+        case .askForFile: askSaveTarget(purpose: purpose, done: done)
         }
     }
 
-    private func askSaveTarget(done: @escaping @MainActor (Bool) -> Void) {
+    private func askSaveTarget(purpose: WritePurpose = .ordinary, done: @escaping @MainActor (Bool) -> Void) {
+        guard canStartFileWrite(purpose: purpose) else { return done(false) }
+        canvas.tools.finishTextEditing()
+        if imageDocument.strokeIsActive { imageDocument.endStroke() }
         guard let window else { return done(false) }
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [UTType(importedAs: "org.gimp.xcf", conformingTo: .image)]
@@ -447,15 +482,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         savePanel.nameFieldStringValue = (imageDocument.name as NSString).deletingPathExtension + ".xcf"
         savePanel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = savePanel.url, let self else { return done(false) }
-            self.saveTo(url, done: done)
+            self.saveTo(url, purpose: purpose, done: done)
         }
     }
 
     /// Writes the XCF, then moves the name, the represented file and the
     /// dirty flag to it — a failed or cancelled save changes nothing.
-    private func saveTo(_ url: URL, done: @escaping @MainActor (Bool) -> Void) {
+    private func saveTo(_ url: URL, purpose: WritePurpose = .ordinary, done: @escaping @MainActor (Bool) -> Void) {
+        guard canStartFileWrite(purpose: purpose) else { return done(false) }
+        let release: () -> Void
+        do { release = try reserveWrite?(url) ?? {} } catch {
+            statusBar.message = error.localizedDescription
+            return done(false)
+        }
         statusBar.message = "Saving \(url.lastPathComponent)…"
         imageDocument.save(to: url) { [weak self] error in
+            defer { release() }
             guard let self else { return done(false) }
             if let error {
                 self.statusBar.message = String(describing: error)
@@ -470,14 +512,36 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    private func canStartFileWrite(purpose: WritePurpose = .ordinary) -> Bool {
+        guard blurPanel == nil, !PlugInCommands.isRunning, !imageDocument.isClosing,
+              !imageDocument.isTransferringClipboard,
+              !imageDocument.isSavingForClose || purpose == .closing else {
+            statusBar.message = "Apply or cancel the current operation before saving or exporting."
+            return false
+        }
+        // Commit field editors in floating palettes before taking a file
+        // snapshot, just as the canvas text editor is committed below.
+        NSApp.windows.forEach { $0.endEditing(for: nil) }
+        return true
+    }
+
     @objc func exportDocument(_ sender: Any?) {
+        guard canStartFileWrite() else { return }
+        canvas.tools.finishTextEditing()
+        if imageDocument.strokeIsActive { imageDocument.endStroke() }
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [.png, .jpeg, .tiff]
         savePanel.nameFieldStringValue = (imageDocument.name as NSString).deletingPathExtension + ".png"
         savePanel.beginSheetModal(for: window!) { [weak self] response in
             guard response == .OK, let url = savePanel.url, let self else { return }
+            let release: () -> Void
+            do { release = try self.reserveWrite?(url) ?? {} } catch {
+                self.statusBar.message = error.localizedDescription
+                return
+            }
             self.statusBar.message = "Exporting \(url.lastPathComponent)…"
             self.imageDocument.export(to: url) { error in
+                defer { release() }
                 self.statusBar.message = error.map { String(describing: $0) } ?? "Exported \(url.lastPathComponent)"
             }
         }
@@ -507,12 +571,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if imageDocument.isSavingForClose || savePromptVisible { return false }
+        if sender.attachedSheet != nil {
+            statusBar.message = "Finish or cancel the dialog before closing this image."
+            finishCloseRequest(false)
+            return false
+        }
         guard !PlugInCommands.isRunning else {
             statusBar.message = "Finish or cancel the running filter before closing this image."
             NSSound.beep()
             finishCloseRequest(false)
             return false
         }
+        NSApp.windows.forEach { $0.endEditing(for: nil) }
+        canvas.tools.finishTextEditing()
+        blurPanel?.cancel()
+        if imageDocument.strokeIsActive { imageDocument.endStroke() }
         if closeApproved || !imageDocument.hasUnsavedChanges { return true }
         askToSaveChanges()
         return false
@@ -542,8 +616,20 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     private func saveThenClose() {
-        performSave { [weak self] saved in
-            if saved { self?.approveClose() } else { self?.finishCloseRequest(false) }
+        guard canStartFileWrite() else { return finishCloseRequest(false) }
+        canvas.tools.finishTextEditing()
+        if imageDocument.strokeIsActive { imageDocument.endStroke() }
+        guard imageDocument.beginCloseSave() else { return finishCloseRequest(false) }
+        performSave(purpose: .closing) { [weak self] saved in
+            guard let self else { return }
+            if saved {
+                self.approveClose()
+            } else {
+                let message = self.statusBar.message
+                self.imageDocument.cancelCloseSave()
+                self.statusBar.message = message
+                self.finishCloseRequest(false)
+            }
         }
     }
 

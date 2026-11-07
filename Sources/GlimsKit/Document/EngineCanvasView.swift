@@ -330,6 +330,10 @@ final class EngineCanvasView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard !document.isClosing else {
+            document.onError?(ImageDocument.DocumentError.busy.localizedDescription)
+            return
+        }
         window?.makeFirstResponder(self)
         tools.mouseDown(with: event)
     }
@@ -343,7 +347,13 @@ final class EngineCanvasView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        if !tools.keyDown(with: event) { super.keyDown(with: event) }
+        if tools.keyDown(with: event) { return }
+        if event.keyCode == 51, event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
+           let controller = window?.windowController as? DocumentWindowController {
+            controller.deleteBackward(nil)
+            return
+        }
+        super.keyDown(with: event)
     }
 
     override func keyUp(with event: NSEvent) {

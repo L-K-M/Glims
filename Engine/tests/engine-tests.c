@@ -1229,7 +1229,7 @@ test_paint_and_undo (GlimsImageID image)
 }
 
 static void
-test_filters (GlimsImageID image)
+test_filters (GlimsImageID image, const char *work)
 {
   GlimsItemID    layer = first_layer (image);
   GlimsFilterID  filter = 0;
@@ -1245,6 +1245,13 @@ test_filters (GlimsImageID image)
   CHECK (api->filter_set_double (engine, filter, "std-dev-x", 4.0) == GLIMS_STATUS_OK &&
          api->filter_set_double (engine, filter, "std-dev-y", 4.0) == GLIMS_STATUS_OK,
          "filter properties set");
+  {
+    char preview_path[1024];
+    snprintf (preview_path, sizeof preview_path, "%s/uncommitted-preview.xcf", work);
+    CHECK (api->image_save (engine, image, preview_path, NULL) == GLIMS_STATUS_BUSY && access (preview_path, F_OK) != 0,
+           "Save refuses an uncommitted filter preview without writing a file");
+    unlink (preview_path);
+  }
   CHECK (api->filter_set_double (engine, filter, "no-such-property", 1.0) == GLIMS_STATUS_NOT_FOUND,
          "unknown filter property is reported");
 
@@ -1611,6 +1618,71 @@ test_procedures (void)
   api->image_close (engine, image);
 }
 
+static void
+test_clipboard (void)
+{
+  GlimsImageID image = 0;
+  GlimsPixelBuffer copied = { 0 }, merged = { 0 };
+  GlimsItemID pasted = 0;
+  uint8_t pixels[] = {255,0,0,255, 0,255,0,128, 0,0,255,255, 0,0,0,0};
+  GlimsRect bounds = { 8, 10, 2, 2 };
+  GlimsSelectOptions options = { .struct_size = sizeof options, .antialias = false };
+  GlimsUndoInfo undo;
+  CHECK (api->image_new (engine, 32, 32, &image, NULL) == GLIMS_STATUS_OK, "clipboard test image");
+  CHECK (api->image_paste_pixels (engine, image, bounds, pixels, sizeof pixels, &pasted, NULL) == GLIMS_STATUS_OK &&
+         pasted > 0 && layer_count (image) == 2, "paste creates a new RGBA layer");
+  CHECK (api->image_undo_info (engine, image, &undo) == GLIMS_STATUS_OK && undo.undo_count == 1,
+         "paste is one undo step");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && layer_count (image) == 1 &&
+         api->image_redo (engine, image) == GLIMS_STATUS_OK && layer_count (image) == 2,
+         "paste undo and redo restore the independent layer");
+  CHECK (api->image_copy_pixels (engine, image, false, &copied, NULL) == GLIMS_STATUS_OK &&
+         copied.bounds.x == 8 && copied.bounds.y == 10 && copied.bounds.width == 2 && copied.bounds.height == 2 &&
+         copied.byte_count == sizeof pixels && memcmp (copied.pixels, pixels, sizeof pixels) == 0,
+         "copy preserves layer offset, pixel order, straight alpha and extent");
+  api->free_pixels (copied.pixels);
+  CHECK (api->image_copy_pixels (engine, image, true, &merged, NULL) == GLIMS_STATUS_OK &&
+         merged.bounds.width == 32 && merged.bounds.height == 32 && merged.pixels[3] == 255,
+         "Copy Merged reads the composite rather than the selected layer");
+  api->free_pixels (merged.pixels);
+  api->select_shape (engine, image, GLIMS_SHAPE_ELLIPSE,
+                     (GlimsPoint[]) { { 8, 10 }, { 10, 12 } }, 2, &options);
+  CHECK (api->image_copy_pixels (engine, image, false, &copied, NULL) == GLIMS_STATUS_OK &&
+         copied.bounds.width == 2 && copied.bounds.height == 2,
+         "copy clips to selection bounds");
+  api->free_pixels (copied.pixels);
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 8, 10 }, { 9, 11 } }, 2, &options);
+  CHECK (api->image_clear (engine, image, NULL, NULL) == GLIMS_STATUS_OK &&
+         api->image_copy_pixels (engine, image, false, &copied, NULL) == GLIMS_STATUS_OK && copied.pixels[3] == 0,
+         "Clear erases selected pixels on an alpha layer");
+  api->free_pixels (copied.pixels);
+  api->image_undo (engine, image);
+  CHECK (api->image_copy_pixels (engine, image, false, &copied, NULL) == GLIMS_STATUS_OK && copied.pixels[3] == 255,
+         "Clear is undoable");
+  api->free_pixels (copied.pixels);
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  CHECK (api->image_paste_pixels (engine, image, bounds, pixels, 1, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_paste_pixels (engine, image, (GlimsRect) {0,0,INT32_MAX,INT32_MAX}, pixels, sizeof pixels, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_copy_pixels (engine, image, false, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "clipboard rejects invalid buffers and dimensions");
+  CHECK (api->image_copy_pixels (engine, -123, true, &copied, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "clipboard reports unknown images");
+  {
+    uint8_t opaque[6 * 6 * 4] = { 0 };
+    for (int i = 0; i < 36; i++) { opaque[i * 4] = 255; opaque[i * 4 + 3] = 255; }
+    api->image_paste_pixels (engine, image, (GlimsRect) { 8, 10, 6, 6 }, opaque, sizeof opaque, NULL, NULL);
+    api->select_shape (engine, image, GLIMS_SHAPE_ELLIPSE,
+                       (GlimsPoint[]) { {8, 10}, {14, 16} }, 2, &options);
+    CHECK (api->image_copy_pixels (engine, image, false, &copied, NULL) == GLIMS_STATUS_OK &&
+           copied.bounds.width == 6 && copied.bounds.height == 6 && copied.pixels[3] == 0 &&
+           copied.pixels[(3 * 6 + 3) * 4 + 3] == 255,
+           "copy carries nonrectangular selection alpha, not just its bounds");
+    api->free_pixels (copied.pixels);
+  }
+  api->image_close (engine, image);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1662,7 +1734,7 @@ main (int argc, char **argv)
   if (image)
     {
       test_paint_and_undo (image);
-      test_filters (image);
+      test_filters (image, argv[2]);
       test_save_reopen_export (image, argv[2]);
       CHECK (api->image_close (engine, image) == GLIMS_STATUS_OK, "close image");
       CHECK (api->image_close (engine, image) == GLIMS_STATUS_NOT_FOUND, "closing twice is reported");
@@ -1675,6 +1747,7 @@ main (int argc, char **argv)
   test_paint_tools ();
   test_selections ();
   test_editing ();
+  test_clipboard ();
   test_render_freshness ();
   test_transforms ();
   test_matrix_transform ();

@@ -1,0 +1,269 @@
+import AppKit
+import XCTest
+@testable import GlimsKit
+
+/// The Layers palette's row interactions without an engine: the visibility
+/// checkbox and the inline name edit. A row keeps the document and layer it
+/// was made for, so a rename cannot land on another document or on a layer
+/// that went away while the name was being typed.
+@MainActor
+final class LayerRowEditingTests: XCTestCase {
+
+    private func makeLayer(id: Int32 = 1, name: String = "Background",
+                           kind: EngineSession.LayerKind = .pixel, depth: Int = 0,
+                           isVisible: Bool = true, hasMask: Bool = false,
+                           filterCount: Int = 0) -> EngineSession.Layer {
+        EngineSession.Layer(id: id, parent: 0, depth: depth, kind: kind, name: name, mode: "normal",
+                            isVisible: isVisible, hasMask: hasMask, isSelected: false, opacity: 1,
+                            bounds: .zero, filterCount: filterCount)
+    }
+
+    func testDisplayedLayerIdsSurviveReorderAndRejectRemovalOrRetarget() {
+        let owner = NSObject()
+        let first = makeLayer(id: 1), second = makeLayer(id: 2)
+        let shown = LayerListSnapshot(document: owner, layers: [first, second])
+        XCTAssertEqual(shown.layer(at: 0, for: owner, currentLayers: [second, first])?.id, 1)
+        XCTAssertNil(shown.layer(at: 1, for: owner, currentLayers: [first]))
+        XCTAssertNil(shown.layer(at: 0, for: NSObject(), currentLayers: [first, second]))
+        XCTAssertNil(shown.layer(at: -1, for: owner, currentLayers: [first, second]))
+        XCTAssertNil(shown.layer(at: 100, for: owner, currentLayers: [first, second]))
+    }
+
+    /// Records what a row tried to change and whether the document accepted.
+    private final class Commit {
+        var changes: [EngineSession.LayerChange] = []
+        var contexts: [LayerRowView.Context] = []
+        var accepted = true
+
+        func call(_ context: LayerRowView.Context, _ change: EngineSession.LayerChange) -> Bool {
+            contexts.append(context)
+            changes.append(change)
+            return accepted
+        }
+    }
+
+    private func descendant<T: NSView>(of view: NSView, as type: T.Type) -> T? {
+        for subview in view.subviews {
+            if let match = subview as? T { return match }
+            if let match = descendant(of: subview, as: type) { return match }
+        }
+        return nil
+    }
+
+    private func visibilityChange(_ visible: Bool) -> EngineSession.LayerChange {
+        var change = EngineSession.LayerChange()
+        change.isVisible = visible
+        return change
+    }
+
+    private func nameChange(_ name: String) -> EngineSession.LayerChange {
+        var change = EngineSession.LayerChange()
+        change.name = name
+        return change
+    }
+
+    func testPaletteTableUsesTheRowHeightAndDoubleClick() {
+        let controller = LayersPaletteController()
+        _ = controller.view
+        let table = descendant(of: controller.view, as: NSTableView.self)
+
+        XCTAssertEqual(table?.rowHeight, LayerRowView.rowHeight)
+        XCTAssertGreaterThanOrEqual(table?.rowHeight ?? 0, 22)
+        XCTAssertTrue(table?.target === controller)
+        XCTAssertNotNil(table?.doubleAction)
+    }
+
+    func testTitleStillDescribesTheWholeRow() {
+        XCTAssertEqual(LayersPaletteController.title(for: makeLayer()), "● Background")
+        XCTAssertEqual(LayersPaletteController.detailsSuffix(for: makeLayer()), "")
+        XCTAssertEqual(LayersPaletteController.title(for: makeLayer(name: "Set", kind: .group, depth: 1,
+                                                                   isVisible: false, hasMask: true,
+                                                                   filterCount: 2)),
+                       "    ○ Set  (group, mask, 2 filters)")
+        XCTAssertEqual(LayersPaletteController.detailsSuffix(for: makeLayer(kind: .text, hasMask: true,
+                                                                            filterCount: 1)),
+                       "  (text, mask, 1 filter)")
+    }
+
+    func testVisibilityCheckboxCommitsWhenAccepted() {
+        let commit = Commit()
+        let row = LayerRowView(layer: makeLayer(isVisible: false),
+                               context: LayerRowView.Context(document: NSObject(), layerID: 1),
+                               commit: commit.call)
+
+        row.checkbox.performClick(nil)
+
+        XCTAssertEqual(commit.changes, [visibilityChange(true)])
+        XCTAssertEqual(row.checkbox.state, .on)
+    }
+
+    func testRefusedVisibilityRevertsTheCheckbox() {
+        let commit = Commit()
+        commit.accepted = false
+        let row = LayerRowView(layer: makeLayer(isVisible: false),
+                               context: LayerRowView.Context(document: NSObject(), layerID: 1),
+                               commit: commit.call)
+
+        row.checkbox.performClick(nil)
+
+        XCTAssertEqual(commit.changes, [visibilityChange(true)])
+        XCTAssertEqual(row.checkbox.state, .off)
+    }
+
+    func testNameCommitsOnEndEditingOnly() {
+        let commit = Commit()
+        let row = LayerRowView(layer: makeLayer(),
+                               context: LayerRowView.Context(document: NSObject(), layerID: 1),
+                               commit: commit.call)
+
+        row.nameField.stringValue = "Renamed"
+        XCTAssertTrue(commit.changes.isEmpty)
+
+        row.finishNameEditing()
+        XCTAssertEqual(commit.changes, [nameChange("Renamed")])
+        XCTAssertEqual(row.nameField.stringValue, "Renamed")
+    }
+
+    func testEmptyAndUnchangedNamesDoNotCommit() {
+        let commit = Commit()
+        let row = LayerRowView(layer: makeLayer(),
+                               context: LayerRowView.Context(document: NSObject(), layerID: 1),
+                               commit: commit.call)
+
+        row.nameField.stringValue = "   "
+        row.finishNameEditing()
+        XCTAssertTrue(commit.changes.isEmpty)
+        XCTAssertEqual(row.nameField.stringValue, "Background")
+
+        row.nameField.stringValue = "Background"
+        row.finishNameEditing()
+        XCTAssertTrue(commit.changes.isEmpty)
+    }
+
+    func testRenameTrimsWhitespaceAndTellsThePaletteWhenItEnds() {
+        let commit = Commit()
+        let row = LayerRowView(layer: makeLayer(),
+                               context: LayerRowView.Context(document: NSObject(), layerID: 1),
+                               commit: commit.call)
+        var editEnded = 0
+        row.onEditEnded = { editEnded += 1 }
+
+        row.nameField.stringValue = "  Renamed  "
+        XCTAssertEqual(editEnded, 0)
+        row.finishNameEditing()
+
+        XCTAssertEqual(commit.changes, [nameChange("Renamed")])
+        XCTAssertEqual(editEnded, 1)
+    }
+
+    func testRefusedRenameRevertsTheField() {
+        let commit = Commit()
+        commit.accepted = false
+        let row = LayerRowView(layer: makeLayer(),
+                               context: LayerRowView.Context(document: NSObject(), layerID: 1),
+                               commit: commit.call)
+
+        row.nameField.stringValue = "Renamed"
+        row.finishNameEditing()
+
+        XCTAssertEqual(commit.changes, [nameChange("Renamed")])
+        XCTAssertEqual(row.nameField.stringValue, "Background")
+    }
+
+    func testRenameTargetsTheRowItStartedOn() {
+        let token = NSObject()
+        let commit = Commit()
+        let row = LayerRowView(layer: makeLayer(id: 7),
+                               context: LayerRowView.Context(document: token, layerID: 7),
+                               commit: commit.call)
+
+        row.nameField.stringValue = "Renamed"
+        row.finishNameEditing()
+
+        XCTAssertTrue(commit.contexts.first?.document === token)
+        XCTAssertEqual(commit.contexts.first?.layerID, 7)
+    }
+
+    func testChangeIsRefusedWhenTheDocumentOrLayerIsGone() {
+        let token = NSObject()
+        let context = LayerRowView.Context(document: token, layerID: 7)
+
+        XCTAssertTrue(LayerRowView.canChange(context, document: token, layers: [makeLayer(id: 7)]))
+        XCTAssertFalse(LayerRowView.canChange(context, document: NSObject(), layers: [makeLayer(id: 7)]))
+        XCTAssertFalse(LayerRowView.canChange(context, document: token, layers: [makeLayer(id: 8)]))
+        XCTAssertFalse(LayerRowView.canChange(context, document: nil, layers: [makeLayer(id: 7)]))
+    }
+
+    func testGroupRowsAllowVisibilityAndNameEditing() {
+        let commit = Commit()
+        let row = LayerRowView(layer: makeLayer(name: "Set", kind: .group),
+                               context: LayerRowView.Context(document: NSObject(), layerID: 1),
+                               commit: commit.call)
+
+        XCTAssertTrue(row.nameField.isEditable)
+        XCTAssertTrue(row.checkbox.isEnabled)
+
+        row.checkbox.performClick(nil)
+        row.nameField.stringValue = "New Set"
+        row.finishNameEditing()
+
+        XCTAssertEqual(commit.changes, [visibilityChange(false), nameChange("New Set")])
+    }
+
+    func testRowIsAccessibleAndTallEnough() {
+        let row = LayerRowView(layer: makeLayer(),
+                               context: LayerRowView.Context(document: NSObject(), layerID: 1),
+                               commit: { _, _ in true })
+
+        XCTAssertEqual(row.checkbox.accessibilityLabel(), "Hide Background")
+        XCTAssertEqual(row.nameField.accessibilityLabel(), "Layer name")
+        XCTAssertGreaterThanOrEqual(row.fittingSize.height, 22)
+    }
+
+    func testRenameDetectionFollowsTheFieldEditor() {
+        _ = NSApplication.shared
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("layer")))
+        table.rowHeight = LayerRowView.rowHeight
+        let row = LayerRowView(layer: makeLayer(),
+                               context: LayerRowView.Context(document: NSObject(), layerID: 1),
+                               commit: { _, _ in true })
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 100),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = table
+        table.addSubview(row)
+        window.contentView?.layoutSubtreeIfNeeded()
+
+        XCTAssertFalse(LayerRowView.isRenaming(in: table))
+        row.startEditingName()
+        XCTAssertTrue(LayerRowView.isRenaming(in: table))
+        window.makeFirstResponder(nil)
+        XCTAssertFalse(LayerRowView.isRenaming(in: table))
+    }
+
+    func testDoubleClickStartsAndEndsANameEdit() {
+        let commit = Commit()
+        let row = LayerRowView(layer: makeLayer(),
+                               context: LayerRowView.Context(document: NSObject(), layerID: 1),
+                               commit: commit.call)
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 100),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = row
+        window.contentView?.layoutSubtreeIfNeeded()
+
+        row.startEditingName()
+        XCTAssertNotNil(row.nameField.currentEditor())
+        XCTAssertTrue(commit.changes.isEmpty)
+
+        row.nameField.currentEditor()?.string = "Renamed"
+        window.makeFirstResponder(nil)
+
+        XCTAssertEqual(commit.changes, [nameChange("Renamed")])
+        XCTAssertEqual(row.nameField.stringValue, "Renamed")
+    }
+}

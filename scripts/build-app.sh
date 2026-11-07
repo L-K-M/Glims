@@ -24,7 +24,7 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="${GLIMS_BUILD_DIR:-$PROJECT_ROOT/.build}"
 OUTPUT_DIR="${GLIMS_OUTPUT_DIR:-$PROJECT_ROOT/dist}"
 APP_NAME="Glims"
-APP_PATH="$OUTPUT_DIR/$APP_NAME.app"
+FINAL_APP_PATH="$OUTPUT_DIR/$APP_NAME.app"
 
 CONFIGURATION=release
 source "$PROJECT_ROOT/scripts/engine.env"
@@ -64,6 +64,19 @@ if [[ "$(uname -s)" != Darwin ]]; then
 fi
 
 mkdir -p "$BUILD_DIR" "$OUTPUT_DIR"
+ASSEMBLY_LOCK="$OUTPUT_DIR/.glims-assemble.lock"
+mkdir "$ASSEMBLY_LOCK" 2>/dev/null || {
+  echo "error: another app build holds $ASSEMBLY_LOCK" >&2
+  exit 1
+}
+STAGE_DIR=""
+cleanup() {
+  [[ -z "$STAGE_DIR" ]] || rm -rf "$STAGE_DIR"
+  rmdir "$ASSEMBLY_LOCK"
+}
+trap cleanup EXIT
+STAGE_DIR="$(mktemp -d "$OUTPUT_DIR/.glims-build.XXXXXX")"
+APP_PATH="$STAGE_DIR/$APP_NAME.app"
 export CLANG_MODULE_CACHE_PATH="$BUILD_DIR/clang-cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$BUILD_DIR/module-cache"
 SWIFT_ARGS=(--configuration "$CONFIGURATION" --scratch-path "$BUILD_DIR"
@@ -77,8 +90,7 @@ BIN_DIR="$(swift build "${SWIFT_ARGS[@]}" --show-bin-path)"
 echo "==> Checking third-party notices"
 "$PROJECT_ROOT/scripts/third-party-notices.sh" --check "$BUILD_DIR"
 
-echo "==> Assembling $APP_PATH"
-rm -rf "$APP_PATH"
+echo "==> Assembling $FINAL_APP_PATH"
 mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
 cp "$BIN_DIR/$APP_NAME" "$APP_PATH/Contents/MacOS/$APP_NAME"
 cp "$PROJECT_ROOT/Resources/Info.plist" "$APP_PATH/Contents/Info.plist"
@@ -105,4 +117,12 @@ else
   codesign --force --sign - "$APP_PATH"
 fi
 codesign --verify --strict --verbose=2 "$APP_PATH"
-printf '\nBuilt %s\n' "$APP_PATH"
+# Publish only a signed, complete app. Finder or a running plug-in can
+# write caches in the old bundle, so deleting it in place is unreliable.
+PREVIOUS_APP="$STAGE_DIR/previous.app"
+if [[ -e "$FINAL_APP_PATH" ]]; then mv "$FINAL_APP_PATH" "$PREVIOUS_APP"; fi
+if ! mv "$APP_PATH" "$FINAL_APP_PATH"; then
+  [[ ! -e "$PREVIOUS_APP" ]] || mv "$PREVIOUS_APP" "$FINAL_APP_PATH"
+  exit 1
+fi
+printf '\nBuilt %s\n' "$FINAL_APP_PATH"

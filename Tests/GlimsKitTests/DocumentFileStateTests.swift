@@ -55,6 +55,16 @@ final class DocumentFileStateTests: XCTestCase {
         XCTAssertEqual(state.saveRoute, .write(xcf))
     }
 
+    func testCompressedNativeImagesKeepTheirOriginalSaveTarget() {
+        for name in ["drawing.xcf.gz", "drawing.XCF.BZ2"] {
+            let url = URL(fileURLWithPath: "/tmp/" + name)
+            let state = DocumentFileState(openedFrom: url)
+            XCTAssertEqual(state.saveRoute, .write(url))
+            XCTAssertFalse(state.hasUnsavedChanges)
+            XCTAssertNil(state.importedSourceURL)
+        }
+    }
+
     func testSaveAsCanRetargetAnExistingNativeFile() {
         var state = DocumentFileState(openedFrom: xcf)
         state.syncDirty(true)

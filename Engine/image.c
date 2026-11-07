@@ -481,6 +481,11 @@ save_with_group (GlimsEngine            *engine,
     return GLIMS_STATUS_INVALID_ARGUMENT;
   if (engine->busy > 0)
     return GLIMS_STATUS_BUSY;
+  if (saving && glims_filters_active_for_image (engine, open->image))
+    {
+      if (error) *error = g_strdup ("Apply or cancel the filter preview before saving.");
+      return GLIMS_STATUS_BUSY;
+    }
 
   file = g_file_new_for_path (path);
   proc = gimp_plug_in_manager_file_procedure_find (engine->gimp->plug_in_manager, group, file, &gerror);

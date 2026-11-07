@@ -49,7 +49,7 @@ Xcode 26.0). The shared build and release engines come from
 `./install.sh`.
 
 ```sh
-scripts/build.sh              # Complete editor in dist/Glims.app, revealed in Finder
+scripts/build.sh              # Editor with engine in dist/Glims.app, revealed in Finder
 scripts/build.sh --run        # …and launch it
 swift test                    # unit tests
 dist/Glims.app/Contents/MacOS/Glims --smoke-test

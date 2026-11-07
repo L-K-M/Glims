@@ -50,6 +50,7 @@ final class ImageDocument {
     var onSizeChange: (() -> Void)?
 
     nonisolated let inputQueue = DispatchQueue(label: "ch.lkmc.Glims.document.input", qos: .userInteractive)
+    private nonisolated let clipboardQueue = DispatchQueue(label: "ch.lkmc.Glims.document.clipboard", qos: .userInitiated)
     nonisolated let longQueue = DispatchQueue(label: "ch.lkmc.Glims.document.long", qos: .userInitiated)
 
     /// Engine jobs queued and not yet finished. Touched on the main actor
@@ -62,10 +63,17 @@ final class ImageDocument {
     private var pendingInput = 0
     /// Once the image starts closing, nothing new is queued.
     private(set) var isClosing = false
+    private(set) var isTransferringClipboard = false
+    private(set) var isSavingForClose = false
     private var onQueueDrained: (() -> Void)?
+
+    var acceptsEdits: Bool {
+        !isClosing && !isSavingForClose && !isTransferringClipboard && !PlugInCommands.isRunning
+    }
 
     /// Touched only on `inputQueue`.
     private nonisolated(unsafe) var currentStroke: Int32?
+    private(set) var strokeIsActive = false
 
     /// Which plug-in commands can run on the selected layers, by name;
     /// nil until asked for after a change.
@@ -115,10 +123,14 @@ final class ImageDocument {
 
     /// Makes `id` the layer painting, fills, filters, plug-ins and the
     /// Layer commands act on, here and in the engine.
-    func selectLayer(_ id: Int32) {
+    enum SelectionSource { case user, engine }
+
+    func selectLayer(_ id: Int32, source: SelectionSource = .user) {
+        guard !isClosing else { return }
+        if source == .user && refuseWhileEditingUnavailable() { return }
         guard layers.contains(where: { $0.id == id && $0.kind != .group }) else { return }
         activeLayer = id
-        run { session, image in try session.selectLayer(id, image: image) }
+        run(effect: .readsPixels) { session, image in try session.selectLayer(id, image: image) }
         onStateChange?()
     }
 
@@ -142,7 +154,8 @@ final class ImageDocument {
     // MARK: Painting
 
     func beginStroke(at point: EngineSession.StrokePoint, brush: EngineSession.Brush = EngineSession.Brush()) {
-        guard let layer = activeLayer, !refuseWhilePlugInRuns() else { return }
+        guard let layer = activeLayer, !refuseWhileEditingUnavailable() else { return }
+        strokeIsActive = true
         enqueue(on: inputQueue, input: true) { [session, image] in
             do {
                 self.currentStroke = try session.beginStroke(image: image, layer: layer, brush: brush, first: point)
@@ -161,6 +174,7 @@ final class ImageDocument {
     }
 
     func endStroke() {
+        strokeIsActive = false
         enqueue(on: inputQueue, input: true) { [session] in
             guard let stroke = self.currentStroke else { return }
             self.currentStroke = nil
@@ -171,17 +185,17 @@ final class ImageDocument {
     // MARK: Selection
 
     func select(_ shape: EngineSession.SelectShape, options: EngineSession.SelectOptions) {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.select(shape, image: image, options: options) }
     }
 
     func selectColor(at point: CGPoint, options: EngineSession.SelectOptions) {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.selectColor(at: point, image: image, options: options) }
     }
 
     func select(_ command: EngineSession.SelectCommand, radius: Double = 0) {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.select(command, image: image, radius: radius) }
     }
 
@@ -189,7 +203,7 @@ final class ImageDocument {
 
     func fill(at point: CGPoint, mode: EngineSession.FillMode, color: NSColor, threshold: Double,
               sampleMerged: Bool) {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in
             try session.fill(image: image, at: point, mode: mode, color: color,
                              threshold: threshold, sampleMerged: sampleMerged)
@@ -197,14 +211,14 @@ final class ImageDocument {
     }
 
     func gradient(from: CGPoint, to: CGPoint, shape: EngineSession.GradientShape, fromColor: NSColor, toColor: NSColor) {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in
             try session.gradient(image: image, from: from, to: to, shape: shape, fromColor: fromColor, toColor: toColor)
         }
     }
 
     func layerCommand(_ command: EngineSession.LayerCommand) {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         let layer = activeLayer ?? 0
         run { session, image in
             let created = try session.layerCommand(command, image: image, layer: layer)
@@ -212,29 +226,29 @@ final class ImageDocument {
                 // The engine selects what it created; keep the interface in step.
                 DispatchQueue.main.async {
                     try? self.reload()
-                    if self.layers.contains(where: { $0.id == created }) { self.selectLayer(created) }
+                    if self.layers.contains(where: { $0.id == created }) { self.selectLayer(created, source: .engine) }
                 }
             }
         }
     }
 
     func changeLayer(_ layer: Int32, _ change: EngineSession.LayerChange) {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.changeLayer(layer, image: image, change) }
     }
 
     func moveActiveLayer(by offset: CGSize) {
-        guard let layer = activeLayer, offset != .zero, !refuseWhilePlugInRuns() else { return }
+        guard let layer = activeLayer, offset != .zero, !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.moveLayer(layer, image: image, by: offset) }
     }
 
     func transformImage(_ transform: EngineSession.Transform) {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.transformImage(image, transform) }
     }
 
     func transformActiveLayer(_ transform: EngineSession.Transform) {
-        guard let layer = activeLayer, !refuseWhilePlugInRuns() else { return }
+        guard let layer = activeLayer, !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.transformLayer(layer, image: image, transform) }
     }
 
@@ -242,11 +256,11 @@ final class ImageDocument {
 
     /// Adds a text layer at `position` and makes it the active layer.
     func addText(_ text: String, settings: EngineSession.TextSettings, at position: CGPoint) {
-        guard !text.isEmpty, !refuseWhilePlugInRuns() else { return }
+        guard !text.isEmpty, !refuseWhileEditingUnavailable() else { return }
         enqueue(on: inputQueue, input: true) { [session, image] in
             do {
                 let layer = try session.addTextLayer(image: image, text: text, settings: settings, at: position)
-                DispatchQueue.main.async { self.selectLayer(layer) }
+                DispatchQueue.main.async { self.selectLayer(layer, source: .engine) }
             } catch {
                 self.report(error)
             }
@@ -255,7 +269,7 @@ final class ImageDocument {
 
     /// Changes a text layer's text, its look, or both, as one undo step.
     func updateText(_ layer: Int32, text: String?, settings: EngineSession.TextSettings?) {
-        guard text != nil || settings != nil, !refuseWhilePlugInRuns() else { return }
+        guard text != nil || settings != nil, !refuseWhileEditingUnavailable() else { return }
         run { session, image in
             try session.setTextLayer(image: image, layer: layer, text: text, settings: settings)
         }
@@ -270,24 +284,24 @@ final class ImageDocument {
     /// where its handles put them.
     func transformLayer(_ layer: Int32, matrix: CGAffineTransform,
                         interpolation: EngineSession.Interpolation) {
-        guard !matrix.isIdentity, !refuseWhilePlugInRuns() else { return }
+        guard !matrix.isIdentity, !refuseWhileEditingUnavailable() else { return }
         run { session, image in
             try session.transformLayer(layer, image: image, matrix: matrix, interpolation: interpolation)
         }
     }
 
     func scale(toWidth width: Int, height: Int) {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.scaleImage(image, width: width, height: height) }
     }
 
     func resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: NSColor) {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill) }
     }
 
     func crop(to rect: CGRect) {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.crop(image: image, to: rect) }
     }
 
@@ -295,7 +309,7 @@ final class ImageDocument {
 
     /// Makes `id` the path the Path tool edits, here and in the engine.
     func selectPath(_ id: Int32) {
-        guard paths.contains(where: { $0.id == id }), !refuseWhilePlugInRuns() else { return }
+        guard paths.contains(where: { $0.id == id }), !refuseWhileEditingUnavailable() else { return }
         activePath = id
         if pathShapes[id] == nil { pathShapes[id] = try? session.path(id, image: image) }
         run { session, image in try session.changePath(id, image: image, select: true) }
@@ -306,7 +320,7 @@ final class ImageDocument {
     /// engine, so the next edit knows the path.
     @discardableResult
     func addPath(_ shape: VectorPath) -> Int32? {
-        guard !refuseWhilePlugInRuns() else { return nil }
+        guard !refuseWhileEditingUnavailable() else { return nil }
         let result = inputQueue.sync { [session, image] in
             Result { try session.setPath(nil, image: image, shape) }
         }
@@ -325,7 +339,7 @@ final class ImageDocument {
     /// Replaces the shape of path `id` as one undo step. The canvas shows
     /// the new shape at once.
     func updatePath(_ id: Int32, to shape: VectorPath) {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         pathShapes[id] = shape
         pendingPathEdits[id, default: 0] += 1
         enqueue(on: inputQueue, input: true) { [session, image] in
@@ -342,23 +356,23 @@ final class ImageDocument {
     }
 
     func renamePath(_ id: Int32, to name: String) {
-        guard !name.isEmpty, !refuseWhilePlugInRuns() else { return }
+        guard !name.isEmpty, !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.changePath(id, image: image, name: name) }
     }
 
     func setPathVisible(_ id: Int32, _ visible: Bool) {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.changePath(id, image: image, visible: visible) }
     }
 
     func deletePath(_ id: Int32) {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.deletePath(id, image: image) }
     }
 
     /// Select ▸ From Path: the active path's area, combined by `operation`.
     func selectFromPath(_ id: Int32, operation: EngineSession.SelectOperation = .replace) {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         var options = EngineSession.SelectOptions()
         options.operation = operation
         run { session, image in try session.selectPath(id, image: image, options: options) }
@@ -366,7 +380,7 @@ final class ImageDocument {
 
     /// Edit ▸ Stroke Path: draws the path on the active layer.
     func strokePath(_ id: Int32, settings: EngineSession.LineSettings) {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.strokePath(id, image: image, settings: settings) }
     }
 
@@ -379,18 +393,22 @@ final class ImageDocument {
     // MARK: Undo
 
     func undo() {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.undo(image) }
     }
 
     func redo() {
-        guard !refuseWhilePlugInRuns() else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.redo(image) }
     }
 
     /// The engine refuses edits while a plug-in command runs (its dialog
     /// acts as a modal filter dialog); say why instead of failing later.
-    private func refuseWhilePlugInRuns() -> Bool {
+    private func refuseWhileEditingUnavailable() -> Bool {
+        if isClosing || isSavingForClose || isTransferringClipboard {
+            onError?(isClosing ? DocumentError.closed.localizedDescription : DocumentError.busy.localizedDescription)
+            return true
+        }
         guard let running = PlugInCommands.running else { return false }
         let title = running.procedure.label.replacingOccurrences(of: "…", with: "")
         onError?("Finish or cancel \u{201C}\(title)\u{201D} first.")
@@ -414,13 +432,87 @@ final class ImageDocument {
     /// plug-in shows its own dialog; the call completes when it finished.
     func run(_ procedure: EngineSession.Procedure, mode: EngineSession.RunMode,
              completion: @escaping @MainActor (Result<EngineSession.RunOutcome, Error>) -> Void) {
-        enqueue(on: longQueue) { [session, image] in
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !isTransferringClipboard, !isSavingForClose else { return completion(.failure(DocumentError.busy)) }
+        enqueueAfterInput { [session, image] in
             let result = Result { try session.runProcedure(procedure.name, image: image, mode: mode) }
             DispatchQueue.main.async {
                 try? self.reload()
                 completion(result)
             }
         }
+    }
+
+    enum DocumentError: LocalizedError {
+        case closed, busy
+        var errorDescription: String? {
+            switch self {
+            case .closed: return "This image has already closed."
+            case .busy: return "Wait for the current clipboard transfer or save to finish."
+            }
+        }
+    }
+
+    /// After Save was chosen on close, stop accepting new edits until
+    /// the write either fails/cancels or the image is destroyed.
+    func beginCloseSave() -> Bool {
+        guard !refuseWhileEditingUnavailable() else { return false }
+        isSavingForClose = true
+        onStateChange?()
+        return true
+    }
+
+    func cancelCloseSave() {
+        isSavingForClose = false
+        onStateChange?()
+    }
+
+    enum ClipboardOperation { case layer, merged, cutLayer }
+
+    /// Pixel work stays serial with input; the pasteboard transaction is
+    /// asynchronous on the main actor. Never block this queue waiting for
+    /// AppKit, which can synchronously read text/path metadata from it.
+    func copyPixels(_ operation: ClipboardOperation, background: NSColor,
+                    consume: @escaping @MainActor (ClipboardImage.Encoded) throws -> Void,
+                    completion: @escaping @MainActor (Error?) -> Void) {
+        guard !isClosing else { return completion(DocumentError.closed) }
+        guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning else {
+            return completion(DocumentError.busy)
+        }
+        isTransferringClipboard = true
+        let cutting = operation == .cutLayer
+        // Track the encoding/main-actor stage independently of the short
+        // pixel-read job; it must also drain before destroying the image.
+        pendingWork += 1
+        if cutting { pendingInput += 1 }
+        onStateChange?()
+        enqueue(on: inputQueue) { [session, image] in
+            let pixels = Result { try session.copyPixels(image, merged: operation == .merged) }
+            self.clipboardQueue.async {
+                let result = pixels.flatMap { image in Result { try image.encoded() } }
+                DispatchQueue.main.async {
+                    defer { self.jobDidFinish(input: cutting) }
+                    guard !self.isClosing else { return self.finishClipboard(DocumentError.closed, completion: completion) }
+                    do { try consume(result.get()) } catch {
+                        return self.finishClipboard(error, completion: completion)
+                    }
+                    guard cutting else { return self.finishClipboard(nil, completion: completion) }
+                    // No edits were accepted between the copy and clear.
+                    self.enqueue(on: self.inputQueue, input: true) {
+                        let error: Error?
+                        do { try session.clearPixels(image, background: background); error = nil }
+                        catch let failure { error = failure }
+                        DispatchQueue.main.async { self.finishClipboard(error, completion: completion) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func finishClipboard(_ error: Error?, completion: @MainActor (Error?) -> Void) {
+        isTransferringClipboard = false
+        if !isClosing { try? reload() }
+        completion(error)
     }
 
     // MARK: Files
@@ -434,6 +526,8 @@ final class ImageDocument {
     }
 
     func export(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
+        guard !isClosing else { return completion(DocumentError.closed) }
+        guard !isTransferringClipboard else { return completion(DocumentError.busy) }
         enqueueAfterInput { [session, image] in
             let result: Error?
             do { try session.export(image, to: url.path); result = nil } catch { result = error }
@@ -445,6 +539,8 @@ final class ImageDocument {
     }
 
     func save(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
+        guard !isClosing else { return completion(DocumentError.closed) }
+        guard !isTransferringClipboard else { return completion(DocumentError.busy) }
         enqueueAfterInput { [session, image] in
             let result: Error?
             do { try session.save(image, to: url.path); result = nil } catch { result = error }
@@ -466,6 +562,7 @@ final class ImageDocument {
     /// gone — so the session and image id travel in the closure.
     func closeImageWhenDrained(completion: @escaping @MainActor () -> Void = {}) {
         guard !isClosing else { return }
+        if strokeIsActive { endStroke() }
         isClosing = true
         let close = { [session, image, longQueue] in
             longQueue.async {
@@ -479,8 +576,11 @@ final class ImageDocument {
     // MARK: Helpers
 
     /// Runs engine work on the input queue, after any pending pointer input.
-    func run(_ work: @escaping (EngineSession, Int32) throws -> Void) {
-        enqueue(on: inputQueue, input: true) { [session, image] in
+    enum CommandEffect { case readsPixels, changesImage }
+
+    func run(effect: CommandEffect = .changesImage, _ work: @escaping (EngineSession, Int32) throws -> Void) {
+        if effect == .changesImage && refuseWhileEditingUnavailable() { return }
+        enqueue(on: inputQueue, input: effect == .changesImage) { [session, image] in
             do { try work(session, image) } catch { self.report(error) }
         }
     }

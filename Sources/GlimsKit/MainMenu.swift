@@ -31,6 +31,13 @@ enum MainMenu {
             item("Undo", Selector(("undo:")), "z"),
             item("Redo", Selector(("redo:")), "Z"),
             .separator(),
+            item("Cut", #selector(DocumentWindowController.cut(_:)), "x"),
+            item("Copy", #selector(DocumentWindowController.copy(_:)), "c"),
+            item("Copy Merged", #selector(DocumentWindowController.copyMerged(_:)), "C"),
+            item("Paste", #selector(DocumentWindowController.paste(_:)), "v"),
+            item("Paste in Place", #selector(DocumentWindowController.pasteInPlace(_:)), "V"),
+            clearItem(),
+            .separator(),
             item("Stroke Path", #selector(DocumentWindowController.strokePath(_:))),
         ])
         // Plug-in commands are appended to Image, Layer and Select (PlugInMenus).
@@ -129,6 +136,12 @@ enum MainMenu {
         NSApplication.shared.windowsMenu = windowMenu
 
         return menu
+    }
+
+    private static func clearItem() -> NSMenuItem {
+        let clear = item("Clear", #selector(DocumentWindowController.deleteBackward(_:)), "\u{7f}")
+        clear.keyEquivalentModifierMask = []
+        return clear
     }
 
     private static func submenu(_ title: String, _ items: [NSMenuItem]) -> NSMenuItem {

@@ -8,14 +8,17 @@ final class CanvasToolController {
     private unowned let canvas: EngineCanvasView
     private var document: ImageDocument { canvas.document }
 
-    /// The tool for the current drag; Space switches to the hand meanwhile.
+    /// The tool for the current drag; Space and Command switch tools
+    /// temporarily meanwhile.
     private var dragTool: ToolID?
     private var dragStart: CGPoint?
     private var dragCurrent: CGPoint?
     private var dragOperation = EngineSession.SelectOperation.replace
     private var lassoPoints: [CGPoint] = []
     private var handOrigin: (window: NSPoint, scroll: NSPoint)?
-    private var spaceHeld = false
+    /// Held temporary-tool modifiers: Space for the hand, Command for the
+    /// move tool, Option for color sampling.
+    private var keyboard = CanvasKeyboardState()
     /// The crop rectangle waiting for Return (image pixels).
     private(set) var pendingCrop: CGRect?
     /// The Transform tool's pending transform, waiting for Return.
@@ -54,13 +57,22 @@ final class CanvasToolController {
         }
     }
 
-    private var tool: ToolID { spaceHeld ? .hand : ToolState.shared.current }
+    /// The tool a pointer press uses: Space is the temporary hand, Command
+    /// moves the layer, otherwise the current tool.
+    private func pointerTool(for flags: NSEvent.ModifierFlags) -> ToolID {
+        keyboard.pointerTool(current: ToolState.shared.current, flags: flags)
+    }
 
     // MARK: Pointer
 
     func mouseDown(with event: NSEvent) {
         let point = canvas.imagePoint(for: event)
-        let tool = self.tool
+        let tool = pointerTool(for: event.modifierFlags)
+        let optionDown = keyboard.optionIsDown(flags: event.modifierFlags)
+        guard document.acceptsEdits || [.hand, .zoom, .eyedropper].contains(tool) else {
+            onStatus?("Finish the current operation before editing the image.")
+            return
+        }
         dragTool = tool
         if tool != .transform, transformSession != nil {
             // Another tool took over: the unapplied transform goes away.
@@ -74,9 +86,16 @@ final class CanvasToolController {
         }
 
         if let paintTool = tool.paintTool {
-            if event.modifierFlags.contains(.option), paintTool == .clone || paintTool == .heal {
-                setCloneSource(at: point)
-                dragTool = nil
+            if optionDown {
+                if paintTool == .clone || paintTool == .heal {
+                    setCloneSource(at: point)
+                    dragTool = nil
+                } else {
+                    // Option with any other paint tool temporarily samples
+                    // the foreground color, as the Color Picker does.
+                    pickColor(at: point)
+                    dragTool = .eyedropper
+                }
                 return
             }
             if (paintTool == .clone || paintTool == .heal), ToolState.shared.cloneSource == nil {
@@ -264,19 +283,20 @@ final class CanvasToolController {
     private static let returnKeys: Set<Int> = [36, 76]      // Return, keypad Enter
     private static let escapeKey = 53
     private static let tabKey = 48
-    /// Arrow key codes and the direction each nudges (the canvas is flipped).
-    private static let arrowDirections: [Int: CGSize] = [
-        123: CGSize(width: -1, height: 0), 124: CGSize(width: 1, height: 0),
-        125: CGSize(width: 0, height: 1), 126: CGSize(width: 0, height: -1),
-    ]
-
-    /// Tool shortcuts and Space for the hand. Returns false for keys it
-    /// does not handle.
+    /// Temporary-tool modifiers, tool shortcuts, Space for the hand, digits,
+    /// brackets and arrows. Returns false for keys it does not handle.
     func keyDown(with event: NSEvent) -> Bool {
-        let flags = event.modifierFlags.intersection([.command, .control, .option])
-        guard flags.isEmpty, let key = event.charactersIgnoringModifiers else { return false }
-
         let keyCode = Int(event.keyCode)
+
+        // Command and Option are temporary-tool modifiers; track their held
+        // state before the plain-key guard below rejects their flags.
+        if CanvasKeyboardPolicy.isTemporaryModifierKey(keyCode: keyCode) {
+            keyboard.keyDown(keyCode)
+            return true
+        }
+
+        guard CanvasKeyboardPolicy.allowsPlainKey(event.modifierFlags),
+              let key = event.charactersIgnoringModifiers else { return false }
         if transformSession != nil, Self.returnKeys.contains(keyCode) {
             applyTransform()
             return true
@@ -305,9 +325,9 @@ final class CanvasToolController {
         if ToolState.shared.current == .path, pathTool.keyDown(keyCode: keyCode) {
             return true
         }
-        if ToolState.shared.current == .move, let direction = Self.arrowDirections[keyCode] {
-            let step: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
-            document.moveActiveLayer(by: CGSize(width: direction.width * step, height: direction.height * step))
+        if let arrow = CanvasKeyboardPolicy.Arrow(keyCode: keyCode) {
+            document.moveActiveLayer(by: CanvasKeyboardPolicy.nudge(arrow,
+                                                                   shift: event.modifierFlags.contains(.shift)))
             return true
         }
 
@@ -323,30 +343,49 @@ final class CanvasToolController {
         }
 
         if key == " " {
-            if !event.isARepeat {
-                spaceHeld = true
-                NSCursor.openHand.set()
-            }
+            keyboard.keyDown(CanvasKeyboardPolicy.spaceKeyCode)
+            if !event.isARepeat { NSCursor.openHand.set() }
             return true
         }
         if ToolID.group(forShortcut: key) != nil {
             ToolState.shared.select(shortcut: key, cycle: event.modifierFlags.contains(.shift))
             return true
         }
-        if (key == "[" || key == "]"), ToolState.shared.current.paintTool != nil {
+        if CanvasKeyboardPolicy.isLeftBracket(key) || CanvasKeyboardPolicy.isRightBracket(key) {
             let tool = ToolState.shared.current
-            ToolState.shared.update(tool) { brush in
-                brush.size = max(1, min(500, key == "]" ? brush.size * 1.25 : brush.size / 1.25)).rounded()
+            guard tool.paintTool != nil else { return false }
+            let increased = CanvasKeyboardPolicy.isRightBracket(key)
+            if event.modifierFlags.contains(.shift) {
+                let hardness = CanvasKeyboardPolicy.hardness(ToolState.shared.brush(for: tool).hardness,
+                                                             increased: increased)
+                ToolState.shared.update(tool) { $0.hardness = hardness }
+                onStatus?("\(tool.name) hardness \(Int((hardness * 100).rounded()))%")
+            } else {
+                ToolState.shared.update(tool) { brush in
+                    brush.size = max(1, min(500, increased ? brush.size * 1.25 : brush.size / 1.25)).rounded()
+                }
+                onStatus?("\(tool.name) size \(Int(ToolState.shared.brush(for: tool).size)) px")
             }
-            onStatus?("\(tool.name) size \(Int(ToolState.shared.brush(for: tool).size)) px")
+            return true
+        }
+        if let opacity = CanvasKeyboardPolicy.paintOpacity(for: key),
+           CanvasKeyboardPolicy.adjustsBrush(ToolState.shared.current) {
+            let tool = ToolState.shared.current
+            ToolState.shared.update(tool) { $0.opacity = opacity }
+            onStatus?("\(tool.name) opacity \(Int((opacity * 100).rounded()))%")
             return true
         }
         return false
     }
 
     func keyUp(with event: NSEvent) -> Bool {
+        let keyCode = Int(event.keyCode)
+        if CanvasKeyboardPolicy.isTemporaryModifierKey(keyCode: keyCode) {
+            keyboard.keyUp(keyCode)
+            return true
+        }
         guard event.charactersIgnoringModifiers == " " else { return false }
-        spaceHeld = false
+        keyboard.keyUp(CanvasKeyboardPolicy.spaceKeyCode)
         NSCursor.arrow.set()
         return true
     }
@@ -428,7 +467,11 @@ final class CanvasToolController {
         if let layer = editor.textLayer {
             guard editor.hasChanges else { return }
             if text.isEmpty {
-                onStatus?("Empty text was not applied; delete the layer to remove it.")
+                // Committing an emptied editor removes its text layer as
+                // one undoable edit. Saving must not resurrect old text.
+                guard document.layers.contains(where: { $0.id == layer }) else { return }
+                document.selectLayer(layer)
+                document.layerCommand(.delete)
                 return
             }
             document.updateText(layer, text: text, settings: nil)

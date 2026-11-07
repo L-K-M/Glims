@@ -12,9 +12,10 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 - [x] Real first-window drawing requests tiles without a zoom interaction.
 - [x] New Image asks for pixel dimensions; Finder opens wait for startup.
 - [x] Save, Save As and native/imported file identity behave consistently.
-- [ ] Closing and quitting protect unsaved work and drain queued operations.
+- [x] Closing and quitting protect unsaved work and drain queued operations.
 - [ ] Cut, Copy, Copy Merged, Paste, Paste in Place and Clear use the system
-      clipboard, honor selection alpha and preserve undo.
+      clipboard, honor selection alpha and preserve undo. Implemented and
+      covered through the engine/interface harness; final keyboard checks pending.
 - [ ] Fit Image, Open Recent, repeat export and basic file command validation.
 - [ ] A bundled app passes engine checks with development trees inaccessible,
       and actual pointer/keyboard editing, save, reopen and export work.
@@ -25,6 +26,7 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
       drag reorder, multi-selection, locks, fit/trim and rasterization policy.
 - [ ] Channels and saved selections; Quick Mask with paintable overlay.
 - [ ] History palette and image snapshots.
+- [ ] Periodic recovery copies that preserve native file identity and dirty state.
 - [ ] Filter discovery and native property forms; editable, reorderable
       non-destructive filter stacks; adjustments and adjustment groups.
 - [ ] Place images as layers and GIMP 3.2 link layers.
@@ -32,6 +34,8 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 - [ ] Brushes, patterns and gradients: resource choosers and presets.
 - [ ] Color management: accurate image mode/precision/profile state,
       conversion/assignment and soft proofing.
+- [ ] Retina Actual Pixels maps an image pixel to a device pixel, including
+      changing displays while a document is open.
 - [ ] Canvas navigation: rulers, guides, grid, snapping, rotation and
       consistent modifier/trackpad behavior; initial fit avoids palettes.
 - [ ] Complete menu coverage, keyboard settings, preferences and persistence.
@@ -61,3 +65,22 @@ draw, save/reopen of queued input, export dirty-state preservation, ordinary
 Save, close Cancel, failed Save on close and teardown after queued work.
 The unit suite currently passes 60 checks. Quit still needs an on-screen
 check and independent lifecycle review before this slice is closed.
+
+Current completion slice: 95 unit checks and eight packaging checks pass.
+Clipboard transport preserves straight-alpha bytes through a native private
+format and standard PNG/TIFF for other apps. Its 210 adapter checks and 104
+interface checks passed on all four engine sets before the final save guards.
+The uncommitted-filter-save regression reproduced a file write from a live
+preview; the adapter now refuses it. A clipboard/main-queue wait cycle was
+reproduced with a timeout and replaced with an asynchronous transaction whose
+encoding work is also counted during teardown. Close-triggered Save gates new
+edits until completion; failed/cancelled saves restore editing. Empty text
+commits as an undoable layer deletion instead of being silently resurrected
+on Save. The save/close/clipboard smoke passes locally with these changes.
+
+On screen, the bundled app opened a layered XCF through Finder, rendered it
+without a zoom workaround, created a custom-sized document, and painted a
+pointer stroke. Quit Cancel preserved the edited image, and Don't Save
+completed the quit. Layer rows now offer visibility and inline rename; their
+stable snapshot rejects removed/retargeted rows while reloads are deferred.
+Final review and updated bundle/matrix checks are in progress.

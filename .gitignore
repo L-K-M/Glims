@@ -10,3 +10,6 @@ dist/
 # Engine build trees and dependency prefixes created by scripts/
 /_engine/
 /_deps/
+
+# Python packaging-test caches
+__pycache__/

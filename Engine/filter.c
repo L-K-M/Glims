@@ -42,6 +42,20 @@ glims_filters_free (gpointer data)
   g_free (session);
 }
 
+gboolean
+glims_filters_active_for_image (GlimsEngine *engine, GimpImage *image)
+{
+  GHashTableIter iter;
+  gpointer value;
+  g_hash_table_iter_init (&iter, engine->filters);
+  while (g_hash_table_iter_next (&iter, NULL, &value))
+    {
+      GlimsFilter *session = value;
+      if (session->image == image && session->filter) return TRUE;
+    }
+  return FALSE;
+}
+
 GlimsStatus
 glims_filter_begin (GlimsEngine    *engine,
                     GlimsImageID    image_id,

@@ -26,6 +26,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private var openingURLs: Set<URL> = []
     private var pendingFileOperations = 0
     private var terminationRequested = false
+    private let fileWrites = FileWriteCoordinator()
     private var terminationClosingDocument: DocumentWindowController?
     private let openQueue = DispatchQueue(label: "ch.lkmc.Glims.open", qos: .userInitiated)
 
@@ -88,6 +89,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             showWorkspace(message: "This build is missing its image engine. Build Glims with scripts/build.sh, or set \(EngineLibrary.environmentVariable) for development.")
             workspace?.canvas.message = "Image engine unavailable"
             state = .unavailable("not configured")
+            reportPendingOpenFailure("This build is missing its image engine.")
             return
         }
         showWorkspace(message: "Starting the engine…")
@@ -171,7 +173,18 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             state = .failed(String(describing: error))
             workspace?.canvas.message = "Image engine could not start"
             workspace?.statusBar.message = "The engine did not start: \(error)"
+            reportPendingOpenFailure("The engine did not start: \(error)")
         }
+    }
+
+    private func reportPendingOpenFailure(_ message: String) {
+        guard !pendingOpenURLs.isEmpty else { return }
+        let names = pendingOpenURLs.map(\.lastPathComponent).joined(separator: ", ")
+        pendingOpenURLs.removeAll()
+        let alert = NSAlert()
+        alert.messageText = "Could not open \(names)"
+        alert.informativeText = message
+        if let window = workspace?.window { alert.beginSheetModal(for: window) }
     }
 
     private func showWorkspace(message: String) {
@@ -195,6 +208,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     func open(_ document: ImageDocument) {
         let controller = DocumentWindowController(document: document)
+        controller.reserveWrite = { [weak self, weak controller] url in
+            guard let self, let controller else { throw ImageDocument.DocumentError.closed }
+            let openFiles = self.documents.compactMap { item -> (owner: UUID, url: URL)? in
+                guard let url = item.imageDocument.fileState.nativeURL ?? item.imageDocument.fileState.importedSourceURL else { return nil }
+                return (item.fileAccessID, url)
+            }
+            let token = try self.fileWrites.reserve(url, owner: controller.fileAccessID,
+                                                    openFiles: openFiles, opening: Array(self.openingURLs))
+            return { [weak self] in self?.fileWrites.release(token) }
+        }
         if let previous = documents.last?.window, previous.isVisible, let window = controller.window,
            let visible = (previous.screen ?? NSScreen.main)?.visibleFrame {
             window.setFrameTopLeftPoint(DocumentWindowController.cascadedTopLeft(
@@ -236,7 +259,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     // MARK: Menu commands
 
     @objc func newDocument(_ sender: Any?) {
-        guard session != nil else { return }
+        guard session != nil, !terminationRequested else { return }
         if let newImagePanel { newImagePanel.showWindow(nil); return }
         let panel = NewImagePanel()
         panel.onCreate = { [weak self] settings in
@@ -248,7 +271,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     private func createDocument(width: Int, height: Int) {
-        guard let session else { return }
+        guard let session, !terminationRequested else { return }
         pendingFileOperations += 1
         openQueue.async {
             let result = Result { try session.newImage(width: width, height: height) }
@@ -291,7 +314,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag, session != nil { newDocument(nil) }
+        if !flag, session != nil, !terminationRequested { newDocument(nil) }
         return true
     }
 
@@ -310,8 +333,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         }
         for requested in urls {
             let url = requested.standardizedFileURL
+            if let owner = fileWrites.owner(writing: url), let writer = documents.first(where: { $0.fileAccessID == owner }) {
+                writer.window?.makeKeyAndOrderFront(nil)
+                continue
+            }
             if let existing = documents.first(where: {
-                ($0.imageDocument.fileState.nativeURL ?? $0.imageDocument.fileState.importedSourceURL)?.standardizedFileURL == url
+                guard let source = $0.imageDocument.fileState.nativeURL ?? $0.imageDocument.fileState.importedSourceURL else { return false }
+                return FileWriteCoordinator.sameFile(source, url)
             }) {
                 existing.window?.makeKeyAndOrderFront(nil)
                 continue

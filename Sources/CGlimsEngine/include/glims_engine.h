@@ -380,6 +380,13 @@ typedef struct GlimsProcedureInfo {
   bool sensitive;        /* runnable on the given image's selected layers */
 } GlimsProcedureInfo;
 
+/* Owned straight-alpha sRGB bytes. Release pixels with free_pixels(). */
+typedef struct GlimsPixelBuffer {
+  GlimsRect bounds;
+  uint8_t  *pixels;
+  size_t    byte_count;
+} GlimsPixelBuffer;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -588,6 +595,17 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*path_stroke)      (GlimsEngine *engine, GlimsImageID image, GlimsItemID path,
                                     GlimsItemID layer, const GlimsLineSettings *settings,
                                     char **error);
+  /* System clipboard. Copy honors the selection, or copies the whole
+   * active layer / merged image when no selection exists. Copy is not an
+   * undo step. Clear and Paste each make one undo step. Paste creates an
+   * independent layer at bounds.x/y, ignoring the current selection. */
+  GlimsStatus (*image_copy_pixels)(GlimsEngine *, GlimsImageID, bool merged,
+                                   GlimsPixelBuffer *, char **error);
+  void        (*free_pixels)(uint8_t *pixels);
+  GlimsStatus (*image_clear)(GlimsEngine *, GlimsImageID, const GlimsColor *background, char **error);
+  GlimsStatus (*image_paste_pixels)(GlimsEngine *, GlimsImageID, GlimsRect bounds,
+                                    const uint8_t *pixels, size_t byte_count,
+                                    GlimsItemID *result, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

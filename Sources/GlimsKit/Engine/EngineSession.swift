@@ -15,11 +15,12 @@ import Foundation
 /// session across queues is safe.
 final class EngineSession: @unchecked Sendable {
 
-    struct EngineError: Error, CustomStringConvertible, Equatable {
+    struct EngineError: LocalizedError, CustomStringConvertible, Equatable {
         let status: Int32
         let message: String
 
         var description: String { message }
+        var errorDescription: String? { message }
     }
 
     enum Event: Equatable {
@@ -295,6 +296,40 @@ final class EngineSession: @unchecked Sendable {
         var error: UnsafeMutablePointer<CChar>?
         try check(api.image_open(engine, path, &image, &error), error)
         return image
+    }
+
+    func copyPixels(_ image: Int32, merged: Bool) throws -> ClipboardImage {
+        var output = GlimsPixelBuffer()
+        var error: UnsafeMutablePointer<CChar>?
+        defer { api.free_pixels(output.pixels) }
+        try check(api.image_copy_pixels(engine, image, merged, &output, &error), error)
+        let count = try ClipboardImage.byteCount(width: Int(output.bounds.width), height: Int(output.bounds.height))
+        guard count == output.byte_count, let pixels = output.pixels else { throw ClipboardImage.TransferError.invalidImage }
+        return ClipboardImage(width: Int(output.bounds.width), height: Int(output.bounds.height),
+                              pixels: Data(bytes: pixels, count: count),
+                              origin: CGPoint(x: Int(output.bounds.x), y: Int(output.bounds.y)))
+    }
+
+    func clearPixels(_ image: Int32, background: NSColor) throws {
+        var color = Self.color(background)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_clear(engine, image, &color, &error), error)
+    }
+
+    func pastePixels(_ image: Int32, pixels: ClipboardImage, at origin: CGPoint) throws -> Int32 {
+        guard origin.x.isFinite, origin.y.isFinite, abs(origin.x) <= 524_288, abs(origin.y) <= 524_288,
+              pixels.pixels.count == (try ClipboardImage.byteCount(width: pixels.width, height: pixels.height)) else {
+            throw ClipboardImage.TransferError.invalidImage
+        }
+        let bounds = GlimsRect(x: Int32(origin.x.rounded()), y: Int32(origin.y.rounded()),
+                               width: Int32(pixels.width), height: Int32(pixels.height))
+        var layer: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try pixels.pixels.withUnsafeBytes { bytes in
+            try check(api.image_paste_pixels(engine, image, bounds, bytes.bindMemory(to: UInt8.self).baseAddress,
+                                             bytes.count, &layer, &error), error)
+        }
+        return layer
     }
 
     func closeImage(_ image: Int32) throws {

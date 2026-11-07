@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -53,6 +54,65 @@ class AppPackagingTests(unittest.TestCase):
         result = self.run_build("--shell-only")
         self.assertEqual(result.returncode, 42)
         self.assertIn("reached-swift", result.stderr)
+
+    def test_failed_build_keeps_previous_app_and_cleans_staging(self):
+        app = self.root / "dist/Glims.app"
+        app.mkdir(parents=True)
+        marker = app / "previous-version"
+        marker.write_text("keep")
+        self.assertEqual(self.run_build("--shell-only").returncode, 42)
+        self.assertEqual(marker.read_text(), "keep")
+        self.assertEqual(list((self.root / "dist").iterdir()), [app])
+
+    def allow_successful_assembly(self):
+        resources = self.root / "Resources"
+        resources.mkdir()
+        for name in ("Info.plist", "AppIcon.icns", "Third-Party-Notices.txt"):
+            (resources / name).write_text("fixture")
+        (self.root / "LICENSE").write_text("fixture")
+        notices = self.root / "scripts/third-party-notices.sh"
+        notices.write_text("#!/bin/sh\nexit 0\n")
+        notices.chmod(0o755)
+        tools = self.root / "tools"
+        binary = tools / "Glims"
+        binary.write_text("new executable")
+        swift = tools / "swift"
+        swift.write_text("#!/bin/sh\ncase \" $* \" in *--show-bin-path*) printf '%s\\n' "
+                         + shlex.quote(str(tools)) + ";; esac\nexit 0\n")
+        signing = tools / "codesign"
+        signing.write_text("#!/bin/sh\nexit 0\n")
+        signing.chmod(0o755)
+    def test_success_publishes_complete_app_without_nesting(self):
+        self.allow_successful_assembly()
+        app = self.root / "dist/Glims.app"
+        app.mkdir(parents=True)
+        (app / "old-version").touch()
+        result = self.run_build("--shell-only")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((app / "Contents/MacOS/Glims").read_text(), "new executable")
+        self.assertFalse((app / "old-version").exists())
+        self.assertFalse((app / "Glims.app").exists())
+        self.assertEqual(list((self.root / "dist").iterdir()), [app])
+
+    def test_normal_build_contains_the_engine(self):
+        self.allow_successful_assembly()
+        pinned = (ROOT / "scripts/engine.env").read_text().split('ENGINE_SETS="')[1].split(':')[0]
+        (self.root / "_engine/install" / pinned).mkdir(parents=True)
+        adapter = self.root / "_engine/adapter" / pinned / "libglimsengine.dylib"
+        adapter.parent.mkdir(parents=True)
+        adapter.touch()
+        rebuild = self.root / "scripts/build-adapter.sh"
+        rebuild.write_text("#!/bin/sh\nexit 0\n")
+        rebuild.chmod(0o755)
+        bundler = self.root / "scripts/bundle-engine.py"
+        bundler.write_text("import pathlib, sys\n"
+                           "target = pathlib.Path(sys.argv[1]) / 'Contents/Frameworks'\n"
+                           "target.mkdir()\n"
+                           "(target / 'libglimsengine.dylib').write_text('engine')\n")
+        result = self.run_build()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        engine = self.root / "dist/Glims.app/Contents/Frameworks/libglimsengine.dylib"
+        self.assertEqual(engine.read_text(), "engine")
 
     def test_mutually_exclusive_options_in_both_orders(self):
         for args in [("--shell-only", "--engine", "master"),

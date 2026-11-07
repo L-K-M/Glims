@@ -39,7 +39,8 @@ struct DocumentFileState: Equatable {
     }
 
     static func isNative(_ url: URL) -> Bool {
-        url.pathExtension.lowercased() == nativeExtension
+        let name = url.lastPathComponent.lowercased()
+        return name.hasSuffix(".xcf") || name.hasSuffix(".xcf.gz") || name.hasSuffix(".xcf.bz2")
     }
 
     /// How a plain Save proceeds.
