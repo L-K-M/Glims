@@ -63,7 +63,9 @@ typedef enum GlimsEventKind {
   GLIMS_EVENT_MESSAGE            = 4, /* text */
   GLIMS_EVENT_PROGRESS           = 5, /* text (may be NULL), value, active */
   GLIMS_EVENT_SELECTION_CHANGED  = 6, /* image */
-  GLIMS_EVENT_SIZE_CHANGED       = 7  /* image: its width or height changed */
+  GLIMS_EVENT_SIZE_CHANGED       = 7, /* image: its width or height changed */
+  GLIMS_EVENT_CHANNELS_CHANGED   = 8  /* image: channel list, selected channel,
+                                       * components or Quick Mask */
 } GlimsEventKind;
 
 typedef struct GlimsEvent {
@@ -528,6 +530,88 @@ typedef struct GlimsMaskState {
   bool        showing;
 } GlimsMaskState;
 
+/* The components of the image's color model: the bits image_components
+ * reports and image_set_components takes. RED/GREEN/BLUE apply to RGB
+ * images, GRAY to grayscale, INDEXED to indexed; ALPHA applies wherever
+ * the image currently has an alpha component. */
+typedef enum GlimsComponent {
+  GLIMS_COMPONENT_RED     = 1 << 0,
+  GLIMS_COMPONENT_GREEN   = 1 << 1,
+  GLIMS_COMPONENT_BLUE    = 1 << 2,
+  GLIMS_COMPONENT_ALPHA   = 1 << 3,
+  GLIMS_COMPONENT_GRAY    = 1 << 4,
+  GLIMS_COMPONENT_INDEXED = 1 << 5
+} GlimsComponent;
+
+/* The image's color model, as image_components reports it. */
+typedef enum GlimsComponentMode {
+  GLIMS_COMPONENT_MODE_RGB     = 1,
+  GLIMS_COMPONENT_MODE_GRAY    = 2,
+  GLIMS_COMPONENT_MODE_INDEXED = 3
+} GlimsComponentMode;
+
+/* `supported` is the components the image's model actually has;
+ * `active` the ones painting and fills write to; `visible` the ones the
+ * composite shows. `active` and `visible` cover `supported` bits only. */
+typedef struct GlimsComponentState {
+  uint32_t mode;       /* GlimsComponentMode */
+  uint32_t supported;  /* GlimsComponent bits */
+  uint32_t active;
+  uint32_t visible;
+} GlimsComponentState;
+
+/* One row of the image's channel list, top first: saved selection
+ * channels plus the Quick Mask's channel while it is on. `id` is a
+ * drawable id, valid for stroke_begin, drawable_thumbnail and the
+ * channel calls. A channel stores single-component coverage; `color`
+ * and `opacity` describe only how it renders as an overlay. */
+typedef struct GlimsChannelInfo {
+  GlimsItemID id;
+  char        name[256];   /* UTF-8, truncated */
+  bool        visible;     /* composited over the image as an overlay:
+                            * channels saved from a selection tint the
+                            * masked-out region with `color`, like the
+                            * Quick Mask does */
+  bool        selected;    /* a selected channel is the edit target,
+                            * in preference to the selected layers */
+  bool        quick_mask;  /* the Quick Mask's own channel */
+  double      opacity;     /* overlay opacity, 0 ... 1 */
+  GlimsColor  color;       /* overlay color */
+} GlimsChannelInfo;
+
+/* Which fields of GlimsChannelChange apply. */
+typedef enum GlimsChannelProperty {
+  GLIMS_CHANNEL_NAME    = 1 << 0,
+  GLIMS_CHANNEL_VISIBLE = 1 << 1,
+  GLIMS_CHANNEL_OPACITY = 1 << 2,
+  GLIMS_CHANNEL_COLOR   = 1 << 3
+} GlimsChannelProperty;
+
+typedef struct GlimsChannelChange {
+  uint32_t   struct_size;  /* sizeof (GlimsChannelChange) */
+  uint32_t   properties;   /* GlimsChannelProperty bits */
+  char       name[256];    /* UTF-8; empty restores the default name */
+  bool       visible;
+  double     opacity;      /* 0 ... 1 */
+  GlimsColor color;
+} GlimsChannelChange;
+
+typedef enum GlimsChannelCommand {
+  GLIMS_CHANNEL_SELECT    = 1,  /* make it the image's selected channel; a
+                                 * `channel` of 0 selects the layers again */
+  GLIMS_CHANNEL_DUPLICATE = 2,  /* `result` (may be NULL) receives the copy */
+  GLIMS_CHANNEL_DELETE    = 3   /* INVALID_ARGUMENT on the Quick Mask's channel */
+} GlimsChannelCommand;
+
+/* Whether the image's selection is being shown and edited as a mask,
+ * that mask's channel id (0 while off) and its overlay style. */
+typedef struct GlimsQuickMaskState {
+  bool        enabled;
+  GlimsItemID channel;   /* the mask channel, a valid drawable id, while enabled */
+  bool        inverted;
+  GlimsColor  color;     /* overlay color; alpha is its opacity */
+} GlimsQuickMaskState;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -581,7 +665,7 @@ typedef struct GlimsEngineAPI {
 
   /* A live filter session: the filter previews while it is open. Commit
    * adds it to the layer as one non-destructive undo step; abort leaves
-   * no trace. */
+   * no trace. Layers only: channels and masks report INVALID_ARGUMENT. */
   GlimsStatus  (*filter_begin)     (GlimsEngine *engine, GlimsImageID image,
                                     GlimsItemID drawable, const char *operation,
                                     GlimsFilterID *filter, char **error);
@@ -882,6 +966,71 @@ typedef struct GlimsEngineAPI {
                                      GlimsItemID drawable, int32_t max_size,
                                      uint8_t *pixels, size_t byte_count,
                                      int32_t *width, int32_t *height);
+
+  /* Image components and channels: the color components of the image's
+   * model, its saved selection channels, and the Quick Mask. All of it
+   * is the engine's own state and behavior; CHANNELS_CHANGED reports
+   * changes to the list, the selected channel, components and the Quick
+   * Mask. Channel writes report BUSY while a stroke, a filter preview or
+   * a plug-in is running; reads and channel selection are always
+   * allowed. */
+  /* `state` receives the components the image's color model has and
+   * their active and visible masks. */
+  GlimsStatus  (*image_components)     (GlimsEngine *engine, GlimsImageID image,
+                                        GlimsComponentState *state);
+  /* Sets the active and visible components the masks name to `values`'s
+   * bits; bits outside the masks keep their state. Component changes are
+   * not undo steps in the engine. Changing `active` unselects any
+   * selected channel, back to layers (as the engine's component toggles
+   * do). INVALID_ARGUMENT for mask bits that are no component or that
+   * the image's color model lacks. */
+  GlimsStatus  (*image_set_components) (GlimsEngine *engine, GlimsImageID image,
+                                        uint32_t active_mask, uint32_t active_values,
+                                        uint32_t visible_mask, uint32_t visible_values,
+                                        char **error);
+  /* The image's saved channels (and the Quick Mask's channel while it
+   * is on); `count` receives the total. A visible channel composites
+   * over the image: the engine's projection tints the channel's
+   * masked-out region with its `color` and `opacity`, so image_render
+   * shows it. */
+  GlimsStatus  (*image_channels)       (GlimsEngine *engine, GlimsImageID image,
+                                        GlimsChannelInfo *channels, int32_t capacity,
+                                        int32_t *count);
+  /* Saves the current selection as a new channel (Select > Save to
+   * Channel): invisible by default, selected, one undo step. `name` may
+   * be NULL or empty for the engine's default. */
+  GlimsStatus  (*channel_from_selection)(GlimsEngine *engine, GlimsImageID image,
+                                         const char *name, GlimsItemID *result, char **error);
+  /* Changes a channel's name, visibility or overlay style; each applied
+   * property is its own undo step. */
+  GlimsStatus  (*channel_change)       (GlimsEngine *engine, GlimsImageID image,
+                                        GlimsItemID channel, const GlimsChannelChange *change,
+                                        char **error);
+  /* SELECT makes `channel` the image's selected channel — painting,
+   * fills, gradients, copy and clear then act on it, not on the layers;
+   * `channel` 0 returns the target to the layers. Selection itself is
+   * not an undo step. DUPLICATE copies the channel and selects the copy,
+   * DELETE removes it; each is one undo step. INVALID_ARGUMENT for an
+   * unknown `command`. */
+  GlimsStatus  (*channel_command)      (GlimsEngine *engine, GlimsImageID image,
+                                        GlimsItemID channel, uint32_t command,
+                                        GlimsItemID *result, char **error);
+  /* Combines the channel into the selection by `operation` (a
+   * GlimsSelectOperation), honoring the channel's offset, as one undo
+   * step. INVALID_ARGUMENT for an unknown `operation`. */
+  GlimsStatus  (*channel_to_selection) (GlimsEngine *engine, GlimsImageID image,
+                                        GlimsItemID channel, uint32_t operation, char **error);
+  /* The image's Quick Mask state. */
+  GlimsStatus  (*image_quick_mask)     (GlimsEngine *engine, GlimsImageID image,
+                                        GlimsQuickMaskState *state);
+  /* Turns the Quick Mask on or off, as one undo step. Enabling moves the
+   * current selection into the mask's channel and selects it as the
+   * edit target; disabling converts the mask back to the selection and
+   * restores the previously selected drawables. While it is on the
+   * selection itself is empty and the composite shows the mask's red
+   * overlay over the unselected area, as the core projects it. */
+  GlimsStatus  (*image_set_quick_mask) (GlimsEngine *engine, GlimsImageID image,
+                                        bool enabled, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

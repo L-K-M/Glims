@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "core/gimp.h"
+#include "core/gimpchannel.h"
 #include "core/gimpdrawable.h"
 #include "core/gimpdrawablefilter.h"
 #include "core/gimpimage.h"
@@ -99,6 +100,15 @@ glims_filter_begin (GlimsEngine    *engine,
   drawable = glims_lookup_drawable (open, drawable_id);
   if (! drawable)
     return GLIMS_STATUS_NOT_FOUND;
+  /* The facade's filter sessions cover layers. Channels (and layer
+   * masks) are refused rather than filtered: their non-destructive
+   * filter semantics differ between engine versions. */
+  if (GIMP_IS_CHANNEL (drawable))
+    {
+      if (error)
+        *error = strdup ("Filters cannot be applied to channels.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
   status = glims_check_item_locks (GIMP_ITEM (drawable), GLIMS_LOCK_PIXELS, error);
   if (status != GLIMS_STATUS_OK) return status;
 
