@@ -28,7 +28,8 @@ let package = Package(
         .target(name: "CGlimsEngine"),
         .target(
             name: "GlimsKit",
-            dependencies: ["CGlimsEngine", .product(name: "RigiUI", package: "rigi")]
+            dependencies: ["CGlimsEngine", .product(name: "RigiUI", package: "rigi")],
+            resources: [.copy("Resources/GlimsManual.txt")]
         ),
         .executableTarget(
             name: "Glims",
