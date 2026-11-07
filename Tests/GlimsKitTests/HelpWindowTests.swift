@@ -5,25 +5,38 @@ import XCTest
 /// The Help menu's commands, the Help window's policy and its search state.
 @MainActor
 final class HelpWindowTests: XCTestCase {
+    func testHelpMenuDispatchReachesTheAppController() throws {
+        let app = NSApplication.shared
+        let previous = app.delegate
+        let controller = AppController()
+        app.delegate = controller
+        defer { app.delegate = previous }
+        let help = MainMenu.make().items.first { $0.title == "Help" }?.submenu
+        let item = try XCTUnwrap(help?.items.first { $0.title == "Glims Help" })
+        let action = try XCTUnwrap(item.action)
+        XCTAssertTrue(app.target(forAction: action, to: item.target, from: item) as AnyObject? === controller,
+                      "the Help command must reach the bundled manual through the responder chain")
+    }
+
     func testHelpMenuOffersTheThreeCommands() {
         let menu = MainMenu.make()
         let help = menu.items.first { $0.title == "Help" }?.submenu
         XCTAssertNotNil(help, "the menu bar has no Help menu")
         guard let help else { return }
         let actions = help.items.compactMap(\.action)
-        for action in [#selector(AppController.showHelp(_:)),
+        for action in [#selector(AppController.showGlimsHelp(_:)),
                        #selector(AppController.showKeyboardReference(_:)),
                        #selector(AppController.openEngineManual(_:))] {
             XCTAssertTrue(actions.contains(action), "Help has no item for \(action)")
         }
-        let helpItem = help.items.first { $0.action == #selector(AppController.showHelp(_:)) }
+        let helpItem = help.items.first { $0.action == #selector(AppController.showGlimsHelp(_:)) }
         XCTAssertEqual(helpItem?.keyEquivalent, "?", "Glims Help keeps the macOS Command-? convention")
     }
 
     /// Help works without the engine: its items must not wait for a session.
     func testHelpCommandsAreAvailableWithoutTheEngine() {
         let controller = AppController()
-        for action in [#selector(AppController.showHelp(_:)),
+        for action in [#selector(AppController.showGlimsHelp(_:)),
                        #selector(AppController.showKeyboardReference(_:)),
                        #selector(AppController.openEngineManual(_:))] {
             let item = NSMenuItem(title: "", action: action, keyEquivalent: "")

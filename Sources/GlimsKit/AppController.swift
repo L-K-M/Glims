@@ -142,7 +142,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     /// Help > Glims Help: the bundled manual in its own window. The panel
     /// never becomes main, so the front document stays the target.
-    @objc func showHelp(_ sender: Any?) {
+    @objc func showGlimsHelp(_ sender: Any?) {
         showHelp(section: nil)
     }
 

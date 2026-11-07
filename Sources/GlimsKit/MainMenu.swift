@@ -150,7 +150,7 @@ enum MainMenu {
         ])
         NSApplication.shared.windowsMenu = windowMenu
         let helpMenu = add(menu, "Help", [
-            item("Glims Help", #selector(AppController.showHelp(_:)), "?"),
+            item("Glims Help", #selector(AppController.showGlimsHelp(_:)), "?"),
             item("Keyboard & Mouse Reference", #selector(AppController.showKeyboardReference(_:))),
             .separator(),
             item("Engine Manual", #selector(AppController.openEngineManual(_:))),
