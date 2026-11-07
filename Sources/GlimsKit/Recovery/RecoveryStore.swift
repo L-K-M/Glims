@@ -8,7 +8,7 @@ import Foundation
 ///
 ///     <run-UUID>/run.json        the run's identity and owner pid   0600
 ///     <run-UUID>/<doc-UUID>.json the document's record (manifest)   0600
-///     <run-UUID>/<doc-UUID>.xcf  the recovery copy itself           0600
+///     <run-UUID>/<doc-UUID>.<generation-UUID>.xcf  a copy           0600
 ///
 /// Each app run owns one folder named by a fresh UUID and stamped with
 /// its pid, so several instances can share the store and a later run
@@ -43,8 +43,8 @@ final class RecoveryStore {
         /// The foreign file the document was imported from, if any.
         var importedSourceURL: URL?
         /// The copy's name inside the run folder. Always
-        /// `<documentID>.xcf`; checked byte-for-byte on decode, so a
-        /// manifest can never name a path outside the folder.
+        /// a document UUID and generation UUID, checked on decode.
+        /// A manifest can never name a path outside the run folder.
         var copyFilename: String
         /// When the copy was committed.
         var date: Date
@@ -86,7 +86,7 @@ final class RecoveryStore {
         }
     }
 
-    static let schemaVersion = 1
+    static let schemaVersion = 2
     /// The run folder marker.
     static let runFilename = "run.json"
 
@@ -136,7 +136,14 @@ final class RecoveryStore {
     }
 
     func copyURL(for id: UUID) -> URL {
-        runDirectory.appendingPathComponent(Self.copyName(for: id))
+        runDirectory.appendingPathComponent(record(for: id)?.copyFilename ?? Self.copyName(for: id))
+    }
+
+    private static func isCopyName(_ name: String, for id: UUID) -> Bool {
+        if name == copyName(for: id) { return true } // first store format
+        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 3 && parts[0] == id.uuidString
+            && UUID(uuidString: String(parts[1])) != nil && parts[2] == "xcf"
     }
 
     private func manifestURL(for id: UUID) -> URL {
@@ -164,25 +171,36 @@ final class RecoveryStore {
                    temporary: runDirectory.appendingPathComponent(".run.tmp-\(UUID().uuidString).json"))
     }
 
-    /// Moves the engine-written copy at `temp` over the document's
-    /// committed copy, then rewrites its manifest. Each step replaces
-    /// atomically, so a failure leaves the earlier recoverable copy and
-    /// record in place; the temporary is left for `discardTemporary`.
+    /// Publishes an immutable generation, then atomically changes the
+    /// manifest's pointer to it. A failed manifest write leaves both the
+    /// earlier pixels and their metadata intact; only after publication
+    /// may the previous generation be removed.
     @discardableResult
     func commitCopy(at temp: URL, for id: UUID, metadata: Metadata) throws -> Record {
         guard isOwnTemporary(temp, for: id, ext: "xcf"),
               files.fileExists(atPath: temp.path) else {
             throw StoreError.invalidTemporaryName(temp.lastPathComponent)
         }
+        let previous = record(for: id)
+        let name = "\(id.uuidString).\(UUID().uuidString).xcf"
+        let generation = runDirectory.appendingPathComponent(name)
         try files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temp.path)
-        try replace(temp, with: copyURL(for: id))
+        try replace(temp, with: generation)
         let record = Record(documentID: id, name: metadata.name,
                             nativeURL: metadata.nativeURL,
                             importedSourceURL: metadata.importedSourceURL,
-                            copyFilename: Self.copyName(for: id),
-                            date: now(), revision: metadata.revision)
+                            copyFilename: name, date: now(), revision: metadata.revision)
         let manifestTemp = runDirectory.appendingPathComponent(Self.temporaryName(for: id, ext: "json"))
-        try commit(data: encoder().encode(record), to: manifestURL(for: id), temporary: manifestTemp)
+        do {
+            try commit(data: encoder().encode(record), to: manifestURL(for: id), temporary: manifestTemp)
+        } catch {
+            try? files.removeItem(at: generation)
+            discardTemporary(manifestTemp)
+            throw error
+        }
+        if let previous {
+            try? files.removeItem(at: runDirectory.appendingPathComponent(previous.copyFilename))
+        }
         return record
     }
 
@@ -200,9 +218,9 @@ final class RecoveryStore {
     /// are never touched.
     func discard(_ id: UUID) {
         try? files.removeItem(at: manifestURL(for: id))
-        try? files.removeItem(at: copyURL(for: id))
         for entry in (try? files.contentsOfDirectory(at: runDirectory, includingPropertiesForKeys: nil)) ?? []
-        where entry.lastPathComponent.hasPrefix(".\(id.uuidString).tmp-") {
+        where Self.isCopyName(entry.lastPathComponent, for: id)
+                || entry.lastPathComponent.hasPrefix(".\(id.uuidString).tmp-") {
             try? files.removeItem(at: entry)
         }
     }
@@ -282,9 +300,9 @@ final class RecoveryStore {
     private func readRecord(at url: URL, expectedID: UUID) -> Record? {
         guard let data = try? Data(contentsOf: url),
               let record = try? decoder().decode(Record.self, from: data),
-              record.schemaVersion == Self.schemaVersion,
+              (1...Self.schemaVersion).contains(record.schemaVersion),
               record.documentID == expectedID,
-              record.copyFilename == Self.copyName(for: expectedID),
+              Self.isCopyName(record.copyFilename, for: expectedID),
               !record.name.isEmpty,
               isValid(record.nativeURL), isValid(record.importedSourceURL)
         else { return nil }
@@ -301,7 +319,7 @@ final class RecoveryStore {
         let url = dir.appendingPathComponent(Self.runFilename)
         guard let data = try? Data(contentsOf: url),
               let run = try? decoder().decode(Run.self, from: data),
-              run.schemaVersion == Self.schemaVersion,
+              (1...Self.schemaVersion).contains(run.schemaVersion),
               run.runID.uuidString == dir.lastPathComponent
         else { return nil }
         return run

@@ -223,7 +223,13 @@ final class RecoveryScheduler {
         servedThisPass.insert(id)
         document.saveRecoveryCopy(to: temp) { [weak self] error in
             guard let self else { return }
-            self.copying = nil
+            defer {
+                self.copying = nil
+                // The document completion precedes EngineActivity's
+                // release. Continue only once another copy can enter,
+                // so all dirty documents fit in this recovery pass.
+                EngineActivity.shared.whenIdle { [weak self] in self?.serveNextCandidate() }
+            }
             let entry = self.entries[id]
             if error == nil, entry != nil,
                let live = entry?.document, !live.recoverySnapshot.isClosing {
@@ -239,7 +245,6 @@ final class RecoveryScheduler {
             } else {
                 self.store.discardTemporary(temp)
             }
-            self.serveNextCandidate()
         }
     }
 

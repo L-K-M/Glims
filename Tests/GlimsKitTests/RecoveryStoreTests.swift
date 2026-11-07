@@ -92,18 +92,21 @@ final class RecoveryStoreTests: XCTestCase {
         let id = UUID()
         let first = try commit(store, id: id, content: "v1", metadata: metadata(revision: 4))
         XCTAssertEqual(first.documentID, id)
-        XCTAssertEqual(first.copyFilename, "\(id.uuidString).xcf")
+        XCTAssertTrue(first.copyFilename.hasPrefix("\(id.uuidString)."))
+        XCTAssertTrue(first.copyFilename.hasSuffix(".xcf"))
         XCTAssertEqual(first.revision, 4)
         XCTAssertEqual(String(data: try Data(contentsOf: store.copyURL(for: id)), encoding: .utf8), "v1")
 
         let second = try commit(store, id: id, content: "v2-longer", metadata: metadata(revision: 9))
         XCTAssertEqual(second.revision, 9)
+        XCTAssertNotEqual(first.copyFilename, second.copyFilename)
+        XCTAssertFalse(files.fileExists(atPath: store.runDirectory.appendingPathComponent(first.copyFilename).path))
         XCTAssertEqual(String(data: try Data(contentsOf: store.copyURL(for: id)), encoding: .utf8), "v2-longer")
         // One copy and one manifest per document, replaced not appended.
         let names = try files.contentsOfDirectory(at: store.runDirectory, includingPropertiesForKeys: nil)
             .map(\.lastPathComponent)
         XCTAssertEqual(names.filter { $0.contains(id.uuidString) }.sorted(),
-                       ["\(id.uuidString).json", "\(id.uuidString).xcf"])
+                       ["\(id.uuidString).json", second.copyFilename].sorted())
     }
 
     /// A failed copy keeps the last committed copy and its manifest —
@@ -128,6 +131,18 @@ final class RecoveryStoreTests: XCTestCase {
         XCTAssertFalse(files.fileExists(atPath: abandoned.path))
         XCTAssertEqual(String(data: try Data(contentsOf: store.copyURL(for: id)), encoding: .utf8), "v1")
         XCTAssertEqual(store.record(for: id)?.revision, 4)
+    }
+
+    func testManifestFailureKeepsThePreviousCopyAndMetadataTogether() throws {
+        let failingFiles = FailingManifestFiles()
+        let store = RecoveryStore(base: base, runID: UUID(), fileManager: failingFiles)
+        try store.prepare()
+        let id = UUID()
+        let first = try commit(store, id: id, content: "earlier pixels", metadata: metadata(revision: 4))
+        failingFiles.failManifest = true
+        XCTAssertThrowsError(try commit(store, id: id, content: "newer pixels", metadata: metadata(revision: 9)))
+        XCTAssertEqual(store.record(for: id), first)
+        XCTAssertEqual(try Data(contentsOf: store.copyURL(for: id)), Data("earlier pixels".utf8))
     }
 
     /// Decoding must never turn manifest text into paths: traversal and
@@ -277,5 +292,15 @@ final class RecoveryStoreTests: XCTestCase {
         try store.prepare()
         XCTAssertNil(store.record(for: UUID()))
         XCTAssertFalse(store.copyExists(for: UUID()))
+    }
+}
+
+private final class FailingManifestFiles: FileManager, @unchecked Sendable {
+    var failManifest = false
+    override func setAttributes(_ attributes: [FileAttributeKey: Any], ofItemAtPath path: String) throws {
+        if failManifest && path.hasSuffix(".json") && URL(fileURLWithPath: path).lastPathComponent.hasPrefix(".") {
+            throw CocoaError(.fileWriteNoPermission)
+        }
+        try super.setAttributes(attributes, ofItemAtPath: path)
     }
 }
