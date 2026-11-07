@@ -185,6 +185,20 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
     }
 
+    /// Whether a background recovery copy may start now. The engine-wide
+    /// input drain that precedes a file call commits every open
+    /// document's in-flight text and field edits — the same ones
+    /// `endPendingEdits` commits — so a recovery pass must not admit
+    /// this document while any of them is open. It checks the same
+    /// scope instead of committing, and the scheduler checks every
+    /// tracked window before it admits any.
+    var isReadyForRecoveryCopy: Bool {
+        guard canvas.tools.textEditor == nil else { return false }
+        let scoped = [window, previewPanel?.window].compactMap { $0 }
+            + PaletteEditScope.windowsEditing(imageDocument)
+        return scoped.allSatisfy { !PaletteEditScope.isFieldEditing($0) }
+    }
+
     private func stateDidChange() {
         window?.title = Self.title(name: imageDocument.name, zoomPercent: canvas.zoomPercent,
                                    isDirty: imageDocument.hasUnsavedChanges,
