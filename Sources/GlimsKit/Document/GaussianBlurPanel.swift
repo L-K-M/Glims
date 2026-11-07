@@ -15,14 +15,13 @@ final class GaussianBlurPanel: FilterPreviewPanel {
     private let field = NSTextField()
     private var appliedRadius = 4.0
 
-    init?(document imageDocument: ImageDocument) {
+    init(document imageDocument: ImageDocument, filter: Int32) {
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 110),
                             styleMask: [.titled, .closable, .utilityWindow],
                             backing: .buffered, defer: false)
         panel.title = "Gaussian Blur"
         panel.isFloatingPanel = true
-        super.init(document: imageDocument, panel: panel)
-        guard beginSession(Self.operation) else { return nil }
+        super.init(document: imageDocument, panel: panel, filter: filter)
         buildContent(in: panel)
         apply(radius: slider.doubleValue)
     }

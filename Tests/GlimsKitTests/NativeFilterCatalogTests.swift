@@ -3,13 +3,38 @@ import XCTest
 @testable import GlimsKit
 
 /// The catalog's pure decisions: category mapping, ordering, availability
-/// presentation, and installing into a menu without touching other items.
+/// presentation, and merging into the Filter menu's categories without
+/// disturbing dedicated or plug-in items.
 @MainActor
 final class NativeFilterCatalogTests: XCTestCase {
     private func operation(_ name: String, title: String? = nil, categories: [String] = [],
                            support: EngineSession.FilterOpSupport = .supported) -> EngineSession.FilterOperation {
         EngineSession.FilterOperation(name: name, title: title ?? name, categories: categories,
                                       blurb: "", support: support)
+    }
+
+    private func procedure(_ name: String, label: String? = nil,
+                           menuPath: String) -> EngineSession.Procedure {
+        EngineSession.Procedure(name: name, label: label ?? name, menuPath: menuPath,
+                                blurb: "", isSensitive: true)
+    }
+
+    private func filterMenu(_ menu: NSMenu) -> NSMenu {
+        menu.item(withTitle: "Filter")!.submenu!
+    }
+
+    /// Item titles of a submenu, marking separators as "—".
+    private func titles(_ submenu: NSMenu?) -> [String] {
+        submenu?.items.map { $0.isSeparatorItem ? "—" : $0.title } ?? []
+    }
+
+    /// Every item anywhere under the Filter menu carrying a native command.
+    private func nativeItems(_ menu: NSMenu) -> [NSMenuItem] {
+        var found: [NSMenuItem] = []
+        for item in filterMenu(menu).items {
+            found += item.submenu?.items.filter { $0.representedObject is NativeFilterCommand } ?? []
+        }
+        return found
     }
 
     func testCategoryMappingUsesTheFirstKnownKey() {
@@ -46,47 +71,92 @@ final class NativeFilterCatalogTests: XCTestCase {
                        "unavailable operations keep their place in the catalog menu")
     }
 
-    func testInstallKeepsNativeAndPlugInItems() {
+    /// Native after plug-ins: the catalog's operations merge into the
+    /// Filter categories next to dedicated and plug-in items.
+    func testInstallMergesIntoFilterCategoriesAlongsidePlugIns() {
         let menu = MainMenu.make()
-        let procedure = EngineSession.Procedure(name: "plug-in-checkerboard", label: "Checkerboard…",
-                                                menuPath: "<Image>/Filters/Render/Pattern", blurb: "",
-                                                isSensitive: true)
-        PlugInMenus.install([procedure], in: menu)
-        let filter = menu.item(withTitle: "Filter")!.submenu!
-
+        let checkerboard = procedure("plug-in-checkerboard", label: "Checkerboard (legacy)…",
+                                     menuPath: "<Image>/Filters/Render/Pattern")
+        PlugInMenus.install([checkerboard], in: menu)
         NativeFilterMenus.install([
             operation("gegl:median-blur", title: "Median Blur", categories: ["blur"]),
             operation("gegl:displace", title: "Displace", categories: ["map"], support: .needsAuxInput),
+            operation("gegl:waves", title: "Waves", categories: ["render"]),
         ], in: menu)
 
-        let native = filter.item(withTitle: "Native")?.submenu
-        XCTAssertNotNil(native)
-        XCTAssertEqual(native?.item(withTitle: "Blur")?.submenu?.items.map(\.title), ["Median Blur…"])
-        let displace = native?.item(withTitle: "Map")?.submenu?.items.first
+        let filter = filterMenu(menu)
+        XCTAssertNil(filter.item(withTitle: "Native"), "no implementation-level Native submenu remains")
+        XCTAssertEqual(titles(filter.item(withTitle: "Blur")?.submenu),
+                       ["Gaussian Blur…", "Median Blur…"],
+                       "the catalog's blurs merge into Filter ▸ Blur next to the dedicated command")
+        let displace = filter.item(withTitle: "Map")?.submenu?.items.first
         XCTAssertEqual(displace?.title, "Displace (needs a second layer as its source)")
         XCTAssertEqual(displace?.action, #selector(DocumentWindowController.runNativeFilter(_:)))
         XCTAssertEqual((displace?.representedObject as? NativeFilterCommand)?.operation.name, "gegl:displace")
         XCTAssertNotNil(displace?.toolTip)
-
-        // Nothing else moved: the dedicated command, plug-in categories
-        // and the Recently Used placeholder are untouched.
-        XCTAssertEqual(filter.item(withTitle: "Blur")?.submenu?.items.first?.title, "Gaussian Blur…")
-        XCTAssertNotNil(filter.item(withTitle: "Render")?.submenu?.item(withTitle: "Pattern"))
+        XCTAssertEqual(titles(filter.item(withTitle: "Render")?.submenu),
+                       ["Waves…", "—", "Pattern"],
+                       "native operations share a category with plug-in submenus")
         XCTAssertNotNil(filter.item(withTitle: MainMenu.recentlyUsedTitle))
 
-        // A plug-in rebuild leaves the Native submenu alone.
-        PlugInMenus.install([procedure], in: menu)
-        XCTAssertEqual(filter.item(withTitle: "Native")?.submenu?.item(withTitle: "Blur")?.submenu?.items.count, 1)
+        // A plug-in refresh loses none of the native entries.
+        PlugInMenus.install([checkerboard], in: menu)
+        XCTAssertEqual(nativeItems(menu).count, 3)
+        XCTAssertEqual(titles(filter.item(withTitle: "Blur")?.submenu),
+                       ["Gaussian Blur…", "Median Blur…"])
+        XCTAssertEqual(titles(filter.item(withTitle: "Render")?.submenu),
+                       ["Waves…", "—", "Pattern"])
+    }
+
+    /// Native before plug-ins: a plug-in install into a category the
+    /// catalog created keeps the native entries too.
+    func testInstallSurvivesPlugInInstallInEitherOrder() {
+        let menu = MainMenu.make()
+        let checkerboard = procedure("plug-in-checkerboard", label: "Checkerboard (legacy)…",
+                                     menuPath: "<Image>/Filters/Render/Pattern")
+        NativeFilterMenus.install([
+            operation("gegl:waves", title: "Waves", categories: ["render"]),
+        ], in: menu)
+        PlugInMenus.install([checkerboard], in: menu)
+
+        let filter = filterMenu(menu)
+        XCTAssertEqual(titles(filter.item(withTitle: "Render")?.submenu),
+                       ["Waves…", "—", "Pattern"],
+                       "a category the catalog made is shared, not replaced")
+
+        // Both refreshes are stable: native entries survive the plug-in
+        // rebuild, plug-in entries survive the catalog rebuild.
+        PlugInMenus.install([checkerboard], in: menu)
+        NativeFilterMenus.install([
+            operation("gegl:waves", title: "Waves", categories: ["render"]),
+        ], in: menu)
+        XCTAssertEqual(titles(filter.item(withTitle: "Render")?.submenu),
+                       ["Waves…", "—", "Pattern"])
+        XCTAssertEqual(nativeItems(menu).count, 1)
     }
 
     func testInstallIsIdempotentAndDropsWhenEmpty() {
         let menu = MainMenu.make()
-        let filter = menu.item(withTitle: "Filter")!.submenu!
-        let ops = [operation("gegl:median-blur", title: "Median Blur", categories: ["blur"])]
+        let filter = filterMenu(menu)
+        let checkerboard = procedure("plug-in-checkerboard", label: "Checkerboard (legacy)…",
+                                     menuPath: "<Image>/Filters/Render/Pattern")
+        PlugInMenus.install([checkerboard], in: menu)
+        let ops = [
+            operation("gegl:median-blur", title: "Median Blur", categories: ["blur"]),
+            operation("gegl:displace", title: "Displace", categories: ["map"], support: .needsAuxInput),
+        ]
         NativeFilterMenus.install(ops, in: menu)
         NativeFilterMenus.install(ops, in: menu)
-        XCTAssertEqual(filter.items.filter { $0.title == "Native" }.count, 1)
+        XCTAssertEqual(nativeItems(menu).count, 2, "a repeated install adds no duplicates")
+        XCTAssertEqual(filter.item(withTitle: "Map")?.submenu?.items.count, 1)
+
         NativeFilterMenus.install([], in: menu)
-        XCTAssertNil(filter.item(withTitle: "Native"))
+        XCTAssertEqual(nativeItems(menu).count, 0)
+        XCTAssertNil(filter.item(withTitle: "Map"),
+                     "a category the catalog made goes away when it is empty")
+        XCTAssertEqual(titles(filter.item(withTitle: "Blur")?.submenu), ["Gaussian Blur…"],
+                       "the dedicated command stays")
+        XCTAssertNotNil(filter.item(withTitle: "Render")?.submenu?.item(withTitle: "Pattern"),
+                        "plug-in categories stay")
     }
 }

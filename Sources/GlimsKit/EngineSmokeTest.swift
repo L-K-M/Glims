@@ -382,7 +382,10 @@ enum EngineSmokeTest {
         documents.items.append(document)
         let controller = DocumentWindowController(document: document)
         controller.showWindow(nil)
-        guard let blur = GaussianBlurPanel(document: document) else { throw NoWindow() }
+        guard let layer = document.activeLayer,
+              let blurFilter = try? session.beginFilter(image: image, drawable: layer,
+                                                        operation: GaussianBlurPanel.operation) else { throw NoWindow() }
+        let blur = GaussianBlurPanel(document: document, filter: blurFilter)
         document.inputQueue.sync {}
         spin()
         document.copyPixels(.merged, background: .white, consume: { _ in }, completion: { _ in })
@@ -502,10 +505,13 @@ enum EngineSmokeTest {
         check(rows == ["● Background"], "Layers palette rows: \(rows)")
 
         // The Gaussian Blur dialog: preview, then OK.
-        guard let blur = GaussianBlurPanel(document: document) else {
+        guard let blurLayer = document.activeLayer,
+              let blurFilter = try? session.beginFilter(image: image, drawable: blurLayer,
+                                                        operation: GaussianBlurPanel.operation) else {
             check(false, "Gaussian Blur dialog opens a filter session")
             return
         }
+        let blur = GaussianBlurPanel(document: document, filter: blurFilter)
         blur.apply(radius: 6)
         document.inputQueue.sync {}
         check(document.undoInfo.undoCount == 1, "the blur preview adds no undo step")
@@ -1815,8 +1821,8 @@ enum EngineSmokeTest {
         check(median?.support == .supported && overlay?.support == .supported,
               "Median Blur and Color Overlay are supported native operations")
 
-        // The Native submenu installs next to the plug-in menus; the
-        // dedicated Gaussian command and every plug-in item survive.
+        // The catalog merges into the Filter categories next to the
+        // dedicated Gaussian command and the plug-in items.
         let mainMenu = MainMenu.make()
         NSApp.mainMenu = mainMenu
         PlugInMenus.install(try session.procedures(), in: mainMenu)
@@ -1825,21 +1831,22 @@ enum EngineSmokeTest {
             path.reduce(mainMenu as NSMenu?) { menu, title in menu?.item(withTitle: title)?.submenu }
         }
         func nativeItem(_ name: String) -> NSMenuItem? {
-            for section in submenu(["Filter", "Native"])?.items ?? [] {
-                if let found = section.submenu?.items.first(where: {
+            for category in submenu(["Filter"])?.items ?? [] {
+                if let found = category.submenu?.items.first(where: {
                     ($0.representedObject as? NativeFilterCommand)?.operation.name == name
                 }) { return found }
             }
             return nil
         }
-        let blurItems = submenu(["Filter", "Native", "Blur"])?.items.map(\.title) ?? []
-        check(blurItems.contains("Median Blur…") && !blurItems.contains("Gaussian Blur…"),
-              "Filter ▸ Native ▸ Blur lists operations without duplicating Gaussian Blur (\(blurItems))")
+        check(submenu(["Filter"])?.item(withTitle: "Native") == nil,
+              "the catalog merges into the Filter categories without a Native submenu")
+        let blurItems = submenu(["Filter", "Blur"])?.items.map(\.title) ?? []
+        check(blurItems.first == "Gaussian Blur…" && blurItems.contains("Median Blur…"),
+              "Filter ▸ Blur keeps the dedicated command and gains the catalog's operations (\(blurItems))")
+        check(nativeItem("gegl:gaussian-blur") == nil, "the catalog's own Gaussian Blur stays out")
         check(nativeItem("gegl:displace")?.title == "Displace (needs a second layer as its source)"
                 && nativeItem("gimp:curves")?.title == "Curves (needs a dedicated editor)",
               "inapplicable operations stay listed with their reason")
-        check(submenu(["Filter", "Blur"])?.items.first?.title == "Gaussian Blur…",
-              "the dedicated Gaussian Blur command stays in Filter ▸ Blur")
         check(submenu(["Filter", "Render", "Pattern"])?.items.isEmpty == false,
               "the plug-in categories are intact after the native install")
 
@@ -1890,6 +1897,23 @@ enum EngineSmokeTest {
               "the typed number write round-trips through the session")
         let blurred = pixel(session, image, x: 8, y: 30)
         check(blurred != nil && blurred != painted, "the number preview changes pixels (\(painted ?? []) → \(blurred ?? []))")
+
+        // A programmatic NaN write rides the same request path: whatever
+        // the engine answers must land — a NaN request never equals
+        // itself, so value-equality staleness would drop its answer.
+        panel.setProperty("std-dev-x", .number(.nan))
+        wait()
+        if case .number(let stored) = try? session.filterProperty(filter, "std-dev-x"), stored == 20 {
+            check(panel.lastError?.isEmpty == false,
+                  "a refused NaN write keeps the form's error visible")
+        } else {
+            check(controller.previewPanel === panel && document.filterPreviewIsOpen,
+                  "a NaN write the engine accepts leaves the form alive")
+        }
+        panel.setProperty("std-dev-x", .number(20))
+        wait()
+        check((try? session.filterProperty(filter, "std-dev-x")) == .number(20),
+              "the form keeps taking writes after a NaN one")
 
         let choices = (try? session.filterEnumChoices("gegl:gaussian-blur", property: "filter")) ?? []
         check(choices.count >= 2 && choices.contains(where: { !$0.label.isEmpty }),
@@ -2002,6 +2026,98 @@ enum EngineSmokeTest {
         wait()
         check((try? session.filterProperty(colorFilter, "value")) == nil,
               "the cancelled color session is gone")
+
+        // Value Invert has no editable properties: the form shows a note
+        // instead of a settings grid, and the preview still commits and
+        // cancels like any other — no empty grid, no immediate apply.
+        let invert = operations.first { $0.name == "gegl:value-invert" }
+        check(invert?.support == .supported, "Value Invert is a supported native operation")
+        let preInvert = pixel(session, image, x: 8, y: 30)
+        guard let invertOp = invert, let invertPanel = open(invertOp) else {
+            check(false, "the no-settings form opens")
+            return
+        }
+        let undoBeforeInvert = document.undoInfo.undoCount
+        check(pixel(session, image, x: 8, y: 30) != preInvert,
+              "the no-settings preview changes pixels")
+        invertPanel.cancel()
+        wait()
+        check(pixel(session, image, x: 8, y: 30) == preInvert
+                && document.undoInfo.undoCount == undoBeforeInvert
+                && !document.filterPreviewIsOpen,
+              "cancel on a no-settings form restores pixels and leaves no history")
+        guard let invertAgain = open(invertOp) else {
+            check(false, "the no-settings form reopens")
+            return
+        }
+        invertAgain.commit()
+        let invertDeadline = Date().addingTimeInterval(10)
+        while controller.previewPanel != nil && Date() < invertDeadline { spin(0.02) }
+        wait()
+        try? document.reload()
+        check(document.undoInfo.undoCount == undoBeforeInvert + 1
+                && document.undoInfo.nextUndo.contains("Invert"),
+              "Apply on a no-settings form adds one named undo step (\(document.undoInfo.nextUndo))")
+        check(pixel(session, image, x: 8, y: 30) != preInvert,
+              "the committed no-settings filter changed the layer")
+
+        // A begin must queue behind pending input: a blocked job stands
+        // in for a committed stroke still on its way to the engine. The
+        // open returns at once; session and panel land only after the
+        // input has drained. Median Blur's properties are warm in the
+        // catalog, so nothing but the input can delay the start.
+        let beforePending = pixel(session, image, x: 8, y: 30)
+        let gate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { gate.wait() }
+        // Released from a background queue after a beat: a synchronous
+        // begin would stall measurably here, a queued one returns at once.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.8) { gate.signal() }
+        let openStart = DispatchTime.now()
+        controller.openNativeFilter(medianOp)
+        let openMilliseconds = milliseconds(since: openStart)
+        check(controller.previewPanel == nil && document.filterPreviewIsOpen,
+              "a filter open behind pending input returns before its panel exists")
+        check(openMilliseconds < 500,
+              "the open does not wait on the input queue (\(Int(openMilliseconds)) ms)")
+        // Escape cancels the pending start before its session is used.
+        controller.cancelOperation(nil)
+        check(controller.previewPanel == nil && !document.filterPreviewIsOpen,
+              "Escape cancels a pending filter start")
+        let undoBeforePending = document.undoInfo.undoCount
+        wait()
+        check(document.undoInfo.undoCount == undoBeforePending && controller.previewPanel == nil,
+              "a cancelled pending start leaves no session, panel or undo step")
+        check(pixel(session, image, x: 8, y: 30) == beforePending, "…and changes no pixels")
+
+        // A document close during a pending start drains the counted
+        // begin and the image takes the begun session with it.
+        let pendingImage = try session.newImage(width: 16, height: 16)
+        let pendingNative = work.appendingPathComponent("pending-start.xcf")
+        try session.save(pendingImage, to: pendingNative.path)
+        let pendingDocument = try ImageDocument(session: session, image: pendingImage,
+                                                name: "Pending", openedFrom: pendingNative)
+        documents.items.append(pendingDocument)
+        let pendingController = DocumentWindowController(document: pendingDocument)
+        pendingController.showWindow(nil)
+        let pendingGate = DispatchSemaphore(value: 0)
+        pendingDocument.inputQueue.async { pendingGate.wait() }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.8) { pendingGate.signal() }
+        let pendingStart = DispatchTime.now()
+        pendingController.openNativeFilter(medianOp)
+        check(pendingController.previewPanel == nil && milliseconds(since: pendingStart) < 500,
+              "a pending start on a clean image returns promptly too")
+        var pendingClosed: Bool?
+        pendingController.requestClose { pendingClosed = $0 }
+        check(pendingClosed == nil, "the close waits for the pending begin")
+        let pendingDeadline = Date().addingTimeInterval(10)
+        while pendingClosed == nil && Date() < pendingDeadline { spin(0.02) }
+        check(pendingClosed == true && !pendingDocument.hasUnsavedChanges,
+              "closing during a pending start asks nothing and finishes")
+        let destroyDeadline = Date().addingTimeInterval(10)
+        while (try? session.info(pendingImage)) != nil && Date() < destroyDeadline { spin(0.02) }
+        check((try? session.info(pendingImage)) == nil,
+              "the image is destroyed and the begun session goes with it")
+        documents.items.removeAll { $0 === pendingDocument }
 
         // A clean close cancels the open preview and leaves no session
         // behind: the image's own close path is the drain.

@@ -14,16 +14,23 @@ final class NativeFilterPanel: FilterPreviewPanel {
     let operation: EngineSession.FilterOperation
     /// Control refreshers by property name, for reads and refused writes.
     private var bindings: [String: (EngineSession.FilterValue) -> Void] = [:]
-    /// The latest value a control asked for; superseded answers are dropped.
-    private var requested: [String: EngineSession.FilterValue] = [:]
+    /// Every send bumps its property's generation; only the newest
+    /// request's answer decides the row. Values are unusable for this —
+    /// a NaN request never equals itself yet must still take its answer.
+    private var generations: [String: Int] = [:]
     /// The latest value the engine accepted, for reverts.
     private var accepted: [String: EngineSession.FilterValue] = [:]
     private let statusField = NSTextField(wrappingLabelWithString: "")
     private(set) var lastError: String?
 
+    /// `filter` is the session `ImageDocument.beginFilterPreview` began
+    /// behind pending input; `initialValues` holds the values it read
+    /// back in the same job, before this init runs on the main actor.
     init?(document imageDocument: ImageDocument,
           operation: EngineSession.FilterOperation,
-          properties: [EngineSession.FilterProperty]) {
+          properties: [EngineSession.FilterProperty],
+          filter: Int32,
+          initialValues: [String: EngineSession.FilterValue]) {
         guard operation.support == .supported else { return nil }
         self.operation = operation
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 200),
@@ -31,10 +38,12 @@ final class NativeFilterPanel: FilterPreviewPanel {
                             backing: .buffered, defer: false)
         panel.title = operation.title
         panel.isFloatingPanel = true
-        super.init(document: imageDocument, panel: panel)
-        guard beginSession(operation.name) else { return nil }
+        super.init(document: imageDocument, panel: panel, filter: filter)
         buildContent(in: panel, properties: properties)
-        readInitialValues(from: properties)
+        for (name, value) in initialValues {
+            accepted[name] = value
+            bindings[name]?(value)
+        }
     }
 
     @available(*, unavailable)
@@ -53,9 +62,10 @@ final class NativeFilterPanel: FilterPreviewPanel {
     /// a value the user has already moved past.
     func setProperty(_ name: String, _ value: EngineSession.FilterValue) {
         guard let filter else { return }
-        requested[name] = value
+        let generation = (generations[name] ?? 0) + 1
+        generations[name] = generation
         imageDocument.setFilterProperty(filter, name, value) { [weak self] result in
-            guard let self, self.requested[name] == value else { return }
+            guard let self, self.generations[name] == generation else { return }
             switch result {
             case .success:
                 self.accepted[name] = value
@@ -67,29 +77,17 @@ final class NativeFilterPanel: FilterPreviewPanel {
         }
     }
 
-    /// The engine's values into the rows; read behind pending input so a
-    /// just-ended stroke lands first.
-    private func readInitialValues(from properties: [EngineSession.FilterProperty]) {
-        guard let filter else { return }
-        let names = properties.filter { $0.kind.isEditable }.map(\.name)
-        let values = imageDocument.inputQueue.sync { [session = imageDocument.session] in
-            names.map { ($0, try? session.filterProperty(filter, $0)) }
-        }
-        for (name, value) in values {
-            guard let value else { continue }
-            accepted[name] = value
-            bindings[name]?(value)
-        }
-    }
-
     private func buildContent(in panel: NSPanel, properties: [EngineSession.FilterProperty]) {
-        let rows: [[NSView]] = properties.map { property in
-            [Self.label(for: property), control(for: property)]
-        }
+        // Operations with no editable properties (Invert, Absolute, …)
+        // get a note, not a settings grid — an empty NSGridView has no
+        // column 0 and Apply/Cancel still need a stable window.
+        let rows: [[NSView]] = properties.isEmpty
+            ? [[Self.noSettingsNote()]]
+            : properties.map { property in [Self.label(for: property), control(for: property)] }
         let grid = NSGridView(views: rows)
         grid.rowSpacing = 8
         grid.columnSpacing = 8
-        grid.column(at: 0).xPlacement = .trailing
+        if !properties.isEmpty { grid.column(at: 0).xPlacement = .trailing }
 
         // Tall forms scroll; the rows then take the clip's width so the
         // labels wrap rather than the controls sliding under a scroller.
@@ -152,6 +150,13 @@ final class NativeFilterPanel: FilterPreviewPanel {
     @objc private func apply() {
         window?.endEditing(for: nil)
         commit()
+    }
+
+    private static func noSettingsNote() -> NSTextField {
+        let note = NSTextField(wrappingLabelWithString:
+            "This filter has no settings; Apply commits it as it is.")
+        note.textColor = .secondaryLabelColor
+        return note
     }
 
     private static func label(for property: EngineSession.FilterProperty) -> NSTextField {

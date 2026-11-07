@@ -628,11 +628,12 @@ final class ImageDocument {
     }
 
     enum DocumentError: LocalizedError {
-        case closed, busy
+        case closed, busy, noLayer
         var errorDescription: String? {
             switch self {
             case .closed: return "This image has already closed."
             case .busy: return "Wait for the current clipboard transfer or save to finish."
+            case .noLayer: return "There is no layer to work on."
             }
         }
     }
@@ -773,13 +774,51 @@ final class ImageDocument {
     /// Runs engine work on the input queue, after any pending pointer input.
     enum CommandEffect { case readsPixels, changesImage, changesPreview }
 
+    /// What an accepted filter start hands its panel builder: the open
+    /// session and the values its editable properties began at.
+    struct FilterPreviewStart {
+        let filter: Int32
+        let values: [String: EngineSession.FilterValue]
+    }
+
+    /// Begins a filter session for `operation` on the active layer and
+    /// reads `properties`' starting values, as one counted job on the
+    /// input queue — behind pending stroke, field and text input, so the
+    /// preview begins on the edits the user already made instead of
+    /// overtaking them. The completion runs on the main actor before the
+    /// job counts down, so a stale completion that aborts the session it
+    /// just created still keeps the close drain waiting.
+    func beginFilterPreview(operation: String, properties: [EngineSession.FilterProperty],
+                            completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard let layer = activeLayer else { return completion(.failure(DocumentError.noLayer)) }
+        pendingWork += 1
+        inputQueue.async { [session, image] in
+            let result = Result<FilterPreviewStart, Error> {
+                let filter = try session.beginFilter(image: image, drawable: layer, operation: operation)
+                var values: [String: EngineSession.FilterValue] = [:]
+                for property in properties where property.kind.isEditable {
+                    values[property.name] = try? session.filterProperty(filter, property.name)
+                }
+                return FilterPreviewStart(filter: filter, values: values)
+            }
+            DispatchQueue.main.async {
+                completion(result)
+                self.jobDidFinish(input: false)
+            }
+        }
+    }
+
     /// Aborting a preview is cleanup, so clipboard/save edit gates must
-    /// never suppress it. It still joins pending work to protect teardown.
+    /// never suppress it; it also runs while the image closes, so a
+    /// session begun behind pending input still unwinds before destroy.
     /// A commit is an edit and leaves its session available if refused.
     func finishFilter(_ filter: Int32, commit: Bool, completion: @escaping @MainActor (Bool) -> Void) {
-        guard !isClosing else { return completion(false) }
-        if commit && refuseWhileEditingUnavailable(forPreviewWork: true) { return completion(false) }
-        enqueue(on: inputQueue, input: commit) { [session] in
+        if commit {
+            guard !isClosing else { return completion(false) }
+            if refuseWhileEditingUnavailable(forPreviewWork: true) { return completion(false) }
+        }
+        enqueue(on: inputQueue, input: commit, teardown: !commit) { [session] in
             let success: Bool
             do {
                 if commit { try session.commitFilter(filter) } else { try session.abortFilter(filter) }
@@ -806,12 +845,6 @@ final class ImageDocument {
         }
     }
 
-    /// A preview property's current value, read behind pending input
-    /// like `textLayer(_:)` reads text metadata.
-    func filterProperty(_ filter: Int32, _ property: String) -> EngineSession.FilterValue? {
-        inputQueue.sync { [session] in try? session.filterProperty(filter, property) }
-    }
-
     @discardableResult
     func run(effect: CommandEffect = .changesImage, _ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
         guard !isClosing else { return false }
@@ -826,9 +859,12 @@ final class ImageDocument {
 
     /// Queues engine work; the document counts it until it ran so a close
     /// can wait. `input` jobs go through the input queue — all edits —
-    /// and count as unsaved changes while they wait or run.
-    private func enqueue(on queue: DispatchQueue, input: Bool = false, _ work: @escaping () -> Void) {
-        guard !isClosing else { return }
+    /// and count as unsaved changes while they wait or run. `teardown`
+    /// jobs (filter aborts) are cleanup: they queue and count even while
+    /// closing, so the drain never destroys an image out from under them.
+    private func enqueue(on queue: DispatchQueue, input: Bool = false, teardown: Bool = false,
+                       _ work: @escaping () -> Void) {
+        guard teardown || !isClosing else { return }
         pendingWork += 1
         if input { pendingInput += 1 }
         queue.async {
