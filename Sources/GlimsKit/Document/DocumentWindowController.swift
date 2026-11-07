@@ -155,7 +155,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         window?.contentView?.layoutSubtreeIfNeeded()
         let viewport = scrollView.contentSize
         zoom(to: ZoomLadder.fit(imageWidth: Double(imageDocument.info.width), imageHeight: Double(imageDocument.info.height),
-                               viewportWidth: Double(viewport.width), viewportHeight: Double(viewport.height)))
+                               viewportWidth: Double(viewport.width), viewportHeight: Double(viewport.height),
+                               backingFactor: Double(window?.backingScaleFactor ?? 1)))
         center(on: CGPoint(x: Double(imageDocument.info.width) / 2, y: Double(imageDocument.info.height) / 2))
     }
 

@@ -19,11 +19,12 @@ public enum ZoomLadder {
 
     /// Fit inside the viewport without enlarging a smaller image.
     public static func fit(imageWidth: Double, imageHeight: Double,
-                           viewportWidth: Double, viewportHeight: Double) -> Int {
+                           viewportWidth: Double, viewportHeight: Double, backingFactor: Double = 1) -> Int {
         guard imageWidth.isFinite, imageHeight.isFinite,
               viewportWidth.isFinite, viewportHeight.isFinite,
-              imageWidth > 0, imageHeight > 0, viewportWidth > 0, viewportHeight > 0 else { return actualPixels }
-        let percent = min(100, min(viewportWidth / imageWidth, viewportHeight / imageHeight) * 100)
+              imageWidth > 0, imageHeight > 0, viewportWidth > 0, viewportHeight > 0,
+              backingFactor.isFinite, backingFactor > 0 else { return actualPixels }
+        let percent = min(100, min(viewportWidth / imageWidth, viewportHeight / imageHeight) * backingFactor * 100)
         return max(steps[0], Int(percent.rounded(.down)))
     }
 

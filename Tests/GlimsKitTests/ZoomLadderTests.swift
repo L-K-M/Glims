@@ -2,6 +2,14 @@ import XCTest
 @testable import GlimsKit
 
 final class ZoomLadderTests: XCTestCase {
+    func testFitUsesDevicePixelsOnRetinaDisplays() {
+        XCTAssertEqual(ZoomLadder.fit(imageWidth: 2000, imageHeight: 1000,
+                                     viewportWidth: 800, viewportHeight: 600, backingFactor: 2), 80)
+        XCTAssertEqual(ZoomLadder.fit(imageWidth: 2000, imageHeight: 1000,
+                                     viewportWidth: 800, viewportHeight: 600, backingFactor: 1), 40)
+        XCTAssertEqual(ZoomLadder.fit(imageWidth: 300, imageHeight: 200,
+                                     viewportWidth: 800, viewportHeight: 600, backingFactor: 2), 100)
+    }
     func testStepsAreAscendingAndContainActualPixels() {
         XCTAssertEqual(ZoomLadder.steps, ZoomLadder.steps.sorted())
         XCTAssertEqual(Set(ZoomLadder.steps).count, ZoomLadder.steps.count)

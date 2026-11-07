@@ -92,6 +92,7 @@ enum EngineSmokeTest {
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseClipboard(session, documents: documents)
             try exercisePreviewLifetimes(session, work: work, documents: documents)
+            try exerciseDisplayDensity(session, documents: documents)
             try exerciseTools(session, documents: documents)
             try exerciseEditing(session, documents: documents)
             try exercisePaths(session, documents: documents)
@@ -189,7 +190,8 @@ enum EngineSmokeTest {
         ToolState.shared.textSettings.size = 12
         ToolState.shared.select(.text)
         if let press = NSEvent.mouseEvent(with: .leftMouseDown,
-                                          location: controller.canvas.convert(CGPoint(x: 4, y: 4), to: nil),
+                                          location: controller.canvas.convert(CGPoint(x: 4 * controller.canvas.scale,
+                                                                                       y: 4 * controller.canvas.scale), to: nil),
                                           modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
                                           context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
             controller.canvas.mouseDown(with: press)
@@ -401,6 +403,61 @@ enum EngineSmokeTest {
             NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
         }
         while (try? session.info(image)) != nil && Date() < deadline { spin() }
+        documents.items.removeAll { $0 === document }
+    }
+
+    private final class DensityWindow: NSWindow {
+        var simulatedBackingFactor: CGFloat = 1
+        override var backingScaleFactor: CGFloat { simulatedBackingFactor }
+    }
+
+    /// Exercise the actual canvas hooks and event conversion, independently
+    /// of the physical screen attached to the test machine.
+    private static func exerciseDisplayDensity(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 1600, height: 1200)
+        let document = try ImageDocument(session: session, image: image, name: "Display Density")
+        documents.items.append(document)
+        let window = DensityWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+                                   styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let canvas = EngineCanvasView(document: document)
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        scroll.contentView = CanvasClipView()
+        scroll.documentView = canvas
+        window.contentView = scroll
+        window.contentView?.layoutSubtreeIfNeeded()
+        scroll.contentView.scroll(to: CGPoint(x: 300, y: 200))
+        let viewport = scroll.contentView.bounds
+        let oldCenter = CGPoint(x: viewport.midX / canvas.scale, y: viewport.midY / canvas.scale)
+        window.simulatedBackingFactor = 2
+        canvas.viewDidChangeBackingProperties()
+        let movedViewport = scroll.contentView.bounds
+        let movedCenter = CGPoint(x: movedViewport.midX / canvas.scale, y: movedViewport.midY / canvas.scale)
+        check(canvas.zoomPercent == 100 && canvas.scale == 0.5 && canvas.frame.size == CGSize(width: 800, height: 600),
+              "Actual Pixels uses one device pixel per image pixel in a simulated 2x window")
+        check(hypot(movedCenter.x - oldCenter.x, movedCenter.y - oldCenter.y) < 0.01,
+              "a backing-density change preserves the image pixel under the viewport center")
+        let point = CGPoint(x: 25, y: 30)
+        if let event = NSEvent.mouseEvent(with: .leftMouseDown, location: canvas.convert(point, to: nil),
+                                          modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                          context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+            check(canvas.imagePoint(for: event) == CGPoint(x: 50, y: 60),
+                  "pointer input in a 2x window maps view points to image pixels")
+        } else { check(false, "a simulated-density pointer event can be constructed") }
+        try canvas.renderVisibleTilesNow()
+        check(canvas.renderedTileCount > 0, "the density-adjusted viewport renders engine tiles")
+        window.simulatedBackingFactor = 1
+        canvas.viewDidChangeBackingProperties()
+        let returned = scroll.contentView.bounds
+        check(canvas.scale == 1 && canvas.frame.size == CGSize(width: 1600, height: 1200) &&
+                hypot(returned.midX - oldCenter.x, returned.midY - oldCenter.y) < 0.01,
+              "moving back to 1x preserves zoom and the same image center")
+        window.close()
+        var closed = false
+        canvas.stopRendering { document.closeImageWhenDrained { closed = true } }
+        let deadline = Date().addingTimeInterval(10)
+        while !closed && Date() < deadline { spin() }
+        check(closed, "density changes still allow safe render teardown")
         documents.items.removeAll { $0 === document }
     }
 
@@ -644,7 +701,8 @@ enum EngineSmokeTest {
         ToolState.shared.textSettings = textSettings
         let click = CGPoint(x: 40, y: 30)
         if let window = controller.window,
-           let press = NSEvent.mouseEvent(with: .leftMouseDown, location: canvas.convert(click, to: nil),
+           let press = NSEvent.mouseEvent(with: .leftMouseDown,
+                                          location: canvas.convert(CGPoint(x: click.x * canvas.scale, y: click.y * canvas.scale), to: nil),
                                           modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
                                           context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
             canvas.mouseDown(with: press)
@@ -653,7 +711,7 @@ enum EngineSmokeTest {
                   "a Text tool click opens the editor with the keyboard focus")
             editor?.insertText("Hi", replacementRange: NSRange(location: NSNotFound, length: 0))
             controller.zoom(to: 200)
-            check(editor?.frame.origin == CGPoint(x: click.x * 2, y: click.y * 2),
+            check(editor?.frame.origin == CGPoint(x: click.x * canvas.scale, y: click.y * canvas.scale),
                   "the text editor follows the canvas zoom (\(editor?.frame.origin ?? .zero))")
             controller.zoom(to: ZoomLadder.actualPixels)
             editor?.cancelOperation(nil)
@@ -686,19 +744,21 @@ enum EngineSmokeTest {
         settle()
         controller.cropToSelection(nil)
         settle()
-        check(document.info.width == 100 && document.info.height == 60 && controller.canvas.frame.size == CGSize(width: 100, height: 60),
+        check(document.info.width == 100 && document.info.height == 60 &&
+                controller.canvas.frame.size == CGSize(width: 100 * canvas.scale, height: 60 * canvas.scale),
               "Crop to Selection resizes the image and the canvas (\(document.info.width) × \(document.info.height))")
         document.undo()
         settle()
-        check(document.info.width == 300 && controller.canvas.frame.width == 300, "undo restores the size and the canvas")
+        check(document.info.width == 300 && controller.canvas.frame.width == 300 * canvas.scale, "undo restores the size and the canvas")
 
         controller.rotateImage90(nil)
         settle()
-        check(document.info.width == 200 && document.info.height == 300 && controller.canvas.frame.size == CGSize(width: 200, height: 300),
+        check(document.info.width == 200 && document.info.height == 300 &&
+                controller.canvas.frame.size == CGSize(width: 200 * canvas.scale, height: 300 * canvas.scale),
               "Image ▸ Rotate ▸ 90° Clockwise swaps the size and the canvas follows")
         document.scale(toWidth: 100, height: 150)
         settle()
-        check(document.info.width == 100 && controller.canvas.frame.width == 100, "Image Size scales the image and the canvas")
+        check(document.info.width == 100 && controller.canvas.frame.width == 100 * canvas.scale, "Image Size scales the image and the canvas")
         document.resizeCanvas(width: 140, height: 190, offset: CGPoint(x: 20, y: 20), fill: .blue)
         settle()
         check(document.info.width == 140 && pixel(session, image, x: 2, y: 2)?.prefix(3) == [0, 0, 255],
@@ -760,7 +820,8 @@ enum EngineSmokeTest {
         if let window = controller.window {
             func send(_ type: NSEvent.EventType, _ point: CGPoint) {
                 guard let event = NSEvent.mouseEvent(
-                    with: type, location: controller.canvas.convert(point, to: nil), modifierFlags: [],
+                    with: type, location: controller.canvas.convert(CGPoint(x: point.x * controller.canvas.scale,
+                                                                            y: point.y * controller.canvas.scale), to: nil), modifierFlags: [],
                     timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0,
                     clickCount: 1, pressure: 1) else { return }
                 switch type {
