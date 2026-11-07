@@ -3,6 +3,11 @@ import AppKit
 /// The document canvas: shows the engine's composited image at the current
 /// zoom and turns pointer input into paint strokes.
 ///
+/// A zoom percent counts physical pixels: at 100% one image pixel is one
+/// device pixel on any screen. The render scale is the percent alone,
+/// while pointer input, layout and overlays use `scale`, which also
+/// divides by the window's backing factor.
+///
 /// The image is drawn from a cache of square tiles in device pixels. Missing
 /// or stale visible tiles are rendered one at a time on a background queue,
 /// nearest the viewport centre first, and each is drawn as soon as it
@@ -64,6 +69,7 @@ final class EngineCanvasView: NSView {
 
     init(document: ImageDocument) {
         self.document = document
+        lastBackingFactor = Self.fallbackBackingFactor
         super.init(frame: .zero)
         updateFrameSize()
     }
@@ -75,9 +81,19 @@ final class EngineCanvasView: NSView {
     override var isOpaque: Bool { true }
     override var acceptsFirstResponder: Bool { true }
 
-    var scale: Double { Double(zoomPercent) / 100 }
+    /// View points per image pixel: the zoom in the window's points, for
+    /// pointer input, layout and overlays.
+    var scale: Double { CanvasGeometry.pointScale(zoomPercent: zoomPercent, backingFactor: backingScale) }
+    private static var fallbackBackingFactor: Double { Double(NSScreen.main?.backingScaleFactor ?? 2) }
     private var backingScale: Double { Double(window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2) }
-    private var deviceScale: Double { scale * backingScale }
+    /// Device pixels per image pixel: the zoom percent alone, independent
+    /// of the backing factor, so cached tiles stay valid when the window
+    /// moves between screens; a backing change only re-maps them to points.
+    private var deviceScale: Double { CanvasGeometry.renderScale(zoomPercent: zoomPercent) }
+    /// The backing factor the layout was last built for. The window
+    /// already reports the new one when a change arrives, so the old
+    /// viewport centre is computed with this cache.
+    private var lastBackingFactor: Double
 
     func setZoom(percent: Int) {
         zoomPercent = percent
@@ -103,8 +119,9 @@ final class EngineCanvasView: NSView {
     }
 
     private func updateFrameSize() {
-        setFrameSize(NSSize(width: (Double(document.info.width) * scale).rounded(.up),
-                            height: (Double(document.info.height) * scale).rounded(.up)))
+        setFrameSize(CanvasGeometry.viewSize(imageSize: CGSize(width: Double(document.info.width),
+                                                               height: Double(document.info.height)),
+                                            zoomPercent: zoomPercent, backingFactor: backingScale))
     }
 
     /// Called when the image changed (`rect` in image pixels): the tiles
@@ -185,20 +202,18 @@ final class EngineCanvasView: NSView {
 
     /// The scaled image's size in device pixels.
     private var deviceImageSize: CGSize {
-        CGSize(width: (Double(document.info.width) * deviceScale).rounded(.up),
-               height: (Double(document.info.height) * deviceScale).rounded(.up))
+        CanvasGeometry.renderedImageSize(imageSize: CGSize(width: Double(document.info.width),
+                                                           height: Double(document.info.height)),
+                                         zoomPercent: zoomPercent)
     }
 
     private func deviceRect(for key: TileKey) -> CGRect {
-        let size = Double(Self.tileSize)
-        let full = CGRect(x: Double(key.column) * size, y: Double(key.row) * size, width: size, height: size)
-        return full.intersection(CGRect(origin: .zero, size: deviceImageSize))
+        CanvasGeometry.tileRect(column: key.column, row: key.row,
+                                tileSize: Self.tileSize, renderedImageSize: deviceImageSize)
     }
 
     private func viewRect(for key: TileKey) -> CGRect {
-        let device = deviceRect(for: key)
-        return CGRect(x: device.minX / backingScale, y: device.minY / backingScale,
-                      width: device.width / backingScale, height: device.height / backingScale)
+        CanvasGeometry.viewRect(renderRect: deviceRect(for: key), backingFactor: backingScale)
     }
 
     /// Visible tiles, nearest the viewport centre first.
@@ -226,8 +241,37 @@ final class EngineCanvasView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        setNeedsRender()
+        backingDidChange()
         updateAntsTimer()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        backingDidChange()
+    }
+
+    /// The window or its screen changed: keep the zoom percent, drop the
+    /// renders scheduled under the old layout, rebuild the frame and the
+    /// overlays at the current backing factor, hold the image pixel that
+    /// sat under the viewport centre and request fresh renders. Tiles are
+    /// rendered at a backing-independent scale, so the cache survives and
+    /// only the in-flight generation is invalidated.
+    private func backingDidChange() {
+        generation += 1
+        let viewport = enclosingScrollView?.contentView.bounds ?? .zero
+        let center = CanvasGeometry.imageCenter(scrollOffset: viewport.origin, viewportSize: viewport.size,
+                                                zoomPercent: zoomPercent, backingFactor: lastBackingFactor)
+        lastBackingFactor = backingScale
+        updateFrameSize()
+        tools.canvasScaleDidChange()
+        needsDisplay = true
+        if enclosingScrollView != nil {
+            let target = CanvasGeometry.scrollOffset(preservingImageCenter: center, viewportSize: viewport.size,
+                                                     canvasSize: frame.size,
+                                                     zoomPercent: zoomPercent, backingFactor: backingScale)
+            if target != viewport.origin { scroll(target) }
+        }
+        setNeedsRender()
     }
 
     // MARK: Selection outline
@@ -314,15 +358,15 @@ final class EngineCanvasView: NSView {
 
     /// The pointer's position in image pixels.
     func imagePoint(for event: NSEvent) -> CGPoint {
-        let location = convert(event.locationInWindow, from: nil)
-        return CGPoint(x: Double(location.x) / scale, y: Double(location.y) / scale)
+        CanvasGeometry.imagePoint(viewPoint: convert(event.locationInWindow, from: nil),
+                                  zoomPercent: zoomPercent, backingFactor: backingScale)
     }
 
     func strokePoint(for event: NSEvent) -> EngineSession.StrokePoint {
-        let location = convert(event.locationInWindow, from: nil)
+        let point = imagePoint(for: event)
         let isTablet = event.subtype == .tabletPoint
         return EngineSession.StrokePoint(
-            x: Double(location.x) / scale, y: Double(location.y) / scale,
+            x: point.x, y: point.y,
             pressure: isTablet ? Double(event.pressure) : 1,
             xTilt: isTablet ? Double(event.tilt.x) : 0,
             yTilt: isTablet ? Double(event.tilt.y) : 0,
