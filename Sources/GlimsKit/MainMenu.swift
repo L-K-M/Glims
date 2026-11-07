@@ -12,6 +12,7 @@ enum MainMenu {
 
         add(menu, AppIdentity.name, [
             item("About \(AppIdentity.name)", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
+            item("Preferences…", #selector(AppController.showPreferences(_:)), ","),
             .separator(),
             item("Hide \(AppIdentity.name)", #selector(NSApplication.hide(_:)), "h"),
             item("Quit \(AppIdentity.name)", #selector(NSApplication.terminate(_:)), "q"),
