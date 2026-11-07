@@ -31,11 +31,16 @@ pixel_bytes (int width, int height, size_t *bytes)
   return TRUE;
 }
 
-static GimpLayer *
-selected_layer (GimpImage *image)
+/* Native edit targets substitute an edited mask for its owning layer.
+ * Copy and Clear must agree with paint, fill and gradient about that
+ * target, otherwise editing a mask can destroy the layer's pixels. */
+static GimpDrawable *
+selected_drawable (GimpImage *image)
 {
-  GList *selected = gimp_image_get_selected_layers (image);
-  return selected ? selected->data : NULL;
+  GList *selected = gimp_image_get_selected_drawables (image);
+  GimpDrawable *drawable = selected ? selected->data : NULL;
+  g_list_free (selected);
+  return drawable;
 }
 
 GlimsStatus
@@ -77,7 +82,7 @@ glims_image_copy_pixels (GlimsEngine *engine, GlimsImageID id, gboolean merged,
                          GlimsPixelBuffer *result, char **error)
 {
   GlimsOpenImage *open = glims_lookup_image (engine, id);
-  GimpLayer     *layer;
+  GimpDrawable  *drawable;
   GimpImage     *image;
   GList         pickables = { 0 };
   GeglBuffer   *buffer;
@@ -91,8 +96,8 @@ glims_image_copy_pixels (GlimsEngine *engine, GlimsImageID id, gboolean merged,
   if (! open) return GLIMS_STATUS_NOT_FOUND;
   if (engine->busy > 0) return GLIMS_STATUS_BUSY;
   image = open->image;
-  layer = selected_layer (image);
-  if (! merged && ! layer)
+  drawable = selected_drawable (image);
+  if (! merged && ! drawable)
     return glims_fail (error, NULL, "Select a layer to copy.");
 
   /* Check before extraction can allocate a large intermediate buffer. */
@@ -105,9 +110,9 @@ glims_image_copy_pixels (GlimsEngine *engine, GlimsImageID id, gboolean merged,
   else
     {
       int x2, y2;
-      gimp_item_mask_bounds (GIMP_ITEM (layer), &x, &y, &x2, &y2);
+      gimp_item_mask_bounds (GIMP_ITEM (drawable), &x, &y, &x2, &y2);
       width = x2 - x; height = y2 - y;
-      pickables.data = layer;
+      pickables.data = drawable;
     }
   if (! pixel_bytes (width, height, &bytes))
     return glims_fail (error, NULL, "The selected pixels are empty or too large for the clipboard.");
@@ -135,16 +140,16 @@ GlimsStatus
 glims_image_clear (GlimsEngine *engine, GlimsImageID id, const GlimsColor *background, char **error)
 {
   GlimsOpenImage *open = glims_lookup_image (engine, id);
-  GimpLayer *layer;
+  GimpDrawable *drawable;
   GlimsStatus status;
   uint32_t locks = GLIMS_LOCK_PIXELS;
   if (! open) return GLIMS_STATUS_NOT_FOUND;
   if (engine->busy > 0) return GLIMS_STATUS_BUSY;
-  layer = selected_layer (open->image);
-  if (! layer || GIMP_IS_GROUP_LAYER (layer))
+  drawable = selected_drawable (open->image);
+  if (! drawable || GIMP_IS_GROUP_LAYER (drawable))
     return glims_fail (error, NULL, "Select a pixel layer to clear.");
-  if (gimp_drawable_has_alpha (GIMP_DRAWABLE (layer))) locks |= GLIMS_LOCK_ALPHA;
-  status = glims_check_item_locks (GIMP_ITEM (layer), locks, error);
+  if (gimp_drawable_has_alpha (drawable)) locks |= GLIMS_LOCK_ALPHA;
+  status = glims_check_item_locks (GIMP_ITEM (drawable), locks, error);
   if (status != GLIMS_STATUS_OK) return status;
   /* Native Clear honors selection alpha; on a layer without alpha it
    * fills with the background, matching the other engine edit commands. */
@@ -160,7 +165,7 @@ glims_image_clear (GlimsEngine *engine, GlimsImageID id, const GlimsColor *backg
       gimp_context_set_background (context, color);
       g_object_unref (color);
     }
-  gimp_drawable_edit_clear (GIMP_DRAWABLE (layer), context);
+  gimp_drawable_edit_clear (drawable, context);
   g_object_unref (context);
   gimp_image_flush (open->image);
   return GLIMS_STATUS_OK;

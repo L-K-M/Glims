@@ -80,26 +80,32 @@ find_layer (GimpImage   *image,
   return GIMP_LAYER (item);
 }
 
-/* A paint layer (not a group) to fill, or NULL with `error` set. */
-static GimpLayer *
-paintable_layer (GimpImage    *image,
-                 GlimsStatus  *status,
-                 char        **error)
+/* The drawable to fill or draw on, or NULL with `error` set. The
+ * image's selected drawable is the layer's mask while mask editing is
+ * on, or a selected channel (gimp_image_get_selected_drawables), as in
+ * GIMP's own tools; a mask's content lock check delegates to its layer
+ * and the groups around it. */
+static GimpDrawable *
+paintable_drawable (GimpImage    *image,
+                    GlimsStatus  *status,
+                    char        **error)
 {
-  GimpLayer *layer = find_layer (image, 0);
+  GList         *selected = gimp_image_get_selected_drawables (image);
+  GimpDrawable  *drawable = selected ? selected->data : NULL;
 
   *status = GLIMS_STATUS_FAILED;
-  if (! layer)
+  if (! drawable)
     glims_fail (error, NULL, "Select a layer first.");
-  else if (GIMP_IS_GROUP_LAYER (layer))
+  else if (GIMP_IS_GROUP_LAYER (drawable))
     {
       glims_fail (error, NULL, "Groups cannot be filled.");
-      layer = NULL;
+      drawable = NULL;
     }
-  else if ((*status = glims_check_item_locks (GIMP_ITEM (layer), GLIMS_LOCK_PIXELS, error)) != GLIMS_STATUS_OK)
-    layer = NULL;
+  else if ((*status = glims_check_item_locks (GIMP_ITEM (drawable), GLIMS_LOCK_PIXELS, error)) != GLIMS_STATUS_OK)
+    drawable = NULL;
 
-  return layer;
+  g_list_free (selected);
+  return drawable;
 }
 
 static GeglColor *
@@ -151,7 +157,7 @@ glims_fill (GlimsEngine             *engine,
 {
   GlimsStatus      status;
   GimpImage       *image = writable_image (engine, id, &status);
-  GimpLayer       *layer;
+  GimpDrawable    *drawable;
   GimpContext     *context;
   GimpFillOptions *options;
   GError          *gerror = NULL;
@@ -162,8 +168,8 @@ glims_fill (GlimsEngine             *engine,
       (settings->mode != GLIMS_FILL_SIMILAR_COLORS && settings->mode != GLIMS_FILL_SELECTION))
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
-  layer = paintable_layer (image, &status, error);
-  if (! layer)
+  drawable = paintable_drawable (image, &status, error);
+  if (! drawable)
     return status;
 
   context = command_context (engine->gimp, &settings->color, NULL);
@@ -181,25 +187,26 @@ glims_fill (GlimsEngine             *engine,
 
   if (settings->mode == GLIMS_FILL_SELECTION)
     {
-      gimp_drawable_edit_fill (GIMP_DRAWABLE (layer), options, NULL);
+      gimp_drawable_edit_fill (drawable, options, NULL);
     }
   else
     {
       gdouble x = point.x;
       gdouble y = point.y;
 
-      /* The seed is in the layer's coordinates unless the composite image
-       * is sampled, as in GIMP's bucket fill tool. */
+      /* The seed is in the drawable's coordinates unless the composite
+       * image is sampled, as in GIMP's bucket fill tool. A mask shares
+       * its layer's offset. */
       if (! settings->sample_merged)
         {
           gint offset_x, offset_y;
 
-          gimp_item_get_offset (GIMP_ITEM (layer), &offset_x, &offset_y);
+          gimp_item_get_offset (GIMP_ITEM (drawable), &offset_x, &offset_y);
           x -= offset_x;
           y -= offset_y;
         }
 
-      gimp_drawable_bucket_fill (GIMP_DRAWABLE (layer), options, TRUE,
+      gimp_drawable_bucket_fill (drawable, options, TRUE,
                                  GIMP_SELECT_CRITERION_COMPOSITE,
                                  CLAMP (settings->threshold, 0.0, 1.0),
                                  settings->sample_merged, FALSE, x, y);
@@ -222,7 +229,7 @@ glims_gradient (GlimsEngine                 *engine,
 {
   GlimsStatus       status;
   GimpImage        *image = writable_image (engine, id, &status);
-  GimpLayer        *layer;
+  GimpDrawable     *drawable;
   GimpContext      *context;
   GimpGradientType  shape;
   gint              offset_x, offset_y;
@@ -242,15 +249,15 @@ glims_gradient (GlimsEngine                 *engine,
   if (from.x == to.x && from.y == to.y)
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
-  layer = paintable_layer (image, &status, error);
-  if (! layer)
+  drawable = paintable_drawable (image, &status, error);
+  if (! drawable)
     return status;
 
   /* "FG to BG (RGB)" reads the context's colors when it is drawn. */
   context = command_context (engine->gimp, &settings->from, &settings->to);
-  gimp_item_get_offset (GIMP_ITEM (layer), &offset_x, &offset_y);
+  gimp_item_get_offset (GIMP_ITEM (drawable), &offset_x, &offset_y);
 
-  gimp_drawable_gradient (GIMP_DRAWABLE (layer), context,
+  gimp_drawable_gradient (drawable, context,
                           gimp_gradients_get_fg_bg_rgb (engine->gimp),
                           GEGL_DISTANCE_METRIC_EUCLIDEAN,
                           GIMP_LAYER_MODE_NORMAL, shape,

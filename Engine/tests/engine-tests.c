@@ -1208,6 +1208,426 @@ test_layer_edit_locks (void)
   api->image_close (engine, image);
 }
 
+/* Layer masks: reading and changing mask state, the six sources' effect
+ * on the composite, painting a mask versus its layer, apply and discard,
+ * mask to selection, locks inherited through the owner, id and buffer
+ * refusals, small thumbnails of drawables and masks, and XCF. */
+static void
+test_mask_clipboard_target (void)
+{
+  GlimsImageID image = 0;
+  GlimsItemID layer, mask = 0;
+  GlimsPixelBuffer copied = { 0 };
+  GlimsColor black = { 0, 0, 0, 1 };
+  uint8_t *pixels;
+  int width, height;
+
+  api->image_new (engine, 16, 16, &image, NULL);
+  layer = first_layer (image);
+  api->layer_mask_add (engine, image, layer, GLIMS_MASK_BLACK, true, &mask, NULL);
+  CHECK (api->image_copy_pixels (engine, image, false, &copied, NULL) == GLIMS_STATUS_OK &&
+         copied.byte_count == 16 * 16 * 4 && copied.pixels[0] == 0 && copied.pixels[3] == 255,
+         "Copy targets a selected black mask rather than its white layer");
+  api->free_pixels (copied.pixels);
+  api->layer_mask_apply (engine, image, layer, GLIMS_MASK_DISCARD, NULL);
+  api->layer_mask_add (engine, image, layer, GLIMS_MASK_WHITE, true, &mask, NULL);
+  CHECK (api->image_clear (engine, image, &black, NULL) == GLIMS_STATUS_OK,
+         "Clear accepts the selected mask as its edit target");
+  api->layer_mask_set (engine, image, layer, GLIMS_MASK_ENABLED, 0, NULL);
+  pixels = render_all (image, &width, &height);
+  CHECK (pixels && pixels[0] == 255 && pixels[3] == 255,
+         "clearing a mask preserves its layer's actual pixels");
+  api->free_pixels (pixels);
+  api->image_close (engine, image);
+}
+
+static void
+test_layer_masks (const char *work)
+{
+  GlimsImageID       image = 0, src = 0, other = 0, copy = 0, reopened = 0;
+  GlimsItemID        layer = 0, mask = 0, group = 0, kid = 0, gmask = 0, foreign = 0, pasted = 0;
+  GlimsMaskState     state;
+  GlimsLayerInfo     rows[8];
+  GlimsRect          bounds;
+  GlimsStatus        status;
+  GlimsStrokeID      stroke = 0;
+  GlimsFilterID      filter = 0;
+  GlimsStrokePoint   point = { 10, 10, 1.0, 0.0, 0.0, 0 };
+  GlimsSelectOptions rect = { .struct_size = sizeof rect, .operation = GLIMS_SELECT_REPLACE };
+  GlimsFillSettings  red = { .struct_size = sizeof red, .mode = GLIMS_FILL_SELECTION,
+                             .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  GlimsFillSettings  black = { .struct_size = sizeof black, .mode = GLIMS_FILL_SELECTION,
+                               .color = { 0, 0, 0, 1 }, .opacity = 1 };
+  GlimsGradientSettings grad = { .struct_size = sizeof grad, .shape = GLIMS_GRADIENT_LINEAR,
+                                 .from = { 0, 0, 0, 1 }, .to = { 1, 1, 1, 1 }, .opacity = 1 };
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+  bool               empty = true;
+  int32_t            count = 0, before, w = 0, h = 0;
+  uint8_t            pixel[4];
+  uint8_t            thumb[256 * 256 * 4];
+  char               xcf[1024];
+  char              *error = NULL;
+
+  api->image_new (engine, 64, 48, &image, NULL);
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer, NULL);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &red, NULL);
+
+  /* A maskless layer, invalid arguments and clean failures: no undo step. */
+  before = undo_depth (image);
+  CHECK (api->layer_mask (engine, image, layer, &state) == GLIMS_STATUS_OK &&
+         state.mask == 0 && ! state.enabled && ! state.editing && ! state.showing,
+         "a layer without a mask reports mask 0 and clear flags");
+  CHECK (api->layer_mask (engine, image, layer, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->layer_mask_add (engine, image, layer, 0, false, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->layer_mask_add (engine, image, layer, 7, false, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->layer_mask_set (engine, image, layer, 0, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->layer_mask_set (engine, image, layer, 16, 16, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->layer_mask_apply (engine, image, layer, 3, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->layer_mask_to_selection (engine, image, layer, 4, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before,
+         "unknown sources, modes, operations and flag bits are refused");
+  CHECK (api->layer_mask_apply (engine, image, layer, GLIMS_MASK_DISCARD, NULL) == GLIMS_STATUS_FAILED &&
+         api->layer_mask_to_selection (engine, image, layer, GLIMS_SELECT_REPLACE, NULL) == GLIMS_STATUS_FAILED &&
+         api->layer_mask_set (engine, image, layer, GLIMS_MASK_ENABLED, 0, NULL) == GLIMS_STATUS_FAILED &&
+         undo_depth (image) == before,
+         "mask calls on a maskless layer fail without an undo step");
+
+  /* White leaves the red layer visible, as one undo step. */
+  CHECK (api->layer_mask_add (engine, image, layer, GLIMS_MASK_WHITE, false, &mask, &error) == GLIMS_STATUS_OK &&
+         mask > 0 && undo_depth (image) == before + 1,
+         "a white mask is added as one undo step%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 32, 24, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 0 && pixel[3] == 255,
+         "a white mask leaves the composite unchanged (%d,%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2], pixel[3]);
+  CHECK (api->layer_mask (engine, image, layer, &state) == GLIMS_STATUS_OK &&
+         state.mask == mask && state.enabled && ! state.editing && ! state.showing &&
+         api->image_layers (engine, image, rows, 8, &count) == GLIMS_STATUS_OK &&
+         rows[0].id == layer && rows[0].has_mask,
+         "the new mask reads enabled, not edited, not shown");
+  CHECK (api->layer_mask_add (engine, image, layer, GLIMS_MASK_BLACK, false, NULL, &error) == GLIMS_STATUS_FAILED &&
+         error && undo_depth (image) == before + 1,
+         "a second mask is refused (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* The editing flag is transient: fills follow it. */
+  before = undo_depth (image);
+  CHECK (api->layer_mask_set (engine, image, layer, GLIMS_MASK_EDITING, GLIMS_MASK_EDITING, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before &&
+         api->layer_mask (engine, image, layer, &state) == GLIMS_STATUS_OK && state.editing,
+         "entering mask editing adds no undo step");
+  CHECK (api->fill (engine, image, (GlimsPoint) { 0, 0 }, &black, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 32, 24, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 255,
+         "a fill while editing paints the mask, hiding the layer (%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2]);
+
+  /* Enabled gates the mask's effect: with the mask still black from the
+   * fill, disabling shows the layer, and the flag undoes and redoes. */
+  before = undo_depth (image);
+  CHECK (api->layer_mask_set (engine, image, layer, GLIMS_MASK_ENABLED, 0, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->layer_mask (engine, image, layer, &state) == GLIMS_STATUS_OK && ! state.enabled &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 32, 24, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[1] == 0,
+         "disabling the mask shows the layer again, as one undo step");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->layer_mask (engine, image, layer, &state) == GLIMS_STATUS_OK && state.enabled &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 32, 24, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[1] == 255 &&
+         api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->layer_mask (engine, image, layer, &state) == GLIMS_STATUS_OK && ! state.enabled &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 32, 24, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[1] == 0,
+         "undo and redo toggle the mask's effect");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&   /* the disable */
+         api->image_undo (engine, image) == GLIMS_STATUS_OK &&   /* the mask fill */
+         api->image_render (engine, image, 1.0, (GlimsRect) { 32, 24, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 0,
+         "undoing the mask fill restores the layer");
+
+  /* Showing displays the mask instead of the composite: the white mask
+   * reads as opaque white at its corner. */
+  CHECK (api->layer_mask_set (engine, image, layer, GLIMS_MASK_SHOWING, GLIMS_MASK_SHOWING, NULL) == GLIMS_STATUS_OK &&
+         api->layer_mask (engine, image, layer, &state) == GLIMS_STATUS_OK && state.showing &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 4, 4, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 240 && pixel[0] == pixel[1] && pixel[1] == pixel[2],
+         "showing renders the mask's own gray levels (%d,%d,%d)", pixel[0], pixel[1], pixel[2]);
+  CHECK (api->layer_mask_set (engine, image, layer, GLIMS_MASK_SHOWING, 0, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 4, 4, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[1] == 0, "un-showing returns to the composite");
+
+  /* Painting names the drawable: the mask id darkens the mask along its
+   * line, the layer id hits the layer's pixels. */
+  CHECK (stroke_line (image, mask, &brush, 8, 24, 56, 24, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 32, 24, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[1] > 200 && pixel[0] > 200 &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 32, 40, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[1] == 0,
+         "painting the mask id hides the layer only along its line");
+  CHECK (stroke_line (image, layer, &brush, 8, 12, 56, 12, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 32, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 64 && pixel[1] < 64,
+         "painting the layer id hits its pixels, not the mask");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 32, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 0,
+         "undoing both strokes restores the composite");
+
+  /* A gradient follows the editing flag too: dark to light across the
+   * mask fades the layer in (the ramp is perceptual, so assert a fade,
+   * not exact levels). */
+  CHECK (api->gradient (engine, image, (GlimsPoint) { 0, 24 }, (GlimsPoint) { 64, 24 }, &grad, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 4, 24, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[1] > 200 &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 60, 24, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[1] < 160,
+         "a gradient while editing shades the mask (%d left, %d right)",
+         pixel[1], red_at (image, 60, 24));
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK,
+         "undoing the mask gradient restores the white mask");
+
+  /* Mask to Selection combines the mask at its offset: the white mask
+   * selects everything, a dark column at its left edge shrinks it. */
+  before = undo_depth (image);
+  CHECK (api->layer_mask_to_selection (engine, image, layer, GLIMS_SELECT_REPLACE, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 0, 0, 64, 48),
+         "Mask to Selection selects the whole white mask (%d,%d %dx%d)",
+         bounds.x, bounds.y, bounds.width, bounds.height);
+  CHECK (stroke_line (image, mask, &brush, 0, 0, 0, 48, NULL) == GLIMS_STATUS_OK &&
+         api->layer_mask_to_selection (engine, image, layer, GLIMS_SELECT_REPLACE, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         bounds.x > 0 && bounds.x < 12 && bounds.width < 64,
+         "a dark column shrinks the selection from the left (%d,%d %dx%d)",
+         bounds.x, bounds.y, bounds.width, bounds.height);
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+
+  /* Mutations refuse while a stroke or a preview runs, without ending it. */
+  point = (GlimsStrokePoint) { 20, 40, 1.0, 0.0, 0.0, 0 };
+  CHECK (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK,
+         "a stroke begins for the busy check");
+  CHECK (api->layer_mask_add (engine, image, layer, GLIMS_MASK_BLACK, false, NULL, NULL) == GLIMS_STATUS_BUSY &&
+         api->layer_mask_set (engine, image, layer, GLIMS_MASK_ENABLED, 0, NULL) == GLIMS_STATUS_BUSY &&
+         api->layer_mask_apply (engine, image, layer, GLIMS_MASK_DISCARD, NULL) == GLIMS_STATUS_BUSY &&
+         api->layer_mask_to_selection (engine, image, layer, GLIMS_SELECT_REPLACE, NULL) == GLIMS_STATUS_BUSY &&
+         api->layer_mask (engine, image, layer, &state) == GLIMS_STATUS_OK && state.mask == mask,
+         "mask changes report BUSY during a stroke; reads still work");
+  CHECK (api->stroke_end (engine, stroke) == GLIMS_STATUS_OK,
+         "the refusals left the stroke alive");
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK &&
+         api->layer_mask_set (engine, image, layer, GLIMS_MASK_ENABLED, 0, NULL) == GLIMS_STATUS_BUSY &&
+         api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+         "mask changes report BUSY during a preview, and abort works");
+
+  /* The remaining sources, each on its own 16x16 image: a white
+   * background under a red layer. */
+  api->image_new (engine, 16, 16, &src, NULL);
+  api->layer_command (engine, src, 0, GLIMS_LAYER_NEW, &layer, NULL);
+  api->fill (engine, src, (GlimsPoint) { 0, 0 }, &red, NULL);
+  CHECK (api->layer_mask_add (engine, src, layer, GLIMS_MASK_BLACK, false, &mask, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, src, 1.0, (GlimsRect) { 8, 8, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 255,
+         "a black mask hides its layer");
+  api->image_close (engine, src);
+
+  src = 0;
+  api->image_new (engine, 16, 16, &src, NULL);
+  api->layer_command (engine, src, 0, GLIMS_LAYER_NEW, &layer, NULL);
+  api->fill (engine, src, (GlimsPoint) { 0, 0 }, &red, NULL);
+  api->select_shape (engine, src, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 0, 0 }, { 8, 16 } }, 2, &rect);
+  CHECK (api->layer_mask_add (engine, src, layer, GLIMS_MASK_SELECTION, false, &mask, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, src, 1.0, (GlimsRect) { 4, 8, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[1] == 0 &&
+         api->image_render (engine, src, 1.0, (GlimsRect) { 12, 8, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[1] == 255,
+         "a selection mask keeps the layer inside the selection only");
+  api->image_close (engine, src);
+
+  /* Alpha: clear the right half first so the layer's alpha differs. */
+  src = 0;
+  api->image_new (engine, 16, 16, &src, NULL);
+  api->layer_command (engine, src, 0, GLIMS_LAYER_NEW, &layer, NULL);
+  api->fill (engine, src, (GlimsPoint) { 0, 0 }, &red, NULL);
+  api->select_shape (engine, src, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 8, 0 }, { 16, 16 } }, 2, &rect);
+  api->image_clear (engine, src, NULL, NULL);
+  api->select_command (engine, src, GLIMS_SELECT_NONE, 0, NULL);
+  CHECK (api->layer_mask_add (engine, src, layer, GLIMS_MASK_ALPHA, false, &mask, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, src, 1.0, (GlimsRect) { 4, 8, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[1] == 0 &&
+         api->image_render (engine, src, 1.0, (GlimsRect) { 12, 8, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[1] == 255,
+         "an alpha mask follows the layer's transparency");
+  api->layer_mask_apply (engine, src, layer, GLIMS_MASK_DISCARD, NULL);
+  CHECK (api->layer_mask_add (engine, src, layer, GLIMS_MASK_ALPHA_TRANSFER, false, &mask, NULL) == GLIMS_STATUS_OK &&
+         api->layer_mask (engine, src, layer, &state) == GLIMS_STATUS_OK && state.mask == mask &&
+         api->drawable_thumbnail (engine, src, layer, 16, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_OK &&
+         thumb[(8 * 16 + 12) * 4 + 3] == 255,
+         "alpha transfer leaves the layer itself opaque (%d)", thumb[(8 * 16 + 12) * 4 + 3]);
+  api->image_close (engine, src);
+
+  src = 0;
+  api->image_new (engine, 16, 16, &src, NULL);
+  api->layer_command (engine, src, 0, GLIMS_LAYER_NEW, &layer, NULL);
+  api->fill (engine, src, (GlimsPoint) { 0, 0 }, &red, NULL);
+  CHECK (api->layer_mask_add (engine, src, layer, GLIMS_MASK_GRAYSCALE, false, &mask, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, src, 1.0, (GlimsRect) { 8, 8, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] > 120 && pixel[1] < 230,
+         "a grayscale mask dims red to pink (%d)", pixel[1]);
+  api->image_close (engine, src);
+  src = 0;
+  layer = 0;
+  mask = 0;
+
+  /* Apply bakes the mask into the layer; discard just removes it. Both
+   * undo and redo, and a discarded mask's id goes stale. */
+  api->image_new (engine, 32, 32, &src, NULL);
+  api->layer_command (engine, src, 0, GLIMS_LAYER_NEW, &layer, NULL);
+  api->fill (engine, src, (GlimsPoint) { 0, 0 }, &red, NULL);
+  api->layer_mask_add (engine, src, layer, GLIMS_MASK_BLACK, false, &mask, NULL);
+  before = undo_depth (src);
+  CHECK (api->layer_mask_apply (engine, src, layer, GLIMS_MASK_DISCARD, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (src) == before + 1 &&
+         api->layer_mask (engine, src, layer, &state) == GLIMS_STATUS_OK && state.mask == 0 &&
+         api->image_render (engine, src, 1.0, (GlimsRect) { 16, 16, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[1] == 0,
+         "Discard removes the mask without applying it");
+  CHECK (api->drawable_thumbnail (engine, src, mask, 8, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_NOT_FOUND,
+         "the discarded mask's id is stale");
+  CHECK (api->image_undo (engine, src) == GLIMS_STATUS_OK &&
+         api->layer_mask (engine, src, layer, &state) == GLIMS_STATUS_OK && state.mask != 0 &&
+         api->image_redo (engine, src) == GLIMS_STATUS_OK &&
+         api->layer_mask (engine, src, layer, &state) == GLIMS_STATUS_OK && state.mask == 0 &&
+         api->image_undo (engine, src) == GLIMS_STATUS_OK &&
+         api->layer_mask (engine, src, layer, &state) == GLIMS_STATUS_OK && state.mask != 0,
+         "undo and redo of the discard toggle the mask");
+  before = undo_depth (src);
+  CHECK (api->layer_mask_apply (engine, src, layer, GLIMS_MASK_APPLY, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (src) == before + 1 &&
+         api->layer_mask (engine, src, layer, &state) == GLIMS_STATUS_OK && state.mask == 0 &&
+         api->image_render (engine, src, 1.0, (GlimsRect) { 16, 16, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 255,
+         "Apply bakes the black mask into the layer, hiding it (%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2]);
+  CHECK (api->image_undo (engine, src) == GLIMS_STATUS_OK &&
+         api->layer_mask (engine, src, layer, &state) == GLIMS_STATUS_OK && state.mask != 0 &&
+         api->image_redo (engine, src) == GLIMS_STATUS_OK &&
+         api->layer_mask (engine, src, layer, &state) == GLIMS_STATUS_OK && state.mask == 0,
+         "undo restores the mask, redo applies it again");
+  api->image_close (engine, src);
+  src = 0;
+
+  /* Groups take masks; the group's apply is refused as GIMP's menu is,
+   * locks on the group reach the child's mask through the owner, and
+   * foreign, mask-typed, deleted and unknown ids are refused. */
+  api->image_new (engine, 32, 32, &src, NULL);
+  api->image_layers (engine, src, rows, 8, &count);
+  kid = rows[0].id;
+  api->create_group (engine, src, 0, 0, "Group", &group, NULL);
+  api->reparent_layer (engine, src, kid, group, 0, NULL);
+  CHECK (api->layer_mask_add (engine, src, group, GLIMS_MASK_WHITE, false, &gmask, &error) == GLIMS_STATUS_OK &&
+         gmask > 0, "a group takes a mask%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->layer_mask_apply (engine, src, group, GLIMS_MASK_APPLY, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "applying a group's mask is refused");
+  api->layer_mask_add (engine, src, kid, GLIMS_MASK_WHITE, false, NULL, NULL);
+  api->set_layer_locks (engine, src, group, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL);
+  status = api->stroke_begin (engine, src, gmask, &brush, &point, &stroke, NULL);
+  CHECK (status == GLIMS_STATUS_LOCKED, "an inherited lock refuses painting the group's mask");
+  if (status == GLIMS_STATUS_OK)
+    api->stroke_end (engine, stroke);
+  CHECK (api->layer_mask_apply (engine, src, kid, GLIMS_MASK_APPLY, NULL) == GLIMS_STATUS_LOCKED &&
+         api->layer_mask_apply (engine, src, kid, GLIMS_MASK_DISCARD, NULL) == GLIMS_STATUS_OK,
+         "the inherited lock protects apply but not discard");
+  api->image_new (engine, 8, 8, &other, NULL);
+  foreign = first_layer (other);
+  CHECK (api->layer_mask (engine, src, foreign, &state) == GLIMS_STATUS_NOT_FOUND &&
+         api->layer_mask_add (engine, src, foreign, GLIMS_MASK_WHITE, false, NULL, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->layer_mask (engine, src, gmask, &state) == GLIMS_STATUS_NOT_FOUND &&
+         api->layer_mask (engine, 9999, group, &state) == GLIMS_STATUS_NOT_FOUND &&
+         api->drawable_thumbnail (engine, src, foreign, 8, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_NOT_FOUND,
+         "foreign, mask-typed and unknown ids are refused");
+  api->layer_mask_add (engine, src, kid, GLIMS_MASK_WHITE, false, &foreign, NULL);
+  api->layer_command (engine, src, kid, GLIMS_LAYER_DELETE, NULL, NULL);
+  CHECK (api->layer_mask (engine, src, kid, &state) == GLIMS_STATUS_NOT_FOUND &&
+         api->drawable_thumbnail (engine, src, foreign, 8, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_NOT_FOUND,
+         "a deleted layer and its mask are refused while undo holds them");
+  api->image_close (engine, src);
+  api->image_close (engine, other);
+  src = other = foreign = 0;
+
+  /* Thumbnails of a layer and of a mask: geometry, alpha, gray levels. */
+  api->image_new (engine, 64, 48, &src, NULL);
+  api->layer_command (engine, src, 0, GLIMS_LAYER_NEW, &layer, NULL);
+  api->fill (engine, src, (GlimsPoint) { 0, 0 }, &red, NULL);
+  api->layer_mask_add (engine, src, layer, GLIMS_MASK_WHITE, false, &mask, NULL);
+  CHECK (api->drawable_thumbnail (engine, src, layer, 16, NULL, 0, &w, &h) == GLIMS_STATUS_OK &&
+         w == 16 && h == 12,
+         "a 64x48 drawable thumbnails to 16x12 (%dx%d)", w, h);
+  CHECK (api->drawable_thumbnail (engine, src, layer, 256, NULL, 0, &w, &h) == GLIMS_STATUS_OK &&
+         w == 64 && h == 48,
+         "thumbnails never upscale (%dx%d)", w, h);
+  CHECK (api->drawable_thumbnail (engine, src, layer, 0, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->drawable_thumbnail (engine, src, layer, 257, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->drawable_thumbnail (engine, src, layer, -4, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->drawable_thumbnail (engine, src, layer, 16, thumb, 16 * 12 * 4 - 1, &w, &h) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->drawable_thumbnail (engine, src, layer, 16, thumb, sizeof thumb, NULL, &h) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->drawable_thumbnail (engine, src, layer, 16, thumb, sizeof thumb, &w, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "thumbnails refuse bad sizes, small buffers and missing outputs");
+  CHECK (api->drawable_thumbnail (engine, src, layer, 16, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_OK &&
+         w == 16 && h == 12 &&
+         thumb[(2 * w + 8) * 4] == 255 && thumb[(2 * w + 8) * 4 + 1] == 0 && thumb[(2 * w + 8) * 4 + 3] == 255,
+         "the layer thumbnails as sRGB straight-alpha red (%d,%d,%d,%d)",
+         thumb[(2 * w + 8) * 4], thumb[(2 * w + 8) * 4 + 1], thumb[(2 * w + 8) * 4 + 2],
+         thumb[(2 * w + 8) * 4 + 3]);
+  CHECK (stroke_line (src, mask, &brush, 0, 0, 0, 48, NULL) == GLIMS_STATUS_OK &&
+         api->drawable_thumbnail (engine, src, mask, 16, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_OK &&
+         thumb[(2 * w + 15) * 4] > 200 && thumb[(2 * w + 15) * 4 + 3] == 255 && thumb[2 * w * 4] < 100,
+         "the mask thumbnails as opaque gray, dark where painted (left %d, right %d)",
+         thumb[2 * w * 4], thumb[(2 * w + 15) * 4]);
+
+  /* XCF keeps the mask and its flags; a snapshot owns a mask of its
+   * own id. */
+  CHECK (api->layer_mask_set (engine, src, layer, GLIMS_MASK_EDITING, GLIMS_MASK_EDITING, NULL) == GLIMS_STATUS_OK,
+         "editing turns back on for the round trip");
+  snprintf (xcf, sizeof xcf, "%s/masks.xcf", work);
+  CHECK (api->image_save (engine, src, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, reopened, rows, 8, &count) == GLIMS_STATUS_OK && rows[0].has_mask &&
+         api->layer_mask (engine, reopened, rows[0].id, &state) == GLIMS_STATUS_OK &&
+         state.mask != 0 && state.enabled && state.editing && ! state.showing,
+         "an XCF round trip keeps the mask and its flags");
+  CHECK (api->image_duplicate (engine, src, &copy, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, copy, rows, 8, &count) == GLIMS_STATUS_OK && rows[0].has_mask &&
+         api->layer_mask (engine, copy, rows[0].id, &state) == GLIMS_STATUS_OK &&
+         state.mask != 0 && state.mask != mask,
+         "a snapshot owns a mask of its own id");
+  api->image_close (engine, copy);
+  api->image_close (engine, reopened);
+  copy = reopened = 0;
+
+  /* Alpha follows the source: a pasted RGBA layer's faint pixel stays
+   * faint in the thumbnail. */
+  {
+    uint8_t rgba[] = { 255, 0, 0, 255, 0, 0, 255, 40 };
+
+    CHECK (api->image_paste_pixels (engine, src, (GlimsRect) { 0, 0, 2, 1 }, rgba, sizeof rgba,
+                                    &pasted, NULL) == GLIMS_STATUS_OK &&
+           api->drawable_thumbnail (engine, src, pasted, 2, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_OK &&
+           w == 2 && h == 1 && thumb[3] == 255 && thumb[7] < 60,
+           "thumbnail alpha matches the source (%d, %d)", thumb[3], thumb[7]);
+  }
+
+  api->image_close (engine, src);
+  api->image_close (engine, image);
+}
+
 /* A deleted item lives on in the undo stack until the undo is dropped,
  * still under its id. Calls must not reach it: an edit would change what
  * undoing the delete brings back, outside any undo step. */
@@ -2454,6 +2874,8 @@ main (int argc, char **argv)
   test_groups_and_text_units (argv[3]);
   test_layer_structure ();
   test_layer_edit_locks ();
+  test_layer_masks (argv[2]);
+  test_mask_clipboard_target ();
   test_paint_tools ();
   test_selections ();
   test_editing ();

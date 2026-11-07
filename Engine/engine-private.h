@@ -92,6 +92,7 @@ void             glims_release_image     (GlimsEngine *engine, GlimsImageID id);
 GimpDrawable   * glims_lookup_drawable   (GlimsOpenImage *open, GlimsItemID id);
 GlimsStatus      glims_check_item_locks  (GimpItem *item, uint32_t locks, char **error);
 gint             glims_next_session_id   (GlimsEngine *engine);
+GlimsStatus      glims_edit_ready        (GlimsEngine *engine, GlimsOpenImage *open, char **error);
 
 /* image.c */
 GlimsStatus glims_image_new        (GlimsEngine *e, int32_t w, int32_t h, GlimsImageID *out, char **error);
@@ -150,6 +151,21 @@ GlimsStatus glims_image_history (GlimsEngine *, GlimsImageID, GlimsHistoryRow *,
 GlimsStatus glims_image_history_move (GlimsEngine *, GlimsImageID, uint64_t,
                                       int32_t, char **);
 GlimsStatus glims_image_duplicate (GlimsEngine *, GlimsImageID, GlimsImageID *, char **);
+
+/* layer-mask.c */
+GlimsStatus glims_layer_mask      (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                   GlimsMaskState *state);
+GlimsStatus glims_layer_mask_add  (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                   uint32_t source, gboolean edit, GlimsItemID *mask, char **error);
+GlimsStatus glims_layer_mask_set  (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                   uint32_t flags, uint32_t values, char **error);
+GlimsStatus glims_layer_mask_apply(GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                   uint32_t mode, char **error);
+GlimsStatus glims_layer_mask_to_selection (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                           uint32_t operation, char **error);
+GlimsStatus glims_drawable_thumbnail (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
+                                      int32_t max_size, uint8_t *pixels, size_t byte_count,
+                                      int32_t *width, int32_t *height);
 
 /* progress.c */
 GlimsProgress * glims_progress_new (GlimsEngine *engine);
