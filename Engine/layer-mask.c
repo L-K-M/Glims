@@ -40,6 +40,7 @@
 #include "core/gimppickable.h"
 #include "core/gimpprojection.h"
 #include "core/gimpviewable.h"
+#include "text/gimptextlayer.h"
 
 #include "gimp-intl.h"
 
@@ -176,7 +177,13 @@ glims_layer_mask_add (GlimsEngine  *engine,
   group = gimp_image_undo_group_start (image, GIMP_UNDO_GROUP_LAYER_ADD,
                                        _("Add Layer Masks"));
   mask  = gimp_layer_create_mask (layer, type, NULL);
+#if GIMP_CHECK_VERSION (3, 2, 0)
   if (mask && ! gimp_layer_add_mask (layer, mask, edit, TRUE, &gerror))
+#else
+  /* 3.0 always starts editing a new mask; set our explicit target after
+   * the add succeeds to keep the facade's behavior the same. */
+  if (mask && ! gimp_layer_add_mask (layer, mask, TRUE, &gerror))
+#endif
     {
       g_object_unref (mask);
       mask = NULL;
@@ -189,6 +196,9 @@ glims_layer_mask_add (GlimsEngine  *engine,
     }
   if (result)
     *result = gimp_item_get_id (GIMP_ITEM (mask));
+#if ! GIMP_CHECK_VERSION (3, 2, 0)
+  gimp_layer_set_edit_mask (layer, edit);
+#endif
   if (group)
     gimp_image_undo_group_end (image);
   gimp_image_flush (image);
@@ -296,7 +306,11 @@ glims_layer_mask_apply (GlimsEngine  *engine,
           glims_fail (error, NULL, "A layer group cannot apply its mask.");
           return GLIMS_STATUS_INVALID_ARGUMENT;
         }
+#if GIMP_CHECK_VERSION (3, 2, 0)
       if (gimp_item_is_rasterizable (GIMP_ITEM (layer)))
+#else
+      if (gimp_item_is_text_layer (GIMP_ITEM (layer)))
+#endif
         {
           glims_fail (error, NULL, "A text, link or vector layer cannot apply a mask.");
           return GLIMS_STATUS_INVALID_ARGUMENT;
