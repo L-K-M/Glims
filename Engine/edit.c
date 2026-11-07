@@ -83,10 +83,12 @@ find_layer (GimpImage   *image,
 /* A paint layer (not a group) to fill, or NULL with `error` set. */
 static GimpLayer *
 paintable_layer (GimpImage    *image,
+                 GlimsStatus  *status,
                  char        **error)
 {
   GimpLayer *layer = find_layer (image, 0);
 
+  *status = GLIMS_STATUS_FAILED;
   if (! layer)
     glims_fail (error, NULL, "Select a layer first.");
   else if (GIMP_IS_GROUP_LAYER (layer))
@@ -94,6 +96,8 @@ paintable_layer (GimpImage    *image,
       glims_fail (error, NULL, "Groups cannot be filled.");
       layer = NULL;
     }
+  else if ((*status = glims_check_item_locks (GIMP_ITEM (layer), GLIMS_LOCK_PIXELS, error)) != GLIMS_STATUS_OK)
+    layer = NULL;
 
   return layer;
 }
@@ -158,9 +162,9 @@ glims_fill (GlimsEngine             *engine,
       (settings->mode != GLIMS_FILL_SIMILAR_COLORS && settings->mode != GLIMS_FILL_SELECTION))
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
-  layer = paintable_layer (image, error);
+  layer = paintable_layer (image, &status, error);
   if (! layer)
-    return GLIMS_STATUS_FAILED;
+    return status;
 
   context = command_context (engine->gimp, &settings->color, NULL);
   options = gimp_fill_options_new (engine->gimp, NULL, FALSE);
@@ -238,9 +242,9 @@ glims_gradient (GlimsEngine                 *engine,
   if (from.x == to.x && from.y == to.y)
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
-  layer = paintable_layer (image, error);
+  layer = paintable_layer (image, &status, error);
   if (! layer)
-    return GLIMS_STATUS_FAILED;
+    return status;
 
   /* "FG to BG (RGB)" reads the context's colors when it is drawn. */
   context = command_context (engine->gimp, &settings->from, &settings->to);
@@ -469,6 +473,8 @@ glims_layer_move (GlimsEngine  *engine,
   if (! layer)
     return GLIMS_STATUS_NOT_FOUND;
 
+  status = glims_check_item_locks (GIMP_ITEM (layer), GLIMS_LOCK_POSITION, NULL);
+  if (status != GLIMS_STATUS_OK) return status;
   gimp_item_translate (GIMP_ITEM (layer), dx, dy, TRUE);
   gimp_image_flush (image);
 
@@ -575,6 +581,8 @@ glims_layer_transform (GlimsEngine  *engine,
 
   /* Around the layer's own center, unclipped, as Layer > Transform does
    * (app/actions/drawable-commands.c). */
+  status = glims_check_item_locks (GIMP_ITEM (layer), GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, NULL);
+  if (status != GLIMS_STATUS_OK) return status;
   gimp_item_get_offset (GIMP_ITEM (layer), &x, &y);
   width  = gimp_item_get_width (GIMP_ITEM (layer));
   height = gimp_item_get_height (GIMP_ITEM (layer));
@@ -668,6 +676,8 @@ glims_layer_transform_matrix (GlimsEngine       *engine,
   if (! layer)
     return GLIMS_STATUS_NOT_FOUND;
 
+  status = glims_check_item_locks (GIMP_ITEM (layer), GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, error);
+  if (status != GLIMS_STATUS_OK) return status;
   /* Forward, grown to the result, as the unified transform tool commits
    * a layer (app/tools/gimptransformgridtool.c). gimp_item_transform opens
    * its own undo group. */

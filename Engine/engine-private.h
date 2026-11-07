@@ -79,6 +79,7 @@ GlimsOpenImage * glims_lookup_image      (GlimsEngine *engine, GlimsImageID id);
 GlimsStatus      glims_adopt_image       (GlimsEngine *engine, GimpImage *image, GlimsImageID *id);
 void             glims_release_image     (GlimsEngine *engine, GlimsImageID id);
 GimpDrawable   * glims_lookup_drawable   (GlimsOpenImage *open, GlimsItemID id);
+GlimsStatus      glims_check_item_locks  (GimpItem *item, uint32_t locks, char **error);
 gint             glims_next_session_id   (GlimsEngine *engine);
 
 /* image.c */
@@ -109,6 +110,7 @@ void        glims_strokes_free     (gpointer stroke);
 /* filter.c */
 gboolean glims_filters_active_for_image (GlimsEngine *, GimpImage *);
 void glims_filters_abort_for_image (GlimsEngine *, GimpImage *);
+GlimsStatus glims_filter_check_edit (GlimsEngine *, GlimsFilterID, char **error);
 GlimsStatus glims_filter_begin     (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
                                     const char *operation, GlimsFilterID *out, char **error);
 GlimsStatus glims_filter_set_double(GlimsEngine *e, GlimsFilterID id, const char *property, double value);
@@ -190,6 +192,16 @@ GlimsStatus glims_image_copy_pixels (GlimsEngine *, GlimsImageID, gboolean, Glim
 GlimsStatus glims_image_clear (GlimsEngine *, GlimsImageID, const GlimsColor *, char **);
 GlimsStatus glims_image_paste_pixels (GlimsEngine *, GlimsImageID, GlimsRect, const uint8_t *, size_t, GlimsItemID *, char **);
 GlimsStatus glims_image_from_pixels (GlimsEngine *, int32_t, int32_t, const uint8_t *, size_t, GlimsImageID *, char **);
+/* layer-structure.c */
+GlimsStatus glims_layer_state      (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                    GlimsLayerState *state);
+GlimsStatus glims_create_group     (GlimsEngine *e, GlimsImageID image, GlimsItemID parent,
+                                    int32_t index, const char *name, GlimsItemID *result,
+                                    char **error);
+GlimsStatus glims_reparent_layer   (GlimsEngine *e, GlimsImageID image, GlimsItemID item,
+                                    GlimsItemID new_parent, int32_t index, char **error);
+GlimsStatus glims_set_layer_locks  (GlimsEngine *e, GlimsImageID image, GlimsItemID item,
+                                    uint32_t mask, uint32_t values, char **error);
 
 /* procedure.c */
 GlimsStatus glims_procedures       (GlimsEngine *e, GlimsImageID image, GlimsProcedureInfo *rows,

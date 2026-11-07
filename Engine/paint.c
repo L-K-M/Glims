@@ -275,6 +275,8 @@ glims_stroke_begin (GlimsEngine              *engine,
   GimpCoords          coords;
   GError             *gerror = NULL;
   gint                id;
+  GlimsStatus         status;
+  uint32_t            locks = GLIMS_LOCK_PIXELS;
 
   if (! open)
     return GLIMS_STATUS_NOT_FOUND;
@@ -293,6 +295,10 @@ glims_stroke_begin (GlimsEngine              *engine,
         *error = strdup ("Groups cannot be painted on.");
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
+  if (brush->tool == GLIMS_PAINT_ERASER && gimp_drawable_has_alpha (drawable))
+    locks |= GLIMS_LOCK_ALPHA;
+  status = glims_check_item_locks (GIMP_ITEM (drawable), locks, error);
+  if (status != GLIMS_STATUS_OK) return status;
 
   if (brush->tool == GLIMS_PAINT_CLONE || brush->tool == GLIMS_PAINT_HEAL)
     {

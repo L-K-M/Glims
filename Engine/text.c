@@ -336,6 +336,8 @@ glims_text_layer_set (GlimsEngine             *engine,
     return GLIMS_STATUS_NOT_FOUND;
   if (! string && ! settings)
     return GLIMS_STATUS_OK;
+  status = glims_check_item_locks (GIMP_ITEM (layer), GLIMS_LOCK_PIXELS, error);
+  if (status != GLIMS_STATUS_OK) return status;
 
   /* Settings arrive in pixels and move the text to pixels; the first-line
    * indent, which the facade does not carry, is kept in the text's unit
