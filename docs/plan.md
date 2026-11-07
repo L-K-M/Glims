@@ -655,6 +655,13 @@ In this order (reasons in `phase0-report.md`):
   panel rather than as a tab of Layers; Rigi places a new kind by its
   default group only when the other kinds have no group yet.
 
+- 2026-11-07: Glims pins Rigi `4b4762f`, including the merged picker,
+  activation and restore-layout fixes (L-K-M/Rigi#4, #5, #6 and #15).
+  Restoring palettes saves repaired off-screen positions immediately;
+  pickers remember their invoking editor; changing window activation
+  invalidates chrome, not document content. Rigi's 103 tests, gallery
+  smoke test and release build pass at this revision.
+
 ## Later, before any public release
 
 - Developer ID signing and notarization for the app, GTK3, Python and every

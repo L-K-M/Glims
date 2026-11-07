@@ -9,15 +9,16 @@ both is in [`docs/research/`](docs/research/README.md).
 ## Status
 
 Phase 0 (spike) is finished with a go verdict
-([`docs/phase0-report.md`](docs/phase0-report.md)); phase 1 is under way
-(`docs/plan.md`, "Phase 1"): plug-in commands with their own dialogs work,
+([`docs/phase0-report.md`](docs/phase0-report.md)); phase 1's first
+implementation is complete (`docs/plan.md`, "Phase 1"): plug-in commands
+with their own dialogs work,
 `scripts/build-app.sh --engine` makes a self-contained app, and the Tools and
 Tool Options palettes drive GIMP's paint tools, selections, Transform, Text
 and paths (a Path tool and a Paths palette). The engine dependency prefix is
 built (`_deps/macports`);
 the four engine sets in `scripts/engine.env` (GIMP 3.2.8, 3.2.0, master and
 3.0.8) build unmodified into `_engine/install/<ref>`; adapter v1 (`Engine/`)
-passes its 193 conformance checks against all four. The app loads the adapter
+passes its 198 conformance checks against all four. The app loads the adapter
 at run time and edits real images through it: tiled canvas, painting, a
 Layers palette, Gaussian Blur, undo, save and export.
 Keep `docs/plan.md` current as the work proceeds.
