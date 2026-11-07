@@ -59,6 +59,7 @@ enum MainMenu {
             .separator(),
             item("Crop to Selection", #selector(DocumentWindowController.cropToSelection(_:))),
             item("Flatten Image", #selector(DocumentWindowController.flattenImage(_:))),
+            item("New Snapshot", #selector(DocumentWindowController.newSnapshot(_:))),
         ])
         let newLayer = item("New Layer", #selector(DocumentWindowController.newLayer(_:)), "n")
         newLayer.keyEquivalentModifierMask = [.command, .shift]
@@ -142,6 +143,7 @@ enum MainMenu {
             item("Tool Options", #selector(AppController.showToolOptions(_:))),
             item("Layers", #selector(AppController.showLayers(_:))),
             item("Paths", #selector(AppController.showPaths(_:))),
+            item("History", #selector(AppController.showHistory(_:))),
             item("Hide Palettes", #selector(AppController.togglePaletteVisibility(_:))),
             item("Reset Palettes", #selector(AppController.resetPaletteLayout(_:))),
             WorkspaceMenu.shared.makeItem(),
