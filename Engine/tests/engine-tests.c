@@ -1009,7 +1009,8 @@ test_render_freshness (void)
       if (pixel[1] < 180)
         stale++;
       api->image_render (engine, image, 1.0, (GlimsRect) { 49, 39, 8, 8 }, block, 8 * 4);
-      if (block[(1 * 8 + 1) * 4 + 1] < 180)
+      /* (49,39) was not validated by the preceding 1 x 1 read. */
+      if (block[1] < 180)
         stale_blocks++;
       api->image_close (engine, image);
     }

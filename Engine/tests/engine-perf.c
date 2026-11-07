@@ -187,9 +187,21 @@ main (int argc, char **argv)
           for (i = 1; i < 5; i++)
             {
               api->image_close (engine, image);
-              api->image_open (engine, argv[3], &image, NULL);
+              if (api->image_open (engine, argv[3], &image, NULL) != GLIMS_STATUS_OK)
+                {
+                  fprintf (stderr, "cannot reopen the image for a fresh viewport\n");
+                  api->stop (engine);
+                  free (pixels);
+                  return 1;
+                }
               t = now_ms ();
-              api->image_render (engine, image, scale, start, pixels, VIEW_W * 4);
+              if (api->image_render (engine, image, scale, start, pixels, VIEW_W * 4) != GLIMS_STATUS_OK)
+                {
+                  fprintf (stderr, "cannot render a fresh viewport\n");
+                  api->stop (engine);
+                  free (pixels);
+                  return 1;
+                }
               samples[i] = now_ms () - t;
             }
           report ("  first frame at 100%, five fresh images", samples, 5, 0);
