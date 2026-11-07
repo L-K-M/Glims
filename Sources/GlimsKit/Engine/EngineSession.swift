@@ -155,6 +155,38 @@ final class EngineSession: @unchecked Sendable {
         let filterCount: Int
     }
 
+    /// The locks a layer or group can hold (GlimsLayerLock).
+    struct LayerLocks: OptionSet, Equatable {
+        let rawValue: UInt32
+        static let pixels = LayerLocks(rawValue: GLIMS_LOCK_PIXELS.rawValue)
+        static let position = LayerLocks(rawValue: GLIMS_LOCK_POSITION.rawValue)
+        static let alpha = LayerLocks(rawValue: GLIMS_LOCK_ALPHA.rawValue)
+
+        /// What each lock is called in the Layer menu, in display order.
+        static let menuOrder: [(lock: LayerLocks, title: String)] = [
+            (.pixels, "Pixels"), (.position, "Position"), (.alpha, "Transparency"),
+        ]
+
+        /// The lock's short name for rows and VoiceOver.
+        var name: String {
+            switch self {
+            case .pixels: return "pixels"
+            case .position: return "position"
+            case .alpha: return "transparency"
+            default: return "lock"
+            }
+        }
+    }
+
+    /// A layer's or group's lock state (GlimsLayerState): `local` is the
+    /// item's own locks, `effective` what the engine enforces on it — an
+    /// ancestor group's lock counts too, and for a group the PIXELS and
+    /// POSITION bits also cover a locked descendant.
+    struct LayerLockState: Equatable {
+        let local: LayerLocks
+        let effective: LayerLocks
+    }
+
     struct UndoInfo: Equatable {
         let undoCount: Int
         let redoCount: Int
@@ -589,6 +621,46 @@ final class EngineSession: @unchecked Sendable {
 
     func moveLayer(_ layer: Int32, image: Int32, by offset: CGSize) throws {
         try check(api.layer_move(engine, image, layer, offset.width, offset.height), nil)
+    }
+
+    // MARK: Layer tree structure
+
+    /// The item's own locks and the locks the engine enforces on it
+    /// (`layer` 0: the selected layer).
+    func layerState(_ layer: Int32, image: Int32) throws -> LayerLockState {
+        var state = GlimsLayerState()
+        try check(api.layer_state(engine, image, layer, &state), nil)
+        return LayerLockState(local: LayerLocks(rawValue: state.locks),
+                              effective: LayerLocks(rawValue: state.locked))
+    }
+
+    /// Adds a layer group at `index` among `parent`'s children (`parent`
+    /// 0: the image's top level), pass-through and selected, as one undo
+    /// step. Returns it.
+    @discardableResult
+    func createGroup(image: Int32, parent: Int32 = 0, index: Int32, name: String? = nil) throws -> Int32 {
+        var group: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try withOptionalCString(name) { name in
+            try check(api.create_group(engine, image, parent, index, name, &group, &error), error)
+        }
+        return group
+    }
+
+    /// Moves `item` to `index` among `newParent`'s children (`newParent`
+    /// 0: the image's top level) as one undo step; undo and redo restore
+    /// the exact position. `index` counts the children as they are after
+    /// removing `item` when it is among them.
+    func reparentLayer(_ item: Int32, image: Int32, toParent newParent: Int32, index: Int32) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.reparent_layer(engine, image, item, newParent, index, &error), error)
+    }
+
+    /// Sets the lock bits in `mask` on `item` (0: the selected layer) to
+    /// `values`' bits as one undo step; locks outside `mask` stay.
+    func setLayerLocks(_ item: Int32, image: Int32, mask: LayerLocks, values: LayerLocks) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.set_layer_locks(engine, image, item, mask.rawValue, values.rawValue, &error), error)
     }
 
     func crop(image: Int32, to rect: CGRect) throws {

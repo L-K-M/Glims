@@ -71,13 +71,22 @@ enum MainMenu {
          item("Bring Forward", #selector(DocumentWindowController.bringLayerForward(_:)), "]"),
          item("Send Backward", #selector(DocumentWindowController.sendLayerBackward(_:)), "["),
          toBack].forEach { arrange.submenu?.addItem($0) }
+        let lock = NSMenuItem(title: "Lock", action: nil, keyEquivalent: "")
+        lock.submenu = NSMenu(title: "Lock")
+        for (bit, title) in EngineSession.LayerLocks.menuOrder {
+            let lockItem = item("Lock \(title)", #selector(DocumentWindowController.toggleLayerLock(_:)))
+            lockItem.tag = Int(bit.rawValue)
+            lock.submenu?.addItem(lockItem)
+        }
         add(menu, "Layer", [
             newLayer,
+            item("New Layer Group", #selector(DocumentWindowController.newLayerGroup(_:))),
             item("Duplicate Layer", #selector(DocumentWindowController.duplicateLayer(_:)), "j"),
             item("Delete Layer", #selector(DocumentWindowController.deleteLayer(_:))),
             .separator(),
             item("Layer Properties…", #selector(DocumentWindowController.layerProperties(_:))),
             arrange,
+            lock,
             submenu("Transform", [
                 item("Rotate 90° Clockwise", #selector(DocumentWindowController.rotateLayer90(_:))),
                 item("Rotate 90° Counter-Clockwise", #selector(DocumentWindowController.rotateLayer270(_:))),

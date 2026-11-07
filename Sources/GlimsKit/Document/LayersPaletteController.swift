@@ -2,13 +2,15 @@ import AppKit
 import RigiUI
 
 /// The Layers palette: the front document's layer tree, top of the stack
-/// first. Selecting a row makes that layer the paint and filter target.
-/// Groups cannot be painted on and are not selectable. Each row carries a
-/// visibility checkbox and a name that edits in place. The button bar adds,
-/// duplicates and deletes layers.
+/// first. Selecting a row makes that layer or group the paint, metadata
+/// and filter target. Groups open and close with the disclosure triangle;
+/// dragging a row reorders it inside its parent or moves it into a group.
+/// Each row carries a visibility checkbox, a lock badge when locks apply,
+/// and a name that edits in place. The button bar adds a layer or a group,
+/// duplicates and deletes.
 @MainActor
-final class LayersPaletteController: NSViewController, PaletteContent, NSTableViewDataSource, NSTableViewDelegate,
-                                     NSMenuItemValidation {
+final class LayersPaletteController: NSViewController, PaletteContent, PaletteEditScope.Content,
+                                     NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuItemValidation {
     typealias Target = ImageDocument
 
     static let definition = PaletteDefinition(
@@ -18,12 +20,28 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
         sizing: .resizable(minimumContentSize: NSSize(width: 200, height: 160)),
         frameAutosaveName: "Glims.palette.layers")
 
+    /// The pasteboard type drags inside the outline write: the layer id.
+    private static let dragType = NSPasteboard.PasteboardType("ch.lkmc.Glims.layerID")
+
     private weak var document: ImageDocument?
-    private let table = NSTableView()
+    private let outline = NSOutlineView()
     private var reloading = false
     private var snapshot = LayerListSnapshot(document: nil, layers: [])
+    /// Which document the outline's rows currently show, for expansion
+    /// memory; groups reopen after a reload and after a retarget back.
+    private var displayedDocument: ObjectIdentifier?
+    /// The expanded groups in the displayed tree, tracked from the
+    /// outline's expand and collapse notifications: `isItemExpanded`
+    /// reports false for an item a collapsed ancestor hides, so sampling
+    /// the outline would forget groups nested inside collapsed parents.
+    private var expandedGroupIDs = Set<Int32>()
+    private var expansionByDocument: [ObjectIdentifier: Set<Int32>] = [:]
+    /// The selection the outline last applied; a new selection inside a
+    /// collapsed group opens its parents, an unchanged one does not.
+    private var lastSyncedSelection: Int32?
     private lazy var buttonBar = ClassicPaletteButtonBar(
         items: [Self.item("new", "New Layer", ["plus"]) { $0.layerCommand(.new) },
+                Self.item("group", "New Layer Group", ["folder.badge.plus", "folder", "plus"]) { $0.createGroup() },
                 Self.item("duplicate", "Duplicate Layer", ["plus.square.on.square"]) { $0.layerCommand(.duplicate) }]
             .map(bind),
         trailingItems: [bind(Self.item("delete", "Delete Layer", ["trash"]) { $0.layerCommand(.delete) })])
@@ -54,18 +72,22 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
     override func loadView() {
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("layer"))
         column.resizingMask = .autoresizingMask
-        table.addTableColumn(column)
-        table.headerView = nil
-        table.usesAlternatingRowBackgroundColors = false
-        table.dataSource = self
-        table.delegate = self
-        table.target = self
-        table.doubleAction = #selector(editNameOfClickedRow(_:))
-        table.rowHeight = LayerRowView.rowHeight
-        table.setAccessibilityLabel("Layers")
+        outline.addTableColumn(column)
+        outline.headerView = nil
+        outline.usesAlternatingRowBackgroundColors = false
+        outline.indentationPerLevel = 12
+        outline.dataSource = self
+        outline.delegate = self
+        outline.target = self
+        outline.doubleAction = #selector(editNameOfClickedRow(_:))
+        outline.rowHeight = LayerRowView.rowHeight
+        outline.setAccessibilityLabel("Layers")
+        outline.registerForDraggedTypes([Self.dragType])
+        outline.setDraggingSourceOperationMask(.move, forLocal: true)
+        outline.setDraggingSourceOperationMask([], forLocal: false)
 
         let scroll = NSScrollView()
-        scroll.documentView = table
+        scroll.documentView = outline
         scroll.hasVerticalScroller = true
         scroll.borderType = .noBorder
 
@@ -90,12 +112,22 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
         for (title, command) in commands {
             menu.addItem(commandItem(title, command))
         }
+        let group = NSMenuItem(title: "New Layer Group", action: #selector(newLayerGroup(_:)), keyEquivalent: "")
+        group.target = self
+        menu.addItem(group)
         menu.addItem(.separator())
         menu.addItem(withTitle: "Layer Properties…", action: #selector(DocumentWindowController.layerProperties(_:)),
                      keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(commandItem("Bring Forward", .raise))
         menu.addItem(commandItem("Send Backward", .lower))
+        menu.addItem(.separator())
+        for (lock, title) in EngineSession.LayerLocks.menuOrder {
+            let item = NSMenuItem(title: "Lock \(title)", action: #selector(toggleLock(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = Int(lock.rawValue)
+            menu.addItem(item)
+        }
         return menu
     }
 
@@ -111,13 +143,40 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
         document?.layerCommand(command)
     }
 
+    @objc private func newLayerGroup(_ sender: NSMenuItem) {
+        document?.createGroup()
+    }
+
+    @objc private func toggleLock(_ sender: NSMenuItem) {
+        document?.toggleLocks(document?.activeLayer ?? 0, EngineSession.LayerLocks(rawValue: UInt32(sender.tag)))
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        guard menuItem.action == #selector(runLayerCommand(_:)) else { return true }
-        guard let document, document.acceptsEdits else { return false }
-        return menuItem.tag == Int(EngineSession.LayerCommand.new.rawValue) || document.activeLayer != nil
+        switch menuItem.action {
+        case #selector(runLayerCommand(_:)):
+            guard let document, document.acceptsEdits else { return false }
+            return menuItem.tag == Int(EngineSession.LayerCommand.new.rawValue) || document.activeLayer != nil
+        case #selector(newLayerGroup(_:)):
+            return document?.acceptsEdits == true
+        case #selector(toggleLock(_:)):
+            guard let document, let active = document.activeLayer else { return false }
+            let lock = EngineSession.LayerLocks(rawValue: UInt32(menuItem.tag))
+            let sources = snapshot.tree.nodesByID[active]
+                .map { snapshot.tree.lockSources(for: $0, states: document.layerLocks) }
+            menuItem.state = sources?.local.contains(lock) == true ? .on : .off
+            menuItem.toolTip = DocumentWindowController.lockNote(lock, sources: sources)
+            return document.acceptsEdits
+        default:
+            return true
+        }
     }
 
     func retarget(to target: ImageDocument?) {
+        PaletteEditScope.track(self)
+        // Only a real target change forgets the synced selection: this
+        // also runs for every state change of the shown document, and
+        // resetting then would reopen its collapsed ancestors each time.
+        if target !== document { lastSyncedSelection = nil }
         document = target
         reload()
     }
@@ -126,6 +185,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
         let editable = document?.acceptsEdits == true
         let hasLayer = editable && document?.activeLayer != nil
         buttonBar.setEnabled(editable, forItem: "new")
+        buttonBar.setEnabled(editable, forItem: "group")
         buttonBar.setEnabled(hasLayer, forItem: "duplicate")
         buttonBar.setEnabled(hasLayer, forItem: "delete")
 
@@ -134,26 +194,99 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
         guard !isRenaming else { return }
 
         reloading = true
-        snapshot = LayerListSnapshot(document: document, layers: document?.layers ?? [])
-        table.reloadData()
-        if let document, let active = document.activeLayer,
-           let row = document.layers.firstIndex(where: { $0.id == active }) {
-            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-        } else {
-            table.deselectAll(nil)
+        defer { reloading = false }
+        let shown = document.map { ObjectIdentifier($0) }
+        if shown != displayedDocument {
+            if let previous = displayedDocument {
+                expansionByDocument[previous] = expandedGroupIDs
+            }
+            expandedGroupIDs = shown.flatMap { expansionByDocument[$0] } ?? []
         }
-        reloading = false
+        displayedDocument = shown
+
+        snapshot = LayerListSnapshot(document: document, layers: document?.layers ?? [])
+        outline.reloadData()
+        for id in expandedGroupIDs {
+            if let node = snapshot.tree.nodesByID[id] { outline.expandItem(node) }
+        }
+
+        if let document, let active = document.activeLayer,
+           let node = snapshot.tree.nodesByID[active] {
+            if active != lastSyncedSelection {
+                // A selection that landed inside a collapsed group opens
+                // its parents once so the row can be seen; opened ones
+                // count as expanded like a user's own expansion.
+                var parent = node.parent
+                while let group = parent {
+                    outline.expandItem(group)
+                    expandedGroupIDs.insert(group.id)
+                    parent = group.parent
+                }
+            }
+            let row = outline.row(forItem: node)
+            if row >= 0 {
+                outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            } else {
+                outline.deselectAll(nil)
+            }
+            lastSyncedSelection = active
+        } else {
+            outline.deselectAll(nil)
+            lastSyncedSelection = nil
+        }
     }
 
     /// Whether a layer name in the list is being edited.
     private var isRenaming: Bool {
-        LayerRowView.isRenaming(in: table)
+        LayerRowView.isRenaming(in: outline)
     }
 
-    /// The table's double-click: edit the clicked row's name in place.
-    @objc private func editNameOfClickedRow(_ sender: NSTableView) {
+    // MARK: Expansion tracking
+
+    /// The groups a collapse is currently hiding: AppKit consults
+    /// shouldCollapseItem for a collapsed item's descendants too, parent
+    /// first, and their expansion is meant to survive, so a group stops
+    /// counting as expanded only when nothing collapsing contains it.
+    private var collapsingIDs = Set<Int32>()
+
+    func outlineViewItemDidExpand(_ notification: Notification) {
+        guard let node = notification.userInfo?["NSObject"] as? LayerTree.Node else { return }
+        if !reloading { expandedGroupIDs.insert(node.id) }
+        // A group nested inside this node keeps its tracked expansion
+        // while the node is collapsed, but expandItem cannot mark it
+        // until the node expands again.
+        for child in node.children where expandedGroupIDs.contains(child.id) {
+            outline.expandItem(child)
+        }
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, shouldCollapseItem item: Any) -> Bool {
+        guard !reloading, let node = item as? LayerTree.Node else { return true }
+        var ancestor = node.parent
+        while let parent = ancestor {
+            if collapsingIDs.contains(parent.id) { return true }
+            ancestor = parent.parent
+        }
+        expandedGroupIDs.remove(node.id)
+        collapsingIDs.insert(node.id)
+        return true
+    }
+
+    func outlineViewItemDidCollapse(_ notification: Notification) {
+        guard let node = notification.userInfo?["NSObject"] as? LayerTree.Node else { return }
+        collapsingIDs.remove(node.id)
+    }
+
+    // MARK: PaletteEditScope
+
+    /// The document a name edit in this palette belongs to.
+    var editTarget: ImageDocument? { document }
+
+    /// The outline's double-click: edit the clicked row's name in place.
+    @objc private func editNameOfClickedRow(_ sender: NSOutlineView) {
         guard sender.clickedRow >= 0,
-              let row = sender.view(atColumn: 0, row: sender.clickedRow, makeIfNecessary: true) as? LayerRowView else { return }
+              let row = sender.view(atColumn: 0, row: sender.clickedRow, makeIfNecessary: true) as? LayerRowView
+        else { return }
         row.startEditingName()
     }
 
@@ -190,16 +323,30 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
         return details.isEmpty ? "" : "  (\(details.joined(separator: ", ")))"
     }
 
-    func numberOfRows(in tableView: NSTableView) -> Int {
-        snapshot.layers.count
+    // MARK: Outline data source
+
+    func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
+        item == nil ? snapshot.tree.roots.count : (item as? LayerTree.Node)?.children.count ?? 0
     }
 
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+    func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
+        (item == nil ? snapshot.tree.roots : (item as? LayerTree.Node)?.children ?? [])[index]
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
+        guard let node = item as? LayerTree.Node else { return false }
+        return node.layer.kind == .group && !node.children.isEmpty
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         guard let document,
-              let layer = snapshot.layer(at: row, for: document, currentLayers: document.layers) else { return nil }
+              let layer = snapshot.layer(for: item, for: document, currentLayers: document.layers),
+              let node = item as? LayerTree.Node else { return nil }
+        let locks = snapshot.tree.lockSources(for: node, states: document.layerLocks)
         let rowView = LayerRowView(layer: layer,
                                    context: LayerRowView.Context(document: document, layerID: layer.id),
-                                   details: Self.detailsSuffix(for: layer)) { [weak self] context, change in
+                                   details: Self.detailsSuffix(for: layer),
+                                   locks: locks) { [weak self] context, change in
             self?.commitLayerChange(context, change) ?? false
         }
         rowView.checkbox.isEnabled = document.acceptsEdits
@@ -210,16 +357,70 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSTableVi
         return rowView
     }
 
-    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
-        guard let document, document.acceptsEdits,
-              let layer = snapshot.layer(at: row, for: document, currentLayers: document.layers) else { return false }
-        return layer.kind != .group
+    // MARK: Selection
+
+    func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
+        guard let document, let layer = snapshot.layer(for: item, for: document,
+                                                       currentLayers: document.layers) else { return false }
+        guard document.acceptsEdits else {
+            // The pick is refused; asking the document still shows why.
+            document.selectLayer(layer.id)
+            return false
+        }
+        return true
     }
 
-    func tableViewSelectionDidChange(_ notification: Notification) {
+    func outlineViewSelectionDidChange(_ notification: Notification) {
         guard !reloading, let document,
-              let layer = snapshot.layer(at: table.selectedRow, for: document, currentLayers: document.layers) else { return }
+              let item = outline.selectedRow >= 0 ? outline.item(atRow: outline.selectedRow) : nil,
+              let layer = snapshot.layer(for: item, for: document, currentLayers: document.layers) else { return }
         document.selectLayer(layer.id)
+        lastSyncedSelection = document.activeLayer
+        // A refused pick leaves the active layer; the list shows it again.
         if document.activeLayer != layer.id { reload() }
+    }
+
+    // MARK: Drag and drop
+
+    func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
+        guard let document, document.acceptsEdits,
+              let layer = snapshot.layer(for: item, for: document, currentLayers: document.layers)
+        else { return nil }
+        let writer = NSPasteboardItem()
+        writer.setString("\(layer.id)", forType: Self.dragType)
+        return writer
+    }
+
+    /// Where the drop lands, as the document's `moveLayer` understands it:
+    /// a parent id (0: the top level) and a raw index among its children.
+    /// Drops onto a group go to its first child.
+    private func dropTarget(item: Any?, childIndex index: Int) -> (parent: Int32, index: Int32)? {
+        if index == NSOutlineViewDropOnItemIndex {
+            guard let node = item as? LayerTree.Node, node.layer.kind == .group else { return nil }
+            return (node.id, 0)
+        }
+        return ((item as? LayerTree.Node)?.id ?? 0, Int32(index))
+    }
+
+    private func draggedID(_ info: NSDraggingInfo) -> Int32? {
+        info.draggingPasteboard.string(forType: Self.dragType).flatMap(Int32.init)
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo,
+                     proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
+        guard let document, document.acceptsEdits, let dragged = draggedID(info),
+              let target = dropTarget(item: item, childIndex: index),
+              snapshot.tree.resolveDrop(item: dragged, ontoParent: target.parent, at: target.index) != .invalid
+        else { return [] }
+        return .move
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo,
+                     item: Any?, childIndex index: Int) -> Bool {
+        guard let document, document.acceptsEdits, let dragged = draggedID(info),
+              let target = dropTarget(item: item, childIndex: index) else { return false }
+        document.moveLayer(dragged, toParent: target.parent, atIndex: target.index)
+        if let node = item as? LayerTree.Node { outline.expandItem(node) }
+        return true
     }
 }
