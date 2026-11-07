@@ -22,6 +22,10 @@ final class ImageDocument {
     private(set) var info: EngineSession.ImageInfo
     private(set) var layers: [EngineSession.Layer] = []
     private(set) var undoInfo = EngineSession.UndoInfo(undoCount: 0, redoCount: 0, nextUndo: "", nextRedo: "")
+    /// The undo history last read with the rest of the state: the
+    /// revision these rows and the current position were seen with, so a
+    /// palette pick can only name a state the engine still holds.
+    private(set) var history: EngineSession.History?
 
     /// The layer painting and filters apply to. It may be a group:
     /// groups cannot be painted on but stay valid metadata and filter
@@ -121,6 +125,7 @@ final class ImageDocument {
         for layer in layers { locks[layer.id] = try? session.layerState(layer.id, image: image) }
         layerLocks = locks
         undoInfo = try session.undoInfo(image)
+        history = try session.history(image)
         if activeLayer == nil || !layers.contains(where: { $0.id == activeLayer }) {
             activeLayer = layers.first(where: \.isSelected)?.id ?? layers.first?.id
         }
@@ -512,6 +517,53 @@ final class ImageDocument {
     func redo() {
         guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.redo(image) }
+    }
+
+    // MARK: History and snapshots
+
+    /// The app's entry point for opening a snapshot as a document, wired
+    /// by whoever owns document lifetime; nil without one.
+    var snapshotHandler: ((ImageDocument) -> Void)?
+
+    /// Image ▸ New Snapshot and the History palette's Snapshot button:
+    /// asks the app for an independent copy of this image opened as a new
+    /// document.
+    func newSnapshot() {
+        guard !refuseWhileEditingUnavailable(), let snapshotHandler else { return }
+        snapshotHandler(self)
+    }
+
+    /// Queues a native duplicate behind pending input — in-flight
+    /// strokes and text edits are part of the copy. The callback runs on
+    /// the main actor bound to this document with the new engine image
+    /// or the error, whoever is front document then. The work is counted,
+    /// so a close waits for it before freeing this image.
+    func snapshot(completion: @escaping @MainActor (Result<Int32, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard acceptsEdits else { return completion(.failure(DocumentError.busy)) }
+        endPendingUserEdits()
+        enqueueAfterInput { [session, image] in
+            let result = Result { try session.duplicateImage(image) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// A History palette pick: move the image to the state `position` had
+    /// under `revision`, queued through input so pending text, field and
+    /// stroke edits end first. When those land as a newer revision the
+    /// engine refuses the pick without changing the image; the refusal
+    /// is reported and the list reloads — it is never retried under the
+    /// newer revision.
+    func moveToHistoryState(_ position: Int32, revision: UInt64) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        endPendingUserEdits()
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let result = Result { try session.moveHistory(image, revision: revision, to: position) }
+            DispatchQueue.main.async {
+                if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                try? self.reload()
+            }
+        }
     }
 
     /// The engine refuses edits while a plug-in command runs (its dialog
