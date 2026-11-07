@@ -1016,6 +1016,13 @@ MARSHAL (path_delete, return glims_path_delete (e, a->image, a->item);)
 MARSHAL (path_to_selection, return glims_path_to_selection (e, a->image, a->item, a->in);)
 MARSHAL (path_stroke, return glims_path_stroke (e, a->image, a->item, (GlimsItemID) a->width, a->in,
                                                 a->error);)
+MARSHAL (layer_state,  return glims_layer_state (e, a->image, a->item, a->out);)
+MARSHAL (create_group, return glims_create_group (e, a->image, a->item, a->width, a->string, a->out,
+                                                  a->error);)
+MARSHAL (reparent_layer, return glims_reparent_layer (e, a->image, a->item, (GlimsItemID) a->width,
+                                                      a->height, a->error);)
+MARSHAL (set_layer_locks, return glims_set_layer_locks (e, a->image, a->item, (uint32_t) a->width,
+                                                        (uint32_t) a->height, a->error);)
 
 /* A path's geometry takes more arguments than GlimsArgs holds. */
 typedef struct
@@ -1482,6 +1489,39 @@ api_image_from_pixels (GlimsEngine *e, int32_t width, int32_t height, const uint
   return glims_engine_call (e, image_from_pixels_on_engine, &a);
 }
 
+static GlimsStatus
+api_layer_state (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, GlimsLayerState *state)
+{
+  GlimsArgs a = { .image = image, .item = layer, .out = state };
+  return glims_engine_call (e, layer_state_on_engine, &a);
+}
+
+static GlimsStatus
+api_create_group (GlimsEngine *e, GlimsImageID image, GlimsItemID parent, int32_t index,
+                  const char *name, GlimsItemID *result, char **error)
+{
+  GlimsArgs a = { .image = image, .item = parent, .width = index, .string = name, .out = result,
+                  .error = error };
+  return glims_engine_call (e, create_group_on_engine, &a);
+}
+
+static GlimsStatus
+api_reparent_layer (GlimsEngine *e, GlimsImageID image, GlimsItemID item, GlimsItemID new_parent,
+                    int32_t index, char **error)
+{
+  GlimsArgs a = { .image = image, .item = item, .width = new_parent, .height = index, .error = error };
+  return glims_engine_call (e, reparent_layer_on_engine, &a);
+}
+
+static GlimsStatus
+api_set_layer_locks (GlimsEngine *e, GlimsImageID image, GlimsItemID item, uint32_t mask,
+                     uint32_t values, char **error)
+{
+  GlimsArgs a = { .image = image, .item = item, .width = (int32_t) mask, .height = (int32_t) values,
+                  .error = error };
+  return glims_engine_call (e, set_layer_locks_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1544,6 +1584,10 @@ static const GlimsEngineAPI api_v1 = {
   .image_paste_pixels = api_image_paste_pixels,
   .image_save_copy    = api_image_save_copy,
   .image_from_pixels  = api_image_from_pixels,
+  .layer_state       = api_layer_state,
+  .create_group      = api_create_group,
+  .reparent_layer    = api_reparent_layer,
+  .set_layer_locks   = api_set_layer_locks,
 };
 
 __attribute__ ((visibility ("default")))

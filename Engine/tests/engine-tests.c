@@ -921,6 +921,215 @@ test_groups_and_text_units (const char *fixtures)
     api->image_close (engine, image);
 }
 
+/* The layer tree's rows in depth-first order match `ids` (with `parents`
+ * and `depths`) exactly: the position check the reparent and reorder
+ * tests need. */
+static int
+tree_is (GlimsImageID        image,
+         const GlimsItemID  *ids,
+         const GlimsItemID  *parents,
+         const int32_t      *depths,
+         int32_t             n)
+{
+  GlimsLayerInfo rows[16];
+  int32_t        count = 0, i;
+
+  if (api->image_layers (engine, image, rows, 16, &count) != GLIMS_STATUS_OK || count != n)
+    return 0;
+  for (i = 0; i < n; i++)
+    if (rows[i].id != ids[i] || rows[i].parent != parents[i] || rows[i].depth != depths[i])
+      return 0;
+  return 1;
+}
+
+static void
+test_layer_structure (void)
+{
+  GlimsImageID    image = 0, other = 0;
+  GlimsItemID     background, a = 0, b = 0, group = 0, nested = 0, gone = 0, foreign = 0;
+  GlimsLayerInfo  rows[8];
+  GlimsLayerState state;
+  int32_t         count = 0, before;
+  char           *error = NULL;
+
+  api->image_new (engine, 64, 48, &image, NULL);
+  background = first_layer (image);
+
+  before = undo_depth (image);
+  CHECK (api->create_group (engine, image, 0, 0, "Group", &group, &error) == GLIMS_STATUS_OK &&
+         group > 0 && undo_depth (image) == before + 1,
+         "a group is added on top as one undo step%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_layers (engine, image, rows, 8, &count) == GLIMS_STATUS_OK && count == 2 &&
+         rows[0].id == group && rows[0].kind == GLIMS_LAYER_GROUP && rows[0].depth == 0 &&
+         rows[0].parent == 0 && strcmp (rows[0].name, "Group") == 0 &&
+         strcmp (rows[0].mode, "pass-through") == 0 && rows[0].selected,
+         "the group is on top, named, selected and pass-through (%s, %s)",
+         count == 2 ? rows[0].name : "?", count == 2 ? rows[0].mode : "?");
+
+  CHECK (api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &a, NULL) == GLIMS_STATUS_OK &&
+         api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &b, NULL) == GLIMS_STATUS_OK &&
+         tree_is (image, (GlimsItemID[]) { b, a, group, background },
+                  (GlimsItemID[]) { 0, 0, 0, 0 }, (int32_t[]) { 0, 0, 0, 0 }, 4),
+         "two layers are added above the group");
+
+  /* Reparent at exact positions; undo and redo restore them exactly. */
+  CHECK (api->reparent_layer (engine, image, a, group, 0, &error) == GLIMS_STATUS_OK &&
+         tree_is (image, (GlimsItemID[]) { b, group, a, background },
+                  (GlimsItemID[]) { 0, 0, group, 0 }, (int32_t[]) { 0, 0, 1, 0 }, 4),
+         "a layer moves into the group at index 0%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->reparent_layer (engine, image, b, group, 1, NULL) == GLIMS_STATUS_OK &&
+         tree_is (image, (GlimsItemID[]) { group, a, b, background },
+                  (GlimsItemID[]) { 0, group, group, 0 }, (int32_t[]) { 0, 1, 1, 0 }, 4),
+         "a second layer follows it inside the group");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         tree_is (image, (GlimsItemID[]) { b, group, a, background },
+                  (GlimsItemID[]) { 0, 0, group, 0 }, (int32_t[]) { 0, 0, 1, 0 }, 4),
+         "undo restores the layer's old top-level position");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         tree_is (image, (GlimsItemID[]) { b, a, group, background },
+                  (GlimsItemID[]) { 0, 0, 0, 0 }, (int32_t[]) { 0, 0, 0, 0 }, 4),
+         "undo restores the first move too");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         tree_is (image, (GlimsItemID[]) { group, a, b, background },
+                  (GlimsItemID[]) { 0, group, group, 0 }, (int32_t[]) { 0, 1, 1, 0 }, 4),
+         "redo replays both moves in order");
+
+  /* Reorder inside one parent is the same call; undo and redo too. */
+  CHECK (api->reparent_layer (engine, image, a, group, 1, NULL) == GLIMS_STATUS_OK &&
+         tree_is (image, (GlimsItemID[]) { group, b, a, background },
+                  (GlimsItemID[]) { 0, group, group, 0 }, (int32_t[]) { 0, 1, 1, 0 }, 4),
+         "reordering swaps the group's children");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         tree_is (image, (GlimsItemID[]) { group, a, b, background },
+                  (GlimsItemID[]) { 0, group, group, 0 }, (int32_t[]) { 0, 1, 1, 0 }, 4),
+         "undo restores the children's order");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         tree_is (image, (GlimsItemID[]) { group, b, a, background },
+                  (GlimsItemID[]) { 0, group, group, 0 }, (int32_t[]) { 0, 1, 1, 0 }, 4),
+         "redo swaps them again");
+
+  before = undo_depth (image);
+  CHECK (api->reparent_layer (engine, image, a, group, 1, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "a move to the same position adds no undo step");
+
+  /* Moving back out to the top level. */
+  CHECK (api->reparent_layer (engine, image, b, 0, 1, NULL) == GLIMS_STATUS_OK &&
+         tree_is (image, (GlimsItemID[]) { group, a, b, background },
+                  (GlimsItemID[]) { 0, group, 0, 0 }, (int32_t[]) { 0, 1, 0, 0 }, 4),
+         "a layer moves back out of the group");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_redo (engine, image) == GLIMS_STATUS_OK, "the move out undoes and redoes");
+
+  CHECK (api->create_group (engine, image, group, 1, "Nested", &nested, NULL) == GLIMS_STATUS_OK &&
+         tree_is (image, (GlimsItemID[]) { group, a, nested, b, background },
+                  (GlimsItemID[]) { 0, group, group, 0, 0 }, (int32_t[]) { 0, 1, 1, 0, 0 }, 5),
+         "a group inside the group reports its depth and parent");
+
+  /* Cycles, a non-group parent, items of another image, deleted ids and
+   * out-of-range indices are all refused before anything changes. */
+  before = undo_depth (image);
+  CHECK (api->reparent_layer (engine, image, group, nested, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->reparent_layer (engine, image, group, group, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->reparent_layer (engine, image, a, b, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before,
+         "a group cannot move into itself, its descendant or a pixel layer");
+
+  api->image_new (engine, 32, 32, &other, NULL);
+  foreign = first_layer (other);
+  CHECK (api->reparent_layer (engine, image, foreign, group, 0, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->reparent_layer (engine, image, a, foreign, 0, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         undo_depth (image) == before,
+         "layers of another image are refused");
+
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &gone, NULL);
+  api->layer_command (engine, image, gone, GLIMS_LAYER_DELETE, NULL, NULL);
+  before = undo_depth (image);
+  CHECK (api->reparent_layer (engine, image, gone, group, 0, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->create_group (engine, image, gone, 0, NULL, NULL, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->set_layer_locks (engine, image, gone, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL) ==
+           GLIMS_STATUS_NOT_FOUND &&
+         api->layer_state (engine, image, gone, &state) == GLIMS_STATUS_NOT_FOUND &&
+         undo_depth (image) == before,
+         "a deleted layer cannot be moved, parent to, locked or read");
+
+  CHECK (api->create_group (engine, image, 0, 99, NULL, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->create_group (engine, image, 0, -1, NULL, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->reparent_layer (engine, image, a, group, 99, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->reparent_layer (engine, image, a, group, 2, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->reparent_layer (engine, image, a, group, -1, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before,
+         "out-of-range indices are refused without an undo step");
+
+  /* Locks: the item's own bits, and the effective bits the ancestors set. */
+  CHECK (api->layer_state (engine, image, a, &state) == GLIMS_STATUS_OK &&
+         state.locks == 0 && state.locked == 0, "a new layer reports no locks");
+
+  before = undo_depth (image);
+  CHECK (api->set_layer_locks (engine, image, group, GLIMS_LOCK_PIXELS | GLIMS_LOCK_ALPHA,
+                              GLIMS_LOCK_PIXELS | GLIMS_LOCK_ALPHA, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "two locks in one call are one undo step");
+  CHECK (api->layer_state (engine, image, group, &state) == GLIMS_STATUS_OK &&
+         state.locks == (GLIMS_LOCK_PIXELS | GLIMS_LOCK_ALPHA) &&
+         state.locked == (GLIMS_LOCK_PIXELS | GLIMS_LOCK_ALPHA),
+         "the group reports its own locks (%x, %x)", state.locks, state.locked);
+  CHECK (api->layer_state (engine, image, a, &state) == GLIMS_STATUS_OK &&
+         state.locks == 0 && state.locked == (GLIMS_LOCK_PIXELS | GLIMS_LOCK_ALPHA),
+         "the group's children inherit its locks (%x, %x)", state.locks, state.locked);
+  CHECK (api->layer_state (engine, image, b, &state) == GLIMS_STATUS_OK &&
+         state.locked == 0, "layers outside the group keep no locks");
+
+  CHECK (api->set_layer_locks (engine, image, a, GLIMS_LOCK_POSITION, GLIMS_LOCK_POSITION, NULL) ==
+           GLIMS_STATUS_OK &&
+         api->layer_state (engine, image, a, &state) == GLIMS_STATUS_OK &&
+         state.locks == GLIMS_LOCK_POSITION &&
+         state.locked == (GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION | GLIMS_LOCK_ALPHA),
+         "the child's own and inherited locks read separately (%x, %x)", state.locks, state.locked);
+  CHECK (api->layer_state (engine, image, group, &state) == GLIMS_STATUS_OK &&
+         state.locked & GLIMS_LOCK_POSITION && ! (state.locks & GLIMS_LOCK_POSITION),
+         "the group's effective locks cover a locked child (%x, %x)", state.locks, state.locked);
+
+  before = undo_depth (image);
+  CHECK (api->set_layer_locks (engine, image, a, GLIMS_LOCK_POSITION, GLIMS_LOCK_POSITION, NULL) ==
+           GLIMS_STATUS_OK &&
+         api->set_layer_locks (engine, image, a, 0, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->set_layer_locks (engine, image, a, 0x80, 0x80, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before,
+         "a no-op lock and unknown mask bits add no undo step");
+
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->layer_state (engine, image, a, &state) == GLIMS_STATUS_OK &&
+         state.locks == 0 && state.locked == (GLIMS_LOCK_PIXELS | GLIMS_LOCK_ALPHA),
+         "undo lifts the child's lock and its effective bit");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->layer_state (engine, image, a, &state) == GLIMS_STATUS_OK &&
+         state.locks == GLIMS_LOCK_POSITION &&
+         state.locked == (GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION | GLIMS_LOCK_ALPHA),
+         "redo restores it");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->layer_state (engine, image, a, &state) == GLIMS_STATUS_OK &&
+         state.locks == 0 && state.locked == 0,
+         "undoing the group's locks clears the children's inherited bits");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->layer_state (engine, image, a, &state) == GLIMS_STATUS_OK &&
+         state.locks == GLIMS_LOCK_POSITION &&
+         state.locked == (GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION | GLIMS_LOCK_ALPHA),
+         "redo brings the locks and their inheritance back");
+
+  if (other)
+    api->image_close (engine, other);
+  if (image)
+    api->image_close (engine, image);
+}
+
 /* A deleted item lives on in the undo stack until the undo is dropped,
  * still under its id. Calls must not reach it: an edit would change what
  * undoing the delete brings back, outside any undo step. */
@@ -1812,6 +2021,7 @@ main (int argc, char **argv)
   test_paths (argv[2]);
   test_deleted_items ();
   test_groups_and_text_units (argv[3]);
+  test_layer_structure ();
   test_paint_tools ();
   test_selections ();
   test_editing ();

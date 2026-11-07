@@ -285,6 +285,24 @@ typedef struct GlimsLayerChange {
   char     mode[64];         /* blend mode nick, as GlimsLayerInfo reports it */
 } GlimsLayerChange;
 
+/* The locks a layer or group can hold; `mask` and `values` of
+ * set_layer_locks and the fields of GlimsLayerState are these bits. */
+typedef enum GlimsLayerLock {
+  GLIMS_LOCK_PIXELS   = 1 << 0,  /* the layer's pixels cannot change */
+  GLIMS_LOCK_POSITION = 1 << 1,  /* the layer cannot move or transform */
+  GLIMS_LOCK_ALPHA    = 1 << 2   /* the alpha channel cannot change */
+} GlimsLayerLock;
+
+/* A layer's or group's lock state. `locks` is the item's own locks;
+ * `locked` is what the engine enforces on it: an ancestor group's lock
+ * counts too, and for a group the PIXELS and POSITION bits also cover a
+ * locked descendant, as the engine's lock rules do. Bits are
+ * GlimsLayerLock. */
+typedef struct GlimsLayerState {
+  uint32_t locks;
+  uint32_t locked;
+} GlimsLayerState;
+
 typedef enum GlimsTransform {
   GLIMS_TRANSFORM_ROTATE_90       = 1,  /* clockwise */
   GLIMS_TRANSFORM_ROTATE_180      = 2,
@@ -613,6 +631,34 @@ typedef struct GlimsEngineAPI {
    * The new image is unsaved; pixel limits match image_paste_pixels. */
   GlimsStatus (*image_from_pixels)(GlimsEngine *, int32_t width, int32_t height,
                                    const uint8_t *pixels, size_t byte_count, GlimsImageID *, char **error);
+
+  /* The layer tree's structure: groups, moving layers between groups,
+   * and the layers' locks. `layer`/`item` 0 means the selected layer;
+   * `parent`/`new_parent` 0 the image's top level, otherwise a group of
+   * the same image. */
+  /* `state` receives the layer's own and its effective locks. */
+  GlimsStatus  (*layer_state)      (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                                    GlimsLayerState *state);
+  /* Adds a layer group named `name` (NULL: the engine's default name) at
+   * `index` among `parent`'s children, pass-through and selected, as one
+   * undo step. `result` (may be NULL) receives it. NOT_FOUND for a
+   * `parent` that is not an attached layer of the image; INVALID_ARGUMENT
+   * for a `parent` that is not a group or an out-of-range `index`. */
+  GlimsStatus  (*create_group)     (GlimsEngine *engine, GlimsImageID image, GlimsItemID parent,
+                                    int32_t index, const char *name, GlimsItemID *result,
+                                    char **error);
+  /* Moves `item` to `index` among `new_parent`'s children as one undo
+   * step; undo and redo restore the exact position. NOT_FOUND for an
+   * `item` or `new_parent` that is not an attached layer of the image;
+   * INVALID_ARGUMENT when `new_parent` is `item` or its descendant, not
+   * a group, or `index` is out of range. */
+  GlimsStatus  (*reparent_layer)   (GlimsEngine *engine, GlimsImageID image, GlimsItemID item,
+                                    GlimsItemID new_parent, int32_t index, char **error);
+  /* Sets the GlimsLayerLock bits selected by `mask` to `values`'s bits
+   * as one undo step; locks outside `mask` keep their state.
+   * INVALID_ARGUMENT for an empty `mask` or bits that are no lock. */
+  GlimsStatus  (*set_layer_locks)  (GlimsEngine *engine, GlimsImageID image, GlimsItemID item,
+                                    uint32_t mask, uint32_t values, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

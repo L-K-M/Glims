@@ -190,6 +190,16 @@ GlimsStatus glims_image_copy_pixels (GlimsEngine *, GlimsImageID, gboolean, Glim
 GlimsStatus glims_image_clear (GlimsEngine *, GlimsImageID, const GlimsColor *, char **);
 GlimsStatus glims_image_paste_pixels (GlimsEngine *, GlimsImageID, GlimsRect, const uint8_t *, size_t, GlimsItemID *, char **);
 GlimsStatus glims_image_from_pixels (GlimsEngine *, int32_t, int32_t, const uint8_t *, size_t, GlimsImageID *, char **);
+/* layer-structure.c */
+GlimsStatus glims_layer_state      (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                    GlimsLayerState *state);
+GlimsStatus glims_create_group     (GlimsEngine *e, GlimsImageID image, GlimsItemID parent,
+                                    int32_t index, const char *name, GlimsItemID *result,
+                                    char **error);
+GlimsStatus glims_reparent_layer   (GlimsEngine *e, GlimsImageID image, GlimsItemID item,
+                                    GlimsItemID new_parent, int32_t index, char **error);
+GlimsStatus glims_set_layer_locks  (GlimsEngine *e, GlimsImageID image, GlimsItemID item,
+                                    uint32_t mask, uint32_t values, char **error);
 
 /* procedure.c */
 GlimsStatus glims_procedures       (GlimsEngine *e, GlimsImageID image, GlimsProcedureInfo *rows,
