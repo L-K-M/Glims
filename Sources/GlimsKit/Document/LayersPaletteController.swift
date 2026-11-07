@@ -52,8 +52,13 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     /// Rows asking for the same drawable while its read is in flight;
     /// a reload replaces the rows but the queued read still serves them.
     private var thumbnailWaiters: [ThumbnailKey: [(NSImage?) -> Void]] = [:]
-    private let thumbnailQueue = DispatchQueue(label: "ch.lkmc.Glims.palette.thumbnails",
-                                               qos: .userInitiated)
+    private final class ThumbnailRequest: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+        var isCancelled: Bool { lock.withLock { cancelled } }
+        func cancel() { lock.withLock { cancelled = true } }
+    }
+    private var thumbnailRequests: [ThumbnailKey: ThumbnailRequest] = [:]
     private lazy var buttonBar = ClassicPaletteButtonBar(
         items: [Self.item("new", "New Layer", ["plus"]) { $0.layerCommand(.new) },
                 Self.item("group", "New Layer Group", ["folder.badge.plus", "folder", "plus"]) { $0.createGroup() },
@@ -269,6 +274,14 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     }
 
     func reload() {
+        // Cancel obsolete reads before rebuilding rows. Workers consult
+        // only this synchronized token; document and view state stays on
+        // the main actor.
+        for key in Array(thumbnailRequests.keys)
+        where key.image != document?.image || key.version != document?.stateVersion {
+            thumbnailRequests.removeValue(forKey: key)?.cancel()
+            thumbnailWaiters.removeValue(forKey: key)?.forEach { $0(nil) }
+        }
         let editable = document?.acceptsEdits == true
         let hasLayer = editable && document?.activeLayer != nil
         buttonBar.setEnabled(editable, forItem: "new")
@@ -499,34 +512,36 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             return
         }
         thumbnailWaiters[key] = [apply]
-        let session = document.session
-        let imageID = document.image
+        let request = ThumbnailRequest()
+        thumbnailRequests[key] = request
+        let maxSize = Self.thumbnailMaxSize
         let owner = ObjectIdentifier(document)
-        thumbnailQueue.async { [weak self] in
-            // A newer state already superseded this read; do not spend
-            // engine time on it.
-            guard let self, let current = self.document,
-                  ObjectIdentifier(current) == owner, current.stateVersion == version
-            else {
-                DispatchQueue.main.async { self?.thumbnailWaiters.removeValue(forKey: key)?.forEach { $0(nil) } }
-                return
-            }
+        // Count the read in the document's input queue, so close, Quit
+        // and exclusive engine operations drain it before destruction.
+        let accepted = document.run(effect: .readsPixels) { [weak self] session, imageID in
+            guard !request.isCancelled else { return }
             let cgImage = try? session.drawableThumbnail(drawable, image: imageID,
-                                                         maxSize: Self.thumbnailMaxSize)
-            let image = cgImage.map {
-                NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height))
-            }
+                                                         maxSize: maxSize)
             DispatchQueue.main.async {
+                guard let self, self.thumbnailRequests[key] === request else { return }
+                self.thumbnailRequests.removeValue(forKey: key)
                 let waiters = self.thumbnailWaiters.removeValue(forKey: key) ?? []
                 guard let document = self.document,
                       ObjectIdentifier(document) == owner, document.stateVersion == version
                 else { return waiters.forEach { $0(nil) } }
+                let image = cgImage.map {
+                    NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height))
+                }
                 if let image {
                     if self.thumbnailCache.count > 512 { self.thumbnailCache.removeAll() }
                     self.thumbnailCache[key] = image
                 }
                 waiters.forEach { $0(image) }
             }
+        }
+        if !accepted {
+            thumbnailRequests.removeValue(forKey: key)?.cancel()
+            thumbnailWaiters.removeValue(forKey: key)?.forEach { $0(nil) }
         }
     }
 

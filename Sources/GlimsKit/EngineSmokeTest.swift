@@ -999,6 +999,19 @@ enum EngineSmokeTest {
             return
         }
 
+        if let window = controller.window {
+            controller.showWindow(nil)
+            AddMaskForm.present(for: document, on: window)
+            spin()
+            if let sheet = window.attachedSheet, let content = sheet.contentView {
+                let source = descendant(of: content, as: NSPopUpButton.self)
+                check((source?.visibleRect.width ?? 0) > 20 && (source?.visibleRect.height ?? 0) > 10,
+                      "the Add Mask sheet shows its source picker")
+                window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                spin()
+            } else { check(false, "Add Mask opens a cancellable sheet") }
+        }
+
         // A dark mark on the layer the mask tests must not lose.
         document.beginStroke(at: .init(x: 10, y: 10, pressure: 1), brush: black)
         document.continueStroke((11...20).map { .init(x: Double($0), y: 10, pressure: 1) })
@@ -1224,6 +1237,26 @@ enum EngineSmokeTest {
         check(document.maskStates[layer]?.editing == true && document.isMaskTargetActive,
               "the mask thumbnail pick restores the mask target")
 
+        // Let the first pick complete while the second remains queued.
+        // Its old result must not redirect input accepted for the newer pick.
+        let targetGate = DispatchSemaphore(value: 0)
+        document.editMask(layer)
+        document.inputQueue.async { targetGate.wait() }
+        document.selectLayer(layer)
+        spin(0.1)
+        check(document.activeDrawable == layer,
+              "an older mask-pick completion preserves the newer layer target")
+        targetGate.signal()
+        settle()
+        let reloadGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { reloadGate.wait() }
+        document.editMask(layer)
+        try document.reload()
+        check(document.activeDrawable == document.maskStates[layer]?.mask,
+              "a reload preserves an accepted mask pick still waiting on the input queue")
+        reloadGate.signal()
+        settle()
+
         // A filter preview begins on the mask drawable.
         var preview: Result<ImageDocument.FilterPreviewStart, Error>?
         document.beginFilterPreview(operation: GaussianBlurPanel.operation, properties: []) {
@@ -1237,6 +1270,21 @@ enum EngineSmokeTest {
         } else {
             check(false, "a filter preview begins on the mask drawable: \(String(describing: preview))")
         }
+
+        let thumbnailGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { thumbnailGate.wait() }
+        let palette = LayersPaletteController()
+        _ = palette.view
+        palette.retarget(to: document)
+        if let outline = descendant(of: palette.view, as: NSOutlineView.self),
+           let item = outline.item(atRow: 0) {
+            _ = palette.outlineView(outline, viewFor: nil, item: item)
+            check(document.pendingWork > 0,
+                  "thumbnail reads count as document work until the image is safe to close")
+        } else { check(false, "the thumbnail lifetime check has a layer row") }
+        palette.retarget(to: nil)
+        thumbnailGate.signal()
+        settle()
 
         controller.window?.orderOut(nil)
     }

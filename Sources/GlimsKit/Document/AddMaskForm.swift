@@ -38,6 +38,7 @@ enum AddMaskForm {
             stack.topAnchor.constraint(equalTo: content.topAnchor),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
+        content.setFrameSize(content.fittingSize)
 
         let alert = NSAlert()
         alert.messageText = "Add Layer Mask"

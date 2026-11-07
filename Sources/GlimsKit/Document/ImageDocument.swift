@@ -39,6 +39,13 @@ final class ImageDocument {
     /// Bumped by every reload; thumbnail caches key on it so a result
     /// read for an older state never lands on a newer row.
     private(set) var stateVersion = 0
+    private struct TargetPick {
+        let version: Int
+        let layer: Int32
+        let mask: Int32?
+    }
+    private var targetPickVersion = 0
+    private var pendingTargetPick: TargetPick?
     /// The lock state the engine reported per layer id at the last reload:
     /// the item's own locks and the locks enforced on it.
     private(set) var layerLocks: [Int32: EngineSession.LayerLockState] = [:]
@@ -141,6 +148,12 @@ final class ImageDocument {
             }
         }
         layerLocks = locks
+        if let pick = pendingTargetPick {
+            for (id, var mask) in masks {
+                mask.editing = id == pick.layer && pick.mask != nil
+                masks[id] = mask
+            }
+        }
         maskStates = masks
         undoInfo = try session.undoInfo(image)
         history = try session.history(image)
@@ -173,6 +186,7 @@ final class ImageDocument {
     /// the same target natively from the engine's selected drawables.
     var activeDrawable: Int32? {
         guard let layer = activeLayer else { return nil }
+        if let pick = pendingTargetPick, pick.layer == layer { return pick.mask ?? layer }
         if let state = maskStates[layer], state.editing, state.mask != 0 { return state.mask }
         return layer
     }
@@ -229,7 +243,7 @@ final class ImageDocument {
         // activeDrawable could not name it; read it now — a cheap engine
         // read, no pixels.
         if maskStates[id] == nil { maskStates[id] = try? session.layerMask(id, image: image) }
-        guard maskStates[id]?.mask != 0 else { return }
+        guard let mask = maskStates[id], mask.mask != 0 else { return }
         selectTarget(id, editingMask: true)
     }
 
@@ -248,6 +262,11 @@ final class ImageDocument {
            layers.first(where: { $0.id == id })?.hasMask == true {
             maskStates[id] = try? session.layerMask(id, image: image)
         }
+        let mask = maskStates[id]?.mask
+        guard !editingMask || (mask != nil && mask != 0) else { return }
+        targetPickVersion += 1
+        let pick = TargetPick(version: targetPickVersion, layer: id, mask: editingMask ? mask : nil)
+        pendingTargetPick = pick
         // Mask editing is one target at a time: a mask still flagged
         // EDITING on another layer would keep claiming fills and
         // gradients, so its flag clears in the same job. EDITING
@@ -280,8 +299,11 @@ final class ImageDocument {
                 failure = error
             }
             DispatchQueue.main.async {
-                if let fresh {
-                    self.maskStates[id] = fresh.mask != 0 ? fresh : nil
+                if self.pendingTargetPick?.version == pick.version {
+                    self.pendingTargetPick = nil
+                    if let fresh {
+                        self.maskStates[id] = fresh.mask != 0 ? fresh : nil
+                    }
                 }
                 if let failure { self.report(failure) }
                 self.onStateChange?()
