@@ -103,6 +103,10 @@ Keep `docs/plan.md` current as the work proceeds.
   and painting on a GIMP-made 24 MP, 20-layer image (made once with
   `GIMP_3_2_0`). Any facade change that is not purely additive bumps
   `GLIMS_ENGINE_API_VERSION`.
+- Worktrees may set `GLIMS_ADAPTER_ROOT` to an absolute directory such as
+  `$PWD/.build/engine-adapters` to keep adapter libraries and test runners
+  separate. Use the same value with `build-adapter.sh`, `build-app.sh` and
+  `check-bundle.sh`. The engine input trees and `_engine/.lock` stay shared.
 - `python3 -I scripts/interface-diff.py _engine/adapter/<ref>/obj
   _engine/src/<old>/gimp _engine/src/<new>/gimp` lists the GIMP functions the
   compiled adapter calls whose prototypes differ between two engine trees,

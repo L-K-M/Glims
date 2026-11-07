@@ -15,7 +15,7 @@ class AppPackagingTests(unittest.TestCase):
         self.work = tempfile.TemporaryDirectory(prefix="glims-package-test-")
         self.root = Path(self.work.name)
         (self.root / "scripts").mkdir()
-        for name in ("build-app.sh", "engine.env"):
+        for name in ("build-app.sh", "check-bundle.sh", "engine.env"):
             shutil.copy2(ROOT / "scripts" / name, self.root / "scripts" / name)
         # If preflight succeeds, stop at Swift. No test should build or modify
         # a real bundle or engine; this marks that the chosen mode reached it.
@@ -25,6 +25,7 @@ class AppPackagingTests(unittest.TestCase):
         swift.write_text("#!/bin/sh\necho reached-swift >&2\nexit 42\n")
         swift.chmod(0o755)
         self.env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"])
+        self.env.pop("GLIMS_ADAPTER_ROOT", None)
 
     def tearDown(self):
         self.work.cleanup()
@@ -49,6 +50,51 @@ class AppPackagingTests(unittest.TestCase):
         result = self.run_build()
         self.assertEqual(result.returncode, 42)
         self.assertIn("reached-swift", result.stderr)
+
+    def test_custom_adapter_root_is_used_for_preflight(self):
+        pinned = (ROOT / "scripts/engine.env").read_text().split('ENGINE_SETS="')[1].split(':')[0]
+        (self.root / "_engine/install" / pinned).mkdir(parents=True)
+        custom = self.root / "branch-adapters"
+        adapter = custom / pinned / "libglimsengine.dylib"
+        adapter.parent.mkdir(parents=True)
+        adapter.touch()
+        self.env["GLIMS_ADAPTER_ROOT"] = str(custom)
+        result = self.run_build()
+        self.assertEqual(result.returncode, 42, result.stderr)
+        self.assertIn("reached-swift", result.stderr)
+        self.assertFalse((self.root / "_engine/adapter").exists())
+
+    def test_relative_adapter_root_is_rejected_before_building(self):
+        self.env["GLIMS_ADAPTER_ROOT"] = "relative-adapters"
+        result = self.run_build()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("absolute directory", result.stderr)
+        self.assertNotIn("reached-swift", result.stderr)
+        self.assertEqual(self.run_build("--shell-only").returncode, 42)
+
+    def test_bundle_sandbox_denies_isolated_adapter_outputs(self):
+        app = self.root / "dist/Glims.app"
+        (app / "Contents/Frameworks").mkdir(parents=True)
+        (app / "Contents/MacOS").mkdir()
+        (app / "Contents/Frameworks/libglimsengine.dylib").touch()
+        outputs = self.root / "isolated-adapters"
+        runner = outputs / "test-engine/glims-engine-tests"
+        runner.parent.mkdir(parents=True)
+        secret = outputs / "development-only"
+        secret.write_text("must not be readable by the bundled app")
+        source = ("#!/bin/sh\nif cat " + shlex.quote(str(secret))
+                  + " >/dev/null 2>&1; then echo 'FAIL development output was readable'; exit 1; fi\n"
+                  + "echo 'ok development output denied'\n")
+        runner.write_text(source)
+        runner.chmod(0o755)
+        executable = app / "Contents/MacOS/Glims"
+        executable.write_text(source)
+        executable.chmod(0o755)
+        self.env["GLIMS_ADAPTER_ROOT"] = str(outputs)
+        result = subprocess.run(["bash", str(self.root / "scripts/check-bundle.sh"), str(app)],
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("1 checks passed", result.stdout)
 
     def test_shell_only_is_explicit(self):
         result = self.run_build("--shell-only")

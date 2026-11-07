@@ -7,7 +7,8 @@
 #   scripts/build-adapter.sh --perf [GIMP_REF]   # build, then run the performance pass
 #   scripts/build-adapter.sh --check [GIMP_REF]  # print the resolved configuration
 #
-# Output in _engine/adapter/<GIMP_REF>/: libglimsengine.dylib, which exports
+# Output in _engine/adapter/<GIMP_REF>/ (or GLIMS_ADAPTER_ROOT/<GIMP_REF>/):
+# libglimsengine.dylib, which exports
 # only glims_engine_get_api(), and the glims-engine-tests runner. The adapter
 # is compiled with the flags of GIMP's gimp-console and linked with its object
 # files minus main.c.o, against the installed engine (scripts/adapter-flags.py
@@ -38,7 +39,9 @@ REF="${REF%%:*}"
 
 INSTALL="$ENGINE_DIR/install/$REF"
 BUILD="$ENGINE_DIR/build/$REF/gimp"
-OUT="$ENGINE_DIR/adapter/$REF"
+ADAPTER_ROOT="${GLIMS_ADAPTER_ROOT:-$ENGINE_DIR/adapter}"
+[[ "$ADAPTER_ROOT" == /* ]] || die "GLIMS_ADAPTER_ROOT must be an absolute directory."
+OUT="$ADAPTER_ROOT/$REF"
 INCLUDE="$ROOT/Sources/CGlimsEngine/include"
 
 if [[ "$MODE" == check ]]; then

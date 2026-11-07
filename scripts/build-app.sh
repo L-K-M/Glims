@@ -16,7 +16,9 @@
 # (docs/plan.md).
 #
 # GLIMS_BUILD_DIR and GLIMS_OUTPUT_DIR override the build and output
-# directories. CODE_SIGN_IDENTITY selects a signing identity; without it the
+# directories. GLIMS_ADAPTER_ROOT selects an absolute adapter output directory
+# shared with build-adapter.sh and check-bundle.sh, useful for worktrees.
+# CODE_SIGN_IDENTITY selects a signing identity; without it the
 # bundle is ad-hoc signed, which runs locally but cannot be notarized.
 set -euo pipefail
 
@@ -48,7 +50,9 @@ done
 
 if [[ "$SHELL_ONLY" == false ]]; then
   ENGINE_INSTALL="$PROJECT_ROOT/_engine/install/$ENGINE_REF"
-  ENGINE_ADAPTER="$PROJECT_ROOT/_engine/adapter/$ENGINE_REF/libglimsengine.dylib"
+  ADAPTER_ROOT="${GLIMS_ADAPTER_ROOT:-$PROJECT_ROOT/_engine/adapter}"
+  [[ "$ADAPTER_ROOT" == /* ]] || { echo "error: GLIMS_ADAPTER_ROOT must be an absolute directory." >&2; exit 2; }
+  ENGINE_ADAPTER="$ADAPTER_ROOT/$ENGINE_REF/libglimsengine.dylib"
   DEPS_PREFIX="$PROJECT_ROOT/_deps/macports"
   [[ -d "$ENGINE_INSTALL" ]] || {
     echo "error: Glims needs its image engine. Run scripts/bootstrap-deps.sh, scripts/build-engine.sh $ENGINE_REF and scripts/build-adapter.sh $ENGINE_REF, then build again." >&2

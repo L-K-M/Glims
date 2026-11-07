@@ -7,17 +7,32 @@
 #   scripts/check-bundle.sh [APP]   # default: dist/Glims.app
 #
 # Writes only to a temporary folder; HOME points there too.
+# GLIMS_ADAPTER_ROOT selects the matching conformance runner when the app was
+# built with isolated adapter outputs; use the same value for both commands.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${1:-$ROOT/dist/Glims.app}"
 ADAPTER="$APP/Contents/Frameworks/libglimsengine.dylib"
 [[ -f "$ADAPTER" ]] || { echo "error: $APP has no engine; build it with scripts/build-app.sh --engine GIMP_REF" >&2; exit 1; }
-case "$(cd "$APP" && pwd -P)/" in
-  "$ROOT/_engine/"*|"$ROOT/_deps/"*) echo "error: $APP is inside a build tree the check makes unreadable" >&2; exit 1 ;;
-esac
+ADAPTER_ROOT="${GLIMS_ADAPTER_ROOT:-$ROOT/_engine/adapter}"
+[[ "$ADAPTER_ROOT" == /* ]] || { echo "error: GLIMS_ADAPTER_ROOT must be an absolute directory." >&2; exit 2; }
+# Resolve shared worktree symlinks and escape profile strings. Isolated
+# adapter outputs are development inputs too, and must stay inaccessible.
+PROFILE="$(python3 - "$APP" "$ROOT/_engine" "$ROOT/_deps" "$ADAPTER_ROOT" <<'PY_PROFILE'
+import json
+from pathlib import Path
+import sys
+app = Path(sys.argv[1]).resolve()
+inputs = [Path(path).resolve() for path in sys.argv[2:]]
+if any(app.is_relative_to(path) for path in inputs):
+    sys.exit("error: the app is inside a build tree the check makes unreadable")
+subpaths = " ".join("(subpath " + json.dumps(str(path), ensure_ascii=False) + ")" for path in inputs)
+print("(version 1)\n(allow default)\n(deny file-read* file-write* " + subpaths + ")")
+PY_PROFILE
+)"
 
-TESTS="$(ls -t "$ROOT"/_engine/adapter/*/glims-engine-tests 2>/dev/null | head -1)"
+TESTS="$(ls -t "$ADAPTER_ROOT"/*/glims-engine-tests 2>/dev/null | head -1)"
 [[ -n "$TESTS" ]] || { echo "error: no conformance test binary; run scripts/build-adapter.sh first" >&2; exit 1; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/glims-check-bundle.XXXXXX")"
@@ -26,9 +41,6 @@ mkdir -p "$WORK/home" "$WORK/tests"
 # The test binary lives in _engine/; run a copy so the sandbox can deny it.
 cp "$TESTS" "$WORK/glims-engine-tests"
 
-PROFILE="(version 1)
-(allow default)
-(deny file-read* file-write* (subpath \"$ROOT/_engine\") (subpath \"$ROOT/_deps\"))"
 
 status=0
 echo "==> Conformance tests against the bundled adapter (build trees unreadable)"
