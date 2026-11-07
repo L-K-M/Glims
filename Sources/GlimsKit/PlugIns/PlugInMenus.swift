@@ -40,15 +40,25 @@ enum PlugInCommands {
 /// which also validates it against the front document.
 @MainActor
 enum PlugInMenus {
-    /// Marks generated items so a rebuild can replace them.
-    private static let generatedTag = 0x6C_6D_73
+    /// Marks generated items so a rebuild can replace them. The catalog's
+    /// native merge reads it to tell plug-in content from dedicated items.
+    static let generatedTag = 0x6C_6D_73
 
     /// Installs the commands into the menus named by `GlimsMenu`.
     static func install(_ procedures: [EngineSession.Procedure], in mainMenu: NSMenu) {
         let layout = PlugInMenuNode.layout(procedures)
         for glimsMenu in GlimsMenu.allCases {
             guard let menu = mainMenu.item(withTitle: glimsMenu.rawValue)?.submenu else { continue }
-            menu.items.filter { $0.tag == generatedTag }.forEach(menu.removeItem)
+            for item in menu.items where item.tag == generatedTag {
+                // A generated category is emptied, not removed, when the
+                // native merge shares it; it drops only once it is empty.
+                if let submenu = item.submenu {
+                    submenu.items.filter { $0.tag == generatedTag }.forEach(submenu.removeItem)
+                    if submenu.items.isEmpty { menu.removeItem(item) }
+                } else {
+                    menu.removeItem(item)
+                }
+            }
             guard let node = layout[glimsMenu], !node.isEmpty else { continue }
 
             if glimsMenu == .filter {
@@ -91,7 +101,11 @@ enum PlugInMenus {
         for (title, child) in node.orderedSubmenus {
             if let existing = menu.item(withTitle: title)?.submenu {
                 existing.items.filter { $0.tag == generatedTag }.forEach(existing.removeItem)
-                if !existing.items.isEmpty { existing.addItem(tagged(.separator())) }
+                // A trailing separator the native merge left behind
+                // already divides its entries from the plug-in block.
+                if !existing.items.isEmpty && existing.items.last?.isSeparatorItem != true {
+                    existing.addItem(tagged(.separator()))
+                }
                 append(child, to: existing)
             } else {
                 // Keep categories alphabetical among the native ones.

@@ -7,33 +7,21 @@ import AppKit
 /// non-destructive undo step; Cancel or closing the window aborts it and
 /// leaves no trace (design.md, principle 7).
 @MainActor
-final class GaussianBlurPanel: NSWindowController {
-    static let operation = "gegl:gaussian-blur"
+final class GaussianBlurPanel: FilterPreviewPanel {
+    nonisolated static let operation = "gegl:gaussian-blur"
     static let maximumRadius = 100.0
 
-    private let imageDocument: ImageDocument
     private let slider = NSSlider(value: 4, minValue: 0, maxValue: maximumRadius, target: nil, action: nil)
     private let field = NSTextField()
-    private var filter: Int32?
-    private var finished = false
-    private var committing = false
     private var appliedRadius = 4.0
-    var onFinish: (() -> Void)?
 
-    init?(document imageDocument: ImageDocument) {
-        guard let layer = imageDocument.activeLayer,
-              let filter = try? imageDocument.session.beginFilter(image: imageDocument.image, drawable: layer,
-                                                             operation: Self.operation) else { return nil }
-        self.imageDocument = imageDocument
-        self.filter = filter
-
+    init(document imageDocument: ImageDocument, filter: Int32) {
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 110),
                             styleMask: [.titled, .closable, .utilityWindow],
                             backing: .buffered, defer: false)
         panel.title = "Gaussian Blur"
         panel.isFloatingPanel = true
-        super.init(window: panel)
-        panel.delegate = self
+        super.init(document: imageDocument, panel: panel, filter: filter)
         buildContent(in: panel)
         apply(radius: slider.doubleValue)
     }
@@ -99,43 +87,5 @@ final class GaussianBlurPanel: NSWindowController {
             slider.doubleValue = appliedRadius
             field.doubleValue = appliedRadius
         }
-    }
-
-    @objc func commit() {
-        finish(commit: true)
-    }
-
-    @objc func cancel() {
-        finish(commit: false)
-    }
-
-    private func finish(commit: Bool) {
-        guard !finished, let filter else { return }
-        if commit {
-            guard !committing else { return }
-            committing = true
-            imageDocument.finishFilter(filter, commit: true) { [self] success in
-                committing = false
-                guard success, !finished else { return }
-                finished = true
-                self.filter = nil
-                window?.orderOut(nil)
-                onFinish?()
-            }
-        } else {
-            // Cancel may arrive while an accepted commit is still queued.
-            // The serial queue then either aborts it or finds it committed.
-            finished = true
-            self.filter = nil
-            imageDocument.finishFilter(filter, commit: false) { _ in }
-            window?.orderOut(nil)
-            onFinish?()
-        }
-    }
-}
-
-extension GaussianBlurPanel: NSWindowDelegate {
-    func windowWillClose(_ notification: Notification) {
-        finish(commit: false)
     }
 }
