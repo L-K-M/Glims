@@ -88,6 +88,10 @@ final class NativeFilterPanel: FilterPreviewPanel {
         grid.rowSpacing = 8
         grid.columnSpacing = 8
         if !properties.isEmpty { grid.column(at: 0).xPlacement = .trailing }
+        // NSScrollView does not size a generic document view. The grid
+        // needs its natural frame even when this short form never scrolls.
+        let settingsSize = grid.fittingSize
+        grid.setFrameSize(settingsSize)
 
         // Tall forms scroll; the rows then take the clip's width so the
         // labels wrap rather than the controls sliding under a scroller.
@@ -96,15 +100,17 @@ final class NativeFilterPanel: FilterPreviewPanel {
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        let clipped = grid.fittingSize.height > 380
+        let clipped = settingsSize.height > 380
         scroll.hasVerticalScroller = clipped
-        scroll.heightAnchor.constraint(equalToConstant: min(grid.fittingSize.height, 380)).isActive = true
-        scroll.widthAnchor.constraint(equalToConstant: min(grid.fittingSize.width + (clipped ? 16 : 0), 560)).isActive = true
+        scroll.heightAnchor.constraint(equalToConstant: min(settingsSize.height, 380)).isActive = true
+        let formWidth = min(settingsSize.width + (clipped ? 16 : 0), 560)
+        scroll.widthAnchor.constraint(equalToConstant: formWidth).isActive = true
         if clipped {
             grid.translatesAutoresizingMaskIntoConstraints = false
             scroll.contentView.addConstraints([
                 grid.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
                 grid.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+                grid.heightAnchor.constraint(equalToConstant: settingsSize.height),
             ])
         }
 
@@ -142,7 +148,13 @@ final class NativeFilterPanel: FilterPreviewPanel {
             stack.topAnchor.constraint(equalTo: panel.contentView!.topAnchor),
             stack.bottomAnchor.constraint(equalTo: panel.contentView!.bottomAnchor),
         ])
-        panel.setContentSize(NSSize(width: 420, height: stack.fittingSize.height))
+        panel.setContentSize(NSSize(width: max(420, formWidth + 32), height: stack.fittingSize.height))
+        panel.contentView?.layoutSubtreeIfNeeded()
+        // NSGridView is unflipped: the first row is at the top of a tall
+        // document, rather than the clip view's default bottom origin.
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, grid.frame.height - scroll.contentSize.height)))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        panel.center()
     }
 
     /// Commit a typed-but-uncommitted field before the session commits,
@@ -156,6 +168,7 @@ final class NativeFilterPanel: FilterPreviewPanel {
         let note = NSTextField(wrappingLabelWithString:
             "This filter has no settings; Apply commits it as it is.")
         note.textColor = .secondaryLabelColor
+        note.preferredMaxLayoutWidth = 360
         return note
     }
 

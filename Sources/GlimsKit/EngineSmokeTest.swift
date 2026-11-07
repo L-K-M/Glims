@@ -1889,6 +1889,13 @@ enum EngineSmokeTest {
             return
         }
         check(document.filterPreviewIsOpen, "the form marks the preview open")
+        panel.window?.contentView?.layoutSubtreeIfNeeded()
+        let settingsGrid = panel.window?.contentView.flatMap { descendant(of: $0, as: NSGridView.self) }
+        check(settingsGrid.map { $0.frame.width > 0 && $0.frame.height > 0 && !$0.visibleRect.isEmpty } == true,
+              "the settings grid occupies visible space in the real panel")
+        let visibleNumber = panel.window?.contentView.flatMap { descendant(of: $0, as: FilterNumberRow.self) }
+        check(visibleNumber.map { $0.field.visibleRect.width >= 40 && $0.field.visibleRect.height >= 16 } == true,
+              "a filter's editable number field is actually visible")
         panel.setProperty("std-dev-x", .number(20))
         panel.setProperty("std-dev-y", .number(20))
         wait()
@@ -2037,6 +2044,10 @@ enum EngineSmokeTest {
             check(false, "the no-settings form opens")
             return
         }
+        invertPanel.window?.contentView?.layoutSubtreeIfNeeded()
+        let noteGrid = invertPanel.window?.contentView.flatMap { descendant(of: $0, as: NSGridView.self) }
+        check(noteGrid?.cell(atColumnIndex: 0, rowIndex: 0).contentView?.visibleRect.isEmpty == false,
+              "the no-settings explanation is visible in its panel")
         let undoBeforeInvert = document.undoInfo.undoCount
         check(pixel(session, image, x: 8, y: 30) != preInvert,
               "the no-settings preview changes pixels")
@@ -2060,6 +2071,22 @@ enum EngineSmokeTest {
               "Apply on a no-settings form adds one named undo step (\(document.undoInfo.nextUndo))")
         check(pixel(session, image, x: 8, y: 30) != preInvert,
               "the committed no-settings filter changed the layer")
+
+        if let convolution = operations.first(where: { $0.name == "gegl:convolution-matrix" }),
+           let tall = open(convolution), let content = tall.window?.contentView,
+           let scroll = descendant(of: content, as: NSScrollView.self),
+           let grid = descendant(of: content, as: NSGridView.self),
+           let first = grid.cell(atColumnIndex: 1, rowIndex: 0).contentView,
+           let last = grid.cell(atColumnIndex: 1, rowIndex: grid.numberOfRows - 1).contentView {
+            content.layoutSubtreeIfNeeded()
+            check(scroll.hasVerticalScroller && grid.frame.height > scroll.contentSize.height
+                    && !first.visibleRect.isEmpty,
+                  "a tall form initially shows its first setting in a bounded scroll view")
+            last.scrollToVisible(last.bounds)
+            check(!last.visibleRect.isEmpty, "the last setting of a tall form can scroll into view")
+            tall.cancel()
+            wait()
+        } else { check(false, "the tall Convolution Matrix form opens") }
 
         // A begin must queue behind pending input: a blocked job stands
         // in for a committed stroke still on its way to the engine. The

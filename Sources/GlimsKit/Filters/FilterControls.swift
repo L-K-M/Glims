@@ -105,6 +105,7 @@ final class FilterNumberRow: NSView {
         slider.target = self
         slider.action = #selector(sliderChanged)
         slider.isContinuous = true
+        slider.widthAnchor.constraint(equalToConstant: 160).isActive = true
         slider.setAccessibilityLabel(property.label)
         slider.toolTip = property.blurb.isEmpty ? nil : property.blurb
 
