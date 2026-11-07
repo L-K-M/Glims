@@ -177,7 +177,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// another document's field or palette edits.
     private func endPendingEdits() {
         window?.endEditing(for: nil)
-        blurPanel?.window?.endEditing(for: nil)
+        previewPanel?.window?.endEditing(for: nil)
         for paletteWindow in PaletteEditScope.windowsEditing(imageDocument) {
             paletteWindow.endEditing(for: nil)
         }
