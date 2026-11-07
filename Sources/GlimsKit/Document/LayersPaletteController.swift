@@ -9,8 +9,8 @@ import RigiUI
 /// and a name that edits in place. The button bar adds a layer or a group,
 /// duplicates and deletes.
 @MainActor
-final class LayersPaletteController: NSViewController, PaletteContent, NSOutlineViewDataSource,
-                                     NSOutlineViewDelegate, NSMenuItemValidation {
+final class LayersPaletteController: NSViewController, PaletteContent, PaletteEditScope.Content,
+                                     NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuItemValidation {
     typealias Target = ImageDocument
 
     static let definition = PaletteDefinition(
@@ -30,6 +30,10 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSOutline
     /// Which document the outline's rows currently show, for expansion
     /// memory; groups reopen after a reload and after a retarget back.
     private var displayedDocument: ObjectIdentifier?
+    /// The expanded groups in the displayed tree, tracked from the
+    /// outline's expand and collapse notifications: `isItemExpanded`
+    /// reports false for an item a collapsed ancestor hides, so sampling
+    /// the outline would forget groups nested inside collapsed parents.
     private var expandedGroupIDs = Set<Int32>()
     private var expansionByDocument: [ObjectIdentifier: Set<Int32>] = [:]
     /// The selection the outline last applied; a new selection inside a
@@ -168,8 +172,12 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSOutline
     }
 
     func retarget(to target: ImageDocument?) {
+        PaletteEditScope.track(self)
+        // Only a real target change forgets the synced selection: this
+        // also runs for every state change of the shown document, and
+        // resetting then would reopen its collapsed ancestors each time.
+        if target !== document { lastSyncedSelection = nil }
         document = target
-        lastSyncedSelection = nil
         reload()
     }
 
@@ -188,11 +196,9 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSOutline
         reloading = true
         defer { reloading = false }
         let shown = document.map { ObjectIdentifier($0) }
-        if shown == displayedDocument {
-            expandedGroupIDs = visibleExpandedIDs()
-        } else {
+        if shown != displayedDocument {
             if let previous = displayedDocument {
-                expansionByDocument[previous] = visibleExpandedIDs()
+                expansionByDocument[previous] = expandedGroupIDs
             }
             expandedGroupIDs = shown.flatMap { expansionByDocument[$0] } ?? []
         }
@@ -208,10 +214,12 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSOutline
            let node = snapshot.tree.nodesByID[active] {
             if active != lastSyncedSelection {
                 // A selection that landed inside a collapsed group opens
-                // its parents once so the row can be seen.
+                // its parents once so the row can be seen; opened ones
+                // count as expanded like a user's own expansion.
                 var parent = node.parent
                 while let group = parent {
                     outline.expandItem(group)
+                    expandedGroupIDs.insert(group.id)
                     parent = group.parent
                 }
             }
@@ -228,21 +236,51 @@ final class LayersPaletteController: NSViewController, PaletteContent, NSOutline
         }
     }
 
-    /// The expanded groups the outline currently shows.
-    private func visibleExpandedIDs() -> Set<Int32> {
-        var ids = Set<Int32>()
-        for row in 0..<outline.numberOfRows {
-            guard let node = outline.item(atRow: row) as? LayerTree.Node,
-                  outline.isItemExpanded(node) else { continue }
-            ids.insert(node.id)
-        }
-        return ids
-    }
-
     /// Whether a layer name in the list is being edited.
     private var isRenaming: Bool {
         LayerRowView.isRenaming(in: outline)
     }
+
+    // MARK: Expansion tracking
+
+    /// The groups a collapse is currently hiding: AppKit consults
+    /// shouldCollapseItem for a collapsed item's descendants too, parent
+    /// first, and their expansion is meant to survive, so a group stops
+    /// counting as expanded only when nothing collapsing contains it.
+    private var collapsingIDs = Set<Int32>()
+
+    func outlineViewItemDidExpand(_ notification: Notification) {
+        guard let node = notification.userInfo?["NSObject"] as? LayerTree.Node else { return }
+        if !reloading { expandedGroupIDs.insert(node.id) }
+        // A group nested inside this node keeps its tracked expansion
+        // while the node is collapsed, but expandItem cannot mark it
+        // until the node expands again.
+        for child in node.children where expandedGroupIDs.contains(child.id) {
+            outline.expandItem(child)
+        }
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, shouldCollapseItem item: Any) -> Bool {
+        guard !reloading, let node = item as? LayerTree.Node else { return true }
+        var ancestor = node.parent
+        while let parent = ancestor {
+            if collapsingIDs.contains(parent.id) { return true }
+            ancestor = parent.parent
+        }
+        expandedGroupIDs.remove(node.id)
+        collapsingIDs.insert(node.id)
+        return true
+    }
+
+    func outlineViewItemDidCollapse(_ notification: Notification) {
+        guard let node = notification.userInfo?["NSObject"] as? LayerTree.Node else { return }
+        collapsingIDs.remove(node.id)
+    }
+
+    // MARK: PaletteEditScope
+
+    /// The document a name edit in this palette belongs to.
+    var editTarget: ImageDocument? { document }
 
     /// The outline's double-click: edit the clicked row's name in place.
     @objc private func editNameOfClickedRow(_ sender: NSOutlineView) {

@@ -8,8 +8,9 @@ import RigiUI
 /// area the selection, draw it on the active layer in the foreground color
 /// at the Path tool's stroke width, and delete it.
 @MainActor
-final class PathsPaletteController: NSViewController, PaletteContent, NSTableViewDataSource,
-                                     NSTableViewDelegate, NSTextFieldDelegate, NSMenuItemValidation {
+final class PathsPaletteController: NSViewController, PaletteContent, PaletteEditScope.Content,
+                                     NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate,
+                                     NSMenuItemValidation {
     typealias Target = ImageDocument
 
     static let definition = PaletteDefinition(
@@ -117,9 +118,13 @@ final class PathsPaletteController: NSViewController, PaletteContent, NSTableVie
     }
 
     func retarget(to target: ImageDocument?) {
+        PaletteEditScope.track(self)
         document = target
         reload()
     }
+
+    /// The document a name edit in this palette belongs to.
+    var editTarget: ImageDocument? { document }
 
     func reload() {
         for command in Command.allCases {

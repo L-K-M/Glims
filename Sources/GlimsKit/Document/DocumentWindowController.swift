@@ -148,9 +148,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     /// Commits in-flight field and canvas-text edits and ends an active
     /// stroke; runs before a user layer selection or a structural/lock
-    /// change so those never race a half-committed edit.
+    /// change so those never race a half-committed edit. Only edits that
+    /// belong to this document end: its own window and dialogs plus the
+    /// palettes aimed at it — a routine layer command must not commit
+    /// another document's field or palette edits.
     private func endPendingEdits() {
-        NSApp.windows.forEach { $0.endEditing(for: nil) }
+        window?.endEditing(for: nil)
+        blurPanel?.window?.endEditing(for: nil)
+        for paletteWindow in PaletteEditScope.windowsEditing(imageDocument) {
+            paletteWindow.endEditing(for: nil)
+        }
         canvas.tools.finishTextEditing()
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
     }

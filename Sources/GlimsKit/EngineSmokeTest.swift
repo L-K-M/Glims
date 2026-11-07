@@ -98,6 +98,7 @@ enum EngineSmokeTest {
             try exerciseLayerTree(session, documents: documents)
             try exercisePaths(session, documents: documents)
             try exercisePaletteControls(session, documents: documents)
+            try exercisePendingEditScope(session, documents: documents)
             try exercisePlugInCommands(session, documents: documents)
             try measurePluginStalls(session, work: work)
         } catch {
@@ -665,6 +666,24 @@ enum EngineSmokeTest {
                 && document.layers.first(where: { $0.id == moved.id })?.depth == 1,
               "a layer drops back into the group")
 
+        let layerPalette = LayersPaletteController()
+        _ = layerPalette.view
+        layerPalette.retarget(to: document)
+        if let outline = descendant(of: layerPalette.view, as: NSOutlineView.self),
+           let groupNode = (0..<outline.numberOfRows).compactMap({ outline.item(atRow: $0) as? LayerTree.Node })
+                .first(where: { $0.id == group.id }) {
+            outline.expandItem(groupNode)
+            outline.collapseItem(groupNode)
+            check(!outline.isItemExpanded(groupNode), "a user can collapse the selected layer's group")
+            layerPalette.retarget(to: document)
+            let refreshed = (0..<outline.numberOfRows).compactMap { outline.item(atRow: $0) as? LayerTree.Node }
+                .first { $0.id == group.id }
+            check(refreshed.map { !outline.isItemExpanded($0) } == true,
+                  "retargeting the unchanged document preserves a collapsed selected group")
+        } else {
+            check(false, "the layer outline exposes the created group")
+        }
+
         // A group created while a group is active nests inside it; a
         // group cannot be dropped into its own subtree.
         document.selectLayer(group.id)
@@ -680,6 +699,45 @@ enum EngineSmokeTest {
             check(controller.statusBar.message.contains("cannot be moved")
                     && document.layers.first(where: { $0.id == group.id })?.parent == 0,
                   "dropping a group into its own subtree is refused with an actionable message")
+
+            // Moving a layer into `inner` makes it an expandable nested
+            // group: group > inner > moved. AppKit keeps a child's
+            // expansion under a collapsed parent; the reload a retarget
+            // runs must keep it too.
+            document.moveLayer(moved.id, toParent: inner.id, atIndex: 0)
+            settle()
+            layerPalette.retarget(to: document)
+            if let outline = descendant(of: layerPalette.view, as: NSOutlineView.self) {
+                func rowNode(_ id: Int32) -> LayerTree.Node? {
+                    (0..<outline.numberOfRows).compactMap { outline.item(atRow: $0) as? LayerTree.Node }
+                        .first { $0.id == id }
+                }
+                if let outerNode = rowNode(group.id) {
+                    outline.expandItem(outerNode)
+                    if let innerNode = rowNode(inner.id) {
+                        outline.expandItem(innerNode)
+                        outline.collapseItem(outerNode)
+                        outline.expandItem(outerNode)
+                        check(rowNode(inner.id).map { outline.isItemExpanded($0) } == true,
+                              "collapsing a parent keeps a nested group's expansion")
+                        outline.collapseItem(outerNode)
+                        layerPalette.retarget(to: document)
+                        if let outerAgain = rowNode(group.id) {
+                            outline.expandItem(outerAgain)
+                            check(rowNode(inner.id).map { outline.isItemExpanded($0) } == true,
+                                  "a reload preserves a group's expansion inside a collapsed parent")
+                        } else {
+                            check(false, "the collapsed parent is still in the outline")
+                        }
+                    } else {
+                        check(false, "the outline shows the moved layer inside the nested group")
+                    }
+                } else {
+                    check(false, "the outline shows the outer group")
+                }
+            } else {
+                check(false, "the layer palette has an outline")
+            }
         }
 
         // Layer ▸ Lock items toggle the item's own locks; the engine and
@@ -1037,6 +1095,119 @@ enum EngineSmokeTest {
         check(descendant(of: options.view, as: ClassicValueSlider.self) != nil,
               "Tool Options shows value sliders for a painting tool")
         ToolState.shared.select(previousTool)
+    }
+
+    /// Two documents side by side: a routine layer command on one must
+    /// finish only its own pending edits. A field in each document's
+    /// window and a rename in a Layers palette aimed at each document
+    /// hold real field editors; the other document's keep typing.
+    private static func exercisePendingEditScope(_ session: EngineSession, documents: DocumentList) throws {
+        let documentA = try ImageDocument(session: session, image: session.newImage(width: 32, height: 32), name: "A")
+        documents.items.append(documentA)
+        let controllerA = DocumentWindowController(document: documentA)
+        controllerA.showWindow(nil)
+        let windowA = try XCTUnwrapWindow(controllerA)
+        let documentB = try ImageDocument(session: session, image: session.newImage(width: 32, height: 32), name: "B")
+        documents.items.append(documentB)
+        let controllerB = DocumentWindowController(document: documentB)
+        controllerB.showWindow(nil)
+        let windowB = try XCTUnwrapWindow(controllerB)
+        func settle() {
+            documentA.inputQueue.sync {}
+            documentB.inputQueue.sync {}
+            spin()
+        }
+
+        // A second layer makes the pick a real change of the active one.
+        controllerA.newLayer(nil)
+        settle()
+        guard let active = documentA.layers.first, let other = documentA.layers.last,
+              active.id != other.id else {
+            check(false, "document A has two layers to pick between")
+            return
+        }
+
+        // Editable fields own each document window's field editor.
+        let fieldA = NSTextField(string: "100")
+        fieldA.isEditable = true
+        fieldA.frame = NSRect(x: 0, y: 0, width: 80, height: 18)
+        windowA.contentView?.addSubview(fieldA)
+        let fieldB = NSTextField(string: "200")
+        fieldB.isEditable = true
+        fieldB.frame = NSRect(x: 0, y: 0, width: 80, height: 18)
+        windowB.contentView?.addSubview(fieldB)
+
+        // Each Layers palette aims at its document from its own window,
+        // as the floating panels host them.
+        func layersInWindow(_ document: ImageDocument) -> (LayersPaletteController, NSWindow) {
+            let palette = LayersPaletteController()
+            palette.retarget(to: document)
+            let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 260, height: 300),
+                                styleMask: [.titled], backing: .buffered, defer: false)
+            host.isReleasedWhenClosed = false
+            host.contentView = palette.view
+            host.contentView?.layoutSubtreeIfNeeded()
+            return (palette, host)
+        }
+        let (paletteA, hostA) = layersInWindow(documentA)
+        let (paletteB, hostB) = layersInWindow(documentB)
+        func renameRow(_ palette: LayersPaletteController, _ name: String) -> NSTextField? {
+            guard let outline = descendant(of: palette.view, as: NSOutlineView.self),
+                  let row = outline.view(atColumn: 0, row: 0, makeIfNecessary: true) as? LayerRowView
+            else { return nil }
+            row.startEditingName()
+            row.nameField.currentEditor()?.string = name
+            return row.nameField
+        }
+        let nameFieldA = renameRow(paletteA, "Renamed A")
+        let nameFieldB = renameRow(paletteB, "Renamed B")
+
+        windowA.makeFirstResponder(fieldA)
+        fieldA.currentEditor()?.string = "150"
+        windowB.makeFirstResponder(fieldB)
+        fieldB.currentEditor()?.string = "250"
+
+        // A canvas text draft and a stroke are mid-edit on document A too.
+        var textSettings = EngineSession.TextSettings()
+        textSettings.font = ((try? session.fonts()) ?? []).first ?? "Sans-serif"
+        textSettings.size = 18
+        let previousTool = ToolState.shared.current
+        ToolState.shared.select(.text)
+        ToolState.shared.textSettings = textSettings
+        if let press = NSEvent.mouseEvent(with: .leftMouseDown,
+                                          location: controllerA.canvas.convert(CGPoint(x: 6, y: 6), to: nil),
+                                          modifierFlags: [], timestamp: 0, windowNumber: windowA.windowNumber,
+                                          context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+            controllerA.canvas.mouseDown(with: press)
+        }
+        controllerA.canvas.tools.textEditor?.insertText("Draft", replacementRange: NSRange(location: NSNotFound, length: 0))
+        documentA.beginStroke(at: .init(x: 2, y: 2, pressure: 1))
+        check(controllerA.canvas.tools.textEditor != nil && documentA.strokeIsActive,
+              "document A holds a text draft and a stroke while edits are pending")
+
+        let nameBeforeB = documentB.layers.first?.name
+        documentA.selectLayer(other.id)
+        settle()
+
+        check(fieldA.currentEditor() == nil && fieldA.stringValue == "150",
+              "a layer pick commits the field edit in its own window")
+        check(nameFieldA?.currentEditor() == nil && documentA.layers.contains { $0.name == "Renamed A" },
+              "a layer pick commits a rename in a palette aimed at its document")
+        check(controllerA.canvas.tools.textEditor == nil,
+              "a layer pick finishes its document's canvas text edit")
+        check(!documentA.strokeIsActive, "a layer pick ends its document's stroke")
+        check(fieldB.currentEditor() != nil,
+              "a layer pick leaves the other document's field editor running")
+        check(nameFieldB?.currentEditor() != nil && documentB.layers.first?.name == nameBeforeB,
+              "a layer pick leaves a palette aimed at the other document renaming")
+
+        ToolState.shared.select(previousTool)
+        windowB.makeFirstResponder(nil)
+        hostB.makeFirstResponder(nil)
+        hostA.close()
+        hostB.close()
+        windowA.orderOut(nil)
+        windowB.orderOut(nil)
     }
 
     private static func buttons(in view: NSView) -> [NSButton] {
