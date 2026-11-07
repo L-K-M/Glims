@@ -23,11 +23,12 @@ final class LayerRowEditingTests: XCTestCase {
         let owner = NSObject()
         let first = makeLayer(id: 1), second = makeLayer(id: 2)
         let shown = LayerListSnapshot(document: owner, layers: [first, second])
-        XCTAssertEqual(shown.layer(at: 0, for: owner, currentLayers: [second, first])?.id, 1)
-        XCTAssertNil(shown.layer(at: 1, for: owner, currentLayers: [first]))
-        XCTAssertNil(shown.layer(at: 0, for: NSObject(), currentLayers: [first, second]))
-        XCTAssertNil(shown.layer(at: -1, for: owner, currentLayers: [first, second]))
-        XCTAssertNil(shown.layer(at: 100, for: owner, currentLayers: [first, second]))
+        let firstItem = shown.tree.nodesByID[1], secondItem = shown.tree.nodesByID[2]
+        XCTAssertEqual(shown.layer(for: firstItem, for: owner, currentLayers: [second, first])?.id, 1)
+        XCTAssertNil(shown.layer(for: secondItem, for: owner, currentLayers: [first]))
+        XCTAssertNil(shown.layer(for: firstItem, for: NSObject(), currentLayers: [first, second]))
+        XCTAssertNil(shown.layer(for: nil, for: owner, currentLayers: [first, second]))
+        XCTAssertNil(shown.layer(for: NSObject(), for: owner, currentLayers: [first, second]))
     }
 
     /// Records what a row tried to change and whether the document accepted.
@@ -66,12 +67,12 @@ final class LayerRowEditingTests: XCTestCase {
     func testPaletteTableUsesTheRowHeightAndDoubleClick() {
         let controller = LayersPaletteController()
         _ = controller.view
-        let table = descendant(of: controller.view, as: NSTableView.self)
+        let outline = descendant(of: controller.view, as: NSOutlineView.self)
 
-        XCTAssertEqual(table?.rowHeight, LayerRowView.rowHeight)
-        XCTAssertGreaterThanOrEqual(table?.rowHeight ?? 0, 22)
-        XCTAssertTrue(table?.target === controller)
-        XCTAssertNotNil(table?.doubleAction)
+        XCTAssertEqual(outline?.rowHeight, LayerRowView.rowHeight)
+        XCTAssertGreaterThanOrEqual(outline?.rowHeight ?? 0, 22)
+        XCTAssertTrue(outline?.target === controller)
+        XCTAssertNotNil(outline?.doubleAction)
     }
 
     func testTitleStillDescribesTheWholeRow() {
@@ -223,9 +224,9 @@ final class LayerRowEditingTests: XCTestCase {
 
     func testRenameDetectionFollowsTheFieldEditor() {
         _ = NSApplication.shared
-        let table = NSTableView()
-        table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("layer")))
-        table.rowHeight = LayerRowView.rowHeight
+        let outline = NSOutlineView()
+        outline.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("layer")))
+        outline.rowHeight = LayerRowView.rowHeight
         let row = LayerRowView(layer: makeLayer(),
                                context: LayerRowView.Context(document: NSObject(), layerID: 1),
                                commit: { _, _ in true })
@@ -233,15 +234,15 @@ final class LayerRowEditingTests: XCTestCase {
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        window.contentView = table
-        table.addSubview(row)
+        window.contentView = outline
+        outline.addSubview(row)
         window.contentView?.layoutSubtreeIfNeeded()
 
-        XCTAssertFalse(LayerRowView.isRenaming(in: table))
+        XCTAssertFalse(LayerRowView.isRenaming(in: outline))
         row.startEditingName()
-        XCTAssertTrue(LayerRowView.isRenaming(in: table))
+        XCTAssertTrue(LayerRowView.isRenaming(in: outline))
         window.makeFirstResponder(nil)
-        XCTAssertFalse(LayerRowView.isRenaming(in: table))
+        XCTAssertFalse(LayerRowView.isRenaming(in: outline))
     }
 
     func testDoubleClickStartsAndEndsANameEdit() {
@@ -284,5 +285,36 @@ final class LayerRowEditingTests: XCTestCase {
         row.startEditingName()
         XCTAssertTrue(panel.isKeyWindow, "typing a layer name must reach the palette rather than canvas shortcuts")
         XCTAssertNotNil(row.nameField.currentEditor())
+    }
+
+    func testLockBadgeAppearsOnlyWithEffectiveLocks() {
+        let unlocked = LayerRowView(layer: makeLayer(),
+                                    context: LayerRowView.Context(document: NSObject(), layerID: 1),
+                                    locks: LayerTree.LockSources(),
+                                    commit: { _, _ in true })
+        XCTAssertNil(unlocked.lockView)
+
+        var sources = LayerTree.LockSources()
+        sources.local = [.pixels]
+        sources.effective = [.pixels]
+        let locked = LayerRowView(layer: makeLayer(),
+                                  context: LayerRowView.Context(document: NSObject(), layerID: 1),
+                                  locks: sources,
+                                  commit: { _, _ in true })
+        XCTAssertNotNil(locked.lockView)
+        XCTAssertEqual(locked.lockView?.contentTintColor, .labelColor)
+    }
+
+    func testLockBadgeExplainsLocalInheritedAndDescendantLocks() {
+        var sources = LayerTree.LockSources()
+        sources.local = [.pixels]
+        sources.inherited = [.position]
+        sources.descendant = [.alpha]
+        sources.effective = [.pixels, .position, .alpha]
+        let accessibility = LayerRowView.lockAccessibility(sources, name: "Set")
+        XCTAssertEqual(accessibility.label, "Locked: pixels, position, transparency")
+        XCTAssertEqual(accessibility.help, "Set: locked pixels; position locked by a parent group; "
+            + "a layer inside has locked transparency")
+        XCTAssertEqual(LayerRowView.lockNames([.position, .alpha]), "position, transparency")
     }
 }

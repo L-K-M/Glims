@@ -95,6 +95,7 @@ enum EngineSmokeTest {
             try exerciseDisplayDensity(session, documents: documents)
             try exerciseTools(session, documents: documents)
             try exerciseEditing(session, documents: documents)
+            try exerciseLayerTree(session, documents: documents)
             try exercisePaths(session, documents: documents)
             try exercisePaletteControls(session, documents: documents)
             try exercisePlugInCommands(session, documents: documents)
@@ -591,6 +592,183 @@ enum EngineSmokeTest {
         spin()
         check(try session.selectionBounds(image: image) == CGRect(x: 0, y: 0, width: 400, height: 300),
               "Select ▸ All selects the whole image")
+        controller.window?.orderOut(nil)
+    }
+
+    /// Groups, tree moves and locks through the same document APIs the
+    /// Layers palette and the Layer menu use: group creation, selection
+    /// and nesting, an undoable reparent, lock toggles and the paint/move
+    /// refusals they cause, a queued creation losing to a later user
+    /// pick, and the filter preview gating layer changes.
+    private static func exerciseLayerTree(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Layers")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+
+        // Layer ▸ New Layer Group lands above the active layer and is selected.
+        controller.newLayerGroup(nil)
+        settle()
+        guard let group = document.layers.first(where: { $0.kind == .group }) else {
+            check(false, "Layer ▸ New Layer Group inserts a group")
+            controller.window?.orderOut(nil)
+            return
+        }
+        check(document.layers.count == 2 && document.activeLayer == group.id,
+              "Layer ▸ New Layer Group inserts a group and selects it")
+
+        // A group row is a valid selection target for metadata and filters.
+        guard let background = document.layers.last?.id else { return }
+        document.selectLayer(background)
+        settle()
+        document.selectLayer(group.id)
+        settle()
+        check(document.activeLayer == group.id, "a group can be the selected item")
+
+        // ...but it cannot be painted on.
+        document.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
+        check(!document.strokeIsActive && controller.statusBar.message.contains("cannot be painted"),
+              "painting on a group is refused before the engine is asked")
+        document.endStroke()
+
+        // A new layer with a group active lands inside it; dropping it to
+        // the top level reparents it, undoably.
+        controller.newLayer(nil)
+        settle()
+        guard let moved = document.layers.first(where: { $0.kind == .pixel && $0.parent == group.id }) else {
+            check(false, "Layer ▸ New Layer with a group active adds the layer inside it")
+            controller.window?.orderOut(nil)
+            return
+        }
+        check(moved.depth == 1, "Layer ▸ New Layer with a group active adds the layer inside it")
+        document.moveLayer(moved.id, toParent: 0, atIndex: 0)
+        settle()
+        check(document.layers.first(where: { $0.id == moved.id })?.parent == 0
+                && document.layers.first(where: { $0.id == moved.id })?.depth == 0,
+              "dropping a layer to the top level reparents it")
+        document.undo()
+        settle()
+        check(document.layers.first(where: { $0.id == moved.id })?.parent == group.id,
+              "undo restores the layer's parent")
+        document.redo()
+        settle()
+        check(document.layers.first(where: { $0.id == moved.id })?.parent == 0,
+              "redo repeats the reparent")
+        document.moveLayer(moved.id, toParent: group.id, atIndex: 0)
+        settle()
+        check(document.layers.first(where: { $0.id == moved.id })?.parent == group.id
+                && document.layers.first(where: { $0.id == moved.id })?.depth == 1,
+              "a layer drops back into the group")
+
+        // A group created while a group is active nests inside it; a
+        // group cannot be dropped into its own subtree.
+        document.selectLayer(group.id)
+        settle()
+        controller.newLayerGroup(nil)
+        settle()
+        let inner = document.layers.first(where: { $0.kind == .group && $0.id != group.id })
+        check(inner?.parent == group.id && inner?.depth == 1,
+              "a group created with a group active becomes its first child")
+        if let inner {
+            document.moveLayer(group.id, toParent: inner.id, atIndex: 0)
+            settle()
+            check(controller.statusBar.message.contains("cannot be moved")
+                    && document.layers.first(where: { $0.id == group.id })?.parent == 0,
+                  "dropping a group into its own subtree is refused with an actionable message")
+        }
+
+        // Layer ▸ Lock items toggle the item's own locks; the engine and
+        // the interface refuse editing through them.
+        document.selectLayer(moved.id)
+        settle()
+        let lockPixels = NSMenuItem(title: "Lock Pixels", action: nil, keyEquivalent: "")
+        lockPixels.tag = Int(EngineSession.LayerLocks.pixels.rawValue)
+        controller.toggleLayerLock(lockPixels)
+        settle()
+        check(document.layerLocks[moved.id]?.local == [.pixels]
+                && document.layerLocks[moved.id]?.effective.contains(.pixels) == true,
+              "Layer ▸ Lock ▸ Lock Pixels sets the layer's own lock")
+        document.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
+        document.continueStroke([.init(x: 9, y: 8, pressure: 1)])
+        document.endStroke()
+        settle()
+        check(controller.statusBar.message.contains("Unlock")
+                && (pixel(session, image, x: 8, y: 8)?[0] ?? 255) > 200,
+              "a pixel lock refuses the stroke with an actionable message")
+
+        let lockPosition = NSMenuItem(title: "Lock Position", action: nil, keyEquivalent: "")
+        lockPosition.tag = Int(EngineSession.LayerLocks.position.rawValue)
+        controller.toggleLayerLock(lockPosition)
+        settle()
+        document.moveActiveLayer(by: CGSize(width: 6, height: 6))
+        settle()
+        check(controller.statusBar.message.contains("Unlock"),
+              "a position lock refuses the Move tool's drag")
+        document.setLayerLocks(moved.id, [.pixels, .position], to: false)
+        settle()
+        check(document.layerLocks[moved.id]?.local.isEmpty == true,
+              "unlocking clears the layer's own locks")
+        document.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
+        document.continueStroke([.init(x: 9, y: 8, pressure: 1)])
+        document.endStroke()
+        settle()
+        check((pixel(session, image, x: 8, y: 8)?[0] ?? 255) < 64, "unlocked, the stroke paints")
+
+        // A queued layer creation must not override a pick the user made
+        // while it was queued.
+        document.inputQueue.async { Thread.sleep(forTimeInterval: 0.4) }
+        let countBeforeNew = document.layers.count
+        document.layerCommand(.new)
+        document.selectLayer(background)
+        settle()
+        check(document.layers.count == countBeforeNew + 1 && document.activeLayer == background,
+              "a late new-layer completion keeps the user's selection")
+
+        var textSettings = EngineSession.TextSettings()
+        let fonts = (try? session.fonts()) ?? []
+        textSettings.font = fonts.contains("Sans-serif") ? "Sans-serif" : (fonts.first ?? "Sans-serif")
+        document.inputQueue.async { Thread.sleep(forTimeInterval: 0.4) }
+        document.addText("Late", settings: textSettings, at: CGPoint(x: 6, y: 30))
+        document.selectLayer(background)
+        settle()
+        check(document.layers.contains(where: { $0.kind == .text }) && document.activeLayer == background,
+              "a late text-layer creation keeps the user's selection")
+        if let text = document.layers.first(where: { $0.kind == .text })?.id {
+            document.selectLayer(text)
+            settle()
+            document.layerCommand(.delete)
+            settle()
+        }
+
+        // The blur preview gates every layer command until it finishes.
+        if let pixelLayer = document.layers.first(where: { $0.kind == .pixel })?.id {
+            document.selectLayer(pixelLayer)
+            settle()
+        }
+        controller.gaussianBlur(nil)
+        settle()
+        check(document.filterPreviewIsOpen, "the blur preview marks the document previewing")
+        let countBeforeRefused = document.layers.count
+        document.createGroup()
+        settle()
+        check(document.layers.count == countBeforeRefused
+                && controller.statusBar.message.contains("preview"),
+              "a filter preview refuses New Layer Group with an actionable message")
+        if let other = document.layers.first(where: { $0.id != document.activeLayer })?.id {
+            let active = document.activeLayer
+            document.selectLayer(other)
+            check(document.activeLayer == active && controller.statusBar.message.contains("preview"),
+                  "a filter preview refuses layer picks")
+        }
+        controller.cancelOperation(nil)
+        settle()
+        check(!document.filterPreviewIsOpen, "canceling the preview reopens layer commands")
+
         controller.window?.orderOut(nil)
     }
 
