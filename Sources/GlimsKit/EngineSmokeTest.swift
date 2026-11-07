@@ -97,6 +97,7 @@ enum EngineSmokeTest {
             try exerciseTools(session, documents: documents)
             try exerciseEditing(session, documents: documents)
             try exerciseLayerTree(session, documents: documents)
+            try exercisePreferences(session, documents: documents)
             try exercisePaths(session, documents: documents)
             try exercisePaletteControls(session, documents: documents)
             try exercisePendingEditScope(session, documents: documents)
@@ -610,6 +611,32 @@ enum EngineSmokeTest {
     /// and nesting, an undoable reparent, lock toggles and the paint/move
     /// refusals they cause, a queued creation losing to a later user
     /// pick, and the filter preview gating layer changes.
+    private static func exercisePreferences(_ session: EngineSession, documents: DocumentList) throws {
+        let suite = "ch.lkmc.Glims.smoke.preferences.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = EditorPreferences(defaults: defaults)
+        let image = try session.newImage(width: 32, height: 24)
+        let document = try ImageDocument(session: session, image: image, name: "Preferences")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document, preferences: preferences)
+        controller.showWindow(nil)
+        let before = pixel(session, image, x: 8, y: 8)
+        preferences.surround = .dark
+        let scroll = controller.window?.contentView.flatMap { descendant(of: $0, as: NSScrollView.self) }
+        check(controller.canvas.surroundColor == EditorPreferences.Surround.dark.color &&
+                scroll?.backgroundColor == EditorPreferences.Surround.dark.color,
+              "changing canvas surround updates an already-open document and its viewport")
+        preferences.reset()
+        check(controller.canvas.surroundColor == EditorPreferences.Surround.medium.color &&
+                scroll?.backgroundColor == EditorPreferences.Surround.medium.color,
+              "restoring preferences updates existing canvas surrounds")
+        check(pixel(session, image, x: 8, y: 8) == before &&
+                !document.hasUnsavedChanges && document.undoInfo.undoCount == 0,
+              "display preferences leave image pixels and undo history unchanged")
+        controller.window?.orderOut(nil)
+    }
+
     private static func exerciseLayerTree(_ session: EngineSession, documents: DocumentList) throws {
         let image = try session.newImage(width: 64, height: 64)
         let document = try ImageDocument(session: session, image: image, name: "Layers")

@@ -22,6 +22,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private var documents: [DocumentWindowController] = []
     private var workspace: WorkspaceWindowController?
     private var newImagePanel: NewImagePanel?
+    private var preferencesWindow: PreferencesWindowController?
     private var pendingOpenURLs: [URL] = []
     private var openingURLs: Set<URL> = []
     private var pendingFileOperations = 0
@@ -90,6 +91,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        ClassicChrome.apply(scheme: EditorPreferences.shared.appearance)
+        NotificationCenter.default.addObserver(self, selector: #selector(preferencesChanged),
+                                               name: EditorPreferences.didChange, object: EditorPreferences.shared)
+        NotificationCenter.default.addObserver(self, selector: #selector(auxiliaryWindowBecameKey(_:)),
+                                               name: NSWindow.didBecomeKeyNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(openPendingFiles),
                                                name: PlugInCommands.didFinishNotification, object: nil)
         guard let path = EngineLibrary.configuredPath() else {
@@ -112,6 +118,26 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             DispatchQueue.main.async { self?.engineDidStart(result) }
         }
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func preferencesChanged() {
+        ClassicChrome.apply(scheme: EditorPreferences.shared.appearance)
+        NSApp.windows.forEach { applyAuxiliaryAppearance($0) }
+    }
+
+    @objc private func auxiliaryWindowBecameKey(_ notification: Notification) {
+        if let window = notification.object as? NSWindow { applyAuxiliaryAppearance(window) }
+    }
+
+    private func applyAuxiliaryAppearance(_ window: NSWindow) {
+        guard !(window.windowController is DocumentWindowController) else { return }
+        window.appearance = EditorPreferences.shared.chromeAppearance
+    }
+
+    @objc func showPreferences(_ sender: Any?) {
+        if preferencesWindow == nil { preferencesWindow = PreferencesWindowController() }
+        preferencesWindow?.showWindow(nil)
+        preferencesWindow?.window?.makeKeyAndOrderFront(nil)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -240,7 +266,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         }
         documents.append(controller)
         controller.showWindow(nil)
-        controller.fitImage(nil)
+        if EditorPreferences.shared.initialView == .fit { controller.fitImage(nil) }
         PaletteCenter.shared.frontDocumentDidChange()
         PaletteCenter.shared.setDefaultLayout(Self.defaultPaletteLayout)
         // Paths and History before Layers, so Layers is the tab their

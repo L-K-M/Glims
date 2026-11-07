@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
 final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
     let imageDocument: ImageDocument
     let canvas: EngineCanvasView
+    private let preferences: EditorPreferences
     let statusBar = StatusBarView(frame: .zero)
     private let scrollView = NSScrollView()
     private lazy var engineUndoManager = EngineUndoManager(document: imageDocument)
@@ -26,8 +27,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     let fileAccessID = UUID()
     var reserveWrite: ((URL) throws -> (() -> Void))?
 
-    init(document imageDocument: ImageDocument) {
+    init(document imageDocument: ImageDocument, preferences: EditorPreferences? = nil) {
         self.imageDocument = imageDocument
+        self.preferences = preferences ?? .shared
         self.canvas = EngineCanvasView(document: imageDocument)
 
         let window = ClassicWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 680),
@@ -39,6 +41,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         window.representedURL = imageDocument.fileState.nativeURL
 
         layOutContent(in: window)
+        NotificationCenter.default.addObserver(self, selector: #selector(applyPreferences),
+                                               name: EditorPreferences.didChange, object: self.preferences)
+        applyPreferences()
         imageDocument.onProjectionChange = { [weak self] rect in self?.canvas.imageDidChange(in: rect) }
         imageDocument.onStateChange = { [weak self] in self?.stateDidChange() }
         imageDocument.onError = { [weak self] message in
@@ -80,6 +85,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    @objc private func applyPreferences() {
+        let color = preferences.surround.color
+        canvas.surroundColor = color
+        scrollView.backgroundColor = color
+    }
 
     /// How far each new document window steps from the previous one.
     static let cascadeStep: CGFloat = 22
