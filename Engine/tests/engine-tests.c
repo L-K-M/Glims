@@ -1583,6 +1583,228 @@ test_filters (GlimsImageID image, const char *work)
   }
 }
 
+/* Operation discovery and the typed parameters of a live filter: the
+ * list is sorted and gated like GIMP's non-destructive filters, an
+ * operation's property metadata reads as plain C, enum values are
+ * nicks, values read and write on an open session, and every refusal
+ * leaves the preview and the undo stack alone. Concrete expectations
+ * come from the engine's GEGL sources: gegl:gaussian-blur (a double, an
+ * enum and a boolean), gegl:median-blur (an int), gegl:color-overlay (a
+ * color), gegl:displace (auxiliary input), gimp:curves (config object). */
+static void
+test_filter_properties (void)
+{
+  GlimsImageID          image = 0;
+  GlimsItemID           layer;
+  GlimsFilterID         filter = 0;
+  GlimsOperationInfo   *ops;
+  GlimsFilterProperty   props[8];
+  GlimsFilterEnumChoice choices[8];
+  GlimsFilterValue      value;
+  int32_t               total = -1, count = -1, before, i;
+  int                   gaussian = -1, displace = -1, curves = -1;
+  int                   sorted = 1, hidden = 0, malformed = 0, pads = 0;
+  int                   x = -1, fil = -1, clip = -1;
+  char                 *error = NULL;
+  static const char    *excluded[] = { "gegl:text", "gegl:nop", "gegl:buffer-source",
+                                       "gegl:write-buffer", "gegl:over", "gegl:magick-load" };
+
+  CHECK (api->filter_operations (engine, NULL, 0, &total) == GLIMS_STATUS_OK && total > 50,
+         "%d filter operations are discovered", total);
+  CHECK (api->filter_operations (engine, NULL, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->filter_operations (engine, NULL, -1, &count) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a missing count or a negative capacity is refused");
+  ops = calloc ((size_t) MAX (total, 1), sizeof *ops);
+  CHECK (ops && api->filter_operations (engine, ops, total, &count) == GLIMS_STATUS_OK && count == total,
+         "the rows fill a caller array");
+  for (i = 0; ops && i < count; i++)
+    {
+      size_t e;
+
+      if (i && strcmp (ops[i - 1].name, ops[i].name) >= 0)
+        sorted = 0;
+      if (! ops[i].name[0] || ops[i].support > GLIMS_FILTER_OP_CONFIG)
+        malformed = 1;
+      for (e = 0; e < sizeof excluded / sizeof excluded[0]; e++)
+        if (strcmp (ops[i].name, excluded[e]) == 0)
+          hidden = 1;
+      if (strcmp (ops[i].name, "gegl:gaussian-blur") == 0)
+        gaussian = i;
+      else if (strcmp (ops[i].name, "gegl:displace") == 0)
+        displace = i;
+      else if (strcmp (ops[i].name, "gimp:curves") == 0)
+        curves = i;
+    }
+  CHECK (sorted, "the list is sorted by name");
+  CHECK (! malformed, "every row carries a name and a known support flag");
+  CHECK (! hidden, "hidden, source, sink and compositor operations are excluded");
+  CHECK (gaussian >= 0 && ops[gaussian].support == GLIMS_FILTER_OP_SUPPORTED &&
+         strcmp (ops[gaussian].title, "Gaussian Blur") == 0 && strstr (ops[gaussian].categories, "blur") &&
+         ops[gaussian].blurb[0],
+         "gegl:gaussian-blur is listed as a supported form (%s, %s)",
+         gaussian >= 0 ? ops[gaussian].title : "", gaussian >= 0 ? ops[gaussian].categories : "");
+  CHECK (displace >= 0 && ops[displace].support == GLIMS_FILTER_OP_AUX_INPUT,
+         "gegl:displace is listed but flagged for its auxiliary input");
+  CHECK (curves >= 0 && ops[curves].support == GLIMS_FILTER_OP_CONFIG,
+         "gimp:curves is listed but flagged for its config object");
+
+  CHECK (api->filter_operation_properties (engine, "gegl:gaussian-blur", NULL, 0, &count) == GLIMS_STATUS_OK &&
+         count == 5, "gaussian blur exposes %d editable properties", count);
+  CHECK (api->filter_operation_properties (engine, "gegl:gaussian-blur", props, 8, &count) == GLIMS_STATUS_OK &&
+         count == 5, "its property rows fill");
+  for (i = 0; i < count; i++)
+    {
+      if (! strcmp (props[i].name, "input") || ! strcmp (props[i].name, "output") ||
+          ! strcmp (props[i].name, "aux"))
+        pads = 1;
+      if (strcmp (props[i].name, "std-dev-x") == 0)
+        x = i;
+      else if (strcmp (props[i].name, "filter") == 0)
+        fil = i;
+      else if (strcmp (props[i].name, "clip-extent") == 0)
+        clip = i;
+    }
+  CHECK (! pads, "pads are not offered as properties");
+  CHECK (x >= 0 && props[x].kind == GLIMS_FILTER_VALUE_NUMBER &&
+         props[x].min == 0.0 && props[x].max == 1500.0 &&
+         props[x].ui_min > 0.2 && props[x].ui_min < 0.3 && props[x].ui_max == 100.0 &&
+         props[x].ui_gamma == 3.0 && props[x].default_number == 1.5 &&
+         strcmp (props[x].unit, "pixel-distance") == 0 && strcmp (props[x].label, "Size X") == 0,
+         "std-dev-x reads as a number with absolute and form ranges (%.2f...%.2f, ui %.2f...%.2f)",
+         x >= 0 ? props[x].min : 0.0, x >= 0 ? props[x].max : 0.0,
+         x >= 0 ? props[x].ui_min : 0.0, x >= 0 ? props[x].ui_max : 0.0);
+  CHECK (fil >= 0 && props[fil].kind == GLIMS_FILTER_VALUE_ENUM && props[fil].choice_count == 3 &&
+         strcmp (props[fil].default_string, "auto") == 0,
+         "filter reads as a 3-choice enum defaulting to auto");
+  CHECK (clip >= 0 && props[clip].kind == GLIMS_FILTER_VALUE_BOOL && props[clip].default_bool,
+         "clip-extent reads as a default-on boolean");
+  CHECK (api->filter_operation_properties (engine, "gegl:no-such-op", props, 8, &count) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->filter_operation_properties (engine, "gegl:text", props, 8, &count) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "unknown and hidden operations are refused");
+
+  CHECK (api->filter_enum_choices (engine, "gegl:gaussian-blur", "filter", choices, 8, &count) == GLIMS_STATUS_OK &&
+         count == 3 && strcmp (choices[0].nick, "auto") == 0 && strcmp (choices[1].nick, "fir") == 0 &&
+         strcmp (choices[2].nick, "iir") == 0,
+         "the filter enum lists its nicks");
+  CHECK (api->filter_enum_choices (engine, "gegl:gaussian-blur", "std-dev-x", choices, 8, &count) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->filter_enum_choices (engine, "gegl:gaussian-blur", "no-such", choices, 8, &count) == GLIMS_STATUS_NOT_FOUND &&
+         api->filter_enum_choices (engine, "gegl:no-such-op", "filter", choices, 8, &count) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "non-enums, unknown properties and unknown operations are refused");
+
+  api->image_new (engine, 64, 48, &image, NULL);
+  layer  = first_layer (image);
+  before = undo_depth (image);
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, &error) == GLIMS_STATUS_OK,
+         "a session opens for typed access%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  CHECK (api->filter_get_property (engine, filter, "std-dev-x", &value) == GLIMS_STATUS_OK &&
+         value.kind == GLIMS_FILTER_VALUE_NUMBER && value.number == 1.5,
+         "std-dev-x reads its 1.5 default as a number");
+  CHECK (api->filter_get_property (engine, filter, "filter", &value) == GLIMS_STATUS_OK &&
+         value.kind == GLIMS_FILTER_VALUE_ENUM && strcmp (value.string, "auto") == 0,
+         "filter reads auto as a nick");
+  CHECK (api->filter_get_property (engine, filter, "clip-extent", &value) == GLIMS_STATUS_OK &&
+         value.kind == GLIMS_FILTER_VALUE_BOOL && value.boolean,
+         "clip-extent reads true as a boolean");
+  CHECK (api->filter_get_property (engine, filter, "operation", &value) == GLIMS_STATUS_NOT_FOUND &&
+         api->filter_get_property (engine, filter, "no-such", &value) == GLIMS_STATUS_NOT_FOUND,
+         "node and unknown properties are reported");
+
+  value = (GlimsFilterValue) { .kind = GLIMS_FILTER_VALUE_NUMBER, .number = 6.0 };
+  CHECK (api->filter_set_property (engine, filter, "std-dev-x", &value) == GLIMS_STATUS_OK &&
+         api->filter_get_property (engine, filter, "std-dev-x", &value) == GLIMS_STATUS_OK &&
+         value.number == 6.0, "a number sets and reads back");
+  value = (GlimsFilterValue) { .kind = GLIMS_FILTER_VALUE_BOOL, .boolean = false };
+  CHECK (api->filter_set_property (engine, filter, "clip-extent", &value) == GLIMS_STATUS_OK &&
+         api->filter_get_property (engine, filter, "clip-extent", &value) == GLIMS_STATUS_OK &&
+         ! value.boolean, "a boolean sets and reads back");
+  value = (GlimsFilterValue) { .kind = GLIMS_FILTER_VALUE_ENUM };
+  strcpy (value.string, "fir");
+  CHECK (api->filter_set_property (engine, filter, "filter", &value) == GLIMS_STATUS_OK &&
+         api->filter_get_property (engine, filter, "filter", &value) == GLIMS_STATUS_OK &&
+         strcmp (value.string, "fir") == 0, "an enum nick sets and reads back");
+
+  value = (GlimsFilterValue) { .kind = GLIMS_FILTER_VALUE_NUMBER, .number = NAN };
+  CHECK (api->filter_set_property (engine, filter, "std-dev-x", &value) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "NaN is refused");
+  value = (GlimsFilterValue) { .kind = GLIMS_FILTER_VALUE_NUMBER, .number = 2000.0 };
+  CHECK (api->filter_set_property (engine, filter, "std-dev-x", &value) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a number beyond the absolute range is refused");
+  value = (GlimsFilterValue) { .kind = GLIMS_FILTER_VALUE_INTEGER, .integer = 4 };
+  CHECK (api->filter_set_property (engine, filter, "std-dev-x", &value) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "the wrong kind is refused");
+  value = (GlimsFilterValue) { .kind = GLIMS_FILTER_VALUE_ENUM };
+  strcpy (value.string, "bogus-nick");
+  CHECK (api->filter_set_property (engine, filter, "filter", &value) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown enum nick is refused");
+  value = (GlimsFilterValue) { .kind = GLIMS_FILTER_VALUE_NUMBER, .number = 1.0 };
+  CHECK (api->filter_set_property (engine, filter, "no-such", &value) == GLIMS_STATUS_NOT_FOUND &&
+         api->filter_set_property (engine, 4242, "std-dev-x", &value) == GLIMS_STATUS_NOT_FOUND,
+         "unknown properties and sessions are reported");
+  CHECK (api->filter_get_property (engine, filter, "std-dev-x", &value) == GLIMS_STATUS_OK &&
+         value.number == 6.0 && api->filter_get_property (engine, filter, "filter", &value) == GLIMS_STATUS_OK &&
+         strcmp (value.string, "fir") == 0 && undo_depth (image) == before,
+         "the refusals changed nothing and pushed no undo");
+  CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK && undo_depth (image) == before,
+         "the session aborts without an undo step");
+
+  CHECK (api->filter_begin (engine, image, layer, "gegl:displace", &filter, NULL) == GLIMS_STATUS_OK &&
+         api->filter_get_property (engine, filter, "aux", &value) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->filter_set_property (engine, filter, "aux", &value) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+         "an auxiliary input pad is refused");
+
+  filter = 0;
+  CHECK (api->filter_begin (engine, image, layer, "gegl:median-blur", &filter, NULL) == GLIMS_STATUS_OK &&
+         api->filter_get_property (engine, filter, "radius", &value) == GLIMS_STATUS_OK &&
+         value.kind == GLIMS_FILTER_VALUE_INTEGER && value.integer == 3,
+         "median blur's radius reads 3 as an integer");
+  value = (GlimsFilterValue) { .kind = GLIMS_FILTER_VALUE_INTEGER, .integer = 12 };
+  CHECK (api->filter_set_property (engine, filter, "radius", &value) == GLIMS_STATUS_OK &&
+         api->filter_get_property (engine, filter, "radius", &value) == GLIMS_STATUS_OK &&
+         value.integer == 12, "an integer sets and reads back");
+  value = (GlimsFilterValue) { .kind = GLIMS_FILTER_VALUE_INTEGER, .integer = 500 };
+  CHECK (api->filter_set_property (engine, filter, "radius", &value) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an integer beyond the range is refused");
+  CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK && undo_depth (image) == before,
+         "abort drops the session without an undo step");
+
+  filter = 0;
+  CHECK (api->filter_begin (engine, image, layer, "gegl:color-overlay", &filter, NULL) == GLIMS_STATUS_OK &&
+         api->filter_get_property (engine, filter, "value", &value) == GLIMS_STATUS_OK &&
+         value.kind == GLIMS_FILTER_VALUE_COLOR,
+         "color overlay's value reads as a color");
+  value = (GlimsFilterValue) { .kind = GLIMS_FILTER_VALUE_COLOR, .color = { 1.0, 0.25, 0.5, 1.0 } };
+  CHECK (api->filter_set_property (engine, filter, "value", &value) == GLIMS_STATUS_OK &&
+         api->filter_get_property (engine, filter, "value", &value) == GLIMS_STATUS_OK &&
+         value.color.red > 0.99 && value.color.green > 0.24 && value.color.green < 0.26 &&
+         value.color.alpha > 0.99, "a color sets and reads back (%.2f,%.2f,%.2f,%.2f)",
+         value.color.red, value.color.green, value.color.blue, value.color.alpha);
+  value = (GlimsFilterValue) { .kind = GLIMS_FILTER_VALUE_COLOR, .color = { 1.5, 0, 0, 1 } };
+  CHECK (api->filter_set_property (engine, filter, "value", &value) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a channel beyond 1 is refused");
+  value.color.red = NAN;
+  CHECK (api->filter_set_property (engine, filter, "value", &value) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a NaN channel is refused");
+  CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+         "the color session aborts");
+
+  filter = 0;
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, filter, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "commit still lands as one undo step");
+  value = (GlimsFilterValue) { .kind = GLIMS_FILTER_VALUE_NUMBER, .number = 2.0 };
+  CHECK (api->filter_get_property (engine, filter, "std-dev-x", &value) == GLIMS_STATUS_NOT_FOUND &&
+         api->filter_set_property (engine, filter, "std-dev-x", &value) == GLIMS_STATUS_NOT_FOUND,
+         "a finished session rejects reads and writes");
+
+  free (ops);
+  api->image_close (engine, image);
+}
+
 static void
 test_image_from_pixels (void)
 {
@@ -2088,6 +2310,7 @@ main (int argc, char **argv)
     {
       test_paint_and_undo (image);
       test_filters (image, argv[2]);
+      test_filter_properties ();
       test_save_reopen_export (image, argv[2]);
       test_save_copy (argv[2]);
       test_image_from_pixels ();

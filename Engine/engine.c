@@ -1023,6 +1023,13 @@ MARSHAL (reparent_layer, return glims_reparent_layer (e, a->image, a->item, (Gli
                                                       a->height, a->error);)
 MARSHAL (set_layer_locks, return glims_set_layer_locks (e, a->image, a->item, (uint32_t) a->width,
                                                         (uint32_t) a->height, a->error);)
+MARSHAL (filter_operations, return glims_filter_operations (e, a->out, a->capacity, a->count);)
+MARSHAL (filter_operation_properties, return glims_filter_operation_properties (e, a->string, a->out,
+                                                                                a->capacity, a->count);)
+MARSHAL (filter_enum_choices, return glims_filter_enum_choices (e, a->string, a->in, a->out,
+                                                                a->capacity, a->count);)
+MARSHAL (filter_get_property, return glims_filter_get_property (e, a->item, a->string, a->out);)
+MARSHAL (filter_set_property, return glims_filter_set_property (e, a->item, a->string, a->in);)
 
 /* A path's geometry takes more arguments than GlimsArgs holds. */
 typedef struct
@@ -1522,6 +1529,46 @@ api_set_layer_locks (GlimsEngine *e, GlimsImageID image, GlimsItemID item, uint3
   return glims_engine_call (e, set_layer_locks_on_engine, &a);
 }
 
+static GlimsStatus
+api_filter_operations (GlimsEngine *e, GlimsOperationInfo *rows, int32_t capacity, int32_t *count)
+{
+  GlimsArgs a = { .out = rows, .capacity = capacity, .count = count };
+  return glims_engine_call (e, filter_operations_on_engine, &a);
+}
+
+static GlimsStatus
+api_filter_operation_properties (GlimsEngine *e, const char *operation, GlimsFilterProperty *rows,
+                                 int32_t capacity, int32_t *count)
+{
+  GlimsArgs a = { .string = operation, .out = rows, .capacity = capacity, .count = count };
+  return glims_engine_call (e, filter_operation_properties_on_engine, &a);
+}
+
+static GlimsStatus
+api_filter_enum_choices (GlimsEngine *e, const char *operation, const char *property,
+                         GlimsFilterEnumChoice *rows, int32_t capacity, int32_t *count)
+{
+  GlimsArgs a = { .string = operation, .in = property, .out = rows, .capacity = capacity,
+                  .count = count };
+  return glims_engine_call (e, filter_enum_choices_on_engine, &a);
+}
+
+static GlimsStatus
+api_filter_get_property (GlimsEngine *e, GlimsFilterID filter, const char *property,
+                         GlimsFilterValue *value)
+{
+  GlimsArgs a = { .item = filter, .string = property, .out = value };
+  return glims_engine_call (e, filter_get_property_on_engine, &a);
+}
+
+static GlimsStatus
+api_filter_set_property (GlimsEngine *e, GlimsFilterID filter, const char *property,
+                         const GlimsFilterValue *value)
+{
+  GlimsArgs a = { .item = filter, .string = property, .in = value };
+  return glims_engine_call (e, filter_set_property_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1588,6 +1635,11 @@ static const GlimsEngineAPI api_v1 = {
   .create_group      = api_create_group,
   .reparent_layer    = api_reparent_layer,
   .set_layer_locks   = api_set_layer_locks,
+  .filter_operations = api_filter_operations,
+  .filter_operation_properties = api_filter_operation_properties,
+  .filter_enum_choices = api_filter_enum_choices,
+  .filter_get_property = api_filter_get_property,
+  .filter_set_property = api_filter_set_property,
 };
 
 __attribute__ ((visibility ("default")))

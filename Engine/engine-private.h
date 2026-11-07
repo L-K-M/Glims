@@ -64,6 +64,16 @@ typedef struct
   gulong     size_changed_handler;
 } GlimsOpenImage;
 
+/* A live filter session, owned by `filters` until commit or abort.
+ * filter-properties.c reads its members too. */
+typedef struct
+{
+  GimpImage          *image;
+  GimpDrawable       *drawable;
+  GeglNode           *operation;
+  GimpDrawableFilter *filter;
+} GlimsFilter;
+
 typedef GlimsStatus (*GlimsEngineFunc) (GlimsEngine *engine, gpointer data);
 
 /* Runs `func` on the engine thread and waits for it. Safe from any thread. */
@@ -117,6 +127,20 @@ GlimsStatus glims_filter_set_double(GlimsEngine *e, GlimsFilterID id, const char
 GlimsStatus glims_filter_commit    (GlimsEngine *e, GlimsFilterID id, char **error);
 GlimsStatus glims_filter_abort     (GlimsEngine *e, GlimsFilterID id);
 void        glims_filters_free     (gpointer filter);
+
+/* filter-properties.c */
+GlimsStatus glims_filter_operations (GlimsEngine *e, GlimsOperationInfo *rows,
+                                     int32_t capacity, int32_t *count);
+GlimsStatus glims_filter_operation_properties (GlimsEngine *e, const char *operation,
+                                               GlimsFilterProperty *rows, int32_t capacity,
+                                               int32_t *count);
+GlimsStatus glims_filter_enum_choices (GlimsEngine *e, const char *operation,
+                                       const char *property, GlimsFilterEnumChoice *rows,
+                                       int32_t capacity, int32_t *count);
+GlimsStatus glims_filter_get_property (GlimsEngine *e, GlimsFilterID id,
+                                       const char *property, GlimsFilterValue *value);
+GlimsStatus glims_filter_set_property (GlimsEngine *e, GlimsFilterID id,
+                                       const char *property, const GlimsFilterValue *value);
 
 /* progress.c */
 GlimsProgress * glims_progress_new (GlimsEngine *engine);
