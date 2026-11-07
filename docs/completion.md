@@ -34,7 +34,7 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 - [ ] Brushes, patterns and gradients: resource choosers and presets.
 - [ ] Color management: accurate image mode/precision/profile state,
       conversion/assignment and soft proofing.
-- [ ] Retina Actual Pixels maps an image pixel to a device pixel, including
+- [x] Retina Actual Pixels maps an image pixel to a device pixel, including
       changing displays while a document is open.
 - [ ] Canvas navigation: rulers, guides, grid, snapping, rotation and
       consistent modifier/trackpad behavior; initial fit avoids palettes.
@@ -98,3 +98,15 @@ file identity too. The final review found no important remaining defects;
 its minor xz-suffix omission was added to the existing identity regression.
 The actual bundled Save As panel wrote a new XCF and updated the window's
 name and represented file. A final on-screen rename check remains pending.
+
+The launch slice merged as PR #4. The on-screen rename check also passed:
+typing stayed in the palette, produced one Rename Layer undo step, and
+survived Save, Quit and reopening the native file.
+
+Retina navigation: render scale now counts physical pixels; pointer input,
+overlays and frame geometry account for backing density. Fit Image uses
+viewport device pixels, and display-density changes preserve the image
+center. The actual canvas in a simulated 2x window failed on the old scale
+and pointer mapping, then passed with the corrected implementation. The
+110 unit tests and 120 pinned-engine interface checks pass. Real Retina
+hardware was not available for an on-screen check.
