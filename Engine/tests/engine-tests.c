@@ -983,13 +983,13 @@ test_deleted_items (void)
   api->image_close (engine, image);
 }
 
-/* A render right after a change must show it. Validating tiles only as
- * reads touched them returned the old pixels now and then (about one round
- * in 23 here), and they stayed that way. */
+/* A render right after a change must show it. GEGL's 1 x 1 read shortcut
+ * can reuse a hot tile without asking the projection's validate handler.
+ * Check that shortcut separately from an ordinary multi-pixel tile read. */
 static void
 test_render_freshness (void)
 {
-  int rounds = 60, stale = 0, r;
+  int rounds = 60, stale = 0, stale_blocks = 0, r;
 
   for (r = 0; r < rounds; r++)
     {
@@ -998,7 +998,7 @@ test_render_freshness (void)
       GlimsFillSettings fill = { .struct_size = sizeof fill, .mode = GLIMS_FILL_SELECTION,
                                  .color = { 1, 0, 0, 1 }, .opacity = 1, .antialias = true };
       GlimsLayerChange  change = { .struct_size = sizeof change, .properties = GLIMS_LAYER_OPACITY, .opacity = 0.5 };
-      uint8_t           pixel[4];
+      uint8_t           pixel[4], block[8 * 8 * 4];
 
       api->image_new (engine, 100, 80, &image, NULL);
       api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer, NULL);
@@ -1008,10 +1008,15 @@ test_render_freshness (void)
       api->image_render (engine, image, 1.0, (GlimsRect) { 50, 40, 1, 1 }, pixel, 4);
       if (pixel[1] < 180)
         stale++;
+      api->image_render (engine, image, 1.0, (GlimsRect) { 49, 39, 8, 8 }, block, 8 * 4);
+      /* (49,39) was not validated by the preceding 1 x 1 read. */
+      if (block[1] < 180)
+        stale_blocks++;
       api->image_close (engine, image);
     }
 
-  CHECK (stale == 0, "renders right after %d changes all show them (%d stale)", rounds, stale);
+  CHECK (stale == 0, "single-pixel renders right after %d changes all show them (%d stale)", rounds, stale);
+  CHECK (stale_blocks == 0, "multi-pixel renders right after %d changes all show them (%d stale)", rounds, stale_blocks);
 }
 
 static void

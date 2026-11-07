@@ -1,9 +1,9 @@
 # Glims plan
 
-Status as of 2026-11-06: phase 0 finished with a go verdict
-([`phase0-report.md`](phase0-report.md)); phase 1 is under way, items 1
-(interactive plug-ins), 2 (a self-contained app) and 5 (the nightly engine
-matrix) done; 3 (palettes) and 4 (native tools) partly done. Evidence labels: **[M]**
+Status as of 2026-11-07: phase 0 finished with a go verdict
+([`phase0-report.md`](phase0-report.md)); the first implementation of all
+five phase 1 items is complete. Rendering follow-up below restores the
+100% viewport fast path without giving up fresh pixels. Evidence labels: **[M]**
 measured from GIMP source or history, **[I]** inferred or estimated. Sources
 are in [`research/`](research/README.md); the round 2 memo and its two reviews
 are the main inputs.
@@ -669,20 +669,27 @@ In this order (reasons in `phase0-report.md`):
   check that the notices match the bundle.
 - Accessibility, localization and help content for the new interface.
 
-## Known issues, not to fix yet
+## Rendering follow-up
 
-- **Slower first renders at 100 %** (2026-11-05). Rendering now validates
-  the requested area explicitly (`validate_area` in `Engine/image.c`),
-  because letting reads validate GIMP's projection tiles sometimes
-  returned pixels from before a change, and kept them. It costs 3.5 to 5
-  times more for never-rendered areas at 100 % on a loaded machine (first
-  frame of a 24 MP image 580 ms instead of 167). The root cause is
-  somewhere in GEGL's tile handling (`GimpTileHandlerValidate` and GEGL's
-  tile cache), probably a cached or swapped-out tile served after it was
-  damaged. Finding it would allow the fast path again. Decided with the
-  user: note it, do not fix it yet. Reproduction: the
-  `renders right after 60 changes` conformance check, with
-  `validate_area` limited to zoomed-out reads.
+- 2026-11-07: the user reopened the slower-first-render issue. Found the
+  stale-read root cause in GEGL's `gegl_buffer_get_pixel`
+  (`gegl/buffer/gegl-buffer-access.c`): its 1 × 1 shortcut reuses a hot
+  tile without asking GIMP's validate handler. Ordinary multi-pixel
+  reads do ask the handler. Limiting explicit validation to scaled reads
+  reproduced 36 stale single-pixel reads out of 60, and zero stale
+  multi-pixel reads. The adapter now leaves explicit validation on for
+  single-pixel and scaled reads, while 1:1 viewport reads again render
+  directly into tiles. No upstream patches or private cache access.
+  The conformance test covers both paths separately; the performance
+  pass repeats the cold 100% viewport on five freshly opened images.
+  On this Mac's 24 MP, 20-layer fixture, their mean fell from 517 to
+  219 ms (first sample 574 to 162 ms), and cold-pan p95 from 237 to
+  39 ms. Machine load was high and variable (roughly 40 to 60), so these
+  are not a controlled speed guarantee: each performance pass also had
+  one measurement over the 60 fps budget. Zoomed-out rendering keeps
+  its existing path. The initial GitHub build also exposed a Swift
+  6.2 tuple-conversion error in path hit testing; its distance now
+  explicitly uses Double, matching the stored distance type.
 
 ## Open decisions
 

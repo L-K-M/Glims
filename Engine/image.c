@@ -439,14 +439,17 @@ glims_image_render (GlimsEngine  *engine,
   gimp_projection_stop_rendering (projection);
   gimp_projection_flush_now (projection, FALSE);
 
-  /* Then render the invalid tiles under the area, at full resolution, before
-   * reading. Relying on reads to do it was not enough: GEGL renders an
-   * invalid tile it reads, but now and then a read returned the tile as it
-   * was before the change (seen after layer property changes and strokes,
-   * about one read in thirty in a probe), and the tile stayed that way. A
-   * zoomed-out read would also take mipmaps of unrendered tiles. Explicit
-   * validation, as GIMP's chunk renderer uses, has shown neither. */
-  validate_area (buffer, scale, area);
+  /* At 1:1, ordinary reads ask GimpTileHandlerValidate for each tile and
+   * render straight into it. Explicit area validation instead blits through
+   * an intermediate buffer and is much slower on a cold viewport.
+   *
+   * Keep explicit validation for GEGL's 1 x 1 shortcut: gegl_buffer_get_pixel
+   * in gegl/buffer/gegl-buffer-access.c reuses a hot tile without consulting
+   * the validate handler, so it can return pixels from before a change.
+   * Scaled reads also need level 0 current before GEGL builds its mipmaps.
+   * No GEGL/GIMP source changes or private cache access are needed. */
+  if (scale != 1.0 || (area.width == 1 && area.height == 1))
+    validate_area (buffer, scale, area);
 
   /* Babl converts from the image's working space to sRGB. Display profiles
    * are not applied yet. */

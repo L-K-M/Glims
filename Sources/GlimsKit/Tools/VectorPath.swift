@@ -86,7 +86,7 @@ struct VectorPath: Equatable {
     func part(at point: CGPoint, tolerance: Double, handlesOf: Set<AnchorIndex>) -> Part? {
         var best: (part: Part, distance: Double)?
         func consider(_ part: Part, at location: CGPoint) {
-            let distance = hypot(location.x - point.x, location.y - point.y)
+            let distance = hypot(Double(location.x - point.x), Double(location.y - point.y))
             guard distance <= tolerance, distance < best?.distance ?? .infinity else { return }
             best = (part, distance)
         }
