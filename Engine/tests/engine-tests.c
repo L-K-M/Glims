@@ -1297,6 +1297,63 @@ test_filters (GlimsImageID image, const char *work)
 }
 
 static void
+test_image_from_pixels (void)
+{
+  const uint8_t pixels[] = { 240, 16, 32, 128, 0, 255, 0, 0 };
+  GlimsImageID image = 9999;
+  GlimsImageInfo info = { 0 };
+  GlimsPixelBuffer copied = { 0 };
+  CHECK (api->image_from_pixels (engine, 2, 1, pixels, sizeof pixels - 1, &image, NULL) == GLIMS_STATUS_INVALID_ARGUMENT && image == 0,
+         "Paste as New rejects malformed pixel data without returning an image");
+  CHECK (api->image_from_pixels (engine, 2, 1, pixels, sizeof pixels, &image, NULL) == GLIMS_STATUS_OK &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.width == 2 && info.height == 1 && info.layer_count == 1 && info.dirty && undo_depth (image) == 0,
+         "Paste as New creates a correctly sized unsaved image with one layer and no synthetic undo steps");
+  CHECK (api->image_copy_pixels (engine, image, false, &copied, NULL) == GLIMS_STATUS_OK &&
+         copied.byte_count == sizeof pixels && memcmp (copied.pixels, pixels, sizeof pixels) == 0,
+         "Paste as New preserves partial and complete transparency without a white background");
+  api->free_pixels (copied.pixels);
+  api->image_close (engine, image);
+}
+
+static void
+test_save_copy (const char *work)
+{
+  GlimsImageID image = 0, copy = 0;
+  GlimsImageInfo before, after;
+  GlimsLayerChange change = { .struct_size = sizeof change, .properties = GLIMS_LAYER_NAME };
+  GlimsLayerInfo row;
+  char path[1024], failed_path[1024];
+  int32_t depth, count = 0;
+
+  snprintf (path, sizeof path, "%s/native-copy.xcf", work);
+  snprintf (failed_path, sizeof failed_path, "%s/no-such-directory/copy.xcf", work);
+  api->image_new (engine, 23, 17, &image, NULL);
+  strcpy (change.name, "Unsaved Copy Source");
+  api->layer_change (engine, image, first_layer (image), &change, NULL);
+  api->image_info (engine, image, &before);
+  depth = undo_depth (image);
+  CHECK (before.dirty && api->image_save_copy (engine, image, path, NULL) == GLIMS_STATUS_OK && file_size (path) > 0,
+         "Save a Copy writes a native file from an unsaved image");
+  api->image_info (engine, image, &after);
+  CHECK (after.dirty && undo_depth (image) == depth,
+         "Save a Copy preserves source dirty state and undo history");
+  CHECK (api->image_open (engine, path, &copy, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, copy, &row, 1, &count) == GLIMS_STATUS_OK && count == 1 &&
+         strcmp (row.name, change.name) == 0,
+         "a native copy reopens with its editable layer name");
+  CHECK (api->image_save_copy (engine, image, failed_path, NULL) != GLIMS_STATUS_OK &&
+         api->image_info (engine, image, &after) == GLIMS_STATUS_OK && after.dirty && undo_depth (image) == depth,
+         "a failed native copy leaves the source dirty and editable");
+  api->image_save (engine, image, path, NULL);
+  CHECK (api->image_save_copy (engine, image, path, NULL) == GLIMS_STATUS_OK &&
+         api->image_info (engine, image, &after) == GLIMS_STATUS_OK && !after.dirty,
+         "Save a Copy also preserves a clean source's state");
+  api->image_close (engine, copy);
+  api->image_close (engine, image);
+}
+
+static void
 test_save_reopen_export (GlimsImageID image, const char *work)
 {
   char           xcf[1024], png[1024];
@@ -1745,6 +1802,8 @@ main (int argc, char **argv)
       test_paint_and_undo (image);
       test_filters (image, argv[2]);
       test_save_reopen_export (image, argv[2]);
+      test_save_copy (argv[2]);
+      test_image_from_pixels ();
       CHECK (api->image_close (engine, image) == GLIMS_STATUS_OK, "close image");
       CHECK (api->image_close (engine, image) == GLIMS_STATUS_NOT_FOUND, "closing twice is reported");
     }

@@ -39,6 +39,40 @@ selected_layer (GimpImage *image)
 }
 
 GlimsStatus
+glims_image_from_pixels (GlimsEngine *engine, int32_t width, int32_t height,
+                         const uint8_t *pixels, size_t byte_count, GlimsImageID *out, char **error)
+{
+  size_t bytes;
+  GimpImage *image;
+  GeglBuffer *buffer;
+  GimpLayer *layer;
+
+  if (out) *out = 0;
+  if (! out || ! pixels || ! pixel_bytes (width, height, &bytes) || bytes != byte_count)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (engine->busy > 0) return GLIMS_STATUS_BUSY;
+
+  image = gimp_create_image (engine->gimp, width, height, GIMP_RGB, GIMP_PRECISION_U8_NON_LINEAR, FALSE);
+  gimp_image_undo_disable (image);
+  buffer = gegl_buffer_new (GEGL_RECTANGLE (0, 0, width, height), babl_format ("R'G'B'A u8"));
+  gegl_buffer_set (buffer, GEGL_RECTANGLE (0, 0, width, height), 0,
+                   babl_format ("R'G'B'A u8"), pixels, width * 4);
+  layer = gimp_layer_new_from_gegl_buffer (buffer, image, gimp_image_get_layer_format (image, TRUE),
+                                          "Clipboard", GIMP_OPACITY_OPAQUE, GIMP_LAYER_MODE_NORMAL, NULL);
+  g_object_unref (buffer);
+  if (! layer || ! gimp_image_add_layer (image, layer, NULL, 0, FALSE))
+    {
+      if (layer) g_object_unref (layer);
+      g_object_unref (image);
+      return glims_fail (error, NULL, "The clipboard image could not be created.");
+    }
+  gimp_image_undo_enable (image);
+  gimp_image_dirty (image, GIMP_DIRTY_IMAGE);
+  gimp_image_flush (image);
+  return glims_adopt_image (engine, image, out);
+}
+
+GlimsStatus
 glims_image_copy_pixels (GlimsEngine *engine, GlimsImageID id, gboolean merged,
                          GlimsPixelBuffer *result, char **error)
 {

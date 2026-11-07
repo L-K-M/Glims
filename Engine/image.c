@@ -467,11 +467,18 @@ glims_image_render (GlimsEngine  *engine,
 
 /* ---- Saving and exporting ---------------------------------------------- */
 
+typedef enum
+{
+  SAVE_DOCUMENT,
+  SAVE_COPY,
+  EXPORT_IMAGE
+} FileWritePurpose;
+
 static GlimsStatus
 save_with_group (GlimsEngine            *engine,
                  GlimsImageID            id,
                  const char             *path,
-                 GimpFileProcedureGroup  group,
+                 FileWritePurpose        purpose,
                  char                  **error)
 {
   GlimsOpenImage      *open = glims_lookup_image (engine, id);
@@ -479,7 +486,8 @@ save_with_group (GlimsEngine            *engine,
   GimpPDBStatusType    status;
   GFile               *file;
   GError              *gerror = NULL;
-  gboolean             saving = (group == GIMP_FILE_PROCEDURE_GROUP_SAVE);
+  gboolean             saving = (purpose != EXPORT_IMAGE);
+  GimpFileProcedureGroup group = saving ? GIMP_FILE_PROCEDURE_GROUP_SAVE : GIMP_FILE_PROCEDURE_GROUP_EXPORT;
 
   if (! open)
     return GLIMS_STATUS_NOT_FOUND;
@@ -504,7 +512,7 @@ save_with_group (GlimsEngine            *engine,
   /* Exporting runs a plug-in, which nests a main loop. */
   engine->busy++;
   status = file_save (engine->gimp, open->image, NULL, file, proc, GIMP_RUN_NONINTERACTIVE,
-                      saving,          /* change saved state */
+                      purpose == SAVE_DOCUMENT, /* change saved state */
                       FALSE,           /* export back to the imported file */
                       ! saving,        /* export forward */
                       &gerror);
@@ -526,7 +534,13 @@ glims_image_save (GlimsEngine  *engine,
                   const char   *path,
                   char        **error)
 {
-  return save_with_group (engine, id, path, GIMP_FILE_PROCEDURE_GROUP_SAVE, error);
+  return save_with_group (engine, id, path, SAVE_DOCUMENT, error);
+}
+
+GlimsStatus
+glims_image_save_copy (GlimsEngine *engine, GlimsImageID id, const char *path, char **error)
+{
+  return save_with_group (engine, id, path, SAVE_COPY, error);
 }
 
 GlimsStatus
@@ -535,7 +549,7 @@ glims_image_export (GlimsEngine  *engine,
                     const char   *path,
                     char        **error)
 {
-  return save_with_group (engine, id, path, GIMP_FILE_PROCEDURE_GROUP_EXPORT, error);
+  return save_with_group (engine, id, path, EXPORT_IMAGE, error);
 }
 
 /* ---- Undo -------------------------------------------------------------- */

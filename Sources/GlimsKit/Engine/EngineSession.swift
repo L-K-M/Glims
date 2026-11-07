@@ -373,6 +373,25 @@ final class EngineSession: @unchecked Sendable {
         try check(api.image_export(engine, image, path, &error), error)
     }
 
+    func saveCopy(_ image: Int32, to path: String) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_save_copy(engine, image, path, &error), error)
+    }
+
+    func newImage(pixels: ClipboardImage) throws -> Int32 {
+        guard pixels.pixels.count == (try ClipboardImage.byteCount(width: pixels.width, height: pixels.height)) else {
+            throw ClipboardImage.TransferError.invalidImage
+        }
+        var image: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try pixels.pixels.withUnsafeBytes { bytes in
+            try check(api.image_from_pixels(engine, Int32(pixels.width), Int32(pixels.height),
+                                             bytes.bindMemory(to: UInt8.self).baseAddress,
+                                             bytes.count, &image, &error), error)
+        }
+        return image
+    }
+
     func layers(_ image: Int32) throws -> [Layer] {
         var count: Int32 = 0
         try check(api.image_layers(engine, image, nil, 0, &count), nil)

@@ -117,9 +117,9 @@ final class DocumentFileStateTests: XCTestCase {
     func testExportNeverTouchesNativeState() {
         var state = DocumentFileState(openedFrom: xcf)
         state.syncDirty(true)
-        let before = state
         state.noteExported(to: jpeg)
-        XCTAssertEqual(state, before)
+        XCTAssertEqual(state.lastExportURL, jpeg)
+        XCTAssertNil(state.importedSourceURL)
         XCTAssertTrue(state.hasUnsavedChanges)
         XCTAssertEqual(state.saveRoute, .write(xcf))
     }
@@ -133,6 +133,32 @@ final class DocumentFileStateTests: XCTestCase {
         XCTAssertEqual(state.importedSourceURL, png)
         XCTAssertTrue(state.hasUnsavedChanges)
         XCTAssertEqual(state.saveRoute, .askForFile)
+        XCTAssertEqual(state.lastExportURL, jpeg)
+    }
+
+    func testExportTargetSurvivesNativeSaveAndTracksOnlySuccessfulExports() {
+        var state = DocumentFileState(openedFrom: png)
+        XCTAssertNil(state.lastExportURL)
+        state.noteExported(to: jpeg)
+        state.noteSaved(to: xcf)
+        XCTAssertEqual(state.lastExportURL, jpeg)
+        state.noteExported(to: png)
+        XCTAssertEqual(state.lastExportURL, png)
+        XCTAssertEqual(state.nativeURL, xcf)
+        XCTAssertFalse(state.hasUnsavedChanges)
+    }
+
+    func testCompressedNativeNamesAndCopySuggestions() {
+        for suffix in ["xcf.gz", "xcf.bz2", "xcf.xz", "xcfgz", "xcfbz2", "xcfxz"] {
+            let name = "My Drawing." + suffix.uppercased()
+            XCTAssertTrue(DocumentFileState.isNative(URL(fileURLWithPath: name)))
+            XCTAssertEqual(DocumentFileState.suggestedBaseName(name), "My Drawing")
+        }
+        XCTAssertEqual(DocumentFileState.suggestedBaseName("photo.jpeg"), "photo")
+        XCTAssertEqual(DocumentFileState.suggestedBaseName("Untitled"), "Untitled")
+        XCTAssertEqual(DocumentFileState.suggestedBaseName(".xcf"), "Untitled")
+        // The compressor's ZIP variant is load-only; it must ask for a writable native file.
+        XCTAssertFalse(DocumentFileState.isNative(URL(fileURLWithPath: "drawing.xcf.zip")))
     }
 
     func testTheNativeExtensionIsCaseInsensitive() {

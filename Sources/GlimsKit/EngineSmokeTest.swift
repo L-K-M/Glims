@@ -155,11 +155,29 @@ enum EngineSmokeTest {
         }
 
         paint()
+        let copyURL = work.appendingPathComponent("native-copy.xcf")
+        var copied = false
+        document.saveCopy(to: copyURL) { copied = $0 == nil }
+        wait { copied && document.pendingWork == 0 }
+        check(copied && document.hasUnsavedChanges && document.fileState.nativeURL == native,
+              "Save a Copy includes queued input without changing native identity or dirty state")
+        let copiedImage = try session.openImage(path: copyURL.path)
+        check((pixel(session, copiedImage, x: 28, y: 20)?[0] ?? 255) < 128,
+              "the native copy contains the queued stroke")
+        try session.closeImage(copiedImage)
         var exportedOK = false
         document.export(to: exported) { exportedOK = $0 == nil }
         wait { exportedOK && document.pendingWork == 0 }
         check(exportedOK && document.hasUnsavedChanges && document.fileState.nativeURL == native,
               "export preserves native identity and unsaved changes")
+        paint()
+        controller.repeatExport(nil)
+        wait { document.pendingWork == 0 }
+        let repeated = try session.openImage(path: exported.path)
+        check(document.fileState.lastExportURL == exported && document.hasUnsavedChanges &&
+                (pixel(session, repeated, x: 33, y: 20)?[0] ?? 255) < 128,
+              "Export Again writes new edits to the last export without clearing native unsaved changes")
+        try session.closeImage(repeated)
         controller.saveDocument(nil)
         wait { document.pendingWork == 0 }
         check(!document.hasUnsavedChanges && window.representedURL == native,
@@ -284,6 +302,15 @@ enum EngineSmokeTest {
                                                   0, 0, 255, 255, 0, 0, 0, 0]),
                                     origin: CGPoint(x: 8, y: 10))
         try source.write(to: board)
+        let fromClipboard = try session.newImage(pixels: source)
+        let clipboardInfo = try session.info(fromClipboard)
+        let clipboardRows = try session.layers(fromClipboard)
+        let clipboardUndo = try session.undoInfo(fromClipboard)
+        check(clipboardInfo.width == 2 && clipboardInfo.height == 2 && clipboardInfo.isDirty &&
+                clipboardRows.count == 1 && clipboardRows.first?.bounds.origin == .zero &&
+                clipboardUndo.undoCount == 0,
+              "Paste as New creates an unsaved image at its clipboard size with no white background or synthetic history")
+        try session.closeImage(fromClipboard)
         func waitForWork(_ item: ImageDocument) {
             let deadline = Date().addingTimeInterval(10)
             while item.pendingWork > 0 && Date() < deadline { spin() }
