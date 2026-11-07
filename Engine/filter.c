@@ -9,6 +9,7 @@
  */
 #include "engine-private.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "core/gimp.h"
@@ -17,14 +18,6 @@
 #include "core/gimpimage.h"
 #include "core/gimpimage-undo-push.h"
 #include "core/gimpitem.h"
-
-typedef struct
-{
-  GimpImage          *image;
-  GimpDrawable       *drawable;
-  GeglNode           *operation;
-  GimpDrawableFilter *filter;
-} GlimsFilter;
 
 GlimsStatus
 glims_filter_check_edit (GlimsEngine *engine, GlimsFilterID id, char **error)
@@ -109,10 +102,10 @@ glims_filter_begin (GlimsEngine    *engine,
   status = glims_check_item_locks (GIMP_ITEM (drawable), GLIMS_LOCK_PIXELS, error);
   if (status != GLIMS_STATUS_OK) return status;
 
-  if (! gegl_has_operation (operation))
+  if (! glims_filter_operation_allowed (operation))
     {
       if (error)
-        *error = strdup ("The engine has no such filter.");
+        *error = strdup ("That operation cannot be used as an image filter.");
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
 
@@ -154,7 +147,7 @@ glims_filter_set_double (GlimsEngine   *engine,
   GlimsStatus  status = glims_filter_check_edit (engine, id, NULL);
 
   if (status != GLIMS_STATUS_OK) return status;
-  if (! property)
+  if (! property || ! isfinite (value))
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
   pspec = gegl_node_find_property (session->operation, property);

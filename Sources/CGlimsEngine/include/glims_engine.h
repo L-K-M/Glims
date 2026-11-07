@@ -406,6 +406,76 @@ typedef struct GlimsPixelBuffer {
   size_t    byte_count;
 } GlimsPixelBuffer;
 
+/* Filter operations and their parameters, for native filter forms.
+ * The kinds the facade carries; a property of any other kind reports
+ * GLIMS_FILTER_VALUE_UNSUPPORTED and cannot be read or written. */
+typedef enum GlimsFilterValueKind {
+  GLIMS_FILTER_VALUE_UNSUPPORTED = 0,
+  GLIMS_FILTER_VALUE_NUMBER      = 1,  /* real number, `number` */
+  GLIMS_FILTER_VALUE_INTEGER     = 2,  /* whole number, `integer` */
+  GLIMS_FILTER_VALUE_BOOL        = 3,  /* `boolean` */
+  GLIMS_FILTER_VALUE_ENUM        = 4,  /* choice nick in `string` */
+  GLIMS_FILTER_VALUE_STRING      = 5,  /* text in `string` */
+  GLIMS_FILTER_VALUE_COLOR       = 6   /* `color`, sRGB */
+} GlimsFilterValueKind;
+
+/* Whether a native property form can drive an operation. */
+typedef enum GlimsFilterOpSupport {
+  GLIMS_FILTER_OP_SUPPORTED  = 0,  /* filter_begin plus typed properties */
+  GLIMS_FILTER_OP_AUX_INPUT  = 1,  /* takes a second, auxiliary input */
+  GLIMS_FILTER_OP_CONFIG     = 2   /* settings on a config object (Curves & co.) */
+} GlimsFilterOpSupport;
+
+/* One row of the filter_operations() list, sorted by name. */
+typedef struct GlimsOperationInfo {
+  char     name[128];       /* e.g. "gegl:gaussian-blur" */
+  char     title[256];      /* e.g. "Gaussian Blur" */
+  char     categories[256]; /* the engine's ':'-separated categories */
+  char     blurb[512];      /* one-line description */
+  uint32_t support;         /* GlimsFilterOpSupport */
+} GlimsOperationInfo;
+
+/* One editable property of an operation, in declaration order. Fields
+ * that a kind does not use are zero. Numeric bounds are the absolute
+ * limits; the ui_* fields are the engine's suggested form range (the
+ * bounds when unset). */
+typedef struct GlimsFilterProperty {
+  char       name[128];      /* e.g. "std-dev-x" */
+  char       label[256];     /* the property's human name */
+  char       blurb[512];     /* longer description */
+  char       unit[64];       /* a unit hint like "pixel-distance"; "" when none */
+  uint32_t   kind;           /* GlimsFilterValueKind */
+  double     min, max;       /* NUMBER/INTEGER: absolute bounds */
+  double     ui_min, ui_max; /* suggested form range */
+  double     ui_step_small, ui_step_big; /* suggested steps; 0 when unset */
+  double     ui_gamma;       /* non-linear slider mapping; 1.0 when linear */
+  int32_t    ui_digits;      /* suggested decimals; -1 for the default */
+  double     default_number; /* NUMBER/INTEGER default */
+  bool       default_bool;
+  char       default_string[256]; /* ENUM's default nick; STRING's default */
+  GlimsColor default_color;
+  int32_t    choice_count;   /* ENUM: number of valid nicks */
+} GlimsFilterProperty;
+
+/* One valid value of an ENUM property: `nick` is what
+ * filter_set_property() accepts and filter_get_property() returns. */
+typedef struct GlimsFilterEnumChoice {
+  char nick[64];
+  char label[256];
+} GlimsFilterEnumChoice;
+
+/* A typed property value of an open filter session, for
+ * filter_get_property() and filter_set_property(). `kind` picks the
+ * field; the setter requires it to match the property's own kind. */
+typedef struct GlimsFilterValue {
+  uint32_t   kind;         /* GlimsFilterValueKind, never UNSUPPORTED */
+  double     number;       /* NUMBER: finite, inside `min`...`max` */
+  int64_t    integer;      /* INTEGER: inside `min`...`max` */
+  bool       boolean;      /* BOOL */
+  char       string[256];  /* ENUM nick; STRING text (truncated on get) */
+  GlimsColor color;        /* COLOR: finite components inside 0...1 */
+} GlimsFilterValue;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -660,6 +730,45 @@ typedef struct GlimsEngineAPI {
    * INVALID_ARGUMENT for an empty `mask` or bits that are no lock. */
   GlimsStatus  (*set_layer_locks)  (GlimsEngine *engine, GlimsImageID image, GlimsItemID item,
                                     uint32_t mask, uint32_t values, char **error);
+
+  /* Filter discovery and typed live parameters, for native filter forms.
+   *
+   * The operations that can back a non-destructive filter, sorted by
+   * name. `support` says whether a native form can drive the operation;
+   * auxiliary-input and config-object operations are listed but flagged
+   * as unsupported. `count` receives the total. */
+  GlimsStatus  (*filter_operations)(GlimsEngine *engine, GlimsOperationInfo *rows,
+                                    int32_t capacity, int32_t *count);
+  /* One operation's editable properties in declaration order; pads and
+   * read-only properties are omitted. `count` receives the total.
+   * INVALID_ARGUMENT for an unknown operation or one that cannot back a
+   * non-destructive filter. */
+  GlimsStatus  (*filter_operation_properties)(GlimsEngine *engine, const char *operation,
+                                              GlimsFilterProperty *rows, int32_t capacity,
+                                              int32_t *count);
+  /* An ENUM property's valid nicks and labels; `count` receives the
+   * total. NOT_FOUND for an unknown property; INVALID_ARGUMENT when the
+   * property is not an enum. */
+  GlimsStatus  (*filter_enum_choices)(GlimsEngine *engine, const char *operation,
+                                      const char *property, GlimsFilterEnumChoice *rows,
+                                      int32_t capacity, int32_t *count);
+  /* Reads one property of an open filter session; `value->kind` receives
+   * the property's kind. NOT_FOUND for an unknown property or a finished
+   * session; INVALID_ARGUMENT for a pad, read-only or unsupported-kind
+   * property. */
+  GlimsStatus  (*filter_get_property)(GlimsEngine *engine, GlimsFilterID filter,
+                                      const char *property, GlimsFilterValue *value);
+  /* Sets one property of an open filter session; the preview updates.
+   * `value->kind` must match the property's kind. Numbers must be finite
+   * and inside the absolute bounds, integers inside them too, enum nicks
+   * one of filter_enum_choices() and color channels finite inside
+   * 0...1. NOT_FOUND for an unknown property or a finished session;
+   * INVALID_ARGUMENT for pad, read-only or unsupported-kind properties
+   * and failed validation; BUSY while a plug-in runs; LOCKED if the
+   * target acquires a pixel lock. No undo step is added;
+   * filter_commit() covers the session's changes as one. */
+  GlimsStatus  (*filter_set_property)(GlimsEngine *engine, GlimsFilterID filter,
+                                      const char *property, const GlimsFilterValue *value);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
