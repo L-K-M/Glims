@@ -33,6 +33,26 @@
 /* The lock bits the facade knows. */
 #define GLIMS_LOCK_ALL (GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION | GLIMS_LOCK_ALPHA)
 
+/* The GUI normally checks these before calling core editing functions.
+ * The facade must do the same, including locks inherited from groups. */
+GlimsStatus
+glims_check_item_locks (GimpItem *item, uint32_t locks, char **error)
+{
+  const char *message = NULL;
+
+  if ((locks & GLIMS_LOCK_PIXELS) && gimp_item_is_content_locked (item, NULL))
+    message = "Unlock the layer's pixels, or its group's pixels, before editing.";
+  else if ((locks & GLIMS_LOCK_POSITION) && gimp_item_is_position_locked (item, NULL))
+    message = "Unlock the layer's position, or its group's position, before transforming it.";
+  else if ((locks & GLIMS_LOCK_ALPHA) && GIMP_IS_LAYER (item) &&
+           gimp_layer_is_alpha_locked (GIMP_LAYER (item), NULL))
+    message = "Unlock the layer's transparency, or its group's transparency, before erasing.";
+
+  if (! message) return GLIMS_STATUS_OK;
+  glims_fail (error, NULL, message);
+  return GLIMS_STATUS_LOCKED;
+}
+
 /* The image, if it may be changed now. */
 static GimpImage *
 writable_image (GlimsEngine  *engine,

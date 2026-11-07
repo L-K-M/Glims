@@ -1135,6 +1135,71 @@ test_layer_structure (void)
     api->image_close (engine, image);
 }
 
+static void
+test_layer_edit_locks (void)
+{
+  GlimsImageID image = 0;
+  GlimsItemID group = 0, layer = 0;
+  GlimsStrokeID stroke = 0;
+  GlimsFilterID filter = 0;
+  GlimsStatus status;
+  GlimsPixelBuffer before = { 0 }, after = { 0 };
+  GlimsLayerInfo row;
+  int32_t count = 0, depth;
+  GlimsFillSettings fill = { .struct_size = sizeof fill, .mode = GLIMS_FILL_SELECTION,
+                             .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  GlimsGradientSettings gradient = { .struct_size = sizeof gradient, .shape = GLIMS_GRADIENT_LINEAR,
+                                     .from = { 0, 1, 0, 1 }, .to = { 0, 0, 1, 1 }, .opacity = 1 };
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 5);
+  GlimsStrokePoint point = { .x = 10, .y = 10, .pressure = 1 };
+  GlimsMatrix matrix = { .m = { { 1, 0, 2 }, { 0, 1, 3 }, { 0, 0, 1 } } };
+
+  api->image_new (engine, 64, 48, &image, NULL);
+  api->create_group (engine, image, 0, 0, "Protected Group", &group, NULL);
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer, NULL);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL);
+  api->image_copy_pixels (engine, image, false, &before, NULL);
+  api->set_layer_locks (engine, image, group, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION,
+                        GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, NULL);
+  depth = undo_depth (image);
+  fill.color = (GlimsColor) { 0, 0, 1, 1 };
+  CHECK (api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL) == GLIMS_STATUS_LOCKED &&
+         api->gradient (engine, image, (GlimsPoint) { 0, 0 }, (GlimsPoint) { 60, 40 }, &gradient, NULL) == GLIMS_STATUS_LOCKED &&
+         api->image_clear (engine, image, NULL, NULL) == GLIMS_STATUS_LOCKED,
+         "inherited pixel locks refuse fill, gradient and clear");
+  status = api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL);
+  CHECK (status == GLIMS_STATUS_LOCKED, "inherited pixel locks refuse paint before creating a stroke");
+  if (status == GLIMS_STATUS_OK) api->stroke_end (engine, stroke);
+  status = api->filter_begin (engine, image, layer, "gegl:invert-gamma", &filter, NULL);
+  CHECK (status == GLIMS_STATUS_LOCKED, "inherited pixel locks refuse starting a filter");
+  if (status == GLIMS_STATUS_OK) api->filter_abort (engine, filter);
+  CHECK (api->layer_move (engine, image, layer, 5, 4) == GLIMS_STATUS_LOCKED &&
+         api->layer_transform (engine, image, layer, GLIMS_TRANSFORM_FLIP_HORIZONTAL) == GLIMS_STATUS_LOCKED &&
+         api->layer_transform_matrix (engine, image, layer, &matrix, GLIMS_INTERPOLATION_NONE, NULL) == GLIMS_STATUS_LOCKED,
+         "inherited position locks refuse moves and layer transforms");
+  api->image_copy_pixels (engine, image, false, &after, NULL);
+  CHECK (undo_depth (image) == depth && before.byte_count == after.byte_count &&
+         rect_equals (after.bounds, before.bounds.x, before.bounds.y, before.bounds.width, before.bounds.height) &&
+         memcmp (before.pixels, after.pixels, before.byte_count) == 0,
+         "refused locked edits preserve pixels, bounds and undo history");
+  api->free_pixels (before.pixels);
+  api->free_pixels (after.pixels);
+  api->set_layer_locks (engine, image, group, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION | GLIMS_LOCK_ALPHA,
+                        GLIMS_LOCK_ALPHA, NULL);
+  depth = undo_depth (image);
+  brush.tool = GLIMS_PAINT_ERASER;
+  status = api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL);
+  CHECK (status == GLIMS_STATUS_LOCKED, "an inherited transparency lock refuses the eraser");
+  if (status == GLIMS_STATUS_OK) api->stroke_end (engine, stroke);
+  CHECK (api->image_clear (engine, image, NULL, NULL) == GLIMS_STATUS_LOCKED && undo_depth (image) == depth,
+         "an inherited transparency lock refuses Clear without an undo step");
+  api->set_layer_locks (engine, image, group, GLIMS_LOCK_ALPHA, 0, NULL);
+  CHECK (api->layer_move (engine, image, layer, 5, 4) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, &row, 1, &count) == GLIMS_STATUS_OK,
+         "unlocking restores ordinary layer editing");
+  api->image_close (engine, image);
+}
+
 /* A deleted item lives on in the undo stack until the undo is dropped,
  * still under its id. Calls must not reach it: an edit would change what
  * undoing the delete brings back, outside any undo step. */
@@ -2027,6 +2092,7 @@ main (int argc, char **argv)
   test_deleted_items ();
   test_groups_and_text_units (argv[3]);
   test_layer_structure ();
+  test_layer_edit_locks ();
   test_paint_tools ();
   test_selections ();
   test_editing ();

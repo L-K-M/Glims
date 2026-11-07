@@ -83,6 +83,7 @@ glims_filter_begin (GlimsEngine    *engine,
   GimpDrawable   *drawable;
   GlimsFilter    *session;
   gint            id;
+  GlimsStatus     status;
 
   if (! open)
     return GLIMS_STATUS_NOT_FOUND;
@@ -94,6 +95,8 @@ glims_filter_begin (GlimsEngine    *engine,
   drawable = glims_lookup_drawable (open, drawable_id);
   if (! drawable)
     return GLIMS_STATUS_NOT_FOUND;
+  status = glims_check_item_locks (GIMP_ITEM (drawable), GLIMS_LOCK_PIXELS, error);
+  if (status != GLIMS_STATUS_OK) return status;
 
   if (! gegl_has_operation (operation))
     {

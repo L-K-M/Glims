@@ -79,6 +79,7 @@ GlimsOpenImage * glims_lookup_image      (GlimsEngine *engine, GlimsImageID id);
 GlimsStatus      glims_adopt_image       (GlimsEngine *engine, GimpImage *image, GlimsImageID *id);
 void             glims_release_image     (GlimsEngine *engine, GlimsImageID id);
 GimpDrawable   * glims_lookup_drawable   (GlimsOpenImage *open, GlimsItemID id);
+GlimsStatus      glims_check_item_locks  (GimpItem *item, uint32_t locks, char **error);
 gint             glims_next_session_id   (GlimsEngine *engine);
 
 /* image.c */

@@ -885,6 +885,7 @@ final class EngineSession: @unchecked Sendable {
         case GLIMS_STATUS_BUSY: return "The engine is busy with another operation."
         case GLIMS_STATUS_CANCELLED: return "Cancelled."
         case GLIMS_STATUS_NOT_RUNNING: return "The engine is not running."
+        case GLIMS_STATUS_LOCKED: return "Unlock the layer or its group before editing it."
         default: return "The engine reported an error."
         }
     }

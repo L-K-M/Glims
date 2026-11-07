@@ -136,13 +136,16 @@ glims_image_clear (GlimsEngine *engine, GlimsImageID id, const GlimsColor *backg
 {
   GlimsOpenImage *open = glims_lookup_image (engine, id);
   GimpLayer *layer;
+  GlimsStatus status;
+  uint32_t locks = GLIMS_LOCK_PIXELS;
   if (! open) return GLIMS_STATUS_NOT_FOUND;
   if (engine->busy > 0) return GLIMS_STATUS_BUSY;
   layer = selected_layer (open->image);
   if (! layer || GIMP_IS_GROUP_LAYER (layer))
     return glims_fail (error, NULL, "Select a pixel layer to clear.");
-  if (gimp_item_is_content_locked (GIMP_ITEM (layer), NULL) || gimp_layer_get_lock_alpha (layer))
-    return glims_fail (error, NULL, "Unlock the layer before clearing its pixels.");
+  if (gimp_drawable_has_alpha (GIMP_DRAWABLE (layer))) locks |= GLIMS_LOCK_ALPHA;
+  status = glims_check_item_locks (GIMP_ITEM (layer), locks, error);
+  if (status != GLIMS_STATUS_OK) return status;
   /* Native Clear honors selection alpha; on a layer without alpha it
    * fills with the background, matching the other engine edit commands. */
   if (background && (! isfinite (background->red) || ! isfinite (background->green) ||

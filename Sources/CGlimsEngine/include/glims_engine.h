@@ -48,7 +48,8 @@ typedef enum GlimsStatus {
   GLIMS_STATUS_FAILED           = 3, /* the engine reported an error */
   GLIMS_STATUS_BUSY             = 4, /* a long operation holds the image */
   GLIMS_STATUS_NOT_RUNNING      = 5,
-  GLIMS_STATUS_CANCELLED        = 6  /* the user cancelled, e.g. a plug-in dialog */
+  GLIMS_STATUS_CANCELLED        = 6, /* the user cancelled, e.g. a plug-in dialog */
+  GLIMS_STATUS_LOCKED           = 7  /* a layer or ancestor protects this edit */
 } GlimsStatus;
 
 typedef struct GlimsRect {
