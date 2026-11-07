@@ -608,7 +608,8 @@ final class ImageDocument {
                     consume: @escaping @MainActor (ClipboardImage.Encoded) throws -> Void,
                     completion: @escaping @MainActor (Error?) -> Void) {
         guard !isClosing else { return completion(DocumentError.closed) }
-        guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning else {
+        guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
+              !(operation == .cutLayer && filterPreviewIsOpen) else {
             return completion(DocumentError.busy)
         }
         isTransferringClipboard = true
@@ -737,6 +738,26 @@ final class ImageDocument {
             }
             DispatchQueue.main.async { completion(success) }
         }
+    }
+
+    /// A live-preview property write through the typed setter, behind
+    /// pending input. The completion reports the engine's answer so the
+    /// form can restore a refused control and show the reason; a preview
+    /// write adds no undo step and does not dirty the image.
+    func setFilterProperty(_ filter: Int32, _ property: String, _ value: EngineSession.FilterValue,
+                           completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if refuseWhileEditingUnavailable(forPreviewWork: true) { return completion(.failure(DocumentError.busy)) }
+        enqueue(on: inputQueue) { [session] in
+            let result = Result { try session.setFilterProperty(filter, property, to: value) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// A preview property's current value, read behind pending input
+    /// like `textLayer(_:)` reads text metadata.
+    func filterProperty(_ filter: Int32, _ property: String) -> EngineSession.FilterValue? {
+        inputQueue.sync { [session] in try? session.filterProperty(filter, property) }
     }
 
     @discardableResult

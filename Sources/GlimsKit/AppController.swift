@@ -160,6 +160,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             if let mainMenu = NSApp.mainMenu, let procedures = try? session.procedures() {
                 PlugInMenus.install(procedures, in: mainMenu)
             }
+            // The operation catalog is slower: fetched off-main, its menu
+            // lands whenever it is ready.
+            NativeFilterCatalog.shared.load(using: session)
             workspace?.close()
             workspace = nil
             if pendingOpenURLs.isEmpty {
