@@ -94,4 +94,70 @@ final class FilterControlsTests: XCTestCase {
         XCTAssertEqual(property(kind: .integer, minimum: 0, maximum: 150,
                                 uiMinimum: 0, uiMaximum: 40).absoluteRange, 0...150)
     }
+
+    /// The field parses with the same locale-aware formatter it
+    /// displays: on a comma-decimal system "0,5" both shows and commits.
+    func testNumberRowParsesCommaDecimals() {
+        let row = FilterNumberRow(property: property(uiMinimum: 0, uiMaximum: 1))
+        row.formatter.locale = Locale(identifier: "de_DE")
+        var reported: Double?
+        row.onChange = { reported = $0 }
+
+        row.show(0.5)
+        XCTAssertEqual(row.field.stringValue, "0,5", "the formatter's own decimal separator is shown")
+
+        row.field.stringValue = "0,7"
+        XCTAssertTrue(row.commitField())
+        XCTAssertEqual(row.value, 0.7, accuracy: 0.0001)
+        XCTAssertEqual(reported ?? -1, 0.7, accuracy: 0.0001)
+        XCTAssertEqual(row.field.stringValue, "0,7")
+    }
+
+    /// Committing the text the field already shows is neither an edit
+    /// nor an error — in any decimal-separator locale.
+    func testUnchangedFieldCommitKeepsValue() {
+        let row = FilterNumberRow(property: property(uiMinimum: 0, uiMaximum: 1))
+        row.formatter.locale = Locale(identifier: "de_DE")
+        row.show(0.5)
+        var changes = 0
+        row.onChange = { _ in changes += 1 }
+        XCTAssertTrue(row.commitField())
+        XCTAssertEqual(row.value, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(changes, 0, "an unchanged commit sends nothing")
+    }
+
+    /// Valid typed text clamps to the absolute limits, the same bounds
+    /// the field advertises.
+    func testCommitClampsTypedTextToAbsoluteBounds() {
+        let row = FilterNumberRow(property: property(minimum: 0, maximum: 150,
+                                                     uiMinimum: 0, uiMaximum: 40))
+        var reported: Double?
+        row.onChange = { reported = $0 }
+        row.field.stringValue = "500"
+        XCTAssertTrue(row.commitField())
+        XCTAssertEqual(row.value, 150, accuracy: 0.0001)
+        XCTAssertEqual(reported ?? -1, 150, accuracy: 0.0001)
+        row.field.stringValue = "-3"
+        XCTAssertTrue(row.commitField())
+        XCTAssertEqual(row.value, 0, accuracy: 0.0001)
+    }
+
+    /// Non-finite or unreadable text is refused: the field reverts and
+    /// the row reports nothing — so an integer row's `Int64` conversion
+    /// can never see NaN, and a number row's refused write always
+    /// surfaces instead of being dropped by value equality.
+    func testCommitRejectsNonFiniteAndUnreadableText() {
+        let row = FilterNumberRow(property: property(kind: .integer, minimum: 0, maximum: 150,
+                                                     uiMinimum: 0, uiMaximum: 40))
+        row.show(4)
+        var reported: Double?
+        row.onChange = { reported = $0 }
+        for text in ["nan", "NaN", "∞", "inf", "-inf", "abc", "", "1,5x"] {
+            row.field.stringValue = text
+            XCTAssertFalse(row.commitField(), "\(text) must be refused")
+            XCTAssertNil(reported, "\(text) must not reach onChange")
+            XCTAssertEqual(row.value, 4, "\(text) must not change the value")
+            XCTAssertEqual(row.field.stringValue, "4", "\(text) must revert to the shown value")
+        }
+    }
 }

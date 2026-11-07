@@ -81,8 +81,12 @@ final class FilterNumberRow: NSView {
     private let scale: GammaScale
     private let step: Double
     private let slider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
-    private let field = NSTextField()
-    private let formatter = NumberFormatter()
+    let field = NSTextField()
+    /// Displays and parses the field's text; its locale is the user's,
+    /// so a comma-decimal system both shows and accepts "0,5".
+    let formatter = NumberFormatter()
+    /// The largest Double an integer send can carry into Int64 exactly.
+    private static let integerFieldLimit = 9_007_199_254_740_992.0
     private(set) var value: Double = 0
     var onChange: ((Double) -> Void)?
 
@@ -161,19 +165,30 @@ final class FilterNumberRow: NSView {
         commitField()
     }
 
-    private func commitField() {
-        guard let typed = Double(field.stringValue.trimmingCharacters(in: .whitespaces)) else {
+    /// The text committed and applied; false when the formatter cannot
+    /// read it or it is not finite — the field then reverts and beeps,
+    /// so NaN and Inf never reach a value send.
+    @discardableResult
+    func commitField() -> Bool {
+        let text = field.stringValue.trimmingCharacters(in: .whitespaces)
+        guard let typed = formatter.number(from: text)?.doubleValue, typed.isFinite else {
             show(value)
             NSSound.beep()
-            return
+            return false
         }
-        let accepted = isInteger ? typed.rounded().clamped(to: property.absoluteRange)
-                                 : typed.clamped(to: property.absoluteRange)
+        var accepted = isInteger ? typed.rounded() : typed
+        accepted = accepted.clamped(to: property.absoluteRange)
+        if isInteger {
+            // The send converts to Int64; stay inside the span Double
+            // can convert exactly even when the engine's bounds are not.
+            accepted = accepted.clamped(to: -Self.integerFieldLimit...Self.integerFieldLimit)
+        }
         field.stringValue = formatter.string(from: NSNumber(value: accepted)) ?? "\(accepted)"
         slider.doubleValue = scale.position(for: accepted)
-        guard accepted != value else { return }
+        guard accepted != value else { return true }
         value = accepted
         onChange?(accepted)
+        return true
     }
 }
 

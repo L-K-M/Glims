@@ -4,7 +4,7 @@ import AppKit
 ///
 /// Listing operations and their properties instantiates engine nodes, so
 /// the catalog queries on a background queue and reports on the main
-/// actor; the Native submenu installs only when the answers land there.
+/// actor; the Filter menu's entries install only when the answers land.
 @MainActor
 final class NativeFilterCatalog {
     static let shared = NativeFilterCatalog()
@@ -63,11 +63,11 @@ final class NativeFilterCommand: NSObject {
     }
 }
 
-/// The catalog-to-menu grouping: which Native submenu an operation lands
-/// in, and how unavailable operations present.
+/// The catalog-to-menu grouping: which Filter category an operation
+/// lands in, and how unavailable operations present.
 ///
 /// The engine's categories are ':'-separated keys ("distort:map"); the
-/// first key with a GIMP Filters menu name picks the submenu, the rest
+/// first key with a GIMP Filters menu name picks the category, the rest
 /// land in "Other".
 struct NativeFilterMenuLayout: Equatable {
     struct Section: Equatable {
@@ -133,51 +133,88 @@ struct NativeFilterMenuLayout: Equatable {
     }
 }
 
-/// Builds Filter ▸ Native from the catalog's operations.
+/// Merges the catalog's operations into the Filter menu's categories.
 ///
-/// Items carry a `NativeFilterCommand` and send
+/// The catalog has no menu of its own (docs/design.md): every section
+/// lands in the existing Filter category of the same name, ahead of the
+/// plug-in merge's generated content, or in a new category item placed
+/// alphabetically. Items carry a `NativeFilterCommand` and send
 /// `DocumentWindowController.runNativeFilter(_:)` through the responder
 /// chain, which validates them against the front document. Operations
 /// the form cannot drive stay listed but disabled — a future slice will
 /// own them, and the reason is part of their title.
 @MainActor
 enum NativeFilterMenus {
-    static let title = "Native"
-    /// Marks generated items so a rebuild can replace them.
+    /// Marks generated items so a rebuild can replace them — its own tag,
+    /// so a plug-in refresh removes only plug-in items and vice versa.
     private static let generatedTag = 0x6C_6D_74
 
-    /// Installs or refreshes the Native submenu; every other item — the
-    /// native categories, the plug-in menus' generated items — is left
-    /// alone.
+    /// Installs or refreshes the catalog's sections inside the Filter
+    /// menu's categories. Dedicated commands, Recently Used and the
+    /// plug-in merge's items are left alone; a category the catalog
+    /// created goes away once nothing but generated items filled it.
     static func install(_ operations: [EngineSession.FilterOperation], in mainMenu: NSMenu) {
         guard let menu = mainMenu.item(withTitle: GlimsMenu.filter.rawValue)?.submenu else { return }
-        menu.items.filter { $0.tag == generatedTag }.forEach(menu.removeItem)
-        guard let item = nativeItem(operations) else { return }
-        // Keep categories alphabetical among the native ones, like the
-        // plug-in merge does.
-        let categories = menu.items.indices.filter { menu.items[$0].submenu != nil }
-        let next = categories.first {
-            menu.items[$0].title.localizedStandardCompare(title) == .orderedDescending
-                && menu.items[$0].title != MainMenu.recentlyUsedTitle
+        for item in menu.items where item.submenu != nil {
+            removeGenerated(from: item.submenu!)
+            if item.submenu!.items.isEmpty && item.tag == generatedTag { menu.removeItem(item) }
         }
-        if let next { menu.insertItem(item, at: next) } else { menu.addItem(item) }
+        // Strays without a submenu, if any, are safe to drop wholesale.
+        menu.items.filter { $0.tag == generatedTag && $0.submenu == nil }.forEach(menu.removeItem)
+
+        for section in NativeFilterMenuLayout(operations: operations).sections {
+            let submenu: NSMenu
+            if let existing = menu.item(withTitle: section.title)?.submenu {
+                submenu = existing
+            } else {
+                let parent = tagged(NSMenuItem(title: section.title, action: nil, keyEquivalent: ""))
+                parent.submenu = NSMenu(title: section.title)
+                submenu = parent.submenu!
+                // Keep categories alphabetical among the submenu items,
+                // like the plug-in merge does; Recently Used stands aside.
+                let categories = menu.items.indices.filter { menu.items[$0].submenu != nil }
+                let next = categories.first {
+                    menu.items[$0].title.localizedStandardCompare(section.title) == .orderedDescending
+                        && menu.items[$0].title != MainMenu.recentlyUsedTitle
+                }
+                if let next { menu.insertItem(parent, at: next) } else { menu.addItem(parent) }
+            }
+            merge(section.entries, into: submenu)
+        }
     }
 
-    static func nativeItem(_ operations: [EngineSession.FilterOperation]) -> NSMenuItem? {
-        let layout = NativeFilterMenuLayout(operations: operations)
-        guard !layout.sections.isEmpty else { return nil }
-        let submenu = NSMenu(title: title)
-        for section in layout.sections {
-            let parent = NSMenuItem(title: section.title, action: nil, keyEquivalent: "")
-            let child = NSMenu(title: section.title)
-            section.entries.forEach { child.addItem(commandItem($0)) }
-            parent.submenu = child
-            submenu.addItem(parent)
+    /// Drops generated items from a category and the separators that
+    /// stranded at an edge or doubled up where they stood.
+    private static func removeGenerated(from submenu: NSMenu) {
+        submenu.items.filter { $0.tag == generatedTag }.forEach(submenu.removeItem)
+        while submenu.items.first?.isSeparatorItem == true { submenu.removeItem(submenu.items[0]) }
+        while submenu.items.last?.isSeparatorItem == true {
+            submenu.removeItem(at: submenu.numberOfItems - 1)
         }
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.submenu = submenu
-        item.tag = generatedTag
-        return item
+        var previousWasSeparator = false
+        for item in submenu.items {
+            if item.isSeparatorItem && previousWasSeparator { submenu.removeItem(item) }
+            previousWasSeparator = item.isSeparatorItem
+        }
+    }
+
+    /// The native items join a category ahead of its plug-in content —
+    /// generated items and plug-in submenus — with one separator between
+    /// the two groups; dedicated commands (untagged) stay ahead of both.
+    private static func merge(_ entries: [EngineSession.FilterOperation], into submenu: NSMenu) {
+        let items = entries.map { tagged(commandItem($0)) }
+        guard let boundary = submenu.items.firstIndex(where: {
+            $0.tag == PlugInMenus.generatedTag || $0.submenu != nil
+        }) else {
+            items.forEach(submenu.addItem)
+            return
+        }
+        for (offset, item) in items.enumerated() {
+            submenu.insertItem(item, at: boundary + offset)
+        }
+        if !submenu.items[boundary + items.count].isSeparatorItem {
+            submenu.insertItem(tagged(.separator()), at: boundary + items.count)
+        }
     }
 
     private static func commandItem(_ operation: EngineSession.FilterOperation) -> NSMenuItem {
@@ -190,6 +227,11 @@ enum NativeFilterMenus {
         } else {
             item.toolTip = operation.blurb.isEmpty ? nil : operation.blurb
         }
+        return item
+    }
+
+    private static func tagged(_ item: NSMenuItem) -> NSMenuItem {
+        item.tag = generatedTag
         return item
     }
 }

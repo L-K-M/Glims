@@ -2,12 +2,12 @@ import AppKit
 
 /// The lifecycle every modeless filter dialog shares.
 ///
-/// Opening the panel starts an engine filter session on the active
-/// layer; the subclass's controls update the live preview; Apply commits
-/// the filter as one non-destructive undo step; Cancel or closing the
-/// window aborts it and leaves no trace (design.md, principle 7). A
-/// refused commit keeps the session — and the panel — available, so the
-/// user can still cancel.
+/// The window controller begins an engine filter session behind pending
+/// input and constructs the panel with it; the subclass's controls
+/// update the live preview; Apply commits the filter as one
+/// non-destructive undo step; Cancel or closing the window aborts it and
+/// leaves no trace (design.md, principle 7). A refused commit keeps the
+/// session — and the panel — available, so the user can still cancel.
 @MainActor
 class FilterPreviewPanel: NSWindowController {
     let imageDocument: ImageDocument
@@ -17,26 +17,19 @@ class FilterPreviewPanel: NSWindowController {
     private var committing = false
     var onFinish: (() -> Void)?
 
-    init(document imageDocument: ImageDocument, panel: NSPanel) {
+    /// The session the panel previews and finishes. It is begun on the
+    /// document's input queue by `ImageDocument.beginFilterPreview`, so
+    /// the session never overtakes input still on its way to the engine;
+    /// the window's pending-start gate decides who may construct one.
+    init(document imageDocument: ImageDocument, panel: NSPanel, filter: Int32) {
         self.imageDocument = imageDocument
+        self.filter = filter
         super.init(window: panel)
         panel.delegate = self
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    /// Starts the engine filter session for `operation` on the active
-    /// layer. The subclass calls it during initialization and fails its
-    /// own init when the engine cannot begin the session.
-    @discardableResult
-    func beginSession(_ operation: String) -> Bool {
-        guard let layer = imageDocument.activeLayer,
-              let filter = try? imageDocument.session.beginFilter(image: imageDocument.image,
-                                                                  drawable: layer, operation: operation) else { return false }
-        self.filter = filter
-        return true
-    }
 
     /// A refusal the document reported while the panel is open; the
     /// status bar shows it by default, the generic form also displays it.
