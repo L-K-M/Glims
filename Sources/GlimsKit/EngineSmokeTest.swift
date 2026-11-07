@@ -99,6 +99,7 @@ enum EngineSmokeTest {
             try exercisePaths(session, documents: documents)
             try exercisePaletteControls(session, documents: documents)
             try exercisePendingEditScope(session, documents: documents)
+            try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
             try exercisePlugInCommands(session, documents: documents)
             try measurePluginStalls(session, work: work)
         } catch {
@@ -1221,6 +1222,251 @@ enum EngineSmokeTest {
         }
         return nil
     }
+
+    /// The History palette and image snapshots: exact states backward and
+    /// forward, a no-op pick of the current state, a stale pick refused
+    /// after a new edit, queued stroke and text edits in a snapshot, a
+    /// closing source and a Quit coordinating with snapshot work, and the
+    /// copy's file identity and undo independence.
+    private static func exerciseHistoryAndSnapshots(_ session: EngineSession, work: URL,
+                                                    documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "History")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        var messages: [String] = []
+        let reportError = document.onError
+        document.onError = { reportError?($0); messages.append($0) }
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+        func wait(_ condition: @escaping () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin() }
+        }
+
+        check(document.history?.rows.count == 1 && document.history?.currentPosition == 0
+                && document.history?.rows.first?.name.isEmpty == false,
+              "a new document lists its earliest history state")
+        document.fill(at: .zero, mode: .selection, color: .red, threshold: 0, sampleMerged: false)
+        document.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
+        document.continueStroke([.init(x: 24, y: 24, pressure: 1)])
+        document.endStroke()
+        settle()
+        guard let filled = document.history, filled.rows.count == 3, filled.currentPosition == 2 else {
+            check(false, "a fill and a stroke list three history states (\(document.history?.rows.count ?? -1))")
+            return
+        }
+        check(true, "a fill and a stroke list three history states")
+
+        // Backward and forward through the palette's own pick path; the
+        // pixels show the states are the exact ones, not approximations.
+        let palette = HistoryPaletteController()
+        palette.retarget(to: document)
+        let table = descendant(of: palette.view, as: NSTableView.self)
+        let bar = descendant(of: palette.view, as: ClassicPaletteButtonBar.self)
+        check(table?.numberOfRows == 3, "the History palette lists the states")
+        check(bar?.isEnabled(item: "snapshot") == false,
+              "the Snapshot button waits for something to adopt the copy")
+        /// A registered palette reloads on every document state change;
+        /// this freestanding one does the same after a pick settles.
+        func pickRow(_ row: Int) {
+            table?.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            settle()
+            palette.reload()
+        }
+        pickRow(0)
+        check(document.history?.currentPosition == 0 && (pixel(session, image, x: 2, y: 2)?[1] ?? 0) > 200
+                && (pixel(session, image, x: 12, y: 12)?[0] ?? 0) > 200,
+              "picking the earliest row undoes the fill and the stroke")
+        check(table?.numberOfRows == 3, "undone future states stay listed")
+        pickRow(2)
+        check(document.history?.currentPosition == 2 && (pixel(session, image, x: 2, y: 2)?[1] ?? 255) == 0
+                && (pixel(session, image, x: 12, y: 12)?[0] ?? 255) < 64,
+              "picking an undone row redoes to it")
+
+        // Picking the current state is a no-op: no new revision, same spot.
+        let beforeNoOp = document.history
+        document.moveToHistoryState(beforeNoOp?.currentPosition ?? -1, revision: beforeNoOp?.revision ?? 0)
+        settle()
+        check(document.history?.revision == beforeNoOp?.revision
+                && document.history?.currentPosition == beforeNoOp?.currentPosition,
+              "picking the current state changes nothing")
+
+        // A pick whose revision went stale is refused, keeps the state and
+        // reports why; after the reload a fresh pick goes through.
+        document.fill(at: .zero, mode: .selection, color: .green, threshold: 0, sampleMerged: false)
+        settle()
+        check(document.history?.currentPosition == 3 && document.history?.revision != beforeNoOp?.revision,
+              "a new edit advances the history revision")
+        document.moveToHistoryState(0, revision: beforeNoOp?.revision ?? 0)
+        settle()
+        check(messages.contains { $0.contains("history changed") } && document.history?.currentPosition == 3,
+              "a stale pick is refused with its reason and the state stays")
+        // The palette's own stale row, rendered before that edit landed.
+        document.fill(at: .zero, mode: .selection, color: .blue, threshold: 0, sampleMerged: false)
+        settle()
+        pickRow(0)
+        check(messages.last == HistoryPaletteController.staleMessage && document.history?.currentPosition == 4,
+              "a stale palette row reports why and does not move the state")
+        check(table?.numberOfRows == 5, "the refusal reloads the palette")
+        pickRow(0)
+        check(document.history?.currentPosition == 0 && (pixel(session, image, x: 2, y: 2)?[1] ?? 0) > 200,
+              "selecting again after the reload moves to the state")
+
+        // Snapshot controls disable while the engine cannot duplicate.
+        document.filterPreviewIsOpen = true
+        palette.reload()
+        check(bar?.isEnabled(item: "snapshot") == false,
+              "the Snapshot button is disabled during a filter preview")
+        document.filterPreviewIsOpen = false
+        palette.reload()
+
+        // A snapshot queued behind a stroke contains it; the source's
+        // history is untouched.
+        document.beginStroke(at: .init(x: 40, y: 40, pressure: 1))
+        document.continueStroke([.init(x: 50, y: 50, pressure: 1)])
+        document.endStroke()
+        var copyID: Int32 = 0
+        var copyDone = false
+        document.snapshot { result in
+            copyID = (try? result.get()) ?? 0
+            copyDone = true
+        }
+        wait { copyDone }
+        check(copyID != 0, "the queued snapshot produced an image")
+        check((pixel(session, copyID, x: 45, y: 45)?[0] ?? 255) < 64,
+              "the snapshot contains the just-finished stroke")
+        check((try? session.undoInfo(copyID))?.undoCount == 0 && (try? session.info(copyID))?.isDirty == true,
+              "the snapshot is unsaved with an empty history")
+        try session.closeImage(copyID)
+        settle()
+        check(document.history?.currentPosition == 1 && document.undoInfo.undoCount == 1,
+              "the snapshot left the source's pixels and history alone")
+
+        // Text still being typed is committed through the document's hook
+        // before the copy; the result opens as a new document bound to its
+        // source, whoever is front document then.
+        let app = AppController()
+        document.snapshotHandler = { [weak app] document in app?.snapshot(document) }
+        let previousTool = ToolState.shared.current
+        let previousText = ToolState.shared.textSettings
+        ToolState.shared.textSettings.font = ToolState.pickableFontNames(try session.fonts()).first ?? "Sans-serif"
+        ToolState.shared.textSettings.size = 12
+        ToolState.shared.select(.text)
+        if let window = controller.window,
+           let press = NSEvent.mouseEvent(with: .leftMouseDown,
+                                          location: controller.canvas.convert(CGPoint(x: 4, y: 4), to: nil),
+                                          modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                          context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+            controller.canvas.mouseDown(with: press)
+            controller.canvas.tools.textEditor?.insertText("Snap", replacementRange: NSRange(location: NSNotFound, length: 0))
+            document.newSnapshot()
+            wait { app.frontDocument != nil }
+            let snapshotDoc = app.frontDocument
+            // The real app routes engine events to its documents; the
+            // smoke test's list stands in for that.
+            if let snapshotDoc { documents.items.append(snapshotDoc) }
+            check(controller.canvas.tools.textEditor == nil, "the snapshot committed the pending text first")
+            check(snapshotDoc != nil && snapshotDoc !== document
+                    && snapshotDoc?.layers.contains { $0.kind == .text } == true,
+                  "the snapshot opens as a new document containing the typed text")
+            check(snapshotDoc?.name == "History snapshot" && snapshotDoc?.fileState.nativeURL == nil
+                    && snapshotDoc?.fileState.importedSourceURL == nil && snapshotDoc?.hasUnsavedChanges == true,
+                  "the snapshot is a fresh unsaved document without the source's file")
+            check(snapshotDoc?.undoInfo.undoCount == 0 && snapshotDoc?.history?.rows.count == 1,
+                  "the snapshot's own history starts empty")
+            // Editing the copy does not reach the source (a fill needs a
+            // pixel layer: the copy's text layer is still selected).
+            let sourceSteps = document.undoInfo.undoCount
+            if let background = snapshotDoc?.layers.last?.id { snapshotDoc?.selectLayer(background) }
+            snapshotDoc?.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+            snapshotDoc?.inputQueue.sync {}
+            spin()
+            check(snapshotDoc?.undoInfo.undoCount == 1 && document.undoInfo.undoCount == sourceSteps
+                    && document.layers.contains { $0.kind == .text },
+                  "editing the snapshot leaves the source untouched")
+            snapshotDoc?.undo()
+            snapshotDoc?.inputQueue.sync {}
+            spin()
+            check(snapshotDoc?.undoInfo.undoCount == 0 && document.undoInfo.undoCount == sourceSteps,
+                  "the snapshot's own undo works on it alone")
+            NSApp.windows
+                .first { ($0.windowController as? DocumentWindowController)?.imageDocument === snapshotDoc }?
+                .orderOut(nil)
+            PaletteCenter.shared.closeAll()
+            // The first real document open loads the engine's fonts in the
+            // background; drain it so it cannot straddle later checks.
+            snapshotDoc?.longQueue.sync {}
+            spin()
+        } else {
+            check(false, "text editing can be started before a snapshot")
+        }
+        ToolState.shared.textSettings = previousText
+        ToolState.shared.select(previousTool)
+
+        // A snapshot of a saved document keeps none of its file identity.
+        let filedImage = try session.newImage(width: 32, height: 32)
+        let native = work.appendingPathComponent("snapshot-source.xcf")
+        try session.save(filedImage, to: native.path)
+        let filed = try ImageDocument(session: session, image: filedImage, name: "Filed", openedFrom: native)
+        documents.items.append(filed)
+        var filedResult: Result<Int32, Error>?
+        filed.snapshot { filedResult = $0 }
+        wait { filedResult != nil }
+        if let copyImage = try? filedResult?.get() {
+            let copy = try ImageDocument(session: session, image: copyImage, name: "Filed snapshot")
+            check(copy.fileState.nativeURL == nil && copy.fileState.importedSourceURL == nil
+                    && copy.fileState.saveRoute == .askForFile && copy.hasUnsavedChanges,
+                  "a snapshot of a saved document keeps no file identity")
+            try session.closeImage(copyImage)
+        } else {
+            check(false, "the filed document's snapshot produced an image")
+        }
+        documents.items.removeAll { $0 === filed }
+
+        // A closing source holds its engine image until the snapshot ran.
+        let closingImage = try session.newImage(width: 32, height: 32)
+        let closing = try ImageDocument(session: session, image: closingImage, name: "Closing")
+        documents.items.append(closing)
+        let closingController = DocumentWindowController(document: closing)
+        closingController.showWindow(nil)
+        var closingResult: Result<Int32, Error>?
+        closing.snapshot { closingResult = $0 }
+        var sourceClosed: Bool?
+        closingController.requestClose { sourceClosed = $0 }
+        if let sheet = closingController.window?.attachedSheet {
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+        }
+        wait { sourceClosed != nil && closingResult != nil }
+        check(sourceClosed == true && (try? closingResult?.get()) != nil,
+              "a queued snapshot runs before its closing source frees the image")
+        if let orphan = try? closingResult?.get() { try session.closeImage(orphan) }
+        documents.items.removeAll { $0 === closing }
+
+        // The whole transaction is a file operation: Quit waits for it and
+        // a copy finishing during Quit is closed, not opened.
+        let quittingApp = AppController()
+        let quittingImage = try session.newImage(width: 32, height: 32)
+        let quitting = try ImageDocument(session: session, image: quittingImage, name: "Quit")
+        documents.items.append(quitting)
+        check(quittingApp.applicationShouldTerminate(NSApp) == .terminateNow,
+              "Quit proceeds while nothing is pending")
+        quittingApp.snapshot(quitting)
+        check(quittingApp.applicationShouldTerminate(NSApp) == .terminateLater,
+              "a pending snapshot makes Quit wait")
+        wait { quittingApp.applicationShouldTerminate(NSApp) == .terminateNow }
+        check(quittingApp.frontDocument == nil,
+              "a snapshot finishing during Quit is closed, not opened")
+        documents.items.removeAll { $0 === quitting }
+
+        document.snapshotHandler = nil
+        controller.window?.orderOut(nil)
+        documents.items.removeAll { $0 === document }
+    }
+
 
     /// The Path tool driven through the canvas, then the Paths palette's
     /// commands and the engine's undo of path edits.

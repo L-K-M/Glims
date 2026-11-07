@@ -172,6 +172,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
         (PaletteCenter.shared.registeredPalette(for: LayersPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: PathsPaletteController.definition.kind))?.retarget()
+        (PaletteCenter.shared.registeredPalette(for: HistoryPaletteController.definition.kind))?.retarget()
         // Path shapes arrive with the state; the canvas draws them.
         canvas.needsDisplay = true
     }
@@ -219,6 +220,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         imageDocument.filterPreviewIsOpen = true
         panel.showWindow(nil)
     }
+
+    /// Image ▸ New Snapshot: an independent copy opened as a new document.
+    @objc func newSnapshot(_ sender: Any?) { imageDocument.newSnapshot() }
 
     // MARK: Layer menu
 
@@ -491,6 +495,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             menuItem.state = sources?.local.contains(lock) == true ? .on : .off
             menuItem.toolTip = Self.lockNote(lock, sources: sources)
             return true
+        case #selector(newSnapshot(_:)):
+            // Without an app to adopt the copy there is nothing to run.
+            return imageDocument.snapshotHandler != nil && !editingBlocked && blurPanel == nil
         case #selector(gaussianBlur(_:)):
             return !editingBlocked
         case #selector(repeatExport(_:)):
