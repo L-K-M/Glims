@@ -13,7 +13,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     let statusBar = StatusBarView(frame: .zero)
     private let scrollView = NSScrollView()
     private lazy var engineUndoManager = EngineUndoManager(document: imageDocument)
-    private var blurPanel: GaussianBlurPanel?
+    /// The open filter preview, generic or dedicated; one at a time.
+    private(set) var previewPanel: FilterPreviewPanel?
     var onClose: ((DocumentWindowController) -> Void)?
     let fileAccessID = UUID()
     var reserveWrite: ((URL) throws -> (() -> Void))?
@@ -37,7 +38,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         applyPreferences()
         imageDocument.onProjectionChange = { [weak self] rect in self?.canvas.imageDidChange(in: rect) }
         imageDocument.onStateChange = { [weak self] in self?.stateDidChange() }
-        imageDocument.onError = { [weak self] message in self?.showStatusError(message) }
+        imageDocument.onError = { [weak self] message in
+            self?.showStatusError(message)
+            self?.previewPanel?.showError(message)
+        }
         // Palette picks and structural or lock changes first commit any
         // field/text edit and end an active stroke; each command also
         // lets a remembered refusal go.
@@ -192,7 +196,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     @objc override func deleteBackward(_ sender: Any?) { clearPixels(sender) }
     @objc override func cancelOperation(_ sender: Any?) {
-        if let blurPanel { blurPanel.cancel() } else { super.cancelOperation(sender) }
+        if let previewPanel { previewPanel.cancel() } else { super.cancelOperation(sender) }
     }
 
     @objc func zoomIn(_ sender: Any?) { zoom(to: ZoomLadder.zoomIn(from: canvas.zoomPercent)) }
@@ -208,7 +212,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func gaussianBlur(_ sender: Any?) {
-        guard blurPanel == nil, !imageDocument.isClosing, !PlugInCommands.isRunning,
+        guard previewPanel == nil, !imageDocument.isClosing, !PlugInCommands.isRunning,
               !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
         if canvas.tools.textEditor != nil {
             canvas.tools.finishTextEditing()
@@ -224,16 +228,73 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return
         }
         panel.onFinish = { [weak self] in
-            self?.blurPanel = nil
+            self?.previewPanel = nil
             self?.imageDocument.filterPreviewIsOpen = false
         }
-        blurPanel = panel
+        previewPanel = panel
         imageDocument.filterPreviewIsOpen = true
         panel.showWindow(nil)
     }
 
     /// Image ▸ New Snapshot: an independent copy opened as a new document.
     @objc func newSnapshot(_ sender: Any?) { imageDocument.newSnapshot() }
+    /// Filter ▸ Native ▸ …: opens the catalog operation's generic form.
+    @objc func runNativeFilter(_ sender: Any?) {
+        guard let command = (sender as? NSMenuItem)?.representedObject as? NativeFilterCommand else { return }
+        openNativeFilter(command.operation)
+    }
+
+    /// Opens the operation's form after committing in-flight edits, so
+    /// the filter session begins on the committed layer. Property rows
+    /// load off the main queue through the catalog; the panel builds
+    /// when they land.
+    func openNativeFilter(_ operation: EngineSession.FilterOperation) {
+        guard previewPanel == nil, !imageDocument.isClosing, !PlugInCommands.isRunning,
+              !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
+        guard operation.support == .supported else {
+            if let reason = NativeFilterMenuLayout.unavailableReason(operation.support) {
+                statusBar.message = "\(operation.title) \(reason) — not supported yet."
+            }
+            return
+        }
+        if canvas.tools.textEditor != nil {
+            canvas.tools.finishTextEditing()
+            imageDocument.inputQueue.async { [weak self] in
+                DispatchQueue.main.async { self?.openNativeFilter(operation) }
+            }
+            return
+        }
+        if imageDocument.strokeIsActive { imageDocument.endStroke() }
+        NSApp.windows.forEach { $0.endEditing(for: nil) }
+        statusBar.message = "\(operation.title)…"
+        NativeFilterCatalog.shared.properties(for: operation, using: imageDocument.session) { [weak self] properties in
+            guard let self, !self.imageDocument.isClosing else { return }
+            guard let properties else {
+                self.statusBar.message = "\(operation.title) is not available."
+                NSSound.beep()
+                return
+            }
+            // The gates can have changed while the catalog answered.
+            guard self.previewPanel == nil, !PlugInCommands.isRunning,
+                  !self.imageDocument.isSavingForClose, !self.imageDocument.isTransferringClipboard else {
+                self.statusBar.message = "Apply or cancel the current filter first."
+                return
+            }
+            guard let panel = NativeFilterPanel(document: self.imageDocument,
+                                                operation: operation, properties: properties) else {
+                self.statusBar.message = "\(operation.title) could not start on this layer."
+                NSSound.beep()
+                return
+            }
+            panel.onFinish = { [weak self] in
+                self?.previewPanel = nil
+                self?.imageDocument.filterPreviewIsOpen = false
+            }
+            self.previewPanel = panel
+            self.imageDocument.filterPreviewIsOpen = true
+            panel.showWindow(nil)
+        }
+    }
 
     // MARK: Layer menu
 
@@ -442,6 +503,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// Runs a plug-in command on this document, as its menu item does.
     func run(_ procedure: EngineSession.Procedure, mode: EngineSession.RunMode) {
         guard !PlugInCommands.isRunning, !imageDocument.isClosing else { return }
+        guard !imageDocument.filterPreviewIsOpen else {
+            statusBar.message = "Apply or cancel the filter preview first."
+            return
+        }
         NSApp.windows.forEach { $0.endEditing(for: nil) }
         canvas.tools.finishTextEditing()
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
@@ -497,9 +562,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(selectFromPath(_:)), #selector(strokePath(_:)):
             return imageDocument.activePath != nil && !editingBlocked
         case #selector(newLayerGroup(_:)):
-            return !editingBlocked && blurPanel == nil
+            return !editingBlocked && previewPanel == nil
         case #selector(toggleLayerLock(_:)):
-            guard !editingBlocked, blurPanel == nil, let id = imageDocument.activeLayer else { return false }
+            guard !editingBlocked, previewPanel == nil, let id = imageDocument.activeLayer else { return false }
             let lock = EngineSession.LayerLocks(rawValue: UInt32(menuItem.tag))
             let tree = LayerTree(layers: imageDocument.layers)
             let sources = tree.nodesByID[id].map { tree.lockSources(for: $0, states: imageDocument.layerLocks) }
@@ -510,17 +575,23 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // Without an app to adopt the copy there is nothing to run.
             return imageDocument.snapshotHandler != nil && !editingBlocked && blurPanel == nil
         case #selector(gaussianBlur(_:)):
-            return !editingBlocked
+            return !editingBlocked && previewPanel == nil
+        case #selector(runNativeFilter(_:)):
+            // Auxiliary-input and config operations stay listed but can't
+            // open a form yet; their titles carry the reason.
+            guard let command = menuItem.representedObject as? NativeFilterCommand,
+                  command.operation.support == .supported else { return false }
+            return !editingBlocked && previewPanel == nil && imageDocument.activeLayer != nil
         case #selector(repeatExport(_:)):
             menuItem.title = imageDocument.fileState.lastExportURL.map { "Export to \($0.lastPathComponent)" } ?? "Export Again…"
-            return !editingBlocked && blurPanel == nil
+            return !editingBlocked && previewPanel == nil
         case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(exportDocument(_:)), #selector(saveDocumentCopy(_:)):
             // A plug-in dialog is modal for the engine; file calls get BUSY.
-            return !editingBlocked && blurPanel == nil
+            return !editingBlocked && previewPanel == nil
         case #selector(runPlugIn(_:)):
             // The engine runs no plug-in while a filter preview is open.
             guard let command = menuItem.representedObject as? PlugInCommand else { return false }
-            return !editingBlocked && blurPanel == nil && imageDocument.canRun(command.procedure)
+            return !editingBlocked && previewPanel == nil && imageDocument.canRun(command.procedure)
         case #selector(repeatLastFilter(_:)), #selector(reshowLastFilter(_:)):
             let base = menuItem.action == #selector(repeatLastFilter(_:)) ? "Last Filter" : "Last Filter Settings…"
             guard let last = PlugInCommands.last else {
@@ -530,7 +601,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let title = last.label.replacingOccurrences(of: "…", with: "")
             menuItem.title = menuItem.action == #selector(repeatLastFilter(_:))
                 ? "Last Filter: \(title)" : "Last Filter Settings: \(title)…"
-            return !editingBlocked && blurPanel == nil && imageDocument.canRun(last)
+            return !editingBlocked && previewPanel == nil && imageDocument.canRun(last)
         default:
             return !editingBlocked
         }
@@ -605,7 +676,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     private func canStartFileWrite(purpose: WritePurpose = .ordinary) -> Bool {
-        guard blurPanel == nil, !PlugInCommands.isRunning, !imageDocument.isClosing,
+        guard previewPanel == nil, !PlugInCommands.isRunning, !imageDocument.isClosing,
               !imageDocument.isTransferringClipboard,
               !imageDocument.isSavingForClose || purpose == .closing else {
             statusBar.message = "Apply or cancel the current operation before saving or exporting."
@@ -712,7 +783,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
         NSApp.windows.forEach { $0.endEditing(for: nil) }
         canvas.tools.finishTextEditing()
-        blurPanel?.cancel()
+        previewPanel?.cancel()
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
         if closeApproved || !imageDocument.hasUnsavedChanges { return true }
         askToSaveChanges()
@@ -777,7 +848,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     func windowWillClose(_ notification: Notification) {
         closeStarted = true
-        blurPanel?.cancel()
+        previewPanel?.cancel()
         canvas.stopRendering { [self] in
             imageDocument.closeImageWhenDrained {
                 self.onClose?(self)
