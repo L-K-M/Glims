@@ -17,10 +17,12 @@ enum MainMenu {
             item("Quit \(AppIdentity.name)", #selector(NSApplication.terminate(_:)), "q"),
         ])
         add(menu, "File", [
-            item("New", #selector(AppController.newDocument(_:)), "n"),
+            item("New…", #selector(AppController.newDocument(_:)), "n"),
             item("Open…", #selector(AppController.openDocument(_:)), "o"),
+            RecentDocumentsMenu.shared.makeItem(),
             .separator(),
             item("Close", #selector(NSWindow.performClose(_:)), "w"),
+            item("Save", #selector(DocumentWindowController.saveDocument(_:)), "s"),
             item("Save As…", #selector(DocumentWindowController.saveDocumentAs(_:)), "S"),
             item("Export…", #selector(DocumentWindowController.exportDocument(_:)), "E"),
         ])
@@ -96,6 +98,7 @@ enum MainMenu {
         add(menu, "View", [
             item("Zoom In", #selector(DocumentWindowController.zoomIn(_:)), "+"),
             item("Zoom Out", #selector(DocumentWindowController.zoomOut(_:)), "-"),
+            item("Fit Image", #selector(DocumentWindowController.fitImage(_:)), "0"),
             item("Actual Pixels", #selector(DocumentWindowController.actualPixels(_:)), "1"),
         ])
         let lastFilterSettings = item("Last Filter Settings…", #selector(DocumentWindowController.reshowLastFilter(_:)), "f")

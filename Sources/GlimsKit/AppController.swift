@@ -21,6 +21,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private(set) var state: EngineState = .starting
     private var documents: [DocumentWindowController] = []
     private var workspace: WorkspaceWindowController?
+    private var newImagePanel: NewImagePanel?
+    private var pendingOpenURLs: [URL] = []
+    private var openingURLs: Set<URL> = []
+    private var pendingFileOperations = 0
+    private var terminationRequested = false
+    private var terminationClosingDocument: DocumentWindowController?
+    private let openQueue = DispatchQueue(label: "ch.lkmc.Glims.open", qos: .userInitiated)
 
     private lazy var toolsPalette: Palette = PaletteCenter.shared.palette(
         for: ToolsPaletteController.definition,
@@ -75,8 +82,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NotificationCenter.default.addObserver(self, selector: #selector(openPendingFiles),
+                                               name: PlugInCommands.didFinishNotification, object: nil)
         guard let path = EngineLibrary.configuredPath() else {
-            showWorkspace(message: "No engine library configured; set \(EngineLibrary.environmentVariable).")
+            showWorkspace(message: "This build is missing its image engine. Build Glims with scripts/build.sh, or set \(EngineLibrary.environmentVariable) for development.")
+            workspace?.canvas.message = "Image engine unavailable"
             state = .unavailable("not configured")
             return
         }
@@ -93,6 +103,36 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             DispatchQueue.main.async { self?.engineDidStart(result) }
         }
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !terminationRequested else { return .terminateLater }
+        guard !documents.isEmpty || pendingFileOperations > 0 else { return .terminateNow }
+        terminationRequested = true
+        newImagePanel?.close()
+        // AppKit expects terminateLater before reply(toApplicationShouldTerminate:).
+        DispatchQueue.main.async { self.closeNextDocumentForTermination() }
+        return .terminateLater
+    }
+
+    private func closeNextDocumentForTermination() {
+        guard terminationRequested, terminationClosingDocument == nil, pendingFileOperations == 0 else { return }
+        guard let controller = documents.last else {
+            terminationRequested = false
+            NSApp.reply(toApplicationShouldTerminate: true)
+            return
+        }
+        terminationClosingDocument = controller
+        controller.requestClose { [weak self] closed in
+            guard let self else { return }
+            self.terminationClosingDocument = nil
+            if closed {
+                self.closeNextDocumentForTermination()
+            } else {
+                self.terminationRequested = false
+                NSApp.reply(toApplicationShouldTerminate: false)
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -120,9 +160,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             }
             workspace?.close()
             workspace = nil
-            newDocument(nil)
+            if pendingOpenURLs.isEmpty {
+                createDocument(width: Self.defaultImageSize.width, height: Self.defaultImageSize.height)
+            } else {
+                let urls = pendingOpenURLs
+                pendingOpenURLs.removeAll()
+                openFiles(urls)
+            }
         case .failure(let error):
             state = .failed(String(describing: error))
+            workspace?.canvas.message = "Image engine could not start"
             workspace?.statusBar.message = "The engine did not start: \(error)"
         }
     }
@@ -159,6 +206,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         }
         documents.append(controller)
         controller.showWindow(nil)
+        controller.fitImage(nil)
         PaletteCenter.shared.frontDocumentDidChange()
         PaletteCenter.shared.setDefaultLayout(Self.defaultPaletteLayout)
         // Paths before Layers, so Layers is the tab their group shows.
@@ -188,28 +236,101 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     // MARK: Menu commands
 
     @objc func newDocument(_ sender: Any?) {
+        guard session != nil else { return }
+        if let newImagePanel { newImagePanel.showWindow(nil); return }
+        let panel = NewImagePanel()
+        panel.onCreate = { [weak self] settings in
+            self?.createDocument(width: settings.width, height: settings.height)
+        }
+        panel.onClose = { [weak self] in self?.newImagePanel = nil }
+        newImagePanel = panel
+        panel.showWindow(nil)
+    }
+
+    private func createDocument(width: Int, height: Int) {
         guard let session else { return }
-        do {
-            let image = try session.newImage(width: Self.defaultImageSize.width, height: Self.defaultImageSize.height)
-            open(try ImageDocument(session: session, image: image, name: "Untitled"))
-        } catch {
-            NSAlert(error: error).runModal()
+        pendingFileOperations += 1
+        openQueue.async {
+            let result = Result { try session.newImage(width: width, height: height) }
+            DispatchQueue.main.async {
+                self.pendingFileOperations -= 1
+                defer { self.closeNextDocumentForTermination() }
+                do {
+                    self.open(try ImageDocument(session: session, image: result.get(), name: "Untitled"))
+                } catch {
+                    NSAlert(error: error).runModal()
+                }
+            }
         }
     }
 
+    @objc func openRecentDocument(_ sender: Any?) {
+        guard let url = (sender as? NSMenuItem)?.representedObject as? URL else { return }
+        openFiles([url])
+    }
+
     @objc func openDocument(_ sender: Any?) {
-        guard let session else { return }
+        guard session != nil else { return }
         let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        // Opening a non-XCF file runs a plug-in; keep it off the main thread.
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = Result { try session.openImage(path: url.path) }
-            DispatchQueue.main.async {
-                do {
-                    self.open(try ImageDocument(session: session, image: result.get(), name: url.lastPathComponent))
-                } catch {
-                    NSAlert(error: error).runModal()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK else { return }
+        openFiles(panel.urls)
+    }
+
+    // Finder sends these before the engine has necessarily finished starting.
+    func application(_ sender: NSApplication, open urls: [URL]) {
+        if session != nil {
+            openFiles(urls)
+        } else if case .starting = state {
+            pendingOpenURLs.append(contentsOf: urls)
+        } else {
+            NSAlert(error: NSError(domain: "ch.lkmc.Glims", code: 1,
+                                  userInfo: [NSLocalizedDescriptionKey: "The image engine is unavailable. Rebuild Glims with its engine to open images."])).runModal()
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag, session != nil { newDocument(nil) }
+        return true
+    }
+
+    @objc private func openPendingFiles() {
+        guard !pendingOpenURLs.isEmpty else { return }
+        let urls = pendingOpenURLs
+        pendingOpenURLs.removeAll()
+        if !terminationRequested { openFiles(urls) }
+    }
+
+    private func openFiles(_ urls: [URL]) {
+        guard let session, !terminationRequested else { return }
+        guard !PlugInCommands.isRunning else {
+            pendingOpenURLs.append(contentsOf: urls)
+            return
+        }
+        for requested in urls {
+            let url = requested.standardizedFileURL
+            if let existing = documents.first(where: {
+                ($0.imageDocument.fileState.nativeURL ?? $0.imageDocument.fileState.importedSourceURL)?.standardizedFileURL == url
+            }) {
+                existing.window?.makeKeyAndOrderFront(nil)
+                continue
+            }
+            guard openingURLs.insert(url).inserted else { continue }
+            pendingFileOperations += 1
+            // File plug-ins must not block the AppKit thread.
+            openQueue.async {
+                let result = Result { try session.openImage(path: url.path) }
+                DispatchQueue.main.async {
+                    self.openingURLs.remove(url)
+                    self.pendingFileOperations -= 1
+                    defer { self.closeNextDocumentForTermination() }
+                    do {
+                        self.open(try ImageDocument(session: session, image: result.get(), name: url.lastPathComponent, openedFrom: url))
+                        NSDocumentController.shared.noteNewRecentDocumentURL(url)
+                    } catch {
+                        NSAlert(error: error).runModal()
+                    }
                 }
             }
         }
@@ -241,9 +362,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
-        case #selector(newDocument(_:)), #selector(openDocument(_:)):
+        case #selector(newDocument(_:)), #selector(openDocument(_:)), #selector(openRecentDocument(_:)):
             // A plug-in dialog is modal for the engine (glims_engine.h).
-            return session != nil && !PlugInCommands.isRunning
+            return session != nil && !PlugInCommands.isRunning && !terminationRequested
         case #selector(showLayers(_:)), #selector(showPaths(_:)), #selector(showTools(_:)),
              #selector(showToolOptions(_:)):
             return session != nil

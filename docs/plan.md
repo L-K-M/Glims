@@ -662,6 +662,14 @@ In this order (reasons in `phase0-report.md`):
   invalidates chrome, not document content. Rigi's 103 tests, gallery
   smoke test and release build pass at this revision.
 
+## Completion work (2026-11-07)
+
+The user requested the complete editor after a normal build opened the
+engine-free placeholder. The remaining work and evidence are tracked in
+[`completion.md`](completion.md). Phase 1's implemented tools did not make
+the application complete: basic file lifecycle and clipboard workflows,
+and substantial parts of `design.md`, still need implementation and checks.
+
 ## Later, before any public release
 
 - Developer ID signing and notarization for the app, GTK3, Python and every

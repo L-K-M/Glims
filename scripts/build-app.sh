@@ -4,13 +4,11 @@
 # signs it and verifies the signature. Fails before assembling when the
 # committed notices no longer match the resolved packages.
 #
-#   scripts/build-app.sh [--debug] [--engine GIMP_REF]
+#   scripts/build-app.sh [--debug] [--engine GIMP_REF | --shell-only]
 #
-# --engine bundles a built engine set (scripts/build-engine.sh and
-# scripts/build-adapter.sh GIMP_REF) into the app with
-# scripts/bundle-engine.py, so it runs on its own; scripts/check-bundle.sh
-# tests that. Without it the app has no engine and looks for one through
-# GLIMS_ENGINE_LIBRARY (Sources/GlimsKit/Engine/EngineLibrary.swift).
+# Normal builds bundle the pinned engine. --engine selects another built
+# engine set; --shell-only explicitly builds the interface for hosted CI or
+# development with GLIMS_ENGINE_LIBRARY. Never distribute a shell-only build.
 #
 # --debug builds the Debug configuration (scripts/build.sh --debug reaches this
 # through lkm-build's swiftpm kind). The app builds for the host architecture
@@ -29,23 +27,34 @@ APP_NAME="Glims"
 APP_PATH="$OUTPUT_DIR/$APP_NAME.app"
 
 CONFIGURATION=release
-ENGINE_REF=""
+source "$PROJECT_ROOT/scripts/engine.env"
+ENGINE_REF="${ENGINE_SETS%%:*}"
+ENGINE_OPTION_SET=false
+SHELL_ONLY=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --debug) CONFIGURATION=debug ;;
     --engine)
       [[ $# -ge 2 ]] || { echo "error: --engine needs a GIMP_REF" >&2; exit 2; }
-      ENGINE_REF="$2"; shift ;;
-    *) echo "error: unknown option '$1' (expected --debug or --engine GIMP_REF)" >&2; exit 2 ;;
+      [[ "$SHELL_ONLY" == false ]] || { echo "error: --engine and --shell-only cannot be combined" >&2; exit 2; }
+      ENGINE_REF="$2"; ENGINE_OPTION_SET=true; shift ;;
+    --shell-only)
+      [[ "$ENGINE_OPTION_SET" == false ]] || { echo "error: --engine and --shell-only cannot be combined" >&2; exit 2; }
+      SHELL_ONLY=true ;;
+    *) echo "error: unknown option '$1' (expected --debug, --engine GIMP_REF or --shell-only)" >&2; exit 2 ;;
   esac
   shift
 done
 
-if [[ -n "$ENGINE_REF" ]]; then
+if [[ "$SHELL_ONLY" == false ]]; then
   ENGINE_INSTALL="$PROJECT_ROOT/_engine/install/$ENGINE_REF"
   ENGINE_ADAPTER="$PROJECT_ROOT/_engine/adapter/$ENGINE_REF/libglimsengine.dylib"
   DEPS_PREFIX="$PROJECT_ROOT/_deps/macports"
-  [[ -d "$ENGINE_INSTALL" ]] || { echo "error: no engine at $ENGINE_INSTALL; run scripts/build-engine.sh $ENGINE_REF" >&2; exit 1; }
+  [[ -d "$ENGINE_INSTALL" ]] || {
+    echo "error: Glims needs its image engine. Run scripts/bootstrap-deps.sh, scripts/build-engine.sh $ENGINE_REF and scripts/build-adapter.sh $ENGINE_REF, then build again." >&2
+    echo "For interface-only development, use scripts/build-app.sh --shell-only." >&2
+    exit 1
+  }
   [[ -f "$ENGINE_ADAPTER" ]] || { echo "error: no adapter at $ENGINE_ADAPTER; run scripts/build-adapter.sh $ENGINE_REF" >&2; exit 1; }
 fi
 
@@ -81,7 +90,9 @@ done
 cp "$PROJECT_ROOT/LICENSE" "$APP_PATH/Contents/Resources/LICENSE.txt"
 cp "$PROJECT_ROOT/Resources/Third-Party-Notices.txt" "$APP_PATH/Contents/Resources/Third-Party-Notices.txt"
 
-if [[ -n "$ENGINE_REF" ]]; then
+if [[ "$SHELL_ONLY" == false ]]; then
+  echo "==> Building the current engine adapter ($ENGINE_REF)"
+  "$PROJECT_ROOT/scripts/build-adapter.sh" "$ENGINE_REF"
   echo "==> Bundling the engine ($ENGINE_REF)"
   python3 -I "$PROJECT_ROOT/scripts/bundle-engine.py" "$APP_PATH" "$ENGINE_INSTALL" "$DEPS_PREFIX" \
     "$ENGINE_ADAPTER" "$PROJECT_ROOT/_engine/src/$ENGINE_REF"

@@ -27,7 +27,7 @@ final class WorkspaceWindowController: NSWindowController {
         super.init(window: window)
 
         layOutContent(in: window)
-        statusBar.message = "Engine not connected (phase 0)"
+        statusBar.message = "Starting the image engine…"
         statusBar.onZoomIn = { [weak self] in self?.zoomIn() }
         statusBar.onZoomOut = { [weak self] in self?.zoomOut() }
         statusBar.onZoomReset = { [weak self] in self?.resetZoom() }

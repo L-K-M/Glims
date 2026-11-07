@@ -25,6 +25,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         window.minSize = NSSize(width: 360, height: 240)
         super.init(window: window)
         window.delegate = self
+        window.representedURL = imageDocument.fileState.nativeURL
 
         layOutContent(in: window)
         imageDocument.onProjectionChange = { [weak self] rect in self?.canvas.imageDidChange(in: rect) }
@@ -112,18 +113,23 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func zoom(to percent: Int) {
+        let visible = scrollView.contentView.bounds
+        let imageCenter = CGPoint(x: visible.midX / canvas.scale, y: visible.midY / canvas.scale)
         canvas.setZoom(percent: percent)
+        center(on: imageCenter)
         statusBar.setZoom(percent: percent)
         stateDidChange()
     }
 
     /// Classic title and status: `name @ 100% (RGB, u8-non-linear)`.
-    static func title(name: String, zoomPercent: Int, info: EngineSession.ImageInfo) -> String {
-        "\(info.isDirty ? "• " : "")\(name) @ \(zoomPercent)% (RGB, \(info.precision))"
+    static func title(name: String, zoomPercent: Int, isDirty: Bool, precision: String) -> String {
+        "\(isDirty ? "• " : "")\(name) @ \(zoomPercent)% (RGB, \(precision))"
     }
 
     private func stateDidChange() {
-        window?.title = Self.title(name: imageDocument.name, zoomPercent: canvas.zoomPercent, info: imageDocument.info)
+        window?.title = Self.title(name: imageDocument.name, zoomPercent: canvas.zoomPercent,
+                                   isDirty: imageDocument.hasUnsavedChanges,
+                                   precision: imageDocument.info.precision)
         let undo = imageDocument.undoInfo.nextUndo.isEmpty ? "" : " · Undo \(imageDocument.undoInfo.nextUndo)"
         statusBar.message = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(imageDocument.info.layerCount) layer\(imageDocument.info.layerCount == 1 ? "" : "s")\(undo)"
         (PaletteCenter.shared.registeredPalette(for: LayersPaletteController.definition.kind))?.retarget()
@@ -137,6 +143,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func zoomIn(_ sender: Any?) { zoom(to: ZoomLadder.zoomIn(from: canvas.zoomPercent)) }
     @objc func zoomOut(_ sender: Any?) { zoom(to: ZoomLadder.zoomOut(from: canvas.zoomPercent)) }
     @objc func actualPixels(_ sender: Any?) { zoom(to: ZoomLadder.actualPixels) }
+    @objc func fitImage(_ sender: Any?) {
+        window?.contentView?.layoutSubtreeIfNeeded()
+        let viewport = scrollView.contentSize
+        zoom(to: ZoomLadder.fit(imageWidth: Double(imageDocument.info.width), imageHeight: Double(imageDocument.info.height),
+                               viewportWidth: Double(viewport.width), viewportHeight: Double(viewport.height)))
+        center(on: CGPoint(x: Double(imageDocument.info.width) / 2, y: Double(imageDocument.info.height) / 2))
+    }
 
     @objc func gaussianBlur(_ sender: Any?) {
         guard blurPanel == nil else { return }
@@ -382,6 +395,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return imageDocument.activePath != nil && !PlugInCommands.isRunning
         case #selector(gaussianBlur(_:)):
             return !PlugInCommands.isRunning
+        case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(exportDocument(_:)):
+            // A plug-in dialog is modal for the engine; file calls get BUSY.
+            return !PlugInCommands.isRunning
         case #selector(runPlugIn(_:)):
             // The engine runs no plug-in while a filter preview is open.
             guard let command = menuItem.representedObject as? PlugInCommand else { return false }
@@ -401,6 +417,59 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    // MARK: Saving, exporting and closing
+
+    /// File ▸ Save: writes the image's native XCF; new and imported
+    /// images have none yet, so Save falls through to Save As.
+    @objc func saveDocument(_ sender: Any?) {
+        performSave { _ in }
+    }
+
+    /// File ▸ Save As: always asks for the XCF file to write.
+    @objc func saveDocumentAs(_ sender: Any?) {
+        askSaveTarget { _ in }
+    }
+
+    /// The save flow Cmd-S and the close prompt share; `done` gets
+    /// whether a file was actually written.
+    private func performSave(done: @escaping @MainActor (Bool) -> Void) {
+        switch imageDocument.fileState.saveRoute {
+        case .write(let url): saveTo(url, done: done)
+        case .askForFile: askSaveTarget(done: done)
+        }
+    }
+
+    private func askSaveTarget(done: @escaping @MainActor (Bool) -> Void) {
+        guard let window else { return done(false) }
+        let savePanel = NSSavePanel()
+        savePanel.allowedContentTypes = [UTType(importedAs: "org.gimp.xcf", conformingTo: .image)]
+        savePanel.allowsOtherFileTypes = false
+        savePanel.nameFieldStringValue = (imageDocument.name as NSString).deletingPathExtension + ".xcf"
+        savePanel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = savePanel.url, let self else { return done(false) }
+            self.saveTo(url, done: done)
+        }
+    }
+
+    /// Writes the XCF, then moves the name, the represented file and the
+    /// dirty flag to it — a failed or cancelled save changes nothing.
+    private func saveTo(_ url: URL, done: @escaping @MainActor (Bool) -> Void) {
+        statusBar.message = "Saving \(url.lastPathComponent)…"
+        imageDocument.save(to: url) { [weak self] error in
+            guard let self else { return done(false) }
+            if let error {
+                self.statusBar.message = String(describing: error)
+                return done(false)
+            }
+            self.imageDocument.noteSaved(to: url)
+            self.window?.representedURL = url
+            NSDocumentController.shared.noteNewRecentDocumentURL(url)
+            self.statusBar.message = "Saved \(url.lastPathComponent)"
+            self.stateDidChange()
+            return done(true)
+        }
+    }
+
     @objc func exportDocument(_ sender: Any?) {
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [.png, .jpeg, .tiff]
@@ -414,17 +483,73 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
-    @objc func saveDocumentAs(_ sender: Any?) {
-        let savePanel = NSSavePanel()
-        savePanel.allowedContentTypes = [UTType(filenameExtension: "xcf") ?? .data]
-        savePanel.nameFieldStringValue = (imageDocument.name as NSString).deletingPathExtension + ".xcf"
-        savePanel.beginSheetModal(for: window!) { [weak self] response in
-            guard response == .OK, let url = savePanel.url, let self else { return }
-            self.imageDocument.save(to: url) { error in
-                self.statusBar.message = error.map { String(describing: $0) } ?? "Saved \(url.lastPathComponent)"
-                try? self.imageDocument.reload()
+    /// Whether the user already agreed to close: Don't Save, or a save
+    /// that succeeded. The next close request goes through.
+    private var closeApproved = false
+    private var savePromptVisible = false
+    private var closeCompletion: ((Bool) -> Void)?
+    private var closeStarted = false
+
+    /// Quit and Close All share the same save/cancel flow as the close dot.
+    /// Completion waits for both render reads and engine work to finish.
+    func requestClose(completion: @escaping (Bool) -> Void) {
+        guard closeCompletion == nil else { return completion(false) }
+        closeCompletion = completion
+        guard let window else { return finishCloseRequest(true) }
+        if closeStarted { return }
+        if windowShouldClose(window) { window.close() }
+    }
+
+    private func finishCloseRequest(_ closed: Bool) {
+        let completion = closeCompletion
+        closeCompletion = nil
+        completion?(closed)
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard !PlugInCommands.isRunning else {
+            statusBar.message = "Finish or cancel the running filter before closing this image."
+            NSSound.beep()
+            finishCloseRequest(false)
+            return false
+        }
+        if closeApproved || !imageDocument.hasUnsavedChanges { return true }
+        askToSaveChanges()
+        return false
+    }
+
+    /// Save / Don't Save / Cancel for a document with unsaved changes.
+    /// A cancelled or failed save keeps the window open.
+    private func askToSaveChanges() {
+        guard let window, !savePromptVisible else { return }
+        savePromptVisible = true
+        let alert = NSAlert()
+        alert.messageText = "Do you want to keep the changes to \u{201C}\(imageDocument.name)\u{201D}?"
+        alert.informativeText = "Your changes will be lost if you don't save them."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        let dontSave = alert.addButton(withTitle: "Don't Save")
+        dontSave.keyEquivalent = "\u{7f}"
+        dontSave.keyEquivalentModifierMask = .command
+        alert.beginSheetModal(for: window) { [weak self] response in
+            self?.savePromptVisible = false
+            switch response {
+            case .alertFirstButtonReturn: self?.saveThenClose()
+            case .alertThirdButtonReturn: self?.approveClose()
+            default: self?.finishCloseRequest(false)
             }
         }
+    }
+
+    private func saveThenClose() {
+        performSave { [weak self] saved in
+            if saved { self?.approveClose() } else { self?.finishCloseRequest(false) }
+        }
+    }
+
+    private func approveClose() {
+        closeApproved = true
+        window?.close()
     }
 
     /// Edit ▸ Undo and Redo reach the engine through this (see
@@ -438,9 +563,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func windowWillClose(_ notification: Notification) {
+        closeStarted = true
         blurPanel?.cancel()
-        try? imageDocument.session.closeImage(imageDocument.image)
-        onClose?(self)
+        canvas.stopRendering { [self] in
+            imageDocument.closeImageWhenDrained {
+                self.onClose?(self)
+                self.finishCloseRequest(true)
+            }
+        }
     }
 }
 

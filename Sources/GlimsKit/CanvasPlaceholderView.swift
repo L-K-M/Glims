@@ -9,6 +9,8 @@ final class CanvasPlaceholderView: NSView {
     private static let imageSize = NSSize(width: 640, height: 480)
     private static let surround = NSColor(calibratedWhite: 0.42, alpha: 1)
 
+    var message = "Starting Glims…" { didSet { needsDisplay = true } }
+
     var zoomPercent = ZoomLadder.actualPixels {
         didSet { needsDisplay = true }
     }
@@ -29,7 +31,7 @@ final class CanvasPlaceholderView: NSView {
         NSColor(calibratedWhite: 0, alpha: 0.35).setStroke()
         NSBezierPath(rect: frame.insetBy(dx: -0.5, dy: -0.5)).stroke()
 
-        let caption = "No image engine yet" as NSString
+        let caption = message as NSString
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 12),
             .foregroundColor: NSColor(calibratedWhite: 0.45, alpha: 1)

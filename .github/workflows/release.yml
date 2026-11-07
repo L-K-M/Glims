@@ -17,8 +17,8 @@ env:
 jobs:
   release:
     name: Build & publish (unsigned)
-    runs-on: macos-26
-    timeout-minutes: 45   # don't let a wedged build stall a release for 6h
+    runs-on: [self-hosted, macOS, ARM64, glims-engine]
+    timeout-minutes: 240   # don't let a wedged build stall a release for 6h
     steps:
       # Actions are pinned to immutable commit SHAs: a mutable tag can be repointed
       # at tampered code, a commit SHA cannot. This workflow holds contents:write
@@ -29,6 +29,7 @@ jobs:
           # Nothing in this job runs git after checkout; don't leave a
           # contents:write token sitting in .git/config for the whole build.
           persist-credentials: false
+          clean: false   # preserve the prebuilt engine and dependency prefix
 
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
@@ -66,8 +67,16 @@ jobs:
       - name: Test
         run: swift test
 
+      - name: Build the pinned engine and adapter
+        run: |
+          scripts/build-engine.sh
+          scripts/build-adapter.sh --test
+
       - name: Build the app
         run: ./scripts/build-app.sh
+
+      - name: Check the self-contained editor
+        run: scripts/check-bundle.sh
 
       - name: Stamp the build number & re-sign
         run: |
@@ -113,7 +122,7 @@ jobs:
         run: |
           check_notices() {
             RESOURCES="$1/$APP_NAME.app/Contents/Resources"
-            for notice in LICENSE.txt Third-Party-Notices.txt; do
+            for notice in LICENSE.txt Third-Party-Notices.txt Engine-Notices.txt; do
               test -s "$RESOURCES/$notice" || { echo "::error::$notice missing from $2"; return 1; }
             done
             grep -q '^Rigi ' "$RESOURCES/Third-Party-Notices.txt" || { echo "::error::$2 notices lack Rigi"; return 1; }
@@ -152,8 +161,9 @@ jobs:
 
             ### License and source
 
-            Glims is licensed under GPL-3.0-or-later. The complete corresponding
-            source is this release's tag; the app ships the license text and the
+            Glims is licensed under GPL-3.0-or-later. Glims source is this
+            release's tag; engine and dependency sources are identified in
+            Engine-Notices.txt; the app ships the license text and the
             third-party notices in `Glims.app/Contents/Resources`.
 
       # Never trust an upload: download what GitHub actually serves for the tag and

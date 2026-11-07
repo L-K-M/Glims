@@ -87,6 +87,7 @@ enum EngineSmokeTest {
 
         do {
             try exerciseDocument(session, work: work, documents: documents)
+            try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseTools(session, documents: documents)
             try exerciseEditing(session, documents: documents)
             try exercisePaths(session, documents: documents)
@@ -101,6 +102,87 @@ enum EngineSmokeTest {
         return failures == 0 ? 0 : 1
     }
 
+    /// Saving/closing must use the same asynchronous queues and sheets as
+    /// real input. In particular a compile-only file-state test cannot prove
+    /// that the last stroke reached the file or Cancel preserved the image.
+    private static func exerciseFileSafety(_ session: EngineSession, work: URL,
+                                           documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "File Safety")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        let window = try XCTUnwrapWindow(controller)
+        let directory = work.appendingPathComponent("file-safety")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let native = directory.appendingPathComponent("drawing.xcf")
+        let exported = work.appendingPathComponent("file-safety.png")
+
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin() }
+        }
+        var paintPosition = 15.0
+        func paint() {
+            paintPosition += 5
+            document.beginStroke(at: .init(x: paintPosition, y: 20, pressure: 1))
+            document.endStroke()
+        }
+        paint()
+        var saved = false
+        document.save(to: native) { error in
+            if error == nil { document.noteSaved(to: native); saved = true }
+        }
+        wait { saved && document.pendingWork == 0 }
+        check(saved && document.fileState.nativeURL == native && !document.hasUnsavedChanges,
+              "saving queued input sets the native file and clears unsaved changes")
+        let reopened = try session.openImage(path: native.path)
+        check((pixel(session, reopened, x: 20, y: 20)?[0] ?? 255) < 128,
+              "the saved XCF includes the last queued stroke")
+        try session.closeImage(reopened)
+
+        paint()
+        var exportedOK = false
+        document.export(to: exported) { exportedOK = $0 == nil }
+        wait { exportedOK && document.pendingWork == 0 }
+        check(exportedOK && document.hasUnsavedChanges && document.fileState.nativeURL == native,
+              "export preserves native identity and unsaved changes")
+        controller.saveDocument(nil)
+        wait { document.pendingWork == 0 }
+        check(!document.hasUnsavedChanges && window.representedURL == native,
+              "plain Save writes the current XCF without a save panel")
+
+        paint()
+        document.inputQueue.sync {}
+        spin()
+        var closeResult: Bool?
+        controller.requestClose { closeResult = $0 }
+        if let sheet = window.attachedSheet { NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertSecondButtonReturn.rawValue) }
+        wait { closeResult != nil }
+        check(closeResult == false && window.isVisible && !document.isClosing,
+              "Cancel in the close prompt leaves the edited image open")
+
+        // A native file's parent can disappear between saves. Save on close
+        // must report failure and keep the edited image available.
+        try FileManager.default.removeItem(at: directory)
+        closeResult = nil
+        controller.requestClose { closeResult = $0 }
+        if let sheet = window.attachedSheet { NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue) }
+        wait { closeResult != nil }
+        check(closeResult == false && window.isVisible && document.hasUnsavedChanges,
+              "a failed Save on close keeps the document and its dirty state")
+
+        paint() // intentionally still queued when Don't Save is chosen
+        closeResult = nil
+        controller.requestClose { closeResult = $0 }
+        if let sheet = window.attachedSheet { NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue) }
+        wait { closeResult != nil }
+        check(closeResult == true && document.pendingWork == 0 && document.isClosing,
+              "Don't Save drains input and rendering before reporting the image closed")
+        check((try? session.info(image)) == nil, "the closed image is destroyed after its queued work")
+        documents.items.removeAll { $0 === document }
+    }
+
     private static func exerciseDocument(_ session: EngineSession, work: URL,
                                          documents: DocumentList) throws {
         let image = try session.newImage(width: 2400, height: 1600)
@@ -110,8 +192,14 @@ enum EngineSmokeTest {
         controller.window?.orderFront(nil)
         controller.window?.contentView?.layoutSubtreeIfNeeded()
 
+        // Do not prime the cache here: the real window must request its
+        // first tiles itself after AppKit has laid out the scroll view.
+        controller.window?.displayIfNeeded()
+        let firstDrawDeadline = Date().addingTimeInterval(5)
+        while controller.canvas.renderedTileCount == 0 && Date() < firstDrawDeadline { spin() }
+        check(controller.canvas.renderedTileCount > 0, "first draw schedules canvas tiles without a zoom command")
         let tilesRendered = try controller.canvas.renderVisibleTilesNow()
-        check(tilesRendered > 0, "canvas renders its visible tiles (\(tilesRendered))")
+        check(controller.canvas.renderedTileCount > 0, "canvas has visible tiles (\(tilesRendered) rendered synchronously)")
         check(controller.window?.title.hasPrefix("Smoke @ 100% (RGB, ") == true, "document title: \(controller.window?.title ?? "")")
 
         // A stroke through the same path mouse and tablet events take.
