@@ -16,6 +16,11 @@ extension DocumentWindowController {
     /// later input cannot change the selection in between those operations.
     func copyImage(_ operation: CopyOperation, to pasteboard: NSPasteboard = .general) {
         guard !PlugInCommands.isRunning, !imageDocument.isClosing else { return }
+        if operation == .cutLayer, imageDocument.filterPreviewIsOpen {
+            statusBar.message = "Apply or cancel the filter preview first."
+            NSSound.beep()
+            return
+        }
         NSApp.windows.forEach { $0.endEditing(for: nil) }
         canvas.tools.finishTextEditing()
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
@@ -84,7 +89,11 @@ extension DocumentWindowController {
               !imageDocument.isTransferringClipboard, !imageDocument.isSavingForClose else { return false }
         switch action {
         case #selector(paste(_:)), #selector(pasteInPlace(_:)):
-            return NSPasteboard.general.availableType(from: [.png, .tiff]) != nil
+            return !imageDocument.filterPreviewIsOpen
+                && NSPasteboard.general.availableType(from: [.png, .tiff]) != nil
+        case #selector(cut(_:)):
+            // A cut clears pixels; the preview owns its drawable meanwhile.
+            return !imageDocument.filterPreviewIsOpen && imageDocument.activeLayer != nil
         case #selector(copyMerged(_:)):
             return true
         default:
