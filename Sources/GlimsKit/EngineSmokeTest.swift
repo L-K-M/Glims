@@ -127,6 +127,7 @@ enum EngineSmokeTest {
         let closingController = DocumentWindowController(document: closing)
         closingController.showWindow(nil)
         defer {
+            a.onWillChangeLayers = nil
             documents.items.removeAll { $0 === a || $0 === b || $0 === closing }
             a.closeImageWhenDrained()
             b.closeImageWhenDrained()
@@ -134,10 +135,21 @@ enum EngineSmokeTest {
         }
         var errors: [String] = []
         b.onError = { errors.append($0) }
+        var committedField = false
+        var nestedActivityFinished = false
+        a.onWillChangeLayers = {
+            guard !committedField else { return }
+            committedField = true
+            // A field/text delegate flushes its accepted value at admission.
+            a.beginStroke(at: .init(x: 24, y: 24, pressure: 1))
+            a.endStroke()
+            EngineActivity.shared.performWhenReady(label: "Queued field action", work: {}) {
+                nestedActivityFinished = true
+            }
+        }
         b.inputQueue.async { usleep(200_000) }
         let brush = EngineSession.Brush(size: 10, opacity: 1, red: 0, green: 0, blue: 0, pressureSize: false)
         b.beginStroke(at: .init(x: 12, y: 12, pressure: 1), brush: brush)
-        b.endStroke()
         var finished = false
         var writeError: Error?
         let started = DispatchTime.now()
@@ -167,6 +179,12 @@ enum EngineSmokeTest {
         check(pixel(session, b.image, x: 44, y: 44)?.first == 255,
               "the refused stroke made no pixel change")
         check(a.acceptsEdits && b.acceptsEdits, "all documents resume editing after the write")
+        check(nestedActivityFinished, "a delegate can queue another activity without reentrant admission")
+        while (a.pendingWork > 0 || b.pendingWork > 0) && Date() < deadline { spin(0.01) }
+        let written = try session.openImage(path: work.appendingPathComponent("admission.png").path)
+        check(pixel(session, written, x: 24, y: 24)?.first == 0,
+              "the file includes edits flushed by a field delegate during admission")
+        try session.closeImage(written)
         check(closed == true && (try? session.info(closing.image)) == nil,
               "the deferred close destroys its image after the file operation")
 
