@@ -91,6 +91,7 @@ enum EngineSmokeTest {
         do {
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
+            try exerciseFileAdmission(session, work: work, documents: documents)
             try exerciseClipboard(session, documents: documents)
             try exercisePreviewLifetimes(session, work: work, documents: documents)
             try exerciseDisplayDensity(session, documents: documents)
@@ -111,6 +112,94 @@ enum EngineSmokeTest {
 
         print(failures == 0 ? "PASSED" : "FAILED: \(failures) failure(s)")
         return failures == 0 ? 0 : 1
+    }
+
+    /// A file plug-in holds the engine across all documents. Its admission
+    /// must drain accepted input and refuse later edits before the call starts.
+    private static func exerciseFileAdmission(_ session: EngineSession, work: URL,
+                                               documents: DocumentList) throws {
+        let a = try ImageDocument(session: session, image: session.newImage(width: 64, height: 64), name: "Writing")
+        let b = try ImageDocument(session: session, image: session.newImage(width: 64, height: 64), name: "Painting")
+        let closing = try ImageDocument(session: session, image: session.newImage(width: 16, height: 16), name: "Close during write")
+        documents.items += [a, b, closing]
+        let controller = DocumentWindowController(document: b)
+        let closingController = DocumentWindowController(document: closing)
+        closingController.showWindow(nil)
+        defer {
+            a.onWillChangeLayers = nil
+            documents.items.removeAll { $0 === a || $0 === b || $0 === closing }
+            a.closeImageWhenDrained()
+            b.closeImageWhenDrained()
+            closing.closeImageWhenDrained()
+        }
+        var errors: [String] = []
+        b.onError = { errors.append($0) }
+        var committedField = false
+        var nestedActivityFinished = false
+        a.onWillChangeLayers = {
+            guard !committedField else { return }
+            committedField = true
+            // A field/text delegate flushes its accepted value at admission.
+            a.beginStroke(at: .init(x: 24, y: 24, pressure: 1))
+            a.endStroke()
+            EngineActivity.shared.performWhenReady(label: "Queued field action", work: {}) {
+                nestedActivityFinished = true
+            }
+        }
+        b.inputQueue.async { usleep(200_000) }
+        let brush = EngineSession.Brush(size: 10, opacity: 1, red: 0, green: 0, blue: 0, pressureSize: false)
+        b.beginStroke(at: .init(x: 12, y: 12, pressure: 1), brush: brush)
+        var finished = false
+        var writeError: Error?
+        let started = DispatchTime.now()
+        a.export(to: work.appendingPathComponent("admission.png")) { error in
+            writeError = error
+            finished = true
+        }
+        check(milliseconds(since: started) < 100, "file admission returns without waiting for accepted input")
+        check(!a.acceptsEdits && !b.acceptsEdits, "a pending file write gates edits in every document")
+        b.beginStroke(at: .init(x: 44, y: 44, pressure: 1), brush: brush)
+        check(!b.strokeIsActive, "a later pointer stroke is refused before it becomes active")
+        if b.strokeIsActive { b.endStroke() }
+        check(!errors.isEmpty, "the refused edit explains the pending file operation")
+        let editing = NSMenuItem(title: "Group", action: #selector(DocumentWindowController.newLayerGroup(_:)), keyEquivalent: "")
+        let navigation = NSMenuItem(title: "Fit", action: #selector(DocumentWindowController.fitImage(_:)), keyEquivalent: "")
+        check(!controller.validateMenuItem(editing) && controller.validateMenuItem(navigation),
+              "file activity disables edits while canvas navigation remains available")
+        var closed: Bool?
+        closingController.requestClose { closed = $0 }
+        check(closed == nil && !closing.isClosing, "another document waits for file activity before closing")
+        let deadline = Date().addingTimeInterval(8)
+        while (!finished || closed == nil) && Date() < deadline { spin(0.01) }
+        check(finished && writeError == nil, "the file operation completes after accepted input drains")
+        spin()
+        check(pixel(session, b.image, x: 12, y: 12)?.first == 0,
+              "input accepted in another document before the write is preserved")
+        check(pixel(session, b.image, x: 44, y: 44)?.first == 255,
+              "the refused stroke made no pixel change")
+        check(a.acceptsEdits && b.acceptsEdits, "all documents resume editing after the write")
+        check(nestedActivityFinished, "a delegate can queue another activity without reentrant admission")
+        while (a.pendingWork > 0 || b.pendingWork > 0) && Date() < deadline { spin(0.01) }
+        let written = try session.openImage(path: work.appendingPathComponent("admission.png").path)
+        check(pixel(session, written, x: 24, y: 24)?.first == 0,
+              "the file includes edits flushed by a field delegate during admission")
+        try session.closeImage(written)
+        check(closed == true && (try? session.info(closing.image)) == nil,
+              "the deferred close destroys its image after the file operation")
+
+        controller.gaussianBlur(nil)
+        while b.pendingWork > 0 && Date() < deadline { spin(0.01) }
+        check(controller.previewPanel != nil, "a second document can hold a preview before the write")
+        b.inputQueue.async { usleep(100_000) }
+        finished = false
+        a.export(to: work.appendingPathComponent("admission-preview.png")) { error in
+            writeError = error
+            finished = true
+        }
+        controller.cancelOperation(nil)
+        while (!finished || b.pendingWork > 0 || b.filterPreviewIsOpen) && Date() < deadline { spin(0.01) }
+        check(finished && writeError == nil && !b.filterPreviewIsOpen && controller.previewPanel == nil,
+              "preview cancellation in another document waits safely for the file operation")
     }
 
     /// Saving/closing must use the same asynchronous queues and sheets as

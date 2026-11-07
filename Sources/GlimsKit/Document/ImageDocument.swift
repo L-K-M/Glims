@@ -6,9 +6,9 @@ import CoreGraphics
 /// The document keeps the state the interface shows (size, layers, undo)
 /// and routes work to the engine off the main thread: pointer input and
 /// filter edits go through one serial queue so they reach the engine in
-/// order, and long operations (export, save) run on their own queue behind
-/// everything already pending, so they never sit in front of painting yet
-/// still write its result.
+/// order. File operations and plug-ins use the shared engine activity
+/// queue after all documents' accepted input, with new edits visibly
+/// refused until the engine can accept them again.
 @MainActor
 final class ImageDocument {
     let session: EngineSession
@@ -93,7 +93,7 @@ final class ImageDocument {
 
     var acceptsEdits: Bool {
         !isClosing && !isSavingForClose && !isTransferringClipboard && !PlugInCommands.isRunning
-            && !filterPreviewIsOpen
+            && !filterPreviewIsOpen && !EngineActivity.shared.isBusy
     }
 
     /// Touched only on `inputQueue`.
@@ -113,6 +113,7 @@ final class ImageDocument {
         self.fileState = DocumentFileState(openedFrom: source)
         self.info = try session.info(image)
         try reload()
+        EngineActivity.shared.register(self)
     }
 
     /// Re-reads layers, undo state and size from the engine.
@@ -219,6 +220,7 @@ final class ImageDocument {
     }
 
     func continueStroke(_ points: [EngineSession.StrokePoint]) {
+        guard strokeIsActive else { return }
         enqueue(on: inputQueue, input: true) { [session] in
             guard let stroke = self.currentStroke else { return }
             do { try session.continueStroke(stroke, points: points) } catch { self.report(error) }
@@ -226,6 +228,7 @@ final class ImageDocument {
     }
 
     func endStroke() {
+        guard strokeIsActive else { return }
         strokeIsActive = false
         enqueue(on: inputQueue, input: true) { [session] in
             guard let stroke = self.currentStroke else { return }
@@ -542,7 +545,7 @@ final class ImageDocument {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard acceptsEdits else { return completion(.failure(DocumentError.busy)) }
         endPendingUserEdits()
-        enqueueAfterInput { [session, image] in
+        enqueueExclusive(label: "Creating a snapshot", rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
             let result = Result { try session.duplicateImage(image) }
             DispatchQueue.main.async { completion(result) }
         }
@@ -573,6 +576,10 @@ final class ImageDocument {
     /// commit through.
     private func refuseWhileEditingUnavailable(forPreviewWork: Bool = false) -> Bool {
         onUserCommand?()
+        if let activity = EngineActivity.shared.label, !PlugInCommands.isRunning {
+            onError?("\(activity)… Wait for it to finish before editing.")
+            return true
+        }
         if isClosing || isSavingForClose || isTransferringClipboard {
             onError?(isClosing ? DocumentError.closed.localizedDescription : DocumentError.busy.localizedDescription)
             return true
@@ -600,6 +607,11 @@ final class ImageDocument {
         endingPendingEdits = false
     }
 
+    func finishInputForEngineActivity() {
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+    }
+
     // MARK: Plug-in commands
 
     /// Whether the command can run on the selected layers. Asks the engine
@@ -617,8 +629,8 @@ final class ImageDocument {
     func run(_ procedure: EngineSession.Procedure, mode: EngineSession.RunMode,
              completion: @escaping @MainActor (Result<EngineSession.RunOutcome, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
-        guard !isTransferringClipboard, !isSavingForClose else { return completion(.failure(DocumentError.busy)) }
-        enqueueAfterInput { [session, image] in
+        guard !isTransferringClipboard, !isSavingForClose, !EngineActivity.shared.isBusy else { return completion(.failure(DocumentError.busy)) }
+        enqueueExclusive(label: procedure.label, rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
             let result = Result { try session.runProcedure(procedure.name, image: image, mode: mode) }
             DispatchQueue.main.async {
                 try? self.reload()
@@ -632,7 +644,7 @@ final class ImageDocument {
         var errorDescription: String? {
             switch self {
             case .closed: return "This image has already closed."
-            case .busy: return "Wait for the current clipboard transfer or save to finish."
+            case .busy: return "Wait for the current image operation to finish."
             case .noLayer: return "There is no layer to work on."
             }
         }
@@ -662,7 +674,7 @@ final class ImageDocument {
                     completion: @escaping @MainActor (Error?) -> Void) {
         guard !isClosing else { return completion(DocumentError.closed) }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
-              !(operation == .cutLayer && filterPreviewIsOpen) else {
+              !EngineActivity.shared.isBusy, !(operation == .cutLayer && filterPreviewIsOpen) else {
             return completion(DocumentError.busy)
         }
         isTransferringClipboard = true
@@ -713,8 +725,8 @@ final class ImageDocument {
 
     func export(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
         guard !isClosing else { return completion(DocumentError.closed) }
-        guard !isTransferringClipboard else { return completion(DocumentError.busy) }
-        enqueueAfterInput { [session, image] in
+        guard !isTransferringClipboard, !PlugInCommands.isRunning else { return completion(DocumentError.busy) }
+        enqueueExclusive(label: "Exporting \(url.lastPathComponent)", rejected: { completion(DocumentError.busy) }) { [session, image] in
             let result: Error?
             do { try session.export(image, to: url.path); result = nil } catch { result = error }
             DispatchQueue.main.async {
@@ -726,8 +738,8 @@ final class ImageDocument {
 
     func save(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
         guard !isClosing else { return completion(DocumentError.closed) }
-        guard !isTransferringClipboard else { return completion(DocumentError.busy) }
-        enqueueAfterInput { [session, image] in
+        guard !isTransferringClipboard, !PlugInCommands.isRunning else { return completion(DocumentError.busy) }
+        enqueueExclusive(label: "Saving \(url.lastPathComponent)", rejected: { completion(DocumentError.busy) }) { [session, image] in
             let result: Error?
             do { try session.save(image, to: url.path); result = nil } catch { result = error }
             DispatchQueue.main.async { completion(result) }
@@ -736,8 +748,8 @@ final class ImageDocument {
 
     func saveCopy(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
         guard !isClosing else { return completion(DocumentError.closed) }
-        guard !isTransferringClipboard, !isSavingForClose else { return completion(DocumentError.busy) }
-        enqueueAfterInput { [session, image] in
+        guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning else { return completion(DocumentError.busy) }
+        enqueueExclusive(label: "Saving a copy", rejected: { completion(DocumentError.busy) }) { [session, image] in
             let result: Error?
             do { try session.saveCopy(image, to: url.path); result = nil } catch { result = error }
             DispatchQueue.main.async { completion(result) }
@@ -760,10 +772,10 @@ final class ImageDocument {
         guard !isClosing else { return }
         if strokeIsActive { endStroke() }
         isClosing = true
-        let close = { [session, image, longQueue] in
-            longQueue.async {
-                do { try session.closeImage(image) } catch { self.report(error) }
-                DispatchQueue.main.async { completion() }
+        let close = { [session, image] in
+            EngineActivity.shared.closeImage(image, session: session) { result in
+                if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                completion()
             }
         }
         if pendingWork == 0 { close() } else { onQueueDrained = close }
@@ -792,6 +804,7 @@ final class ImageDocument {
                             completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard let layer = activeLayer else { return completion(.failure(DocumentError.noLayer)) }
+        guard !EngineActivity.shared.isBusy else { return completion(.failure(DocumentError.busy)) }
         pendingWork += 1
         inputQueue.async { [session, image] in
             let result = Result<FilterPreviewStart, Error> {
@@ -867,23 +880,27 @@ final class ImageDocument {
         guard teardown || !isClosing else { return }
         pendingWork += 1
         if input { pendingInput += 1 }
-        queue.async {
-            work()
-            DispatchQueue.main.async { self.jobDidFinish(input: input) }
+        EngineActivity.shared.whenIdle {
+            queue.async {
+                work()
+                DispatchQueue.main.async { self.jobDidFinish(input: input) }
+            }
         }
     }
 
-    /// Queues `work` on the long queue behind everything the input queue
-    /// already holds: a save or export then writes every edit that was
-    /// pending when it was asked for.
-    private func enqueueAfterInput(_ work: @escaping () -> Void) {
-        guard !isClosing else { return }
+    /// Count the whole exclusive operation, including its input drain,
+    /// so a close cannot destroy the image while a file call is waiting.
+    private func enqueueExclusive(label: String, rejected: @escaping @MainActor () -> Void,
+                                  _ work: @escaping () -> Void) {
+        guard !isClosing else { return rejected() }
+        onUserCommand?()
         pendingWork += 1
-        inputQueue.async { [longQueue] in
-            longQueue.async {
-                work()
-                DispatchQueue.main.async { self.jobDidFinish(input: false) }
-            }
+        let accepted = EngineActivity.shared.perform(label: label, work: work) {
+            self.jobDidFinish(input: false)
+        }
+        if !accepted {
+            jobDidFinish(input: false)
+            rejected()
         }
     }
 
