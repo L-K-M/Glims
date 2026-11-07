@@ -170,8 +170,8 @@ op_allowed (const gchar *name)
 
 #endif
 
-static gboolean
-filterable_op (const gchar *name)
+gboolean
+glims_filter_operation_allowed (const gchar *name)
 {
   return gegl_has_operation (name) && op_allowed (name);
 }
@@ -445,7 +445,7 @@ glims_filter_operations (GlimsEngine        *engine,
     {
       const gchar *name = names[i];
 
-      if (! filterable_op (name))
+      if (! glims_filter_operation_allowed (name))
         continue;
 
       if (rows && total < capacity)
@@ -484,7 +484,7 @@ glims_filter_operation_properties (GlimsEngine          *engine,
 
   if (! operation || ! count || capacity < 0)
     return GLIMS_STATUS_INVALID_ARGUMENT;
-  if (! filterable_op (operation))
+  if (! glims_filter_operation_allowed (operation))
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
   pspecs = gegl_operation_list_properties (operation, &n_specs);
@@ -526,7 +526,7 @@ glims_filter_enum_choices (GlimsEngine           *engine,
 
   if (! operation || ! property || ! count || capacity < 0)
     return GLIMS_STATUS_INVALID_ARGUMENT;
-  if (! filterable_op (operation))
+  if (! glims_filter_operation_allowed (operation))
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
   pspec = gegl_operation_find_property (operation, property);

@@ -129,6 +129,7 @@ GlimsStatus glims_filter_abort     (GlimsEngine *e, GlimsFilterID id);
 void        glims_filters_free     (gpointer filter);
 
 /* filter-properties.c */
+gboolean glims_filter_operation_allowed (const gchar *operation);
 GlimsStatus glims_filter_operations (GlimsEngine *e, GlimsOperationInfo *rows,
                                      int32_t capacity, int32_t *count);
 GlimsStatus glims_filter_operation_properties (GlimsEngine *e, const char *operation,

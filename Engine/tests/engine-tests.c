@@ -1693,6 +1693,18 @@ test_filter_properties (void)
 
   api->image_new (engine, 64, 48, &image, NULL);
   layer  = first_layer (image);
+  {
+    const char *refused[] = { "gegl:nop", "gegl:gegl" };
+    size_t n;
+    for (n = 0; n < sizeof refused / sizeof refused[0]; n++)
+      {
+        GlimsFilterID refused_filter = 0;
+        GlimsStatus refused_status = api->filter_begin (engine, image, layer, refused[n], &refused_filter, NULL);
+        CHECK (refused_status == GLIMS_STATUS_INVALID_ARGUMENT && refused_filter == 0,
+               "session creation refuses excluded operation %s", refused[n]);
+        if (refused_filter) api->filter_abort (engine, refused_filter);
+      }
+  }
   before = undo_depth (image);
   CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, &error) == GLIMS_STATUS_OK,
          "a session opens for typed access%s%s", error ? ": " : "", error ? error : "");
