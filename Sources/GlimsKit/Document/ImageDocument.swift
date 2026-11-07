@@ -548,6 +548,16 @@ final class ImageDocument {
         }
     }
 
+    func saveCopy(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
+        guard !isClosing else { return completion(DocumentError.closed) }
+        guard !isTransferringClipboard, !isSavingForClose else { return completion(DocumentError.busy) }
+        enqueueAfterInput { [session, image] in
+            let result: Error?
+            do { try session.saveCopy(image, to: url.path); result = nil } catch { result = error }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     /// A native save to `url` succeeded: it becomes the image's file —
     /// name, dirty state and all.
     func noteSaved(to url: URL) {

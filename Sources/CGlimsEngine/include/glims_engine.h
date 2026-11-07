@@ -606,6 +606,13 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_paste_pixels)(GlimsEngine *, GlimsImageID, GlimsRect bounds,
                                     const uint8_t *pixels, size_t byte_count,
                                     GlimsItemID *result, char **error);
+  /* Native layered copy without changing the source image's file,
+   * imported/exported identity, dirty state or undo history. */
+  GlimsStatus (*image_save_copy)(GlimsEngine *, GlimsImageID, const char *path, char **error);
+  /* One alpha layer, no synthetic white background and an empty undo stack.
+   * The new image is unsaved; pixel limits match image_paste_pixels. */
+  GlimsStatus (*image_from_pixels)(GlimsEngine *, int32_t width, int32_t height,
+                                   const uint8_t *pixels, size_t byte_count, GlimsImageID *, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

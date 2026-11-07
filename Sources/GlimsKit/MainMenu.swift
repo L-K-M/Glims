@@ -24,7 +24,9 @@ enum MainMenu {
             item("Close", #selector(NSWindow.performClose(_:)), "w"),
             item("Save", #selector(DocumentWindowController.saveDocument(_:)), "s"),
             item("Save As…", #selector(DocumentWindowController.saveDocumentAs(_:)), "S"),
+            item("Save a Copy…", #selector(DocumentWindowController.saveDocumentCopy(_:))),
             item("Export…", #selector(DocumentWindowController.exportDocument(_:)), "E"),
+            item("Export Again…", #selector(DocumentWindowController.repeatExport(_:)), "e"),
         ])
         add(menu, "Edit", [
             // Answered by the key window from its undo manager.
@@ -36,6 +38,7 @@ enum MainMenu {
             item("Copy Merged", #selector(DocumentWindowController.copyMerged(_:)), "C"),
             item("Paste", #selector(DocumentWindowController.paste(_:)), "v"),
             item("Paste in Place", #selector(DocumentWindowController.pasteInPlace(_:)), "V"),
+            item("Paste as New Image", #selector(AppController.pasteAsNewImage(_:))),
             clearItem(),
             .separator(),
             item("Stroke Path", #selector(DocumentWindowController.strokePath(_:))),
@@ -84,7 +87,7 @@ enum MainMenu {
                 item("Flip Vertical", #selector(DocumentWindowController.flipLayerVertically(_:))),
             ]),
             .separator(),
-            item("Merge Down", #selector(DocumentWindowController.mergeDown(_:)), "e"),
+            item("Merge Down", #selector(DocumentWindowController.mergeDown(_:))),
         ])
         let inverse = item("Inverse", #selector(DocumentWindowController.selectInverse(_:)), "i")
         inverse.keyEquivalentModifierMask = [.command, .shift]

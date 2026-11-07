@@ -422,7 +422,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return imageDocument.activePath != nil && !editingBlocked
         case #selector(gaussianBlur(_:)):
             return !editingBlocked
-        case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(exportDocument(_:)):
+        case #selector(repeatExport(_:)):
+            menuItem.title = imageDocument.fileState.lastExportURL.map { "Export to \($0.lastPathComponent)" } ?? "Export Again…"
+            return !editingBlocked && blurPanel == nil
+        case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(exportDocument(_:)), #selector(saveDocumentCopy(_:)):
             // A plug-in dialog is modal for the engine; file calls get BUSY.
             return !editingBlocked && blurPanel == nil
         case #selector(runPlugIn(_:)):
@@ -479,7 +482,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [UTType(importedAs: "org.gimp.xcf", conformingTo: .image)]
         savePanel.allowsOtherFileTypes = false
-        savePanel.nameFieldStringValue = (imageDocument.name as NSString).deletingPathExtension + ".xcf"
+        savePanel.nameFieldStringValue = DocumentFileState.suggestedBaseName(imageDocument.name) + ".xcf"
         savePanel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = savePanel.url, let self else { return done(false) }
             self.saveTo(url, purpose: purpose, done: done)
@@ -531,18 +534,53 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [.png, .jpeg, .tiff]
-        savePanel.nameFieldStringValue = (imageDocument.name as NSString).deletingPathExtension + ".png"
+        savePanel.nameFieldStringValue = DocumentFileState.suggestedBaseName(imageDocument.name) + ".png"
         savePanel.beginSheetModal(for: window!) { [weak self] response in
             guard response == .OK, let url = savePanel.url, let self else { return }
+            self.exportTo(url)
+        }
+    }
+
+    @objc func repeatExport(_ sender: Any?) {
+        guard let url = imageDocument.fileState.lastExportURL else { return exportDocument(sender) }
+        exportTo(url)
+    }
+
+    private func exportTo(_ url: URL) {
+        guard canStartFileWrite() else { return }
+        canvas.tools.finishTextEditing()
+        if imageDocument.strokeIsActive { imageDocument.endStroke() }
+        let release: () -> Void
+        do { release = try reserveWrite?(url) ?? {} } catch {
+            statusBar.message = error.localizedDescription
+            return
+        }
+        statusBar.message = "Exporting \(url.lastPathComponent)…"
+        imageDocument.export(to: url) { [self] error in
+            defer { release() }
+            statusBar.message = error.map { String(describing: $0) } ?? "Exported \(url.lastPathComponent)"
+        }
+    }
+
+    @objc func saveDocumentCopy(_ sender: Any?) {
+        guard canStartFileWrite(), let window else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(importedAs: "org.gimp.xcf", conformingTo: .image)]
+        panel.allowsOtherFileTypes = false
+        panel.nameFieldStringValue = DocumentFileState.suggestedBaseName(imageDocument.name) + " copy.xcf"
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = panel.url, let self, self.canStartFileWrite() else { return }
+            self.canvas.tools.finishTextEditing()
+            if self.imageDocument.strokeIsActive { self.imageDocument.endStroke() }
             let release: () -> Void
             do { release = try self.reserveWrite?(url) ?? {} } catch {
                 self.statusBar.message = error.localizedDescription
                 return
             }
-            self.statusBar.message = "Exporting \(url.lastPathComponent)…"
-            self.imageDocument.export(to: url) { error in
+            self.statusBar.message = "Saving a copy…"
+            self.imageDocument.saveCopy(to: url) { error in
                 defer { release() }
-                self.statusBar.message = error.map { String(describing: $0) } ?? "Exported \(url.lastPathComponent)"
+                self.statusBar.message = error.map { String(describing: $0) } ?? "Saved a copy to \(url.lastPathComponent)"
             }
         }
     }

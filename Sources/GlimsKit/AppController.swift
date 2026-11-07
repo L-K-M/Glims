@@ -287,6 +287,30 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         }
     }
 
+    @objc func pasteAsNewImage(_ sender: Any?) {
+        guard let session, !terminationRequested, !PlugInCommands.isRunning else { return }
+        let payload: ClipboardImage.Payload
+        do { payload = try ClipboardImage.readPayload(from: .general) } catch {
+            NSAlert(error: error).runModal()
+            return
+        }
+        pendingFileOperations += 1
+        openQueue.async {
+            let result = Result { try session.newImage(pixels: payload.decoded()) }
+            DispatchQueue.main.async {
+                self.pendingFileOperations -= 1
+                defer { self.closeNextDocumentForTermination() }
+                do {
+                    let image = try result.get()
+                    do { self.open(try ImageDocument(session: session, image: image, name: "Clipboard")) }
+                    catch { try? session.closeImage(image); throw error }
+                } catch {
+                    NSAlert(error: error).runModal()
+                }
+            }
+        }
+    }
+
     @objc func openRecentDocument(_ sender: Any?) {
         guard let url = (sender as? NSMenuItem)?.representedObject as? URL else { return }
         openFiles([url])
@@ -390,6 +414,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case #selector(pasteAsNewImage(_:)):
+            return session != nil && !PlugInCommands.isRunning && !terminationRequested
+                && NSPasteboard.general.availableType(from: [.png, .tiff]) != nil
         case #selector(newDocument(_:)), #selector(openDocument(_:)), #selector(openRecentDocument(_:)):
             // A plug-in dialog is modal for the engine (glims_engine.h).
             return session != nil && !PlugInCommands.isRunning && !terminationRequested

@@ -89,6 +89,7 @@ GlimsStatus glims_image_info       (GlimsEngine *e, GlimsImageID id, GlimsImageI
 GlimsStatus glims_image_render     (GlimsEngine *e, GlimsImageID id, double scale, GlimsRect area,
                                     uint8_t *pixels, size_t stride);
 GlimsStatus glims_image_save       (GlimsEngine *e, GlimsImageID id, const char *path, char **error);
+GlimsStatus glims_image_save_copy  (GlimsEngine *e, GlimsImageID id, const char *path, char **error);
 GlimsStatus glims_image_export     (GlimsEngine *e, GlimsImageID id, const char *path, char **error);
 GlimsStatus glims_image_layers     (GlimsEngine *e, GlimsImageID id, GlimsLayerInfo *layers,
                                     int32_t capacity, int32_t *count);
@@ -188,6 +189,7 @@ GlimsStatus glims_image_resize_canvas (GlimsEngine *e, GlimsImageID image, int32
 GlimsStatus glims_image_copy_pixels (GlimsEngine *, GlimsImageID, gboolean, GlimsPixelBuffer *, char **);
 GlimsStatus glims_image_clear (GlimsEngine *, GlimsImageID, const GlimsColor *, char **);
 GlimsStatus glims_image_paste_pixels (GlimsEngine *, GlimsImageID, GlimsRect, const uint8_t *, size_t, GlimsItemID *, char **);
+GlimsStatus glims_image_from_pixels (GlimsEngine *, int32_t, int32_t, const uint8_t *, size_t, GlimsImageID *, char **);
 
 /* procedure.c */
 GlimsStatus glims_procedures       (GlimsEngine *e, GlimsImageID image, GlimsProcedureInfo *rows,

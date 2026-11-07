@@ -15,6 +15,8 @@ struct DocumentFileState: Equatable {
     /// The foreign file this image was imported from, if any. Cleared
     /// when a native save gives the image its own file.
     private(set) var importedSourceURL: URL?
+    /// The last successful foreign-format export, independent of native Save.
+    private(set) var lastExportURL: URL?
     /// Changes not written to `nativeURL`: edits the engine counted
     /// and, for an imported image, the missing native file itself.
     private(set) var hasUnsavedChanges: Bool
@@ -43,8 +45,20 @@ struct DocumentFileState: Equatable {
         // GIMP registers the compressed XCF types under both the
         // dotted ("xcf.gz") and dotless ("xcfgz") suffixes; files from
         // either registration are native and keep their save target.
-        let nativeSuffixes = [".xcf", ".xcf.gz", ".xcfgz", ".xcf.bz2", ".xcfbz2", ".xcf.xz", ".xcfxz"]
         return nativeSuffixes.contains { name.hasSuffix($0) }
+    }
+
+    private static let nativeSuffixes = [".xcf.bz2", ".xcf.gz", ".xcf.xz", ".xcfbz2", ".xcfgz", ".xcfxz", ".xcf"]
+
+    static func suggestedBaseName(_ name: String) -> String {
+        let lower = name.lowercased()
+        let base: String
+        if let suffix = nativeSuffixes.first(where: { lower.hasSuffix($0) }) {
+            base = String(name.dropLast(suffix.count))
+        } else {
+            base = (name as NSString).deletingPathExtension
+        }
+        return base.isEmpty ? "Untitled" : base
     }
 
     /// How a plain Save proceeds.
@@ -74,7 +88,6 @@ struct DocumentFileState: Equatable {
     }
 
     /// An export to `url` finished. Exports write a foreign-format
-    /// copy: the native file state — target and dirtiness — stands, so
-    /// this deliberately changes nothing.
-    mutating func noteExported(to url: URL) {}
+    /// copy. Remember its target without touching native file state.
+    mutating func noteExported(to url: URL) { lastExportURL = url }
 }
