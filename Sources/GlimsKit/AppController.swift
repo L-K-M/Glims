@@ -29,7 +29,6 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private var terminationRequested = false
     private let fileWrites = FileWriteCoordinator()
     private var terminationClosingDocument: DocumentWindowController?
-    private let openQueue = DispatchQueue(label: "ch.lkmc.Glims.open", qos: .userInitiated)
 
     private lazy var toolsPalette: Palette = PaletteCenter.shared.palette(
         for: ToolsPaletteController.definition,
@@ -312,7 +311,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private func createDocument(width: Int, height: Int) {
         guard let session, !terminationRequested else { return }
         pendingFileOperations += 1
-        openQueue.async {
+        EngineActivity.shared.performWhenReady(label: "Creating an image", work: {
             let result = Result { try session.newImage(width: width, height: height) }
             DispatchQueue.main.async {
                 self.pendingFileOperations -= 1
@@ -323,7 +322,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                     NSAlert(error: error).runModal()
                 }
             }
-        }
+        })
     }
 
     @objc func pasteAsNewImage(_ sender: Any?) {
@@ -334,7 +333,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             return
         }
         pendingFileOperations += 1
-        openQueue.async {
+        EngineActivity.shared.performWhenReady(label: "Creating an image from the clipboard", work: {
             let result = Result { try session.newImage(pixels: payload.decoded()) }
             DispatchQueue.main.async {
                 self.pendingFileOperations -= 1
@@ -347,7 +346,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                     NSAlert(error: error).runModal()
                 }
             }
-        }
+        })
     }
 
     @objc func openRecentDocument(_ sender: Any?) {
@@ -410,7 +409,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             guard openingURLs.insert(url).inserted else { continue }
             pendingFileOperations += 1
             // File plug-ins must not block the AppKit thread.
-            openQueue.async {
+            EngineActivity.shared.performWhenReady(label: "Opening \(url.lastPathComponent)", work: {
                 let result = Result { try session.openImage(path: url.path) }
                 DispatchQueue.main.async {
                     self.openingURLs.remove(url)
@@ -423,7 +422,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                         NSAlert(error: error).runModal()
                     }
                 }
-            }
+            })
         }
     }
 

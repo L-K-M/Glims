@@ -85,7 +85,7 @@ extension DocumentWindowController {
     }
 
     func canPerformClipboardCommand(_ action: Selector?) -> Bool {
-        guard !PlugInCommands.isRunning, !imageDocument.isClosing,
+        guard !PlugInCommands.isRunning, !imageDocument.isClosing, !EngineActivity.shared.isBusy,
               !imageDocument.isTransferringClipboard, !imageDocument.isSavingForClose else { return false }
         switch action {
         case #selector(paste(_:)), #selector(pasteInPlace(_:)):
