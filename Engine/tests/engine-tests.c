@@ -968,8 +968,13 @@ test_layer_structure (void)
          "the group is on top, named, selected and pass-through (%s, %s)",
          count == 2 ? rows[0].name : "?", count == 2 ? rows[0].mode : "?");
 
-  CHECK (api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &a, NULL) == GLIMS_STATUS_OK &&
+  /* New Layer enters a selected group. Build the root-level fixture
+   * using existing select/arrange commands before testing tree moves. */
+  CHECK (api->layer_select (engine, image, background) == GLIMS_STATUS_OK &&
+         api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &a, NULL) == GLIMS_STATUS_OK &&
          api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &b, NULL) == GLIMS_STATUS_OK &&
+         api->layer_command (engine, image, a, GLIMS_LAYER_TO_TOP, NULL, NULL) == GLIMS_STATUS_OK &&
+         api->layer_command (engine, image, b, GLIMS_LAYER_TO_TOP, NULL, NULL) == GLIMS_STATUS_OK &&
          tree_is (image, (GlimsItemID[]) { b, a, group, background },
                   (GlimsItemID[]) { 0, 0, 0, 0 }, (int32_t[]) { 0, 0, 0, 0 }, 4),
          "two layers are added above the group");
