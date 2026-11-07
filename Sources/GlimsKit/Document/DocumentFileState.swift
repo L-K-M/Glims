@@ -43,7 +43,7 @@ struct DocumentFileState: Equatable {
         // GIMP registers the compressed XCF types under both the
         // dotted ("xcf.gz") and dotless ("xcfgz") suffixes; files from
         // either registration are native and keep their save target.
-        let nativeSuffixes = [".xcf", ".xcf.gz", ".xcfgz", ".xcf.bz2", ".xcfbz2"]
+        let nativeSuffixes = [".xcf", ".xcf.gz", ".xcfgz", ".xcf.bz2", ".xcfbz2", ".xcf.xz", ".xcfxz"]
         return nativeSuffixes.contains { name.hasSuffix($0) }
     }
 

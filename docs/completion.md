@@ -93,6 +93,8 @@ clean document with a preview closes without a false save prompt. All 212
 adapter checks and the expanded interface smoke pass on the pinned engine.
 Inline rename reproduced a separate focus defect in nonactivating palettes;
 the field now makes its panel key before typing. Its regression passes.
-Registered `.xcfgz`/`.xcfbz2` aliases preserve native file identity too.
+Registered `.xcfgz`/`.xcfbz2`/`.xcfxz` aliases and `.xcf.xz` preserve native
+file identity too. The final review found no important remaining defects;
+its minor xz-suffix omission was added to the existing identity regression.
 The actual bundled Save As panel wrote a new XCF and updated the window's
 name and represented file. A final on-screen rename check remains pending.

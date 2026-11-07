@@ -68,7 +68,8 @@ final class DocumentFileStateTests: XCTestCase {
     /// GIMP registers the compressed XCF types under the dotless
     /// suffixes too: those files are native, not imports.
     func testRegisteredCompressedSuffixesAreNative() {
-        for name in ["drawing.xcfgz", "drawing.xcfbz2", "DRAWING.XCFGZ", "DRAWING.XCFBZ2"] {
+        for name in ["drawing.xcfgz", "drawing.xcfbz2", "drawing.xcf.xz", "drawing.xcfxz",
+                     "DRAWING.XCFGZ", "DRAWING.XCFBZ2", "DRAWING.XCF.XZ", "DRAWING.XCFXZ"] {
             let url = URL(fileURLWithPath: "/tmp/" + name)
             XCTAssertTrue(DocumentFileState.isNative(url), name)
             let state = DocumentFileState(openedFrom: url)
