@@ -10,8 +10,8 @@ final class PreferencesWindowController: NSWindowController {
 
     init(preferences: EditorPreferences? = nil) {
         self.preferences = preferences ?? .shared
-        let window = ClassicWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 230),
-                                   styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let window = PreferencesPanel(contentRect: NSRect(x: 0, y: 0, width: 440, height: 230),
+                                      styleMask: [.titled, .closable], backing: .buffered, defer: false)
         super.init(window: window)
         window.title = "Preferences"
         window.isReleasedWhenClosed = false
@@ -66,6 +66,7 @@ final class PreferencesWindowController: NSWindowController {
     }
 
     @objc private func refresh() {
+        window?.appearance = preferences.chromeAppearance
         appearancePicker.selectItem(at: ClassicChromeScheme.allCases.firstIndex(of: preferences.appearance) ?? 0)
         surroundPicker.selectItem(at: EditorPreferences.Surround.allCases.firstIndex(of: preferences.surround) ?? 1)
         initialViewPicker.selectItem(at: EditorPreferences.InitialView.allCases.firstIndex(of: preferences.initialView) ?? 0)
@@ -87,4 +88,10 @@ final class PreferencesWindowController: NSWindowController {
     }
 
     @objc private func restoreDefaults(_ sender: Any?) { preferences.reset() }
+}
+
+/// Preferences takes keyboard focus while the current document remains
+/// main, so document palettes keep their target.
+private final class PreferencesPanel: NSPanel {
+    override var canBecomeMain: Bool { false }
 }

@@ -89,6 +89,18 @@ final class EditorPreferencesTests: XCTestCase {
         }
     }
 
+    func testPreferencesWindowLeavesTheDocumentMain() {
+        _ = NSApplication.shared
+        withDefaults { defaults, _ in
+            let controller = PreferencesWindowController(preferences: EditorPreferences(defaults: defaults))
+            defer { controller.close() }
+            controller.showWindow(nil)
+            controller.window?.makeKeyAndOrderFront(nil)
+            XCTAssertFalse(controller.window!.canBecomeMain,
+                           "Preferences must not retarget document palettes to the last-created image")
+        }
+    }
+
     func testPreferencesMenuUsesTheStandardShortcut() throws {
         let menu = MainMenu.make()
         let app = try XCTUnwrap(menu.items.first?.submenu)

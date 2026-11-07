@@ -87,6 +87,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         ClassicChrome.apply(scheme: EditorPreferences.shared.appearance)
         NotificationCenter.default.addObserver(self, selector: #selector(preferencesChanged),
                                                name: EditorPreferences.didChange, object: EditorPreferences.shared)
+        NotificationCenter.default.addObserver(self, selector: #selector(auxiliaryWindowBecameKey(_:)),
+                                               name: NSWindow.didBecomeKeyNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(openPendingFiles),
                                                name: PlugInCommands.didFinishNotification, object: nil)
         guard let path = EngineLibrary.configuredPath() else {
@@ -113,6 +115,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     @objc private func preferencesChanged() {
         ClassicChrome.apply(scheme: EditorPreferences.shared.appearance)
+        NSApp.windows.forEach { applyAuxiliaryAppearance($0) }
+    }
+
+    @objc private func auxiliaryWindowBecameKey(_ notification: Notification) {
+        if let window = notification.object as? NSWindow { applyAuxiliaryAppearance(window) }
+    }
+
+    private func applyAuxiliaryAppearance(_ window: NSWindow) {
+        guard !(window.windowController is DocumentWindowController) else { return }
+        window.appearance = EditorPreferences.shared.chromeAppearance
     }
 
     @objc func showPreferences(_ sender: Any?) {

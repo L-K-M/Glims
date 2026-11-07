@@ -58,6 +58,12 @@ final class EditorPreferences {
         }
     }
 
+    /// App-owned dialogs use the matching native appearance. Document
+    /// windows keep their own appearance and Rigi recolors their chrome.
+    var chromeAppearance: NSAppearance? {
+        NSAppearance(named: appearance == .dark ? .darkAqua : .aqua)
+    }
+
     var surround: Surround {
         get { defaults.string(forKey: Key.surround).flatMap(Surround.init(rawValue:)) ?? .medium }
         set {
