@@ -59,6 +59,19 @@ typedef struct
   GimpPaintOptions *options;
 } GlimsStroke;
 
+/* The paint info (core and options type) behind a Glims paint tool, or
+ * NULL when the engine lacks the tool. */
+GimpPaintInfo *
+glims_paint_info_for_tool (Gimp    *gimp,
+                           uint32_t tool)
+{
+  if (tool >= G_N_ELEMENTS (paint_infos))
+    return NULL;
+
+  return GIMP_PAINT_INFO (gimp_container_get_child_by_name (gimp->paint_info_list,
+                                                            paint_infos[tool]));
+}
+
 void
 glims_strokes_free (gpointer data)
 {
@@ -113,10 +126,10 @@ set_number (GObject     *options,
 }
 
 /* The tool's own options, as GIMP's tool options dialogs set them. */
-static void
-set_tool_options (GimpPaintOptions         *options,
-                  const GlimsBrushSettings *brush,
-                  GimpDrawable             *source)
+void
+glims_set_tool_options (GimpPaintOptions         *options,
+                        const GlimsBrushSettings *brush,
+                        GimpDrawable             *source)
 {
   GObject *object = G_OBJECT (options);
 
@@ -180,11 +193,11 @@ set_tool_options (GimpPaintOptions         *options,
 
 /* `brush_resource` is the stroke's own selected brush, or NULL to inherit
  * the user context's current brush as stroke_begin() always did. */
-static GimpPaintOptions *
-make_options (Gimp                     *gimp,
-              GimpPaintInfo            *info,
-              const GlimsBrushSettings *brush,
-              GimpBrush                *brush_resource)
+GimpPaintOptions *
+glims_make_paint_options (Gimp                     *gimp,
+                          GimpPaintInfo            *info,
+                          const GlimsBrushSettings *brush,
+                          GimpBrush                *brush_resource)
 {
   GimpPaintOptions *options;
   GimpContext      *context;
@@ -249,9 +262,9 @@ airbrush_stamp (GimpAirbrush *airbrush,
 
 /* The caller's settings, with the fields its struct_size lacks filled with
  * defaults (an older caller paints with the paintbrush). */
-static gboolean
-read_brush (const GlimsBrushSettings *brush,
-            GlimsBrushSettings       *settings)
+gboolean
+glims_read_brush (const GlimsBrushSettings *brush,
+                  GlimsBrushSettings       *settings)
 {
   if (! brush || brush->struct_size < offsetof (GlimsBrushSettings, tool))
     return FALSE;
@@ -301,7 +314,7 @@ stroke_begin_common (GlimsEngine              *engine,
     *out = 0;  /* a refused call leaves no stroke id behind */
   if (! open)
     return GLIMS_STATUS_NOT_FOUND;
-  if (! read_brush (brush, &settings) || ! first || ! out || ! (settings.size > 0.0))
+  if (! glims_read_brush (brush, &settings) || ! first || ! out || ! (settings.size > 0.0))
     return GLIMS_STATUS_INVALID_ARGUMENT;
   brush = &settings;
   if (engine->busy > 0)
@@ -330,17 +343,16 @@ stroke_begin_common (GlimsEngine              *engine,
       source = GIMP_DRAWABLE (item);
     }
 
-  info = GIMP_PAINT_INFO (gimp_container_get_child_by_name (engine->gimp->paint_info_list,
-                                                            paint_infos[brush->tool]));
+  info = glims_paint_info_for_tool (engine->gimp, brush->tool);
   if (! info)
     return glims_fail (error, NULL, "The engine lacks this paint tool.");
 
   stroke = g_new0 (GlimsStroke, 1);
   stroke->image     = g_object_ref (open->image);
   stroke->drawable  = g_object_ref (drawable);
-  stroke->options   = make_options (engine->gimp, info, brush, brush_resource);
+  stroke->options   = glims_make_paint_options (engine->gimp, info, brush, brush_resource);
   stroke->core      = g_object_new (info->paint_type, "undo-desc", info->blurb, NULL);
-  set_tool_options (stroke->options, brush, source);
+  glims_set_tool_options (stroke->options, brush, source);
 
   if (GIMP_IS_AIRBRUSH (stroke->core))
     g_signal_connect (stroke->core, "stamp", G_CALLBACK (airbrush_stamp), stroke);

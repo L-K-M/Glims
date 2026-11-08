@@ -1708,6 +1708,210 @@ passed before the unrelated layer-boundary integration; the combined
 Guides interface will receive its own unit and window checks. The
 independent backend review found no important issues.
 
+### Native image grid (2026-11-08)
+
+Backend-and-cache slice on `feat/native-grid`: no canvas overlay, grid
+dialog or snap support. Two append-only facade slots follow the
+canonical footer (`image_convert_indexed`): `image_grid` (a read of
+the current state into a size-versioned `GlimsGrid`) and
+`image_set_grid`. Own `GlimsGridStyle` (DOTS=1, INTERSECTIONS=2,
+ON_OFF_DASH=3, DOUBLE_DASH=4, SOLID=5) mapped by name to
+`GIMP_GRID_DOTS`/`GIMP_GRID_INTERSECTIONS`/`GIMP_GRID_ON_OFF_DASH`/
+`GIMP_GRID_DOUBLE_DASH`/`GIMP_GRID_SOLID`
+(libgimpbase/gimpbaseenums.h:522-530, identical in all four trees); no
+native enum value, struct layout or pointer crosses the facade.
+`GlimsGrid` carries `struct_size`, the style, `spacing_x/y`,
+`offset_x/y` and `foreground`/`background` as `GlimsColor` (sRGB 0...1,
+alpha included).
+
+Verified identical across GIMP_3_0_8, GIMP_3_2_0, GIMP_3_2_8 and
+master: `gimp_image_get_grid`/`gimp_image_set_grid(image, grid, TRUE)`
+(app/core/gimpimage-grid.h/.c — set compares with
+`gimp_config_is_equal_to`, returns with no undo when equal, otherwise
+pushes exactly one "Grid" undo via `gimp_image_undo_push_image_grid`
+with `GIMP_DIRTY_IMAGE_META` and syncs), the getters
+`gimp_grid_get_style`/`get_fgcolor`/`get_bgcolor`/`get_spacing`/
+`get_offset` (app/core/gimpgrid.h), `gimp_config_duplicate` and
+`gimp_config_is_equal_to` (libgimpconfig/gimpconfig-iface.h:124-125),
+and the property names and bounds in `gimp_grid_class_init`
+(app/core/gimpgrid.c): `style` (enum, default SOLID), `fgcolor`/
+`bgcolor` (color, has alpha, defaults black/white), `xspacing`/
+`yspacing` (double, 0.0 ... GIMP_MAX_IMAGE_SIZE, default 10.0),
+`spacing-unit`, `xoffset`/`yoffset` (double, -GIMP_MAX_IMAGE_SIZE ...
+GIMP_MAX_IMAGE_SIZE, default 0.0), `offset-unit`, with
+GIMP_MAX_IMAGE_SIZE = 524288 in all four trees
+(libgimpbase/gimplimits.h:57). `check_engine_interface` now asserts
+all nine property names and types on `GIMP_TYPE_GRID` at start-up.
+XCF persists the grid as a parasite (app/xcf/xcf-save.c:559-561 via
+`gimp_grid_to_parasite`, xcf-load.c:784-789 via
+`gimp_grid_from_parasite`).
+
+The adapter (Engine/grid.c) clones the image's borrowed grid with
+`gimp_config_duplicate`, so the unexposed units are retained, and
+validates the whole request before any `g_object_set` — so the native
+clamps can neither hide invalid input nor leave a partial mutation:
+INVALID_ARGUMENT for a missing/short struct, an unknown style, a
+non-finite spacing/offset, a spacing that is zero, negative or outside
+the native bounds, an offset outside the native signed range, or a
+non-finite/out-of-range color component (alpha included). The bounds
+are read from the engine's own `GParamSpecDouble` at call time, not
+hard-coded. Colors are set on freshly created `GeglColor` objects
+through `gegl_color_set_rgba_with_space(..., NULL)` — a NULL space is
+non-linear sRGB (gegl/gegl/property-types/gegl-color.h) — so the
+engine's shared default color objects are never mutated; the native
+color setter duplicates the passed object into the grid
+(gimpgrid.c, PROP_FGCOLOR/PROP_BGCOLOR), and the adapter releases its
+own references right after `g_object_set`. Readback borrows the grid
+and its colors and reads them with `gegl_color_get_rgba_with_space(...,
+NULL)`. An identical native config is detected with
+`gimp_config_is_equal_to` before the readiness gate (like guide_put's
+same-position no-op) and returns OK with no undo; a changed config
+goes through `gimp_image_set_grid(image, clone, TRUE)` — exactly one
+native undo step, pixels and selection untouched. Mutations are
+guarded by `glims_edit_ready` (BUSY during a stroke, a filter session
+or a plug-in); the read is allowed at any time. No new event kind: the
+native undo push emits "undo-event", forwarded as the existing
+GLIMS_EVENT_UNDO_CHANGED, and ImageDocument's `.state` refresh runs
+`reload`, which re-reads the grid.
+
+Session side: `EngineSession.GridStyle`, `Grid`, `grid(_:)` and
+`setGrid(_:image:)` over the facade types (struct_size set, colors via
+the existing sRGB `NSColor` conversion, no synchronous native call
+outside the queued job); `ImageDocument` caches `grid` in `reload` and
+queues `setGrid` edits through `run` on the input queue.
+
+Facade-only conformance adds `test_grid`: the native default readback
+(solid, black/white, 10/10, 0/0); all five styles with numeric, color
+and alpha readback, each exactly one undo; undo/redo restoring the
+previous grid; the identical no-op; rendered pixels, selection bounds,
+dirty flag and undo depth unchanged across every refusal (missing/short
+struct, unknown styles, zero/negative/NaN/infinite/over-maximum
+spacings, out-of-range and non-finite offsets, out-of-range and invalid
+alpha colors); the native range edges (±524288) accepted; BUSY under
+an open stroke and an open filter preview with reads still allowed;
+XCF save/reopen preserving the whole config; NOT_FOUND for unknown and
+closed images. Comparisons are against the values set and the engine
+defaults from source, not against the adapter's storage. There is no
+`source_id` anywhere in this facade (grep over the header, adapter and
+session finds none) — the concept is not invented here; the nearest
+existing notion is `layer_source_info`'s structured-source report,
+which the grid slice does not use.
+
+Checks actually run on this branch: `swift build -j 2` and
+`swift build -j 2 --build-tests` pass; `clang -fsyntax-only` with the
+existing adapter flags (from `_engine/adapter/<ref>/compile.rsp`,
+paths rewritten to this worktree) is clean for `Engine/grid.c` and
+`Engine/engine.c` on both GIMP_3_2_8 and GIMP_3_0_8, for
+`Engine/grid.c` also under `-Wall -Wextra -Werror`, and
+`Engine/tests/engine-tests.c` under `-std=c11 -O2 -Wall -Wextra
+-Werror -fsyntax-only` plus `abi.c`. NOT run here (the shared
+engine/adapter lock belongs to the root job): `build-adapter.sh
+--test` conformance, any adapter compile/link, `swift test`, the app's
+`--engine-smoke-test`, the engine matrix and any on-screen check —
+no runtime behavior of the new slots was executed in this slice.
+
+### Stroke selection backend (2026-11-08)
+
+Backend slice on `feat/stroke-selection`: no UI and no action
+recording. One append-only facade footer slot after `image_set_grid`
+(slot 117): `selection_stroke(engine, image, drawable, brush,
+settings, error)`, API version 1 unchanged. The signature follows
+`path_stroke`'s target convention and `stroke_begin_with_brush_resource`'s
+resource convention: `drawable` 0 is the image's selected layer and an
+explicit id must be an attached layer of this image (a group, a layer
+mask or a channel is refused with FAILED, exactly as `path_stroke`
+refuses them); `brush` is a full-width `GlimsResourceID` — 0 keeps
+`stroke_begin`'s established convention of inheriting the shared user
+context's current brush, while a non-zero handle goes through
+`glims_lookup_brush`'s strict admission (INVALID_ARGUMENT for
+out-of-native-range or wrong-kind handles, NOT_FOUND for stale ones)
+with no silent default replacement; `settings` is the existing
+`GlimsBrushSettings`, no new struct and no native enum crosses the
+facade.
+
+The adapter (Engine/select.c, `glims_selection_stroke`) drives the GUI-
+free core path, not a hand-rendered bitmap: `gimp_item_stroke()` on the
+image's mask (`GIMP_ITEM (gimp_image_get_mask (image))`) with
+`push_undo` TRUE, exactly as the PDB's `drawable-edit-stroke-selection`
+invoker does (app/pdb/drawable-edit-cmds.c). Verified identical in all
+four engine trees (GIMP_3_0_8, GIMP_3_2_0, GIMP_3_2_8, master):
+`GimpSelection`'s stroke vfunc (app/core/gimpselection.c) fails with
+"There is no selection to stroke." when `gimp_channel_boundary` finds
+no boundary, then suspends the selection, calls `GimpChannel`'s stroke
+vfunc and resumes — so the stroke straddles the boundary (pixels on
+both sides change), the selection mask is never modified, and
+`gimp_item_stroke`'s own undo group makes the whole call exactly one
+"Stroke Selection" undo step. The adapter pre-checks the same boundary
+so an empty selection fails with FAILED before the native undo group
+opens. The stroke is painted through the stroke options' paint method
+(`GIMP_STROKE_PAINT_METHOD`, `gimp_paint_core_stroke_boundary`): a
+temporary context inheriting the user context carries the tool's paint
+info — defined locally (`gimp_context_define_property` before
+`gimp_context_set_paint_info`, so the setter cannot walk up to the
+shared user context) — and the tool's own paint options are built by
+paint.c's `glims_make_paint_options`/`glims_set_tool_options` (now shared
+with `stroke_begin_common`) and passed explicitly, as the PDB invoker
+does, with the selected brush pinned locally exactly as
+`stroke_begin_with_brush_resource` pins it. All temporary context,
+options and paint-options references are released on every path.
+Readiness is `glims_edit_ready` (BUSY during a stroke, a filter
+session or a plug-in); locks are `glims_check_item_locks` with
+`GLIMS_LOCK_PIXELS`, plus `GLIMS_LOCK_ALPHA` for the eraser on a layer
+with alpha — the same policy as `stroke_begin`. The whole request
+(settings, brush handle, target, locks, empty selection) is validated
+before any mutation, so refusals change no pixels and push no undo.
+No new event kind: the usual UNDO_CHANGED follows a success.
+
+Session side: `EngineSession.strokeSelection(image:drawable:brush:)`
+over the slot, reusing the captured `EngineSession.Brush` settings (via
+the new shared `nativeBrush` helper, also used by `beginStroke`) and the
+existing `ResourceIdentity` resolve — a nil resource passes 0 (the
+documented inherit convention) and a non-nil one is resolved on the
+worker with `resolveResource(_:kind: .brush)`; session ids are never
+stored. `ImageDocument.strokeSelection(_:)` queues the call as counted
+input on the input queue behind already accepted input, capturing the
+brush settings, the resource identity and the target drawable id by
+value, requiring the paint target inside the job and reporting errors
+through the usual path; mask/channel/group targets are refused up
+front like `strokePath`, and no synchronous native call runs on the
+main thread.
+
+Facade-only conformance adds `test_selection_stroke` (engine-tests.c,
+no engine headers): rectangular and elliptical selections; the boundary
+stroke visible on both sides of the edge while the interior and the
+far outside stay untouched; the selection's bounds AND outline
+segments (the shape invariant, not just pixels) unchanged across the
+stroke and across undo/redo; exact pixel undo/redo by full-render
+compare; an empty selection failing with an error before any undo;
+invalid/stale/foreign image and drawable ids; out-of-range, stale and
+wrong-kind brush handles; NULL/short settings, zero/NaN size, unknown
+tool, NaN opacity/color; group, mask and channel targets refused like
+path_stroke's; pixel lock LOCKED with unchanged pixels and history and
+the eraser on an alpha-locked alpha layer LOCKED; BUSY under an open
+stroke and an open filter session. Not covered by this test: a
+polygon-shaped selection (same boundary machinery as the ellipse), a
+clone/heal source drawable, XCF round trips of the stroke's result
+(covered by the existing undo/redo checks), and any on-screen result.
+
+Checks actually run on this branch: `swift build -j 2` and
+`swift build -j 2 --build-tests` pass; `clang -fsyntax-only` with the
+existing adapter flags (from `_engine/adapter/<ref>/compile.rsp`,
+paths rewritten to this worktree, plus the build's
+`-I Engine -I Sources/CGlimsEngine/include` and the two
+`GLIMS_ENGINE_*_PATH` defines from `scripts/build-adapter.sh`) is clean
+for `Engine/select.c`, `Engine/paint.c` and `Engine/engine.c` on all
+four refs (GIMP_3_2_8, GIMP_3_2_0, GIMP_3_0_8, master), and
+`Engine/select.c`/`Engine/paint.c` are also clean under the added
+`-Wextra -Werror` (the only -Wextra diagnostic in paint.c is
+pre-existing in untouched `to_coords`); `Engine/tests/engine-tests.c`
+and `Sources/CGlimsEngine/abi.c` pass `-std=c11 -O2 -Wall -Wextra
+-Werror -fsyntax-only -I Sources/CGlimsEngine/include`. NOT run here
+(the shared engine/adapter lock belongs to the root fixture job):
+`build-adapter.sh --test` conformance, any adapter compile/link,
+`swift test`, the app's `--engine-smoke-test`, the engine matrix and
+any on-screen check — no runtime behavior of the new slot was executed
+in this slice.
+
 ### Fill pattern source (2026-11-08)
 
 Interface slice on `feat/pattern-chooser`, frontend only: Edit ▸ Fill…
@@ -2100,3 +2304,28 @@ history/dirty state on reads and profile-assignment Undo/Redo appearance.
 No production renderer change was needed. This verifies the in-gamut sRGB
 path; physical monitor calibration, wide-gamut/HDR output, proof profiles,
 proof intents and gamut warnings remain unverified or unimplemented.
+
+Grid integration validation passes 1,380 / 1,269 / 1,380 / 1,380 native
+checks on GIMP 3.2.8 / 3.0.8 / 3.2.0 / master. The initial failures were
+fixture errors: the color oracle required double precision although
+GEGL's RGBA-with-space accessors store floats, and the preview busy probe
+submitted an identical no-op and short-circuited its cleanup. Color
+comparisons now allow float rounding; the busy probe requests a genuine
+change and always closes its preview. No production grid code changed.
+Independent review found no important issue. Nondefault unit retention
+is verified from clone semantics in the sources; it is not directly
+covered by the facade-only XCF fixture. Swift/cache runtime follows with
+the configuration interface.
+
+Stroke Selection runtime validation supersedes the compile-only report
+above: native suites pass 1,422 / 1,311 / 1,422 / 1,422 checks on GIMP
+3.2.8 / 3.0.8 / 3.2.0 / master. Runtime tests reproduced invalid settings
+returning FAILED instead of INVALID_ARGUMENT and native stroke preparation
+replacing the requested translucent red with opaque black. The adapter now
+returns the specified validation status and pins the paint properties on
+the private context before preparation reparents the options. A separate
+ordinary paint stroke supplies the color/opacity oracle. Clone/heal source
+coordinates are checked for finite, native-integer range before conversion.
+The 3.2.0 suite still logs two startup GLib filename assertions before the
+checks, as recorded in its log; it reports zero failed checks. Swift document
+queue execution and user-facing Stroke Selection controls remain to verify.
