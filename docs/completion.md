@@ -52,7 +52,7 @@ behavior, not every adjacent feature in `design.md`.
       and initial fit that avoids palettes.
 - [ ] Paste Into/floating selection controls, Stroke Selection and resource
       creation from selections.
-- [ ] Image metadata editing, Fill dialog, remaining Image Adjust commands,
+- [ ] Image metadata editing, remaining Image Adjust commands,
       layer-boundary/selection-edge/proof view toggles, complete menu and
       keyboard coverage and shortcut customization.
 - [ ] Recorder and semantic command replay.
@@ -311,3 +311,20 @@ stroke in another document is checked by its changed pixels. Follow-up
 review reports no important findings. A grayscale PNG opened in the old
 bundle reproduced its incorrect RGB title; interactive verification of
 the corrected title and conversion sheets remains pending.
+
+2026-11-08 later checkpoint: color controls are merged at `f5998f5`.
+The source launch, actual grayscale/RGB titles, profile information,
+16-bit float linear conversion and undo/redo have on-screen evidence.
+The adapter now provides path fill and vector creation on all supported
+engines with the appropriate capability gates. The Paths interface branch
+passes 305 unit tests and 677/666/677/677 interface checks, including actual
+opacity control actions, layer/mask/channel targets, history, vector path
+updates and XCF persistence. Its review found no important defects; native
+vector style editing and multi-anchor selection are still outstanding.
+
+2026-11-08 Fill integration: Edit > Fill provides foreground/background,
+white/black/custom and opacity. The two-document binding regression was
+observed failing in the draft and passes after per-sheet retention. The
+Paths-integrated build passes 305 unit tests and 689/678/689/689 interface
+checks. On screen, half-opacity Fill works and cancelling the Custom
+color well closes the panel it opened. Pattern fill remains resource work.

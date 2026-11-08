@@ -719,16 +719,43 @@ resets and owned strings freed. All four engine prefixes built by
 `scripts/build-engine.sh` install stock brush, pattern and gradient
 files (47/58/78), and the tests require at least one file-backed and
 one built-in resource per kind, so a built-in-only listing cannot pass.
-Checked here: compile and syntax checks only: every `Engine/*.c`
-against the pinned set and the changed translation units against all
-four sets with their existing `compile.rsp` flags, and
-`engine-tests.c` with its own `-std=c11 -Wall -Wextra -Werror` flags,
-plus the facade header standalone in C and C++. Not run here (the root
-owns the native runtime): adapter build and link, the conformance runs
-on the four engine sets, bundle checks and any Swift build. Pending
-runtime validation: `scripts/build-adapter.sh --test` per engine set
-before merge; later slices cover thumbnails, selection and application
-of resources, settings, management and the choosers' UI.
+Validation: all four private adapter builds and native conformance runs
+pass: 820 checks on 3.2.8, 3.2.0 and master, and 787 on 3.0.8. The
+installed stock files (47/58/78 above) differ from loaded factory totals:
+the pinned runtime lists 58 brushes, 59 patterns and 77 gradients. Added
+high-bit handle regressions prove that a 64-bit handle is rejected before
+narrowing it to a live 32-bit native id. Independent Mistral Large 4
+review found no important issues. Swift build and unit integration are
+recorded in the PR; thumbnails, resource selection and application,
+settings, management and chooser UI remain later slices.
+
+### Swift resource wrappers (2026-11-08)
+
+Session side of the same slice, on `feat/resource-session`: three typed
+`EngineSession` wrappers over the three facade slots
+(`resources(_:)`, `resourceIdentifiers(_:)`,
+`resolveResource(_:kind:)`) with facade-owned `ResourceKind`
+(brush/pattern/gradient, UInt32 tags 1/2/3, unknown engine row kinds
+rejected), `ResourceID` (`UInt64`, the full range so no handle
+truncates lossily), `Resource` and a Codable/Equatable
+`ResourceIdentity` whose `collection` keeps NULL (nil) distinct from
+an empty string through persisted JSON. A short resource buffer is
+retried at the reported count, and the owned identity strings are
+freed on every path, error paths included; errors go through the
+existing `check`/`free_string` handling. Returned ids are local to the
+running engine session: persisted selections store identities, never
+ids, and nothing enumerates the catalog eagerly on the main thread or
+at startup. The `--engine-smoke-test` gains a bounded catalog scenario
+after the existing checks: counts and rows for all three kinds, one
+identity/resolve round trip per kind, a wrong identity and a high-bit
+handle; `ResourceIdentityTests` covers the persisted nil-versus-empty
+distinction and the kind tags. Root validation passes 308 unit tests and
+696 interface checks on 3.2.8/3.2.0/master, 685 on 3.0.8. The two
+embedded-NUL identity checks first failed because CString truncation
+resolved another identity. The wrapper now rejects the text before C.
+After merging Fill, the source-discovered pinned engine passes 708
+interface checks and all 308 unit tests. Independent Mistral Large 4
+review found no important issue. Preview and chooser UI remain separate.
 
 ### Resource thumbnails (2026-11-08)
 
@@ -849,6 +876,34 @@ and the exact gradient strip dimensions.
   re-associated in `app/xcf/xcf-load.c`), so the layer survives save
   and reopen as structured content. Conformance tests cover both; the
   four-engine run is left to the root checkout.
+- 2026-11-08: the frontend slice for the two new facade calls, on this
+  worktree branch. `EngineSession` gained typed `fillPath` and
+  `toVectorLayer` wrappers and a `supportsVectorLayers` version
+  capability (one shared parser with `supportsLinkLayers`).
+  `ImageDocument.fillPath` queues on the input queue behind accepted
+  input, passing the explicit current drawable (layer, editing mask or
+  channel) and refusing groups, stale path rows, missing, pixel-locked,
+  busy and closed states with an error instead of silent success; the
+  native call revalidates path and target, is one undo step and clips to
+  the selection. `ImageDocument.toVectorLayer` queues as a target
+  command, so the completion's authoritative reload makes the
+  engine-selected vector layer the active one; on a pre-3.2 engine it
+  reports the honest 3.2 requirement and never degrades to a raster.
+  The Paths palette has Fill Path and To Vector Layer buttons and menu
+  items (membership-guarded, the vector item capability-gated, its
+  tooltip stating the engine's default white-fill/black-stroke style,
+  not the foreground color), as do Edit ▸ Fill Path and Edit ▸ To
+  Vector Layer; the bundled manual documents both. No engine or facade
+  change, no global native context mutation. Added scoped engine smoke
+  cases (real pixels and fill color, selection clipping, one undo step,
+  vector kind / selection / name, re-render after a path edit, XCF
+  round trip and target reconcile, pre-3.2 UNSUPPORTED, missing, busy
+  and closed guards) and pure unit tests for the capability parser, the
+  palette command metadata and the fill settings. Checked on this
+  branch: `swift build --build-tests` compiles only — no adapter
+  rebuild, no library relink, no test or smoke run (the root checkout
+  serializes desktop tests). Pending: the runtime run of the new smoke
+  cases and `swift test` on all four engines in the root checkout.
 
 ## Open decisions
 
@@ -901,5 +956,44 @@ A separate observed conformance-runner defect called engine functions after
 rejecting a too-small API table. The runner now exits immediately. The
 engine-free `scripts/test-conformance-abi.sh` reproduced the invalid call
 before the guard and passes after it; CI runs this regression. Initial
-independent review found no important issue; the sRGB/guard follow-up and
-cross-engine native runs are pending.
+independent and follow-up reviews found no important issue. Final native
+runs pass 867 checks on 3.2.8/3.2.0/master and 834 on 3.0.8. The follow-up
+review also identified the existing Clear color mismatch, now tracked in
+a separate fix. Swift integration is recorded in the PR.
+
+### Color Fill sheet (2026-11-08)
+
+Edit > Fill opens a native sheet for foreground, background, white, black
+or a custom color and opacity. It fills the selection, or the active
+layer, mask or channel without one, through the existing counted target
+queue. A sheet keeps its document and its own control bindings; cancelling
+or refusing a busy/closed target produces no edit. Native lock failures
+reach the caller. The custom color well releases its own panel interaction
+without hiding an already open panel or another active well.
+
+The original draft's shared binding target failed a two-document native
+regression. Per-sheet retention passes that regression and ten isolated
+pinned-engine checks, including pixels, selection clipping, undo, custom
+color and busy/native refusals. Review found no important issues. The
+expanded checks include independent background color and invalid opacity.
+The integrated four-engine run passes 652 checks on 3.2.8, 3.2.0 and master,
+649 on 3.0.8, before the Paths interface merge. After that integration,
+305 unit tests and 689 interface checks on 3.2.8/3.2.0/master, 678 on
+3.0.8 pass. An actual 50-percent Fill paints the document; cancelling
+Custom after opening its color well closes the sheet's color panel.
+The test app quit without saving. Pattern fill and resource selection
+are a separate slice.
+
+### Paths interface verification (2026-11-08)
+
+The Paths palette and Edit menu expose Fill Path and To Vector Layer.
+Fill uses the current layer, mask or saved channel; the Path options now
+include opacity and antialias controls. Vector creation adopts the native
+selected layer after reload and reports unsupported engines explicitly.
+Independent review found no important issues. The integrated branch passes
+305 unit tests and 677 interface checks on 3.2.8/3.2.0/master, 666 on 3.0.8.
+The first mask test failure was a fixture retaining a selection after undo;
+the corrected history reset verifies white pixels and the original history
+position. Real control actions now verify 50-percent fill pixels and saved
+channel isolation. Vector styling and multi-anchor editing remain later
+work; initial vector creation uses the native context's defaults.

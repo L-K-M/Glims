@@ -467,9 +467,28 @@ final class EngineSession: @unchecked Sendable {
 
     /// Parses an engine `major.minor[.micro]` version string.
     static func supportsLinkLayers(version: String) -> Bool? {
+        Self.version(version, isAtLeast: (3, 2))
+    }
+
+    /// Whether the engine is known to make genuine vector layers from
+    /// paths: they arrived in GIMP 3.2, and older engines answer
+    /// `toVectorLayer` with UNSUPPORTED. `nil` when the version string
+    /// does not parse — the facade's own answer then decides.
+    var supportsVectorLayers: Bool? {
+        Self.supportsVectorLayers(version: version)
+    }
+
+    /// Parses an engine `major.minor[.micro]` version string.
+    static func supportsVectorLayers(version: String) -> Bool? {
+        Self.version(version, isAtLeast: (3, 2))
+    }
+
+    /// Whether an engine `major.minor[.micro]` version string is at least
+    /// `majorMinor`; nil when it does not parse.
+    static func version(_ version: String, isAtLeast majorMinor: (major: Int, minor: Int)) -> Bool? {
         let parts = version.split(separator: ".")
         guard parts.count >= 2, let major = Int(parts[0]), let minor = Int(parts[1]) else { return nil }
-        return major > 3 || (major == 3 && minor >= 2)
+        return major > majorMinor.major || (major == majorMinor.major && minor >= majorMinor.minor)
     }
 
     func newImage(pixels: ClipboardImage) throws -> Int32 {
@@ -1546,6 +1565,14 @@ final class EngineSession: @unchecked Sendable {
         var antialias = true
     }
 
+    /// How `fillPath` fills a path: a solid color at an opacity, with an
+    /// antialiased edge. No pattern and no fill rule of its own.
+    struct PathFillSettings: Equatable {
+        var color: NSColor = .black
+        var opacity: Double = 1
+        var antialias = true
+    }
+
     func paths(_ image: Int32) throws -> [PathInfo] {
         var count: Int32 = 0
         try check(api.paths(engine, image, nil, 0, &count), nil)
@@ -1637,6 +1664,35 @@ final class EngineSession: @unchecked Sendable {
         try check(api.path_stroke(engine, image, path, layer ?? 0, &values, &error), error)
     }
 
+    /// Fills the area `path` encloses on `drawable` — a layer, a layer mask
+    /// or a channel of the image (0: the selected drawable) — with a solid
+    /// color, as one undo step. The fill stays inside the selection and
+    /// honors the drawable's mask and pixel locks; a group or a locked
+    /// target is refused. The engine revalidates the path and the target.
+    func fillPath(_ path: Int32, image: Int32, drawable: Int32, settings: PathFillSettings) throws {
+        var values = GlimsPathFillSettings(struct_size: UInt32(MemoryLayout<GlimsPathFillSettings>.size),
+                                           color: Self.color(settings.color), opacity: settings.opacity,
+                                           antialias: settings.antialias)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.path_fill(engine, image, path, drawable, &values, &error), error)
+    }
+
+    /// Makes a genuine vector layer from `path`, above the selected layer
+    /// and itself selected, as one undo step. `name` (nil: the path's
+    /// name) sets the layer's name. Returns the new layer's id. Throws
+    /// `EngineError` with `GLIMS_STATUS_UNSUPPORTED` on engines without
+    /// vector layers (before GIMP 3.2); the call never degrades to a
+    /// raster copy. The layer keeps the same path object, so editing the
+    /// path re-renders it.
+    func toVectorLayer(_ path: Int32, image: Int32, name: String? = nil) throws -> Int32 {
+        var layer: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try withOptionalCString(name) { name in
+            try check(api.path_to_vector_layer(engine, image, path, name, &layer, &error), error)
+        }
+        return layer
+    }
+
     private func withOptionalCString(_ string: String?,
                                      _ body: (UnsafePointer<CChar>?) throws -> Void) rethrows {
         guard let string else { return try body(nil) }
@@ -1715,6 +1771,126 @@ final class EngineSession: @unchecked Sendable {
     @discardableResult
     func cancelProcedure() -> Bool {
         api.procedure_cancel(engine) == GLIMS_STATUS_OK
+    }
+
+    // MARK: Resources
+
+    /// The kind of a brush, pattern or gradient (GlimsResourceKind).
+    /// Facade-owned values; the engine's own enum never crosses the boundary.
+    enum ResourceKind: UInt32, CaseIterable {
+        case brush = 1, pattern = 2, gradient = 3
+    }
+
+    /// A handle to one brush, pattern or gradient (GlimsResourceID):
+    /// opaque, and local to the current engine session. A number can be
+    /// reused after a restart. Persisted selections store
+    /// `ResourceIdentity`, never these ids.
+    typealias ResourceID = UInt64
+
+    /// One row of the resource catalog (GlimsResourceInfo): the display
+    /// name and handle of one brush, pattern or gradient; nothing rendered.
+    struct Resource: Equatable {
+        let id: ResourceID
+        let kind: ResourceKind
+        let displayName: String
+    }
+
+    /// The persistent identity of a resource: the triplet to store and
+    /// later feed to `resolveResource(_:kind:)`. A nil `collection` is a
+    /// value of its own, not an empty collection: Codable keeps the NULL
+    /// and empty values apart so a persisted selection restores exactly
+    /// what was stored.
+    struct ResourceIdentity: Equatable, Codable {
+        let name: String
+        let collection: String?
+        let isInternal: Bool
+    }
+
+    /// The engine's resources of `kind`, in the engine's own order (sort
+    /// in the interface as you like): names and handles only, nothing
+    /// rendered. The catalog can list hundreds of rows, so call this when
+    /// a chooser opens, never eagerly on the main thread or at startup.
+    func resources(_ kind: ResourceKind) throws -> [Resource] {
+        var count: Int32 = 0
+        try check(api.resources(engine, kind.rawValue, nil, 0, &count), nil)
+        var rows = [GlimsResourceInfo](repeating: GlimsResourceInfo(), count: Int(count))
+        var filled: Int32 = 0
+        while true {
+            let capacity = Int32(rows.count)
+            filled = 0
+            try rows.withUnsafeMutableBufferPointer { buffer in
+                try check(api.resources(engine, kind.rawValue, buffer.baseAddress, capacity, &filled), nil)
+            }
+            // The second count is the total again: one above the buffer
+            // means the catalog grew between the calls, so retry at the
+            // reported size instead of returning a short list.
+            guard filled > capacity else { break }
+            rows = [GlimsResourceInfo](repeating: GlimsResourceInfo(), count: Int(filled))
+        }
+        return try rows.prefix(Int(max(filled, 0))).map { row in
+            Resource(id: row.id, kind: try Self.resourceKind(row.kind), displayName: Self.string(row.name))
+        }
+    }
+
+    /// The persistent identity of the resource `id` names: the triplet to
+    /// store and later feed to `resolveResource(_:kind:)`. A nil
+    /// `collection` is a value of its own, not an empty collection: pass
+    /// back exactly what was received. The identity survives restarting
+    /// the engine; nothing else is promised, since moving or renaming the
+    /// underlying file changes it.
+    func resourceIdentifiers(_ id: ResourceID) throws -> ResourceIdentity {
+        var name: UnsafeMutablePointer<CChar>?
+        var collection: UnsafeMutablePointer<CChar>?
+        var isInternal = false
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.resource_identifiers(engine, id, &name, &collection, &isInternal, &error)
+        // Own the returned strings until this call finishes, including
+        // any error path that supplied them.
+        defer {
+            api.free_string(name)
+            api.free_string(collection)
+        }
+        try check(status, error)
+        guard let rawName = name else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine reported no resource identity.")
+        }
+        return ResourceIdentity(name: String(cString: rawName),
+                                collection: collection.map { String(cString: $0) },
+                                isInternal: isInternal)
+    }
+
+    /// The handle of the resource of `kind` that `identity` names, as
+    /// `resourceIdentifiers(_:)` reported it. The match is exactly the
+    /// engine's own: `collection` (nil and "" are distinct) and
+    /// `isInternal` must agree, and for non-internal resources the name
+    /// too. An internal resource's name is not compared (its display name
+    /// is localized), and there is no name-only fallback for the rest.
+    /// Throws NOT_FOUND when no resource of `kind` carries the identity.
+    func resolveResource(_ identity: ResourceIdentity, kind: ResourceKind) throws -> ResourceID {
+        guard !identity.name.utf8.contains(0), identity.collection?.utf8.contains(0) != true else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The resource identity contains invalid text.")
+        }
+        var handle: ResourceID = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try withOptionalCString(identity.name) { name in
+            try withOptionalCString(identity.collection) { collection in
+                try check(api.resource_resolve(engine, kind.rawValue, name, collection,
+                                               identity.isInternal, &handle, &error), error)
+            }
+        }
+        return handle
+    }
+
+    /// The facade kind of an engine row; unknown kind values never reach
+    /// the interface.
+    private static func resourceKind(_ raw: UInt32) throws -> ResourceKind {
+        guard let kind = ResourceKind(rawValue: raw) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The engine returned an unknown resource kind.")
+        }
+        return kind
     }
 
     // MARK: Helpers

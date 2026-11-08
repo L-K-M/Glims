@@ -586,11 +586,11 @@ final class ImageDocument {
     // MARK: Editing
 
     func fill(at point: CGPoint, mode: EngineSession.FillMode, color: NSColor, threshold: Double,
-              sampleMerged: Bool) {
+              sampleMerged: Bool, opacity: Double = 1) {
         guard !refuseWhileEditingUnavailable() else { return }
         runOnPaintTarget { session, image in
             try session.fill(image: image, at: point, mode: mode, color: color,
-                             threshold: threshold, sampleMerged: sampleMerged)
+                             opacity: opacity, threshold: threshold, sampleMerged: sampleMerged)
         }
     }
 
@@ -1154,6 +1154,61 @@ final class ImageDocument {
         runOnPaintTarget { session, image in try session.strokePath(id, image: image, settings: settings) }
     }
 
+    /// Edit ▸ Fill Path / the Paths palette's Fill: fills the path's area
+    /// on the explicit current paint target — a layer, its mask while
+    /// mask editing is on, or a selected channel — with the settings'
+    /// color, as one undo step ordered behind earlier accepted input.
+    /// A group, a missing or a pixel-locked target is refused with an
+    /// error, never silently; the engine revalidates path and target.
+    func fillPath(_ id: Int32, settings: EngineSession.PathFillSettings) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        // A stale row's id (the path is gone) runs nothing.
+        guard paths.contains(where: { $0.id == id }) else { return }
+        guard !refuseWhileTargetPending() else { return }
+        guard let drawable = activeDrawable else {
+            onError?(DocumentError.targetChanged.localizedDescription)
+            NSSound.beep()
+            return
+        }
+        if case .layer(let layer) = paintTarget,
+           layers.first(where: { $0.id == layer })?.kind == .group {
+            onError?("A path cannot be filled onto a layer group; select a layer, its mask or a channel.")
+            NSSound.beep()
+            return
+        }
+        if let layer = paintTarget?.layer,
+           layerLocks[layer]?.effective.contains(.pixels) == true {
+            onError?("Unlock the layer's pixels (or its group's) before filling a path onto it.")
+            NSSound.beep()
+            return
+        }
+        runOnPaintTarget { session, image in
+            try session.fillPath(id, image: image, drawable: drawable, settings: settings)
+        }
+    }
+
+    /// The Paths palette's To Vector Layer: makes a genuine vector layer
+    /// from the path, above the selected layer. The engine selects it
+    /// natively; the completion's authoritative reload is what makes it
+    /// the interface's target. Engines without vector layers (before
+    /// GIMP 3.2) are told so honestly instead of degrading to a raster.
+    /// The new layer starts in the engine's default style (white fill,
+    /// black stroke) — the foreground color is not applied to it.
+    func toVectorLayer(_ id: Int32, name: String? = nil) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        // A stale row's id (the path is gone) runs nothing.
+        guard paths.contains(where: { $0.id == id }) else { return }
+        if session.supportsVectorLayers == false {
+            onError?("This engine has no vector layers; they arrived in GIMP 3.2.")
+            NSSound.beep()
+            return
+        }
+        endPendingUserEdits()
+        enqueueTargetCommand { session, image in
+            _ = try session.toVectorLayer(id, image: image, name: name)
+        }
+    }
+
     /// Re-reads the outline; the engine caches it until the selection changes.
     func refreshSelection() {
         selectionOutline = (try? session.selectionOutline(image: image)) ?? []
@@ -1486,6 +1541,12 @@ final class ImageDocument {
     /// the facade's own UNSUPPORTED answer reports the rest. Place's
     /// menu item and action consult this.
     var supportsLinkLayers: Bool? { session.supportsLinkLayers }
+
+    /// Whether the engine is known to make genuine vector layers from
+    /// paths (GIMP 3.2 and later); nil when its version does not say, in
+    /// which case the facade's own UNSUPPORTED answer reports the rest.
+    /// To Vector Layer's menu item and action consult this.
+    var supportsVectorLayers: Bool? { session.supportsVectorLayers }
 
     /// What a file import did, for the caller's status line.
     enum ImportOutcome: Equatable {
