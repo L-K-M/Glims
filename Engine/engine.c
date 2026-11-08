@@ -2098,6 +2098,8 @@ MARSHAL (image_guides, return glims_image_guides (e, a->image, a->out, a->capaci
 MARSHAL (guide_put, return glims_guide_put (e, a->image, a->in, a->out, a->error);)
 MARSHAL (guide_remove, return glims_guide_remove (e, a->image, a->width, a->error);)
 MARSHAL (layer_source_info, return glims_layer_source_info (e, a->image, a->item, a->out, a->error);)
+MARSHAL (image_convert_indexed, return glims_image_convert_indexed (e, a->image, a->in,
+                                                                    a->in2, a->capacity, a->error);)
 
 static GlimsStatus
 api_image_guides (GlimsEngine *e, GlimsImageID image, GlimsGuideInfo *rows,
@@ -2128,6 +2130,16 @@ api_layer_source_info (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
 {
   GlimsArgs a = { .image = image, .item = layer, .out = out, .error = error };
   return glims_engine_call (e, layer_source_info_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_convert_indexed (GlimsEngine *e, GlimsImageID image,
+                           const GlimsIndexedSettings *settings,
+                           const GlimsColor *colors, int32_t color_count, char **error)
+{
+  GlimsArgs a = { .image = image, .in = settings, .in2 = colors,
+                  .capacity = color_count, .error = error };
+  return glims_engine_call (e, image_convert_indexed_on_engine, &a);
 }
 
 static GlimsStatus
@@ -2259,6 +2271,7 @@ static const GlimsEngineAPI api_v1 = {
   .guide_put       = api_guide_put,
   .guide_remove    = api_guide_remove,
   .layer_source_info = api_layer_source_info,
+  .image_convert_indexed = api_image_convert_indexed,
 };
 
 __attribute__ ((visibility ("default")))

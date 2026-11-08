@@ -1239,7 +1239,7 @@ test_layer_restore_source (const char *work)
       api->free_string (error);
       error = NULL;
       edited = render_all (image, &w2, &h2);
-      CHECK (shot && edited && memcmp (shot, edited, (size_t) w * h * 4) != 0,
+      CHECK (shot && edited && w == w2 && h == h2 && memcmp (shot, edited, (size_t) w * h * 4) != 0,
              "the paint changed the vector's composite");
       before = undo_depth (image);
       CHECK (api->layer_command (engine, image, vector, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
@@ -1249,7 +1249,7 @@ test_layer_restore_source (const char *work)
              source_test_row (image, vector, &row) && row.kind == GLIMS_LAYER_VECTOR,
              "restore regenerates the vector from its path in one undo step");
       after = render_all (image, &w2, &h2);
-      CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
+      CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
              "the vector's composite is pixel-identical to the source render");
       free (after);
       after = NULL;
@@ -1258,7 +1258,7 @@ test_layer_restore_source (const char *work)
              info.is_rasterized && source_test_row (image, vector, &row) && row.kind == GLIMS_LAYER_PIXEL,
              "undo returns the rasterized vector");
       after = render_all (image, &w2, &h2);
-      CHECK (edited && after && memcmp (edited, after, (size_t) w * h * 4) == 0,
+      CHECK (edited && after && w == w2 && h == h2 && memcmp (edited, after, (size_t) w * h * 4) == 0,
              "undo brings back the exact edited vector pixels");
       free (after);
       after = NULL;
@@ -1310,7 +1310,7 @@ test_layer_restore_source (const char *work)
              source_test_row (link_image, link, &row) && row.kind == GLIMS_LAYER_LINK,
              "restore after the explicit rasterize remonitors the link in one undo step");
       after = render_all (link_image, &w2, &h2);
-      CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
+      CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
              "the remonitored link re-renders pixel-identically");
       free (after);
       after = NULL;
@@ -1338,7 +1338,7 @@ test_layer_restore_source (const char *work)
       api->free_string (error);
       error = NULL;
       edited = render_all (link_image, &w2, &h2);
-      CHECK (shot && edited && memcmp (shot, edited, (size_t) w * h * 4) != 0,
+      CHECK (shot && edited && w == w2 && h == h2 && memcmp (shot, edited, (size_t) w * h * 4) != 0,
              "the paint changed the link's composite");
       CHECK (api->layer_source_info (engine, link_image, painted, &info, NULL) == GLIMS_STATUS_OK &&
              info.source_kind == GLIMS_LAYER_LINK && info.is_rasterized && info.has_source &&
@@ -1352,7 +1352,7 @@ test_layer_restore_source (const char *work)
              source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_LINK,
              "restore of the painted link (flag FALSE) regenerates the source in one undo step");
       after = render_all (link_image, &w2, &h2);
-      CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
+      CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
              "the painted pixels are discarded and the retained source renders again");
       free (after);
       after = NULL;
@@ -1361,7 +1361,7 @@ test_layer_restore_source (const char *work)
              info.is_rasterized && source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_PIXEL,
              "undo stops the monitor again (retained raster state)");
       after = render_all (link_image, &w2, &h2);
-      CHECK (edited && after && memcmp (edited, after, (size_t) w * h * 4) == 0,
+      CHECK (edited && after && w == w2 && h == h2 && memcmp (edited, after, (size_t) w * h * 4) == 0,
              "undo restores the exact painted link pixels");
       free (after);
       after = NULL;
@@ -1370,7 +1370,7 @@ test_layer_restore_source (const char *work)
              ! info.is_rasterized && source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_LINK,
              "redo restores the link source again");
       after = render_all (link_image, &w2, &h2);
-      CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
+      CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
              "redo re-renders the source pixel-identically");
       free (after);
       free (shot);
@@ -1429,7 +1429,7 @@ test_layer_restore_source (const char *work)
              source_test_row (link_image, gone, &row) && row.kind == GLIMS_LAYER_LINK,
              "restore with a missing file keeps the retained buffer and resumes monitoring");
       after = render_all (link_image, &w2, &h2);
-      CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
+      CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
              "the retained source buffer renders exactly as before the paint");
       free (after);
       free (shot);
@@ -6062,6 +6062,530 @@ test_color_state (const char *fixtures, const char *work)
   free (after_pixels);
 }
 
+static GlimsIndexedSettings
+indexed_defaults (uint32_t palette)
+{
+  GlimsIndexedSettings settings = { .struct_size = sizeof settings,
+                                    .palette = palette, .max_colors = 256,
+                                    .remove_unused = true,
+                                    .dither = GLIMS_INDEXED_DITHER_NONE,
+                                    .preservation = GLIMS_INDEXED_PRESERVE_EDITABLE };
+  return settings;
+}
+
+/* Indexed conversion (image_convert_indexed): the four palette modes
+ * with real quantized pixels, dither and alpha options, undo/redo of
+ * pixels, mode and layer kinds, the editable-layer policy, whole-input
+ * validation, precision/group/busy refusals and the already-indexed
+ * no-op. Vector and link parts run on GIMP 3.2+ only. */
+static void
+test_indexed_conversion (const char *work)
+{
+  GlimsImageID         image = 0, src = 0, dup = 0, alpha_img = 0;
+  GlimsItemID          layer = 0, group = 0, text = 0, path = 0, vector = 0, link = 0;
+  GlimsIndexedSettings gen, s, bad;
+  GlimsColor           red_blue[2]  = { { 1, 0, 0, 1 }, { 0, 0, 1, 1 } };
+  GlimsColor           three[3]     = { { 1, 0, 0, 1 }, { 0, 0, 1, 1 }, { 0, 1, 0, 1 } };
+  GlimsColor           too_many[257];
+  GlimsColorInfo       info;
+  GlimsLayerSourceInfo srcinfo;
+  GlimsFillSettings    red  = { .struct_size = sizeof red, .mode = GLIMS_FILL_SELECTION,
+                                .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  GlimsFillSettings    blue = { .struct_size = sizeof blue, .mode = GLIMS_FILL_SELECTION,
+                                .color = { 0, 0, 0.8, 1 }, .opacity = 1 };
+  GlimsBrushSettings   brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 5);
+  GlimsStrokePoint     point = { 4, 4, 1.0, 0, 0, 0 };
+  GlimsStrokeID        stroke = 0;
+  GlimsFilterID        filter = 0;
+  GlimsPixelBuffer     copied = { 0 };
+  GlimsTextSettings    text_settings = { .struct_size = sizeof text_settings, .size = 14,
+                                         .color = { 0, 0, 0, 1 }, .justify = GLIMS_JUSTIFY_LEFT,
+                                         .antialias = true };
+  GlimsSubpath         square = { .count = 4, .closed = true };
+  GlimsPathPoint       corners[4] = { corner (10, 10), corner (60, 10),
+                                      corner (60, 50), corner (10, 50) };
+  uint8_t              custom_src[4 * 4];
+  uint8_t              ramp[8 * 8 * 4], translucent[8 * 8 * 4];
+  uint8_t              pixel[4];
+  uint8_t             *shot = NULL, *after = NULL, *d_none = NULL, *d_fs = NULL;
+  int32_t              w = 0, h = 0, w2 = 0, h2 = 0, before, i;
+  char                *fonts = NULL, *error = NULL, *newline, png[1024];
+  int                  vectors, links;
+  size_t               none_bytes = 0, fs_bytes = 0;
+
+  vectors = supports_vector_layers ();
+  links   = supports_link_layers ();
+  memset (too_many, 0, sizeof too_many);
+
+  /* ---- Whole-input validation: every refusal leaves pixels, mode and
+   * history alone. */
+  api->image_new (engine, 40, 24, &image, NULL);
+  layer = first_layer (image);
+  gen = indexed_defaults (GLIMS_INDEXED_PALETTE_GENERATED);
+  before = undo_depth (image);
+  bad = gen;
+  bad.struct_size = sizeof bad - 1;
+  CHECK (api->image_convert_indexed (engine, 9999, &gen, NULL, 0, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->image_convert_indexed (engine, image, NULL, NULL, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_convert_indexed (engine, image, &bad, NULL, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "unknown image, missing settings and a short struct are refused");
+  bad = gen;
+  bad.palette = 99;
+  CHECK (api->image_convert_indexed (engine, image, &bad, NULL, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown palette mode is refused");
+  bad = gen;
+  bad.dither = 0;
+  CHECK (api->image_convert_indexed (engine, image, &bad, NULL, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown dither mode is refused");
+  bad = gen;
+  bad.preservation = 7;
+  CHECK (api->image_convert_indexed (engine, image, &bad, NULL, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown preservation policy is refused");
+  bad = gen;
+  bad.max_colors = 1;
+  CHECK (api->image_convert_indexed (engine, image, &bad, NULL, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "max_colors below 2 is refused");
+  bad = gen;
+  bad.max_colors = 257;
+  CHECK (api->image_convert_indexed (engine, image, &bad, NULL, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "max_colors above 256 is refused");
+
+  s = indexed_defaults (GLIMS_INDEXED_PALETTE_CUSTOM);
+  CHECK (api->image_convert_indexed (engine, image, &s, NULL, 2, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_convert_indexed (engine, image, &s, red_blue, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_convert_indexed (engine, image, &s, too_many, 257, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "CUSTOM refuses missing, empty and over-256 color lists");
+  {
+    GlimsColor bad_color[1] = { { NAN, 0, 0, 1 } };
+    CHECK (api->image_convert_indexed (engine, image, &s, bad_color, 1, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+           "CUSTOM refuses a non-finite color");
+    bad_color[0] = (GlimsColor) { 1.2, 0, 0, 1 };
+    CHECK (api->image_convert_indexed (engine, image, &s, bad_color, 1, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+           "CUSTOM refuses an out-of-range color");
+    bad_color[0] = (GlimsColor) { 1, 0, 0, 0.5 };
+    CHECK (api->image_convert_indexed (engine, image, &s, bad_color, 1, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+           "CUSTOM refuses a non-opaque color");
+  }
+  CHECK (undo_depth (image) == before &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.mode == GLIMS_COLOR_MODE_RGB,
+         "every refusal left pixels, mode and history alone");
+
+  /* ---- GENERATED on a two-color image: quantized pixels, one undo
+   * step, undo/redo restores exact pixels and mode. */
+  CHECK (api->fill (engine, image, (GlimsPoint) { 0, 0 }, &red, NULL) == GLIMS_STATUS_OK &&
+         api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 20, 0 }, { 40, 24 } }, 2, NULL) == GLIMS_STATUS_OK &&
+         api->fill (engine, image, (GlimsPoint) { 30, 12 }, &blue, NULL) == GLIMS_STATUS_OK &&
+         api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL) == GLIMS_STATUS_OK,
+         "the red/blue fixture paints");
+  shot = render_all (image, &w, &h);
+  before = undo_depth (image);
+  CHECK (api->image_convert_indexed (engine, image, &gen, NULL, 0, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.mode == GLIMS_COLOR_MODE_INDEXED &&
+         info.component == GLIMS_COLOR_COMPONENT_U8 && info.trc == GLIMS_COLOR_TRC_NONLINEAR,
+         "generated conversion is one undo step to indexed u8 non-linear");
+  render_pixel (image, 10, 12, pixel);
+  CHECK (pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 255,
+         "the generated palette keeps the exact red (%d,%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2], pixel[3]);
+  render_pixel (image, 30, 12, pixel);
+  CHECK (pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 204 && pixel[3] == 255,
+         "and the exact blue (%d,%d,%d,%d)", pixel[0], pixel[1], pixel[2], pixel[3]);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.mode == GLIMS_COLOR_MODE_RGB,
+         "undo restores the RGB mode");
+  after = render_all (image, &w2, &h2);
+  CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
+         "undo restores the exact pre-conversion pixels");
+  free (shot);
+  free (after);
+  shot = after = NULL;
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.mode == GLIMS_COLOR_MODE_INDEXED,
+         "redo converts to indexed again");
+
+  /* Already indexed is a no-op after validation: no undo, no change. */
+  before = undo_depth (image);
+  CHECK (api->image_convert_indexed (engine, image, &gen, NULL, 0, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.mode == GLIMS_COLOR_MODE_INDEXED,
+         "converting an already indexed image is a history-free no-op");
+  CHECK (api->image_convert_indexed (engine, image, &s, red_blue, 2, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "the no-op still runs full settings validation first");
+
+  /* ---- WEB and MONO on the same image after undo. A non-web color
+   * (230,77,26) quantizes to web steps (multiples of 51); a light gray
+   * becomes white under MONO. */
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->fill (engine, image, (GlimsPoint) { 0, 0 },
+                    &(GlimsFillSettings) { .struct_size = sizeof (GlimsFillSettings),
+                                           .mode = GLIMS_FILL_SELECTION,
+                                           .color = { 0.9, 0.3, 0.1, 1 }, .opacity = 1 },
+                    NULL) == GLIMS_STATUS_OK,
+         "back to RGB with a non-web color");
+  s = indexed_defaults (GLIMS_INDEXED_PALETTE_WEB);
+  CHECK (api->image_convert_indexed (engine, image, &s, NULL, 0, NULL) == GLIMS_STATUS_OK,
+         "web conversion succeeds");
+  render_pixel (image, 10, 12, pixel);
+  CHECK (pixel[0] % 51 == 0 && pixel[1] % 51 == 0 && pixel[2] % 51 == 0 && pixel[3] == 255,
+         "the web palette quantizes to 6x6x6 steps (%d,%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2], pixel[3]);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->fill (engine, image, (GlimsPoint) { 0, 0 },
+                    &(GlimsFillSettings) { .struct_size = sizeof (GlimsFillSettings),
+                                           .mode = GLIMS_FILL_SELECTION,
+                                           .color = { 0.75, 0.75, 0.75, 1 }, .opacity = 1 },
+                    NULL) == GLIMS_STATUS_OK,
+         "back to RGB with a light gray");
+  s = indexed_defaults (GLIMS_INDEXED_PALETTE_MONO);
+  CHECK (api->image_convert_indexed (engine, image, &s, NULL, 0, NULL) == GLIMS_STATUS_OK,
+         "mono conversion succeeds");
+  render_pixel (image, 10, 12, pixel);
+  CHECK (pixel[0] == 255 && pixel[1] == 255 && pixel[2] == 255 && pixel[3] == 255,
+         "the mono palette renders the light gray white (%d,%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2], pixel[3]);
+  api->image_close (engine, image);
+  image = 0;
+
+  /* ---- CUSTOM: a known two-color palette pins the exact rendered and
+   * copied colors of an image built from pixels. */
+  memcpy (custom_src,
+          ((uint8_t[]) { 240, 30, 20, 255, 200, 60, 0, 255,
+                        20, 30, 240, 255, 0, 60, 200, 255 }), sizeof custom_src);
+  CHECK (api->image_from_pixels (engine, 4, 1, custom_src, sizeof custom_src, &src, NULL) == GLIMS_STATUS_OK,
+         "the custom-palette source image exists");
+  s = indexed_defaults (GLIMS_INDEXED_PALETTE_CUSTOM);
+  before = undo_depth (src);
+  CHECK (api->image_convert_indexed (engine, src, &s, red_blue, 2, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (src) == before + 1,
+         "custom conversion is one undo step");
+  CHECK (api->image_copy_pixels (engine, src, false, &copied, NULL) == GLIMS_STATUS_OK &&
+         copied.byte_count == sizeof custom_src &&
+         memcmp (copied.pixels,
+                 ((uint8_t[]) { 255, 0, 0, 255, 255, 0, 0, 255,
+                               0, 0, 255, 255, 0, 0, 255, 255 }),
+                 sizeof custom_src) == 0,
+         "the two-color palette pins exact copied colors");
+  api->free_pixels (copied.pixels);
+  memset (&copied, 0, sizeof copied);
+  render_pixel (src, 0, 0, pixel);
+  CHECK (pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0 &&
+         (render_pixel (src, 3, 0, pixel), pixel[2] == 255 && pixel[0] == 0),
+         "the rendered colors agree with the copy");
+  CHECK (api->image_undo (engine, src) == GLIMS_STATUS_OK &&
+         api->image_copy_pixels (engine, src, false, &copied, NULL) == GLIMS_STATUS_OK &&
+         copied.byte_count == sizeof custom_src &&
+         memcmp (copied.pixels, custom_src, sizeof custom_src) == 0 &&
+         api->image_color_info (engine, src, &info) == GLIMS_STATUS_OK &&
+         info.mode == GLIMS_COLOR_MODE_RGB,
+         "undo restores the exact source pixels and RGB mode");
+  api->free_pixels (copied.pixels);
+  memset (&copied, 0, sizeof copied);
+  CHECK (api->image_redo (engine, src) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, src, &info) == GLIMS_STATUS_OK &&
+         info.mode == GLIMS_COLOR_MODE_INDEXED,
+         "redo converts again");
+
+  /* remove_unused is accepted for CUSTOM (an unused third color) and
+   * WEB; the native pass skips it for the other modes. */
+  CHECK (api->image_undo (engine, src) == GLIMS_STATUS_OK,
+         "back to RGB for the unused-entry check");
+  s = indexed_defaults (GLIMS_INDEXED_PALETTE_CUSTOM);
+  CHECK (api->image_convert_indexed (engine, src, &s, three, 3, NULL) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, src, &info) == GLIMS_STATUS_OK &&
+         info.mode == GLIMS_COLOR_MODE_INDEXED,
+         "CUSTOM with remove_unused on a partly unused palette converts");
+  api->image_close (engine, src);
+  src = 0;
+
+  /* ---- Dither and alpha options on a red-blue ramp: NONE maps every
+   * pixel to a pure palette color, FS mixes them spatially. */
+  for (i = 0; i < 8 * 8; i++)
+    {
+      int x = i % 8;
+      ramp[4 * i]     = (uint8_t) (255 * (7 - x) / 7);
+      ramp[4 * i + 1] = 0;
+      ramp[4 * i + 2] = (uint8_t) (255 * x / 7);
+      ramp[4 * i + 3] = 255;
+      translucent[4 * i]     = ramp[4 * i];
+      translucent[4 * i + 1] = 0;
+      translucent[4 * i + 2] = ramp[4 * i + 2];
+      translucent[4 * i + 3] = (uint8_t) (x < 4 ? 128 : 255);
+    }
+  CHECK (api->image_from_pixels (engine, 8, 8, ramp, sizeof ramp, &src, NULL) == GLIMS_STATUS_OK &&
+         api->image_from_pixels (engine, 8, 8, ramp, sizeof ramp, &dup, NULL) == GLIMS_STATUS_OK,
+         "the dither ramp sources exist");
+  s = indexed_defaults (GLIMS_INDEXED_PALETTE_CUSTOM);
+  CHECK (api->image_convert_indexed (engine, src, &s, red_blue, 2, NULL) == GLIMS_STATUS_OK,
+         "no-dither custom conversion succeeds");
+  s.dither = GLIMS_INDEXED_DITHER_FS;
+  CHECK (api->image_convert_indexed (engine, dup, &s, red_blue, 2, NULL) == GLIMS_STATUS_OK,
+         "Floyd-Steinberg custom conversion succeeds");
+  CHECK (api->image_copy_pixels (engine, src, false, &copied, NULL) == GLIMS_STATUS_OK,
+         "the no-dither result copies");
+  none_bytes = copied.byte_count;
+  if (copied.pixels && none_bytes == sizeof ramp)
+    {
+      d_none = malloc (none_bytes);
+      if (d_none) memcpy (d_none, copied.pixels, none_bytes);
+    }
+  api->free_pixels (copied.pixels);
+  memset (&copied, 0, sizeof copied);
+  CHECK (api->image_copy_pixels (engine, dup, false, &copied, NULL) == GLIMS_STATUS_OK,
+         "the dithered result copies");
+  fs_bytes = copied.byte_count;
+  if (copied.pixels && fs_bytes == sizeof ramp)
+    {
+      d_fs = malloc (fs_bytes);
+      if (d_fs) memcpy (d_fs, copied.pixels, fs_bytes);
+    }
+  api->free_pixels (copied.pixels);
+  memset (&copied, 0, sizeof copied);
+  CHECK (d_none && d_fs && none_bytes == sizeof ramp && fs_bytes == none_bytes &&
+         memcmp (d_none, d_fs, none_bytes) != 0,
+         "Floyd-Steinberg dithers differently from no dithering");
+  free (d_none);
+  free (d_fs);
+  api->image_close (engine, src);
+  api->image_close (engine, dup);
+  src = dup = 0;
+
+  /* FS_LOW_BLEED and FIXED run; dither_alpha is exercised on a
+   * translucent ramp. */
+  CHECK (api->image_from_pixels (engine, 8, 8, ramp, sizeof ramp, &src, NULL) == GLIMS_STATUS_OK &&
+         api->image_from_pixels (engine, 8, 8, translucent, sizeof translucent, &alpha_img, NULL) == GLIMS_STATUS_OK,
+         "the dither-variant sources exist");
+  s = indexed_defaults (GLIMS_INDEXED_PALETTE_GENERATED);
+  s.dither = GLIMS_INDEXED_DITHER_FS_LOW_BLEED;
+  CHECK (api->image_convert_indexed (engine, src, &s, NULL, 0, NULL) == GLIMS_STATUS_OK,
+         "low-bleed Floyd-Steinberg conversion succeeds");
+  CHECK (api->image_undo (engine, src) == GLIMS_STATUS_OK, "undo");
+  s.dither = GLIMS_INDEXED_DITHER_FIXED;
+  CHECK (api->image_convert_indexed (engine, src, &s, NULL, 0, NULL) == GLIMS_STATUS_OK,
+         "fixed-matrix dither conversion succeeds");
+  s = indexed_defaults (GLIMS_INDEXED_PALETTE_CUSTOM);
+  s.dither = GLIMS_INDEXED_DITHER_FS;
+  s.dither_alpha = true;
+  CHECK (api->image_convert_indexed (engine, alpha_img, &s, red_blue, 2, NULL) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, alpha_img, &info) == GLIMS_STATUS_OK &&
+         info.mode == GLIMS_COLOR_MODE_INDEXED,
+         "dither-alpha custom conversion succeeds on a translucent image");
+  api->image_close (engine, src);
+  api->image_close (engine, alpha_img);
+  src = alpha_img = 0;
+
+  /* ---- Refusals that must not change pixels or history: unsupported
+   * precision and a non-flat layer stack. */
+  api->image_new (engine, 40, 24, &image, NULL);
+  layer = first_layer (image);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &red, NULL);
+  CHECK (api->image_convert_precision (engine, image, GLIMS_COLOR_COMPONENT_U16,
+                                       GLIMS_COLOR_TRC_NONLINEAR, NULL) == GLIMS_STATUS_OK,
+         "a u16 image exists for the precision refusal");
+  before = undo_depth (image);
+  CHECK (api->image_convert_indexed (engine, image, &gen, NULL, 0, NULL) == GLIMS_STATUS_UNSUPPORTED &&
+         undo_depth (image) == before &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.mode == GLIMS_COLOR_MODE_RGB && info.component == GLIMS_COLOR_COMPONENT_U16,
+         "non-u8-non-linear precision is UNSUPPORTED with no mutation");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK, "back to u8");
+  CHECK (api->create_group (engine, image, 0, 0, "Group", &group, NULL) == GLIMS_STATUS_OK &&
+         api->reparent_layer (engine, image, layer, group, 0, NULL) == GLIMS_STATUS_OK,
+         "the layer sits inside a group");
+  before = undo_depth (image);
+  CHECK (api->image_convert_indexed (engine, image, &gen, NULL, 0, &error) == GLIMS_STATUS_UNSUPPORTED &&
+         error && undo_depth (image) == before &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.mode == GLIMS_COLOR_MODE_RGB,
+         "a layer stack containing a group is UNSUPPORTED with no mutation (%s)",
+         error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->reparent_layer (engine, image, layer, 0, 0, NULL) == GLIMS_STATUS_OK &&
+         api->layer_command (engine, image, group, GLIMS_LAYER_DELETE, NULL, NULL) == GLIMS_STATUS_OK,
+         "the stack is flat again");
+
+  /* BUSY while a stroke or a filter session holds the image. */
+  before = undo_depth (image);
+  if (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK)
+    {
+      CHECK (api->image_convert_indexed (engine, image, &gen, NULL, 0, NULL) == GLIMS_STATUS_BUSY &&
+             undo_depth (image) == before,
+             "conversion is BUSY during a stroke");
+      api->stroke_end (engine, stroke);
+    }
+  else
+    CHECK (0, "the stroke for the busy check began");
+  before = undo_depth (image); /* ending the stroke above commits its own undo */
+  if (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK)
+    {
+      CHECK (api->image_convert_indexed (engine, image, &gen, NULL, 0, NULL) == GLIMS_STATUS_BUSY &&
+             undo_depth (image) == before,
+             "conversion is BUSY during a filter preview");
+      api->filter_abort (engine, filter);
+    }
+  else
+    CHECK (0, "the filter session for the busy check opened");
+  api->image_close (engine, image);
+  image = 0;
+
+  /* ---- The editable-layer policy on a genuine text layer. */
+  CHECK (api->fonts (engine, &fonts) == GLIMS_STATUS_OK && fonts && *fonts,
+         "the engine lists fonts for the text policy checks");
+  if (fonts && *fonts)
+    {
+      if (strstr (fonts, "Sans-serif\n") == fonts || strstr (fonts, "\nSans-serif\n"))
+        strcpy (text_settings.font, "Sans-serif");
+      else
+        {
+          newline = strchr (fonts, '\n');
+          snprintf (text_settings.font, sizeof text_settings.font, "%.*s",
+                    (int) (newline ? newline - fonts : (ptrdiff_t) strlen (fonts)), fonts);
+        }
+
+      api->image_new (engine, 120, 80, &image, NULL);
+      layer = first_layer (image);
+      api->fill (engine, image, (GlimsPoint) { 0, 0 }, &red, NULL);
+      CHECK (api->text_layer_new (engine, image, "Idx", &text_settings, (GlimsPoint) { 10, 10 },
+                                  &text, NULL) == GLIMS_STATUS_OK && text != 0,
+             "the genuine text layer exists");
+
+      /* dither_text off keeps the text editable under both policies. */
+      s = indexed_defaults (GLIMS_INDEXED_PALETTE_GENERATED);
+      memset (&srcinfo, 0, sizeof srcinfo);
+      srcinfo.struct_size = sizeof srcinfo;
+      before = undo_depth (image);
+      CHECK (api->image_convert_indexed (engine, image, &s, NULL, 0, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (image) == before + 1 &&
+             api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+             info.mode == GLIMS_COLOR_MODE_INDEXED &&
+             api->layer_source_info (engine, image, text, &srcinfo, NULL) == GLIMS_STATUS_OK &&
+             srcinfo.source_kind == GLIMS_LAYER_TEXT && ! srcinfo.is_rasterized && srcinfo.has_source,
+             "dither_text off converts and keeps the text editable");
+      CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+             api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+             info.mode == GLIMS_COLOR_MODE_RGB &&
+             api->layer_source_info (engine, image, text, &srcinfo, NULL) == GLIMS_STATUS_OK &&
+             srcinfo.source_kind == GLIMS_LAYER_TEXT && ! srcinfo.is_rasterized,
+             "undo restores RGB and the editable text layer");
+
+      /* dither_text on: preserve refuses actionably before mutating. */
+      s.dither_text = true;
+      before = undo_depth (image);
+      CHECK (api->image_convert_indexed (engine, image, &s, NULL, 0, &error) ==
+               GLIMS_STATUS_REQUIRES_RASTERIZE && error &&
+             undo_depth (image) == before &&
+             api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+             info.mode == GLIMS_COLOR_MODE_RGB &&
+             api->layer_source_info (engine, image, text, &srcinfo, NULL) == GLIMS_STATUS_OK &&
+             ! srcinfo.is_rasterized,
+             "preserve refuses dithering editable text before any mutation (%s)",
+             error ? error : "");
+      api->free_string (error);
+      error = NULL;
+
+      /* Explicit consent rasterizes it inside the same single undo
+       * step; the source stays and undo restores the editable kind. */
+      s.preservation = GLIMS_INDEXED_ALLOW_RASTERIZE;
+      CHECK (api->image_convert_indexed (engine, image, &s, NULL, 0, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (image) == before + 1 &&
+             api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+             info.mode == GLIMS_COLOR_MODE_INDEXED &&
+             api->layer_source_info (engine, image, text, &srcinfo, NULL) == GLIMS_STATUS_OK &&
+             srcinfo.source_kind == GLIMS_LAYER_TEXT && srcinfo.is_rasterized && srcinfo.has_source,
+             "consented conversion rasterizes the text in one undo, source retained");
+      CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+             api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+             info.mode == GLIMS_COLOR_MODE_RGB &&
+             api->layer_source_info (engine, image, text, &srcinfo, NULL) == GLIMS_STATUS_OK &&
+             srcinfo.source_kind == GLIMS_LAYER_TEXT && ! srcinfo.is_rasterized && srcinfo.has_source,
+             "undo restores RGB and the editable text kind");
+      CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+             api->layer_source_info (engine, image, text, &srcinfo, NULL) == GLIMS_STATUS_OK &&
+             srcinfo.is_rasterized,
+             "redo rasterizes it again");
+      CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK, "undo for the next checks");
+      api->image_close (engine, image);
+      image = 0;
+    }
+  api->free_string (fonts);
+  fonts = NULL;
+
+  /* ---- Genuine vector and link layers (GIMP 3.2+): the quantize path
+   * rasterizes them under either dither_text choice, so preserve
+   * always refuses. */
+  if (vectors && links)
+    {
+      api->image_new (engine, 120, 80, &image, NULL);
+      layer = first_layer (image);
+      api->fill (engine, image, (GlimsPoint) { 0, 0 }, &red, NULL);
+      snprintf (png, sizeof png, "%s/indexed-link.png", work);
+      CHECK (api->image_export (engine, image, png, NULL) == GLIMS_STATUS_OK,
+             "a link source file exists");
+      CHECK (api->path_set (engine, image, 0, "Shape", &square, 1, corners, 4, &path, NULL) == GLIMS_STATUS_OK &&
+             api->path_to_vector_layer (engine, image, path, "Vector", &vector, NULL) == GLIMS_STATUS_OK &&
+             api->image_place_link (engine, image, png, &link, NULL) == GLIMS_STATUS_OK &&
+             vector != 0 && link != 0,
+             "the genuine vector and link layers exist");
+      memset (&srcinfo, 0, sizeof srcinfo);
+      srcinfo.struct_size = sizeof srcinfo;
+
+      s = indexed_defaults (GLIMS_INDEXED_PALETTE_GENERATED);
+      before = undo_depth (image);
+      CHECK (api->image_convert_indexed (engine, image, &s, NULL, 0, &error) ==
+               GLIMS_STATUS_REQUIRES_RASTERIZE && error &&
+             undo_depth (image) == before &&
+             api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+             info.mode == GLIMS_COLOR_MODE_RGB,
+             "preserve refuses editable vector/link even with dither_text off (%s)",
+             error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (api->layer_source_info (engine, image, vector, &srcinfo, NULL) == GLIMS_STATUS_OK &&
+             srcinfo.source_kind == GLIMS_LAYER_VECTOR && ! srcinfo.is_rasterized &&
+             api->layer_source_info (engine, image, link, &srcinfo, NULL) == GLIMS_STATUS_OK &&
+             srcinfo.source_kind == GLIMS_LAYER_LINK && ! srcinfo.is_rasterized,
+             "the refusal left both layers editable");
+
+      s.preservation = GLIMS_INDEXED_ALLOW_RASTERIZE;
+      CHECK (api->image_convert_indexed (engine, image, &s, NULL, 0, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (image) == before + 1 &&
+             api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+             info.mode == GLIMS_COLOR_MODE_INDEXED &&
+             api->layer_source_info (engine, image, vector, &srcinfo, NULL) == GLIMS_STATUS_OK &&
+             srcinfo.source_kind == GLIMS_LAYER_VECTOR && srcinfo.is_rasterized && srcinfo.has_source &&
+             api->layer_source_info (engine, image, link, &srcinfo, NULL) == GLIMS_STATUS_OK &&
+             srcinfo.source_kind == GLIMS_LAYER_LINK && srcinfo.is_rasterized && srcinfo.has_source,
+             "consented conversion rasterizes vector and link in one undo, sources retained");
+      CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+             api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+             info.mode == GLIMS_COLOR_MODE_RGB &&
+             api->layer_source_info (engine, image, vector, &srcinfo, NULL) == GLIMS_STATUS_OK &&
+             srcinfo.source_kind == GLIMS_LAYER_VECTOR && ! srcinfo.is_rasterized &&
+             api->layer_source_info (engine, image, link, &srcinfo, NULL) == GLIMS_STATUS_OK &&
+             srcinfo.source_kind == GLIMS_LAYER_LINK && ! srcinfo.is_rasterized,
+             "undo restores RGB and the editable vector and link kinds");
+      api->image_close (engine, image);
+      image = 0;
+    }
+
+  if (image)
+    api->image_close (engine, image);
+  if (src)
+    api->image_close (engine, src);
+  if (dup)
+    api->image_close (engine, dup);
+  if (alpha_img)
+    api->image_close (engine, alpha_img);
+}
+
 /* Independent analytic oracle for the linear-TRC fixture made with sRGB
  * primaries in scripts/make-icc-fixtures.py. Do not derive expected values
  * from a second babl/GIMP rendering path. */
@@ -10106,6 +10630,7 @@ main (int argc, char **argv)
   test_filter_edit_history_gate ();
   test_filter_edit (argv[2]);
   test_color_state (argv[3], argv[2]);
+  test_indexed_conversion (argv[2]);
   test_color_profiles (argv[3], argv[2]);
   test_render_profile_colors (argv[3]);
   test_profile_preserves_editable_layers (argv[3]);
