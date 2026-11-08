@@ -88,6 +88,19 @@ final class PixelRulerTests: XCTestCase {
         XCTAssertEqual(majors, [150, 200, 250, 300, 350, 400])
     }
 
+    func testLargeScrolledCoordinatesKeepMinorTicksUnlabeled() {
+        for (scale, expected) in [
+            (16.0, [1_000_000.0, 1_000_005, 1_000_010]),
+            (32.0, [1_000_000.0, 1_000_002, 1_000_004, 1_000_006, 1_000_008, 1_000_010])
+        ] {
+            let plan = PixelRulerPlan.plan(visibleStart: 1_000_000, visibleEnd: 1_000_010,
+                                          pointsPerPixel: scale, imageExtent: 2_000_000)!
+            XCTAssertEqual(plan.ticks.filter(\.isMajor).map(\.imagePosition), expected)
+            XCTAssertEqual(plan.ticks.compactMap(\.label), expected.map { String(Int($0)) })
+            XCTAssertTrue(plan.ticks.contains { !$0.isMajor && $0.label == nil })
+        }
+    }
+
     func testOriginTickSitsAtImageZeroWhenVisible() {
         let plan = PixelRulerPlan.plan(visibleStart: -20, visibleEnd: 80,
                                        pointsPerPixel: 2, imageExtent: 500)

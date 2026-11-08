@@ -90,8 +90,11 @@ enum PixelRulerPlan {
         while index <= last && ticks.count < maximumTicks {
             let position = index * tickSpacing
             guard position.isFinite else { break }
-            let majorIndex = position / major
-            let isMajor = abs(majorIndex - majorIndex.rounded()) <= 1e-6 * max(1, abs(majorIndex))
+            // Tick indices are integral, with one major per subdivision
+            // group. A position-relative epsilon would grow large enough
+            // to classify ordinary minors as majors on large images.
+            let isMajor = minor == nil
+                || index.truncatingRemainder(dividingBy: Double(minorSubdivisions)) == 0
             ticks.append(Tick(imagePosition: position, isMajor: isMajor))
             let next = index + 1
             // Beyond 2^53 a Double no longer advances by one; stop instead
