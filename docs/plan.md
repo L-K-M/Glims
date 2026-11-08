@@ -948,32 +948,49 @@ change: the slice is Swift-only over the existing append-only facade
   fails explicitly (native queued tests passed) instead of painting with a
   different brush.
 - `Sources/GlimsKit/Tools/BrushChooserModel.swift`: the pure model. It
-  captures the `ToolID` at open, holds the bounded catalog (at most 512
-  rows), the 32 px thumbnails, the in-memory case-insensitive search, the
-  selection (none / native Default / a row), the missing-identity marker
-  and a generation counter that closing bumps so late native results are
+  captures the `ToolID` at open, holds the FULL catalog (every engine
+  brush — no 512-row cap), the lazily rendered 32 px thumbnails, the
+  in-memory case-insensitive search over the whole catalog, the selection
+  (none / native Default / a row), the missing-identity marker and a
+  generation counter that closing bumps so late native results are
   dropped. `pendingIdentity()` maps the selection to the identity to
-  commit; applying writes only the captured tool, so switching tools while
-  the chooser is open never retargets the selection, and cancel applies
-  nothing, preserving the previous choice.
+  commit; a selected row absent from the loaded rows falls back to the
+  unchanged current identity, so filtering, partial rows or an unlisted
+  current choice never reset the preference to Default. Applying writes
+  only the captured tool, so switching tools while the chooser is open
+  never retargets the selection, and cancel applies nothing, preserving
+  the previous choice. The current identity is marked missing ONLY when
+  native resolution returns NOT_FOUND; any other resolution error is kept
+  distinctly in `resolutionError`, and an engine-resolved identity outside
+  the loaded rows stays valid.
+- `Sources/GlimsKit/Tools/BrushThumbnailQueue.swift`: the pure lazy
+  thumbnail pipeline. Rows are requested as they appear (the resolved
+  current brush first), native batches are bounded to 32, never overlap,
+  and succeeded/failed attempts are cached for the generation so a single
+  bad thumbnail shows a placeholder and is never retried. Refused batches
+  (gate busy) are requeued and re-pumped once when idle; `invalidate()`
+  drops everything on close and stale generations are rejected.
 - `Sources/GlimsKit/Tools/BrushChooserPanel.swift`: `BrushChooser.shared`
   owns the one open panel (closed on shutdown from
   `applicationWillTerminate`, on palette dismiss, and on retarget to a
   different/closing document). The panel is an owned NSPanel with a search
   field, a one-column list of native 32 px thumbnails and names (row 0 is
   the native Default), a status line for the loading / engine-busy / error
-  / empty states with a Retry, and Choose (Return) / Cancel (Escape).
-  Loading runs OFF the main thread in ONE bounded batch through
-  `EngineActivity.perform`/`whenIdle` (the global exclusive gate):
-  `resources(.brush)` capped at 512, then per row `resourceIdentifiers`
-  and `resourceThumbnail(maxSize: 32, foreground:background:)` with the
-  FG/BG captured from `ToolState` at open — `resourceThumbnail` is a
-  synchronous RPC and is never called on main; only `ResourceThumbnail.image`
-  is displayed, and no shared global context is mutated. If the gate is
-  busy the panel shows the busy state and retries once when idle, then an
-  error with a manual Retry. Delivery checks the generation and that the
-  document is still alive, so document/parent closing or picker closing
-  invalidates stale results.
+  / empty states with a Retry, and Choose (Return) / Cancel (Escape). The
+  catalog load runs OFF the main thread through
+  `EngineActivity.perform`/`whenIdle` (the global exclusive gate) and
+  reads EVERY brush's name and persistent identity — no thumbnails in
+  that batch. Thumbnails render lazily in bounded batches of 32 through
+  the same gate (`resourceThumbnail` is a synchronous RPC and is never
+  called on main), recolored with the FG/BG captured from `ToolState` at
+  open; only `ResourceThumbnail.image` is displayed, and no shared global
+  context is mutated. If the gate is busy the panel shows the busy state
+  and retries once when idle, then an error with a manual Retry; delivery
+  checks the generation and that the document is still alive, so
+  document/parent closing or picker closing invalidates stale results.
+  The status line reports the full catalog count and the current search
+  result count ("N of M brushes"), plus the missing / resolution-error
+  marker when one applies.
 - `Sources/GlimsKit/Tools/ToolPalettes.swift`
   (`ToolOptionsPaletteController`): the no-op `retarget` now retains a
   weak document as the chooser's session/loading source; paint tools get a
@@ -984,8 +1001,12 @@ change: the slice is Swift-only over the existing append-only facade
 - Tests: `Tests/GlimsKitTests/BrushChooserTests.swift` covers the
   identity-only encode/restore (raw JSON carries no session handle),
   invalid stored data, the in-memory search, stale-generation delivery,
-  current/missing selection, and captured-tool apply / cancel / restore /
-  reset through a fresh `ToolState`. `EngineSmokeTest` gains
+  current/missing selection, a >512-row catalog searched and selected in
+  full, missing reported only for native NOT_FOUND (other errors
+  distinguished), a resolved current identity outside the loaded rows, the
+  lazy thumbnail queue (dedupe, 32-row batches, no overlap, failure
+  caching, priority, stale generations), and captured-tool apply / cancel
+  / restore / reset through a fresh `ToolState`. `EngineSmokeTest` gains
   `exerciseBrushChooserSelection`: captured tool vs tool switching, the UI
   choice painted through the document queue with undo restoring exact
   pixels, cancel preserving the selection, a missing identity reported

@@ -63,8 +63,11 @@ final class BrushChooser {
 /// and Choose (Return) / Cancel (Escape). Choosing applies the selection to
 /// the captured tool only; Cancel and window closing preserve the previous
 /// selection. All engine reads (catalog, identities, thumbnails) run off
-/// the main thread in ONE bounded batch through the global exclusive gate —
-/// `resourceThumbnail` is a synchronous RPC and is never called on main.
+/// the main thread through the global exclusive gate — `resources`,
+/// `resourceIdentifiers`, `resource_resolve` and `resourceThumbnail` are
+/// synchronous RPCs and are never called on main. The catalog load takes
+/// EVERY brush (names and identities only); thumbnails render lazily in
+/// small bounded batches as rows appear.
 @MainActor
 final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
                                NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
@@ -72,6 +75,10 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
     private weak var sourceDocument: ImageDocument?
     private var isClosed = false
     private var autoRetryScheduled = false
+    /// True while a catalog load is on the engine: no overlapping loads.
+    private var loadInFlight = false
+    /// Guards the single whenIdle re-pump of the thumbnail queue.
+    private var thumbnailPumpScheduled = false
 
     private let searchField = NSSearchField()
     private let table = BrushChooserTableView()
@@ -151,15 +158,16 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
         refresh()
     }
 
-    // MARK: Loading (off the main thread, one bounded batch)
+    // MARK: Loading (off the main thread; full catalog, lazy thumbnails)
 
     @objc func load() {
-        guard !isClosed else { return }
+        guard !isClosed, !loadInFlight else { return }
         guard let session = sourceDocument?.session else {
             model.setLoading(.error("Open a document to load the brush catalog."))
             refresh()
             return
         }
+        loadInFlight = true
         model.setLoading(.loading)
         refresh()
         // Plain values only: the model is main-actor state and must not be
@@ -169,43 +177,49 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
         let background = ToolState.shared.background
         let current = model.currentIdentity
         var outRows: [BrushRow] = []
-        var outThumbnails: [EngineSession.ResourceID: CGImage] = [:]
         var outError: String?
         var resolvedCurrent: EngineSession.ResourceID?
+        var resolutionError: EngineSession.EngineError?
         let accepted = EngineActivity.shared.perform(label: "Loading brushes", work: {
             do {
-                // One bounded batch: names, identities and fresh 32 px
-                // thumbnails (recolored with the captured FG/BG) for at
-                // most maxResources brushes, all on the engine worker.
-                for row in try session.resources(.brush).prefix(BrushChooserModel.maxResources) {
+                // The FULL catalog — every brush, no cap: names, handles
+                // and persistent identities. Thumbnails stay lazy
+                // (pumpThumbnails) so a huge user brush folder never holds
+                // the engine gate for long.
+                for row in try session.resources(.brush) {
                     let identity = try session.resourceIdentifiers(row.id)
                     outRows.append(BrushRow(id: row.id, name: row.displayName, identity: identity))
-                    outThumbnails[row.id] =
-                        try session.resourceThumbnail(row.id, maxSize: 32,
-                                                      foreground: foreground, background: background).image
                 }
                 if let current {
-                    // A missing persisted identity is detected here and
-                    // shown, never silently replaced by the default.
-                    resolvedCurrent = try? session.resolveResource(current, kind: .brush)
+                    do {
+                        resolvedCurrent = try session.resolveResource(current, kind: .brush)
+                    } catch {
+                        // Only NOT_FOUND means the brush is really gone; any
+                        // other failure is reported distinctly, never as
+                        // "missing" (the model checks isNotFound).
+                        resolutionError = EngineSession.EngineError.coerce(error)
+                    }
                 }
             } catch {
                 outError = (error as? EngineSession.EngineError)?.message ?? String(describing: error)
             }
         }, completion: { [weak self] in
-            self?.deliver(generation: generation, rows: outRows, thumbnails: outThumbnails,
-                          resolvedCurrent: resolvedCurrent, error: outError)
+            self?.loadInFlight = false
+            self?.deliver(generation: generation, rows: outRows, resolvedCurrent: resolvedCurrent,
+                          resolutionError: resolutionError, error: outError)
         })
         if !accepted {
             // The exclusive gate is held elsewhere: show the busy state and
             // retry once automatically when the engine frees up; a further
             // refusal becomes an error with a manual Retry.
+            loadInFlight = false
             model.setLoading(.busy)
             refresh()
             if !autoRetryScheduled {
                 autoRetryScheduled = true
                 EngineActivity.shared.whenIdle { [weak self] in
                     guard let self, !self.isClosed, case .busy = self.model.state else { return }
+                    self.autoRetryScheduled = false
                     self.load()
                 }
             }
@@ -213,22 +227,94 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
     }
 
     private func deliver(generation: Int, rows: [BrushRow],
-                         thumbnails: [EngineSession.ResourceID: CGImage],
-                         resolvedCurrent: EngineSession.ResourceID?, error: String?) {
+                         resolvedCurrent: EngineSession.ResourceID?,
+                         resolutionError: EngineSession.EngineError?, error: String?) {
         // Stale delivery: the picker (or its document) closed meanwhile.
         guard !isClosed, generation == model.generation else { return }
         guard let sourceDocument, !sourceDocument.isClosing else {
             dismiss()
             return
         }
-        guard model.deliver(generation: generation, rows: rows, thumbnails: thumbnails,
-                            resolvedCurrent: resolvedCurrent, error: error) else { return }
+        guard model.deliver(generation: generation, rows: rows, thumbnails: [:],
+                            resolvedCurrent: resolvedCurrent, resolutionError: resolutionError,
+                            error: error) else { return }
         BrushChooser.shared.noteMissing(model.capturedTool, model.missingIdentity)
-        if let resolvedCurrent, let cgImage = thumbnails[resolvedCurrent] {
+        // Prime the lazy thumbnail queue: the resolved current brush first
+        // (the Tool Options button shows its preview), then only the
+        // initial visible batch — the rest render as rows scroll into view.
+        if let resolvedCurrent {
+            model.thumbnailQueue.request([resolvedCurrent], priority: true)
+        }
+        model.thumbnailQueue.request(visibleRows.prefix(BrushThumbnailQueue.batchSize).map { $0.id })
+        pumpThumbnails()
+        refresh()
+    }
+
+    // MARK: Lazy thumbnails (bounded native batches, off the main thread)
+
+    /// Starts one bounded native thumbnail batch when the queue has pending
+    /// ids and no batch is in flight. A refused batch (gate busy) is
+    /// requeued and re-pumped once when the engine goes idle.
+    private func pumpThumbnails() {
+        guard !isClosed, case .ready = model.state else { return }
+        let queue = model.thumbnailQueue
+        guard queue.pendingCount > 0, queue.inFlightCount == 0 else { return }
+        let batch = queue.beginBatch()
+        guard !batch.isEmpty, let session = sourceDocument?.session else {
+            queue.requeue(batch)
+            return
+        }
+        let generation = model.generation
+        let foreground = ToolState.shared.foreground
+        let background = ToolState.shared.background
+        var rendered: [EngineSession.ResourceID: CGImage] = [:]
+        var failed: [EngineSession.ResourceID: String] = [:]
+        let accepted = EngineActivity.shared.perform(label: "Rendering brush previews", work: {
+            // One bounded batch; a single bad thumbnail fails only its own
+            // entry and is cached as failed by the queue (never retried).
+            for id in batch {
+                do {
+                    rendered[id] = try session.resourceThumbnail(id, maxSize: 32,
+                                                                  foreground: foreground,
+                                                                  background: background).image
+                } catch {
+                    failed[id] = EngineSession.EngineError.coerce(error).message
+                }
+            }
+        }, completion: { [weak self] in
+            self?.deliverThumbnails(generation: generation, rendered: rendered, failed: failed)
+        })
+        if !accepted {
+            queue.requeue(batch)
+            if !thumbnailPumpScheduled {
+                thumbnailPumpScheduled = true
+                EngineActivity.shared.whenIdle { [weak self] in
+                    guard let self, !self.isClosed else { return }
+                    self.thumbnailPumpScheduled = false
+                    self.pumpThumbnails()
+                }
+            }
+        }
+    }
+
+    private func deliverThumbnails(generation: Int,
+                                   rendered: [EngineSession.ResourceID: CGImage],
+                                   failed: [EngineSession.ResourceID: String]) {
+        // Stale delivery: the picker (or its document) closed meanwhile.
+        guard !isClosed, generation == model.generation else { return }
+        guard let sourceDocument, !sourceDocument.isClosing else {
+            dismiss()
+            return
+        }
+        guard model.deliverThumbnails(generation: generation, rendered: rendered, failed: failed) else { return }
+        if let resolved = model.resolvedCurrentID, let cgImage = rendered[resolved] {
             BrushChooser.shared.noteChoiceThumbnail(model.capturedTool,
                                                     NSImage(cgImage: cgImage, size: NSSize(width: 32, height: 32)))
         }
-        refresh()
+        // Rows without a preview yet stay placeholders; reloading re-enters
+        // viewFor, which re-requests them (deduplicated by the queue).
+        table.reloadData()
+        pumpThumbnails()
     }
 
     // MARK: Display
@@ -263,9 +349,24 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
             statusLabel.stringValue = message
             retryButton.isHidden = false
         case .ready:
-            statusLabel.stringValue = model.rows.isEmpty
-                ? "No brushes found in the engine's catalog."
-                : "\(model.rows.count) brushes"
+            // The status reflects the FULL catalog and the current search
+            // results — never a misleading "missing" for a valid choice.
+            let total = model.rows.count
+            let shown = visibleRows.count
+            var text: String
+            if total == 0 {
+                text = "No brushes found in the engine's catalog."
+            } else if shown != total {
+                text = "\(shown) of \(total) brushes"
+            } else {
+                text = "\(total) brushes"
+            }
+            if let missing = model.missingIdentity {
+                text += " (current brush \"\(missing.name)\" is missing)"
+            } else if let failure = model.resolutionError {
+                text += " (could not verify the current brush: \(failure))"
+            }
+            statusLabel.stringValue = text
             retryButton.isHidden = true
         }
     }
@@ -292,7 +393,11 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
             if let cgImage = model.thumbnail(item.id) {
                 cell.imageView?.image = NSImage(cgImage: cgImage, size: NSSize(width: 32, height: 32))
             } else {
+                // No preview yet: a placeholder until the lazy queue renders
+                // this row in a bounded native batch.
                 cell.imageView?.image = nil
+                model.thumbnailQueue.request([item.id])
+                pumpThumbnails()
             }
         }
         return cell

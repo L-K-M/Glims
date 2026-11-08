@@ -21,6 +21,20 @@ final class EngineSession: @unchecked Sendable {
 
         var description: String { message }
         var errorDescription: String? { message }
+
+        /// True only when the engine itself reported NOT_FOUND: the named
+        /// image, layer, resource or session does not exist. Any other
+        /// failure (busy, locked, engine error, ...) must not be read as
+        /// "missing".
+        var isNotFound: Bool { status == Int32(GLIMS_STATUS_NOT_FOUND.rawValue) }
+
+        /// Any thrown error as an `EngineError`, wrapping non-facade errors
+        /// so callers can classify results (NOT_FOUND vs other) uniformly.
+        static func coerce(_ error: Error) -> EngineError {
+            if let engineError = error as? EngineError { return engineError }
+            return EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                               message: String(describing: error))
+        }
     }
 
     enum Event: Equatable {
