@@ -729,6 +729,34 @@ review found no important issues. Swift build and unit integration are
 recorded in the PR; thumbnails, resource selection and application,
 settings, management and chooser UI remain later slices.
 
+### Swift resource wrappers (2026-11-08)
+
+Session side of the same slice, on `feat/resource-session`: three typed
+`EngineSession` wrappers over the three facade slots
+(`resources(_:)`, `resourceIdentifiers(_:)`,
+`resolveResource(_:kind:)`) with facade-owned `ResourceKind`
+(brush/pattern/gradient, UInt32 tags 1/2/3, unknown engine row kinds
+rejected), `ResourceID` (`UInt64`, the full range so no handle
+truncates lossily), `Resource` and a Codable/Equatable
+`ResourceIdentity` whose `collection` keeps NULL (nil) distinct from
+an empty string through persisted JSON. A short resource buffer is
+retried at the reported count, and the owned identity strings are
+freed on every path, error paths included; errors go through the
+existing `check`/`free_string` handling. Returned ids are local to the
+running engine session: persisted selections store identities, never
+ids, and nothing enumerates the catalog eagerly on the main thread or
+at startup. The `--engine-smoke-test` gains a bounded catalog scenario
+after the existing checks: counts and rows for all three kinds, one
+identity/resolve round trip per kind, a wrong identity and a high-bit
+handle; `ResourceIdentityTests` covers the persisted nil-versus-empty
+distinction and the kind tags. Root validation passes 308 unit tests and
+696 interface checks on 3.2.8/3.2.0/master, 685 on 3.0.8. The two
+embedded-NUL identity checks first failed because CString truncation
+resolved another identity. The wrapper now rejects the text before C.
+After merging Fill, the source-discovered pinned engine passes 708
+interface checks and all 308 unit tests. Independent Mistral Large 4
+review found no important issue. Preview and chooser UI remain separate.
+
 ## Later, before any public release
 
 - Developer ID signing and notarization for the app, GTK3, Python and every
