@@ -7,25 +7,35 @@ final class PreferencesWindowController: NSWindowController {
     let appearancePicker = NSPopUpButton()
     let surroundPicker = NSPopUpButton()
     let initialViewPicker = NSPopUpButton()
+    let recoveryCopiesCheck = NSButton(checkboxWithTitle: "Keep recovery copies of open images",
+                                       target: nil, action: nil)
+    let recoveryIntervalPicker = NSPopUpButton()
 
     init(preferences: EditorPreferences? = nil) {
         self.preferences = preferences ?? .shared
-        let window = PreferencesPanel(contentRect: NSRect(x: 0, y: 0, width: 440, height: 230),
+        let window = PreferencesPanel(contentRect: NSRect(x: 0, y: 0, width: 440, height: 255),
                                       styleMask: [.titled, .closable], backing: .buffered, defer: false)
         super.init(window: window)
         window.title = "Preferences"
         window.isReleasedWhenClosed = false
-        let chrome = ClassicPanelView(frame: NSRect(x: 0, y: 0, width: 440, height: 230))
+        let chrome = ClassicPanelView(frame: NSRect(x: 0, y: 0, width: 440, height: 255))
         window.contentView = chrome
 
         appearancePicker.addItems(withTitles: ClassicChromeScheme.allCases.map(\.displayName))
         surroundPicker.addItems(withTitles: EditorPreferences.Surround.allCases.map(\.title))
         initialViewPicker.addItems(withTitles: EditorPreferences.InitialView.allCases.map(\.title))
+        recoveryIntervalPicker.addItems(withTitles: EditorPreferences.RecoveryInterval.allCases.map(\.title))
+        recoveryCopiesCheck.target = self
+        recoveryCopiesCheck.action = #selector(recoveryCopiesChanged(_:))
+        recoveryCopiesCheck.font = .systemFont(ofSize: 11)
+        recoveryCopiesCheck.setAccessibilityLabel("Keep recovery copies of open images")
         let rows = [row("Appearance", appearancePicker, #selector(appearanceChanged(_:))),
                     row("Canvas Surround", surroundPicker, #selector(surroundChanged(_:))),
-                    row("Open Images At", initialViewPicker, #selector(initialViewChanged(_:)))]
+                    row("Open Images At", initialViewPicker, #selector(initialViewChanged(_:))),
+                    checkRow("Recovery Copies", recoveryCopiesCheck),
+                    row("Copy Every", recoveryIntervalPicker, #selector(recoveryIntervalChanged(_:)))]
         let note = NSTextField(wrappingLabelWithString:
-            "Appearance and canvas surround apply immediately. The zoom choice applies to newly opened images.")
+            "Appearance and canvas surround apply immediately. The zoom choice applies to newly opened images. Recovery copies are written privately in the background.")
         note.font = .systemFont(ofSize: 11)
         note.textColor = .secondaryLabelColor
         let reset = NSButton(title: "Restore Defaults", target: self, action: #selector(restoreDefaults(_:)))
@@ -65,11 +75,25 @@ final class PreferencesWindowController: NSWindowController {
         return row
     }
 
+    /// The same label column as a picker row, with a checkbox as the control.
+    private func checkRow(_ title: String, _ check: NSButton) -> NSView {
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: 11)
+        label.widthAnchor.constraint(equalToConstant: 120).isActive = true
+        let row = NSStackView(views: [label, check])
+        row.spacing = 12
+        return row
+    }
+
     @objc private func refresh() {
         window?.appearance = preferences.chromeAppearance
         appearancePicker.selectItem(at: ClassicChromeScheme.allCases.firstIndex(of: preferences.appearance) ?? 0)
         surroundPicker.selectItem(at: EditorPreferences.Surround.allCases.firstIndex(of: preferences.surround) ?? 1)
         initialViewPicker.selectItem(at: EditorPreferences.InitialView.allCases.firstIndex(of: preferences.initialView) ?? 0)
+        recoveryCopiesCheck.state = preferences.recoveryCopiesEnabled ? .on : .off
+        recoveryIntervalPicker.isEnabled = preferences.recoveryCopiesEnabled
+        recoveryIntervalPicker.selectItem(at: EditorPreferences.RecoveryInterval.allCases
+            .firstIndex(of: preferences.recoveryInterval) ?? 1)
     }
 
     @objc private func appearanceChanged(_ sender: NSPopUpButton) {
@@ -85,6 +109,15 @@ final class PreferencesWindowController: NSWindowController {
     @objc private func initialViewChanged(_ sender: NSPopUpButton) {
         guard EditorPreferences.InitialView.allCases.indices.contains(sender.indexOfSelectedItem) else { return }
         preferences.initialView = EditorPreferences.InitialView.allCases[sender.indexOfSelectedItem]
+    }
+
+    @objc private func recoveryCopiesChanged(_ sender: NSButton) {
+        preferences.recoveryCopiesEnabled = sender.state == .on
+    }
+
+    @objc private func recoveryIntervalChanged(_ sender: NSPopUpButton) {
+        guard EditorPreferences.RecoveryInterval.allCases.indices.contains(sender.indexOfSelectedItem) else { return }
+        preferences.recoveryInterval = EditorPreferences.RecoveryInterval.allCases[sender.indexOfSelectedItem]
     }
 
     @objc private func restoreDefaults(_ sender: Any?) { preferences.reset() }

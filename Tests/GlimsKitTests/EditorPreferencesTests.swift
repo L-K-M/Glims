@@ -33,10 +33,32 @@ final class EditorPreferencesTests: XCTestCase {
             defaults.set("missing", forKey: "editor.appearance")
             defaults.set(1000, forKey: "editor.canvasSurround")
             defaults.set(["unexpected"], forKey: "editor.initialView")
+            defaults.set(7, forKey: "editor.recoveryInterval")
+            defaults.set("yes", forKey: "editor.recoveryCopies")
             let preferences = EditorPreferences(defaults: defaults)
             XCTAssertEqual(preferences.appearance, .classicLight)
             XCTAssertEqual(preferences.surround, .medium)
             XCTAssertEqual(preferences.initialView, .fit)
+            XCTAssertEqual(preferences.recoveryInterval, .twoMinutes)
+            XCTAssertTrue(preferences.recoveryCopiesEnabled)
+        }
+    }
+
+    /// Recovery copies are on at two minutes by default, persist, and
+    /// reset with the rest of the editor-owned keys.
+    func testRecoveryChoicesPersistAndReset() {
+        withDefaults { defaults, _ in
+            let preferences = EditorPreferences(defaults: defaults)
+            XCTAssertTrue(preferences.recoveryCopiesEnabled)
+            XCTAssertEqual(preferences.recoveryInterval, .twoMinutes)
+            preferences.recoveryCopiesEnabled = false
+            preferences.recoveryInterval = .tenMinutes
+            let reopened = EditorPreferences(defaults: defaults)
+            XCTAssertFalse(reopened.recoveryCopiesEnabled)
+            XCTAssertEqual(reopened.recoveryInterval, .tenMinutes)
+            reopened.reset()
+            XCTAssertTrue(reopened.recoveryCopiesEnabled)
+            XCTAssertEqual(reopened.recoveryInterval, .twoMinutes)
         }
     }
 
@@ -79,13 +101,25 @@ final class EditorPreferencesTests: XCTestCase {
             controller.initialViewPicker.selectItem(at: 1)
             NSApp.sendAction(controller.initialViewPicker.action!, to: controller.initialViewPicker.target,
                              from: controller.initialViewPicker)
+            controller.recoveryCopiesCheck.performClick(nil)
+            controller.recoveryIntervalPicker.selectItem(at: 3)
+            NSApp.sendAction(controller.recoveryIntervalPicker.action!,
+                             to: controller.recoveryIntervalPicker.target,
+                             from: controller.recoveryIntervalPicker)
             XCTAssertEqual(preferences.appearance, .dark)
             XCTAssertEqual(preferences.surround, .light)
             XCTAssertEqual(preferences.initialView, .actualPixels)
+            XCTAssertFalse(preferences.recoveryCopiesEnabled)
+            XCTAssertFalse(controller.recoveryIntervalPicker.isEnabled,
+                           "the interval follows the enabled choice")
+            XCTAssertEqual(preferences.recoveryInterval, .tenMinutes)
             preferences.reset()
             XCTAssertEqual(controller.appearancePicker.indexOfSelectedItem, 0)
             XCTAssertEqual(controller.surroundPicker.indexOfSelectedItem, 1)
             XCTAssertEqual(controller.initialViewPicker.indexOfSelectedItem, 0)
+            XCTAssertEqual(controller.recoveryCopiesCheck.state, .on)
+            XCTAssertTrue(controller.recoveryIntervalPicker.isEnabled)
+            XCTAssertEqual(controller.recoveryIntervalPicker.indexOfSelectedItem, 1)
         }
     }
 

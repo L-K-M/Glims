@@ -19,7 +19,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     static let defaultImageSize = (width: 1600, height: 1200)
 
     private(set) var state: EngineState = .starting
-    private var documents: [DocumentWindowController] = []
+    private(set) var documents: [DocumentWindowController] = []
     private var workspace: WorkspaceWindowController?
     private var newImagePanel: NewImagePanel?
     private var preferencesWindow: PreferencesWindowController?
@@ -30,6 +30,32 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private var terminationRequested = false
     private let fileWrites = FileWriteCoordinator()
     private var terminationClosingDocument: DocumentWindowController?
+    /// Periodic recovery copies into the private store; starts with the
+    /// engine and stays off when the store cannot be created.
+    private var recovery: RecoveryScheduler?
+    /// The shared store the scheduler writes into and the recovery panel
+    /// reads prior runs' records from; kept even when the scheduler
+    /// cannot start so prior records stay reachable.
+    var recoveryStore: RecoveryStore?
+    private(set) var recoveryPanel: RecoveryPanelController?
+    /// Records with a recovery open in flight, so a repeated click
+    /// cannot duplicate the operation.
+    private(set) var inFlightRecoveries: Set<RecoveryKey> = []
+    /// Prior records whose recovered document is still open, by that
+    /// document's recovery id; a record is retired when its document
+    /// closes for good.
+    private var recoveredSources: [UUID: RecoveryStore.RecoveredDocument] = [:]
+    /// The last recovery failure shown nonmodally in the panel.
+    private(set) var lastRecoveryFailure: String?
+    /// A copy's identity: which dead run's folder and which document id.
+    struct RecoveryKey: Hashable {
+        var runID: UUID
+        var documentID: UUID
+        init(_ candidate: RecoveryStore.RecoveredDocument) {
+            runID = candidate.runID
+            documentID = candidate.documentID
+        }
+    }
 
     private lazy var toolsPalette: Palette = PaletteCenter.shared.palette(
         for: ToolsPaletteController.definition,
@@ -123,6 +149,22 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     @objc private func preferencesChanged() {
         ClassicChrome.apply(scheme: EditorPreferences.shared.appearance)
         NSApp.windows.forEach { applyAuxiliaryAppearance($0) }
+        applyRecoveryPreferences()
+    }
+
+    /// Applies the recovery preferences to the live scheduler. Stopping
+    /// only disarms the tick — a copy already in flight still finishes
+    /// and commits; restarting keeps the tracked documents and their
+    /// copied revisions, so existing copies are never re-made or lost.
+    private func applyRecoveryPreferences() {
+        let preferences = EditorPreferences.shared
+        guard let recovery else { return }
+        if preferences.recoveryCopiesEnabled {
+            recovery.setInterval(preferences.recoveryInterval.seconds)
+            recovery.start()
+        } else {
+            recovery.stop()
+        }
     }
 
     @objc private func auxiliaryWindowBecameKey(_ notification: Notification) {
@@ -168,6 +210,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         guard !documents.isEmpty || pendingFileOperations > 0 else { return .terminateNow }
         terminationRequested = true
         newImagePanel?.close()
+        recoveryPanel?.close()
         // AppKit expects terminateLater before reply(toApplicationShouldTerminate:).
         DispatchQueue.main.async { self.closeNextDocumentForTermination() }
         return .terminateLater
@@ -194,6 +237,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        recovery?.stop()
         session?.stop()
     }
 
@@ -209,6 +253,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 caches.appendingPathComponent("Glims/Engine", isDirectory: true))
     }
 
+    /// Where recovery copies live: Application Support, beside the
+    /// engine's own directory.
+    static func recoveryDirectory() -> URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Glims/Recovery", isDirectory: true)
+    }
+
     private func engineDidStart(_ result: Result<EngineSession, Error>) {
         switch result {
         case .success(let session):
@@ -219,6 +270,25 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             // The operation catalog is slower: fetched off-main, its menu
             // lands whenever it is ready.
             NativeFilterCatalog.shared.load(using: session)
+            let store = RecoveryStore(base: Self.recoveryDirectory())
+            recoveryStore = store
+            do {
+                try store.prepare()
+                let scheduler = RecoveryScheduler(store: store,
+                                                  interval: EditorPreferences.shared.recoveryInterval.seconds)
+                // A missed copy is visible in the affected document's
+                // status bar and in the recovery panel's status line.
+                scheduler.onFailure = { [weak self] candidate, message in
+                    (candidate as? ImageDocument)?.onError?(message)
+                    self?.noteRecoveryFailure(message)
+                }
+                recovery = scheduler
+                applyRecoveryPreferences()
+            } catch {
+                // Periodic copies stay off; the documents are unaffected
+                // and prior records can still be offered read-only.
+                noteRecoveryFailure("Recovery copies are unavailable: \(error.localizedDescription)")
+            }
             workspace?.close()
             workspace = nil
             if pendingOpenURLs.isEmpty {
@@ -228,6 +298,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 pendingOpenURLs.removeAll()
                 openFiles(urls)
             }
+            offerRecoveryAfterStartup()
         case .failure(let error):
             state = .failed(String(describing: error))
             workspace?.canvas.message = "Image engine could not start"
@@ -285,9 +356,25 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         }
         controller.onClose = { [weak self] closed in
             self?.documents.removeAll { $0 === closed }
+            self?.recovery?.untrack(closed.imageDocument)
+            // A document recovered from a prior record is closed for
+            // good (saved or Don't Save): the prior copy has served its
+            // purpose and is retired. A record already gone is the same
+            // end state, not an error.
+            if let prior = self?.recoveredSources.removeValue(forKey: closed.imageDocument.recoveryID) {
+                do {
+                    try self?.recoveryStore?.discardRecoverable(prior)
+                } catch RecoveryStore.StoreError.recordMismatch {
+                } catch {
+                    self?.noteRecoveryFailure("Could not remove the recovery copy of \u{201C}\(prior.name)\u{201D}: \(error.localizedDescription)")
+                }
+            }
             PaletteCenter.shared.frontDocumentDidChange()
         }
         documents.append(controller)
+        recovery?.track(document, isReady: { [weak controller] in
+            controller?.isReadyForRecoveryCopy ?? false
+        })
         controller.showWindow(nil)
         if EditorPreferences.shared.initialView == .fit { controller.fitImage(nil) }
         PaletteCenter.shared.frontDocumentDidChange()
@@ -470,6 +557,194 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         historyPalette.isPresented ? historyPalette.bringToFront() : historyPalette.showPanel()
     }
 
+    /// File ▸ Recover Documents…: the panel is never a dead end — Later
+    /// keeps the records and this menu item reopens the list.
+    @objc func recoverDocuments(_ sender: Any?) {
+        showRecoveryPanel()
+    }
+
+    /// Offers prior copies when the startup document has been adopted.
+    func offerRecoveryAfterStartup() {
+        // Let this idle-action batch admit any opens queued after the
+        // offer before testing readiness. Otherwise one of those opens
+        // could adopt a window on top of a panel just presented here.
+        EngineActivity.shared.whenIdle { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.terminationRequested else { return }
+                guard !EngineActivity.shared.isBusy, self.pendingFileOperations == 0 else {
+                    self.offerRecoveryAfterStartup()
+                    return
+                }
+                guard self.recoveryStore?.discoverRecoverableDocuments().isEmpty == false else { return }
+                self.showRecoveryPanel()
+            }
+        }
+    }
+
+    private func showRecoveryPanel() {
+        if recoveryPanel == nil {
+            let panel = RecoveryPanelController()
+            panel.onRecover = { [weak self] records in
+                guard let self, let session = self.session else { return }
+                self.recover(records, using: session)
+            }
+            panel.onDiscard = { [weak self] records in self?.discardSelected(records) }
+            recoveryPanel = panel
+        }
+        guard let panel = recoveryPanel else { return }
+        let found = recoveryStore?.discoverRecoverableDocuments() ?? []
+        panel.setRecords(found)
+        if let lastRecoveryFailure {
+            panel.showStatus(lastRecoveryFailure)
+        } else if recoveryStore == nil {
+            panel.showStatus("Recovery copies are unavailable.")
+        } else if !found.isEmpty {
+            panel.showStatus("")
+        }
+        panel.showWindow(nil)
+        panel.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// A recovery failure is never dropped silently: it lands in the
+    /// panel's status line when the panel is up, and always on stderr.
+    private func noteRecoveryFailure(_ message: String) {
+        lastRecoveryFailure = message
+        recoveryPanel?.showStatus(message)
+        FileHandle.standardError.write(Data("Glims: \(message)\n".utf8))
+    }
+
+    /// The still-open document a record was recovered into, if any.
+    private func recoveredDocument(for key: RecoveryKey) -> DocumentWindowController? {
+        for (id, record) in recoveredSources where RecoveryKey(record) == key {
+            if let controller = documents.first(where: { $0.imageDocument.recoveryID == id }) {
+                return controller
+            }
+        }
+        return nil
+    }
+
+    /// Opens each selected record's copy as a new unsaved document. The
+    /// record itself is re-validated against the store — a stale row
+    /// refuses visibly — then the copy is opened and duplicated into an
+    /// independent image on the engine queue, counted as a file
+    /// operation so Quit and engine-busy work are respected. The prior
+    /// record is kept until the recovered document closes: deleting the
+    /// only copy at open would leave a second crash with nothing.
+    func recover(_ candidates: [RecoveryStore.RecoveredDocument], using session: EngineSession) {
+        guard let store = recoveryStore, !terminationRequested else { return }
+        for candidate in candidates {
+            let key = RecoveryKey(candidate)
+            if let existing = recoveredDocument(for: key) {
+                existing.window?.makeKeyAndOrderFront(nil)
+                continue
+            }
+            guard inFlightRecoveries.insert(key).inserted else { continue }
+            pendingFileOperations += 1
+            guard let record = store.recoverableDocument(matching: candidate) else {
+                inFlightRecoveries.remove(key)
+                pendingFileOperations -= 1
+                closeNextDocumentForTermination()
+                // Refresh first: an emptied list's message must not
+                // overwrite the refusal error.
+                recoveryPanel?.setRecords(store.discoverRecoverableDocuments())
+                noteRecoveryFailure("\u{201C}\(candidate.name)\u{201D} is no longer available to recover.")
+                continue
+            }
+            recoveryPanel?.setBusy(true)
+            recoveryPanel?.showStatus("Recovering \u{201C}\(record.name)\u{201D}\u{2026}")
+            EngineActivity.shared.performWhenReady(label: "Recovering \(record.name)", work: {
+                let result = Self.recoverImage(from: record, session: session)
+                DispatchQueue.main.async { self.finishRecovery(result, for: record, key: key, session: session) }
+            })
+        }
+    }
+
+    /// Runs on the engine activity queue: opens the store's copy into an
+    /// intermediate image, duplicates it so the document to open is
+    /// independent of the copy's own identity, and closes the
+    /// intermediate handle on every outcome.
+    private nonisolated static func recoverImage(from record: RecoveryStore.RecoveredDocument,
+                                                 session: EngineSession) -> Result<Int32, Error> {
+        do {
+            let opened = try session.openImage(path: record.copyURL.path)
+            do {
+                let duplicated = try session.duplicateImage(opened)
+                do { try session.closeImage(opened) }
+                catch {
+                    try? session.closeImage(duplicated)
+                    throw error
+                }
+                return .success(duplicated)
+            } catch {
+                try? session.closeImage(opened)
+                return .failure(error)
+            }
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    /// Adopts the recovered image on the main queue. A failed recovery
+    /// keeps the record; a Quit or a failed document construction closes
+    /// the duplicate instead of adopting it.
+    private func finishRecovery(_ result: Result<Int32, Error>,
+                                for record: RecoveryStore.RecoveredDocument,
+                                key: RecoveryKey, session: EngineSession) {
+        pendingFileOperations -= 1
+        inFlightRecoveries.remove(key)
+        defer {
+            recoveryPanel?.setBusy(!inFlightRecoveries.isEmpty)
+            closeNextDocumentForTermination()
+        }
+        switch result {
+        case .success(let image):
+            guard !terminationRequested else {
+                try? session.closeImage(image)
+                return
+            }
+            do {
+                let document = try ImageDocument(session: session, image: image,
+                                                 name: "\(record.name) recovered")
+                recoveredSources[document.recoveryID] = record
+                open(document)
+                lastRecoveryFailure = nil
+                recoveryPanel?.showStatus(
+                    "Recovered \u{201C}\(record.name)\u{201D} as a new unsaved document. Its copy is kept until that document closes.")
+            } catch {
+                try? session.closeImage(image)
+                noteRecoveryFailure("Could not recover \u{201C}\(record.name)\u{201D}: \(error.localizedDescription)")
+            }
+        case .failure(let error):
+            noteRecoveryFailure("Could not recover \u{201C}\(record.name)\u{201D}: \(error.localizedDescription)")
+        }
+    }
+
+    /// Deletes the selected prior records through the store's validated
+    /// path; every failure is visible in the panel and the list is
+    /// re-read from disk so removed rows disappear.
+    func discardSelected(_ candidates: [RecoveryStore.RecoveredDocument]) {
+        guard let store = recoveryStore else { return }
+        var failures: [String] = []
+        for candidate in candidates {
+            let key = RecoveryKey(candidate)
+            if inFlightRecoveries.contains(key) {
+                failures.append("\u{201C}\(candidate.name)\u{201D} is being recovered")
+            } else if recoveredDocument(for: key) != nil {
+                failures.append("\u{201C}\(candidate.name)\u{201D} is open as a recovered document; close it first")
+            } else {
+                do { try store.discardRecoverable(candidate) }
+                catch { failures.append("\u{201C}\(candidate.name)\u{201D}: \(error.localizedDescription)") }
+            }
+        }
+        recoveryPanel?.setRecords(store.discoverRecoverableDocuments())
+        if failures.isEmpty {
+            recoveryPanel?.showStatus("Discarded \(candidates.count) recovery \(candidates.count == 1 ? "copy" : "copies").")
+            lastRecoveryFailure = nil
+        } else {
+            noteRecoveryFailure("Could not discard \(failures.joined(separator: "; "))")
+        }
+    }
+
     /// Image ▸ New Snapshot and the History palette's button: queues a
     /// native copy on the source document, then opens it as a fresh
     /// unsaved document. The whole transaction counts as a file operation
@@ -528,6 +803,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         case #selector(newDocument(_:)), #selector(openDocument(_:)), #selector(openRecentDocument(_:)):
             // A plug-in dialog is modal for the engine (glims_engine.h).
             return session != nil && !PlugInCommands.isRunning && !terminationRequested
+        case #selector(recoverDocuments(_:)):
+            return session != nil && !terminationRequested
         case #selector(showLayers(_:)), #selector(showPaths(_:)), #selector(showHistory(_:)),
              #selector(showTools(_:)), #selector(showToolOptions(_:)):
             return session != nil

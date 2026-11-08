@@ -29,6 +29,12 @@ enum PaletteEditScope {
         contents.append(WeakContent(content))
     }
 
+    /// Whether `window`'s first responder is a field editor holding an
+    /// uncommitted edit — document, preview and palette windows alike.
+    static func isFieldEditing(_ window: NSWindow) -> Bool {
+        (window.firstResponder as? NSTextView)?.isFieldEditor == true
+    }
+
     /// The distinct windows of presented palettes aimed at `document`.
     static func windowsEditing(_ document: ImageDocument) -> [NSWindow] {
         contents.removeAll { $0.value == nil }
