@@ -2926,8 +2926,6 @@ path; physical monitor calibration, wide-gamut/HDR output, proof profiles,
 proof intents and gamut warnings remain unverified or unimplemented.
 
 
-
-
 Ruler review reproduced a major/minor classification defect at large
 scrolled coordinates: a magnitude-relative tolerance eventually exceeded
 the distance between ticks. At image coordinate 1,000,000 and 3,200% zoom,
@@ -3142,7 +3140,6 @@ an installed font, capture baselines after the setup stroke and preceding
 Anchor, and expect native To Layer to reveal the full payload after
 removing the selection clip. That appearance uses an independent known
 RGBA-cell oracle rather than assuming the clipped preview stays identical.
-
 
 
 

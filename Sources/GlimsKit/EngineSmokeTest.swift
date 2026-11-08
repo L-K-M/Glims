@@ -105,8 +105,6 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
-
-
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "file-safety" {
                 try exerciseFileSafety(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (file safety)" : "FAILED: \(failures) failure(s)")
@@ -228,12 +226,17 @@ enum EngineSmokeTest {
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "floating-controls" {
                 try exerciseFloatingControls(session, work: work, documents: documents)
-                print(failures == 0 ? "PASSED (floating controls)" : "FAILED: \(failures) failure(s)")
+                print(failures == 0 ? "PASSED (floating-controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-multiselection-controls" {
                 try exerciseLayerMultiselectionControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (layer-multiselection-controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "guide-dragging" {
+                try exerciseGuideDragging(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (guide dragging)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
@@ -274,6 +277,10 @@ enum EngineSmokeTest {
             try exerciseGuidesControls(session, work: work, documents: documents)
             try exerciseGridControls(session, work: work, documents: documents)
             try exercisePixelRulers(session, work: work, documents: documents)
+            try exerciseGuideDragging(session, work: work, documents: documents)
+            try exerciseFloatingControls(session, work: work, documents: documents)
+            try exerciseLayerMultiselectionControls(session, work: work, documents: documents)
+
             try exerciseStrokeSelectionControls(session, work: work, documents: documents)
 
 
@@ -289,9 +296,6 @@ enum EngineSmokeTest {
             try exerciseResourceCatalog(session)
             try exerciseGuideCache(session, documents: documents)
             try exerciseLayerSourceCache(session, documents: documents)
-            try exerciseFloatingControls(session, work: work, documents: documents)
-            try exerciseLayerMultiselectionControls(session, work: work, documents: documents)
-
             try exerciseLayerSourceControls(session, work: work, documents: documents)
 
             try exerciseIndexedWrapper(session)
@@ -8959,6 +8963,16 @@ enum EngineSmokeTest {
         check(!a.rulerObserversActive, "closing the window removes the ruler observers")
     }
 
+    /// Direct guide gestures with real NSEvents dispatched to the actual
+    /// ruler and canvas handlers: ruler drags create the matching
+    /// horizontal/vertical guide at the dropped image pixel, the Move tool
+    /// grabs a visible guide within its view-point tolerance and an
+    /// intentional release outside the image removes it, and Escape, tool
+    /// change, window close and engine-busy cancel without any native
+    /// mutation. Geometry is checked against an independent
+    /// frame-arithmetic oracle and the canvas view bitmap at zoom+scroll;
+    /// every commit is exactly one undo step and ghosts/cancels leave the
+    /// native render pixels and history untouched.
     private static func exerciseCanvasOverlays(_ session: EngineSession, documents: DocumentList) throws {
         let image = try session.newImage(width: 48, height: 32)
         guard let layer = try session.layers(image).first?.id else {
@@ -10194,16 +10208,6 @@ enum EngineSmokeTest {
         check(try session.copyPixels(image, merged: true).pixels == beforeDefault,
               "undo restores the pixels before the Default gesture")
     }
-
-    /// The floating-selection controls end to end: Edit ▸ Paste Into's
-    /// two-document capture of document + explicit target + clipboard
-    /// RGBA payload, the selection-clipped preview, the selection staying
-    /// unchanged, explicit expected-id resolution and the Undo/Redo cache
-    /// refresh, BUSY/lock/rasterize refusals, the mask/channel New Layer
-    /// gates, the paint target owning painting while attached to a mask
-    /// or channel, the real menu and palette buttons, and close draining
-    /// accepted work before the image is destroyed. Oracles are the
-    /// session's own pixel, floating-state and selection reads.
 
 }
 
