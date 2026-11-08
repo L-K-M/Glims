@@ -1490,6 +1490,54 @@ final class EngineSession: @unchecked Sendable {
                   error)
     }
 
+    /// A rendering intent for profile conversion (GlimsProfileIntent):
+    /// the facade's own values 1–4, never the engine's native enum.
+    enum ProfileIntent: UInt32, Codable {
+        case perceptual = 1, relativeColorimetric, saturation, absoluteColorimetric
+
+        /// The choices the Convert form offers, in display order.
+        static let conversionChoices: [ProfileIntent] = [.perceptual, .relativeColorimetric,
+                                                          .saturation, .absoluteColorimetric]
+
+        var title: String {
+            switch self {
+            case .perceptual: return "Perceptual"
+            case .relativeColorimetric: return "Relative Colorimetric"
+            case .saturation: return "Saturation"
+            case .absoluteColorimetric: return "Absolute Colorimetric"
+            }
+        }
+    }
+
+    /// Image ▸ Color Profile ▸ Assign…: embed the ICC profile at `path`
+    /// without converting pixel component values, or discard the
+    /// embedded profile when `path` is nil (image_assign_profile).
+    /// One undo group; assigning an equal profile is a no-op. BUSY while
+    /// a stroke, a preview or a plug-in holds the image.
+    func assignProfile(_ image: Int32, path: String?) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try withOptionalCString(path) { path in
+            try check(api.image_assign_profile(engine, image, path, &error), error)
+        }
+    }
+
+    /// Image ▸ Color Profile ▸ Convert…: convert pixels to preserve
+    /// appearance in the destination ICC profile
+    /// (image_convert_profile); a nil `path` chooses the image
+    /// model/precision's builtin profile. `intent` and
+    /// `blackPointCompensation` apply only to this conversion.
+    /// Indexed images answer UNSUPPORTED — their native palette
+    /// conversion ignores intent and BPC. Same undo, no-op and busy
+    /// rules as `assignProfile`.
+    func convertProfile(_ image: Int32, path: String?, intent: ProfileIntent,
+                        blackPointCompensation: Bool) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try withOptionalCString(path) { path in
+            try check(api.image_convert_profile(engine, image, path, intent.rawValue,
+                                               blackPointCompensation, &error), error)
+        }
+    }
+
     // MARK: Text
 
     /// The font names text settings take, sorted.

@@ -603,6 +603,23 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         ColorForms.presentInformation(for: imageDocument, on: window)
     }
 
+    /// Image ▸ Color Profile ▸ Assign…: the shared profile form in its
+    /// assign kind, seeded from the cached color state.
+    @objc func assignColorProfile(_ sender: Any?) {
+        guard let window else { return }
+        endPendingEdits()
+        ProfileForm.present(.assign, for: imageDocument, on: window)
+    }
+
+    /// Image ▸ Color Profile ▸ Convert…: the shared profile form in its
+    /// convert kind. Disabled for indexed images in validation; the
+    /// document guards the same rule on Apply.
+    @objc func convertColorProfile(_ sender: Any?) {
+        guard let window else { return }
+        endPendingEdits()
+        ProfileForm.present(.convert, for: imageDocument, on: window)
+    }
+
     // MARK: Image size and transforms
 
     @objc func rotateImage90(_ sender: Any?) { imageDocument.transformImage(.rotate90) }
@@ -868,6 +885,18 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // Read-only and cheap: the sheet shows the cached state,
             // so it works wherever another sheet does not already.
             return !imageDocument.isClosing && window?.attachedSheet == nil
+        case #selector(assignColorProfile(_:)):
+            // Assignment is allowed on every mode, indexed included:
+            // it embeds a compatible profile without converting pixels.
+            return !editingBlocked && !previewBusy
+        case #selector(convertColorProfile(_:)):
+            // Indexed images cannot convert their palette profile —
+            // the native conversion ignores intent and BPC — so the
+            // item stays listed but disabled, and says why.
+            let allowed = ProfileForm.convertAllowed(mode: imageDocument.colorInfo.mode)
+            menuItem.toolTip = allowed ? nil
+                : "Convert the image to RGB first: indexed palette conversion ignores the intent and black-point settings."
+            return allowed && !editingBlocked && !previewBusy
         case #selector(newSnapshot(_:)):
             // Without an app to adopt the copy there is nothing to run.
             return imageDocument.snapshotHandler != nil && !editingBlocked && !previewBusy

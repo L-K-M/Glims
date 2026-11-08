@@ -68,6 +68,10 @@ enum MainMenu {
         add(menu, "Image", [
             mode,
             item("Precision…", #selector(DocumentWindowController.imagePrecision(_:))),
+            submenu("Color Profile", [
+                item("Assign…", #selector(DocumentWindowController.assignColorProfile(_:))),
+                item("Convert…", #selector(DocumentWindowController.convertColorProfile(_:))),
+            ]),
             .separator(),
             item("Image Size…", #selector(DocumentWindowController.imageSize(_:))),
             item("Canvas Size…", #selector(DocumentWindowController.canvasSize(_:))),
