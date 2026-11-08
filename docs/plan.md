@@ -732,6 +732,34 @@ and substantial parts of `design.md`, still need implementation and checks.
   re-associated in `app/xcf/xcf-load.c`), so the layer survives save
   and reopen as structured content. Conformance tests cover both; the
   four-engine run is left to the root checkout.
+- 2026-11-08: the frontend slice for the two new facade calls, on this
+  worktree branch. `EngineSession` gained typed `fillPath` and
+  `toVectorLayer` wrappers and a `supportsVectorLayers` version
+  capability (one shared parser with `supportsLinkLayers`).
+  `ImageDocument.fillPath` queues on the input queue behind accepted
+  input, passing the explicit current drawable (layer, editing mask or
+  channel) and refusing groups, stale path rows, missing, pixel-locked,
+  busy and closed states with an error instead of silent success; the
+  native call revalidates path and target, is one undo step and clips to
+  the selection. `ImageDocument.toVectorLayer` queues as a target
+  command, so the completion's authoritative reload makes the
+  engine-selected vector layer the active one; on a pre-3.2 engine it
+  reports the honest 3.2 requirement and never degrades to a raster.
+  The Paths palette has Fill Path and To Vector Layer buttons and menu
+  items (membership-guarded, the vector item capability-gated, its
+  tooltip stating the engine's default white-fill/black-stroke style,
+  not the foreground color), as do Edit ▸ Fill Path and Edit ▸ To
+  Vector Layer; the bundled manual documents both. No engine or facade
+  change, no global native context mutation. Added scoped engine smoke
+  cases (real pixels and fill color, selection clipping, one undo step,
+  vector kind / selection / name, re-render after a path edit, XCF
+  round trip and target reconcile, pre-3.2 UNSUPPORTED, missing, busy
+  and closed guards) and pure unit tests for the capability parser, the
+  palette command metadata and the fill settings. Checked on this
+  branch: `swift build --build-tests` compiles only — no adapter
+  rebuild, no library relink, no test or smoke run (the root checkout
+  serializes desktop tests). Pending: the runtime run of the new smoke
+  cases and `swift test` on all four engines in the root checkout.
 
 ## Open decisions
 
@@ -784,6 +812,23 @@ without hiding an already open panel or another active well.
 The original draft's shared binding target failed a two-document native
 regression. Per-sheet retention passes that regression and ten isolated
 pinned-engine checks, including pixels, selection clipping, undo, custom
-color and busy/native refusals. Review found no important issues. Added
-background and invalid-input checks and the integrated four-engine pass
-are pending. Pattern fill and resource selection are a separate slice.
+color and busy/native refusals. Review found no important issues. The
+expanded checks include independent background color and invalid opacity.
+The integrated four-engine run passes 652 checks on 3.2.8, 3.2.0 and master,
+649 on 3.0.8, before the Paths interface merge. After that integration,
+unit and native checks are recorded in the PR. Pattern fill and resource
+selection are a separate slice.
+
+### Paths interface verification (2026-11-08)
+
+The Paths palette and Edit menu expose Fill Path and To Vector Layer.
+Fill uses the current layer, mask or saved channel; the Path options now
+include opacity and antialias controls. Vector creation adopts the native
+selected layer after reload and reports unsupported engines explicitly.
+Independent review found no important issues. The integrated branch passes
+305 unit tests and 677 interface checks on 3.2.8/3.2.0/master, 666 on 3.0.8.
+The first mask test failure was a fixture retaining a selection after undo;
+the corrected history reset verifies white pixels and the original history
+position. Real control actions now verify 50-percent fill pixels and saved
+channel isolation. Vector styling and multi-anchor editing remain later
+work; initial vector creation uses the native context's defaults.

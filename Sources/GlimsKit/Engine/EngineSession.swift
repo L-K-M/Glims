@@ -467,9 +467,28 @@ final class EngineSession: @unchecked Sendable {
 
     /// Parses an engine `major.minor[.micro]` version string.
     static func supportsLinkLayers(version: String) -> Bool? {
+        Self.version(version, isAtLeast: (3, 2))
+    }
+
+    /// Whether the engine is known to make genuine vector layers from
+    /// paths: they arrived in GIMP 3.2, and older engines answer
+    /// `toVectorLayer` with UNSUPPORTED. `nil` when the version string
+    /// does not parse — the facade's own answer then decides.
+    var supportsVectorLayers: Bool? {
+        Self.supportsVectorLayers(version: version)
+    }
+
+    /// Parses an engine `major.minor[.micro]` version string.
+    static func supportsVectorLayers(version: String) -> Bool? {
+        Self.version(version, isAtLeast: (3, 2))
+    }
+
+    /// Whether an engine `major.minor[.micro]` version string is at least
+    /// `majorMinor`; nil when it does not parse.
+    static func version(_ version: String, isAtLeast majorMinor: (major: Int, minor: Int)) -> Bool? {
         let parts = version.split(separator: ".")
         guard parts.count >= 2, let major = Int(parts[0]), let minor = Int(parts[1]) else { return nil }
-        return major > 3 || (major == 3 && minor >= 2)
+        return major > majorMinor.major || (major == majorMinor.major && minor >= majorMinor.minor)
     }
 
     func newImage(pixels: ClipboardImage) throws -> Int32 {
@@ -1546,6 +1565,14 @@ final class EngineSession: @unchecked Sendable {
         var antialias = true
     }
 
+    /// How `fillPath` fills a path: a solid color at an opacity, with an
+    /// antialiased edge. No pattern and no fill rule of its own.
+    struct PathFillSettings: Equatable {
+        var color: NSColor = .black
+        var opacity: Double = 1
+        var antialias = true
+    }
+
     func paths(_ image: Int32) throws -> [PathInfo] {
         var count: Int32 = 0
         try check(api.paths(engine, image, nil, 0, &count), nil)
@@ -1635,6 +1662,35 @@ final class EngineSession: @unchecked Sendable {
                                        antialias: settings.antialias)
         var error: UnsafeMutablePointer<CChar>?
         try check(api.path_stroke(engine, image, path, layer ?? 0, &values, &error), error)
+    }
+
+    /// Fills the area `path` encloses on `drawable` — a layer, a layer mask
+    /// or a channel of the image (0: the selected drawable) — with a solid
+    /// color, as one undo step. The fill stays inside the selection and
+    /// honors the drawable's mask and pixel locks; a group or a locked
+    /// target is refused. The engine revalidates the path and the target.
+    func fillPath(_ path: Int32, image: Int32, drawable: Int32, settings: PathFillSettings) throws {
+        var values = GlimsPathFillSettings(struct_size: UInt32(MemoryLayout<GlimsPathFillSettings>.size),
+                                           color: Self.color(settings.color), opacity: settings.opacity,
+                                           antialias: settings.antialias)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.path_fill(engine, image, path, drawable, &values, &error), error)
+    }
+
+    /// Makes a genuine vector layer from `path`, above the selected layer
+    /// and itself selected, as one undo step. `name` (nil: the path's
+    /// name) sets the layer's name. Returns the new layer's id. Throws
+    /// `EngineError` with `GLIMS_STATUS_UNSUPPORTED` on engines without
+    /// vector layers (before GIMP 3.2); the call never degrades to a
+    /// raster copy. The layer keeps the same path object, so editing the
+    /// path re-renders it.
+    func toVectorLayer(_ path: Int32, image: Int32, name: String? = nil) throws -> Int32 {
+        var layer: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try withOptionalCString(name) { name in
+            try check(api.path_to_vector_layer(engine, image, path, name, &layer, &error), error)
+        }
+        return layer
     }
 
     private func withOptionalCString(_ string: String?,

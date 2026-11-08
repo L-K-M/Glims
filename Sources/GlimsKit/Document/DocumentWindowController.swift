@@ -782,6 +782,21 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         FillForm.present(in: imageDocument, on: window)
     }
 
+    /// Edit ▸ Fill Path: fills the active path's area on the current paint
+    /// target using the Path tool's foreground color and fill settings.
+    @objc func fillPath(_ sender: Any?) {
+        guard let path = imageDocument.activePath else { return }
+        imageDocument.fillPath(path, settings: ToolState.shared.pathFill)
+    }
+
+    /// Edit ▸ To Vector Layer: makes a genuine vector layer from the
+    /// active path. The new layer starts in the engine's default style
+    /// (white fill, black stroke); the foreground color is not applied.
+    @objc func toVectorLayer(_ sender: Any?) {
+        guard let path = imageDocument.activePath else { return }
+        imageDocument.toVectorLayer(path)
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
             || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || EngineActivity.shared.isBusy || window?.attachedSheet != nil
@@ -796,10 +811,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(cut(_:)), #selector(copy(_:)), #selector(copyMerged(_:)),
              #selector(paste(_:)), #selector(pasteInPlace(_:)), #selector(deleteBackward(_:)):
             return canPerformClipboardCommand(menuItem.action)
-        case #selector(selectFromPath(_:)), #selector(strokePath(_:)):
+        case #selector(selectFromPath(_:)), #selector(strokePath(_:)), #selector(fillPath(_:)):
             return imageDocument.activePath != nil && !editingBlocked
         case #selector(fill(_:)):
             return !editingBlocked && !previewBusy && imageDocument.activeDrawable != nil
+        case #selector(toVectorLayer(_:)):
+            // Vector layers arrived in GIMP 3.2; older engines report
+            // UNSUPPORTED when the command runs, so the item stays listed.
+            menuItem.toolTip = PathsPaletteController.Command.toVectorLayer.toolTip
+            return imageDocument.activePath != nil && !editingBlocked
+                && imageDocument.supportsVectorLayers != false
         case #selector(newLayerGroup(_:)):
             return !editingBlocked && !previewBusy
         case #selector(toggleLayerLock(_:)):

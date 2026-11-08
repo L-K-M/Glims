@@ -123,6 +123,7 @@ enum EngineSmokeTest {
             try exerciseTargetHistory(session, documents: documents)
             try exercisePreferences(session, documents: documents)
             try exercisePaths(session, documents: documents)
+            try exercisePathFillAndVector(session, work: work, documents: documents)
             try exercisePaletteControls(session, documents: documents)
             try exercisePendingEditScope(session, documents: documents)
             try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
@@ -4378,10 +4379,11 @@ enum EngineSmokeTest {
         ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(buttons)
     }
 
-    private static func descendant<View: NSView>(of view: NSView, as type: View.Type) -> View? {
-        if let match = view as? View { return match }
+    private static func descendant<View: NSView>(of view: NSView, as type: View.Type,
+                                                   matching predicate: (View) -> Bool = { _ in true }) -> View? {
+        if let match = view as? View, predicate(match) { return match }
         for child in view.subviews {
-            if let match = descendant(of: child, as: type) { return match }
+            if let match = descendant(of: child, as: type, matching: predicate) { return match }
         }
         return nil
     }
@@ -4873,6 +4875,305 @@ enum EngineSmokeTest {
         paths.run(.delete)
         settle()
         check(document.paths.isEmpty && document.activePath == nil, "the palette deletes the path")
+    }
+
+    /// Fill Path and To Vector Layer over the appended `path_fill` and
+    /// `path_to_vector_layer` facade calls: real pixels and the fill color,
+    /// selection clipping, one undo step each, the vector layer's kind and
+    /// its re-render after a path edit, the XCF round trip, and the
+    /// unsupported (pre-3.2), missing, busy and closed guards.
+    private static func exercisePathFillAndVector(_ session: EngineSession, work: URL,
+                                                  documents: DocumentList) throws {
+        let image = try session.newImage(width: 200, height: 120)
+        let document = try ImageDocument(session: session, image: image, name: "PathFillVector")
+        documents.items.append(document)
+        defer {
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func composite(_ x: Int, _ y: Int) -> [UInt8]? { pixel(session, image, x: x, y: y) }
+        func luminance(_ rgba: [UInt8]?) -> Int {
+            guard let rgba else { return -1 }
+            return (Int(rgba[0]) + Int(rgba[1]) + Int(rgba[2])) / 3
+        }
+        func thumbPixel(_ drawable: Int32, _ x: Int, _ y: Int) -> [UInt8]? {
+            guard let cg = try? session.drawableThumbnail(drawable, image: image, maxSize: 32),
+                  let data = cg.dataProvider?.data as Data? else { return nil }
+            let offset = (y * cg.width + x) * 4
+            guard offset + 4 <= data.count else { return nil }
+            return Array(data[offset..<offset + 4])
+        }
+        let rect = VectorPath(subpaths: [.init(anchors: [.init(CGPoint(x: 20, y: 20)), .init(CGPoint(x: 100, y: 20)),
+                                                         .init(CGPoint(x: 100, y: 90)), .init(CGPoint(x: 20, y: 90))],
+                                               isClosed: true)])
+        guard let path = document.addPath(rect) else {
+            return check(false, "a path can be added for the fill and vector checks")
+        }
+        settle()
+        guard let layer = document.activeLayer else {
+            return check(false, "the new image has a layer to fill on")
+        }
+
+        // The palette's new commands: menu items, enablement and the
+        // honest tooltip for the vector layer's default style.
+        let paths = PathsPaletteController()
+        paths.retarget(to: document)
+        let fillItem = paths.paletteMenu?.items.first { $0.title == "Fill Path" }
+        let vectorItem = paths.paletteMenu?.items.first { $0.title == "To Vector Layer" }
+        check(fillItem.map { paths.validateMenuItem($0) } == true,
+              "the palette menu enables Fill Path with an active path")
+        check(vectorItem.map { paths.validateMenuItem($0) } == (document.supportsVectorLayers != false),
+              "the palette menu enables To Vector Layer only where the engine has vector layers")
+        check(vectorItem?.toolTip?.contains("white fill") == true,
+              "To Vector Layer's tooltip states the engine's default white fill, black stroke")
+
+        // Missing ids at the facade: NOT_FOUND, nothing mutated.
+        if case .failure(let error) = Result(catching: { try session.fillPath(9999, image: image, drawable: layer,
+                                                                             settings: .init(color: .red)) }) {
+            check((error as? EngineSession.EngineError)?.status == Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
+                  "path_fill of an unknown path reports NOT_FOUND (\(error))")
+        } else {
+            check(false, "path_fill of an unknown path must fail")
+        }
+        if case .failure(let error) = Result(catching: { try session.toVectorLayer(9999, image: image, name: nil) }) {
+            check((error as? EngineSession.EngineError)?.status == Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
+                  "path_to_vector_layer of an unknown path reports NOT_FOUND (\(error))")
+        } else {
+            check(false, "path_to_vector_layer of an unknown path must fail")
+        }
+
+        // Busy guard: while a plug-in runs on the document, both commands
+        // are refused with an error and change nothing.
+        let running = EngineSession.Procedure(name: "smoke-busy", label: "Busy", menuPath: "", blurb: "",
+                                              isSensitive: true)
+        PlugInCommands.willRun(running, on: document)
+        let undoBeforeBusy = document.undoInfo.undoCount
+        let busyErrorCount = errors.count
+        document.fillPath(path, settings: .init(color: .red))
+        document.toVectorLayer(path)
+        settle()
+        check(errors.count > busyErrorCount && errors.suffix(2).allSatisfy { $0.contains("first") },
+              "fill and to-vector refuse while a plug-in runs (\(errors.suffix(2)))")
+        check(document.undoInfo.undoCount == undoBeforeBusy && !document.layers.contains { $0.kind == .vector },
+              "the refused commands changed nothing")
+        PlugInCommands.didRun(running, outcome: nil)
+
+        // Real pixels: the fill color lands inside the path only, as one
+        // undo step ordered on the input queue.
+        let undoBefore = document.undoInfo.undoCount
+        document.fillPath(path, settings: EngineSession.PathFillSettings(color: .red, opacity: 1, antialias: true))
+        settle()
+        check((composite(60, 50)?[0] ?? 0) > 200 && (composite(60, 50)?[1] ?? 255) < 64,
+              "Fill Path fills the path's area in the fill color")
+        check((composite(150, 100)?[0] ?? 0) > 200, "the area outside the path is untouched")
+        check(document.undoInfo.undoCount == undoBefore + 1, "Fill Path is one undo step")
+
+        // Selection clipping: a fill inside a smaller selection stays
+        // inside it; undo takes both fills back, one step each.
+        try session.select(.rectangle(CGRect(x: 30, y: 30, width: 20, height: 20)), image: image)
+        document.fillPath(path, settings: .init(color: .blue))
+        settle()
+        check((composite(40, 40)?[2] ?? 0) > 200 && (composite(40, 40)?[0] ?? 255) < 64,
+              "the fill lands inside the selection")
+        check((composite(80, 80)?[0] ?? 0) > 200 && (composite(80, 80)?[2] ?? 255) < 64,
+              "the fill stays clipped to the selection")
+        try session.select(.none, image: image)
+        // Selection changes also occupy history entries. Return to the
+        // captured position, rather than assuming two undos remove fills.
+        var traversed = 0
+        while document.undoInfo.undoCount > undoBefore && traversed < 8 {
+            document.undo()
+            settle()
+            traversed += 1
+        }
+        check(document.undoInfo.undoCount == undoBefore &&
+                composite(60, 50)?.prefix(3).allSatisfy { $0 > 240 } == true,
+              "undo restores the white pixels and selection from before both fills")
+
+        // Commit a value through the real Tool Options control, then use
+        // the palette action. This verifies the controls affect pixels.
+        let state = ToolState.shared
+        let savedTool = state.current, savedColor = state.foreground
+        let savedOpacity = state.pathFillOpacity, savedAntialias = state.pathFillAntialias
+        defer {
+            state.foreground = savedColor
+            state.pathFillOpacity = savedOpacity
+            state.pathFillAntialias = savedAntialias
+            state.select(savedTool)
+        }
+        state.select(.path)
+        state.foreground = .red
+        let options = ToolOptionsPaletteController()
+        let opacity = options.view.subviews.compactMap { $0 as? ClassicValueSlider }.last
+        let field = opacity.flatMap { descendant(of: $0, as: NSTextField.self, matching: { $0.isEditable }) }
+        field?.stringValue = "50"
+        if let field, let action = field.action { NSApp.sendAction(action, to: field.target, from: field) }
+        let antialias = options.view.subviews.compactMap { $0 as? NSButton }.first { $0.title == "Antialias fill" }
+        if antialias?.state == .on { antialias?.performClick(nil) }
+        check(state.pathFillOpacity == 0.5 && !state.pathFillAntialias,
+              "the Path options commit fill opacity and antialias choices")
+        if let item = fillItem, let action = item.action { NSApp.sendAction(action, to: item.target, from: item) }
+        settle()
+        let translucent = composite(60, 50) ?? []
+        check(translucent.count == 4 && translucent[0] > 240 && (175...200).contains(Int(translucent[1])),
+              "the palette fill uses the options' 50 percent foreground opacity (\(translucent))")
+        document.undo()
+        settle()
+        state.pathFillOpacity = savedOpacity
+        state.pathFillAntialias = savedAntialias
+
+        // A saved channel is a distinct drawable; filling it must leave
+        // layer pixels unchanged and keep the channel's outside area.
+        try session.select(.all, image: image)
+        let channel = try session.channelFromSelection(image, name: "Path fill target")
+        try session.select(.none, image: image)
+        try document.reload()
+        document.fillPath(path, settings: .init(color: .black))
+        settle()
+        check(document.activeDrawable == channel && luminance(thumbPixel(channel, 9, 9)) < 64
+                && luminance(thumbPixel(channel, 0, 0)) > 200 && luminance(thumbPixel(layer, 9, 9)) > 200,
+              "Fill Path changes the saved channel inside the path and preserves layer pixels")
+        document.selectLayer(layer)
+        settle()
+        document.deleteChannel(channel)
+        settle()
+
+        // A group as the target is refused, not silently filled.
+        document.createGroup()
+        settle()
+        guard let group = document.layers.first(where: { $0.kind == .group }) else {
+            return check(false, "a group exists for the fill-refusal check")
+        }
+        document.selectLayer(group.id)
+        settle()
+        let groupErrorCount = errors.count
+        document.fillPath(path, settings: .init(color: .red))
+        settle()
+        check(errors.count > groupErrorCount && errors.last?.contains("group") == true,
+              "filling onto a group is refused with an error (\(errors.last ?? "none"))")
+        check((composite(60, 50)?[0] ?? 0) > 200, "the refused group fill changed no pixels")
+
+        // A pixel-locked target is refused the same way.
+        document.selectLayer(layer)
+        settle()
+        document.setLayerLocks(layer, .pixels, to: true)
+        settle()
+        let lockErrorCount = errors.count
+        document.fillPath(path, settings: .init(color: .red))
+        settle()
+        check(errors.count > lockErrorCount && errors.last?.contains("Unlock") == true,
+              "a pixel-locked target refuses the fill with an error (\(errors.last ?? "none"))")
+        check((composite(60, 50)?[0] ?? 0) > 200, "the refused locked fill changed no pixels")
+        document.setLayerLocks(layer, .pixels, to: false)
+        settle()
+
+        // A mask is a supported fill target: the fill lands on the mask.
+        document.addMask(layer, source: .white, edit: true)
+        settle()
+        guard let mask = document.maskStates[layer]?.mask, mask != 0, document.isMaskTargetActive else {
+            return check(false, "the mask target is active for the mask-fill check")
+        }
+        document.fillPath(path, settings: .init(color: .black))
+        settle()
+        // The mask's thumbnail is scaled to 32 px wide, so (9, 9) is image
+        // (60, 50) — inside the path — and (0, 0) is outside it.
+        check(luminance(thumbPixel(mask, 9, 9)) < 64, "Fill Path lands on the mask while mask editing is on")
+        check(luminance(thumbPixel(mask, 0, 0)) > 200, "the mask fill stays inside the path")
+        document.selectLayer(layer)
+        settle()
+        document.deleteMask()
+        settle()
+        check(document.maskStates[layer] == nil, "the mask is removed again before the vector checks")
+
+        // To Vector Layer: fill red first so the vector layer's default
+        // white fill is visible over the filled area.
+        document.fillPath(path, settings: .init(color: .red))
+        settle()
+        check((composite(60, 50)?[0] ?? 0) > 200, "the path area is red before the conversion")
+        let undoBeforeVector = document.undoInfo.undoCount
+        let layersBeforeVector = document.layers.count
+        document.toVectorLayer(path, name: "Outline vector")
+        settle()
+        if let vector = document.layers.first(where: { $0.kind == .vector }) {
+            check(document.supportsVectorLayers != false, "a vector layer appears only where the engine has them")
+            check(document.layers.count == layersBeforeVector + 1, "To Vector Layer adds exactly one layer")
+            check(vector.isSelected && document.activeLayer == vector.id,
+                  "the new vector layer is selected through the authoritative reload")
+            check(vector.name == "Outline vector", "the explicit name survives the native refresh")
+            check(document.undoInfo.undoCount == undoBeforeVector + 1, "To Vector Layer is one undo step")
+            check(luminance(composite(60, 50)) > 200,
+                  "the vector layer renders with the engine's default white fill over the red area")
+
+            // Editing the path re-renders the vector layer: shrink the
+            // path and the area it no longer covers shows the red again.
+            let smaller = VectorPath(subpaths: [.init(anchors: [.init(CGPoint(x: 60, y: 50)), .init(CGPoint(x: 90, y: 50)),
+                                                                .init(CGPoint(x: 90, y: 80)), .init(CGPoint(x: 60, y: 80))],
+                                                      isClosed: true)])
+            document.updatePath(path, to: smaller)
+            settle()
+            check((composite(30, 30)?[0] ?? 0) > 200 && (composite(30, 30)?[1] ?? 255) < 64,
+                  "editing the path after the conversion re-renders the vector layer")
+            check(document.layers.contains { $0.kind == .vector && $0.id == vector.id },
+                  "the layer stays a genuine vector layer after the path edit")
+
+            // XCF round trip: the vector layer and the path survive save
+            // and reopen as structured content, and the document's target
+            // reconciles to the vector layer after the save's reload.
+            let xcf = work.appendingPathComponent("path-vector.xcf")
+            var saved = false
+            document.saveCopy(to: xcf) { saved = $0 == nil }
+            wait { saved && document.pendingWork == 0 }
+            check(saved, "the vector-layer image saves a copy")
+            let reopened = try session.openImage(path: xcf.path)
+            check(try session.layers(reopened).contains { $0.kind == .vector },
+                  "the saved copy keeps the vector layer as structured content")
+            check((try? session.paths(reopened))?.isEmpty == false, "the path survives the XCF round trip")
+            try session.closeImage(reopened)
+            check(document.activeLayer == document.layers.first(where: { $0.kind == .vector })?.id,
+                  "the target reconciles to the vector layer after the save reload")
+        } else {
+            check(document.supportsVectorLayers == false,
+                  "To Vector Layer adds nothing only on an engine without vector layers")
+            if case .failure(let error) = Result(catching: { try session.toVectorLayer(path, image: image, name: nil) }) {
+                check((error as? EngineSession.EngineError)?.status == Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                      "path_to_vector_layer on a pre-3.2 engine reports UNSUPPORTED (\(error))")
+            } else {
+                check(false, "path_to_vector_layer on a pre-3.2 engine must not succeed")
+            }
+            let vectorErrorCount = errors.count
+            document.toVectorLayer(path)
+            settle()
+            check(errors.count > vectorErrorCount && errors.last?.contains("3.2") == true,
+                  "the document reports the honest 3.2 requirement (\(errors.last ?? "none"))")
+            check(document.acceptsEdits, "the document edits again after the unsupported To Vector Layer")
+        }
+
+        // Closed guard: a closing document refuses both commands with the
+        // closed error rather than queueing onto a dying image.
+        let closingImage = try session.newImage(width: 32, height: 32)
+        let closing = try ImageDocument(session: session, image: closingImage, name: "ClosingPaths")
+        documents.items.append(closing)
+        closing.onError = { errors.append($0) }
+        closing.closeImageWhenDrained()
+        wait { closing.pendingWork == 0 }
+        let closedErrorCount = errors.count
+        closing.fillPath(path, settings: .init(color: .red))
+        closing.toVectorLayer(path)
+        settle()
+        check(errors.count > closedErrorCount
+                && errors.suffix(2).allSatisfy { $0.contains("already closed") },
+              "a closing document refuses fill and to-vector (\(errors.suffix(2)))")
+        documents.items.removeAll { $0 === closing }
     }
 
     private static func exercisePlugInCommands(_ session: EngineSession, documents: DocumentList) throws {
