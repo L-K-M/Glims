@@ -1102,6 +1102,10 @@ MARSHAL (image_convert_profile, return glims_image_convert_profile (e, a->image,
 MARSHAL (image_convert_profile_rasterizing, return glims_image_convert_profile_rasterizing
             (e, a->image, a->string, (uint32_t) a->width, a->height != 0, a->error);)
 MARSHAL (resources, return glims_resources (e, (uint32_t) a->width, a->out, a->capacity, a->count);)
+MARSHAL (vector_layer_style_get, return glims_vector_layer_style_get (e, a->image, a->item,
+                                                                      (GlimsVectorStyle *) a->in_out, a->error);)
+MARSHAL (vector_layer_style_set, return glims_vector_layer_style_set (e, a->image, a->item,
+                                                                      a->in, a->error);)
 
 /* A path's geometry takes more arguments than GlimsArgs holds. */
 typedef struct
@@ -2006,6 +2010,22 @@ api_resource_thumbnail (GlimsEngine *e, GlimsResourceID id, int32_t max_size,
 }
 
 static GlimsStatus
+api_vector_layer_style_get (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                            GlimsVectorStyle *style, char **error)
+{
+  GlimsArgs a = { .image = image, .item = layer, .in_out = style, .error = error };
+  return glims_engine_call (e, vector_layer_style_get_on_engine, &a);
+}
+
+static GlimsStatus
+api_vector_layer_style_set (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                            const GlimsVectorStyleChange *change, char **error)
+{
+  GlimsArgs a = { .image = image, .item = layer, .in = change, .error = error };
+  return glims_engine_call (e, vector_layer_style_set_on_engine, &a);
+}
+
+static GlimsStatus
 api_gradient_resource (GlimsEngine *e, GlimsImageID image, GlimsResourceID gradient,
                        GlimsPoint from, GlimsPoint to,
                        const GlimsResourceGradientSettings *settings, char **error)
@@ -2122,6 +2142,9 @@ static const GlimsEngineAPI api_v1 = {
   .image_convert_profile = api_image_convert_profile,
   .image_convert_profile_rasterizing = api_image_convert_profile_rasterizing,
   .resource_thumbnail = api_resource_thumbnail,
+  .vector_layer_style_get = api_vector_layer_style_get,
+  .vector_layer_style_set = api_vector_layer_style_set,
+
   .gradient_resource = api_gradient_resource,
 };
 
