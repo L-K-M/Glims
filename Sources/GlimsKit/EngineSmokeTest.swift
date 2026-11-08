@@ -245,14 +245,20 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (layer-multiselection-controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
-            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "snapping" {
-                try exerciseSnapping(session, work: work, documents: documents)
-                print(failures == 0 ? "PASSED (snapping)" : "FAILED: \(failures) failure(s)")
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "imports-and-layer-tree" {
+                try exerciseFileImports(session, work: work, documents: documents)
+                try exerciseLayerTree(session, documents: documents)
+                print(failures == 0 ? "PASSED (imports and layer tree)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "guide-dragging" {
                 try exerciseGuideDragging(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (guide dragging)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "snapping" {
+                try exerciseSnapping(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (snapping)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
@@ -294,10 +300,10 @@ enum EngineSmokeTest {
             try exerciseGridControls(session, work: work, documents: documents)
             try exercisePixelRulers(session, work: work, documents: documents)
             try exerciseGuideDragging(session, work: work, documents: documents)
-            try exerciseSnapping(session, work: work, documents: documents)
             try exerciseToolPresetControls(session, work: work, documents: documents)
             try exerciseFloatingControls(session, work: work, documents: documents)
             try exerciseLayerMultiselectionControls(session, work: work, documents: documents)
+            try exerciseSnapping(session, work: work, documents: documents)
 
             try exerciseStrokeSelectionControls(session, work: work, documents: documents)
 
@@ -640,6 +646,8 @@ enum EngineSmokeTest {
         // on the layer that was active before the load.
         if let active = document.activeLayer, active != oldActive {
             document.beginStroke(at: .init(x: 42, y: 50, pressure: 1), brush: brush)
+            check(document.strokeIsActive && document.selectedLayerIDs.count == 1,
+                  "the imported primary is immediately paintable without another selection (ids \(document.selectedLayerIDs))")
             document.continueStroke((43...46).map { .init(x: Double($0), y: 50, pressure: 1) })
             document.endStroke()
             wait { document.pendingWork == 0 }

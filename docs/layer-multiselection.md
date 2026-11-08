@@ -148,3 +148,13 @@ layer_select readiness policy, including during a preview/stroke.
 
 All four native suites pass: 1,777 / 1,563 / 1,777 / 1,777 checks on 3.2.8 /
 3.0.8 / 3.2.0 / master. Runtime UI adoption remains separate.
+
+## Controls acceptance
+
+Layer imports explicitly select their first imported layer before completion,
+so an immediately accepted pixel edit has one target. Collapsing groups
+preserves the document selection and nested expansion through AppKit's
+collapse callback turn; visible selection is restored without native picks.
+Separate synthetic user actions wait for that turn to finish. The focused
+controls pass all 68 checks on each engine, and the full pinned app run
+passes. The completed independent source fix review found no important issue.
