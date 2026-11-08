@@ -143,6 +143,8 @@ enum MainMenu {
             mask,
             item("Layer Properties…", #selector(DocumentWindowController.layerProperties(_:))),
             item("Vector Style…", #selector(DocumentWindowController.vectorStyle(_:))),
+            item("Rasterize Layer…", #selector(DocumentWindowController.rasterizeLayer(_:))),
+            item("Restore Layer Source…", #selector(DocumentWindowController.restoreLayerSource(_:))),
             arrange,
             lock,
             submenu("Transform", [
@@ -183,6 +185,7 @@ enum MainMenu {
             item("Fit Image", #selector(DocumentWindowController.fitImage(_:)), "0"),
             item("Actual Pixels", #selector(DocumentWindowController.actualPixels(_:)), "1"),
             .separator(),
+            item("Show Rulers", #selector(DocumentWindowController.toggleShowRulers(_:))),
             item("Show Guides", #selector(DocumentWindowController.toggleShowGuides(_:))),
             item("Show Grid", #selector(DocumentWindowController.toggleShowGrid(_:))),
             item("Show Layer Boundary", #selector(DocumentWindowController.toggleLayerBoundary(_:))),

@@ -534,6 +534,14 @@ final class EngineCanvasView: NSView {
                                   zoomPercent: zoomPercent, backingFactor: backingScale)
     }
 
+    /// The image-pixel point under a canvas view point — the same mapping
+    /// pointer input uses. The pixel rulers convert their own corners into
+    /// canvas coordinates and then through this, so their image-pixel
+    /// range matches the canvas exactly.
+    func imagePoint(at viewPoint: CGPoint) -> CGPoint {
+        CanvasGeometry.imagePoint(viewPoint: viewPoint, zoomPercent: zoomPercent, backingFactor: backingScale)
+    }
+
     func strokePoint(for event: NSEvent) -> EngineSession.StrokePoint {
         let point = imagePoint(for: event)
         let isTablet = event.subtype == .tabletPoint

@@ -1059,6 +1059,64 @@ row/edit preservation and overlay geometry; the GLIMS_SMOKE_CASE=
 guides-controls scenario is wired but NOT run — root owns the runtime
 matrix against the native-guides libraries.
 
+### Pixel rulers (2026-11-08)
+
+View > Show Rulers (default on) puts app-specific pixel rulers in the
+scroll view's native ruler slots: `DocumentWindowController` assigns two
+`PixelRulerView`s (an `NSRulerView` subclass) to
+`scrollView.horizontalRulerView`/`verticalRulerView` with
+`hasHorizontalRuler`/`hasVerticalRuler`, so AppKit keeps the scroll
+layout (toggling relayouts the viewport around the ruler thickness) and
+the rulers' accessibility semantics. The toggle state is a cached
+per-window `RulerViewState` (default on), separate from
+`guidesViewState`; the menu checkmark reads the cache via
+`RulerMenuLogic.validate`, which deliberately takes `engineIsBusy` and
+ignores it, so the item stays enabled and the toggle works while the
+engine is busy. Drawing is display-only: `PixelRulerView` reads the
+canvas's live geometry (weak `canvas` reference, cached image size) and
+maps image pixels through `NSView.convert(_:from:)` from the canvas —
+never assuming a vertical direction — so scroll, zoom, backing scale,
+image extent and flips come out right; no facade call, pixel, file,
+dirty, history, selection, export or print path is touched (printing
+draws an immutable PrintSnapshot, not the scroll view). Ruler
+invalidation rides the existing content-bounds notification (scroll and
+ruler toggles), plus canvas frame changes (zoom, image extent) and the
+window's backing-properties notification; the selector observers are
+removed in `windowWillClose` and in `deinit` (`rulerObserversActive`
+tracks them), and the ruler holds the canvas weakly, so closing a window
+leaves no observation or dangling geometry source behind. There is no
+global ruler controller.
+
+Ticks and labels come from a pure bounded planner, `PixelRulerPlan`: it
+validates all inputs finite (nil for non-finite inputs, non-positive
+scale, negative extent or an inverted range), clamps the visible range
+to the image extent `0...extent` (an off-image range or zero extent is
+the deliberate empty-plan fallback), picks the major spacing as the
+smallest whole 1/2/5 * 10^n reaching ~50 view points (whole pixels, so
+labels are whole image pixels), plans minor ticks at major/5 only when
+they land at least 4 view points apart, and caps the output at 512
+ticks with a progress guard, so extreme zoom, nonzero origins and
+damaged huge sizes terminate with a finite, sorted, bounded plan.
+`PixelRulerGeometry.deviceAligned` snaps strokes to the half-device-
+pixel grid (at most half a device pixel) without changing the ticks'
+image coordinates. Guides keep working independently; their state and
+overlay are untouched.
+
+Compile-checked here: `swift build` and `swift build --build-tests`
+both pass. Unit tests (`PixelRulerTests`) cover the planner against
+independent oracles (brute-force nice spacing, CanvasGeometry zoom/
+backing point scale, explicit range arithmetic) across nonzero origins,
+zoom and backing, clamping, cap/finiteness at extremes, damaged inputs,
+label semantics, device alignment, and the per-window default plus the
+busy-independent menu-validation contract. The smoke scenario
+`GLIMS_SMOKE_CASE=pixel-rulers` (`exercisePixelRulers`, also in the
+default engine-smoke run) is wired but NOT run here — it drives the
+real ruler slots and menu action (on/off viewport and checkmark changes,
+independent two-window state, busy-independent toggling, scroll/zoom
+tick movement and a ruler view bitmap against the geometry oracle,
+pixel/dirty/history/selection isolation, observer removal on close);
+root owns the runtime matrix against the native libraries.
+
 ### Path tool multi-anchor selection (2026-11-08)
 
 Scope: `Sources/GlimsKit/Tools/VectorPath.swift`,
@@ -2107,6 +2165,241 @@ now pass. The compiled `layer-source` interface scenario additionally
 checks queued document cache refresh and busy admission; its runtime
 execution and the unit suite are pending the shared desktop.
 
+Ruler runtime validation caught overlapping native ruler/clip rectangles:
+this AppKit build left the viewport full-sized even with zero content
+insets. CanvasScrollView now reserves only rectangles that actually
+overlap, leaving traditional native tiling alone, and preserves the
+scrolled position across repeated tiling. The focused checks pass on all
+four engines, including real scrolling and rectangle separation.
+Independent reviews of the original rulers and the layout fix found no
+important issues. All 417 unit tests pass.
+
+The first full run exposed a stale synthetic text click: after layout
+changed, its old window coordinates mapped to image (4,-17), outside the
+saved text at (4,4). Recomputing a click inside the current text bounds
+reopens that exact layer; deleting its content then saves correctly. The
+focused file-safety scenario passes. Unknown smoke selectors now fail
+explicitly rather than silently running the full suite. The integrated
+full run is repeated after adopting the Guides field fix.
+
+### Retained-source restore (2026-11-08)
+
+Backend slice on `feat/layer-source-restore`, engine plus a typed Swift
+case, no UI and no document dispatch. `GLIMS_LAYER_RESTORE_SOURCE = 13`
+on `layer_command` (purely additive enum value, ABI version stays 1) is
+the inverse of RASTERIZE for layers that still retain their structured
+source: it discards the pixel edits and regenerates the content from the
+retained text, link or path as ONE undo step, preserving the selection,
+the item id, the source kind and a mask attachment. Dispatch in
+`glims_layer_command` (Engine/edit.c) mirrors RASTERIZE exactly:
+`glims_edit_ready` first (BUSY during stroke/filter/plug-in), then
+`glims_check_item_locks` with PIXELS|POSITION (LOCKED, own or inherited),
+then `glims_layer_restore_source` (Engine/layer-source.c). An explicit
+layer id that names no attached layer of the image is NOT_FOUND before
+the switch, like RASTERIZE.
+
+Kind decision in `glims_layer_restore_source`: ordinary pixel layers,
+groups and structured layers whose source is gone (`source_is_retained`
+is false) report UNSUPPORTED with an actionable message before any
+mutation; an already editable instance (`source_is_editable`, the
+core's own `gimp_item_is_text/link/vector_layer` predicates) is a no-op
+that pushes no undo.
+
+On GIMP 3.2+ with the genuine rasterizable flag TRUE — text and vector
+always (their predicates ARE the flag), and a link rasterized
+explicitly — the mutation is `gimp_rasterizable_restore`
+(app/core/gimprasterizable.c): one "Revert Rasterize …" undo group
+around the rasterizable undo plus `gimp_image_undo_push_drawable_mod`
+(copy TRUE), then `set_rasterized(FALSE)`, whose handlers re-render
+the retained text (app/text/gimptextlayer.c), re-render the path
+(app/path/gimpvectorlayer.c) or thaw the link, reset its matrix and
+render its buffer (app/core/gimplinklayer.c).
+
+A link layer whose monitor stopped while the generic flag stayed FALSE
+— native pixel edits or an indexed conversion call
+`gimp_link_freeze` from `gimp_link_layer_set_buffer`, and
+`gimp_item_is_link_layer` computes `gimp_link_layer_is_monitored`, so
+`gimp_item_is_rasterized` sees it without the flag — never touches the
+restore guard or fakes the flag. The restore is assembled from public
+core headers as one undo group: `gimp_image_undo_push_drawable_mod`
+(copy TRUE) BEFORE `gimp_image_undo_push_link_layer`, so undo first
+stops the monitor (the link undo restores the unmonitored duplicate)
+and then restores the painted buffer; then `gimp_link_thaw` on the
+retained link and `gimp_link_layer_set_link(layer, same_link, FALSE)`,
+which resets the transform matrix to identity and re-renders the
+retained source. Link policy, stated exactly: the file is RELOADED when
+it is readable; on a read failure the RETAINED SOURCE BUFFER is kept and
+monitoring resumes — a missing file is NOT an error
+(`gimp_link_update_buffer` keeps the old buffer when the load fails,
+app/core/gimplink.c). The static `gimp_link_update_buffer` and the
+private flag setter are never called. `gimp_link_layer_set_link` returns
+FALSE only when the link has no buffer or the buffer's extents are zero
+(`gimp_link_layer_render_link`), so the retained link's GFile
+(`gimp_link_get_file`) and nonempty buffer (`gimp_link_get_buffer`) are
+prevalidated BEFORE the undo group; an unexpected FALSE after that is
+reported as FAILED with a message disclosing the gap, never silently
+OK.
+
+Before GIMP 3.2 only text exists; the restore reproduces
+`gimp_text_layer_set`'s own undo group (app/text/gimptextlayer.c):
+`gimp_image_undo_push_text_layer_modified` plus
+`gimp_image_undo_push_drawable_mod` (copy TRUE) in one
+GIMP_UNDO_GROUP_TEXT group, alpha added when the painted layer lost it,
+`"modified"=FALSE`, then the GimpText `"changed"` signal (no args)
+re-triggers the layer's existing private render callback.
+`gimp_text_layer_set` itself cannot be used while modified is TRUE —
+its `gimp_item_is_text_layer` predicate guard refuses — and
+`gimp_text_layer_discard` is never used: it would destroy the text.
+
+Swift: `EngineSession.LayerCommand.restoreSource = 13` (typed, routed
+through the existing `layerCommand(_:image:layer:)` call), but
+`ImageDocument.layerCommand` REFUSES `.restoreSource` with "Use the
+confirmed restore command." until the root's global confirmed-restore
+dispatch exists — the input queue must not run native file I/O (a link
+restore can reload its file). No new footer slots; no palette or menu
+entry.
+
+Tests: `test_layer_restore_source` in `Engine/tests/engine-tests.c`
+(exact oracles, rows matched by identity via `source_test_row`): edited
+pixels -> source restoration (pixel-identical render) -> UNDO exact
+edited pixels + retained raster state -> REDO source again, for the
+explicit-rasterize text on every engine (3.0's modified-flag path
+included), the vector on 3.2+, the explicitly rasterized link (flag
+TRUE) and the painted link (flag FALSE, monitor stopped); no-op without
+history on already editable layers; unchanged selection/bounds/item
+id/source kind/mask attachment; UNSUPPORTED for pixel/group and
+NOT_FOUND for stale/foreign/closed ids before any mutation; own and
+inherited PIXELS/POSITION locks LOCKED; BUSY during a stroke and a
+filter preview; the reload-file policy (rewritten file renders blue) and
+the missing-file retained-buffer policy (deleted file restores the
+exact retained render, monitoring resumed, no error). The adapter and
+these tests were NOT compiled or run in this slice — only
+`swift build --build-tests` (the facade header compiles through
+CGlimsEngine). Root compiles the C matrix.
+
+Root validation: the native restore suite passes 1,314 / 1,170 / 1,314 /
+1,314 checks on GIMP 3.2.8 / 3.0.8 / 3.2.0 / master. The first run's
+retained-source assertions used an uninitialized size-versioned output
+struct. Initializing `struct_size` fixes those tests; the independent
+pixel-restoration and exact undo assertions already passed. No runtime
+restore behavior required a change. User-facing confirmed dispatch and
+its interface checks follow separately.
+
+### Layer source controls: Rasterize Layer… / Restore Layer Source… (2026-11-08)
+
+UI slice on `feat/layer-source-controls`, Swift-only over the existing
+C API 113 (`LayerCommand.rasterize = 12`, `.restoreSource = 13`,
+`layer_source_info`): no C, header or dependency change.
+
+- `Sources/GlimsKit/Document/LayerSourceMenuPolicy.swift`: pure
+  cached-state gating. Rasterize only on genuine TEXT/LINK/VECTOR with
+  `hasSource && !isRasterized`; Restore only on `hasSource &&
+  isRasterized`; ordinary pixels/groups and a missing cache entry offer
+  neither; inherited (effective) PIXELS|POSITION locks, mask/channel
+  targets and the caller-composed closing/busy/pending-target/preview/
+  attached-sheet states disable. No synchronous native RPC in
+  validation or UI.
+- `ImageDocument`: `targetCommandIsPending` cached flag;
+  `rasterizeLayerSource(_:completion:)` — counted, explicit-id, routed on
+  the input queue behind accepted edits; `restoreLayerSource(_:completion:)`
+  — same explicit-id rules, but through the existing `enqueueExclusive`
+  mechanism like `convertProfile`: pending edits end, accepted input in
+  every document drains first, `pendingWork` holds until completion, and
+  the restore never goes through the ordinary input queue (a link
+  restore may load a file). Both deliver the `Result` on main exactly
+  once, reload when the document is alive, report failures through
+  `onError`, refuse closed/busy without queueing, and pass a stale id to
+  the engine untouched so it comes back NOT_FOUND, never retargeted.
+  `layerCommand(.restoreSource)` still refuses unconfirmed calls.
+- `MainMenu` Layer menu gains "Rasterize Layer…" and "Restore Layer
+  Source…"; `DocumentWindowController` owns the per-window NSAlert
+  confirmation sheets (no singleton, no callback-hook clobbering): the
+  document and explicit layer id are captured by value before the alert,
+  so Apply never uses layer 0, the front window or the current selection;
+  Cancel queues nothing; a close since the sheet opened wins over a late
+  Apply. Rasterize's text explains pixel behavior with the source
+  retained and linked layers stopping source updates; Restore's text
+  explains discarded pixel edits, undo availability, retained
+  text/path/linked source, and the native link contract (reload when
+  readable, otherwise retained source with monitoring resumed). Sheet
+  buttons carry explicit accessibility labels. `validateMenuItem` gates
+  both items through the policy over `layerSources`/`layerLocks` and the
+  existing mask/channel/busy/closing/preview/attached-sheet guards.
+- Tests: `LayerSourceMenuPolicyTests` (pure policy: kinds, source
+  states, missing cache, locks, target and blocked states),
+  `LayerMenuTests` gains the Layer-menu wiring for both selectors, and
+  `EngineSmokeTest` gains `GLIMS_SMOKE_CASE=layer-source-controls` plus
+  `exerciseLayerSourceControls` in the full suite: menu wiring and
+  cached gating (text/pixel/locks/attached-sheet/busy), sheet Cancel
+  changing nothing, Rasterize Apply as one undo with the cached kind
+  flipped, retarget-before-Apply and a second document staying untouched,
+  a pixel stroke then Restore giving the exact source pixels plus one
+  undo, undo restoring the painted pixels, BUSY refusal under a
+  controlled semaphore pause, the admitted restore counted in
+  `pendingWork` and draining the other document's accepted stroke first,
+  stale-id native NOT_FOUND, and late-close Apply queueing nothing.
+  Pixel/kind oracles read the session directly (`copyPixels`,
+  `layerSource`, `layers`), never the cache under test.
+
+Checked in this slice: `swift build -j 2` — Build complete;
+`swift build -j 2 --build-tests` — Build complete (the new
+`LayerSourceMenuPolicyTests.o` is in the build tree). NOT RUN here (the
+Mac's shared process limits; root owns runtime): `swift test`, the
+`GLIMS_SMOKE_CASE=layer-source-controls` and full `--engine-smoke-test`
+runs, all AppKit/GUI execution, and every native adapter/engine build —
+the four-engine suite 1314/1170/1314/1314 green under root predates
+this slice and does not validate it. Remaining gaps: runtime behavior
+of the sheets, the restore's link-file reload path through the UI, and
+mask/channel-target gating exercised only in the pure policy tests, not
+against a live mask/channel target.
+
+Guide field refresh regression: undoing a selected guide's move updated
+the list but left its idle position field stale because reselecting the
+same table row does not notify its delegate. The new actual-sheet check
+failed before the fix. Reload now synchronizes the selected guide's input
+fields explicitly while preserving an active text edit. Both Undo/Redo
+field checks and the existing active-edit preservation check pass on the
+pinned engine (30 focused checks). Before this fix, the source-cache
+integration passed 399 unit tests, all-four-engine guide checks and 971
+full pinned interface checks. Follow-up review and matrix are running.
+
+### Linked-load admission and object lifetime (2026-11-08)
+
+A controlled Python file loader reproduced edits being admitted during
+Restore Source, Undo, history navigation and automatic linked-file refresh.
+Restore/Undo/history now hold balanced native busy counters. RPC dispatch
+from a nested engine loop also raises busy for the call so mutation gates
+refuse while reads and cancellation remain deliverable. This is not a
+blanket dispatch block; existing stroke delivery keeps its prior contract.
+The public event callback contract already forbids synchronous reentry.
+
+A second red regression showed close destroying images during a load.
+Native close now returns BUSY and leaves the image alive; EngineActivity
+retries asynchronously without occupying its queue or reporting a false
+completion. The session stays retained until a real close result arrives.
+The retry intentionally waits for native completion; a permanently wedged
+loader can therefore keep the close pending while cancellation remains
+available.
+
+GIMP 3.2's link finalizer leaves a changed idle with bare link userdata.
+The adapter tracks links in current layers, detached undo-owned layers,
+link undo records and nested undo/redo stacks. A weak notification removes
+pending sources only when the link object actually dies, preserving live
+shared owners and future monitoring. Adoption, undo events and final image
+release install the hooks. Master cancels the idle natively, so this
+compatibility cleanup applies only to the pinned 3.2 engines. No upstream
+source was modified. Re-audit the workaround when updating those pins.
+
+Native suites pass 1,361 / 1,171 / 1,361 / 1,361 checks on GIMP 3.2.8 /
+3.0.8 / 3.2.0 / master, including close BUSY/no destruction, post-load
+close, unchanged pixels/history after refused edits, reads/cancel delivery
+and native monitor reload. The fixture now observes native close status
+rather than assuming a Python marker or a fixed delay proves completion.
+Independent review of the lifetime change found no important issues.
+Swift targets compile; application-side retry runtime remains part of
+subsequent interface integration.
+
+
 ### Native indexed conversion (2026-11-08)
 
 Backend slice on `feat/indexed-conversion`, adapter plus typed Swift
@@ -2250,6 +2543,14 @@ pinned engine (30 focused checks). Before this fix, the source-cache
 integration passed 399 unit tests, all-four-engine guide checks and 971
 full pinned interface checks. Follow-up review and matrix are running.
 
+The combined rulers/Guides-field revision passes all 417 unit tests and
+1,021 full pinned-engine interface checks. The focused rulers scenario
+passes 47 checks on each of the four supported engines.
+
+Pinned CI uses Swift 6.2 and requires explicit CGFloat-to-Double tuple
+conversion in the ruler axis mapping; the newer local compiler had
+accepted it implicitly. The conversions are now explicit.
+
 ### Indexed conversion controls (2026-11-08)
 
 UI slice on `feat/indexed-controls`, Swift only — no C/header/dependency
@@ -2337,6 +2638,7 @@ Root reviewed form state, explicit consent, captured settings/document,
 validation, exclusive work and close handling. The separate independent
 UI review failed without findings and provides no approval.
 
+
 Integrated with the merged Guides/source cache: all 402 unit tests,
 focused anchor checks on all four engines and 1,000 full pinned interface
 checks pass. The synthetic Escape key now also carries the correct ESC
@@ -2389,6 +2691,16 @@ the four engines. A focused independent review of the supplied exact diff
 and surrounding source found no important findings; the helper could not
 independently execute Git. The broader current-file review was also clean.
 
+The source-controls integration passes 407 unit tests, all 33 focused
+sheet/dispatch checks on each supported engine, and the full pinned
+interface suite. Initial failures were assertions against the wrong
+state: ordinary pixels have a source-info cache entry, and the menu
+was still aimed at the retargeted pixel layer. Correcting those fixture
+expectations required no production change. Root reviewed the source
+controls, admission/drain and close paths. The independent broad UI
+helper timed out without a verdict and is not counted as approval.
+
+
 Grid integration validation passes 1,380 / 1,269 / 1,380 / 1,380 native
 checks on GIMP 3.2.8 / 3.0.8 / 3.2.0 / master. The initial failures were
 fixture errors: the color oracle required double precision although
@@ -2400,3 +2712,53 @@ Independent review found no important issue. Nondefault unit retention
 is verified from clone semantics in the sources; it is not directly
 covered by the facade-only XCF fixture. Swift/cache runtime follows with
 the configuration interface.
+
+
+Ruler review reproduced a major/minor classification defect at large
+scrolled coordinates: a magnitude-relative tolerance eventually exceeded
+the distance between ticks. At image coordinate 1,000,000 and 3,200% zoom,
+the actual planner mislabeled all 26 visible ticks as major. Classification
+now uses exact divisibility of the integral tick index. The independent
+six-position oracle passes, as do all 421 unit tests and 47 focused pinned
+interface checks. The four-engine focused and 1,067 full integration checks
+above preceded this pure planner correction.
+
+
+After integrating Indexed, one native conformance run failed during the
+linked-file rewrite fixture and later crashed after cascading failures.
+A bounded debugger run did not reproduce the crash and produced no
+backtrace; its exact cause is unverified. The fixture did discard image
+ids after refused closes and continued dependent setup after BUSY.
+Its positive linked-file setup/cleanup now retries only pre-mutation BUSY
+with finite deadlines, reports individual statuses, retains owned ids
+until a real close, and stops dependent tests on setup/cleanup failure.
+Negative BUSY assertions remain single calls. All four suites pass
+1,459 / 1,245 / 1,459 / 1,459 checks. These runs observed zero retries in
+this fixture; controlled slow-loader tests separately verify the native
+BUSY contract. The earlier crash is not presented as a proven new UAF.
+
+### Focused linked-close smoke (2026-11-08)
+
+`GLIMS_SMOKE_CASE=linked-close` runs only `exerciseLinkedClose`
+(`Sources/GlimsKit/EngineSmokeTestLinkedClose.swift`). Before the engine
+starts, that case installs the slow-loader plug-in named by
+`GLIMS_SMOKE_SLOW_LOADER_SCRIPT` into the throwaway user directory, points
+`GLIMS_SLOWLOAD_DIR` at the smoke work directory and leaves the release
+marker present. The scenario places a `.gslow` link, rewrites the file in
+place, waits for the native link monitor's reload to park inside the
+loader, then closes through `closeImageWhenDrained`: while parked, the
+close stays deferred, the image stays alive (facade read-only oracle) and
+the main loop keeps advancing; after the marker is released the close
+completes exactly once and the native oracle reports the image gone.
+Engines before 3.2 skip explicitly. Added compile-checked only
+(`swift build`, `swift build --build-tests`); the runtime run is not
+exercised on this branch and happens on the review root.
+
+The linked-close smoke is now exercised. Replacing only EngineActivity's
+close method with the earlier one-shot implementation reproduced two
+failures: premature close completion during the paused loader and an image
+still present after completion. The fixed retry method passes on GIMP
+3.2.8, 3.2.0 and master; 3.0.8 explicitly skips unsupported link layers.
+The final fixture requires NOT_FOUND specifically, stops on a missing
+pause marker, checks that no app activity masks the native busy state,
+and cleans up any image left by the deliberate red implementation.
