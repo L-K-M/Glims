@@ -331,6 +331,17 @@ GlimsStatus glims_image_convert_mode      (GlimsEngine *e, GlimsImageID image,
 GlimsStatus glims_image_convert_precision (GlimsEngine *e, GlimsImageID image,
                                            uint32_t component, uint32_t trc, char **error);
 
+/* color-profile.c */
+GlimsStatus glims_image_assign_profile (GlimsEngine *e, GlimsImageID image,
+                                        const char *path, char **error);
+GlimsStatus glims_image_convert_profile (GlimsEngine *e, GlimsImageID image,
+                                         const char *path, uint32_t intent,
+                                         bool black_point_compensation, char **error);
+
+GlimsStatus glims_image_convert_profile_rasterizing (GlimsEngine *e, GlimsImageID image,
+                                                     const char *path, uint32_t intent,
+                                                     bool black_point_compensation, char **error);
+
 /* resource.c */
 GlimsStatus glims_resources            (GlimsEngine *e, uint32_t kind,
                                         GlimsResourceInfo *rows, int32_t capacity,
