@@ -111,6 +111,7 @@ enum EngineSmokeTest {
             try exerciseEditing(session, documents: documents)
             try exerciseLayerTree(session, documents: documents)
             try exerciseLayerMasks(session, documents: documents)
+            try exerciseEffectBindings(session)
             try exerciseTargetCommands(session, documents: documents)
             try exerciseTargetHistory(session, documents: documents)
             try exercisePreferences(session, documents: documents)
@@ -1315,6 +1316,69 @@ enum EngineSmokeTest {
         while !closed && Date() < deadline { spin() }
         check(closed, "density changes still allow safe render teardown")
         documents.items.removeAll { $0 === document }
+    }
+
+    private static func exerciseEffectBindings(_ session: EngineSession) throws {
+        let image = try session.newImage(width: 32, height: 32)
+        defer { try? session.closeImage(image) }
+        guard let layer = try session.layers(image).first?.id else { throw NoWindow() }
+        let initial = try session.effects(on: layer, image: image)
+        check(initial.isEmpty, "a new drawable has no committed effects")
+        let preview = try session.beginFilter(image: image, drawable: layer, operation: "gegl:value-invert")
+        check(try session.effects(on: layer, image: image).isEmpty,
+              "a live preview is not mistaken for a committed effect id")
+        try session.commitFilter(preview)
+        guard let invert = try session.effects(on: layer, image: image).first else { throw NoWindow() }
+        check(invert.operation == "gegl:value-invert" && invert.isEnabled && invert.opacity == 1,
+              "the committed effect reads back its operation, enabled state and opacity")
+        check((pixel(session, image, x: 10, y: 10)?[0] ?? 255) < 20,
+              "the committed invert changes white image pixels to black")
+        try session.changeEffect(invert.id, on: layer, image: image,
+                                 .init(name: "Negative", isEnabled: false, opacity: 0.5))
+        let disabled = try session.effects(on: layer, image: image).first
+        check(disabled?.name == "Negative" && disabled?.isEnabled == false && disabled?.opacity == 0.5,
+              "one effect change marshals all requested properties")
+        check((pixel(session, image, x: 10, y: 10)?[0] ?? 0) > 230,
+              "disabling the effect restores the drawable's white output")
+        try session.undo(image)
+        check(try session.effects(on: layer, image: image).first == invert,
+              "one Undo restores the effect's complete property state")
+        check((pixel(session, image, x: 10, y: 10)?[0] ?? 255) < 20,
+              "property Undo restores the effect's pixels")
+        try session.redo(image)
+        check(try session.effects(on: layer, image: image).first == disabled,
+              "property Redo restores the changed metadata")
+        try session.changeEffect(invert.id, on: layer, image: image, .init(isEnabled: true, opacity: 1))
+        let secondPreview = try session.beginFilter(image: image, drawable: layer, operation: "gegl:value-invert")
+        try session.commitFilter(secondPreview)
+        let pair = try session.effects(on: layer, image: image)
+        guard pair.count == 2, let top = pair.first else { throw NoWindow() }
+        check(top.id != invert.id && pair.last?.id == invert.id,
+              "the effect list preserves the native top-first order and distinct ids")
+        try session.effectCommand(.toBottom, effect: top.id, on: layer, image: image)
+        check(try session.effects(on: layer, image: image).last?.id == top.id,
+              "To Bottom reorders the named committed effect")
+        try session.effectCommand(.raise, effect: top.id, on: layer, image: image)
+        check(try session.effects(on: layer, image: image).first?.id == top.id,
+              "Raise moves the effect toward the top")
+        try session.effectCommand(.remove, effect: top.id, on: layer, image: image)
+        check(try session.effects(on: layer, image: image).map(\.id) == [invert.id],
+              "Remove drops only the named effect")
+        let beforeMerge = pixel(session, image, x: 10, y: 10)
+        try session.effectCommand(.merge, effect: invert.id, on: layer, image: image)
+        check(try session.effects(on: layer, image: image).isEmpty,
+              "Merge removes the baked effect from the committed stack")
+        check(pixel(session, image, x: 10, y: 10) == beforeMerge,
+              "Merge keeps the actual composited pixels unchanged")
+        try session.undo(image)
+        check(try session.effects(on: layer, image: image).first?.id == invert.id,
+              "merge Undo restores the same effect identity")
+        do {
+            try session.changeEffect(top.id, on: layer, image: image, .init(isEnabled: false))
+            check(false, "a removed effect id is refused")
+        } catch {
+            check(true, "a removed effect id is refused without touching the remaining effect")
+        }
     }
 
     private static func exerciseDocument(_ session: EngineSession, work: URL,
