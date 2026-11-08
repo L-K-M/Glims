@@ -1540,8 +1540,8 @@ final class EngineSession: @unchecked Sendable {
 
     /// The image's color model, as `colorInfo` reports it and
     /// `convertMode` takes (GlimsColorMode). Conversion to `.indexed`
-    /// is not implemented yet — palette and dither policy are a later
-    /// slice — but an indexed image's info still reports `.indexed`.
+    /// goes through `convertToIndexed`, which takes palette and dither
+    /// settings; an indexed image's info still reports `.indexed`.
     enum ColorMode: UInt32 {
         case unknown = 0, rgb = 1, grayscale = 2, indexed = 3
 
@@ -1622,8 +1622,9 @@ final class EngineSession: @unchecked Sendable {
 
     /// Image ▸ Mode ▸ …: the whole image's color model as one undo
     /// step (image_convert_mode). A no-op changes nothing and pushes no
-    /// undo; converting to `.indexed` is UNSUPPORTED for now; BUSY while
-    /// a stroke, a preview or a plug-in holds the image.
+    /// undo; converting to `.indexed` stays UNSUPPORTED here — use
+    /// `convertToIndexed`; BUSY while a stroke, a preview or a plug-in
+    /// holds the image.
     func convertMode(_ image: Int32, to mode: ColorMode) throws {
         var error: UnsafeMutablePointer<CChar>?
         try check(api.image_convert_mode(engine, image, mode.rawValue, &error), error)
@@ -1709,6 +1710,91 @@ final class EngineSession: @unchecked Sendable {
         guard path?.utf8.contains(0) != true else {
             throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
                               message: "The profile path contains invalid text.")
+        }
+    }
+
+    /// The palette an indexed conversion builds (GlimsIndexedPalette):
+    /// the facade's own values, never the engine's enum.
+    enum IndexedPalette: UInt32 {
+        /// Quantize to the image's own colors, at most `maxColors`.
+        case generated = 1
+        /// The fixed 216-color web palette.
+        case web = 2
+        /// Black and white.
+        case mono = 3
+        /// The call's own `customColors` list.
+        case custom = 4
+    }
+
+    /// How an indexed conversion dithers (GlimsIndexedDither).
+    enum IndexedDither: UInt32 {
+        case none = 1
+        case floydSteinberg = 2
+        /// Floyd-Steinberg, reduced color bleeding.
+        case floydSteinbergLowBleed = 3
+        /// The engine's built-in positioned/ordered matrix.
+        case fixed = 4
+    }
+
+    /// What `convertToIndexed` does when the image holds a genuine
+    /// editable text, vector or link layer the conversion would
+    /// rasterize (GlimsIndexedPreservation).
+    enum IndexedPreservation: UInt32 {
+        /// Refuse; nothing changes.
+        case preserveEditable = 1
+        /// Rasterize them inside the conversion's one undo step; their
+        /// structured sources are retained and restored by undo.
+        case allowRasterize = 2
+    }
+
+    /// How `convertToIndexed` quantizes (GlimsIndexedSettings).
+    /// `maxColors` applies only to `.generated` (2 ... 256).
+    /// `removeUnused` drops unused and duplicate colormap entries; the
+    /// engine honors it for `.web` and `.custom` and ignores it
+    /// otherwise. `ditherText` quantizes text layers' pixels like a
+    /// raster layer; with it off a text layer is re-rendered and stays
+    /// editable. `customColors` is the `.custom` palette: 1 ... 256
+    /// colors; the engine keeps opaque colors only, so non-opaque
+    /// entries are refused.
+    struct IndexedSettings: Equatable {
+        var palette: IndexedPalette = .generated
+        var maxColors: Int32 = 256
+        var removeUnused = true
+        var dither: IndexedDither = .none
+        var ditherAlpha = false
+        var ditherText = false
+        var preservation: IndexedPreservation = .preserveEditable
+        var customColors: [NSColor] = []
+    }
+
+    /// Converts the whole image to indexed color as exactly one undo
+    /// step (image_convert_indexed). An already indexed image is a
+    /// no-op. `.preserveEditable` (the default) reports
+    /// `EngineError.requiresRasterization` when the image holds a
+    /// genuine editable vector or link layer, or a genuine editable
+    /// text layer while `ditherText` is on; retry with
+    /// `.allowRasterize` after consent. Throws UNSUPPORTED for a
+    /// non-8-bit-non-linear precision or a layer stack containing a
+    /// group, BUSY while a stroke, a preview or a plug-in holds the
+    /// image, and INVALID_ARGUMENT for invalid settings.
+    func convertToIndexed(_ image: Int32, settings: IndexedSettings) throws {
+        var values = GlimsIndexedSettings(
+            struct_size: UInt32(MemoryLayout<GlimsIndexedSettings>.size),
+            palette: settings.palette.rawValue,
+            max_colors: settings.maxColors,
+            remove_unused: settings.removeUnused,
+            dither: settings.dither.rawValue,
+            dither_alpha: settings.ditherAlpha,
+            dither_text: settings.ditherText,
+            preservation: settings.preservation.rawValue)
+        let colors = settings.customColors.map(Self.color)
+        var error: UnsafeMutablePointer<CChar>?
+        // The buffer covers the complete synchronous C call; an empty
+        // list passes a NULL base address, valid for non-custom modes.
+        try colors.withUnsafeBufferPointer { buffer in
+            try check(api.image_convert_indexed(engine, image, &values,
+                                                buffer.baseAddress, Int32(buffer.count), &error),
+                      error)
         }
     }
 
