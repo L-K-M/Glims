@@ -41,17 +41,55 @@ final class ImageDocument {
     /// the edit target and reports no event for it — so the mask
     /// commands and target picks refresh it explicitly.
     private(set) var maskStates: [Int32: EngineSession.MaskState] = [:]
+    private(set) var components: EngineSession.ComponentState?
+    private(set) var channels: [EngineSession.Channel] = []
+    private(set) var quickMaskState: EngineSession.QuickMaskState?
     /// Bumped by every reload; thumbnail caches key on it so a result
     /// read for an older state never lands on a newer row.
     private(set) var stateVersion = 0
+    private enum PaintTarget {
+        case layer(Int32)
+        case mask(layer: Int32, drawable: Int32)
+        case channel(Int32)
+
+        var drawable: Int32 {
+            switch self {
+            case .layer(let id), .channel(let id): return id
+            case .mask(_, let id): return id
+            }
+        }
+
+        var layer: Int32? {
+            switch self {
+            case .layer(let id), .mask(let id, _): return id
+            case .channel: return nil
+            }
+        }
+
+        var mask: Int32? {
+            if case .mask(_, let id) = self { return id }
+            return nil
+        }
+    }
+
     private struct TargetPick {
         let version: Int
-        let layer: Int32
-        let mask: Int32?
+        let target: PaintTarget
     }
     private var targetPickVersion = 0
     private var pendingTargetPick: TargetPick?
     private var rejectedTargetPick = false
+    private struct ComponentIntent {
+        let version: Int
+        let activeMask: EngineSession.Components
+        let activeValues: EngineSession.Components
+        let visibleMask: EngineSession.Components
+        let visibleValues: EngineSession.Components
+    }
+    private var componentIntents: [ComponentIntent] = []
+    private var nextChannelIntent = 0
+    private var channelVisibilityIntents: [Int32: (version: Int, visible: Bool)] = [:]
+    private var quickMaskIntent: (version: Int, enabled: Bool)?
     /// Input-queue state: edits already accepted behind a failed pick
     /// must refuse before reaching an implicit native drawable target.
     private nonisolated(unsafe) var paintTargetIsValid = true
@@ -167,13 +205,25 @@ final class ImageDocument {
             }
         }
         layerLocks = locks
-        if let pick = pendingTargetPick {
+        if let pick = pendingTargetPick, let pickedLayer = pick.target.layer {
             for (id, var mask) in masks {
-                mask.editing = id == pick.layer && pick.mask != nil
+                mask.editing = id == pickedLayer && pick.target.mask != nil
                 masks[id] = mask
             }
         }
         maskStates = masks
+        components = try session.components(image)
+        channels = try session.channels(image)
+        quickMaskState = try session.quickMask(image)
+        mirrorChannelIntents()
+        if let pick = pendingTargetPick {
+            channels = channels.map { row in
+                channelRow(row, selected: {
+                    if case .channel(let id) = pick.target { return id == row.id }
+                    return false
+                }())
+            }
+        }
         undoInfo = try session.undoInfo(image)
         history = try session.history(image)
         // While a pick or a pending target command mirrors an intended
@@ -205,23 +255,62 @@ final class ImageDocument {
     }
 
     /// The drawable painting, fills, gradients, filters, Copy and Clear
-    /// act on: the active layer's mask while mask editing is on, the
-    /// layer itself otherwise. Fill, gradient, Copy and Clear resolve
-    /// the same target natively from the engine's selected drawables.
-    var activeDrawable: Int32? {
+    /// act on. A selected channel takes precedence over the remembered
+    /// layer, just as it does for implicit engine edits.
+    private var paintTarget: PaintTarget? {
         guard !rejectedTargetPick, pendingTargetCommands.isEmpty else { return nil }
+        if let pick = pendingTargetPick { return pick.target }
+        if let channel = channels.first(where: \.isSelected) { return .channel(channel.id) }
         guard let layer = activeLayer else { return nil }
-        if let pick = pendingTargetPick, pick.layer == layer { return pick.mask ?? layer }
-        if let state = maskStates[layer], state.editing, state.mask != 0 { return state.mask }
-        return layer
+        if let state = maskStates[layer], state.editing, state.mask != 0 {
+            return .mask(layer: layer, drawable: state.mask)
+        }
+        return .layer(layer)
+    }
+
+    var activeDrawable: Int32? { paintTarget?.drawable }
+
+    var activeChannel: Int32? {
+        if case .channel(let id) = paintTarget { return id }
+        return nil
     }
 
     /// Whether the active target is a mask rather than the layer:
     /// transforms, moves and path strokes have no mask backend, so they
     /// refuse instead of silently editing the layer's pixels.
     var isMaskTargetActive: Bool {
-        guard let layer = activeLayer, let drawable = activeDrawable else { return false }
-        return drawable != layer
+        if case .mask = paintTarget { return true }
+        return false
+    }
+
+    var isChannelTargetActive: Bool { activeChannel != nil }
+
+    private func channelRow(_ row: EngineSession.Channel, selected: Bool? = nil,
+                            visible: Bool? = nil) -> EngineSession.Channel {
+        EngineSession.Channel(id: row.id, name: row.name, isVisible: visible ?? row.isVisible,
+                              isSelected: selected ?? row.isSelected, isQuickMask: row.isQuickMask,
+                              opacity: row.opacity, color: row.color)
+    }
+
+    private func mirrorChannelIntents() {
+        if let state = components {
+            var active = state.active, visible = state.visible
+            for intent in componentIntents {
+                active.subtract(intent.activeMask)
+                active.formUnion(intent.activeValues.intersection(intent.activeMask))
+                visible.subtract(intent.visibleMask)
+                visible.formUnion(intent.visibleValues.intersection(intent.visibleMask))
+            }
+            components = EngineSession.ComponentState(mode: state.mode, supported: state.supported,
+                                                       active: active, visible: visible)
+        }
+        channels = channels.map { row in
+            channelRow(row, visible: channelVisibilityIntents[row.id]?.visible)
+        }
+        if let intent = quickMaskIntent, let state = quickMaskState {
+            quickMaskState = EngineSession.QuickMaskState(enabled: intent.enabled,
+                channel: intent.enabled ? state.channel : 0, inverted: state.inverted, color: state.color)
+        }
     }
 
     /// Makes `id` the layer painting, fills, filters, plug-ins and the
@@ -269,8 +358,23 @@ final class ImageDocument {
         }
         let mask = maskStates[id]?.mask
         guard !editingMask || (mask != nil && mask != 0) else { return }
+        queueTargetPick(editingMask ? .mask(layer: id, drawable: mask!) : .layer(id))
+    }
+
+    func selectChannel(_ id: Int32) {
+        guard !isClosing, !refuseWhileEditingUnavailable() else { return }
+        endPendingUserEdits()
+        guard channels.contains(where: { $0.id == id }) else { return }
+        queueTargetPick(.channel(id))
+    }
+
+    func returnToLayers() {
+        if let layer = activeLayer { selectLayer(layer) }
+    }
+
+    private func queueTargetPick(_ target: PaintTarget) {
         targetPickVersion += 1
-        let pick = TargetPick(version: targetPickVersion, layer: id, mask: editingMask ? mask : nil)
+        let pick = TargetPick(version: targetPickVersion, target: target)
         pendingTargetPick = pick
         rejectedTargetPick = false
         // A valid known pick resolves the target itself: queued target
@@ -281,17 +385,21 @@ final class ImageDocument {
         // EDITING on another layer would keep claiming fills and
         // gradients, so its flag clears in the same job. EDITING
         // changes carry no undo step.
-        let staleEditing = maskStates.filter { $0.key != id && $0.value.editing && $0.value.mask != 0 }
+        let staleEditing = maskStates.filter {
+            target.layer != nil && $0.key != target.layer && $0.value.editing && $0.value.mask != 0
+        }
             .map(\.key)
-        activeLayer = id
-        if var state = maskStates[id] {
-            state.editing = editingMask
-            maskStates[id] = state
+        if let layer = target.layer {
+            activeLayer = layer
+            maskStates[layer]?.editing = target.mask != nil
         }
         for other in staleEditing { maskStates[other]?.editing = false }
+        channels = channels.map { row in
+            if case .channel(let id) = target { return channelRow(row, selected: row.id == id) }
+            return channelRow(row, selected: false)
+        }
         enqueue(on: inputQueue) { [session, image] in
             var failure: Error?
-            var fresh: EngineSession.MaskState?
             self.paintTargetIsValid = false
             do {
                 // Best-effort: a layer gone since the read must not
@@ -299,15 +407,27 @@ final class ImageDocument {
                 for other in staleEditing {
                     try? session.setLayerMask(other, image: image, flags: [.editing], values: [])
                 }
-                try session.selectLayer(id, image: image)
-                fresh = try session.layerMask(id, image: image)
-                if editingMask, fresh?.mask != pick.mask || fresh?.mask == 0 {
-                    throw DocumentError.targetChanged
-                }
-                if let current = fresh, current.mask != 0, current.editing != editingMask {
-                    try session.setLayerMask(id, image: image, flags: [.editing],
-                                             values: editingMask ? [.editing] : [])
-                    fresh = try session.layerMask(id, image: image)
+                if let layer = target.layer {
+                    // Selecting an already-selected layer can be a native
+                    // no-op. Clear channels explicitly before that call.
+                    try session.channelCommand(.select, channel: 0, image: image)
+                    try session.selectLayer(layer, image: image)
+                    guard try session.layers(image).contains(where: { $0.id == layer && $0.isSelected }) else {
+                        throw DocumentError.targetChanged
+                    }
+                    let fresh = try session.layerMask(layer, image: image)
+                    if let mask = target.mask, fresh.mask != mask || mask == 0 {
+                        throw DocumentError.targetChanged
+                    }
+                    if fresh.mask != 0, fresh.editing != (target.mask != nil) {
+                        try session.setLayerMask(layer, image: image, flags: [.editing],
+                                                 values: target.mask != nil ? [.editing] : [])
+                    }
+                } else if case .channel(let id) = target {
+                    try session.channelCommand(.select, channel: id, image: image)
+                    guard try session.channels(image).contains(where: { $0.id == id && $0.isSelected }) else {
+                        throw DocumentError.targetChanged
+                    }
                 }
                 self.paintTargetIsValid = true
             } catch {
@@ -317,13 +437,9 @@ final class ImageDocument {
                 if self.pendingTargetPick?.version == pick.version {
                     self.pendingTargetPick = nil
                     self.rejectedTargetPick = failure != nil
-                    if let fresh {
-                        self.maskStates[id] = fresh.mask != 0 ? fresh : nil
-                    }
-                    if failure != nil { try? self.reload() }
                 }
                 if let failure { self.report(failure) }
-                self.onStateChange?()
+                try? self.reload()
             }
         }
         onStateChange?()
@@ -334,6 +450,7 @@ final class ImageDocument {
         case .projectionChanged(let image, let rect) where image == self.image:
             onProjectionChange?(rect)
         case .layersChanged(let image) where image == self.image,
+             .channelsChanged(let image) where image == self.image,
              .undoChanged(let image) where image == self.image:
             try? reload()
         case .selectionChanged(let image) where image == self.image:
@@ -349,8 +466,11 @@ final class ImageDocument {
     // MARK: Painting
 
     func beginStroke(at point: EngineSession.StrokePoint, brush: EngineSession.Brush = EngineSession.Brush()) {
-        guard !refuseWhileEditingUnavailable(), !refuseWhileTargetPending(),
-              let drawable = activeDrawable else { return }
+        guard !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
+        guard let drawable = activeDrawable else {
+            onError?(DocumentError.targetChanged.localizedDescription)
+            return
+        }
         // A group's own pixels cannot be painted on; its mask can, so the
         // check applies to the layer, not the drawable.
         if drawable == activeLayer,
@@ -510,12 +630,18 @@ final class ImageDocument {
         guard let layer = activeLayer, offset != .zero,
               !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
         guard !isMaskTargetActive else { return refuseMaskEdit() }
+        guard !isChannelTargetActive else { return refuseChannelTransform() }
         run { session, image in try session.moveLayer(layer, image: image, by: offset) }
     }
 
     /// Refuses an edit the mask target cannot take, saying why.
     private func refuseMaskEdit() {
         onError?("Finish mask editing first; a mask cannot be moved or transformed on its own.")
+        NSSound.beep()
+    }
+
+    private func refuseChannelTransform() {
+        onError?("Return to Layers before moving, transforming or stroking a path; the current channel cannot take that edit.")
         NSSound.beep()
     }
 
@@ -527,7 +653,127 @@ final class ImageDocument {
     func transformActiveLayer(_ transform: EngineSession.Transform) {
         guard let layer = activeLayer,
               !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
+        guard !isMaskTargetActive else { return refuseMaskEdit() }
+        guard !isChannelTargetActive else { return refuseChannelTransform() }
         run { session, image in try session.transformLayer(layer, image: image, transform) }
+    }
+
+    // MARK: Channels
+
+    func setComponentActive(_ component: EngineSession.Components, to enabled: Bool) {
+        changeComponents(component, enabled: enabled, editing: true)
+    }
+
+    func setComponentVisible(_ component: EngineSession.Components, to enabled: Bool) {
+        changeComponents(component, enabled: enabled, editing: false)
+    }
+
+    private func changeComponents(_ component: EngineSession.Components, enabled: Bool, editing: Bool) {
+        guard !refuseWhileEditingUnavailable(), let state = components else { return }
+        let mask = component.intersection(state.supported)
+        guard !mask.isEmpty else { return }
+        endPendingUserEdits()
+        nextChannelIntent += 1
+        let intent = ComponentIntent(version: nextChannelIntent,
+            activeMask: editing ? mask : [], activeValues: editing && enabled ? mask : [],
+            visibleMask: editing ? [] : mask, visibleValues: !editing && enabled ? mask : [])
+        componentIntents.append(intent)
+        mirrorChannelIntents()
+        let work: (EngineSession, Int32) throws -> Void = { session, image in
+            try session.setComponents(image, activeMask: intent.activeMask, activeValues: intent.activeValues,
+                                      visibleMask: intent.visibleMask, visibleValues: intent.visibleValues)
+        }
+        let finished: @MainActor (Result<Void, Error>) -> Void = { _ in
+            self.componentIntents.removeAll { $0.version == intent.version }
+            try? self.reload()
+        }
+        if editing {
+            enqueueTargetCommand(work, completion: finished)
+        } else {
+            // Display-only state must never reopen a failed paint target.
+            enqueue(on: inputQueue) { [session, image] in
+                let result = Result { try work(session, image) }
+                DispatchQueue.main.async {
+                    if case .failure(let error) = result { self.report(error) }
+                    finished(result)
+                }
+            }
+            onStateChange?()
+        }
+    }
+
+    func saveSelectionToChannel(name: String? = nil,
+                                completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        endPendingUserEdits()
+        enqueueTargetCommand({ session, image in
+            _ = try session.channelFromSelection(image, name: name)
+        }, completion: completion)
+    }
+
+    func duplicateChannel(_ id: Int32) {
+        guard !refuseWhileEditingUnavailable(), channels.contains(where: { $0.id == id }) else { return }
+        endPendingUserEdits()
+        enqueueTargetCommand { session, image in
+            _ = try session.channelCommand(.duplicate, channel: id, image: image)
+        }
+    }
+
+    func deleteChannel(_ id: Int32) {
+        guard !refuseWhileEditingUnavailable(), let row = channels.first(where: { $0.id == id }) else { return }
+        guard !row.isQuickMask else {
+            onError?("Turn off Quick Mask to remove its channel.")
+            return
+        }
+        endPendingUserEdits()
+        enqueueTargetCommand { session, image in
+            _ = try session.channelCommand(.delete, channel: id, image: image)
+        }
+    }
+
+    func changeChannel(_ id: Int32, _ change: EngineSession.ChannelChange,
+                       completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
+        guard !refuseWhileEditingUnavailable(), channels.contains(where: { $0.id == id }) else { return }
+        endPendingUserEdits()
+        nextChannelIntent += 1
+        let version = nextChannelIntent
+        if let visible = change.isVisible {
+            channelVisibilityIntents[id] = (version, visible)
+            mirrorChannelIntents()
+            onStateChange?()
+        }
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let result = Result { try session.changeChannel(id, image: image, change) }
+            DispatchQueue.main.async {
+                if self.channelVisibilityIntents[id]?.version == version {
+                    self.channelVisibilityIntents[id] = nil
+                }
+                if case .failure(let error) = result { self.report(error) }
+                try? self.reload()
+                completion?(result)
+            }
+        }
+    }
+
+    func channelToSelection(_ id: Int32, operation: EngineSession.SelectOperation) {
+        guard !refuseWhileEditingUnavailable(), channels.contains(where: { $0.id == id }) else { return }
+        endPendingUserEdits()
+        run { session, image in try session.channelToSelection(id, image: image, operation: operation) }
+    }
+
+    func setQuickMask(_ enabled: Bool) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        endPendingUserEdits()
+        nextChannelIntent += 1
+        let version = nextChannelIntent
+        quickMaskIntent = (version, enabled)
+        mirrorChannelIntents()
+        enqueueTargetCommand({ session, image in
+            try session.setQuickMask(image, enabled: enabled)
+        }, completion: { _ in
+            if self.quickMaskIntent?.version == version { self.quickMaskIntent = nil }
+            try? self.reload()
+        })
     }
 
     // MARK: Text
@@ -567,6 +813,8 @@ final class ImageDocument {
     func transformLayer(_ layer: Int32, matrix: CGAffineTransform,
                         interpolation: EngineSession.Interpolation) {
         guard !matrix.isIdentity, !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileTargetPending() else { return }
+        guard !isChannelTargetActive else { return refuseChannelTransform() }
         guard maskStates[layer]?.editing != true else {
             return refuseMaskEdit()
         }
@@ -677,6 +925,7 @@ final class ImageDocument {
                 // addLayerMask sets the mask's EDITING flag but does not
                 // select the layer; without selecting it first the new
                 // target could land on a layer the engine selected last.
+                try session.channelCommand(.select, channel: 0, image: image)
                 try session.selectLayer(layer, image: image)
                 _ = try session.addLayerMask(layer, image: image, source: source, edit: true)
             }
@@ -784,6 +1033,7 @@ final class ImageDocument {
     /// than silently painting the layer's pixels.
     func strokePath(_ id: Int32, settings: EngineSession.LineSettings) {
         guard !refuseWhileEditingUnavailable() else { return }
+        guard !isChannelTargetActive else { return refuseChannelTransform() }
         guard !isMaskTargetActive else {
             onError?("A path cannot be drawn on a mask; select the layer first.")
             NSSound.beep()
@@ -938,7 +1188,7 @@ final class ImageDocument {
             case .closed: return "This image has already closed."
             case .busy: return "Wait for the current image operation to finish."
             case .noLayer: return "There is no layer to work on."
-            case .targetChanged: return "The selected layer or mask changed. Select a paint target again."
+            case .targetChanged: return "The selected layer, mask or channel changed. Select a paint target again."
             }
         }
     }
@@ -996,6 +1246,9 @@ final class ImageDocument {
                     guard !self.isClosing else { return self.finishClipboard(DocumentError.closed, completion: completion) }
                     do { try consume(result.get()) } catch {
                         return self.finishClipboard(error, completion: completion)
+                    }
+                    guard !self.isClosing else {
+                        return self.finishClipboard(DocumentError.closed, completion: completion)
                     }
                     guard cutting else { return self.finishClipboard(nil, completion: completion) }
                     // No edits were accepted between the copy and clear.
