@@ -101,6 +101,8 @@ enum EngineSmokeTest {
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseFileAdmission(session, work: work, documents: documents)
+            try exerciseRevert(session, work: work, documents: documents)
+            try exerciseFileImports(session, work: work, documents: documents)
             try exercisePrinting(session, work: work, documents: documents)
             try exerciseRecovery(session, work: work, documents: documents)
             try exerciseRecoveryInterface(session, work: work, documents: documents)
@@ -305,6 +307,330 @@ enum EngineSmokeTest {
         while (!finished || b.pendingWork > 0 || b.filterPreviewIsOpen) && Date() < deadline { spin(0.01) }
         check(finished && writeError == nil && !b.filterPreviewIsOpen && controller.previewPanel == nil,
               "preview cancellation in another document waits safely for the file operation")
+    }
+
+    /// File ▸ Open as Layers… and Place as Link Layer…: a saved native
+    /// image takes a chosen file's layers — or a genuine link layer on
+    /// engines that have them — through the same exclusive admission a
+    /// file write gets. Covers accepted input draining across documents,
+    /// the busy refusals, file identity, the single undo step, failure
+    /// recovery, a close during the load and the older-engine answer.
+    private static func exerciseFileImports(_ session: EngineSession, work: URL,
+                                            documents: DocumentList) throws {
+        let directory = work.appendingPathComponent("file-imports")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let brush = EngineSession.Brush(size: 8, opacity: 1, red: 0, green: 0, blue: 0, pressureSize: false)
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(15)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func succeeded(_ result: Result<ImageDocument.ImportOutcome, Error>?,
+                       as expected: ImageDocument.ImportOutcome) -> Bool {
+            guard case .success(let outcome) = result else { return false }
+            return outcome == expected
+        }
+
+        // The sources: a three-layer XCF and a small PNG to place.
+        let sourceImage = try session.newImage(width: 48, height: 48)
+        _ = try session.layerCommand(.new, image: sourceImage)
+        _ = try session.layerCommand(.new, image: sourceImage)
+        let sourceXCF = directory.appendingPathComponent("source.xcf")
+        try session.save(sourceImage, to: sourceXCF.path)
+        try session.closeImage(sourceImage)
+        let linkPNG = directory.appendingPathComponent("link.png")
+        let linkSource = try session.newImage(width: 24, height: 24)
+        try session.select(.all, image: linkSource)
+        try session.fill(image: linkSource, at: .zero, mode: .selection, color: .red)
+        try session.export(linkSource, to: linkPNG.path)
+        try session.closeImage(linkSource)
+
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Imports")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        defer {
+            document.onWillChangeLayers = nil
+            document.onError = nil
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        func thumbPixel(_ drawable: Int32, _ x: Int, _ y: Int) -> [UInt8]? {
+            guard let cg = try? session.drawableThumbnail(drawable, image: image, maxSize: 32),
+                  let data = cg.dataProvider?.data as Data? else { return nil }
+            let offset = (y * cg.width + x) * 4
+            guard offset + 4 <= data.count else { return nil }
+            return Array(data[offset..<offset + 4])
+        }
+        func luminance(_ rgba: [UInt8]?) -> Int {
+            guard let rgba else { return -1 }
+            return (Int(rgba[0]) + Int(rgba[1]) + Int(rgba[2])) / 3
+        }
+
+        // The import target starts as a clean saved native image whose
+        // file bytes the imports must leave alone.
+        let native = directory.appendingPathComponent("drawing.xcf")
+        var saved = false
+        document.save(to: native) { error in
+            if error == nil { document.noteSaved(to: native); saved = true }
+        }
+        wait { saved && document.pendingWork == 0 }
+        check(saved && document.fileState.nativeURL == native && !document.hasUnsavedChanges,
+              "the import target starts as a clean saved native image")
+        let nativeBytes = try Data(contentsOf: native)
+        let nativeName = document.name
+        let oldActive = document.activeLayer
+        let oldUndo = document.undoInfo.undoCount
+        var expectedLayers = document.layers.count
+
+        // A stroke queued before the choice drains first; a field-style
+        // delegate edit flushed during admission lands too. Both sit left
+        // of the centered 48 px import, so the composite still shows them.
+        document.inputQueue.async { usleep(150_000) }
+        document.beginStroke(at: .init(x: 5, y: 30, pressure: 1), brush: brush)
+        document.continueStroke([.init(x: 7, y: 30, pressure: 1)])
+        document.endStroke()
+        var flushedDuringAdmission = false
+        document.onWillChangeLayers = {
+            guard !flushedDuringAdmission else { return }
+            flushedDuringAdmission = true
+            document.beginStroke(at: .init(x: 5, y: 45, pressure: 1), brush: brush)
+            document.continueStroke([.init(x: 7, y: 45, pressure: 1)])
+            document.endStroke()
+        }
+        var outcome: Result<ImageDocument.ImportOutcome, Error>?
+        document.openLayers(from: sourceXCF) { outcome = $0 }
+        document.onWillChangeLayers = nil
+        check(flushedDuringAdmission, "admission flushes an in-flight field edit before the load")
+        check(EngineActivity.shared.isBusy, "an import holds the engine-wide busy gate")
+        check(!document.acceptsEdits, "a pending import refuses edits in its document")
+        document.beginStroke(at: .init(x: 60, y: 60, pressure: 1), brush: brush)
+        check(!document.strokeIsActive, "a stroke behind a pending import is refused")
+        if document.strokeIsActive { document.endStroke() }
+        check(errors.contains { $0.contains("Wait") },
+              "the refused edit explains the pending import (\(errors.last ?? "none"))")
+        var second: Result<ImageDocument.ImportOutcome, Error>?
+        document.openLayers(from: sourceXCF) { second = $0 }
+        guard case .failure = second else {
+            check(false, "a second import behind the gate is refused")
+            return
+        }
+        wait { outcome != nil && document.pendingWork == 0 }
+        check(succeeded(outcome, as: .openedLayers), "Open as Layers completes (\(outcome as Any))")
+        spin()
+        check(document.layers.count == expectedLayers + 3,
+              "Open as Layers adds every layer of the source file")
+        expectedLayers += 3
+        check(document.activeLayer != oldActive
+                && document.activeLayer == document.layers.first(where: \.isSelected)?.id,
+              "the engine's imported selection becomes the active target through reload")
+        check(document.undoInfo.undoCount > oldUndo, "the import is undoable")
+        check(document.fileState.nativeURL == native && document.name == nativeName,
+              "the import keeps native file identity and name")
+        check(try Data(contentsOf: native) == nativeBytes,
+              "the import does not rewrite the native file")
+        check(document.hasUnsavedChanges, "the import marks the image unsaved")
+        check((pixel(session, image, x: 6, y: 30)?[0] ?? 255) < 128
+                && (pixel(session, image, x: 6, y: 45)?[0] ?? 255) < 128,
+              "queued and admission-flushed strokes survive the import")
+
+        // The imported stack is the new target: a stroke lands on it, not
+        // on the layer that was active before the load.
+        if let active = document.activeLayer, active != oldActive {
+            document.beginStroke(at: .init(x: 42, y: 50, pressure: 1), brush: brush)
+            document.continueStroke((43...46).map { .init(x: Double($0), y: 50, pressure: 1) })
+            document.endStroke()
+            wait { document.pendingWork == 0 }
+            check(luminance(thumbPixel(active, 22, 25)) < 64,
+                  "a stroke after the import paints the new active layer")
+        } else {
+            check(false, "the import leaves the imported layer active")
+        }
+
+        // The stroke is its own undo step; the next undo removes the
+        // whole imported stack at once — the import is a single step.
+        document.undo()
+        wait { document.pendingWork == 0 }
+        check(document.layers.count == expectedLayers && document.undoInfo.redoCount == 1,
+              "the stroke is its own undo step")
+        document.undo()
+        wait { document.pendingWork == 0 }
+        check(document.layers.count == expectedLayers - 3 && document.undoInfo.redoCount == 2,
+              "one undo removes the whole imported stack as a single step")
+        document.redo()
+        document.redo()
+        wait { document.pendingWork == 0 }
+        check(document.layers.count == expectedLayers,
+              "redo restores the import and the stroke")
+
+        // A load that fails leaves the image editable and intact.
+        var failed: Result<ImageDocument.ImportOutcome, Error>?
+        document.openLayers(from: directory.appendingPathComponent("missing.xcf")) { failed = $0 }
+        wait { failed != nil && document.pendingWork == 0 }
+        guard case .failure(let loadError) = failed else {
+            check(false, "a missing file fails the import (\(failed as Any))")
+            return
+        }
+        check(!String(describing: loadError).isEmpty,
+              "the failure carries the engine's native error message")
+        check(document.layers.count == expectedLayers,
+              "a failed import inserts nothing")
+        check(document.acceptsEdits, "the document edits again after a failed import")
+        document.beginStroke(at: .init(x: 30, y: 16, pressure: 1), brush: brush)
+        document.endStroke()
+        wait { document.pendingWork == 0 }
+        check((pixel(session, image, x: 30, y: 16)?[0] ?? 255) < 128,
+              "edits work again after the failed import")
+
+        // A native import establishes a new target even when the prior
+        // known pick failed after its mask disappeared from the queue.
+        let healingImage = try session.newImage(width: 64, height: 64)
+        let healing = try ImageDocument(session: session, image: healingImage, name: "Import target recovery")
+        documents.items.append(healing)
+        defer {
+            documents.items.removeAll { $0 === healing }
+            healing.closeImageWhenDrained()
+        }
+        guard let healingLayer = healing.activeLayer else { throw NoWindow() }
+        healing.onError = { _ in }
+        healing.addMask(healingLayer, source: .white, edit: false)
+        wait { healing.pendingWork == 0 }
+        healing.run { session, image in
+            try session.applyLayerMask(healingLayer, image: image, mode: .discard)
+        }
+        healing.editMask(healingLayer)
+        wait { healing.pendingWork == 0 }
+        check(healing.activeDrawable == nil, "the import recovery starts with a refused stale mask target")
+        var healingFailure: Result<ImageDocument.ImportOutcome, Error>?
+        healing.openLayers(from: directory.appendingPathComponent("missing-again.xcf")) { healingFailure = $0 }
+        wait { healingFailure != nil && healing.pendingWork == 0 }
+        check(healing.activeDrawable == nil, "a failed import does not reopen the rejected paint target")
+        var healed: Result<ImageDocument.ImportOutcome, Error>?
+        healing.openLayers(from: sourceXCF) { healed = $0 }
+        wait { healed != nil && healing.pendingWork == 0 }
+        check(succeeded(healed, as: .openedLayers), "a valid import succeeds after the refused target")
+        check(healing.activeDrawable != nil && healing.activeDrawable == healing.activeLayer,
+              "successful import adopts its new drawable after a refused target pick")
+        healing.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        wait { healing.pendingWork == 0 }
+        check((pixel(session, healingImage, x: 20, y: 20)?[0] ?? 255) < 64,
+              "pixel edits reach the newly imported layer without another target pick")
+
+        // Input accepted in another document before the choice drains
+        // ahead of the load; edits there refuse behind the same gate.
+        let otherImage = try session.newImage(width: 32, height: 32)
+        let other = try ImageDocument(session: session, image: otherImage, name: "Other")
+        documents.items.append(other)
+        defer {
+            documents.items.removeAll { $0 === other }
+            other.closeImageWhenDrained()
+        }
+        other.inputQueue.async { usleep(200_000) }
+        other.beginStroke(at: .init(x: 10, y: 10, pressure: 1), brush: brush)
+        other.endStroke()
+        var drained: Result<ImageDocument.ImportOutcome, Error>?
+        document.openLayers(from: sourceXCF) { drained = $0 }
+        other.beginStroke(at: .init(x: 20, y: 20, pressure: 1), brush: brush)
+        check(!other.strokeIsActive, "another document's edits refuse behind the gate too")
+        if other.strokeIsActive { other.endStroke() }
+        wait { drained != nil && document.pendingWork == 0 }
+        check(succeeded(drained, as: .openedLayers), "the drained import completes (\(drained as Any))")
+        expectedLayers += 3
+        spin()
+        check(document.layers.count == expectedLayers,
+              "the second import adds its layers on top")
+        check((pixel(session, otherImage, x: 10, y: 10)?[0] ?? 255) < 128,
+              "input accepted in another document before the import is preserved")
+        check((pixel(session, otherImage, x: 20, y: 20)?[0] ?? 255) > 200,
+              "the refused stroke in the other document made no pixel change")
+
+        // A close while the load is queued waits for it, then destroys
+        // the image; the import's completion still lands.
+        let closingImage = try session.newImage(width: 32, height: 32)
+        let closing = try ImageDocument(session: session, image: closingImage, name: "Closing Import")
+        documents.items.append(closing)
+        let closingController = DocumentWindowController(document: closing)
+        closingController.showWindow(nil)
+        defer {
+            documents.items.removeAll { $0 === closing }
+            closing.closeImageWhenDrained()
+        }
+        document.inputQueue.async { usleep(400_000) }
+        var closingOutcome: Result<ImageDocument.ImportOutcome, Error>?
+        closing.openLayers(from: sourceXCF) { closingOutcome = $0 }
+        check(EngineActivity.shared.isBusy, "the closing document's import takes the gate")
+        var closed: Bool?
+        closingController.requestClose { closed = $0 }
+        check(closed == nil && !closing.isClosing, "close waits while the import is queued")
+        wait { closingOutcome != nil && closing.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        let sheetDeadline = Date().addingTimeInterval(5)
+        while closingController.window?.attachedSheet == nil && Date() < sheetDeadline { spin(0.05) }
+        if let sheet = closingController.window?.attachedSheet {
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+        }
+        wait { closed != nil }
+        check(closed == true && (try? session.info(closingImage)) == nil,
+              "the deferred close destroys the image after its import lands")
+        check(succeeded(closingOutcome, as: .openedLayers),
+              "the closing document's import still reports its outcome")
+
+        // Place: a genuine link layer where the engine has them (3.2+),
+        // a clean unsupported answer elsewhere — never a raster fallback.
+        let placeItem = NSMenuItem(title: "Place", action: #selector(DocumentWindowController.placeLinkFromFile(_:)),
+                                   keyEquivalent: "")
+        check(controller.validateMenuItem(placeItem) == (session.supportsLinkLayers != false),
+              "the Place menu follows the engine's verified link-layer support")
+        let beforePlace = document.layers.count
+        let beforePlaceUndo = document.undoInfo.undoCount
+        var placed: Result<ImageDocument.ImportOutcome, Error>?
+        document.placeLink(from: linkPNG) { placed = $0 }
+        wait { placed != nil && document.pendingWork == 0 }
+        switch placed {
+        case .success(.placedLink):
+            check(document.layers.count == beforePlace + 1 && document.layers.contains { $0.kind == .link },
+                  "Place adds one genuine link layer")
+            let selectedLink = document.layers.first { $0.isSelected && $0.kind == .link }
+            check(selectedLink?.id == document.activeLayer && selectedLink != nil,
+                  "the placed link is the active target through reload")
+            check(document.undoInfo.undoCount == beforePlaceUndo + 1, "Place is one undo step")
+            let placedXCF = directory.appendingPathComponent("placed.xcf")
+            var copySaved = false
+            document.saveCopy(to: placedXCF) { copySaved = $0 == nil }
+            wait { copySaved && document.pendingWork == 0 }
+            check(copySaved, "the placed image saves a copy")
+            let reopened = try session.openImage(path: placedXCF.path)
+            let reopenedLayers = try session.layers(reopened)
+            check(reopenedLayers.contains { $0.kind == .link },
+                  "the saved copy keeps the link layer")
+            let blueSource = try session.newImage(width: 24, height: 24)
+            try session.select(.all, image: blueSource)
+            try session.fill(image: blueSource, at: .zero, mode: .selection, color: .blue)
+            try session.export(blueSource, to: linkPNG.path)
+            try session.closeImage(blueSource)
+            var updated = false
+            let updateDeadline = Date().addingTimeInterval(10)
+            while Date() < updateDeadline {
+                spin(0.1)
+                if let p = pixel(session, reopened, x: 32, y: 32), p[2] > 200 && p[0] < 60 {
+                    updated = true
+                    break
+                }
+            }
+            check(updated, "the link layer rereads its changed source file")
+            try session.closeImage(reopened)
+        case .failure(let error):
+            let status = (error as? EngineSession.EngineError)?.status
+            check(status == Int32(GLIMS_STATUS_UNSUPPORTED.rawValue)
+                    || EngineSession.supportsLinkLayers(version: session.version) != true,
+                  "Place on an engine without link layers reports unsupported (\(error))")
+            check(document.layers.count == beforePlace && !document.layers.contains { $0.kind == .link },
+                  "an unsupported Place inserts nothing")
+            check(document.acceptsEdits, "the document edits again after unsupported Place")
+        default:
+            check(false, "Place reports placed, cancelled or failed (\(placed as Any))")
+        }
     }
 
     /// File ▸ Print… and Page Setup…: a committed composite rendered in
@@ -1232,6 +1558,208 @@ enum EngineSmokeTest {
         discarded.save(to: native) { closedSaveFailed = $0 != nil }
         check(closedSaveFailed, "a save requested after close reports an error through its completion")
         documents.items.removeAll { $0 === discarded }
+    }
+
+    /// File ▸ Revert…: the confirm sheet, the file-admission reload and
+    /// the window replacement on success — plus every refusal path:
+    /// Cancel, an unreadable source, an untitled image and a direct
+    /// close while the file loads. Adoption needs the app's document
+    /// list, so this drives a real AppController.
+    private static func exerciseRevert(_ session: EngineSession, work: URL,
+                                       documents: DocumentList) throws {
+        let app = AppController()
+        let directory = work.appendingPathComponent("revert")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let native = directory.appendingPathComponent("keep.xcf")
+        var tracked: [ImageDocument] = []
+        defer {
+            documents.items.removeAll { item in tracked.contains { $0 === item } }
+        }
+
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin() }
+        }
+        func track(_ document: ImageDocument) {
+            tracked.append(document)
+            documents.items.append(document)
+            app.open(document)
+        }
+        func confirm(_ response: NSApplication.ModalResponse, on owner: DocumentWindowController) {
+            wait { owner.window?.attachedSheet != nil }
+            if let sheet = owner.window?.attachedSheet {
+                NSApp.endSheet(sheet, returnCode: response.rawValue)
+            }
+        }
+        let revertItem = NSMenuItem(title: "", action: #selector(DocumentWindowController.revertDocument(_:)), keyEquivalent: "")
+
+        // The saved source: a 64×64 XCF with one stroke near the top.
+        let setup = try session.newImage(width: 64, height: 64)
+        if let layer = try session.layers(setup).first?.id {
+            let stroke = try session.beginStroke(image: setup, drawable: layer,
+                                                 brush: .init(), first: .init(x: 10, y: 10, pressure: 1))
+            try session.endStroke(stroke)
+        }
+        try session.save(setup, to: native.path)
+        try session.closeImage(setup)
+        let savedBytes = try Data(contentsOf: native)
+
+        let image = try session.openImage(path: native.path)
+        let document = try ImageDocument(session: session, image: image,
+                                         name: native.lastPathComponent, openedFrom: native)
+        track(document)
+        guard let controller = app.documents.last else { throw NoWindow() }
+        controller.zoom(to: 150)
+        let window = try XCTUnwrapWindow(controller)
+        let frame = window.frame
+
+        // A second document exercises the drain: its accepted stroke
+        // must land before the reload, and it stays untouched itself.
+        let otherImage = try session.newImage(width: 64, height: 64)
+        let other = try ImageDocument(session: session, image: otherImage, name: "Untitled")
+        track(other)
+        guard let otherController = app.documents.last else { throw NoWindow() }
+        check(!otherController.validateMenuItem(revertItem),
+              "an untitled document cannot revert")
+        otherController.revertDocument(nil)
+        spin(0.15)
+        check(otherController.window?.attachedSheet == nil,
+              "Revert asks nothing when the document has no source")
+
+        document.beginStroke(at: .init(x: 50, y: 50, pressure: 1))
+        document.endStroke()
+        wait { document.pendingWork == 0 && document.hasUnsavedChanges }
+        check(controller.validateMenuItem(revertItem) && revertItem.title == "Revert to Saved…",
+              "Revert is offered on a saved file as Revert to Saved…")
+        controller.revertDocument(nil)
+        confirm(.alertSecondButtonReturn, on: controller)
+        spin(0.2)
+        check(app.documents.contains(where: { $0 === controller }) && app.documents.count == 2 && !controller.revertIsPending
+                && document.hasUnsavedChanges && !document.isClosing
+                && (pixel(session, image, x: 50, y: 50)?[0] ?? 255) < 128,
+              "a cancelled Revert preserves the edits, image and window")
+        check((try? Data(contentsOf: native)) == savedBytes, "a cancelled Revert never touches the source")
+
+        // Accepted input in the other document drains before the load.
+        other.beginStroke(at: .init(x: 30, y: 30, pressure: 1))
+        other.endStroke()
+        controller.revertDocument(nil)
+        confirm(.alertFirstButtonReturn, on: controller)
+        wait { !app.documents.contains(where: { $0 === controller }) }
+        guard let first = app.documents.last else { throw NoWindow() }
+        documents.items.removeAll { $0 === document }
+        tracked.append(first.imageDocument)
+        documents.items.append(first.imageDocument)
+        check(first !== controller && first.imageDocument !== document
+                && first.imageDocument.image != image
+                && first.imageDocument.fileState.nativeURL == native
+                && !first.imageDocument.hasUnsavedChanges
+                && first.imageDocument.undoInfo.undoCount == 0,
+              "a confirmed Revert adopts a clean fresh-history reload of the saved file")
+        wait { (try? session.info(image)) == nil && !window.isVisible }
+        check(controller.closeStarted && (try? session.info(image)) == nil && !window.isVisible,
+              "the discarded document closes without a save prompt and its image is destroyed")
+        check(first.window.map { abs($0.frame.minX - frame.minX) < 1 && abs($0.frame.minY - frame.minY) < 1
+                && $0.frame.size == frame.size } == true
+                && first.canvas.zoomPercent == 150,
+              "the replacement window keeps the old frame and zoom")
+        check((pixel(session, first.imageDocument.image, x: 10, y: 10)?[0] ?? 255) < 128
+                && (pixel(session, first.imageDocument.image, x: 50, y: 50)?[0] ?? 0) > 127,
+              "the reverted image has the saved stroke and none of the discarded edits")
+        check((try? Data(contentsOf: native)) == savedBytes, "a confirmed Revert never writes to the source")
+        wait { other.pendingWork == 0 }
+        check((pixel(session, otherImage, x: 30, y: 30)?[0] ?? 255) < 128
+                && other.image == otherImage && app.documents.contains(where: { $0 === otherController }),
+              "input accepted in another document drains before the load; the document is untouched")
+
+        // A source rewritten on disk loads its new bytes.
+        let rewritten = try session.newImage(width: 32, height: 48)
+        try session.save(rewritten, to: native.path)
+        try session.closeImage(rewritten)
+        first.revertDocument(nil)
+        confirm(.alertFirstButtonReturn, on: first)
+        wait { !app.documents.contains(where: { $0 === first }) }
+        guard let second = app.documents.last else { throw NoWindow() }
+        documents.items.removeAll { $0 === first.imageDocument }
+        tracked.append(second.imageDocument)
+        documents.items.append(second.imageDocument)
+        check(second !== first && second.imageDocument.info.width == 32
+                && second.imageDocument.info.height == 48
+                && second.imageDocument.fileState.nativeURL == native,
+              "Revert reloads the source's new bytes after an external rewrite")
+
+        // An unreadable source keeps the whole document usable.
+        second.imageDocument.beginStroke(at: .init(x: 5, y: 5, pressure: 1))
+        second.imageDocument.endStroke()
+        wait { second.imageDocument.pendingWork == 0 && second.imageDocument.hasUnsavedChanges }
+        try FileManager.default.removeItem(at: native)
+        second.revertDocument(nil)
+        confirm(.alertFirstButtonReturn, on: second)
+        wait { !second.revertIsPending }
+        check(app.documents.last === second && !second.imageDocument.isClosing
+                && second.imageDocument.hasUnsavedChanges
+                && second.window?.isVisible == true
+                && (try? session.info(second.imageDocument.image)) != nil,
+              "a failed Revert keeps the original image, window and unsaved changes")
+        check(!second.statusBar.message.hasPrefix("32 × 48"),
+              "a failed Revert reports its error instead of restoring the status line")
+
+        // An imported original re-imports and keeps imported identity.
+        let png = directory.appendingPathComponent("imported.png")
+        let foreign = try session.newImage(width: 24, height: 24)
+        try session.export(foreign, to: png.path)
+        try session.closeImage(foreign)
+        let imported = try ImageDocument(session: session, image: session.openImage(path: png.path),
+                                         name: png.lastPathComponent, openedFrom: png)
+        track(imported)
+        guard let importedController = app.documents.last else { throw NoWindow() }
+        check(importedController.validateMenuItem(revertItem) && revertItem.title == "Revert…",
+              "an imported document is offered Revert…")
+        importedController.revertDocument(nil)
+        confirm(.alertFirstButtonReturn, on: importedController)
+        wait { !app.documents.contains(where: { $0 === importedController }) }
+        guard let reimported = app.documents.last else { throw NoWindow() }
+        documents.items.removeAll { $0 === imported }
+        tracked.append(reimported.imageDocument)
+        documents.items.append(reimported.imageDocument)
+        check(reimported.imageDocument.fileState.nativeURL == nil
+                && reimported.imageDocument.fileState.importedSourceURL == png
+                && reimported.imageDocument.hasUnsavedChanges,
+              "a re-import keeps the imported identity and unsaved state")
+
+        // A direct close during the load follows file admission: the
+        // close waits for the engine, wins, and the loaded image is
+        // destroyed unadopted.
+        let closingFile = directory.appendingPathComponent("closing.xcf")
+        let setup2 = try session.newImage(width: 32, height: 32)
+        try session.save(setup2, to: closingFile.path)
+        try session.closeImage(setup2)
+        let closingImage = try session.openImage(path: closingFile.path)
+        let closingDoc = try ImageDocument(session: session, image: closingImage,
+                                           name: closingFile.lastPathComponent, openedFrom: closingFile)
+        track(closingDoc)
+        guard let closingController = app.documents.last else { throw NoWindow() }
+        let countBefore = app.documents.count
+        closingDoc.inputQueue.async { usleep(400_000) }
+        closingController.revertDocument(nil)
+        confirm(.alertFirstButtonReturn, on: closingController)
+        wait { closingController.revertIsPending }
+        check(closingController.revertIsPending, "a confirmed Revert marks its pending load")
+        var closedDuringLoad: Bool?
+        closingController.requestClose { closedDuringLoad = $0 }
+        wait { closedDuringLoad != nil }
+        check(closedDuringLoad == true, "a close during the Revert load completes")
+        wait { (try? session.info(closingImage)) == nil
+                && !app.documents.contains(where: { $0 === closingController }) }
+        check(app.documents.count == countBefore - 1,
+              "the closing document leaves and no duplicate window is adopted for it")
+        check(FileManager.default.fileExists(atPath: closingFile.path),
+              "the source file survives a close during the load")
+
+        let survivors = app.documents
+        survivors.forEach { $0.closeDiscardingChanges() }
+        wait { app.documents.isEmpty }
+        check(app.documents.isEmpty, "all documents close cleanly after the revert checks")
     }
 
     private static func exerciseClipboard(_ session: EngineSession, documents: DocumentList) throws {

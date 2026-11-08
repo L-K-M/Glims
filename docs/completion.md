@@ -167,3 +167,51 @@ a `clang -fsyntax-only` pass of the changed C files against all four
 engine source trees plus the header-only TU and the test file.
 Profile assignment/conversion, soft proofing, the indexed palette dialog
 and the Swift forms are deliberately out of this slice.
+2026-11-08: File ▸ Revert reloads the last saved XCF — or the original
+file an imported image came from, titled Revert to Saved… / Revert… —
+only after a confirmation sheet and a successful engine load. A saved
+file wins over the imported original; an untitled image disables the
+item. The confirmed discard counts as close approval, so no second
+Save prompt appears, while Cancel, an unreadable source, a close that
+wins the load or a Quit leaves the document and its unsaved state
+fully usable. The reload is a file operation on the global engine
+queue: accepted strokes, text and field commits on every document
+drain first, the busy label shows in the status bar, and the count
+holds Quit until the load resolves. Adoption is all or nothing — a
+fresh document opens through the ordinary path, takes the old window's
+frame, zoom and image-center, and only then does the old document
+close and its image drain; a window gone or a close/Quit requested
+during the load destroys the loaded image unadopted on the same queue.
+A re-import keeps imported (unsaved) identity; a native reload is
+clean with fresh history. Recovery follows the same close path: the
+old record is removed and the replacement registers its own. Source
+bytes are only read. Unit tests cover the source/title rules; the
+engine smoke exercise covers cancel, confirmed native reload with
+restored frame/zoom and discarded edits, external rewrite, missing
+source, untitled, re-import identity, cross-document drain and a
+direct close during the load. `swift build` and `swift test` (246
+tests) pass; the engine smoke run and interactive QA were not run in
+this session.
+2026-11-08: the File menu commands are wired. Open as Layers… and Place
+as Link Layer… sit below Open Recent and run through
+`DocumentWindowController`'s single-file panel into
+`ImageDocument.openLayers`/`placeLink`, which take the same
+`EngineActivity` exclusive admission a file write gets: accepted strokes,
+text and field edits end first, every document's input drains, the
+engine-wide busy label holds for the whole load including a plug-in's
+modal dialog, and the work counts toward close and Quit. The engine's
+native selection of the imported result becomes the target only through
+the completion's reload — no selection is issued on the main thread —
+file identity and the on-disk XCF stay untouched, and one undo step
+covers the import. A failed or cancelled load adds nothing and reports
+the engine's own message; a loader cancel surfaces as a cancelled
+outcome rather than an error. Place consults the engine's verified
+version (`EngineSession.supportsLinkLayers`, link layers need 3.2) to
+disable its menu item and guard the action, and an unparsable version
+leaves the facade's UNSUPPORTED answer to report; there is no raster
+fallback. `EngineSmokeTest.exerciseFileImports` covers the drain,
+refusals, identity, undo grouping, failure recovery, close during the
+load and the link layer's save/reload/reread; it was added but not run —
+engine smoke stays with the desktop pass against the private adapters.
+`swift build` and `swift test` (229 tests, including new menu-placement
+and version-parsing cases) pass headless.

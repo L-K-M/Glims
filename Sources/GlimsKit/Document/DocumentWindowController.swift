@@ -42,6 +42,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     var onClose: ((DocumentWindowController) -> Void)?
     let fileAccessID = UUID()
     var reserveWrite: ((URL) throws -> (() -> Void))?
+    /// Whoever owns the open documents binds this: a confirmed Revert
+    /// asks it to reload `URL` from disk and replace this window's
+    /// document with the result. `nil` where nothing can adopt a
+    /// document — the menu item stays disabled then.
+    var revertHandler: ((URL, @escaping @MainActor (Result<DocumentWindowController, Error>) -> Void) -> Void)?
 
     init(document imageDocument: ImageDocument, preferences: EditorPreferences? = nil) {
         self.imageDocument = imageDocument
@@ -153,6 +158,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     @objc private func viewportChanged() {
         canvas.setNeedsRender()
+    }
+
+    /// The image-space point at the viewport's center; a revert
+    /// restores it on the replacement document.
+    var canvasCenter: CGPoint {
+        let visible = scrollView.contentView.bounds
+        return CGPoint(x: visible.midX / canvas.scale, y: visible.midY / canvas.scale)
     }
 
     /// Scrolls so `point` (image pixels) is in the middle of the view.
@@ -730,9 +742,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(repeatExport(_:)):
             menuItem.title = imageDocument.fileState.lastExportURL.map { "Export to \($0.lastPathComponent)" } ?? "Export Again…"
             return !editingBlocked && !previewBusy
-        case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(exportDocument(_:)), #selector(saveDocumentCopy(_:)):
+        case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(exportDocument(_:)), #selector(saveDocumentCopy(_:)),
+             #selector(openLayersFromFile(_:)):
             // A plug-in dialog is modal for the engine; file calls get BUSY.
             return !editingBlocked && !previewBusy
+        case #selector(revertDocument(_:)):
+            let source = imageDocument.fileState.revertSource
+            menuItem.title = source?.menuTitle ?? "Revert…"
+            // Untitled images and open previews have nothing to revert
+            // or too much to discard silently; the sheet asks anyway,
+            // so a pending load and every busy gate also refuse.
+            return source != nil && revertHandler != nil && !revertIsPending
+                && !editingBlocked && !previewBusy
+        case #selector(placeLinkFromFile(_:)):
+            // Link layers need GIMP 3.2; an unknown version stays enabled
+            // and the facade's own UNSUPPORTED answer reports the rest.
+            return !editingBlocked && !previewBusy && imageDocument.supportsLinkLayers != false
         case #selector(runPlugIn(_:)):
             // The engine runs no plug-in while a filter preview is open.
             guard let command = menuItem.representedObject as? PlugInCommand else { return false }
@@ -854,6 +879,74 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         printJobIsOpen = false
         printJobDropped = false
         stateDidChange()
+    }
+
+    // MARK: File imports
+
+    /// File ▸ Open as Layers…: one file, imported as layers.
+    @objc func openLayersFromFile(_ sender: Any?) {
+        askForImportFile(prompt: "Open", message: "Choose a file to open as layers.") { [weak self] url in
+            self?.importChosenFile(url, asLink: false)
+        }
+    }
+
+    /// File ▸ Place…: one file, placed as a link layer.
+    /// Engines before GIMP 3.2 have no link layers; the menu already
+    /// refuses them, and this guard keeps a programmatic trigger honest.
+    @objc func placeLinkFromFile(_ sender: Any?) {
+        guard imageDocument.supportsLinkLayers != false else {
+            statusBar.message = "Linked layers are unavailable in this build. Use Open as Layers to import a copy."
+            NSSound.beep()
+            return
+        }
+        askForImportFile(prompt: "Place", message: "Choose a file to place as a link layer.") { [weak self] url in
+            self?.importChosenFile(url, asLink: true)
+        }
+    }
+
+    /// The import's file panel: one local file, presented as a sheet like
+    /// Save's. Choosing commits in-flight edits first so the load sees
+    /// the finished state; cancelling changes nothing.
+    private func askForImportFile(prompt: String, message: String,
+                                  _ chosen: @escaping (URL) -> Void) {
+        guard let window, !imageDocument.isClosing else { return }
+        endPendingEdits()
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.prompt = prompt
+        panel.message = message
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK, let url = panel.url else { return }
+            chosen(url)
+        }
+    }
+
+    /// Hands the chosen file to the document, which owns admission, the
+    /// engine-wide busy gate and the facade call; the status line reports
+    /// the outcome and any native error.
+    private func importChosenFile(_ url: URL, asLink: Bool) {
+        let name = url.lastPathComponent
+        let completion: @MainActor (Result<ImageDocument.ImportOutcome, Error>) -> Void = { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(.openedLayers):
+                self.statusBar.message = "Opened layers from \(name)"
+            case .success(.placedLink):
+                self.statusBar.message = "Placed \(name) as a link layer"
+            case .success(.cancelled):
+                self.statusBar.message = asLink ? "Placing \(name) was cancelled."
+                    : "Opening \(name) as layers was cancelled."
+            case .failure(let error):
+                self.showStatusError(String(describing: error))
+            }
+            self.stateDidChange()
+        }
+        if asLink {
+            imageDocument.placeLink(from: url, completion: completion)
+        } else {
+            imageDocument.openLayers(from: url, completion: completion)
+        }
     }
 
     // MARK: Saving, exporting and closing
@@ -996,13 +1089,76 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    /// File ▸ Revert…: reloads the saved XCF — or the original file an
+    /// imported image came from — from disk. The sheet is the only
+    /// approval for discarding this document's edits; the confirmed
+    /// load runs through the app's file admission, which replaces this
+    /// window's document only once the new image is valid. A failed or
+    /// refused load leaves this document fully usable.
+    @objc func revertDocument(_ sender: Any?) {
+        guard let window, window.attachedSheet == nil, !revertIsPending, !previewBusy,
+              let revertHandler, let source = imageDocument.fileState.revertSource,
+              !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
+              !imageDocument.isClosing, !imageDocument.isSavingForClose,
+              !imageDocument.isTransferringClipboard else { return }
+        endPendingEdits()
+        let fileName = source.url.lastPathComponent
+        let alert = NSAlert()
+        switch source {
+        case .native:
+            alert.messageText = "Revert to \u{201C}\(fileName)\u{201D}?"
+            alert.informativeText = "All changes to \u{201C}\(imageDocument.name)\u{201D} since it was last saved will be lost, including the undo history."
+        case .imported:
+            alert.messageText = "Re-import \u{201C}\(fileName)\u{201D}?"
+            alert.informativeText = "All changes to \u{201C}\(imageDocument.name)\u{201D} will be lost, including the undo history. The document is imported again from its original file."
+        }
+        alert.addButton(withTitle: "Revert")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn, !self.revertIsPending else { return }
+            // The document's file cannot change under a sheet, but its
+            // lifetime can; the source check also guards a re-open.
+            guard let current = self.imageDocument.fileState.revertSource, current == source,
+                  !self.imageDocument.isClosing else { return }
+            self.revertIsPending = true
+            revertHandler(source.url) { [weak self] result in
+                guard let self else { return }
+                self.revertIsPending = false
+                if case .failure(let error) = result {
+                    self.showStatusError(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// A confirmed Revert's discard approval: no close path may ask to
+    /// save this document again.
+    func approveDiscard() { closeApproved = true }
+
+    /// Closes the window without an unsaved-changes prompt; a
+    /// confirmed revert already holds the discard approval. The
+    /// ordinary close drain — preview cancellation, render reads and
+    /// queued engine work — still applies.
+    func closeDiscardingChanges() {
+        closeApproved = true
+        window?.close()
+    }
+
+    /// A confirmed revert's load is in flight: edits stay consented to
+    /// discard, so a close during the load must not prompt again.
+    private(set) var revertIsPending = false
+
     /// Whether the user already agreed to close: Don't Save, or a save
     /// that succeeded. The next close request goes through.
     private var closeApproved = false
     private var savePromptVisible = false
     private var closeCompletion: ((Bool) -> Void)?
-    private var closeStarted = false
-    private var waitingForActivityToClose = false
+    /// Set the moment the window begins closing, before the async
+    /// teardown; a revert landing meanwhile must not adopt into it.
+    private(set) var closeStarted = false
+    /// A close asked for while the engine was busy waits for the idle
+    /// gate; an adoption landing first must yield to it.
+    private(set) var waitingForActivityToClose = false
 
     /// Quit and Close All share the same save/cancel flow as the close dot.
     /// Completion waits for both render reads and engine work to finish.
@@ -1052,7 +1208,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         previewPanel?.cancel()
         cancelPendingPreview()
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
-        if closeApproved || !imageDocument.hasUnsavedChanges { return true }
+        if closeApproved || revertIsPending || !imageDocument.hasUnsavedChanges { return true }
         askToSaveChanges()
         return false
     }
