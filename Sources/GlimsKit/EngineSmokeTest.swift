@@ -1309,7 +1309,7 @@ enum EngineSmokeTest {
         controller.revertDocument(nil)
         confirm(.alertSecondButtonReturn, on: controller)
         spin(0.2)
-        check(app.documents.last === controller && !controller.revertIsPending
+        check(app.documents.contains(where: { $0 === controller }) && app.documents.count == 2 && !controller.revertIsPending
                 && document.hasUnsavedChanges && !document.isClosing
                 && (pixel(session, image, x: 50, y: 50)?[0] ?? 255) < 128,
               "a cancelled Revert preserves the edits, image and window")
@@ -1320,7 +1320,7 @@ enum EngineSmokeTest {
         other.endStroke()
         controller.revertDocument(nil)
         confirm(.alertFirstButtonReturn, on: controller)
-        wait { app.documents.last !== controller }
+        wait { !app.documents.contains(where: { $0 === controller }) }
         guard let first = app.documents.last else { throw NoWindow() }
         documents.items.removeAll { $0 === document }
         tracked.append(first.imageDocument)
@@ -1353,7 +1353,7 @@ enum EngineSmokeTest {
         try session.closeImage(rewritten)
         first.revertDocument(nil)
         confirm(.alertFirstButtonReturn, on: first)
-        wait { app.documents.last !== first }
+        wait { !app.documents.contains(where: { $0 === first }) }
         guard let second = app.documents.last else { throw NoWindow() }
         documents.items.removeAll { $0 === first.imageDocument }
         tracked.append(second.imageDocument)
@@ -1392,7 +1392,7 @@ enum EngineSmokeTest {
               "an imported document is offered Revert…")
         importedController.revertDocument(nil)
         confirm(.alertFirstButtonReturn, on: importedController)
-        wait { app.documents.last !== importedController }
+        wait { !app.documents.contains(where: { $0 === importedController }) }
         guard let reimported = app.documents.last else { throw NoWindow() }
         documents.items.removeAll { $0 === imported }
         tracked.append(reimported.imageDocument)
