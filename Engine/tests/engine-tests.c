@@ -679,6 +679,26 @@ static int            supports_vector_layers (void);
 static int            supports_link_layers (void);
 static GlimsPathPoint corner (double x, double y);
 
+/* The source test deliberately creates a group, so an inserted source
+ * layer can be nested or follow another top-level layer. Match identity,
+ * never assume the edited layer is the first row of the tree. */
+static bool
+source_test_row (GlimsImageID image, GlimsItemID item, GlimsLayerInfo *out)
+{
+  GlimsLayerInfo rows[8];
+  int32_t count = 0;
+
+  if (api->image_layers (engine, image, rows, 8, &count) != GLIMS_STATUS_OK || count > 8)
+    return false;
+  for (int32_t i = 0; i < count; i++)
+    if (rows[i].id == item)
+      {
+        *out = rows[i];
+        return true;
+      }
+  return false;
+}
+
 /* Structured layer sources: layer_source_info's native kind and state,
  * the retained source after pixel painting, the explicit RASTERIZE
  * command with its undo/redo, unchanged render/selection/bounds, repeat
@@ -690,7 +710,7 @@ test_layer_source (const char *work)
   GlimsImageID         image = 0, other = 0, reopened = 0;
   GlimsItemID          layer = 0, other_layer = 0, group = 0, text = 0, painted = 0;
   GlimsItemID          path = 0, vector = 0, link = 0, foreign = 0;
-  GlimsLayerInfo       rows[8];
+  GlimsLayerInfo       rows[8], row = { 0 };
   GlimsLayerSourceInfo info, small;
   GlimsTextSettings    settings = { .struct_size = sizeof settings, .size = 24,
                                     .color = { 0, 0, 0, 1 }, .justify = GLIMS_JUSTIFY_LEFT,
@@ -789,8 +809,8 @@ test_layer_source (const char *work)
   api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
                      (GlimsPoint[]) { { 0, 0 }, { 150, 90 } }, 2, NULL);
   api->selection_bounds (engine, image, &sel_empty, &sel_before);
-  api->image_layers (engine, image, rows, 8, &n);
-  bounds_before = rows[0].bounds;
+  CHECK (source_test_row (image, text, &row), "the text source row resolves by identity");
+  bounds_before = row.bounds;
   shot = render_all (image, &w, &h);
 
   before = undo_depth (image);
@@ -800,9 +820,8 @@ test_layer_source (const char *work)
   CHECK (api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
          info.source_kind == GLIMS_LAYER_TEXT && info.is_rasterized && info.has_source,
          "the rasterized text keeps its TEXT source kind and retained text");
-  CHECK (api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK &&
-         rows[0].id == text && rows[0].kind == GLIMS_LAYER_PIXEL &&
-         rect_equals (rows[0].bounds, bounds_before.x, bounds_before.y,
+  CHECK (source_test_row (image, text, &row) && row.kind == GLIMS_LAYER_PIXEL &&
+         rect_equals (row.bounds, bounds_before.x, bounds_before.y,
                       bounds_before.width, bounds_before.height),
          "the layer reads PIXEL in the tree with unchanged bounds");
   after = render_all (image, &w2, &h2);
@@ -826,8 +845,7 @@ test_layer_source (const char *work)
   CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
          api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
          ! info.is_rasterized && info.has_source &&
-         api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK &&
-         rows[0].kind == GLIMS_LAYER_TEXT,
+         source_test_row (image, text, &row) && row.kind == GLIMS_LAYER_TEXT,
          "undo restores the editable text layer");
   CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
          api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
@@ -924,8 +942,7 @@ test_layer_source (const char *work)
              undo_depth (image) == before + 1 &&
              api->layer_source_info (engine, image, vector, &info, NULL) == GLIMS_STATUS_OK &&
              info.source_kind == GLIMS_LAYER_VECTOR && info.is_rasterized && info.has_source &&
-             api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK &&
-             rows[0].id == vector && rows[0].kind == GLIMS_LAYER_PIXEL,
+             source_test_row (image, vector, &row) && row.kind == GLIMS_LAYER_PIXEL,
              "rasterizing the vector is one undo step keeping kind, flag and path");
       after = render_all (image, &w2, &h2);
       CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
@@ -970,8 +987,7 @@ test_layer_source (const char *work)
       CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
              api->layer_source_info (engine, image, link, &info, NULL) == GLIMS_STATUS_OK &&
              ! info.is_rasterized && info.has_source &&
-             api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK &&
-             rows[0].kind == GLIMS_LAYER_LINK,
+             source_test_row (image, link, &row) && row.kind == GLIMS_LAYER_LINK,
              "undo remonitors the link layer");
       api->image_redo (engine, image);
     }

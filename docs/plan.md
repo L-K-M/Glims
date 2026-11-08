@@ -1812,3 +1812,13 @@ and an XCF round trip for rasterized text (plus vector/link paths on
 GIMP 3.2+). The adapter and these tests were NOT compiled or run in
 this slice — only `swift build --build-tests` (the facade header
 compiles through CGlimsEngine).
+
+Root native validation passes 1,251 / 1,146 / 1,251 / 1,251 checks on
+GIMP 3.2.8 / 3.0.8 / 3.2.0 / master. The first run exposed four test
+assertions that assumed a nested or newly inserted layer was the tree's
+first row. Resolving the exact layer id corrects those fixtures; the
+production implementation required no change. All retained-source,
+undo/redo, unchanged pixels/selection/bounds, XCF, lock and busy assertions
+now pass. The compiled `layer-source` interface scenario additionally
+checks queued document cache refresh and busy admission; its runtime
+execution and the unit suite are pending the shared desktop.
