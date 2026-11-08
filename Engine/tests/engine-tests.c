@@ -1305,7 +1305,8 @@ test_vector_rasterized_roundtrip (const char *work)
   if (! vectors)
     {
       CHECK (api->image_new (engine, 40, 30, &image, NULL) == GLIMS_STATUS_OK &&
-             api->path_to_vector_layer (engine, image, 1, "x", NULL, NULL) == GLIMS_STATUS_UNSUPPORTED,
+             api->path_set (engine, image, 0, "Raster shape", rsquare, 1, rpoints, 4, &rpath, NULL) == GLIMS_STATUS_OK &&
+             api->path_to_vector_layer (engine, image, rpath, "x", NULL, NULL) == GLIMS_STATUS_UNSUPPORTED,
              "engines without vector layers report UNSUPPORTED");
       if (image)
         api->image_close (engine, image);
