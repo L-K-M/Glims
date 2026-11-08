@@ -1954,6 +1954,139 @@ focused file-safety scenario passes. Unknown smoke selectors now fail
 explicitly rather than silently running the full suite. The integrated
 full run is repeated after adopting the Guides field fix.
 
+### Native indexed conversion (2026-11-08)
+
+Backend slice on `feat/indexed-conversion`, adapter plus typed Swift
+wrapper, no UI. One facade footer slot appended after
+`layer_source_info` (unchanged ABI otherwise):
+`image_convert_indexed(engine, image, settings, colors, color_count,
+error)` runs the core's `gimp_image_convert_indexed`
+(app/core/gimpimage-convert-indexed.c; identical signature and
+semantics in GIMP_3_0_8, GIMP_3_2_0, GIMP_3_2_8 and master — the header
+is byte-identical up to `#pragma once`/cleanup-attribute cosmetics and
+the .c differs only in a `gimp_gegl_buffer_new` internal on master) as
+its own single "Convert Image to Indexed" undo group. No adapter undo
+group is added and upstream is unpatched.
+
+Settings cross the facade as the size-versioned `GlimsIndexedSettings`
+with facade-owned enums only: `GlimsIndexedPalette` GENERATED/WEB/MONO/
+CUSTOM → `GIMP_CONVERT_PALETTE_*` (libgimpbase/gimpbaseenums.h),
+`GlimsIndexedDither` NONE/FS/FS_LOW_BLEED/FIXED →
+`GIMP_CONVERT_DITHER_*` (app/core/core-enums.h; the internal
+NODESTRUCT value is never exposed), and `GlimsIndexedPreservation`
+PRESERVE_EDITABLE/ALLOW_RASTERIZE. `max_colors` is validated 2 ... 256
+for GENERATED and ignored otherwise (the core sizes its quantizer from
+it only on the GENERATE path; the call passes the native maximum for
+the fixed palettes, as the engine's own dialog default does).
+`remove_unused` maps to the core's `remove_duplicates`, which the
+native post-pass applies to WEB and CUSTOM only and skips for
+GENERATED and MONO — forwarded verbatim and documented as ignored
+there. `dither_alpha` and `dither_text` map to the same-named core
+arguments. FIXED dithering uses the engine's current ordered-dither
+matrix, whose native default is initialized statically. Conversion does
+not reset process-wide state configured by another command.
+
+CUSTOM takes a caller-owned `colors`/`color_count` argument (1 ... 256
+opaque sRGB entries), validated element-wise — finite, 0 ... 1, alpha
+exactly 1 — before any mutation. The adapter builds a private
+`GimpPalette` per call (`gimp_palette_new(NULL, "Custom")` +
+`gimp_palette_add_entry` of `GeglColor`s set in sRGB), passes it as
+the borrowed `custom_palette` argument and unrefs it right after the
+synchronous call; the core copies the entries out in `custompal_pass1`
+(gimpimage-convert-indexed.c:2950), so nothing outlives the call.
+The palette is therefore never NULL for CUSTOM, which also makes the
+core's silent CUSTOM→MONO fallback unreachable; an empty list is
+refused by our own validation, the only CUSTOM error the core would
+report. No resource id or native pointer crosses the facade.
+
+Validation order: image identity (NOT_FOUND), whole settings —
+struct_size, all three enum fields, GENERATED's `max_colors`, CUSTOM's
+list and per-color components (INVALID_ARGUMENT) — then
+`glims_edit_ready` (stroke/filter/plug-in BUSY), then the image gates:
+an already indexed base type is a history-free no-op (the core refuses
+it with no GError); precision must be exactly
+`GIMP_PRECISION_U8_NON_LINEAR` — the only one `gimp_babl_is_valid`
+accepts for indexed — and the layer stack must be flat
+(`gimp_item_stack_is_flat` on `gimp_image_get_layers`, the identical
+gate the engine's own menu action and PDB invoker apply;
+image-actions.c:484,536, image-convert-cmds.c:143). Both report
+UNSUPPORTED with an actionable message. All of the core's
+`g_return_val_if_fail` preconditions are thus excluded before the
+call; a remaining FALSE return reports through `glims_fail` with the
+core's GError.
+
+Editable-layer policy: the core's quantize path rasterizes every
+non-text layer (vector/link `set_buffer` keeps the `GimpRasterizable`
+flag/link object — source retained, monitor frozen for links) and
+text only when `dither_text` is on; with it off,
+`gimp_drawable_convert_type`/`gimp_text_layer_convert_type` re-renders
+the text in indexed format and it stays editable
+(gimpimage-convert-indexed.c:1054-1099). PRESERVE_EDITABLE refuses
+genuine editable vector or link layers always, and genuine editable
+text when `dither_text` is on, with REQUIRES_RASTERIZE — the same
+actionable consent status `image_convert_profile` uses — before any
+mutation. ALLOW_RASTERIZE admits them inside the conversion's one
+undo; undo restores RGB/gray pixels, the mode and each layer's
+structured kind and editable predicate.
+
+Swift: `EngineSession.IndexedPalette/IndexedDither/
+IndexedPreservation/IndexedSettings` and
+`convertToIndexed(_:settings:)`; `customColors` (`[NSColor]`, opaque)
+marshals to a `GlimsColor` array whose `withUnsafeBufferPointer`
+covers the complete synchronous C call. `EngineError.requiresRasterization`
+classifies the consent refusal. `convertMode(.indexed)` stays
+UNSUPPORTED and now points at `convertToIndexed`.
+
+Conformance (`test_indexed_conversion`, registered after
+`test_color_state`): GENERATED on a painted two-color image pins exact
+quantized pixels plus indexed mode/u8-non-linear precision and
+undo/redo pixel-for-pixel restoration; WEB pins 6×6×6-step components;
+MONO pins black/white; a known red/blue CUSTOM palette pins the exact
+rendered AND copied bytes of an `image_from_pixels` source with no
+colormap-read API; FS vs NONE diverge on a ramp; FS_LOW_BLEED, FIXED
+and `dither_alpha` on a translucent ramp are exercised; the
+already-indexed no-op runs after full validation. Negatives: missing/
+short settings, every unknown enum, `max_colors` 1/257, CUSTOM
+missing/empty/257 colors and non-finite/out-of-range/non-opaque
+entries, unknown image, u16 precision, a grouped stack, and BUSY under
+stroke and filter — all assert unchanged mode and undo depth. Text:
+dither_text off converts and keeps the text editable (source_kind
+TEXT, not rasterized, source retained); dithered text under preserve
+is refused actionably; allowRasterize converts in one undo with source
+retained and undo restores the editable kind. On GIMP 3.2+ a genuine
+vector plus placed link layer are refused under preserve even with
+dither_text off, rasterize under consent in one undo with sources
+retained, and undo restores both kinds; the whole block is skipped on
+3.0.8, which lacks the classes.
+
+The initial helper compiled the Swift targets only. Root subsequently
+built and ran the adapter and native suites on this same changeset, as
+recorded in the integrated validation below.
+
+Owner review retains the existing facade's REQUIRES_RASTERIZE status
+for the preservation refusal, matching profile conversion and allowing
+the interface to offer explicit consent without treating other
+unsupported states as rasterization requests. The first native run
+confirmed the refusal happens before mutation. Its filter-busy fixture
+initially compared history against the depth before a preceding stroke
+was committed; it now captures the depth after that stroke. FIXED
+dithering passed using the native statically initialized matrix after
+removing the unnecessary per-conversion global reset.
+
+Integrated validation passes 1,319 / 1,208 / 1,319 / 1,319 native checks
+on GIMP 3.2.8 / 3.0.8 / 3.2.0 / master, plus 387 unit tests and nine
+typed-wrapper checks on each engine. The full pinned interface suite
+passes 952 checks. An actual pattern-color palette input reproduced an
+AppKit component-access exception in the shared NSColor serializer: a
+failed RGB conversion fell back to a generic-gray black, then read RGB
+components. Serialization now throws INVALID_ARGUMENT before component
+access or engine mutation; throwing propagation covers its existing typed
+callers. Non-custom palettes ignore the unused custom-color list.
+Independent native and shared-color reviews found no important issues.
+One minor existing wrapper caveat remains deferred: vector-style changes
+serialize both colors even when their property bits are absent; current
+forms supply valid captured colors for those unused fields.
+
 Guide field refresh regression: undoing a selected guide's move updated
 the list but left its idle position field stale because reselecting the
 same table row does not notify its delegate. The new actual-sheet check
@@ -1971,6 +2104,11 @@ passes 47 checks on each of the four supported engines.
 Pinned CI uses Swift 6.2 and requires explicit CGFloat-to-Double tuple
 conversion in the ruler axis mapping; the newer local compiler had
 accepted it implicitly. The conversions are now explicit.
+
+Post-merge validation with Guides passes 399 unit tests, all-four-engine
+typed wrapper checks and 982 full pinned interface checks. Review also
+hardened the dither fixture against unexpected short pixel-copy results;
+comparison now requires both buffers to have the expected byte count.
 
 ### Profiled display pixels (2026-11-08)
 
