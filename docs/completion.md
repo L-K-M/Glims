@@ -328,3 +328,11 @@ observed failing in the draft and passes after per-sheet retention. The
 Paths-integrated build passes 305 unit tests and 689/678/689/689 interface
 checks. On screen, half-opacity Fill works and cancelling the Custom
 color well closes the panel it opened. Pattern fill remains resource work.
+
+2026-11-08 Pattern fill source: Edit > Fill gains Pattern (index 5), an
+embedded searchable list of the engine's full pattern catalog with lazy
+32 px thumbnails rendered off the main thread through the engine gate.
+The choice persists as a ResourceIdentity only and resolves fresh on the
+input queue at execution; a removed pattern is reported missing and the
+fill refused, never substituted. Pure model/store/queue checks added; a
+compiled chooser-model engine scenario awaits the sheet-drive slice.

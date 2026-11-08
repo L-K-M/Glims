@@ -1,9 +1,12 @@
 import AppKit
 
 /// The native Edit ▸ Fill… sheet: a fill source (foreground, background,
-/// white, black or a custom color) and an opacity from 0 to 100 %. The
-/// document is captured when the sheet opens; a retarget cannot redirect
-/// the fill.
+/// white, black, a custom color or a pattern) and an opacity from 0 to
+/// 100 %. The document is captured when the sheet opens; a retarget
+/// cannot redirect the fill. Choosing Pattern embeds a searchable list
+/// of the engine's full pattern catalog; the fill commits the chosen
+/// persistent identity and resolves it on the engine worker at
+/// execution — a removed pattern is refused, never substituted.
 @MainActor
 enum FillForm {
     static func present(in document: ImageDocument, on window: NSWindow) {
@@ -17,7 +20,8 @@ enum FillForm {
         }
 
         let choice = NSPopUpButton(frame: .zero, pullsDown: false)
-        choice.addItems(withTitles: ["Foreground Color", "Background Color", "White", "Black", "Custom"])
+        // Indices 0-4 keep their meaning; Pattern is exactly index 5.
+        choice.addItems(withTitles: ["Foreground Color", "Background Color", "White", "Black", "Custom", "Pattern"])
         choice.setAccessibilityLabel("Fill with")
 
         let colorWell = NSColorWell(frame: NSRect(x: 0, y: 0, width: 64, height: 28))
@@ -34,8 +38,17 @@ enum FillForm {
         opacityField.setAccessibilityLabel("Fill opacity, percent")
         opacityField.widthAnchor.constraint(equalToConstant: 64).isActive = true
 
+        // The pattern picker lives exactly as long as the sheet: the sync
+        // object owns it, the completion drops its stale callbacks.
+        let picker = PatternFillPicker(document: document,
+                                       currentIdentity: PatternFillStore.shared.identity)
+        let patternLabel = NSTextField(labelWithString: "Pattern:")
+        patternLabel.isHidden = true
+        picker.view.isHidden = true
+
         let sync = FillFormSync(choice: choice, colorWell: colorWell,
-                               slider: opacitySlider, field: opacityField)
+                               slider: opacitySlider, field: opacityField,
+                               picker: picker, patternLabel: patternLabel)
         choice.target = sync
         choice.action = #selector(FillFormSync.choiceChanged(_:))
         opacitySlider.target = sync
@@ -51,6 +64,7 @@ enum FillForm {
         let grid = NSGridView(views: [
             [NSTextField(labelWithString: "Fill with:"), choice],
             [NSTextField(labelWithString: "Color:"), colorWell],
+            [patternLabel, picker.view],
             [NSTextField(labelWithString: "Opacity (%):"), opacityStack],
         ])
         grid.rowSpacing = 8
@@ -71,6 +85,9 @@ enum FillForm {
             sheetWindow?.endEditing(for: nil)
             if colorWell.isActive && !colorPanelWasVisible { NSColorPanel.shared.orderOut(nil) }
             sync.colorWell?.deactivate()
+            // The sheet ended: no in-flight catalog or thumbnail delivery
+            // may touch this stale view again.
+            sync.picker?.invalidate()
             guard response == .alertFirstButtonReturn else { return }
             guard document.acceptsEdits else {
                 document.onError?(document.isClosing
@@ -80,6 +97,22 @@ enum FillForm {
             }
             guard let opacity = ChannelForms.opacityValue(opacityField.stringValue) else {
                 document.onError?("Enter an opacity from 0 to 100%.")
+                return
+            }
+            if choice.indexOfSelectedItem == 5 {
+                // Pattern fill: commit the persistent identity only; the
+                // document resolves it fresh on the engine worker at
+                // execution. A missing or unchosen pattern is refused —
+                // no default is substituted.
+                guard let identity = sync.picker?.model.pendingIdentity() else {
+                    document.onError?("Choose a pattern to fill with.")
+                    return
+                }
+                PatternFillStore.shared.set(identity)
+                var settings = EngineSession.PatternFillSettings()
+                settings.mode = .selection
+                settings.opacity = opacity
+                document.fillPattern(identity, at: .zero, settings)
                 return
             }
             let color: NSColor
@@ -102,18 +135,30 @@ private final class FillFormSync: NSObject {
     weak var colorWell: NSColorWell?
     weak var slider: NSSlider?
     weak var field: NSTextField?
+    /// Owned strongly for the sheet's lifetime: the picker's table data
+    /// source is weak, so this reference is what keeps it alive.
+    let picker: PatternFillPicker?
+    weak var patternLabel: NSTextField?
 
-    init(choice: NSPopUpButton, colorWell: NSColorWell, slider: NSSlider, field: NSTextField) {
+    init(choice: NSPopUpButton, colorWell: NSColorWell, slider: NSSlider, field: NSTextField,
+         picker: PatternFillPicker? = nil, patternLabel: NSTextField? = nil) {
         self.choice = choice
         self.colorWell = colorWell
         self.slider = slider
         self.field = field
+        self.picker = picker
+        self.patternLabel = patternLabel
         super.init()
     }
 
     @objc func choiceChanged(_ sender: NSPopUpButton) {
         let custom = sender.indexOfSelectedItem == 4
         colorWell?.isEnabled = custom
+        let pattern = sender.indexOfSelectedItem == 5
+        patternLabel?.isHidden = !pattern
+        picker?.view.isHidden = !pattern
+        // The catalog loads once, the first time the list shows.
+        if pattern { picker?.load() }
     }
 
     @objc func sliderChanged(_ sender: NSSlider) {

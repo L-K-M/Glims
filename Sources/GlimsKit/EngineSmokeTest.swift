@@ -6405,6 +6405,111 @@ enum EngineSmokeTest {
         settle()
         check(document.undoInfo.undoCount == undoBefore, "the refused calls added no undo step")
     }
+
+    /// The Edit ▸ Fill pattern picker's pure model against the live
+    /// catalog: the full native list feeds a `PatternChooserModel`
+    /// exactly as `PatternFillPicker.load` does (off the main thread,
+    /// names plus persistent identities, the persisted identity resolved
+    /// fresh), the user pick commits an identity, and the document's
+    /// queued `fillPattern` lands it as one undo step. A missing
+    /// persisted identity stays a refusal — the model never substitutes
+    /// another pattern. Not wired into `run()` yet: this is the compiled
+    /// companion to the picker's UI, exercised like the other scenarios
+    /// once the sheet flow is part of the smoke drive.
+    private static func exercisePatternChooserModel(_ session: EngineSession,
+                                                    documents: DocumentList) throws {
+        let image = try session.newImage(width: 96, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Pattern Chooser")
+        documents.items.append(document)
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+            spin()
+        }
+
+        // The catalog enumeration and the fresh resolution of the
+        // persisted identity belong off the main thread, exactly as the
+        // picker's EngineActivity work does.
+        struct Load {
+            let rows: [PatternRow]
+            let resolved: EngineSession.ResourceID?
+        }
+        func loadCatalog(resolving persisted: EngineSession.ResourceIdentity?) throws -> Load {
+            try DispatchQueue.global(qos: .userInitiated).sync {
+                var rows: [PatternRow] = []
+                for entry in try session.resources(.pattern) {
+                    rows.append(PatternRow(id: entry.id, name: entry.displayName,
+                                           identity: try session.resourceIdentifiers(entry.id)))
+                }
+                var resolved: EngineSession.ResourceID?
+                if let persisted {
+                    resolved = try? session.resolveResource(persisted, kind: .pattern)
+                }
+                return Load(rows: rows, resolved: resolved)
+            }
+        }
+
+        let first = try loadCatalog(resolving: nil)
+        check(!first.rows.isEmpty, "the engine lists at least one pattern for the picker")
+
+        let model = PatternChooserModel(currentIdentity: nil)
+        check(model.deliver(generation: model.generation, rows: first.rows,
+                            resolvedCurrent: nil, error: nil),
+              "the chooser model accepts the full catalog")
+        check(model.rows(matching: "").count == first.rows.count,
+              "the picker keeps every catalog row, uncapped")
+        check(model.pendingIdentity() == nil,
+              "with nothing picked, the fill is refused rather than defaulted")
+
+        // A search pick commits the row's persistent identity.
+        let needle = String(first.rows[0].name.prefix(1))
+        let matches = model.rows(matching: needle)
+        check(matches.contains { $0.id == first.rows[0].id },
+              "search finds the first catalog row by its first letter")
+        model.select(first.rows[0].id)
+        guard let chosen = model.pendingIdentity() else {
+            check(false, "a picked row yields its persistent identity")
+            return
+        }
+        check(chosen == first.rows[0].identity, "the committed value is the row's ResourceIdentity")
+
+        // Persisting and reopening resolves the same identity fresh.
+        let reopened = try loadCatalog(resolving: chosen)
+        check(reopened.resolved == first.rows[0].id,
+              "the persisted identity resolves to the same pattern on reopen")
+        let restored = PatternChooserModel(currentIdentity: chosen)
+        restored.deliver(generation: restored.generation, rows: reopened.rows,
+                         resolvedCurrent: reopened.resolved, error: nil)
+        check(restored.pendingIdentity() == chosen,
+              "a still-live persisted pattern is preselected and committable")
+
+        // The queued document fill lands the chosen pattern as one undo step.
+        let undoBefore = document.undoInfo.undoCount
+        let pixelsBefore = try session.copyPixels(image, merged: true).pixels
+        document.fillPattern(chosen, at: .zero, EngineSession.PatternFillSettings())
+        settle()
+        check(document.undoInfo.undoCount == undoBefore + 1,
+              "the chosen pattern fill is one undo step")
+        check(try session.copyPixels(image, merged: true).pixels != pixelsBefore,
+              "the chosen pattern fill changed the layer's pixels")
+        document.undo()
+        settle()
+
+        // A removed pattern: persisted identity resolves NOT_FOUND, the
+        // model reports it missing and pendingIdentity refuses.
+        let gone = EngineSession.ResourceIdentity(name: "glims-no-such-pattern",
+                                                  collection: "no-such-collection",
+                                                  isInternal: false)
+        let missingLoad = try loadCatalog(resolving: gone)
+        check(missingLoad.resolved == nil, "a bogus identity does not resolve")
+        let missingModel = PatternChooserModel(currentIdentity: gone)
+        missingModel.deliver(generation: missingModel.generation, rows: missingLoad.rows,
+                             resolvedCurrent: missingLoad.resolved, error: nil)
+        check(missingModel.missingIdentity == gone,
+              "a missing persisted pattern is reported, not substituted")
+        check(missingModel.pendingIdentity() == nil,
+              "a missing pattern refuses the fill; no default is applied")
+    }
 }
 
 @MainActor
