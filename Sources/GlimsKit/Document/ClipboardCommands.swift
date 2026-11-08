@@ -81,7 +81,7 @@ extension DocumentWindowController {
         canvas.tools.finishTextEditing()
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
         let background = ToolState.shared.background
-        imageDocument.run { session, image in try session.clearPixels(image, background: background) }
+        imageDocument.runOnPaintTarget { session, image in try session.clearPixels(image, background: background) }
     }
 
     func canPerformClipboardCommand(_ action: Selector?) -> Bool {
@@ -93,11 +93,11 @@ extension DocumentWindowController {
                 && NSPasteboard.general.availableType(from: [.png, .tiff]) != nil
         case #selector(cut(_:)):
             // A cut clears pixels; the preview owns its drawable meanwhile.
-            return !imageDocument.filterPreviewIsOpen && imageDocument.activeLayer != nil
+            return !imageDocument.filterPreviewIsOpen && imageDocument.activeDrawable != nil
         case #selector(copyMerged(_:)):
             return true
         default:
-            return imageDocument.activeLayer != nil
+            return imageDocument.activeDrawable != nil
         }
     }
 }

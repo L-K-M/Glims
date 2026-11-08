@@ -260,8 +260,8 @@ final class CanvasToolController {
     }
 
     private func setCloneSource(at point: CGPoint) {
-        guard let layer = document.activeLayer else { return }
-        ToolState.shared.cloneSource = EngineSession.Brush.Source(drawable: layer, x: point.x, y: point.y)
+        guard let drawable = document.activeDrawable else { return }
+        ToolState.shared.cloneSource = EngineSession.Brush.Source(drawable: drawable, x: point.x, y: point.y)
         ToolState.shared.notifyChange()
         onStatus?("Source set at \(Int(point.x)), \(Int(point.y)).")
     }

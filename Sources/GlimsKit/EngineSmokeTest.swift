@@ -1257,6 +1257,22 @@ enum EngineSmokeTest {
         reloadGate.signal()
         settle()
 
+        let savedTool = ToolState.shared.current
+        let savedSource = ToolState.shared.cloneSource
+        ToolState.shared.select(.clone)
+        if let window = controller.window,
+           let sourceClick = NSEvent.mouseEvent(with: .leftMouseDown,
+                location: controller.canvas.convert(CGPoint(x: 12 * controller.canvas.scale,
+                                                             y: 12 * controller.canvas.scale), to: nil),
+                modifierFlags: [.option], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+            controller.canvas.mouseDown(with: sourceClick)
+            check(ToolState.shared.cloneSource?.drawable == document.activeDrawable,
+                  "Option-click Clone samples the selected mask instead of its layer")
+        } else { check(false, "the mask clone-source check receives a pointer event") }
+        ToolState.shared.cloneSource = savedSource
+        ToolState.shared.select(savedTool)
+
         // A filter preview begins on the mask drawable.
         var preview: Result<ImageDocument.FilterPreviewStart, Error>?
         document.beginFilterPreview(operation: GaussianBlurPanel.operation, properties: []) {
@@ -1270,6 +1286,26 @@ enum EngineSmokeTest {
         } else {
             check(false, "a filter preview begins on the mask drawable: \(String(describing: preview))")
         }
+
+        document.select(.none)
+        settle()
+        let layerBeforeFailedPick = try session.drawableThumbnail(layer, image: image, maxSize: 32)?
+            .dataProvider?.data as Data?
+        document.run { session, image in
+            try session.applyLayerMask(layer, image: image, mode: .discard)
+        }
+        document.editMask(layer)
+        document.fill(at: .zero, mode: .selection, color: .magenta, threshold: 0, sampleMerged: false)
+        settle()
+        let layerAfterFailedPick = try session.drawableThumbnail(layer, image: image, maxSize: 32)?
+            .dataProvider?.data as Data?
+        check(layerBeforeFailedPick != nil && layerBeforeFailedPick == layerAfterFailedPick,
+              "a queued mask pick that becomes invalid refuses the following fill instead of painting its layer")
+        check(document.activeDrawable == nil,
+              "a failed mask pick asks for a fresh target instead of silently falling back to the layer")
+        document.selectLayer(layer)
+        settle()
+        check(document.activeDrawable == layer, "picking a layer recovers from a refused mask target")
 
         let thumbnailGate = DispatchSemaphore(value: 0)
         document.inputQueue.async { thumbnailGate.wait() }

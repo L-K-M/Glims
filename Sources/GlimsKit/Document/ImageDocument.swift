@@ -46,6 +46,10 @@ final class ImageDocument {
     }
     private var targetPickVersion = 0
     private var pendingTargetPick: TargetPick?
+    private var rejectedTargetPick = false
+    /// Input-queue state: edits already accepted behind a failed pick
+    /// must refuse before reaching an implicit native drawable target.
+    private nonisolated(unsafe) var paintTargetIsValid = true
     /// The lock state the engine reported per layer id at the last reload:
     /// the item's own locks and the locks enforced on it.
     private(set) var layerLocks: [Int32: EngineSession.LayerLockState] = [:]
@@ -185,6 +189,7 @@ final class ImageDocument {
     /// layer itself otherwise. Fill, gradient, Copy and Clear resolve
     /// the same target natively from the engine's selected drawables.
     var activeDrawable: Int32? {
+        guard !rejectedTargetPick else { return nil }
         guard let layer = activeLayer else { return nil }
         if let pick = pendingTargetPick, pick.layer == layer { return pick.mask ?? layer }
         if let state = maskStates[layer], state.editing, state.mask != 0 { return state.mask }
@@ -267,6 +272,7 @@ final class ImageDocument {
         targetPickVersion += 1
         let pick = TargetPick(version: targetPickVersion, layer: id, mask: editingMask ? mask : nil)
         pendingTargetPick = pick
+        rejectedTargetPick = false
         // Mask editing is one target at a time: a mask still flagged
         // EDITING on another layer would keep claiming fills and
         // gradients, so its flag clears in the same job. EDITING
@@ -282,6 +288,7 @@ final class ImageDocument {
         enqueue(on: inputQueue) { [session, image] in
             var failure: Error?
             var fresh: EngineSession.MaskState?
+            self.paintTargetIsValid = false
             do {
                 // Best-effort: a layer gone since the read must not
                 // block the pick itself; reload reconciles the rest.
@@ -289,21 +296,27 @@ final class ImageDocument {
                     try? session.setLayerMask(other, image: image, flags: [.editing], values: [])
                 }
                 try session.selectLayer(id, image: image)
-                fresh = try? session.layerMask(id, image: image)
+                fresh = try session.layerMask(id, image: image)
+                if editingMask, fresh?.mask != pick.mask || fresh?.mask == 0 {
+                    throw DocumentError.targetChanged
+                }
                 if let current = fresh, current.mask != 0, current.editing != editingMask {
                     try session.setLayerMask(id, image: image, flags: [.editing],
                                              values: editingMask ? [.editing] : [])
-                    if let updated = try? session.layerMask(id, image: image) { fresh = updated }
+                    fresh = try session.layerMask(id, image: image)
                 }
+                self.paintTargetIsValid = true
             } catch {
                 failure = error
             }
             DispatchQueue.main.async {
                 if self.pendingTargetPick?.version == pick.version {
                     self.pendingTargetPick = nil
+                    self.rejectedTargetPick = failure != nil
                     if let fresh {
                         self.maskStates[id] = fresh.mask != 0 ? fresh : nil
                     }
+                    if failure != nil { try? self.reload() }
                 }
                 if let failure { self.report(failure) }
                 self.onStateChange?()
@@ -344,6 +357,7 @@ final class ImageDocument {
         strokeIsActive = true
         enqueue(on: inputQueue, input: true) { [session, image] in
             do {
+                try self.requirePaintTarget()
                 self.currentStroke = try session.beginStroke(image: image, drawable: drawable, brush: brush, first: point)
             } catch {
                 self.currentStroke = nil
@@ -392,7 +406,7 @@ final class ImageDocument {
     func fill(at point: CGPoint, mode: EngineSession.FillMode, color: NSColor, threshold: Double,
               sampleMerged: Bool) {
         guard !refuseWhileEditingUnavailable() else { return }
-        run { session, image in
+        runOnPaintTarget { session, image in
             try session.fill(image: image, at: point, mode: mode, color: color,
                              threshold: threshold, sampleMerged: sampleMerged)
         }
@@ -400,7 +414,7 @@ final class ImageDocument {
 
     func gradient(from: CGPoint, to: CGPoint, shape: EngineSession.GradientShape, fromColor: NSColor, toColor: NSColor) {
         guard !refuseWhileEditingUnavailable() else { return }
-        run { session, image in
+        runOnPaintTarget { session, image in
             try session.gradient(image: image, from: from, to: to, shape: shape, fromColor: fromColor, toColor: toColor)
         }
     }
@@ -746,7 +760,7 @@ final class ImageDocument {
             NSSound.beep()
             return
         }
-        run { session, image in try session.strokePath(id, image: image, settings: settings) }
+        runOnPaintTarget { session, image in try session.strokePath(id, image: image, settings: settings) }
     }
 
     /// Re-reads the outline; the engine caches it until the selection changes.
@@ -885,12 +899,13 @@ final class ImageDocument {
     }
 
     enum DocumentError: LocalizedError {
-        case closed, busy, noLayer
+        case closed, busy, noLayer, targetChanged
         var errorDescription: String? {
             switch self {
             case .closed: return "This image has already closed."
             case .busy: return "Wait for the current image operation to finish."
             case .noLayer: return "There is no layer to work on."
+            case .targetChanged: return "The selected layer or mask changed. Select a paint target again."
             }
         }
     }
@@ -918,6 +933,7 @@ final class ImageDocument {
                     consume: @escaping @MainActor (ClipboardImage.Encoded) throws -> Void,
                     completion: @escaping @MainActor (Error?) -> Void) {
         guard !isClosing else { return completion(DocumentError.closed) }
+        if operation != .merged, activeDrawable == nil { return completion(DocumentError.targetChanged) }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
               !EngineActivity.shared.isBusy, !(operation == .cutLayer && filterPreviewIsOpen) else {
             return completion(DocumentError.busy)
@@ -930,7 +946,10 @@ final class ImageDocument {
         if cutting { pendingInput += 1 }
         onStateChange?()
         enqueue(on: inputQueue) { [session, image] in
-            let pixels = Result { try session.copyPixels(image, merged: operation == .merged) }
+            let pixels = Result {
+                if operation != .merged { try self.requirePaintTarget() }
+                return try session.copyPixels(image, merged: operation == .merged)
+            }
             self.clipboardQueue.async {
                 let result = pixels.flatMap { image in Result { try image.encoded() } }
                 DispatchQueue.main.async {
@@ -943,7 +962,11 @@ final class ImageDocument {
                     // No edits were accepted between the copy and clear.
                     self.enqueue(on: self.inputQueue, input: true) {
                         let error: Error?
-                        do { try session.clearPixels(image, background: background); error = nil }
+                        do {
+                            try self.requirePaintTarget()
+                            try session.clearPixels(image, background: background)
+                            error = nil
+                        }
                         catch let failure { error = failure }
                         DispatchQueue.main.async { self.finishClipboard(error, completion: completion) }
                     }
@@ -1054,6 +1077,7 @@ final class ImageDocument {
         pendingWork += 1
         inputQueue.async { [session, image] in
             let result = Result<FilterPreviewStart, Error> {
+                try self.requirePaintTarget()
                 let filter = try session.beginFilter(image: image, drawable: drawable, operation: operation)
                 var values: [String: EngineSession.FilterValue] = [:]
                 for property in properties where property.kind.isEditable {
@@ -1102,6 +1126,24 @@ final class ImageDocument {
             let result = Result { try session.setFilterProperty(filter, property, to: value) }
             DispatchQueue.main.async { completion(result) }
         }
+    }
+
+    /// Refuses commands after a failed queued target pick, before they
+    /// can act on the engine's previous implicit drawable target.
+    @discardableResult
+    func runOnPaintTarget(_ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
+        guard activeDrawable != nil else {
+            onError?(DocumentError.targetChanged.localizedDescription)
+            return false
+        }
+        return run { session, image in
+            try self.requirePaintTarget()
+            try work(session, image)
+        }
+    }
+
+    private nonisolated func requirePaintTarget() throws {
+        guard paintTargetIsValid else { throw DocumentError.targetChanged }
     }
 
     @discardableResult
