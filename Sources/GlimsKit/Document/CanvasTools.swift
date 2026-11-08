@@ -15,6 +15,10 @@ final class CanvasToolController {
     private var dragCurrent: CGPoint?
     private var dragOperation = EngineSession.SelectOperation.replace
     private var lassoPoints: [CGPoint] = []
+    /// The gradient gesture's captured values (identity, settings, colors),
+    /// taken once at the press so later UI/tool/color changes cannot
+    /// redirect the queued work; only the endpoints track the drag.
+    private var gradientCapture: GradientGestureSnapshot?
     private var handOrigin: (window: NSPoint, scroll: NSPoint)?
     /// Held temporary-tool modifiers: Space for the hand, Command for the
     /// move tool, Option for color sampling.
@@ -146,6 +150,9 @@ final class CanvasToolController {
             dragStart = point
             dragCurrent = point
             if tool == .crop { pendingCrop = nil }
+            if tool == .gradient {
+                gradientCapture = ToolState.shared.gradientSnapshot(from: point, to: point)
+            }
         case .bucketFill:
             let state = ToolState.shared
             document.fill(at: point, mode: state.fillMode, color: state.foreground,
@@ -199,6 +206,7 @@ final class CanvasToolController {
             dragCurrent = nil
             lassoPoints = []
             handOrigin = nil
+            gradientCapture = nil
             canvas.needsDisplay = true
         }
         guard let tool = dragTool else { return }
@@ -223,10 +231,15 @@ final class CanvasToolController {
             guard let start = dragStart else { return }
             document.moveActiveLayer(by: CGSize(width: (end.x - start.x).rounded(), height: (end.y - start.y).rounded()))
         case .gradient:
-            guard let start = dragStart, hypot(end.x - start.x, end.y - start.y) >= 1 else { return }
-            let state = ToolState.shared
-            document.gradient(from: start, to: end, shape: state.gradientShape,
-                              fromColor: state.foreground, toColor: state.background)
+            guard let start = dragStart, hypot(end.x - start.x, end.y - start.y) >= 1,
+                  let capture = gradientCapture else { return }
+            // The gesture commits through the counted resource queue with
+            // the values captured at the press; only the endpoints move
+            // with the drag. The identity resolves on the engine worker
+            // inside the queued job — never on main.
+            let snapshot = capture.withEndpoints(from: start, to: end)
+            document.gradientResource(snapshot.identity, from: snapshot.from, to: snapshot.to,
+                                      settings: snapshot.settings)
         case .crop:
             guard let start = dragStart else { return }
             let rect = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),

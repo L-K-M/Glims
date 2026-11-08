@@ -1446,6 +1446,7 @@ the invalid-width case had its stroke disabled. Correcting the fixture
 makes invalid input, busy-engine and removed-target checks pass. Follow-up
 independent review found no important issues.
 
+
 Brush chooser verification and fixes: a native AppKit row regression first
 failed because fresh table cells had no text field or image view. The cells
 now render names and previews, and the test passes. The full catalog is
@@ -1631,3 +1632,115 @@ the input worker is occupied, and close completion. All 369 unit tests
 passed before the unrelated layer-boundary integration; the combined
 Guides interface will receive its own unit and window checks. The
 independent backend review found no important issues.
+
+### Fill pattern source (2026-11-08)
+
+Interface slice on `feat/pattern-chooser`, frontend only: Edit ▸ Fill…
+appends Pattern (index 5) to the fill source popup and embeds a
+searchable one-column list of the engine's FULL pattern catalog —
+`resources(.pattern)` plus `resource_identifiers` read off the main
+thread through the exclusive `EngineActivity` gate — with lazy 32 px
+`resourceThumbnail` renders in bounded batches as rows appear. The
+picker is owned by the sheet's sync object for exactly the sheet's
+lifetime; cancel or close invalidates its generation so late deliveries
+are dropped, and it opens no child panel or nested sheet. Only the
+persistent `ResourceIdentity` is committed (`PatternFillStore`,
+UserDefaults JSON) and `ImageDocument.fillPattern` re-resolves it on the
+input queue at execution, so a removed pattern is reported missing and
+refused — no default substitution. Existing fill choices 0-4 and their
+behavior are unchanged. Pure `PatternChooserModel`/`PatternThumbnailQueue`/
+`PatternFillStore` unit checks cover search, selection, missing-identity,
+generation drops, queue batching and persistence. The initial model-only
+scenario was replaced by actual sheet checks, wired into the smoke run.
+Those checks cover names/previews, full search, fill pixels and undo,
+persisted selection, source toggling, missing-resource refusal and cleanup.
+
+Brush chooser verification and fixes: a native AppKit row regression first
+failed because fresh table cells had no text field or image view. The cells
+now render names and previews, and the test passes. The full catalog is
+searchable without a 512-row truncation; native thumbnails load lazily in
+batches of 32, with failed attempts cached for the generation.
+
+A focused real-panel regression reproduced Reset and choosing Default
+leaving a stale Missing label. Both now pass: presentation data is tied to
+the exact persistent identity, Default clears it, and an unchanged missing
+choice preserves its warning. A late preview cannot describe a different
+choice. All 326 unit tests pass. Two new lazy-queue test fixtures initially
+omitted the required begin/complete lifecycle; correcting those fixtures
+preserved the queue's no-overlap contract. GLIMS_SMOKE_CASE=brush-chooser
+selects this bounded interface scenario; ordinary engine smoke still runs
+all scenarios. Full interface/matrix and on-screen chooser checks follow.
+
+The real-panel browse scenario confirms lazy thumbnails preserve the scroll
+position. It then reproduced a missing Tool Options preview after choosing a
+rendered brush. Presentation revisions now notify the palette when preview
+data changes even if the identity stays the same; that regression passes.
+Preview images retain their native aspect ratio. The focused scenario also
+drains its close work before stopping the native engine.
+
+Follow-up shutdown review found that isBusy does not cover unlabelled
+image-close work on the activity queue. The focused scenario now awaits
+closeImageWhenDrained's completion in its own cleanup and confirms the image
+is gone before engine shutdown; the completed callback regression passes.
+The thumbnail-batch fixture excludes the Default row when counting brushes.
+
+### Gradient chooser and canvas wiring (2026-11-08)
+
+Interface slice on `feat/gradient-chooser`, frontend only. The pattern
+picker's machinery is now resource-kind parameterized instead of copied a
+third time: `ResourceRow`/`ResourceChooserState`/`ResourceChooserModel`/
+`ResourceThumbnailQueue` (in `Document/ResourceChooserModel.swift`, with
+`PatternRow`/`PatternChooserState`/`PatternChooserModel`/
+`PatternThumbnailQueue` as compatibility aliases, so all pattern behavior
+and tests are unchanged) carry a `kind` and drive `resources(kind)`,
+`resolveResource(_:kind:)` and the bounded 32-thumbnail batches. The
+off-main engine driving that the embedded `PatternFillPicker` owned is
+extracted into the shared `ResourcePickerController` (one catalog load at
+a time, one batch in flight, busy → one whenIdle retry, failed attempts
+cached per generation, close-generation invalidation, document-captured-at-open,
+abandon on document close); `PatternFillPicker` keeps its exact view and
+load-once semantics on top of it, and `BrushChoiceCache` became the generic
+`ResourceChoiceCache<Key>` (alias kept) so previews and missing markers
+stay tagged to the exact persistent identity.
+
+The Gradient tool's Tool Options rows (`ToolPalettes.swift`) are a resource
+row (button with the choice's real name and identity-tagged preview, a
+"Missing: …" marker for a verified NOT_FOUND, "Foreground to Background"
+for the Default, plus an explicit Reset), the three shapes, a blend popup
+offering ONLY Perceptual RGB and Lab (the backend returns UNSUPPORTED for
+RGB Linear, so it is never offered), Reverse, and opacity. The owned
+`GradientChooser` panel (row 0 = Foreground-to-Background Default) captures
+the document at open; Tool Options retarget/palette dismiss close it, and
+close bumps the model generation so no late native result can restore a
+stale view. Choosing commits only a persistent `ResourceIdentity`; nil is
+the Default, persisted in `GradientToolStore` together with the tool's own
+primitive settings (shape/reverse/blend/opacity) — never a session handle,
+a CGImage, or the FG/BG colors (the global color behavior is unchanged).
+
+The real canvas gradient gesture (`CanvasTools.swift`) captures a
+`GradientGestureSnapshot` once at the press — identity (nil → the built-in
+`gimp-gradient-fg-bg-rgb` internal identity, so the Default also gets
+reverse/blend/opacity), shape, reverse, blend space, opacity, and the
+global FG/BG colors forced opaque per the backend contract — and commits
+through the counted `ImageDocument.gradientResource` queue at release with
+only the endpoints moving; the identity resolves on the engine worker
+inside the queued job, never on main, and no mutable `ToolState` is read
+from the worker closure. Default settings (perceptual, non-reversed,
+opacity 1) preserve the previous FG-to-BG appearance; the low-level
+`gradient(from:to:shape:fromColor:toColor:)` API is untouched.
+
+Pure `GradientChooserTests` cover the store's default/reset and
+identity-only persistence, the allowed blend/shape settings, the Default
+identity, snapshot capture semantics (value capture, opaque colors,
+endpoint move, ToolState write-through) and the shared kind-parameterized
+model (pending choice through search/reload, missing-only-on-NOT_FOUND,
+bounded batches, stale-generation drops). The smoke scenario
+`GLIMS_SMOKE_CASE=gradient-chooser` (`exerciseGradientChooser`, also in the
+default run) drives the real palette controls and panel — catalog, Default
+row, search, lazy previews, Choose, Reset, missing marker, cancel/retarget
+close — and the actual canvas drag: chosen gradient changes pixels as one
+undo step and undo restores them, and the Default gesture paints the
+built-in FG-to-BG midpoint even when the colors change mid-drag (capture
+at the press). Runtime/desktop verification of these scenarios is owned by
+the root harness; here only `swift build` and `swift build --build-tests`
+were run.
