@@ -2756,6 +2756,354 @@ test_drawable_effects (const char *work)
   api->image_close (engine, image);
 }
 
+/* Editing a committed effect's parameters through a live session
+ * (filter_edit_begin): the session reads the effect's own properties
+ * and previews new ones through the effect's captured mask at its stack
+ * slot, commit writes them back into the same effect as one undo step,
+ * abort restores it untouched. On mid gray (sRGB ~0.216 linear):
+ * gegl:brightness-contrast adds its brightness to each linear channel
+ * and gegl:value-invert complements the gamma value, so a +0.2 lift is
+ * ~173, -0.2 ~34, +0.4 ~208; invert->lift->invert is ~84. */
+static void
+test_filter_edit (const char *work)
+{
+  GlimsImageID       image = 0, reopened = 0, other = 0;
+  GlimsItemID        layer = 0, layer2 = 0, foreign = 0;
+  GlimsFilterID      session = 0, second = 0;
+  GlimsEffectID      fx_id = 0, inv_id = 0, bright_id = 0, top_id = 0, foreign_fx = 0;
+  GlimsEffectInfo    rows[4];
+  GlimsEffectChange  change;
+  GlimsFilterValue   value;
+  GlimsSelectOptions rect_opt = { .struct_size = sizeof rect_opt,
+                                  .operation = GLIMS_SELECT_REPLACE };
+  GlimsFillSettings  gray = { .struct_size = sizeof gray, .mode = GLIMS_FILL_SELECTION,
+                              .color = { 128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1 },
+                              .opacity = 1 };
+  GlimsRect          bounds;
+  bool               empty = true;
+  int32_t            count = 0, before;
+  uint8_t            pixel[4];
+  char               xcf[1024];
+  char               blocked[1024];
+
+  api->image_new (engine, 32, 24, &image, NULL);
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer, NULL);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &gray, NULL);
+
+  /* A lift committed while a rectangle is selected keeps that selection
+   * as its own mask: ~173 inside, the untouched 128 outside. */
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 8, 8 }, { 24, 20 } }, 2, &rect_opt);
+  CHECK (api->filter_begin (engine, image, layer, "gegl:brightness-contrast", &session, NULL) == GLIMS_STATUS_OK &&
+         api->filter_set_double (engine, session, "brightness", 0.2) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK,
+         "a masked lift commits inside the selected rectangle");
+  session = 0;
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK && count == 1,
+         "one committed effect");
+  fx_id = rows[0].id;
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 12, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 155 && pixel[0] < 195 &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 4, 4, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 120 && pixel[0] < 136,
+         "the captured mask gates the committed render (%d, %d)",
+         pixel[0], 0);
+
+  /* Selecting a different rectangle must not move the mask. */
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 26, 2 }, { 31, 7 } }, 2, &rect_opt);
+
+  CHECK (api->filter_edit_begin (engine, image, layer, fx_id, &session, NULL) == GLIMS_STATUS_OK &&
+         session > 0 && session != fx_id,
+         "an edit session opens on the committed effect");
+  value = (GlimsFilterValue) { 0 };
+  CHECK (api->filter_get_property (engine, session, "brightness", &value) == GLIMS_STATUS_OK &&
+         value.kind == GLIMS_FILTER_VALUE_NUMBER && fabs (value.number - 0.2) < 0.001,
+         "the session reads the effect's own parameter (%f)", value.number);
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && rows[0].id == fx_id,
+         "the open edit session adds no committed effect");
+
+  /* The shadow previews through the effect's own mask: the dim covers
+   * the committed rectangle only — the live selection's corner and the
+   * rest of the image stay 128. */
+  value = (GlimsFilterValue) { .kind = GLIMS_FILTER_VALUE_NUMBER, .number = -0.2 };
+  CHECK (api->filter_set_property (engine, session, "brightness", &value) == GLIMS_STATUS_OK,
+         "the typed property setter writes on an edit session");
+  {
+    uint8_t p_in[4], p_sel[4], p_out[4];
+
+    api->image_render (engine, image, 1.0, (GlimsRect) { 12, 12, 1, 1 }, p_in, 4);
+    api->image_render (engine, image, 1.0, (GlimsRect) { 28, 4, 1, 1 }, p_sel, 4);
+    api->image_render (engine, image, 1.0, (GlimsRect) { 4, 4, 1, 1 }, p_out, 4);
+    CHECK (p_in[0] > 15 && p_in[0] < 60 && p_sel[0] > 120 && p_sel[0] < 136 && p_out[0] > 120 && p_out[0] < 136,
+           "the preview honors the effect's mask, not the live selection (%d %d %d)",
+           p_in[0], p_sel[0], p_out[0]);
+  }
+
+  before = undo_depth (image);
+  change = (GlimsEffectChange) { .struct_size = sizeof change,
+                                 .properties = GLIMS_EFFECT_ENABLED, .enabled = false };
+  CHECK (api->filter_edit_begin (engine, image, layer, fx_id, &second, NULL) == GLIMS_STATUS_BUSY &&
+         second == 0 &&
+         api->effect_change (engine, image, layer, fx_id, &change, NULL) == GLIMS_STATUS_BUSY &&
+         api->effect_command (engine, image, layer, fx_id, GLIMS_EFFECT_RAISE, NULL) == GLIMS_STATUS_BUSY &&
+         api->image_history_move (engine, image, 0, 0, NULL) == GLIMS_STATUS_BUSY,
+         "edits, moves and history refuse while the preview is open");
+  snprintf (blocked, sizeof blocked, "%s/edit-preview.xcf", work);
+  CHECK (api->image_save (engine, image, blocked, NULL) == GLIMS_STATUS_BUSY &&
+         access (blocked, F_OK) != 0,
+         "save refuses while the edit preview is open");
+
+  CHECK (api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "the edit commits as one undo step (%d -> %d)", before, undo_depth (image));
+  session = 0;
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && rows[0].id == fx_id && rows[0].enabled &&
+         strcmp (rows[0].operation, "gegl:brightness-contrast") == 0,
+         "the effect keeps its id, slot and enabled state");
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 12, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 15 && pixel[0] < 60 &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 28, 4, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 120 && pixel[0] < 136,
+         "the committed edit renders through the effect's own mask");
+  CHECK (api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 26, 2, 5, 5),
+         "the edit left the image's selection alone (%d,%d %dx%d)",
+         bounds.x, bounds.y, bounds.width, bounds.height);
+
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 12, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 155 && pixel[0] < 195 &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 28, 4, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 120 && pixel[0] < 136,
+         "undo restores the old parameter and its masked pixels");
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && rows[0].id == fx_id && rows[0].enabled,
+         "undo keeps the effect's id and state");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 12, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 15 && pixel[0] < 60,
+         "redo replays the parameter edit");
+  CHECK (api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 26, 2, 5, 5),
+         "undo and redo left the selection alone");
+
+  /* Abort after a committed edit restores the committed parameters. */
+  before = undo_depth (image);
+  CHECK (api->filter_edit_begin (engine, image, layer, fx_id, &session, NULL) == GLIMS_STATUS_OK,
+         "editing again after the commit opens");
+  value = (GlimsFilterValue) { 0 };
+  CHECK (api->filter_get_property (engine, session, "brightness", &value) == GLIMS_STATUS_OK &&
+         fabs (value.number - -0.2) < 0.001,
+         "the reopened session reads the committed parameter (%f)", value.number);
+  CHECK (api->filter_set_double (engine, session, "brightness", 0.4) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 12, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 195,
+         "the next preview renders through the same mask (%d)", pixel[0]);
+  CHECK (api->filter_abort (engine, session) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 12, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 15 && pixel[0] < 60,
+         "abort restores the committed parameter and costs no undo");
+  session = 0;
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && rows[0].id == fx_id && rows[0].enabled,
+         "abort left the committed effect untouched");
+
+  snprintf (xcf, sizeof xcf, "%s/edited-effect.xcf", work);
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK,
+         "the edited effect saves and reopens");
+  if (reopened)
+    {
+      GlimsItemID relayer = first_layer (reopened);
+
+      CHECK (api->drawable_effects (engine, reopened, relayer, rows, 4, &count) == GLIMS_STATUS_OK &&
+             count == 1 && strcmp (rows[0].operation, "gegl:brightness-contrast") == 0 &&
+             rows[0].enabled &&
+             api->image_render (engine, reopened, 1.0, (GlimsRect) { 12, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+             pixel[0] > 15 && pixel[0] < 60 &&
+             api->image_render (engine, reopened, 1.0, (GlimsRect) { 4, 4, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+             pixel[0] > 120 && pixel[0] < 136,
+             "the XCF round trip keeps the edited parameter and the mask");
+      api->image_close (engine, reopened);
+      reopened = 0;
+    }
+  api->image_close (engine, image);
+  image = 0;
+
+  /* A stack that does not commute: invert -> lift -> invert. */
+  api->image_new (engine, 32, 24, &image, NULL);
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer, NULL);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &gray, NULL);
+  CHECK (api->filter_begin (engine, image, layer, "gegl:value-invert", &session, NULL) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK &&
+         api->filter_begin (engine, image, layer, "gegl:brightness-contrast", &session, NULL) == GLIMS_STATUS_OK &&
+         api->filter_set_double (engine, session, "brightness", 0.2) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK &&
+         api->filter_begin (engine, image, layer, "gegl:value-invert", &session, NULL) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK,
+         "a three-effect stack commits");
+  session = 0;
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK && count == 3,
+         "three effects list");
+  top_id = rows[0].id;
+  bright_id = rows[1].id;
+  inv_id = rows[2].id;
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 65 && pixel[0] < 105,
+         "the stack renders the lifted-then-inverted gray (%d)", pixel[0]);
+
+  /* Editing the middle effect re-renders the whole stack in place. */
+  before = undo_depth (image);
+  CHECK (api->filter_edit_begin (engine, image, layer, bright_id, &session, NULL) == GLIMS_STATUS_OK,
+         "editing the middle effect opens");
+  CHECK (api->filter_set_double (engine, session, "brightness", 0.5) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 20 && pixel[0] < 55,
+         "the shadow previews at the effect's own slot (%d)", pixel[0]);
+  CHECK (api->filter_abort (engine, session) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 65 && pixel[0] < 105,
+         "abort restores the whole stack exactly");
+  session = 0;
+
+  /* Name and opacity edits ride along through a parameter edit. */
+  change = (GlimsEffectChange) { .struct_size = sizeof change,
+                                 .properties = GLIMS_EFFECT_NAME | GLIMS_EFFECT_OPACITY,
+                                 .opacity = 0.75 };
+  strcpy (change.name, "Middle Lift");
+  CHECK (api->effect_change (engine, image, layer, bright_id, &change, NULL) == GLIMS_STATUS_OK,
+         "rename and re-strength the middle effect");
+
+  before = undo_depth (image);
+  CHECK (api->filter_edit_begin (engine, image, layer, bright_id, &session, NULL) == GLIMS_STATUS_OK &&
+         api->filter_set_double (engine, session, "brightness", -0.1) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "editing the middle effect commits in place");
+  session = 0;
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 3 && rows[0].id == top_id && rows[1].id == bright_id && rows[2].id == inv_id &&
+         strcmp (rows[1].name, "Middle Lift") == 0 && rows[1].opacity == 0.75 && rows[1].enabled,
+         "the edited effect keeps its id, slot, name and blend state");
+  /* 127 -> -0.1 lift ~93 -> 0.75 blend ~102 -> invert ~153. */
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 135 && pixel[0] < 175,
+         "the edited parameter reshapes the composite (%d)", pixel[0]);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 80 && pixel[0] < 115,
+         "undo restores the stack's pixels");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 135 && pixel[0] < 175,
+         "redo restores the edit");
+
+  /* A disabled effect: the shadow previews its parameters anyway, and
+   * the parked state comes back on abort and on commit. */
+  change = (GlimsEffectChange) { .struct_size = sizeof change,
+                                 .properties = GLIMS_EFFECT_ENABLED, .enabled = false };
+  CHECK (api->effect_change (engine, image, layer, bright_id, &change, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 120 && pixel[0] < 136,
+         "the disabled effect drops out of the stack (%d)", pixel[0]);
+  CHECK (api->filter_edit_begin (engine, image, layer, bright_id, &session, NULL) == GLIMS_STATUS_OK,
+         "a disabled effect still opens for editing");
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 135 && pixel[0] < 175,
+         "the shadow previews the parked effect's parameters (%d)", pixel[0]);
+  CHECK (api->filter_abort (engine, session) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         ! rows[1].enabled &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 120 && pixel[0] < 136,
+         "abort hands the disabled state back");
+  session = 0;
+  before = undo_depth (image);
+  CHECK (api->filter_edit_begin (engine, image, layer, bright_id, &session, NULL) == GLIMS_STATUS_OK &&
+         api->filter_set_double (engine, session, "brightness", 0.1) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 3 && ! rows[1].enabled && rows[1].id == bright_id,
+         "committing an edit keeps the effect disabled");
+  session = 0;
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 120 && pixel[0] < 136,
+         "the disabled committed edit stays out of the render");
+  change = (GlimsEffectChange) { .struct_size = sizeof change,
+                                 .properties = GLIMS_EFFECT_ENABLED, .enabled = true };
+  /* +0.1 lift ~152 -> 0.75 blend ~146 -> invert ~109. */
+  CHECK (api->effect_change (engine, image, layer, bright_id, &change, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 95 && pixel[0] < 130,
+         "re-enabled, the committed parameter renders (%d)", pixel[0]);
+
+  /* Stale, foreign, removed and detached ids all refuse. */
+  CHECK (api->filter_edit_begin (engine, image, layer, 9999, &session, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->filter_edit_begin (engine, 9999, layer, bright_id, &session, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->filter_edit_begin (engine, image, layer, bright_id, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "unknown ids and a missing output refuse");
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer2, NULL);
+  CHECK (api->filter_edit_begin (engine, image, layer2, bright_id, &session, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an effect id on the wrong drawable refuses");
+  api->image_new (engine, 8, 8, &other, NULL);
+  foreign = first_layer (other);
+  api->filter_begin (engine, other, foreign, "gegl:value-invert", &session, NULL);
+  api->filter_commit (engine, session, NULL);
+  session = 0;
+  api->drawable_effects (engine, other, foreign, rows, 4, &count);
+  foreign_fx = rows[0].id;
+  CHECK (api->filter_edit_begin (engine, image, layer, foreign_fx, &session, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "another image's effect refuses");
+  api->image_close (engine, other);
+  other = 0;
+
+  CHECK (api->effect_command (engine, image, layer, top_id, GLIMS_EFFECT_REMOVE, NULL) == GLIMS_STATUS_OK,
+         "remove the top effect");
+  CHECK (api->filter_edit_begin (engine, image, layer, top_id, &session, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "the removed effect's id is dead while undo holds it");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK,
+         "undo restores the top effect");
+
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_DELETE, NULL, NULL) == GLIMS_STATUS_OK &&
+         api->filter_edit_begin (engine, image, layer, bright_id, &session, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a detached drawable refuses");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->filter_edit_begin (engine, image, layer, bright_id, &session, NULL) == GLIMS_STATUS_OK &&
+         api->filter_abort (engine, session) == GLIMS_STATUS_OK,
+         "the restored layer's effect edits again");
+  session = 0;
+
+  /* New filters on the same stack are unaffected. */
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK && count == 3 &&
+         api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &session, NULL) == GLIMS_STATUS_OK &&
+         api->filter_set_double (engine, session, "std-dev-x", 2.0) == GLIMS_STATUS_OK &&
+         api->filter_set_double (engine, session, "std-dev-y", 2.0) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 4,
+         "a new filter still commits over the edited stack");
+  session = 0;
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 3,
+         "undo drops it again");
+
+  /* Closing the image releases an unfinished edit session. */
+  CHECK (api->filter_edit_begin (engine, image, layer, bright_id, &session, NULL) == GLIMS_STATUS_OK,
+         "a last edit session opens");
+  CHECK (api->image_close (engine, image) == GLIMS_STATUS_OK &&
+         api->filter_abort (engine, session) == GLIMS_STATUS_NOT_FOUND,
+         "closing the image releases the edit session");
+  session = 0;
+  image = 0;
+}
+
 /* The qmask-name.xcf fixture (fixtures/README.md): written by GIMP 3.0.8
  * while its Quick Mask was on. The engine finds the mask's channel by
  * the reserved name "Qmask" — any channel added to or renamed to it
@@ -4552,6 +4900,7 @@ main (int argc, char **argv)
   test_channels (argv[2]);
   test_drawable_filters (argv[2]);
   test_drawable_effects (argv[2]);
+  test_filter_edit (argv[2]);
   test_qmask_name_fixture (argv[3]);
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));

@@ -72,7 +72,10 @@ typedef struct
 /* A live filter session, owned by `filters` until commit or abort.
  * filter-properties.c reads its members too. `non_destructive` is how
  * commit leaves the drawable — the filter on its stack, or merged into
- * its pixels. */
+ * its pixels. An edit session (`filter_edit_begin`) additionally parks
+ * the committed `existing` effect while its shadow `filter` previews:
+ * commit writes the shadow's parameters into `existing`, and either
+ * path restores `existing_active` — NULL for a new filter. */
 typedef struct
 {
   GimpImage          *image;
@@ -80,6 +83,8 @@ typedef struct
   GeglNode           *operation;
   GimpDrawableFilter *filter;
   gboolean            non_destructive;
+  GimpDrawableFilter *existing;
+  gboolean            existing_active;
 } GlimsFilter;
 
 typedef GlimsStatus (*GlimsEngineFunc) (GlimsEngine *engine, gpointer data);
@@ -132,12 +137,17 @@ void glims_filters_abort_for_image (GlimsEngine *, GimpImage *);
 GlimsStatus glims_filter_check_edit (GlimsEngine *, GlimsFilterID, char **error);
 GlimsStatus glims_filter_begin     (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
                                     const char *operation, GlimsFilterID *out, char **error);
+GlimsStatus glims_filter_edit_begin(GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
+                                    GlimsEffectID effect, GlimsFilterID *out, char **error);
+void        glims_filter_preview_apply (GlimsFilter *session);
 GlimsStatus glims_filter_set_double(GlimsEngine *e, GlimsFilterID id, const char *property, double value);
 GlimsStatus glims_filter_commit    (GlimsEngine *e, GlimsFilterID id, char **error);
 GlimsStatus glims_filter_abort     (GlimsEngine *e, GlimsFilterID id);
 void        glims_filters_free     (gpointer filter);
 
 /* effects.c */
+GimpDrawableFilter * glims_lookup_effect (GlimsEngine *engine, GimpDrawable *drawable,
+                                          GlimsEffectID effect_id);
 GlimsStatus glims_drawable_effects (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
                                     GlimsEffectInfo *rows, int32_t capacity, int32_t *count);
 GlimsStatus glims_effect_change    (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,

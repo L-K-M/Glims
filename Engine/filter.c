@@ -5,8 +5,15 @@
  * but the undo bookkeeping of a commit lives in GIMP's GTK filter tool
  * (app/tools/gimpfiltertool.c, gimp_filter_tool_commit). That sequence is
  * reproduced here for a new filter — non-destructive where the drawable's
- * XCF serialization keeps it, merged into the pixels elsewhere; editing
- * an existing filter is not supported yet.
+ * XCF serialization keeps it, merged into the pixels elsewhere. Editing
+ * an already committed effect follows the tool's existing-filter flow
+ * (pinned commit 7addd2b77efb798bbdc4dbf2b082e786a48478ced): the effect
+ * is parked inactive while a shadow filter, seeded with its parameters
+ * and applied with its own mask at its stack index, holds the preview;
+ * commit writes the shadow's state back into the effect behind a native
+ * filter-modified undo, abort drops the shadow. One deviation: the
+ * effect's enabled state is restored from the session, where the tool
+ * unconditionally reactivates it.
  */
 #include "engine-private.h"
 
@@ -15,14 +22,19 @@
 
 #include "core/gimp.h"
 #include "core/gimpchannel.h"
+#include "core/gimpcontainer.h"
 #include "core/gimpdrawable.h"
+#include "core/gimpdrawable-filters.h"
 #include "core/gimpdrawablefilter.h"
+#include "core/gimpfilter.h"
 #include "core/gimpimage.h"
 #include "core/gimpimage-quick-mask.h"
 #include "core/gimpimage-undo-push.h"
 #include "core/gimpitem.h"
 #include "core/gimplayer.h"
 #include "core/gimplayermask.h"
+
+#include "gimp-intl.h"
 
 GlimsStatus
 glims_filter_check_edit (GlimsEngine *engine, GlimsFilterID id, char **error)
@@ -40,11 +52,20 @@ glims_filters_free (gpointer data)
 {
   GlimsFilter *session = data;
 
-  /* An open session the app never finished is aborted. */
+  /* An open session the app never finished is aborted. An edit
+   * session's parked effect then goes back to the state it had when the
+   * session began — the shadow is gone and nothing was recorded. */
   if (session->filter)
     gimp_drawable_filter_abort (session->filter);
+  if (session->existing)
+    {
+      gimp_filter_set_active (GIMP_FILTER (session->existing),
+                              session->existing_active);
+      gimp_drawable_update (session->drawable, 0, 0, -1, -1);
+    }
 
   g_clear_object (&session->filter);
+  g_clear_object (&session->existing);
   g_clear_object (&session->operation);
   g_clear_object (&session->drawable);
   g_clear_object (&session->image);
@@ -211,6 +232,169 @@ glims_filter_begin (GlimsEngine    *engine,
   return GLIMS_STATUS_OK;
 }
 
+/* Opens a live session that edits the committed effect `effect_id`: the
+ * effect keeps its place, id and committed state while a temporary
+ * shadow of the same operation previews in its slot. The returned id is
+ * a filter session id like filter_begin's — property reads and writes,
+ * commit and abort all work on the shadow — never an effect id. */
+GlimsStatus
+glims_filter_edit_begin (GlimsEngine   *engine,
+                         GlimsImageID   image_id,
+                         GlimsItemID    drawable_id,
+                         GlimsEffectID  effect_id,
+                         GlimsFilterID *out,
+                         char         **error)
+{
+  GlimsOpenImage     *open = glims_lookup_image (engine, image_id);
+  GimpDrawable       *drawable;
+  GimpDrawableFilter *existing;
+  GeglNode           *existing_node;
+  GimpContainer      *filters;
+  gchar              *operation;
+  GParamSpec        **pspecs;
+  guint               n_pspecs;
+  GlimsFilter        *session;
+  gint                id, index;
+  GlimsStatus         status;
+
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+  if (! out)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  *out = 0;
+
+  status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+
+  drawable = glims_lookup_drawable (open, drawable_id);
+  if (! drawable)
+    return GLIMS_STATUS_NOT_FOUND;
+
+  /* Only a committed effect of this drawable can be edited — a stale,
+   * foreign, removed or preview id is NOT_FOUND, as for effect_change. */
+  existing = glims_lookup_effect (engine, drawable, effect_id);
+  if (! existing)
+    return GLIMS_STATUS_NOT_FOUND;
+
+  status = glims_check_item_locks (GIMP_ITEM (drawable), GLIMS_LOCK_PIXELS, error);
+  if (status != GLIMS_STATUS_OK) return status;
+
+  /* A filter without its own GEGL operation (a graph node read from an
+   * XCF) has no properties to edit — the same reason
+   * gimp_drawable_filter_duplicate() refuses it. */
+  existing_node = gimp_drawable_filter_get_operation (existing);
+  gegl_node_get (existing_node, "operation", &operation, NULL);
+  if (! operation || ! strcmp (operation, "GraphNode"))
+    {
+      g_free (operation);
+      if (error)
+        *error = strdup ("That effect has no editable parameters.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  session = g_new0 (GlimsFilter, 1);
+  session->image           = g_object_ref (open->image);
+  session->drawable        = g_object_ref (drawable);
+  session->existing        = g_object_ref (existing);
+  session->existing_active = gimp_filter_get_active (GIMP_FILTER (existing));
+  session->non_destructive = TRUE;
+
+  /* The shadow session, as gimp_filter_tool_get_operation() and
+   * create_filter() build it: a new node seeded with every one of the
+   * effect's parameters, owned by a new filter that inherits the
+   * effect's blend and clipping state. The effect itself is untouched
+   * until everything below has succeeded. */
+  session->operation = gegl_node_new_child (NULL, "operation", operation, NULL);
+  pspecs = gegl_operation_list_properties (operation, &n_pspecs);
+  g_free (operation);
+  for (guint i = 0; i < n_pspecs; i++)
+    {
+      GValue value = G_VALUE_INIT;
+
+      if ((pspecs[i]->flags & G_PARAM_READWRITE) != G_PARAM_READWRITE)
+        continue;
+      g_value_init (&value, pspecs[i]->value_type);
+      gegl_node_get_property (existing_node, pspecs[i]->name, &value);
+      gegl_node_set_property (session->operation, pspecs[i]->name, &value);
+      g_value_unset (&value);
+    }
+  g_free (pspecs);
+
+  session->filter = gimp_drawable_filter_new (
+    drawable, gimp_object_get_name (GIMP_OBJECT (existing)),
+    session->operation, NULL);
+  if (! session->filter)
+    {
+      /* Can't happen for an operation an effect was committed from. */
+      glims_filters_free (session);
+      return glims_fail (error, NULL, "That effect cannot be edited.");
+    }
+  gimp_drawable_filter_set_opacity (session->filter,
+                                    gimp_drawable_filter_get_opacity (existing));
+  gimp_drawable_filter_set_mode (session->filter,
+                                 gimp_drawable_filter_get_paint_mode (existing),
+                                 gimp_drawable_filter_get_blend_space (existing),
+                                 gimp_drawable_filter_get_composite_space (existing),
+                                 gimp_drawable_filter_get_composite_mode (existing));
+  gimp_drawable_filter_set_region (session->filter,
+                                   gimp_drawable_filter_get_region (existing));
+  gimp_drawable_filter_set_clip (session->filter,
+                                 gimp_drawable_filter_get_clip (existing));
+
+  /* Capture the effect's mask before the shadow goes on the stack.
+   * This prevents selection restoration from retargeting the mask;
+   * preview_apply also supplies its bounds while core computes the crop. */
+  {
+    GimpDrawableFilterMask *mask = gimp_drawable_filter_get_mask (existing);
+
+    if (mask)
+      g_object_set (session->filter, "mask", mask, NULL);
+
+
+    gimp_filter_set_active (GIMP_FILTER (existing), FALSE);
+    glims_filter_preview_apply (session);
+    gimp_drawable_filter_set_preview (session->filter, TRUE);
+
+    /* The shadow then takes the effect's own slot (apply put it on
+     * top) and is marked temporary so it can never be mistaken for a
+     * committed effect or serialized. */
+    filters = gimp_drawable_get_filters (drawable);
+    index = gimp_container_get_child_index (filters, GIMP_OBJECT (existing));
+    gimp_container_reorder (filters, GIMP_OBJECT (session->filter), index);
+
+    gimp_drawable_filter_set_temporary (session->filter, TRUE);
+  }
+
+  gimp_drawable_update (drawable, 0, 0, -1, -1);
+  gimp_image_flush (open->image);
+
+  id = glims_next_session_id (engine);
+  g_hash_table_insert (engine->filters, GINT_TO_POINTER (id), session);
+  *out = id;
+
+  return GLIMS_STATUS_OK;
+}
+
+/* A parked effect's captured selection defines its crop as well as
+ * its applicator mask. Core sync_mask() calls item_mask_intersect(),
+ * which consults the image's current selection even with a frozen mask.
+ * Use the tool's temporary selection swap on every re-apply, not just
+ * when the shadow starts, or an unrelated live selection crops it away. */
+void
+glims_filter_preview_apply (GlimsFilter *session)
+{
+  if (session->existing)
+    {
+      GimpDrawableFilterMask *mask = gimp_drawable_filter_get_mask (session->existing);
+
+      gimp_drawable_filter_apply_with_mask (session->filter,
+                                            mask ? GIMP_CHANNEL (mask) : NULL, NULL);
+    }
+  else
+    gimp_drawable_filter_apply (session->filter, NULL);
+}
+
 GlimsStatus
 glims_filter_set_double (GlimsEngine   *engine,
                          GlimsFilterID  id,
@@ -245,7 +429,7 @@ glims_filter_set_double (GlimsEngine   *engine,
   gegl_node_set_property (session->operation, property, &typed);
   g_value_unset (&typed);
 
-  gimp_drawable_filter_apply (session->filter, NULL);
+  glims_filter_preview_apply (session);
   gimp_image_flush (session->image);
 
   return GLIMS_STATUS_OK;
@@ -261,6 +445,68 @@ glims_filter_commit (GlimsEngine    *engine,
   GlimsStatus status = glims_filter_check_edit (engine, id, error);
 
   if (status != GLIMS_STATUS_OK) return status;
+
+  if (session->existing)
+    {
+      /* gimp_filter_tool_commit(), existing filter: the undo step
+       * snapshots the effect before the shadow's parameters and blend
+       * state are written into it, then the shadow is dropped and the
+       * effect resumes its own slot, id and enabled state — nothing is
+       * added or moved. */
+      GimpDrawableFilter *existing      = session->existing;
+      GimpDrawableFilter *preview       = session->filter;
+      GeglNode           *existing_node = gimp_drawable_filter_get_operation (existing);
+      GParamSpec        **specs;
+      gchar              *operation_name = NULL;
+      guint               n_specs;
+
+      if (! gimp_image_undo_push_filter_modified (session->image, _("Edit filter"),
+                                                  session->drawable, existing))
+        return glims_fail (error, NULL, "The image's undo history is unavailable.");
+
+      gegl_node_get (session->operation, "operation", &operation_name, NULL);
+      specs = gegl_operation_list_properties (operation_name, &n_specs);
+      g_free (operation_name);
+      for (guint i = 0; i < n_specs; i++)
+        {
+          GValue value = G_VALUE_INIT;
+
+          if ((specs[i]->flags & G_PARAM_READWRITE) != G_PARAM_READWRITE)
+            continue;
+          g_value_init (&value, specs[i]->value_type);
+          gegl_node_get_property (session->operation, specs[i]->name, &value);
+          gegl_node_set_property (existing_node, specs[i]->name, &value);
+          g_value_unset (&value);
+        }
+      g_free (specs);
+
+      gimp_drawable_filter_set_opacity (existing,
+                                        gimp_drawable_filter_get_opacity (preview));
+      gimp_drawable_filter_set_mode (existing,
+                                     gimp_drawable_filter_get_paint_mode (preview),
+                                     gimp_drawable_filter_get_blend_space (preview),
+                                     gimp_drawable_filter_get_composite_space (preview),
+                                     gimp_drawable_filter_get_composite_mode (preview));
+      gimp_drawable_filter_set_region (existing,
+                                       gimp_drawable_filter_get_region (preview));
+      gimp_drawable_filter_set_clip (existing,
+                                     gimp_drawable_filter_get_clip (preview));
+
+      /* The shadow is spent: freeze its mask tracking, take it off the
+       * stack, then hand the effect its enabled state back. */
+      gimp_drawable_filter_layer_mask_freeze (preview);
+      gimp_drawable_filter_abort (preview);
+      g_clear_object (&session->filter);
+
+      gimp_filter_set_active (GIMP_FILTER (existing), session->existing_active);
+      g_clear_object (&session->existing);
+      gimp_drawable_filters_changed (session->drawable);
+      gimp_drawable_update (session->drawable, 0, 0, -1, -1);
+      gimp_image_flush (session->image);
+
+      g_hash_table_remove (engine->filters, GINT_TO_POINTER (id));
+      return GLIMS_STATUS_OK;
+    }
 
   filter = session->filter;
 
