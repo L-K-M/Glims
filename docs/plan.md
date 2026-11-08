@@ -1059,6 +1059,55 @@ row/edit preservation and overlay geometry; the GLIMS_SMOKE_CASE=
 guides-controls scenario is wired but NOT run — root owns the runtime
 matrix against the native-guides libraries.
 
+### Path tool multi-anchor selection (2026-11-08)
+
+Scope: `Sources/GlimsKit/Tools/VectorPath.swift`,
+`Sources/GlimsKit/Document/PathTool.swift`, `Tests/GlimsKitTests/
+VectorPathTests.swift`, `Sources/GlimsKit/EngineSmokeTest.swift` and this
+log only — no C/header/dependency/facade change and no other feature.
+`VectorPath` gains three pure batch helpers: `moveAnchors(_:by:)` (moves
+every anchor in a set with its handles), `removeAnchors(_:)` (removes a set
+descending by subpath then anchor, so earlier removals cannot shift later
+indices; empty subpaths drop and one-anchor closed subpaths open through
+the existing `removeAnchor(at:)`), and `pruned(_:)` (keeps only indices
+that still name an anchor). `PathTool` replaces the single `selected`
+anchor with `selectedAnchors: Set<AnchorIndex>` (`private(set)`; no other
+file read the old property): Shift-click on an existing anchor toggles
+membership, ends the subpath being drawn and neither closes, edits nor
+pushes an undo; Shift-blank still starts a new subpath. A normal click on
+a selected anchor keeps the whole set for a group drag, a click on any
+other anchor single-selects, and Option-pull single-selects. A drag moves
+all selected anchors and their handles by the delta from the press
+baseline — the shape is rebuilt from the anchors captured at the press on
+every motion event, so repeated motion cannot drift — and commits as one
+queued `updatePath`/one undo on release; the shape-changed-during-drag
+refusal is unchanged. Delete removes the whole set in one update/undo,
+adjusting or clearing `extending` for dropped subpaths. The set is pruned
+of invalid indices and cleared on an active-path switch in
+`syncWithDocument`. Drawing shows handles for every selected anchor and
+fills selected anchors with the path color. Old single-anchor behavior
+(closure, extension from either end, handle mirroring with Shift,
+Option-pull, Return/Escape) is retained.
+
+Tests: `VectorPathTests` gains pure batch tests (set move across subpaths
+with handles, descending batch delete across subpaths with
+drop/open/ignore-invalid, pruning). `EngineSmokeTest` gains
+`exercisePathAnchors`, wired both as `GLIMS_SMOKE_CASE=path-anchors` and
+into the full run, driving the real canvas events: selecting two anchors
+across subpaths, Option-pull single-select, a group drag with wandering
+intermediate points as one undo moving anchors and handles by the final
+delta only, a release at the press baseline with no drift and no undo,
+Shift-toggle-off with no undo, active-path switch clearing the set and a
+mid-drag switch refusing the drag, and a batch delete as one undo whose
+undo restores the exact engine shape. All runtime shape oracles read
+`session.path` from the engine, never the document's cached working state.
+
+Build status (this slice): `swift build` and `swift build --build-tests`
+both completed clean (only pre-existing warnings) on this branch. Unit
+tests, `GLIMS_SMOKE_CASE=path-anchors` and the full `--engine-smoke-test`
+were NOT run here — root owns all runtime; no GUI, adapter build, engine
+run or push happened in this slice.
+
 ## Later, before any public release
 
 - Developer ID signing and notarization for the app, GTK3, Python and every
@@ -2240,6 +2289,11 @@ pinned engine (30 focused checks). Before this fix, the source-cache
 integration passed 399 unit tests, all-four-engine guide checks and 971
 full pinned interface checks. Follow-up review and matrix are running.
 
+Integrated with the merged Guides/source cache: all 402 unit tests,
+focused anchor checks on all four engines and 1,000 full pinned interface
+checks pass. The synthetic Escape key now also carries the correct ESC
+character; key-code dispatch was already correct.
+
 Post-merge validation with Guides passes 399 unit tests, all-four-engine
 typed wrapper checks and 982 full pinned interface checks. Review also
 hardened the dither fixture against unexpected short pixel-copy results;
@@ -2273,3 +2327,42 @@ was still aimed at the retargeted pixel layer. Correcting those fixture
 expectations required no production change. Root reviewed the source
 controls, admission/drain and close paths. The independent broad UI
 helper timed out without a verdict and is not counted as approval.
+
+After integrating Indexed, one native conformance run failed during the
+linked-file rewrite fixture and later crashed after cascading failures.
+A bounded debugger run did not reproduce the crash and produced no
+backtrace; its exact cause is unverified. The fixture did discard image
+ids after refused closes and continued dependent setup after BUSY.
+Its positive linked-file setup/cleanup now retries only pre-mutation BUSY
+with finite deadlines, reports individual statuses, retains owned ids
+until a real close, and stops dependent tests on setup/cleanup failure.
+Negative BUSY assertions remain single calls. All four suites pass
+1,459 / 1,245 / 1,459 / 1,459 checks. These runs observed zero retries in
+this fixture; controlled slow-loader tests separately verify the native
+BUSY contract. The earlier crash is not presented as a proven new UAF.
+
+### Focused linked-close smoke (2026-11-08)
+
+`GLIMS_SMOKE_CASE=linked-close` runs only `exerciseLinkedClose`
+(`Sources/GlimsKit/EngineSmokeTestLinkedClose.swift`). Before the engine
+starts, that case installs the slow-loader plug-in named by
+`GLIMS_SMOKE_SLOW_LOADER_SCRIPT` into the throwaway user directory, points
+`GLIMS_SLOWLOAD_DIR` at the smoke work directory and leaves the release
+marker present. The scenario places a `.gslow` link, rewrites the file in
+place, waits for the native link monitor's reload to park inside the
+loader, then closes through `closeImageWhenDrained`: while parked, the
+close stays deferred, the image stays alive (facade read-only oracle) and
+the main loop keeps advancing; after the marker is released the close
+completes exactly once and the native oracle reports the image gone.
+Engines before 3.2 skip explicitly. Added compile-checked only
+(`swift build`, `swift build --build-tests`); the runtime run is not
+exercised on this branch and happens on the review root.
+
+The linked-close smoke is now exercised. Replacing only EngineActivity's
+close method with the earlier one-shot implementation reproduced two
+failures: premature close completion during the paused loader and an image
+still present after completion. The fixed retry method passes on GIMP
+3.2.8, 3.2.0 and master; 3.0.8 explicitly skips unsupported link layers.
+The final fixture requires NOT_FOUND specifically, stops on a missing
+pause marker, checks that no app activity masks the native busy state,
+and cleans up any image left by the deliberate red implementation.

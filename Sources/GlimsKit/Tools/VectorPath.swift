@@ -118,6 +118,30 @@ struct VectorPath: Equatable {
         }
     }
 
+    /// Moves every anchor in `indices` with its handles by `delta`.
+    /// Indices that name no anchor are ignored.
+    mutating func moveAnchors(_ indices: Set<AnchorIndex>, by delta: CGSize) {
+        for index in indices where contains(index) {
+            subpaths[index.subpath].anchors[index.anchor].move(by: delta)
+        }
+    }
+
+    /// Removes every anchor in `indices` as one batch: highest subpath and
+    /// highest anchor first, so an earlier removal cannot shift the indices
+    /// still to go. Empty subpaths drop away and closed ones left with a
+    /// single anchor open, as `removeAnchor(at:)` does.
+    mutating func removeAnchors(_ indices: Set<AnchorIndex>) {
+        let ordered = indices.filter(contains).sorted { lhs, rhs in
+            lhs.subpath == rhs.subpath ? lhs.anchor > rhs.anchor : lhs.subpath > rhs.subpath
+        }
+        for index in ordered { removeAnchor(at: index) }
+    }
+
+    /// The indices that still name an anchor of this path.
+    func pruned(_ indices: Set<AnchorIndex>) -> Set<AnchorIndex> {
+        indices.filter { contains($0) }
+    }
+
     /// Reverses a subpath's direction, so extending its first anchor can
     /// append at the end. Each anchor's handles swap roles.
     mutating func reverseSubpath(_ index: Int) {

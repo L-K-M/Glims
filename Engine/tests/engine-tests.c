@@ -59,6 +59,78 @@ now_ms (void)
   return t.tv_sec * 1000.0 + t.tv_nsec / 1e6;
 }
 
+/* ---- Bounded BUSY waits at linked-file boundaries ----------------------
+ *
+ * A link layer's file monitor can reload its file inside a nested engine
+ * main loop with no facade call around it. A facade call dispatched in
+ * that window sees the engine busy, and every mutation gate refuses
+ * GLIMS_STATUS_BUSY before touching anything, so a refused setup or
+ * cleanup step mutated nothing and is safe to repeat. The retained-link
+ * fixture in test_layer_restore_source rewrites and deletes monitored
+ * files and closes its scratch images around those changes, so its steps
+ * there use WAIT_OUT_BUSY and close_image_wait_busy: they retry ONLY
+ * GLIMS_STATUS_BUSY, under a finite 15 s deadline with a tiny backoff,
+ * logging and counting every actual wait. Any other status passes through
+ * unchanged, and the genuine BUSY-refusal checks elsewhere in this file
+ * stay literal single calls. */
+
+/* Finite deadline for one bounded wait, and the backoff between attempts. */
+#define GLIMS_BUSY_WAIT_DEADLINE_MS 15000.0
+#define GLIMS_BUSY_WAIT_BACKOFF_US  20000
+
+/* Evaluates `expr` into `var`, re-evaluating it only while it answers
+ * GLIMS_STATUS_BUSY — never for any other status, and only for calls
+ * whose BUSY refusal happens before any mutation. `busy_waits` must be
+ * in scope; each actual wait is logged and counted. */
+#define WAIT_OUT_BUSY(var, expr, what)                                  \
+  do {                                                                  \
+    double busy_deadline_ = now_ms () + GLIMS_BUSY_WAIT_DEADLINE_MS;    \
+    (var) = (expr);                                                     \
+    while ((var) == GLIMS_STATUS_BUSY && now_ms () < busy_deadline_)    \
+      {                                                                 \
+        busy_waits++;                                                   \
+        printf ("      (BUSY wait #%d: %s refused, retrying)\n",        \
+                busy_waits, what);                                      \
+        fflush (stdout);                                                \
+        usleep (GLIMS_BUSY_WAIT_BACKOFF_US);                            \
+        (var) = (expr);                                                 \
+      }                                                                 \
+  } while (0)
+
+/* Closes an owned image, waiting out a bounded BUSY first (a monitored
+ * link can sit in a file plug-in's nested loop when the close arrives).
+ * The id is cleared only when the close actually succeeded; a mere close
+ * attempt never discards it. Returns the final status. */
+static GlimsStatus
+close_image_wait_busy (GlimsImageID *id, int *busy_waits)
+{
+  GlimsStatus status;
+  double      deadline;
+
+  if (! id || *id == 0)
+    return GLIMS_STATUS_OK;
+  status   = api->image_close (engine, *id);
+  deadline = now_ms () + GLIMS_BUSY_WAIT_DEADLINE_MS;
+  while (status == GLIMS_STATUS_BUSY && now_ms () < deadline)
+    {
+      (*busy_waits)++;
+      printf ("      (BUSY wait #%d: close of image %d refused, retrying)\n",
+              *busy_waits, *id);
+      fflush (stdout);
+      usleep (GLIMS_BUSY_WAIT_BACKOFF_US);
+      status = api->image_close (engine, *id);
+    }
+  if (status == GLIMS_STATUS_OK)
+    *id = 0;
+  else
+    {
+      printf ("      (close of image %d ended with status %d; id retained)\n",
+              *id, status);
+      fflush (stdout);
+    }
+  return status;
+}
+
 static void
 on_event (void *context, const GlimsEvent *event)
 {
@@ -143,10 +215,13 @@ brush_for (GlimsPaintTool tool, double size)
 }
 
 /* A stroke from (x0, y0) to (x1, y1) in 16 steps; returns the status of
- * the first failing call. */
+ * the first failing call. When `busy_waits` is not NULL, only the begin
+ * step waits out a bounded GLIMS_STATUS_BUSY: a refused begin leaves no
+ * stroke behind, while continue and end mutate the live stroke and are
+ * never retried. */
 static GlimsStatus
-stroke_line (GlimsImageID image, GlimsItemID layer, const GlimsBrushSettings *brush,
-             double x0, double y0, double x1, double y1, char **error)
+stroke_line_run (GlimsImageID image, GlimsItemID layer, const GlimsBrushSettings *brush,
+                 double x0, double y0, double x1, double y1, char **error, int *busy_waits)
 {
   GlimsStrokePoint first = { x0, y0, 1.0, 0.0, 0.0, 0 };
   GlimsStrokePoint points[16];
@@ -159,12 +234,37 @@ stroke_line (GlimsImageID image, GlimsItemID layer, const GlimsBrushSettings *br
                                      1.0, 0.0, 0.0, (uint32_t) (i + 1) * 8 };
 
   status = api->stroke_begin (engine, image, layer, brush, &first, &stroke, error);
+  if (busy_waits)
+    {
+      double deadline = now_ms () + GLIMS_BUSY_WAIT_DEADLINE_MS;
+
+      while (status == GLIMS_STATUS_BUSY && now_ms () < deadline)
+        {
+          (*busy_waits)++;
+          printf ("      (BUSY wait #%d: stroke begin refused, retrying)\n", *busy_waits);
+          fflush (stdout);
+          if (error && *error)
+            {
+              api->free_string (*error);
+              *error = NULL;
+            }
+          usleep (GLIMS_BUSY_WAIT_BACKOFF_US);
+          status = api->stroke_begin (engine, image, layer, brush, &first, &stroke, error);
+        }
+    }
   if (status != GLIMS_STATUS_OK)
     return status;
   status = api->stroke_continue (engine, stroke, points, 16);
   if (status != GLIMS_STATUS_OK)
     return status;
   return api->stroke_end (engine, stroke);
+}
+
+static GlimsStatus
+stroke_line (GlimsImageID image, GlimsItemID layer, const GlimsBrushSettings *brush,
+             double x0, double y0, double x1, double y1, char **error)
+{
+  return stroke_line_run (image, layer, brush, x0, y0, x1, y1, error, NULL);
 }
 
 static void
@@ -1016,7 +1116,19 @@ test_layer_source (const char *work)
  * file is reloaded when readable, on a read failure the retained source
  * buffer is kept and monitoring resumes; a missing file is not an
  * error. */
-static void
+
+/* One positive setup step of the retained-link fixture below: the step
+ * reports its own status, and a failed prerequisite stops the dependent
+ * checks, straight to the fixture's cleanup label. */
+#define LINK_SETUP(ok, ...)                 \
+  do {                                      \
+    bool link_ok_ = (ok);                    \
+    CHECK (link_ok_, __VA_ARGS__);           \
+    if (! link_ok_)                         \
+      { fixture_healthy = false; goto links_cleanup; } \
+  } while (0)
+
+static bool
 test_layer_restore_source (const char *work)
 {
   GlimsImageID         image = 0, other = 0, link_image = 0, saved = 0;
@@ -1034,15 +1146,17 @@ test_layer_restore_source (const char *work)
   GlimsStrokeID        stroke = 0;
   GlimsFilterID        filter = 0;
   GlimsRect            bounds_before = { 0 }, link_bounds = { 0 }, sel_before = { 0 };
-  bool                 sel_empty = true;
+  bool                 sel_empty = true, ok = false;
+  bool                 fixture_healthy = true;
   GlimsFillSettings    red  = { .struct_size = sizeof red,  .mode = GLIMS_FILL_SELECTION,
                                 .color = { 1, 0, 0, 1 }, .opacity = 1 };
   GlimsFillSettings    blue = { .struct_size = sizeof blue, .mode = GLIMS_FILL_SELECTION,
                                 .color = { 0, 0, 1, 1 }, .opacity = 1 };
+  GlimsStatus          st = GLIMS_STATUS_OK;
   int32_t              before, w = 0, h = 0, w2 = 0, h2 = 0;
+  int                  busy_waits = 0, vectors, links;
   char                *fonts = NULL, *error = NULL, *newline, png[1024], png2[1024], png3[1024];
   uint8_t             *shot = NULL, *edited = NULL, *after = NULL;
-  int                  vectors, links;
 
   vectors = supports_vector_layers ();
   links   = supports_link_layers ();
@@ -1052,7 +1166,7 @@ test_layer_restore_source (const char *work)
   if (! fonts || ! *fonts)
     {
       api->free_string (fonts);
-      return;
+      return false;
     }
   if (strstr (fonts, "Sans-serif\n") == fonts || strstr (fonts, "\nSans-serif\n"))
     strcpy (settings.font, "Sans-serif");
@@ -1277,33 +1391,65 @@ test_layer_restore_source (const char *work)
        * background and the link. Three source PNGs: one for the
        * explicit-rasterize restore, one whose file is rewritten before
        * the restore (reload policy), one whose file is deleted before
-       * the restore (retained-buffer policy). */
+       * the restore (retained-buffer policy).
+       *
+       * The fixture's positive setup and cleanup runs split into single
+       * steps, each reporting its own status. Once the link image exists,
+       * its monitored (and undo-owned) links can reload a changed file in
+       * a nested engine loop at any moment, so the steps at those
+       * linked-file boundaries wait out a bounded BUSY only. Scratch
+       * image ids are kept until their close actually succeeds, and a
+       * failed prerequisite stops the dependent checks at links_cleanup. */
       snprintf (png, sizeof png, "%s/restore-link.png", work);
       snprintf (png2, sizeof png2, "%s/restore-link-reload.png", work);
       snprintf (png3, sizeof png3, "%s/restore-link-gone.png", work);
-      CHECK (api->image_new (engine, 40, 30, &saved, NULL) == GLIMS_STATUS_OK &&
-             api->fill (engine, saved, (GlimsPoint) { 0, 0 }, &red, NULL) == GLIMS_STATUS_OK &&
-             api->image_export (engine, saved, png, NULL) == GLIMS_STATUS_OK &&
-             api->image_export (engine, saved, png2, NULL) == GLIMS_STATUS_OK &&
-             api->image_export (engine, saved, png3, NULL) == GLIMS_STATUS_OK &&
-             api->image_close (engine, saved) == GLIMS_STATUS_OK,
-             "the source PNGs for the link restore tests are exported");
-      saved = 0;
-      api->image_new (engine, 200, 120, &link_image, NULL);
+
+      st = api->image_new (engine, 40, 30, &saved, NULL);
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: the scratch image for the link PNGs is created (status %d)", st);
+      WAIT_OUT_BUSY (st, api->fill (engine, saved, (GlimsPoint) { 0, 0 }, &red, NULL),
+                     "the scratch fill red");
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: the scratch image is filled red (status %d)", st);
+      WAIT_OUT_BUSY (st, api->image_export (engine, saved, png, NULL),
+                     "the export of restore-link.png");
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: restore-link.png is exported (status %d)", st);
+      WAIT_OUT_BUSY (st, api->image_export (engine, saved, png2, NULL),
+                     "the export of restore-link-reload.png");
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: restore-link-reload.png is exported (status %d)", st);
+      WAIT_OUT_BUSY (st, api->image_export (engine, saved, png3, NULL),
+                     "the export of restore-link-gone.png");
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: restore-link-gone.png is exported (status %d)", st);
+      st = close_image_wait_busy (&saved, &busy_waits);
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: the scratch image closes after the exports (status %d)", st);
+
+      st = api->image_new (engine, 200, 120, &link_image, NULL);
+      LINK_SETUP (st == GLIMS_STATUS_OK && link_image != 0,
+                  "setup: the link fixture image is created (status %d)", st);
 
       /* Explicit rasterize puts the genuine flag TRUE: restore goes
        * through gimp_rasterizable_restore and remonitors. */
-      CHECK (api->image_place_link (engine, link_image, png, &link, NULL) == GLIMS_STATUS_OK && link != 0,
-             "the link for the explicit-rasterize restore exists");
+      WAIT_OUT_BUSY (st, api->image_place_link (engine, link_image, png, &link, NULL),
+                     "placing the explicit-rasterize link");
+      LINK_SETUP (st == GLIMS_STATUS_OK && link != 0,
+                  "the link for the explicit-rasterize restore exists (status %d)", st);
       shot = render_all (link_image, &w, &h);
       before = undo_depth (link_image);
-      CHECK (api->layer_command (engine, link_image, link, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK &&
+      WAIT_OUT_BUSY (st, api->layer_command (engine, link_image, link, GLIMS_LAYER_RASTERIZE, NULL, NULL), "linked restore/history");
+      LINK_SETUP (st == GLIMS_STATUS_OK, "the linked restore/history step succeeds (status %d)", st);
+      CHECK (st == GLIMS_STATUS_OK &&
              undo_depth (link_image) == before + 1 &&
              api->layer_source_info (engine, link_image, link, &info, NULL) == GLIMS_STATUS_OK &&
              info.source_kind == GLIMS_LAYER_LINK && info.is_rasterized && info.has_source,
              "the link rasterizes with its link retained");
       before = undo_depth (link_image);
-      CHECK (api->layer_command (engine, link_image, link, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
+      WAIT_OUT_BUSY (st, api->layer_command (engine, link_image, link, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL), "linked restore/history");
+      LINK_SETUP (st == GLIMS_STATUS_OK, "the linked restore/history step succeeds (status %d)", st);
+      CHECK (st == GLIMS_STATUS_OK &&
              undo_depth (link_image) == before + 1 &&
              api->layer_source_info (engine, link_image, link, &info, NULL) == GLIMS_STATUS_OK &&
              info.source_kind == GLIMS_LAYER_LINK && ! info.is_rasterized && info.has_source &&
@@ -1314,7 +1460,9 @@ test_layer_restore_source (const char *work)
              "the remonitored link re-renders pixel-identically");
       free (after);
       after = NULL;
-      CHECK (api->image_undo (engine, link_image) == GLIMS_STATUS_OK &&
+      WAIT_OUT_BUSY (st, api->image_undo (engine, link_image), "linked restore/history");
+      LINK_SETUP (st == GLIMS_STATUS_OK, "the linked restore/history step succeeds (status %d)", st);
+      CHECK (st == GLIMS_STATUS_OK &&
              api->layer_source_info (engine, link_image, link, &info, NULL) == GLIMS_STATUS_OK &&
              info.is_rasterized,
              "undo rasterizes the link again");
@@ -1324,17 +1472,21 @@ test_layer_restore_source (const char *work)
 
       /* A painted link: pixel edits stop the monitor while the generic
        * rasterizable flag stays FALSE — the manual restore path. */
-      CHECK (api->image_place_link (engine, link_image, png, &painted, NULL) == GLIMS_STATUS_OK && painted != 0,
-             "the painted link exists");
-      CHECK (source_test_row (link_image, painted, &row), "the painted link row resolves by identity");
+      WAIT_OUT_BUSY (st, api->image_place_link (engine, link_image, png, &painted, NULL),
+                     "placing the painted link");
+      LINK_SETUP (st == GLIMS_STATUS_OK && painted != 0,
+                  "the painted link exists (status %d)", st);
+      ok = source_test_row (link_image, painted, &row);
+      LINK_SETUP (ok, "the painted link row resolves by identity");
       link_bounds = row.bounds;
       shot = render_all (link_image, &w, &h);
-      CHECK (stroke_line (link_image, painted, &brush,
-                          link_bounds.x + 2, link_bounds.y + 2,
-                          link_bounds.x + link_bounds.width - 2, link_bounds.y + link_bounds.height - 2,
-                          &error) == GLIMS_STATUS_OK,
-             "painting over the link layer edits its pixels%s%s",
-             error ? ": " : "", error ? error : "");
+      st = stroke_line_run (link_image, painted, &brush,
+                            link_bounds.x + 2, link_bounds.y + 2,
+                            link_bounds.x + link_bounds.width - 2, link_bounds.y + link_bounds.height - 2,
+                            &error, &busy_waits);
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "painting over the link layer edits its pixels (status %d%s%s)",
+                  st, error ? ": " : "", error ? error : "");
       api->free_string (error);
       error = NULL;
       edited = render_all (link_image, &w2, &h2);
@@ -1345,7 +1497,9 @@ test_layer_restore_source (const char *work)
              source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_PIXEL,
              "the painted link is pixel-behaving (monitor stopped) with its link retained");
       before = undo_depth (link_image);
-      CHECK (api->layer_command (engine, link_image, painted, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
+      WAIT_OUT_BUSY (st, api->layer_command (engine, link_image, painted, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL), "linked restore/history");
+      LINK_SETUP (st == GLIMS_STATUS_OK, "the linked restore/history step succeeds (status %d)", st);
+      CHECK (st == GLIMS_STATUS_OK &&
              undo_depth (link_image) == before + 1 &&
              api->layer_source_info (engine, link_image, painted, &info, NULL) == GLIMS_STATUS_OK &&
              info.source_kind == GLIMS_LAYER_LINK && ! info.is_rasterized && info.has_source &&
@@ -1356,7 +1510,9 @@ test_layer_restore_source (const char *work)
              "the painted pixels are discarded and the retained source renders again");
       free (after);
       after = NULL;
-      CHECK (api->image_undo (engine, link_image) == GLIMS_STATUS_OK &&
+      WAIT_OUT_BUSY (st, api->image_undo (engine, link_image), "linked restore/history");
+      LINK_SETUP (st == GLIMS_STATUS_OK, "the linked restore/history step succeeds (status %d)", st);
+      CHECK (st == GLIMS_STATUS_OK &&
              api->layer_source_info (engine, link_image, painted, &info, NULL) == GLIMS_STATUS_OK &&
              info.is_rasterized && source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_PIXEL,
              "undo stops the monitor again (retained raster state)");
@@ -1365,7 +1521,9 @@ test_layer_restore_source (const char *work)
              "undo restores the exact painted link pixels");
       free (after);
       after = NULL;
-      CHECK (api->image_redo (engine, link_image) == GLIMS_STATUS_OK &&
+      WAIT_OUT_BUSY (st, api->image_redo (engine, link_image), "linked restore/history");
+      LINK_SETUP (st == GLIMS_STATUS_OK, "the linked restore/history step succeeds (status %d)", st);
+      CHECK (st == GLIMS_STATUS_OK &&
              api->layer_source_info (engine, link_image, painted, &info, NULL) == GLIMS_STATUS_OK &&
              ! info.is_rasterized && source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_LINK,
              "redo restores the link source again");
@@ -1378,23 +1536,39 @@ test_layer_restore_source (const char *work)
       shot = edited = after = NULL;
 
       /* Reload policy: the file is rewritten between the paint and the
-       * restore — the restore reloads it. */
-      CHECK (api->image_place_link (engine, link_image, png2, &reloaded, NULL) == GLIMS_STATUS_OK && reloaded != 0,
-             "the reload-test link exists");
-      CHECK (source_test_row (link_image, reloaded, &row), "the reload link row resolves by identity");
+       * restore — the restore reloads it. Rewriting png2 is a linked-file
+       * boundary: the reload-test link monitors that file, so the steps
+       * around the rewrite wait out a bounded BUSY. */
+      WAIT_OUT_BUSY (st, api->image_place_link (engine, link_image, png2, &reloaded, NULL),
+                     "placing the reload-test link");
+      LINK_SETUP (st == GLIMS_STATUS_OK && reloaded != 0,
+                  "the reload-test link exists (status %d)", st);
+      ok = source_test_row (link_image, reloaded, &row);
+      LINK_SETUP (ok, "the reload link row resolves by identity");
       link_bounds = row.bounds;
-      CHECK (stroke_line (link_image, reloaded, &brush,
-                          link_bounds.x + 2, link_bounds.y + 2,
-                          link_bounds.x + link_bounds.width - 2, link_bounds.y + link_bounds.height - 2,
-                          NULL) == GLIMS_STATUS_OK,
-             "the reload-test link is painted over");
-      CHECK (api->image_new (engine, 40, 30, &saved, NULL) == GLIMS_STATUS_OK &&
-             api->fill (engine, saved, (GlimsPoint) { 0, 0 }, &blue, NULL) == GLIMS_STATUS_OK &&
-             api->image_export (engine, saved, png2, NULL) == GLIMS_STATUS_OK &&
-             api->image_close (engine, saved) == GLIMS_STATUS_OK,
-             "the link file is rewritten in blue before the restore");
-      saved = 0;
-      CHECK (api->layer_command (engine, link_image, reloaded, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
+      st = stroke_line_run (link_image, reloaded, &brush,
+                            link_bounds.x + 2, link_bounds.y + 2,
+                            link_bounds.x + link_bounds.width - 2, link_bounds.y + link_bounds.height - 2,
+                            NULL, &busy_waits);
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "the reload-test link is painted over (status %d)", st);
+      st = api->image_new (engine, 40, 30, &saved, NULL);
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: the rewrite-blue scratch image is created (status %d)", st);
+      WAIT_OUT_BUSY (st, api->fill (engine, saved, (GlimsPoint) { 0, 0 }, &blue, NULL),
+                     "the rewrite-blue scratch fill");
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: the rewrite-blue scratch image is filled blue (status %d)", st);
+      WAIT_OUT_BUSY (st, api->image_export (engine, saved, png2, NULL),
+                     "the rewrite over restore-link-reload.png");
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "the link file is rewritten in blue before the restore (export status %d)", st);
+      st = close_image_wait_busy (&saved, &busy_waits);
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: the rewrite-blue scratch image closes (status %d)", st);
+      WAIT_OUT_BUSY (st, api->layer_command (engine, link_image, reloaded, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL), "linked restore/history");
+      LINK_SETUP (st == GLIMS_STATUS_OK, "the linked restore/history step succeeds (status %d)", st);
+      CHECK (st == GLIMS_STATUS_OK &&
              api->layer_source_info (engine, link_image, reloaded, &info, NULL) == GLIMS_STATUS_OK &&
              info.source_kind == GLIMS_LAYER_LINK && ! info.is_rasterized && info.has_source,
              "restore succeeds while the file is readable again");
@@ -1410,19 +1584,26 @@ test_layer_restore_source (const char *work)
       /* Retained-buffer policy: the file is deleted between the paint
        * and the restore — the read fails, the retained source buffer is
        * kept and monitoring resumes; a missing file is not an error. */
-      CHECK (api->image_place_link (engine, link_image, png3, &gone, NULL) == GLIMS_STATUS_OK && gone != 0,
-             "the missing-file link exists");
-      CHECK (source_test_row (link_image, gone, &row), "the missing-file link row resolves by identity");
+      WAIT_OUT_BUSY (st, api->image_place_link (engine, link_image, png3, &gone, NULL),
+                     "placing the missing-file link");
+      LINK_SETUP (st == GLIMS_STATUS_OK && gone != 0,
+                  "the missing-file link exists (status %d)", st);
+      ok = source_test_row (link_image, gone, &row);
+      LINK_SETUP (ok, "the missing-file link row resolves by identity");
       link_bounds = row.bounds;
       shot = render_all (link_image, &w, &h);
-      CHECK (stroke_line (link_image, gone, &brush,
-                          link_bounds.x + 2, link_bounds.y + 2,
-                          link_bounds.x + link_bounds.width - 2, link_bounds.y + link_bounds.height - 2,
-                          NULL) == GLIMS_STATUS_OK,
-             "the missing-file link is painted over");
-      CHECK (unlink (png3) == 0, "the link file is deleted before the restore");
+      st = stroke_line_run (link_image, gone, &brush,
+                            link_bounds.x + 2, link_bounds.y + 2,
+                            link_bounds.x + link_bounds.width - 2, link_bounds.y + link_bounds.height - 2,
+                            NULL, &busy_waits);
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "the missing-file link is painted over (status %d)", st);
+      ok = unlink (png3) == 0;
+      LINK_SETUP (ok, "the link file is deleted before the restore");
       before = undo_depth (link_image);
-      CHECK (api->layer_command (engine, link_image, gone, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
+      WAIT_OUT_BUSY (st, api->layer_command (engine, link_image, gone, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL), "linked restore/history");
+      LINK_SETUP (st == GLIMS_STATUS_OK, "the linked restore/history step succeeds (status %d)", st);
+      CHECK (st == GLIMS_STATUS_OK &&
              undo_depth (link_image) == before + 1 &&
              api->layer_source_info (engine, link_image, gone, &info, NULL) == GLIMS_STATUS_OK &&
              info.source_kind == GLIMS_LAYER_LINK && ! info.is_rasterized && info.has_source &&
@@ -1435,18 +1616,37 @@ test_layer_restore_source (const char *work)
       free (shot);
       shot = after = NULL;
 
-      api->image_close (engine, link_image);
-      link_image = 0;
+    links_cleanup:
+      /* Owned buffers and images, on the normal path and after a failed
+       * prerequisite alike. The closes may wait out a bounded BUSY and
+       * clear their id only on success. */
+      free (shot);
+      free (edited);
+      free (after);
+      shot = edited = after = NULL;
+      api->free_string (error);
+      error = NULL;
+      GlimsStatus saved_close = close_image_wait_busy (&saved, &busy_waits);
+      GlimsStatus link_close = close_image_wait_busy (&link_image, &busy_waits);
+      CHECK (saved_close == GLIMS_STATUS_OK && link_close == GLIMS_STATUS_OK,
+             "the retained-link fixture releases its images (scratch %d, link %d)", saved_close, link_close);
+      if (saved_close != GLIMS_STATUS_OK || link_close != GLIMS_STATUS_OK) fixture_healthy = false;
     }
 
   /* A closed image's layer id is NOT_FOUND. */
   foreign = other_layer;
-  api->image_close (engine, other);
+  GlimsStatus other_close = close_image_wait_busy (&other, &busy_waits);
+  CHECK (other_close == GLIMS_STATUS_OK, "the foreign source image closes (status %d)", other_close);
+  if (other_close != GLIMS_STATUS_OK) fixture_healthy = false;
   CHECK (api->layer_command (engine, image, foreign, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_NOT_FOUND,
          "a closed image's layer id is NOT_FOUND for restore");
-  other = 0;
 
-  api->image_close (engine, image);
+  GlimsStatus image_close = close_image_wait_busy (&image, &busy_waits);
+  CHECK (image_close == GLIMS_STATUS_OK, "the source fixture image closes (status %d)", image_close);
+  if (image_close != GLIMS_STATUS_OK) fixture_healthy = false;
+  printf ("      (test_layer_restore_source observed %d BUSY wait(s))\n", busy_waits);
+  fflush (stdout);
+  return fixture_healthy;
 }
 
 /* ---- Busy while a file load runs in a nested main loop -----------------
@@ -10617,7 +10817,12 @@ main (int argc, char **argv)
   test_editing ();
   test_layer_fit_trim ();
   test_layer_source (argv[2]);
-  test_layer_restore_source (argv[2]);
+  if (! test_layer_restore_source (argv[2]))
+    {
+      printf ("FAILED: retained-source fixture setup or cleanup failed; dependent tests stopped\n");
+      api->stop (engine);
+      return 1;
+    }
   test_busy_during_link_load (argv[2]);
   test_clipboard ();
   test_clear_srgb_and_readiness (argv[3]);
