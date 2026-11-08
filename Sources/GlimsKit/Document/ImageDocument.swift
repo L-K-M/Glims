@@ -661,10 +661,15 @@ final class ImageDocument {
             return completion(.failure(isClosing ? DocumentError.closed : DocumentError.busy))
         }
         endPendingUserEdits()
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        // Keep the deferred cache/completion stage alive through another
+        // document's exclusive work as well as the native input job.
+        pendingWork += 1
         enqueue(on: inputQueue, input: true) { [session, image] in
             let result = Result { try session.setGrid(grid, image: image) }
             DispatchQueue.main.async {
                 EngineActivity.shared.whenIdle {
+                    defer { self.jobDidFinish(input: false) }
                     if !self.isClosing {
                         try? self.reload()
                         if case .failure(let error) = result { self.onError?(String(describing: error)) }

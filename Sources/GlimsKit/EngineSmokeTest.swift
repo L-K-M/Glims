@@ -8177,8 +8177,17 @@ enum EngineSmokeTest {
                 && button(sheetA, "Close grid sheet")?.isEnabled == false
                 && field(sheetA, "Grid spacing X")?.isEnabled == false,
               "accepted grid work is counted and disables controls until completion")
+        let otherWorkGate = DispatchSemaphore(value: 0)
+        let otherWorkAccepted = EngineActivity.shared.perform(label: "Grid completion accounting",
+                                                               work: { otherWorkGate.wait() }, completion: {})
         applyGate.signal()
-        wait { docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+        wait { (try? session.grid(imageA).spacingX) == 20 }
+        spin()
+        check(otherWorkAccepted && EngineActivity.shared.isBusy && docA.pendingWork > 0
+                && button(sheetA, "Close grid sheet")?.isEnabled == false,
+              "grid completion remains counted while another engine activity defers its callback")
+        otherWorkGate.signal()
+        wait { !EngineActivity.shared.isBusy && docA.pendingWork == 0 && docA.grid.spacingX == 20 }
         spin()
         check(docA.grid.spacingX == 20 && docA.grid.spacingY == 10
                 && docA.undoInfo.undoCount == undoBefore + 1,

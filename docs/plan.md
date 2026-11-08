@@ -2235,3 +2235,11 @@ it from the cache. Accepted work disables its controls through completion.
 Close discards unapplied edits, while applied changes remain undoable.
 Own color editing ends on Apply and close without hiding another owner's
 panel. Parent integration and independent review of this fix follow.
+
+A second grid regression reproduced the cache/completion stage becoming
+uncounted while another document held exclusive engine work. That stage
+now retains its own pending-work count through the deferred callback,
+including close and failure paths. All 39 focused checks pass on each of
+the four engines. A focused independent review of the supplied exact diff
+and surrounding source found no important findings; the helper could not
+independently execute Git. The broader current-file review was also clean.
