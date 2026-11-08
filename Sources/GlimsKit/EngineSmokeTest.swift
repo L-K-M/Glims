@@ -51,7 +51,7 @@ enum EngineSmokeTest {
             .usingColorSpace(.genericGray)?.whiteComponent).map(Double.init)
     }
 
-    private static func pixel(_ session: EngineSession, _ image: Int32, x: Int, y: Int) -> [UInt8]? {
+    static func pixel(_ session: EngineSession, _ image: Int32, x: Int, y: Int) -> [UInt8]? {
         guard let rendered = try? session.render(image, scale: 1, area: CGRect(x: x, y: y, width: 1, height: 1)),
               let data = rendered.dataProvider?.data as Data? else { return nil }
         return Array(data.prefix(4))
@@ -171,11 +171,39 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (guides controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-source-controls" {
+                try exerciseLayerSourceControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (layer source controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "plugin-responsiveness" {
+                try measurePluginStalls(session, work: work)
+                print(failures == 0 ? "PASSED (plugin responsiveness)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "history-isolation" {
+                try exercisePendingEditScope(session, documents: documents)
+                try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (history isolation)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "stroke-selection-controls" {
+                try exerciseStrokeSelectionControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (stroke-selection-controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "grid-controls" {
+                try exerciseGridControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (grid controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "pixel-rulers" {
                 try exercisePixelRulers(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (pixel rulers)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+
 
 
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "canvas-overlays" {
@@ -186,6 +214,7 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "indexed-controls" {
                 try exerciseIndexedControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (indexed controls)" : "FAILED: \(failures) failure(s)")
+
                 return failures == 0 ? 0 : 1
             }
 
@@ -231,7 +260,9 @@ enum EngineSmokeTest {
             try exerciseVectorStyleForm(session, work: work, documents: documents)
             try exercisePaletteControls(session, documents: documents)
             try exerciseGuidesControls(session, work: work, documents: documents)
+            try exerciseGridControls(session, work: work, documents: documents)
             try exercisePixelRulers(session, work: work, documents: documents)
+            try exerciseStrokeSelectionControls(session, work: work, documents: documents)
 
 
             try exerciseIndexedControls(session, work: work, documents: documents)
@@ -246,6 +277,8 @@ enum EngineSmokeTest {
             try exerciseResourceCatalog(session)
             try exerciseGuideCache(session, documents: documents)
             try exerciseLayerSourceCache(session, documents: documents)
+            try exerciseLayerSourceControls(session, work: work, documents: documents)
+
             try exerciseIndexedWrapper(session)
             try exerciseResourceGradient(session, documents: documents)
             try exerciseResourceThumbnails(session)
@@ -5038,7 +5071,7 @@ enum EngineSmokeTest {
         document.endStroke()
         settle()
         guard let filled = document.history, filled.rows.count == 3, filled.currentPosition == 2 else {
-            check(false, "a fill and a stroke list three history states (\(document.history?.rows.count ?? -1))")
+            check(false, "a fill and a stroke list three history states (cached \(document.history?.rows.count ?? -1), native undo \(String(describing: try? session.undoInfo(image))), pending \(document.pendingWork), activity \(EngineActivity.shared.label ?? "none"), errors \(messages))")
             return
         }
         check(true, "a fill and a stroke list three history states")
@@ -7133,7 +7166,11 @@ enum EngineSmokeTest {
             maxLateness = max(maxLateness, Double(now.uptimeNanoseconds - lastTick.uptimeNanoseconds) / 1e6 - interval * 1000)
             let begin = DispatchTime.now()
             _ = try? session.render(image, scale: 1, area: CGRect(x: 0, y: 0, width: 64, height: 64))
-            maxRenderCall = max(maxRenderCall, milliseconds(since: begin))
+            let renderMilliseconds = milliseconds(since: begin)
+            if renderMilliseconds >= maximumMainThreadStallMilliseconds {
+                print("     slow render RPC sample \(ticks): \(String(format: "%.1f", renderMilliseconds)) ms")
+            }
+            maxRenderCall = max(maxRenderCall, renderMilliseconds)
             ticks += 1
             lastTick = DispatchTime.now()
         }
@@ -8304,6 +8341,344 @@ enum EngineSmokeTest {
     /// movement under scroll/zoom checked against an independent geometry
     /// oracle plus a ruler view-bitmap check, display-only isolation of
     /// pixels/dirty/history/selection, and safe close.
+    private static func exerciseGridControls(_ session: EngineSession, work: URL,
+                                             documents: DocumentList) throws {
+        // Recursive view search that recurses into children EVEN WHEN THE
+        // ROOT ITSELF MATCHES the type (an NSStackView root must not hide
+        // a nested match of the same class).
+        func allViews<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
+            guard let root else { return [] }
+            var found: [T] = []
+            if let match = root as? T { found.append(match) }
+            for child in root.subviews { found += allViews(child, as: type) }
+            return found
+        }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func button(_ sheet: NSWindow?, _ label: String) -> NSButton? {
+            allViews(sheet?.contentView, as: NSButton.self).first { $0.accessibilityLabel() == label }
+        }
+        func field(_ sheet: NSWindow?, _ label: String) -> NSTextField? {
+            allViews(sheet?.contentView, as: NSTextField.self)
+                .first { $0.isEditable && $0.accessibilityLabel() == label }
+        }
+        func message(_ sheet: NSWindow?) -> NSTextField? {
+            allViews(sheet?.contentView, as: NSTextField.self)
+                .first { !$0.isEditable && $0.accessibilityLabel() == "Grid message" }
+        }
+        func popup(_ sheet: NSWindow?, _ label: String) -> NSPopUpButton? {
+            allViews(sheet?.contentView, as: NSPopUpButton.self).first { $0.accessibilityLabel() == label }
+        }
+        func well(_ sheet: NSWindow?, _ label: String) -> NSColorWell? {
+            allViews(sheet?.contentView, as: NSColorWell.self).first { $0.accessibilityLabel() == label }
+        }
+
+        let imageA = try session.newImage(width: 40, height: 24)
+        let imageB = try session.newImage(width: 30, height: 30)
+        let docA = try ImageDocument(session: session, image: imageA, name: "Grid A")
+        let docB = try ImageDocument(session: session, image: imageB, name: "Grid B")
+        documents.items += [docA, docB]
+        let a = DocumentWindowController(document: docA)
+        let b = DocumentWindowController(document: docB)
+        a.showWindow(nil)
+        b.showWindow(nil)
+        var messages: [String] = []
+        let reportError = docA.onError
+        docA.onError = { reportError?($0); messages.append($0) }
+        defer {
+            for (controller, document) in [(a, docA), (b, docB)] {
+                if let sheet = controller.window?.attachedSheet {
+                    controller.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                }
+                controller.window?.close()
+                documents.items.removeAll { $0 === document }
+                var closed = false
+                document.closeImageWhenDrained { closed = true }
+                let deadline = Date().addingTimeInterval(10)
+                while !closed && Date() < deadline { spin(0.01) }
+            }
+        }
+
+        // Menu wiring: both items sit on the document's own selectors.
+        let mainMenu = MainMenu.make()
+        let imageMenu = mainMenu.items.first { $0.title == "Image" }?.submenu
+        let viewMenu = mainMenu.items.first { $0.title == "View" }?.submenu
+        check(imageMenu?.items.first { $0.title == "Configure Grid…" }?.action
+                == #selector(DocumentWindowController.configureGrid(_:)),
+              "Image offers Configure Grid… on the document's selector")
+        check(viewMenu?.items.first { $0.title == "Show Grid" }?.action
+                == #selector(DocumentWindowController.toggleShowGrid(_:)),
+              "View offers Show Grid on the document's selector")
+
+        // Menu validation reads only cached state: Show Grid unchecked by
+        // default and always valid; Configure Grid… enabled while no sheet
+        // is attached (image metadata: no channel-target restriction).
+        let showGridItem = NSMenuItem(title: "Show Grid",
+                                      action: #selector(DocumentWindowController.toggleShowGrid(_:)), keyEquivalent: "")
+        let configureItem = NSMenuItem(title: "Configure Grid…",
+                                       action: #selector(DocumentWindowController.configureGrid(_:)), keyEquivalent: "")
+        check(a.validateMenuItem(showGridItem) && showGridItem.state == .off,
+              "Show Grid validates unchecked by default")
+        check(a.validateMenuItem(configureItem), "Configure Grid… validates while no sheet is open")
+
+        // Two documents open independent sheets through the actual action.
+        a.configureGrid(nil)
+        b.configureGrid(nil)
+        let sheetA = a.window?.attachedSheet
+        let sheetB = b.window?.attachedSheet
+        check(sheetA != nil && sheetB != nil && sheetA !== sheetB && a.gridSheet !== b.gridSheet,
+              "two documents open independent grid sheets owned by their windows")
+        check(!a.validateMenuItem(configureItem), "Configure Grid… is disabled while its sheet is open")
+
+        // The sheet seeds its draft from the cached grid (default 10/10, 0/0, solid).
+        check(field(sheetA, "Grid spacing X")?.stringValue == "10.0"
+                && field(sheetA, "Grid spacing Y")?.stringValue == "10.0"
+                && field(sheetA, "Grid offset X")?.stringValue == "0.0"
+                && field(sheetA, "Grid offset Y")?.stringValue == "0.0"
+                && popup(sheetA, "Grid style")?.titleOfSelectedItem == "Solid"
+                && well(sheetA, "Grid foreground color") != nil && well(sheetA, "Grid background color") != nil,
+              "the sheet seeds spacing, offset, style and both color wells from the cached grid")
+
+        // Apply through the sheet's real controls: one queued atomic
+        // setGrid, one undo step, pixels untouched, sheet stays open.
+        let pixelsBefore = try session.copyPixels(imageA, merged: true).pixels
+        let undoBefore = docA.undoInfo.undoCount
+        field(sheetA, "Grid spacing X")?.stringValue = "20"
+        a.gridSheet?.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification,
+                                                       object: field(sheetA, "Grid spacing X")))
+        let applyGate = DispatchSemaphore(value: 0)
+        docA.inputQueue.async { applyGate.wait() }
+        button(sheetA, "Apply grid")?.performClick(nil)
+        check(docA.pendingWork > 0 && button(sheetA, "Apply grid")?.isEnabled == false
+                && button(sheetA, "Close grid sheet")?.isEnabled == false
+                && field(sheetA, "Grid spacing X")?.isEnabled == false,
+              "accepted grid work is counted and disables controls until completion")
+        let otherWorkGate = DispatchSemaphore(value: 0)
+        let otherWorkAccepted = EngineActivity.shared.perform(label: "Grid completion accounting",
+                                                               work: { otherWorkGate.wait() }, completion: {})
+        applyGate.signal()
+        wait { (try? session.grid(imageA).spacingX) == 20 }
+        spin()
+        check(otherWorkAccepted && EngineActivity.shared.isBusy && docA.pendingWork > 0
+                && button(sheetA, "Close grid sheet")?.isEnabled == false,
+              "grid completion remains counted while another engine activity defers its callback")
+        otherWorkGate.signal()
+        wait { !EngineActivity.shared.isBusy && docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+        spin()
+        check(docA.grid.spacingX == 20 && docA.grid.spacingY == 10
+                && docA.undoInfo.undoCount == undoBefore + 1,
+              "Apply performs one queued setGrid with one undo step")
+        check(try session.copyPixels(imageA, merged: true).pixels == pixelsBefore,
+              "the grid change leaves the image pixels untouched")
+        check(a.window?.attachedSheet === sheetA && a.gridSheet != nil,
+              "Apply keeps the sheet open")
+        docA.undo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 10 }
+        spin()
+        check(field(sheetA, "Grid spacing X")?.stringValue == "10.0",
+              "Undo after Apply refreshes the idle field in the still-open sheet")
+        docA.redo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+        spin()
+        check(field(sheetA, "Grid spacing X")?.stringValue == "20.0",
+              "Redo refreshes the open grid sheet's committed field")
+
+        // Invalid input: refused visibly in the sheet, no mutation, and
+        // the draft is preserved for correcting.
+        let undoAfterApply = docA.undoInfo.undoCount
+        field(sheetA, "Grid spacing X")?.stringValue = "abc"
+        button(sheetA, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 }
+        check(docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply
+                && a.gridSheet?.lastError != nil && !(message(sheetA)?.stringValue ?? "").isEmpty
+                && field(sheetA, "Grid spacing X")?.stringValue == "abc",
+              "an unparsable spacing is refused in the sheet without mutation and the draft is kept")
+        field(sheetA, "Grid spacing X")?.stringValue = "0"
+        button(sheetA, "Apply grid")?.performClick(nil)
+        check(docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply
+                && (message(sheetA)?.stringValue ?? "").contains("greater than zero"),
+              "a zero spacing is refused visibly without mutation")
+
+        // A native bounds refusal (spacing beyond the engine's maximum)
+        // is reported, not clamped; the draft survives.
+        field(sheetA, "Grid spacing X")?.stringValue = "1000000000"
+        button(sheetA, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && !messages.isEmpty }
+        spin()
+        check(docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply
+                && a.gridSheet?.lastError != nil && !(message(sheetA)?.stringValue ?? "").isEmpty
+                && field(sheetA, "Grid spacing X")?.stringValue == "1000000000",
+              "an over-maximum spacing is refused by the engine and shown in the sheet, draft preserved")
+
+        // Cancel writes nothing and closes the sheet.
+        field(sheetA, "Grid spacing X")?.stringValue = "33"
+        button(sheetA, "Close grid sheet")?.performClick(nil)
+        wait { a.window?.attachedSheet == nil }
+        spin()
+        check(a.gridSheet == nil && docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply,
+              "Cancel closes the sheet without writing anything")
+
+        // A reopened sheet re-seeds from the cache; applying the identical
+        // grid is a no-op with no undo.
+        a.configureGrid(nil)
+        let reopened = a.window?.attachedSheet
+        check(field(reopened, "Grid spacing X")?.stringValue == "20.0",
+              "a reopened sheet re-seeds its draft from the cached grid")
+        button(reopened, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 }
+        spin()
+        check(docA.undoInfo.undoCount == undoAfterApply && docA.grid.spacingX == 20,
+              "applying the identical grid is a no-op with no undo")
+        if let sheet = a.window?.attachedSheet {
+            a.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+        }
+        wait { a.window?.attachedSheet == nil }
+
+        // Undo/Redo refresh the cached grid.
+        docA.undo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 10 }
+        spin()
+        check(docA.grid.spacingX == 10, "undo refreshes the cached grid")
+        docA.redo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+        spin()
+        check(docA.grid.spacingX == 20, "redo refreshes the cached grid")
+
+        // Late close: after the sheet ended, a grid change must not
+        // reopen or update it.
+        docA.setGrid(EngineSession.Grid(style: .solid, spacingX: 15, spacingY: 10,
+                                        offsetX: 0, offsetY: 0,
+                                        foreground: .black, background: .white))
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 15 }
+        spin()
+        check(a.window?.attachedSheet == nil && a.gridSheet == nil,
+              "a late grid change does not reopen or update a closed sheet")
+        docA.undo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+
+        // Two-document ownership: A's sheet drives only docA.
+        a.configureGrid(nil)
+        b.configureGrid(nil)
+        let sheetA2 = a.window?.attachedSheet
+        field(sheetA2, "Grid spacing X")?.stringValue = "25"
+        button(sheetA2, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 25 }
+        spin()
+        check(docA.grid.spacingX == 25 && docB.grid.spacingX == 10 && docB.undoInfo.undoCount == 0,
+              "the two sheets drive their own documents independently")
+
+        // Busy: the sheet's Apply gates on cached state, but Show Grid —
+        // pure view state — stays available while the engine is busy. The
+        // gate is released on every path by the defer.
+        do {
+            let gate = DispatchSemaphore(value: 0)
+            defer { gate.signal() }
+            let held = EngineActivity.shared.perform(label: "Holding the engine for grid", work: { gate.wait() },
+                                                     completion: {})
+            check(held && button(sheetA2, "Apply grid")?.isEnabled == false,
+                  "Apply disables while the engine is busy (cached state)")
+            check(a.validateMenuItem(showGridItem), "Show Grid stays valid while the engine is busy")
+            a.toggleShowGrid(showGridItem)
+            check(a.gridViewState.showsGrid && showGridItem.state == .on && a.canvas.showsGrid,
+                  "Show Grid toggles while the engine is busy")
+            a.toggleShowGrid(showGridItem)
+            check(!a.gridViewState.showsGrid && showGridItem.state == .off,
+                  "Show Grid toggles back while the engine is busy")
+        }
+        wait { !EngineActivity.shared.isBusy }
+        spin()
+        check(button(a.window?.attachedSheet, "Apply grid")?.isEnabled == true,
+              "Apply re-enables when the engine is idle again")
+
+        // Set a known grid (solid 10/10, 0/0) through the sheet for the
+        // bitmap checks, then close the sheet.
+        let sheetA3 = a.window?.attachedSheet
+        field(sheetA3, "Grid spacing X")?.stringValue = "10"
+        popup(sheetA3, "Grid style")?.selectItem(withTitle: "Solid")
+        button(sheetA3, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 10 && docA.grid.style == .solid }
+        spin()
+        if let sheet = a.window?.attachedSheet {
+            a.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+        }
+        wait { a.window?.attachedSheet == nil }
+        for (controller, document) in [(a, docA), (b, docB)] where controller.window?.attachedSheet != nil {
+            controller.window?.endSheet(controller.window!.attachedSheet!, returnCode: .alertSecondButtonReturn)
+        }
+        wait { b.window?.attachedSheet == nil }
+
+        // View bitmap: Show Grid draws the cached grid between the image
+        // and the other overlays; toggling and re-styling change only the
+        // view, never the native pixels, dirty state or history.
+        let canvas = a.canvas
+        try canvas.renderVisibleTilesNow()
+        func bitmap() -> Data? {
+            guard let rep = canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds) else { return nil }
+            canvas.cacheDisplay(in: canvas.bounds, to: rep)
+            guard let bytes = rep.bitmapData else { return nil }
+            return Data(bytes: bytes, count: rep.bytesPerRow * rep.pixelsHigh)
+        }
+        func brightnessNear(_ x: Int, _ y: Int) -> Double? {
+            [CGPoint(x: x, y: y), CGPoint(x: x, y: y - 1), CGPoint(x: x, y: y + 1),
+             CGPoint(x: x - 1, y: y), CGPoint(x: x + 1, y: y)]
+                .compactMap { canvasBrightness(canvas, at: $0) }.min()
+        }
+        let pixelOnLine = pixel(session, imageA, x: 10, y: 5)
+        let pixelAtIntersection = pixel(session, imageA, x: 10, y: 10)
+        let dirtyBefore = docA.hasUnsavedChanges
+        let undoBeforeBitmap = docA.undoInfo
+        let bitmapOff = bitmap()
+        a.toggleShowGrid(showGridItem)
+        let bitmapOn = bitmap()
+        check(showGridItem.state == .on && canvas.showsGrid
+                && bitmapOff != nil && bitmapOn != nil && bitmapOn != bitmapOff,
+              "Show Grid changes the canvas view bitmap")
+        let onLine = brightnessNear(10, 5)   // on the vertical line x = 10
+        let offLine = brightnessNear(5, 5)   // between grid lines
+        check(onLine != nil && offLine != nil && onLine! < offLine! - 0.05,
+              "the solid grid draws its line in the view bitmap (\(String(describing: onLine)) vs \(String(describing: offLine)))")
+        check(!b.gridViewState.showsGrid && !b.canvas.showsGrid,
+              "Show Grid is cached per window: the other window stays off")
+        check(pixel(session, imageA, x: 10, y: 5) == pixelOnLine
+                && pixel(session, imageA, x: 10, y: 10) == pixelAtIntersection
+                && docA.hasUnsavedChanges == dirtyBefore && docA.undoInfo == undoBeforeBitmap,
+              "toggling Show Grid changes neither the engine pixels nor dirty state or history")
+        a.toggleShowGrid(showGridItem)
+        check(bitmap() == bitmapOff && showGridItem.state == .off,
+              "toggling Show Grid off restores the view bitmap")
+        check(pixel(session, imageA, x: 10, y: 5) == pixelOnLine,
+              "the image pixels on the grid line are identical after both toggles")
+
+        // Style differences in the view bitmap: Dots darken only the
+        // intersections, not the line between them.
+        a.configureGrid(nil)
+        let sheetA4 = a.window?.attachedSheet
+        popup(sheetA4, "Grid style")?.selectItem(withTitle: "Dots")
+        button(sheetA4, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && docA.grid.style == .dots }
+        spin()
+        if let sheet = a.window?.attachedSheet {
+            a.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+        }
+        wait { a.window?.attachedSheet == nil }
+        a.toggleShowGrid(showGridItem)
+        let bitmapDots = bitmap()
+        check(bitmapDots != nil && bitmapDots != bitmapOn,
+              "the Dots style draws a different view bitmap than Solid")
+        let dotsOnLine = brightnessNear(10, 5)
+        let dotsAtIntersection = brightnessNear(10, 10)
+        check(dotsOnLine != nil && offLine != nil && abs(dotsOnLine! - offLine!) < 0.05,
+              "Dots leave the line between intersections untouched")
+        check(dotsAtIntersection != nil && offLine != nil && dotsAtIntersection! < offLine! - 0.05,
+              "Dots darken the intersections in the view bitmap")
+        check(pixel(session, imageA, x: 10, y: 5) == pixelOnLine
+                && pixel(session, imageA, x: 10, y: 10) == pixelAtIntersection,
+              "re-styling the grid changes no native image pixel")
+        a.toggleShowGrid(showGridItem)
+    }
+
     private static func exercisePixelRulers(_ session: EngineSession, work: URL,
                                             documents: DocumentList) throws {
         func wait(_ condition: () -> Bool) {
@@ -9230,6 +9605,274 @@ enum EngineSmokeTest {
         check(accepted && errors.count == baseline + 1 && document.pendingWork == 0,
               "busy admission refuses Rasterize before queueing input")
         settle()
+    }
+
+    /// Layer ▸ Rasterize Layer… / Restore Layer Source…: menu wiring and
+    /// cached gating, the per-window confirmation sheets (Cancel changes
+    /// nothing, Apply runs on the captured document and explicit layer
+    /// id), the counted explicit-id document methods, the exclusive
+    /// restore with its global input drain, BUSY refusal, stale-id
+    /// NOT_FOUND and late-close safety. Pixel and kind oracles read the
+    /// session directly, never the document cache; sheet buttons are
+    /// queried by their accessibility labels.
+    private static func exerciseLayerSourceControls(_ session: EngineSession, work: URL,
+                                                    documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(15)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func buttons(in view: NSView?) -> [NSButton] {
+            guard let view else { return [] }
+            if let button = view as? NSButton { return [button] }
+            return view.subviews.flatMap { buttons(in: $0) }
+        }
+        func alertButton(_ sheet: NSWindow?, _ label: String) -> NSButton? {
+            buttons(in: sheet?.contentView).first { $0.accessibilityLabel() == label }
+        }
+        func endSheet(_ controller: DocumentWindowController, _ response: NSApplication.ModalResponse) {
+            wait { controller.window?.attachedSheet != nil }
+            if let sheet = controller.window?.attachedSheet {
+                NSApp.endSheet(sheet, returnCode: response.rawValue)
+            }
+        }
+
+        // Document A holds a genuine text layer plus a plain pixel layer;
+        // document B only witnesses the global drain.
+        let imageA = try session.newImage(width: 96, height: 64)
+        let pixelLayer = try session.layerCommand(.new, image: imageA) ?? 0
+        let text = try session.addTextLayer(image: imageA, text: "Source", settings: .init(),
+                                            at: CGPoint(x: 4, y: 4))
+        try session.selectLayer(text, image: imageA)
+        let docA = try ImageDocument(session: session, image: imageA, name: "Source A")
+        let imageB = try session.newImage(width: 64, height: 64)
+        let docB = try ImageDocument(session: session, image: imageB, name: "Source B")
+        documents.items += [docA, docB]
+        let a = DocumentWindowController(document: docA)
+        let b = DocumentWindowController(document: docB)
+        a.showWindow(nil)
+        b.showWindow(nil)
+        var errors: [String] = []
+        docA.onError = { errors.append($0) }
+        docB.onError = { errors.append($0) }
+        func settle() {
+            docA.inputQueue.sync {}
+            docB.inputQueue.sync {}
+            wait { docA.pendingWork == 0 && docB.pendingWork == 0 && !EngineActivity.shared.isBusy }
+            spin()
+        }
+        defer {
+            for (controller, document) in [(a, docA), (b, docB)] {
+                if let sheet = controller.window?.attachedSheet {
+                    NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertSecondButtonReturn.rawValue)
+                }
+                controller.window?.close()
+                documents.items.removeAll { $0 === document }
+                document.closeImageWhenDrained()
+            }
+            wait { (try? session.info(imageA)) == nil && (try? session.info(imageB)) == nil }
+        }
+
+        // Menu wiring: both commands sit on the Layer menu, on the
+        // document window's own sheet selectors.
+        let mainMenu = MainMenu.make()
+        let layerMenu = mainMenu.items.first { $0.title == "Layer" }?.submenu
+        let rasterizeItem = NSMenuItem(title: "Rasterize Layer…",
+                                       action: #selector(DocumentWindowController.rasterizeLayer(_:)),
+                                       keyEquivalent: "")
+        let restoreItem = NSMenuItem(title: "Restore Layer Source…",
+                                     action: #selector(DocumentWindowController.restoreLayerSource(_:)),
+                                     keyEquivalent: "")
+        check(layerMenu?.items.first { $0.title == "Rasterize Layer…" }?.action
+                == #selector(DocumentWindowController.rasterizeLayer(_:))
+                && layerMenu?.items.first { $0.title == "Restore Layer Source…" }?.action
+                == #selector(DocumentWindowController.restoreLayerSource(_:)),
+              "the Layer menu lists Rasterize Layer… and Restore Layer Source… on the document's selectors")
+
+        let editable = EngineSession.LayerSource(kind: .text, isRasterized: false, hasSource: true)
+        let rasterized = EngineSession.LayerSource(kind: .text, isRasterized: true, hasSource: true)
+        check(docA.layerSources[text] == editable && docA.activeLayer == text,
+              "the text layer starts editable with its source retained")
+
+        // The ordinary unconfirmed restore route still refuses.
+        let bErrors0 = errors.count
+        docB.layerCommand(.restoreSource)
+        check(errors.count == bErrors0 + 1 && docB.pendingWork == 0,
+              "layerCommand(.restoreSource) still refuses unconfirmed calls")
+
+        // Cached gating: an editable text layer offers Rasterize only.
+        check(a.validateMenuItem(rasterizeItem) && !a.validateMenuItem(restoreItem),
+              "an editable text layer offers Rasterize only")
+        docA.selectLayer(pixelLayer)
+        settle()
+        check(!a.validateMenuItem(rasterizeItem) && !a.validateMenuItem(restoreItem),
+              "an ordinary pixel layer offers neither source command")
+        docA.selectLayer(text)
+        settle()
+        check(a.validateMenuItem(rasterizeItem) && !a.validateMenuItem(restoreItem),
+              "selecting the text layer again offers Rasterize only")
+        // An effective pixel lock (own or inherited) disables the item.
+        docA.setLayerLocks(text, .pixels, to: true)
+        settle()
+        try docA.reload()
+        check(!a.validateMenuItem(rasterizeItem), "a pixel-locked text layer disables Rasterize")
+        docA.setLayerLocks(text, .pixels, to: false)
+        settle()
+        try docA.reload()
+        check(a.validateMenuItem(rasterizeItem), "unlocking re-enables Rasterize")
+
+        // Sheet Cancel changes nothing; the sheet's buttons are found by
+        // their accessibility labels, and both items disable while it is
+        // attached.
+        let undo0 = docA.undoInfo.undoCount
+        let pixels0 = try session.copyPixels(imageA, merged: true).pixels
+        a.rasterizeLayer(nil)
+        wait { a.window?.attachedSheet != nil }
+        let cancelSheet = a.window?.attachedSheet
+        check(alertButton(cancelSheet, "Rasterize") != nil && alertButton(cancelSheet, "Cancel") != nil,
+              "the rasterize sheet offers labeled Rasterize and Cancel buttons")
+        check(!a.validateMenuItem(rasterizeItem) && !a.validateMenuItem(restoreItem),
+              "both source items disable while the sheet is attached")
+        if let cancelSheet {
+            NSApp.endSheet(cancelSheet, returnCode: NSApplication.ModalResponse.alertSecondButtonReturn.rawValue)
+        }
+        spin(0.15)
+        check(docA.pendingWork == 0 && docA.undoInfo.undoCount == undo0
+                && docA.layerSources[text] == editable
+                && (try? session.copyPixels(imageA, merged: true).pixels) == pixels0,
+              "the rasterize sheet's Cancel queues nothing and changes nothing")
+
+        // Sheet Apply rasterizes only the captured explicit id: the
+        // selection is retargeted to the pixel layer while the sheet is
+        // up, and the other document stays untouched.
+        let bLayersBefore = try session.layers(imageB)
+        let bPixelsBefore = try session.copyPixels(imageB, merged: true).pixels
+        a.rasterizeLayer(nil)
+        wait { a.window?.attachedSheet != nil }
+        docA.selectLayer(pixelLayer)
+        settle()
+        check(docA.activeLayer == pixelLayer, "the selection retargets while the sheet is up")
+        endSheet(a, .alertFirstButtonReturn)
+        wait { docA.layerSources[text]?.isRasterized == true && docA.pendingWork == 0 }
+        settle()
+        check(docA.undoInfo.undoCount == undo0 + 1, "Rasterize Apply is one undo step")
+        check(docA.layerSources[text] == rasterized
+                && docA.layers.first(where: { $0.id == text })?.kind == .pixel
+                && (try? session.layerSource(text, image: imageA)) == rasterized,
+              "Apply updates the cached kind and the session oracle agrees")
+        check(docA.layerSources[pixelLayer] == .init(kind: .pixel, isRasterized: false, hasSource: false)
+                && docA.activeLayer == pixelLayer
+                && docA.layers.first(where: { $0.id == pixelLayer })?.kind == .pixel
+                && (try? session.layers(imageB)) == bLayersBefore
+                && (try? session.copyPixels(imageB, merged: true).pixels) == bPixelsBefore,
+              "retarget-before-Apply and the second document stay untouched")
+        docA.selectLayer(text)
+        settle()
+        check(!a.validateMenuItem(rasterizeItem) && a.validateMenuItem(restoreItem),
+              "after rasterize the gating flips: Restore offered, Rasterize not")
+        let sourcePixels = try session.copyPixels(imageA, merged: true).pixels
+        check(sourcePixels == pixels0, "rasterizing keeps the pixels identical")
+
+        // A pixel stroke on the rasterized layer, as one undo step.
+        docA.selectLayer(text)
+        settle()
+        let undoBeforeStroke = docA.undoInfo.undoCount
+        docA.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
+        docA.endStroke()
+        settle()
+        let paintedPixels = try session.copyPixels(imageA, merged: true).pixels
+        check(docA.undoInfo.undoCount == undoBeforeStroke + 1 && paintedPixels != sourcePixels,
+              "a stroke paints on the rasterized layer as one undo step")
+
+        // BUSY refusal: while a controlled pause holds the engine-wide
+        // gate, the explicit restore refuses before queueing, reports,
+        // and the menu item disables.
+        let gate = DispatchSemaphore(value: 0)
+        let held = EngineActivity.shared.perform(label: "Source controls hold", work: { gate.wait() },
+                                                 completion: {})
+        check(held && EngineActivity.shared.isBusy, "the controlled pause holds the engine-wide gate")
+        var busyResult: Result<Void, Error>?
+        let busyErrors = errors.count
+        docA.restoreLayerSource(text) { busyResult = $0 }
+        if case .failure(ImageDocument.DocumentError.busy) = busyResult {
+            check(docA.pendingWork == 0 && errors.count == busyErrors + 1,
+                  "a busy restore refuses without queueing and reports busy")
+        } else {
+            check(false, "a busy restore refuses with busy (got \(String(describing: busyResult)))")
+        }
+        check(!a.validateMenuItem(restoreItem), "the Restore item disables while the engine is busy")
+        gate.signal()
+        wait { !EngineActivity.shared.isBusy }
+        settle()
+
+        // The restore sheet's Cancel also changes nothing.
+        a.restoreLayerSource(nil)
+        wait { a.window?.attachedSheet != nil }
+        check(alertButton(a.window?.attachedSheet, "Restore") != nil
+                && alertButton(a.window?.attachedSheet, "Cancel") != nil,
+              "the restore sheet offers labeled Restore and Cancel buttons")
+        endSheet(a, .alertSecondButtonReturn)
+        spin(0.15)
+        check(docA.pendingWork == 0 && docA.layerSources[text] == rasterized
+                && docA.undoInfo.undoCount == undoBeforeStroke + 1,
+              "the restore sheet's Cancel queues nothing")
+
+        // Accepted input in the other document drains before the restore
+        // runs; the admitted restore stays counted until its completion.
+        docB.beginStroke(at: .init(x: 20, y: 20, pressure: 1))
+        docB.endStroke()
+        var restoreResult: Result<Void, Error>?
+        let undoBeforeRestore = docA.undoInfo.undoCount
+        docA.restoreLayerSource(text) { restoreResult = $0 }
+        check(docA.pendingWork == 1, "the admitted restore is counted in pendingWork until completion")
+        wait { restoreResult != nil && docA.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        settle()
+        if case .failure(let error) = restoreResult { check(false, "restore failed: \(error)") }
+        check(docA.undoInfo.undoCount == undoBeforeRestore + 1, "Restore is one undo step")
+        check(try session.copyPixels(imageA, merged: true).pixels == sourcePixels,
+              "Restore after a pixel stroke gives the exact source pixels")
+        check(docA.layerSources[text] == editable
+                && docA.layers.first(where: { $0.id == text })?.kind == .text
+                && (try? session.layerSource(text, image: imageA)) == editable,
+              "Restore refreshes the cached kind to editable text")
+        check((pixel(session, imageB, x: 20, y: 20)?.first ?? 255) < 128,
+              "input accepted in the other document drained before the restore ran")
+
+        // Undo brings the painted pixels back.
+        docA.undo()
+        settle()
+        check(try session.copyPixels(imageA, merged: true).pixels == paintedPixels
+                && docA.layerSources[text] == rasterized,
+              "undo restores the painted pixels and the rasterized cache")
+
+        // A deleted/stale explicit id reaches native NOT_FOUND and is
+        // never retargeted.
+        let errorsBeforeStale = errors.count
+        var staleResult: Result<Void, Error>?
+        docA.rasterizeLayerSource(424242) { staleResult = $0 }
+        wait { staleResult != nil && docA.pendingWork == 0 }
+        if case .failure(let error as EngineSession.EngineError) = staleResult {
+            check(error.isNotFound, "a stale explicit id reports native NOT_FOUND")
+        } else {
+            check(false, "a stale explicit id fails with NOT_FOUND (got \(String(describing: staleResult)))")
+        }
+        check(errors.count == errorsBeforeStale + 1 && docA.layerSources[text] == rasterized,
+              "the stale id changed nothing, was reported, and never retargeted")
+
+        // Late-close safety: a sheet still up when the document begins
+        // closing queues nothing on Apply.
+        a.restoreLayerSource(nil)
+        wait { a.window?.attachedSheet != nil }
+        var closedA = false
+        docA.closeImageWhenDrained { closedA = true }
+        let errorsBeforeLateApply = errors.count
+        endSheet(a, .alertFirstButtonReturn)
+        spin(0.2)
+        check(docA.pendingWork == 0 && errors.count == errorsBeforeLateApply,
+              "a late Apply after close queues nothing and reports nothing")
+        wait { closedA }
+        check(closedA && (try? session.info(imageA)) == nil,
+              "the late-closed document drained and its image is gone")
+        documents.items.removeAll { $0 === docA }
     }
 
     private static func exerciseGuideCache(_ session: EngineSession, documents: DocumentList) throws {

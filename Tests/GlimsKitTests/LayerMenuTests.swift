@@ -37,4 +37,15 @@ final class LayerMenuTests: XCTestCase {
         XCTAssertEqual(EngineSession.LayerCommand.fitToImage.rawValue, GLIMS_LAYER_FIT_TO_IMAGE.rawValue)
         XCTAssertEqual(EngineSession.LayerCommand.trimToContent.rawValue, GLIMS_LAYER_TRIM_TO_CONTENT.rawValue)
     }
+
+    /// The layer-source commands sit on the Layer menu, wired to the
+    /// document window's own sheet actions.
+    func testTheLayerMenuListsTheSourceCommands() {
+        let menu = MainMenu.make()
+        let layer = menu.items.first { $0.title == "Layer" }?.submenu
+        let rasterize = layer?.items.first { $0.title == "Rasterize Layer…" }
+        XCTAssertEqual(rasterize?.action, #selector(DocumentWindowController.rasterizeLayer(_:)))
+        let restore = layer?.items.first { $0.title == "Restore Layer Source…" }
+        XCTAssertEqual(restore?.action, #selector(DocumentWindowController.restoreLayerSource(_:)))
+    }
 }
