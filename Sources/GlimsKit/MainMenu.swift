@@ -88,6 +88,7 @@ enum MainMenu {
             item("Flatten Image", #selector(DocumentWindowController.flattenImage(_:))),
             item("New Snapshot", #selector(DocumentWindowController.newSnapshot(_:))),
             .separator(),
+            item("Guides…", #selector(DocumentWindowController.showGuides(_:))),
             item("Image Information…", #selector(DocumentWindowController.imageInformation(_:))),
         ])
         let newLayer = item("New Layer", #selector(DocumentWindowController.newLayer(_:)), "n")
@@ -180,6 +181,8 @@ enum MainMenu {
             item("Zoom Out", #selector(DocumentWindowController.zoomOut(_:)), "-"),
             item("Fit Image", #selector(DocumentWindowController.fitImage(_:)), "0"),
             item("Actual Pixels", #selector(DocumentWindowController.actualPixels(_:)), "1"),
+            .separator(),
+            item("Show Guides", #selector(DocumentWindowController.toggleShowGuides(_:))),
         ])
         let lastFilterSettings = item("Last Filter Settings…", #selector(DocumentWindowController.reshowLastFilter(_:)), "f")
         lastFilterSettings.keyEquivalentModifierMask = [.command, .option]
