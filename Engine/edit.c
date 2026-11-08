@@ -743,7 +743,12 @@ glims_layer_command (GlimsEngine  *engine,
       status = glims_check_item_locks (GIMP_ITEM (layer),
                                        GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, error);
       if (status != GLIMS_STATUS_OK) return status;
+      /* A link restore thaws the layer, which reloads its file through a
+       * load plug-in's nested main loop — hold busy for the duration, as
+       * the open, place and procedure paths do. */
+      engine->busy++;
       status = glims_layer_restore_source (image, layer, error);
+      engine->busy--;
       if (status != GLIMS_STATUS_OK) return status;
       break;
 
