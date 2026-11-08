@@ -1964,11 +1964,9 @@ dither_text off, rasterize under consent in one undo with sources
 retained, and undo restores both kinds; the whole block is skipped on
 3.0.8, which lacks the classes.
 
-NOT RUN: the adapter, conformance tests and everything native — this
-worktree built no engine or adapter. Only `swift build` and
-`swift build --build-tests` were run (the facade header compiles
-through CGlimsEngine). Serialization and the four-engine matrix stay
-with the root harness.
+The initial helper compiled the Swift targets only. Root subsequently
+built and ran the adapter and native suites on this same changeset, as
+recorded in the integrated validation below.
 
 Owner review retains the existing facade's REQUIRES_RASTERIZE status
 for the preservation refusal, matching profile conversion and allowing
@@ -2003,3 +2001,8 @@ field checks and the existing active-edit preservation check pass on the
 pinned engine (30 focused checks). Before this fix, the source-cache
 integration passed 399 unit tests, all-four-engine guide checks and 971
 full pinned interface checks. Follow-up review and matrix are running.
+
+Post-merge validation with Guides passes 399 unit tests, all-four-engine
+typed wrapper checks and 982 full pinned interface checks. Review also
+hardened the dither fixture against unexpected short pixel-copy results;
+comparison now requires both buffers to have the expected byte count.
