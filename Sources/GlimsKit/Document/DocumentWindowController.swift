@@ -1983,9 +1983,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // cleared and no guide action is committed; late events afterwards
         // are ignored by the gesture's captured window/document identity.
         canvas.guideDrag.cancel()
-        // A closing window likewise cancels an in-progress Move snap: the
-        // preview and indicators clear and the release commits nothing.
+        // A closing window likewise cancels an in-progress Move snap or
+        // floating move: the preview and indicators clear and the release
+        // commits nothing.
         canvas.tools.cancelMoveSnap()
+        canvas.tools.cancelFloatingMove()
         // A closing window leaves no ruler observation behind; the ruler
         // views themselves go away with the scroll view's view hierarchy.
         removeRulerObservers()

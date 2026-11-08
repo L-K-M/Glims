@@ -1157,8 +1157,10 @@ final class ImageDocument {
     /// Moves the active drawable. While its mask is the edit target the
     /// engine has no mask move — the mask's offset is part of the layer
     /// — so the gesture refuses rather than silently moving the layer.
-    /// Moving the floating selection's pixels is not implemented yet, so
-    /// it is gated with the resolve-first reason like a target switch.
+    /// An active floating selection stays gated with the resolve-first
+    /// reason here: its pixels move only through the specific captured
+    /// `moveFloatingSelection(by:completion:)`, never through this
+    /// ordinary-layer path.
     func moveActiveLayer(by offset: CGSize) {
         guard let layer = activeLayer, offset != .zero,
               !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
@@ -2219,6 +2221,58 @@ final class ImageDocument {
         enqueueTargetCommand({ session, image in
             _ = try session.floatingCommand(command, image: image, expected: expected)
         }, completion: completion)
+    }
+
+    /// Moves the pixels of the active floating selection by `offset`, as
+    /// one counted, serial input command behind every accepted edit —
+    /// one native undo step when it lands (a same-position move follows
+    /// the engine's own no-op semantics). The expected floating state
+    /// (floating id, attachment target, target kind) is captured here
+    /// from the cache and re-read FRESH on the worker immediately before
+    /// the move: if the floating selection changed or resolved meanwhile
+    /// — a Detach turns the same id into an ordinary layer — the move is
+    /// refused with no mutation and no undo, visibly through `onError`
+    /// and the completion. The attachment and the unresolved floating
+    /// state are preserved; the move never anchors, and native move
+    /// readiness/position locks stay authoritative. Unlike an ordinary
+    /// layer move this is not a target command: the floating layer stays
+    /// the paint target, so the pending-target gate only refuses edits
+    /// accepted while another command's target is still unknown.
+    func moveFloatingSelection(by offset: CGSize,
+                               completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count,
+                                                     action: "Move Floating Selection") {
+            return completion(.failure(DocumentError.multipleLayersSelected(reason)))
+        }
+        guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
+        guard !refuseWhileTargetPending() else { return completion(.failure(DocumentError.busy)) }
+        let expected = floatingState
+        let readiness = FloatingControlsLogic.floatingMoveReadiness(expected,
+            acceptsEdits: acceptsEdits, pendingTarget: !pendingTargetCommands.isEmpty)
+        guard readiness.allowed else {
+            return completion(.failure(FloatingError.refused(readiness.reason
+                ?? "The floating selection cannot be moved now.")))
+        }
+        endPendingUserEdits()
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let result = Result<Void, Error> {
+                // Fresh read on the worker, immediately before the move:
+                // the captured id must still be the active floating
+                // selection with the same attachment — never a detached
+                // ordinary layer reusing the id.
+                let fresh = try session.floatingSelection(image)
+                guard FloatingControlsLogic.floatingStateStillMatches(expected: expected, fresh: fresh) else {
+                    throw FloatingError.refused("The floating selection changed before the move, so nothing was moved.")
+                }
+                try session.moveLayer(expected.floating, image: image, by: offset)
+            }
+            DispatchQueue.main.async {
+                if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                try? self.reload()
+                completion(result)
+            }
+        }
     }
 
     // MARK: Files
