@@ -29,6 +29,9 @@ enum MainMenu {
             item("Save a Copy…", #selector(DocumentWindowController.saveDocumentCopy(_:))),
             item("Export…", #selector(DocumentWindowController.exportDocument(_:)), "E"),
             item("Export Again…", #selector(DocumentWindowController.repeatExport(_:)), "e"),
+            .separator(),
+            item("Page Setup…", #selector(DocumentWindowController.runGlimsPageSetup(_:)), "P"),
+            item("Print…", #selector(DocumentWindowController.printGlimsImage(_:)), "p"),
         ])
         add(menu, "Edit", [
             // Answered by the key window from its undo manager.

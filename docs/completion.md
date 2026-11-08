@@ -110,3 +110,16 @@ center. The actual canvas in a simulated 2x window failed on the old scale
 and pointer mapping, then passed with the corrected implementation. The
 110 unit tests and 120 pinned-engine interface checks pass. Real Retina
 hardware was not available for an on-screen check.
+
+Printing: File ▸ Page Setup… edits a per-document NSPrintInfo through the
+standard sheet; File ▸ Print… (⌘P) flushes pending strokes, text and field
+commits, then renders the committed composite into an immutable snapshot in
+bounded stripes behind accepted input on the exclusive engine queue, sized
+to the imageable area at 300 dpi under fixed pixel caps. The snapshot drives
+a one-page NSView whose own drawing composites the image over white paper —
+no canvas checks, overlays or palettes — through NSPrintOperation's document
+sheet, and AppKit's PDF write produced the same page with the queued stroke
+in place. A second Print during a job is refused, a close requested while
+the snapshot renders drops the job, and printing never adds an undo step or
+touches file identity. On-screen panel and physical-printer behavior were
+not exercised.
