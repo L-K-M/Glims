@@ -167,6 +167,12 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
             stack.addArrangedSubview(slider("Stroke", 1...200, state.pathLineWidth, unit: "px", fractionDigits: 1) { value in
                 ToolState.shared.pathLineWidth = value
             })
+            stack.addArrangedSubview(slider("Fill opacity", 0...100, state.pathFillOpacity * 100, unit: "%") { value in
+                ToolState.shared.pathFillOpacity = value / 100
+            })
+            stack.addArrangedSubview(checkbox("Antialias fill", state.pathFillAntialias) { on in
+                ToolState.shared.pathFillAntialias = on
+            })
             stack.addArrangedSubview(hint("Click to add corners, drag for curves; click the first anchor to "
                 + "close. Drag anchors and handles to reshape (Option-drag an anchor pulls out handles). "
                 + "Shift-click starts a new subpath; Return ends one; Delete removes the selected anchor."))

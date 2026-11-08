@@ -6,7 +6,9 @@ import RigiUI
 /// hides it on the canvas; double-clicking the name renames it. The button
 /// bar and the title bar menu add an empty path, make the selected one's
 /// area the selection, draw it on the active layer in the foreground color
-/// at the Path tool's stroke width, and delete it.
+/// at the Path tool's stroke width, fill its area on the current paint
+/// target in the foreground color, turn it into a vector layer, and delete
+/// it.
 @MainActor
 final class PathsPaletteController: NSViewController, PaletteContent, PaletteEditScope.Content,
                                      NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate,
@@ -22,7 +24,7 @@ final class PathsPaletteController: NSViewController, PaletteContent, PaletteEdi
 
     /// The palette's commands.
     enum Command: Int, CaseIterable {
-        case new, delete, toSelection, stroke
+        case new, delete, toSelection, stroke, fill, toVectorLayer
 
         /// SF Symbols names, first available wins.
         var symbolNames: [String] {
@@ -31,17 +33,32 @@ final class PathsPaletteController: NSViewController, PaletteContent, PaletteEdi
             case .delete: return ["trash"]
             case .toSelection: return ["rectangle.dashed", "lasso"]
             case .stroke: return ["scribble", "pencil"]
+            case .fill: return ["paintbucket.fill", "paintbucket"]
+            case .toVectorLayer: return ["pencil.and.ruler.fill", "pencil.and.ruler"]
             }
         }
 
-        /// The command's name in the palette's menu, as its button's tool
-        /// tip and to VoiceOver.
+        /// The command's name in the palette's menu.
         var menuTitle: String {
             switch self {
             case .new: return "New Path"
             case .delete: return "Delete Path"
             case .toSelection: return "Path to Selection"
             case .stroke: return "Stroke Path"
+            case .fill: return "Fill Path"
+            case .toVectorLayer: return "To Vector Layer"
+            }
+        }
+
+        /// The button's tool tip and VoiceOver text: the menu title, plus
+        /// for To Vector Layer what the new layer honestly starts as —
+        /// the engine's default style, not the foreground color.
+        var toolTip: String {
+            switch self {
+            case .toVectorLayer:
+                return "Create a vector layer with white fill and black stroke."
+            default:
+                return menuTitle
             }
         }
     }
@@ -49,7 +66,7 @@ final class PathsPaletteController: NSViewController, PaletteContent, PaletteEdi
     private weak var document: ImageDocument?
     private let table = NSTableView()
     private lazy var buttonBar = ClassicPaletteButtonBar(
-        items: [Command.new, .toSelection, .stroke].map(barItem),
+        items: [Command.new, .toSelection, .stroke, .fill, .toVectorLayer].map(barItem),
         trailingItems: [barItem(.delete)])
     private var reloading = false
 
@@ -82,7 +99,7 @@ final class PathsPaletteController: NSViewController, PaletteContent, PaletteEdi
             .compactMap { NSImage(systemSymbolName: $0, accessibilityDescription: command.menuTitle) }
             .first ?? NSImage()
         image.isTemplate = true
-        return ClassicPaletteButtonBar.Item(id: "\(command)", title: command.menuTitle, image: image) { [weak self] in
+        return ClassicPaletteButtonBar.Item(id: "\(command)", title: command.toolTip, image: image) { [weak self] in
             self?.run(command)
         }
     }
@@ -91,10 +108,13 @@ final class PathsPaletteController: NSViewController, PaletteContent, PaletteEdi
     var paletteMenu: NSMenu? {
         let menu = NSMenu(title: "Paths")
         for command in Command.allCases {
-            if command == .toSelection { menu.addItem(.separator()) }
+            if command == .toSelection || command == .fill { menu.addItem(.separator()) }
             let item = NSMenuItem(title: command.menuTitle, action: #selector(runMenuCommand(_:)), keyEquivalent: "")
             item.target = self
             item.tag = command.rawValue
+            if command == .toVectorLayer {
+                item.toolTip = command.toolTip
+            }
             menu.addItem(item)
         }
         return menu
@@ -114,7 +134,13 @@ final class PathsPaletteController: NSViewController, PaletteContent, PaletteEdi
 
     private func isEnabled(_ command: Command) -> Bool {
         guard let document else { return false }
-        return command == .new || document.activePath != nil
+        if command == .new { return true }
+        guard document.activePath != nil else { return false }
+        // To Vector Layer needs an engine with vector layers (GIMP 3.2+);
+        // a version that does not say lets the facade's own UNSUPPORTED
+        // answer report it when the command runs.
+        if command == .toVectorLayer { return document.supportsVectorLayers != false }
+        return true
     }
 
     func retarget(to target: ImageDocument?) {
@@ -172,6 +198,10 @@ final class PathsPaletteController: NSViewController, PaletteContent, PaletteEdi
             document.selectFromPath(path)
         case .stroke:
             document.strokePath(path, settings: ToolState.shared.pathLine)
+        case .fill:
+            document.fillPath(path, settings: ToolState.shared.pathFill)
+        case .toVectorLayer:
+            document.toVectorLayer(path)
         }
     }
 
