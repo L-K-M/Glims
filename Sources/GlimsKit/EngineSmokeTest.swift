@@ -102,6 +102,7 @@ enum EngineSmokeTest {
             try exerciseLayerTree(session, documents: documents)
             try exerciseLayerMasks(session, documents: documents)
             try exerciseChannelBindings(session, work: work)
+            try exerciseChannelTargets(session, documents: documents)
             try exerciseTargetCommands(session, documents: documents)
             try exerciseTargetHistory(session, documents: documents)
             try exercisePreferences(session, documents: documents)
@@ -1407,6 +1408,186 @@ enum EngineSmokeTest {
     /// masks, Copy/Clear targeting, mask-to-selection, apply and undo,
     /// group masks, filter preview on a mask, and the refusals for edits
     /// a mask cannot take.
+    /// A layer pick must leave a channel even when that layer was already
+    /// selected natively. Otherwise implicit fills still edit the channel.
+    private static func exerciseChannelTargets(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Channel Targets")
+        documents.items.append(document)
+        defer {
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        func settle() { document.inputQueue.sync {}; spin() }
+        func sample(_ drawable: Int32, _ x: Int, _ y: Int) -> [UInt8]? {
+            guard let cg = try? session.drawableThumbnail(drawable, image: image, maxSize: 64),
+                  let data = cg.dataProvider?.data as Data? else { return nil }
+            let offset = (y * cg.width + x) * 4
+            guard offset + 4 <= data.count else { return nil }
+            return Array(data[offset..<offset + 4])
+        }
+        guard let layer = document.activeLayer else { return }
+        try session.select(.rectangle(CGRect(x: 20, y: 20, width: 24, height: 24)),
+                           image: image, options: .init())
+        let channel = try session.channelFromSelection(image, name: "Saved area")
+        try session.select(.none, image: image)
+        try document.reload()
+        check(document.activeDrawable == channel,
+              "the document reports the native selected channel as its paint target")
+        document.selectLayer(layer)
+        document.fill(at: .zero, mode: .selection, color: .red, threshold: 0, sampleMerged: false)
+        settle()
+        check((try session.channels(image)).allSatisfy { !$0.isSelected },
+              "picking the already-selected layer explicitly leaves the saved channel")
+        check(sample(layer, 8, 8).map { $0[0] > 230 && $0[1] < 30 && $0[2] < 30 } == true,
+              "a fill after returning from a channel paints the layer")
+        check(sample(channel, 8, 8).map { $0[0] < 20 } == true,
+              "returning to the layer preserves the saved channel pixels")
+
+        document.selectChannel(channel)
+        check(document.activeDrawable == channel && document.activeChannel == channel && !document.isMaskTargetActive,
+              "a channel pick immediately mirrors its own drawable rather than a layer mask")
+        document.fill(at: .zero, mode: .selection, color: .white, threshold: 0, sampleMerged: false)
+        settle()
+        check(sample(channel, 8, 8).map { $0[0] > 230 } == true
+                && sample(layer, 8, 8).map { $0[1] < 30 } == true,
+              "a queued fill paints the saved channel and preserves the red layer")
+        document.addMask(layer, source: .white, edit: true)
+        settle()
+        guard let mask = document.maskStates[layer]?.mask else {
+            check(false, "Add Mask creates an edit target while a channel is selected")
+            return
+        }
+        let channelsAfterMask = try session.channels(image)
+        check(document.activeDrawable == mask && document.isMaskTargetActive
+                && document.activeChannel == nil && channelsAfterMask.allSatisfy { !$0.isSelected },
+              "adding an editing mask leaves the saved channel")
+        document.selectChannel(channel)
+        document.editMask(layer)
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        settle()
+        check(sample(mask, 8, 8).map { $0[0] < 20 } == true
+                && sample(channel, 8, 8).map { $0[0] > 230 } == true,
+              "a channel-to-mask pick routes the immediately queued fill to the mask")
+
+        let gate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { gate.wait() }
+        document.selectChannel(channel)
+        document.selectLayer(layer)
+        document.selectChannel(channel)
+        try document.reload()
+        check(document.activeDrawable == channel && document.channels.first(where: { $0.id == channel })?.isSelected == true,
+              "a reload preserves the newest queued channel pick")
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        gate.signal()
+        settle()
+        check(document.activeChannel == channel && sample(channel, 8, 8).map { $0[0] < 20 } == true,
+              "rapid channel/layer/channel picks finish on the last target")
+        let positionBefore = try session.layers(image).first { $0.id == layer }?.bounds
+        document.moveActiveLayer(by: CGSize(width: 8, height: 3))
+        document.transformActiveLayer(.flipHorizontal)
+        settle()
+        check((try session.layers(image).first { $0.id == layer }?.bounds) == positionBefore
+                && errors.contains(where: { $0.contains("Return to Layers") }),
+              "channel-target move and transform refuse without changing the remembered layer")
+
+        // Delete after the cached row was read, before the pick lands.
+        document.run { session, image in
+            _ = try session.channelCommand(.delete, channel: channel, image: image)
+        }
+        document.selectChannel(channel)
+        document.fill(at: .zero, mode: .selection, color: .white, threshold: 0, sampleMerged: false)
+        settle()
+        check(document.activeDrawable == nil && errors.contains(where: { $0.contains("target") }),
+              "a removed-channel pick refuses queued pixel edits rather than falling back")
+        document.setComponentVisible(.blue, to: false)
+        document.setComponentVisible(.blue, to: true)
+        settle()
+        check(document.activeDrawable == nil,
+              "display-only component toggles cannot reopen a refused paint target")
+        document.saveSelectionToChannel(name: "Recovered target")
+        check(document.activeDrawable == nil, "creating a channel gates drawable capture until its id is known")
+        settle()
+        guard let recovered = document.activeChannel else {
+            check(false, "a successful new channel recovers a refused paint target")
+            return
+        }
+        document.fill(at: .zero, mode: .selection, color: .white, threshold: 0, sampleMerged: false)
+        settle()
+        check(sample(recovered, 8, 8).map { $0[0] > 230 } == true
+                && sample(layer, 8, 8).map { $0[1] < 30 } == true,
+              "the recovered target receives paint while the layer stays intact")
+        document.changeChannel(recovered, .init(isVisible: true))
+        document.changeChannel(recovered, .init(isVisible: false))
+        try document.reload()
+        check(document.channels.first(where: { $0.id == recovered })?.isVisible == false,
+              "a reload keeps the latest queued channel visibility choice")
+        settle()
+        check((try session.channels(image)).first(where: { $0.id == recovered })?.isVisible == false,
+              "rapid channel visibility toggles finish at the latest value")
+
+        document.setComponentActive(.red, to: false)
+        document.setComponentActive(.red, to: true)
+        try document.reload()
+        check(document.components?.active.contains(.red) == true,
+              "component editing mirrors the last queued toggle through reloads")
+        settle()
+        let componentsAfterPick = try session.components(image)
+        check(document.activeChannel == nil && componentsAfterPick.active.contains(.red),
+              "changing editable components returns painting from channels to layers")
+        document.selectLayer(layer)
+        settle()
+        // Mask display is not a layer-pixel edit; leave its black pixels
+        // intact while checking that only the red component changes.
+        document.setComponentActive(.green, to: false)
+        document.setComponentActive(.blue, to: false)
+        settle()
+        document.fill(at: .zero, mode: .selection, color: .cyan, threshold: 0, sampleMerged: false)
+        settle()
+        check(sample(layer, 8, 8).map { $0[0] < 30 && $0[1] < 30 && $0[2] < 30 } == true,
+              "a component-limited fill changes red without writing green or blue")
+        document.setComponentActive([.green, .blue], to: true)
+        settle()
+
+        let quickGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { quickGate.wait() }
+        document.setQuickMask(true)
+        check(document.quickMaskState?.enabled == true && document.activeDrawable == nil,
+              "Quick Mask mirrors its toggle while the new target id is pending")
+        document.selectLayer(layer)
+        quickGate.signal()
+        settle()
+        check(document.quickMaskState?.enabled == true && document.activeDrawable == layer,
+              "a later known layer pick wins a queued Quick Mask creation")
+        document.setQuickMask(false)
+        settle()
+        document.setQuickMask(true)
+        document.setQuickMask(false)
+        try document.reload()
+        check(document.quickMaskState?.enabled == false,
+              "rapid Quick Mask toggles mirror the final off choice")
+        settle()
+        check(!(try session.quickMask(image)).enabled && document.quickMaskState?.enabled == false,
+              "rapid Quick Mask toggles finish with no live mask channel")
+        document.setQuickMask(true)
+        settle()
+        guard let quickChannel = document.activeChannel else {
+            check(false, "Quick Mask becomes the document's channel paint target")
+            return
+        }
+        document.fill(at: .zero, mode: .selection, color: .white, threshold: 0, sampleMerged: false)
+        settle()
+        check(document.activeDrawable == quickChannel && sample(quickChannel, 8, 8).map { $0[0] > 230 } == true,
+              "painting on Quick Mask changes its channel pixels")
+        document.setQuickMask(false)
+        settle()
+        let bounds = try session.selectionBounds(image: image)
+        check(bounds == CGRect(x: 0, y: 0, width: 64, height: 64),
+              "turning off a painted Quick Mask converts it into the selection")
+    }
+
     private static func exerciseLayerMasks(_ session: EngineSession, documents: DocumentList) throws {
         let image = try session.newImage(width: 64, height: 64)
         let document = try ImageDocument(session: session, image: image, name: "Masks")
