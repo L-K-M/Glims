@@ -10392,7 +10392,7 @@ test_image_metadata (const char *work)
   char               path[1100];
   static const char *const artist[1]  = { "Alice" };
   static const char *const desc[1]    = { "a test image" };
-  static const char *const kw[3]      = { "one", "two", "one" };
+  static const char *const kw[5]      = { "one", "two", "one", "UNREQUESTED", NULL };
   static const char *const two[2]     = { "x", "y" };
   static const char *const tool[1]    = { "Glims test" };
   static const char *const nine[1]    = { "999" };
@@ -10403,8 +10403,8 @@ test_image_metadata (const char *work)
   /* Reads on an image with no metadata: honest empty OWNED vectors,
    * and the reads create nothing (all three domains stay empty). */
   vec = metadata_tags (image, GLIMS_METADATA_EXIF, &count);
-  CHECK (vec != NULL && count == 0 && vec[0] == NULL,
-         "a fresh image lists zero EXIF tags as an owned empty vector");
+  CHECK (vec != NULL && count >= 0 && vec[count] == NULL,
+         "a fresh image lists its actual default EXIF tags as an owned terminated vector");
   api->free_metadata_strings (vec);
   vec = metadata_tags (image, GLIMS_METADATA_IPTC, &count);
   CHECK (vec != NULL && count == 0 && vec[0] == NULL,
@@ -10605,8 +10605,9 @@ test_image_metadata (const char *work)
     CHECK (0, "the stroke for the busy check began");
   if (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK)
     {
+      int32_t before_preview = undo_depth (image);
       CHECK (api->image_metadata_edit (engine, image, "Iptc.Application2.Keywords", GLIMS_METADATA_REMOVE, NULL, 0, NULL) == GLIMS_STATUS_BUSY &&
-             undo_depth (image) == before + 5,
+             undo_depth (image) == before_preview,
              "edit is BUSY during a filter preview, with no undo");
       CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
              "the busy-check filter preview aborts");

@@ -250,6 +250,95 @@ glims_image_metadata_values (GlimsEngine *engine,
   return GLIMS_STATUS_OK;
 }
 
+/* Compare complete native metadata before trusting the engine's XML
+ * duplicate. Its serializer can cap ancestor arrays or shorten tag names.
+ * EXIF/IPTC use raw values; XMP compares the complete generated packet so
+ * language qualifiers and container structure remain part of the check.
+ * A comparison error fails closed: it never authorizes a replacement. */
+static gboolean
+metadata_equal_native (GimpMetadata *left, GimpMetadata *right)
+{
+  guint domain;
+  if (! left || ! right)
+    return left == right;
+  for (domain = 0; domain < 3; domain++)
+    {
+      gchar **a = domain == 0 ? gexiv2_metadata_get_exif_tags (GEXIV2_METADATA (left)) :
+                  domain == 1 ? gexiv2_metadata_get_iptc_tags (GEXIV2_METADATA (left)) :
+                                gexiv2_metadata_get_xmp_tags (GEXIV2_METADATA (left));
+      gchar **b = domain == 0 ? gexiv2_metadata_get_exif_tags (GEXIV2_METADATA (right)) :
+                  domain == 1 ? gexiv2_metadata_get_iptc_tags (GEXIV2_METADATA (right)) :
+                                gexiv2_metadata_get_xmp_tags (GEXIV2_METADATA (right));
+      guint n = a ? g_strv_length (a) : 0;
+      gboolean equal = n == (b ? g_strv_length (b) : 0);
+      guint index;
+      for (index = 0; equal && index < n; index++)
+        {
+          GError *failure = NULL;
+          GBytes *raw_a, *raw_b;
+          equal = ! strcmp (a[index], b[index]);
+          if (! equal || domain == 2)
+            continue;
+          /* Core normalizes these image facts and can store the same
+           * number with a different EXIF integer width on duplication. */
+          if (domain == 0 && metadata_tag_protected (a[index]))
+            {
+              gchar **values_a = gexiv2_metadata_try_get_tag_multiple (GEXIV2_METADATA (left), a[index], &failure);
+              gchar **values_b = NULL;
+              if (! failure)
+                values_b = gexiv2_metadata_try_get_tag_multiple (GEXIV2_METADATA (right), b[index], &failure);
+              equal = ! failure && values_a && values_b &&
+                      g_strv_equal ((const gchar * const *) values_a, (const gchar * const *) values_b);
+              g_clear_error (&failure);
+              g_strfreev (values_a);
+              g_strfreev (values_b);
+              continue;
+            }
+          raw_a = gexiv2_metadata_try_get_tag_raw (GEXIV2_METADATA (left), a[index], &failure);
+          if (failure || ! raw_a)
+            {
+              g_clear_error (&failure);
+              if (raw_a) g_bytes_unref (raw_a);
+              equal = FALSE;
+              break;
+            }
+          raw_b = gexiv2_metadata_try_get_tag_raw (GEXIV2_METADATA (right), b[index], &failure);
+          equal = ! failure && raw_b && g_bytes_equal (raw_a, raw_b);
+          g_clear_error (&failure);
+          g_bytes_unref (raw_a);
+          if (raw_b) g_bytes_unref (raw_b);
+        }
+      if (equal && domain == 2 && n > 0)
+        {
+          GError *failure = NULL;
+          gchar *packet_a, *packet_b;
+          GExiv2XmpFormatFlags flags = GEXIV2_OMIT_PACKET_WRAPPER |
+                                       GEXIV2_USE_COMPACT_FORMAT |
+                                       GEXIV2_OMIT_ALL_FORMATTING;
+          packet_a = gexiv2_metadata_try_generate_xmp_packet (GEXIV2_METADATA (left), flags, 0, &failure);
+          if (failure || ! packet_a)
+            {
+              g_clear_error (&failure);
+              g_free (packet_a);
+              equal = FALSE;
+            }
+          else
+            {
+              packet_b = gexiv2_metadata_try_generate_xmp_packet (GEXIV2_METADATA (right), flags, 0, &failure);
+              equal = ! failure && packet_b && ! strcmp (packet_a, packet_b);
+              g_clear_error (&failure);
+              g_free (packet_a);
+              g_free (packet_b);
+            }
+        }
+      g_strfreev (a);
+      g_strfreev (b);
+      if (! equal)
+        return FALSE;
+    }
+  return TRUE;
+}
+
 GlimsStatus
 glims_image_metadata_edit (GlimsEngine        *engine,
                            GlimsImageID        id,
@@ -361,6 +450,12 @@ glims_image_metadata_edit (GlimsEngine        *engine,
   copy = current ? gimp_metadata_duplicate (current) : gimp_metadata_new ();
   if (! copy)
     return glims_fail (error, NULL, "The image metadata could not be duplicated.");
+  if (current && ! metadata_equal_native (current, copy))
+    {
+      g_object_unref (copy);
+      if (error) *error = strdup ("This metadata cannot be copied without changing unrelated tags; the image was left untouched.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
 
   /* A NEW Xmp Bag/Seq/Alt tag needs a chosen container type, which a
    * bare string vector cannot supply; existing containers are edited
@@ -458,8 +553,17 @@ glims_image_metadata_edit (GlimsEngine        *engine,
   if (operation == GLIMS_METADATA_REMOVE)
     ok = gexiv2_metadata_try_clear_tag (GEXIV2_METADATA (copy), tag, &gerror);
   else if (is_container || count > 1)
-    ok = gexiv2_metadata_try_set_tag_multiple (GEXIV2_METADATA (copy), tag,
-                                               (const gchar **) values, &gerror);
+    {
+      /* The facade input is count-bounded. GExiv2 consumes a strv, so
+       * supply our own terminator rather than reading past the caller's
+       * last pointer. The native setter copies the strings synchronously. */
+      const gchar **terminated = g_new0 (const gchar *, (gsize) count + 1);
+      for (i = 0; i < count; i++)
+        terminated[i] = values[i];
+      ok = gexiv2_metadata_try_set_tag_multiple (GEXIV2_METADATA (copy), tag,
+                                                terminated, &gerror);
+      g_free (terminated);
+    }
   else
     ok = gexiv2_metadata_try_set_tag_string (GEXIV2_METADATA (copy), tag,
                                              values[0], &gerror);
@@ -471,6 +575,26 @@ glims_image_metadata_edit (GlimsEngine        *engine,
       g_object_unref (copy);
       return status;
     }
+
+  /* Canonical native values can make an apparent string edit a no-op. */
+  if (current && metadata_equal_native (current, copy))
+    {
+      g_object_unref (copy);
+      return GLIMS_STATUS_OK;
+    }
+  /* Undo and XCF also use the native duplicate/serialization path. Do not
+   * create metadata that cannot survive that path without changing it. */
+  {
+    GimpMetadata *roundtrip = gimp_metadata_duplicate (copy);
+    gboolean preserved = roundtrip && metadata_equal_native (copy, roundtrip);
+    if (roundtrip) g_object_unref (roundtrip);
+    if (! preserved)
+      {
+        g_object_unref (copy);
+        if (error) *error = strdup ("This change cannot preserve all metadata through Undo and save; the image was left untouched.");
+        return GLIMS_STATUS_UNSUPPORTED;
+      }
+  }
 
   /* The single native setter: takes its own reference on the copy and
    * pushes exactly one GIMP_UNDO_IMAGE_METADATA step (the copy is never

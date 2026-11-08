@@ -2788,6 +2788,7 @@ final class EngineSession: @unchecked Sendable {
     /// NOT_FOUND. Language-alternative (Xmp LangAlt) tags report their
     /// alternative texts without the xml:lang qualifiers.
     func metadataValues(_ image: Int32, tag: String) throws -> [String] {
+        try Self.validateMetadataStrings(tag: tag, values: [])
         var result: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
         var count: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
@@ -2809,6 +2810,7 @@ final class EngineSession: @unchecked Sendable {
     /// metadata change), XMP language alternatives and new XMP
     /// Bag/Seq/Alt containers.
     func editMetadata(_ image: Int32, tag: String, _ operation: MetadataEdit, values: [String] = []) throws {
+        try Self.validateMetadataStrings(tag: tag, values: values)
         // The facade takes a NULL-terminated-agnostic `const char *const *`:
         // marshal the Swift strings as C strings for the duration of the
         // synchronous call only; nothing is retained by the engine.
@@ -2825,6 +2827,16 @@ final class EngineSession: @unchecked Sendable {
             let base = buffer.isEmpty ? nil : buffer.baseAddress
             try check(api.image_metadata_edit(engine, image, tag, operation.rawValue,
                                              base, Int32(buffer.count), &error), error)
+        }
+    }
+
+    /// C strings cannot represent embedded NULs; reject them before any
+    /// bridge allocation or native call can silently shorten the request.
+    static func validateMetadataStrings(tag: String, values: [String]) throws {
+        guard !tag.utf8.contains(0), !values.contains(where: { $0.utf8.contains(0) }),
+              values.count <= Int(Int32.max) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Metadata tags and values cannot contain a NUL character, and the value count must fit the engine interface.")
         }
     }
 

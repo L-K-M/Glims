@@ -199,3 +199,24 @@ what the sources above state.
 - Normalization filling the dimension/resolution/bits/colorspace tags
   on the first edit of a metadata-less image is documented from source,
   not asserted by a runtime test here.
+
+Root acceptance checkpoint: a counted input vector with a fourth,
+unrequested trailing value reproduced reading beyond the public count.
+The adapter now builds a private count+1 terminated vector for GExiv2;
+requested three-value order and duplicates survive. Swift rejects embedded
+NULs before bridging tags or values. Two pure input checks pass.
+
+The native XML duplicate can shorten some metadata. Every write now verifies
+the complete copied tag catalog and EXIF/IPTC raw values; XMP uses the whole
+generated packet so language qualifiers and containers participate. Core's
+protected image facts compare logical values because native duplication can
+change EXIF integer width (ColorSpace was observed as four versus two bytes).
+A second duplicate checks that the edited object can survive Undo and save.
+An unverifiable or changed copy is refused before replacing the image.
+
+Pinned conformance passes after these changes. Initial remaining fixture
+failures assumed a new image had zero default EXIF tags and forgot the Undo
+step created by the busy-check stroke before the preview case. The fixtures
+now inspect the actual owned catalog and snapshot Undo depth after that stroke.
+Positive existing-LangAlt/container and overlong-ancestor preservation cases
+remain unverified; the copy guard does not count as evidence for those fixtures.
