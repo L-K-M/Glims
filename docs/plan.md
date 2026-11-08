@@ -1186,3 +1186,25 @@ native interface assertions: the Swift getter left the caller's output
 struct_size at zero, so the facade correctly refused every style snapshot.
 The getter now initializes its output size before the call. A full native
 interface rerun follows; compilation alone did not establish this workflow.
+
+After integration with the merged ICC/vector loader fixes, resource previews
+pass 941 native checks on 3.2.8, 3.2.0 and master, and 881 on 3.0.8. The
+Swift build, 308 unit tests, complete pinned interface smoke and older-table
+ABI refusal regression pass. Native preview and Swift ownership reviews
+found no important issues. Native context colors remain opaque; resource
+alpha is preserved in the straight-alpha output.
+
+Final integrated native vector style runs pass 979 checks on 3.2.8, 3.2.0
+and master, and 884 on 3.0.8. The preserved ICC/load guard fixes keep imported
+paths in their destination and retain raster edits; style changes keep
+fractional float32 XCF width/miter values and avoid empty undo on reapplying
+the displayed values. Native style colors stay opaque sRGB. The sheet is a
+separate interface slice, with independent wrapper/runtime verification.
+
+The completed style interface passes 322 unit tests and 790/764/790/790
+interface checks across the four engines, including actual fill/outline
+pixels, undo and XCF persistence. The remaining three refusal failures were
+fixture errors: window construction replaced the test error callback, and
+the invalid-width case had its stroke disabled. Correcting the fixture
+makes invalid input, busy-engine and removed-target checks pass. Follow-up
+independent review found no important issues.
