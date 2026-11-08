@@ -16,16 +16,14 @@
 #include "core/gimplayer-new.h"
 #include "core/gimpselection.h"
 
-#define MAX_CLIPBOARD_BYTES ((uint64_t) 512 * 1024 * 1024)
-
-static gboolean
-pixel_bytes (int width, int height, size_t *bytes)
+gboolean
+glims_pixel_bytes (int width, int height, size_t *bytes)
 {
   uint64_t count;
   if (width < 1 || height < 1 || width > GIMP_MAX_IMAGE_SIZE || height > GIMP_MAX_IMAGE_SIZE)
     return FALSE;
   count = (uint64_t) width * height * 4;
-  if (count > MAX_CLIPBOARD_BYTES || count > SIZE_MAX)
+  if (count > GLIMS_MAX_PIXEL_BUFFER_BYTES || count > SIZE_MAX)
     return FALSE;
   *bytes = (size_t) count;
   return TRUE;
@@ -53,7 +51,7 @@ glims_image_from_pixels (GlimsEngine *engine, int32_t width, int32_t height,
   GimpLayer *layer;
 
   if (out) *out = 0;
-  if (! out || ! pixels || ! pixel_bytes (width, height, &bytes) || bytes != byte_count)
+  if (! out || ! pixels || ! glims_pixel_bytes (width, height, &bytes) || bytes != byte_count)
     return GLIMS_STATUS_INVALID_ARGUMENT;
   if (engine->busy > 0) return GLIMS_STATUS_BUSY;
 
@@ -114,7 +112,7 @@ glims_image_copy_pixels (GlimsEngine *engine, GlimsImageID id, gboolean merged,
       width = x2 - x; height = y2 - y;
       pickables.data = drawable;
     }
-  if (! pixel_bytes (width, height, &bytes))
+  if (! glims_pixel_bytes (width, height, &bytes))
     return glims_fail (error, NULL, "The selected pixels are empty or too large for the clipboard.");
 
   buffer = gimp_selection_extract (GIMP_SELECTION (gimp_image_get_mask (image)), &pickables,
@@ -123,7 +121,7 @@ glims_image_copy_pixels (GlimsEngine *engine, GlimsImageID id, gboolean merged,
   if (! buffer)
     return glims_fail (error, gerror, "The selected pixels could not be copied.");
   width = gegl_buffer_get_width (buffer); height = gegl_buffer_get_height (buffer);
-  if (! pixel_bytes (width, height, &bytes))
+  if (! glims_pixel_bytes (width, height, &bytes))
     { g_object_unref (buffer); return GLIMS_STATUS_INVALID_ARGUMENT; }
   result->pixels = g_try_malloc (bytes);
   if (! result->pixels)
@@ -185,7 +183,7 @@ glims_image_paste_pixels (GlimsEngine *engine, GlimsImageID id, GlimsRect bounds
   if (result) *result = 0;
   if (! open) return GLIMS_STATUS_NOT_FOUND;
   if (engine->busy > 0) return GLIMS_STATUS_BUSY;
-  if (! pixels || ! pixel_bytes (bounds.width, bounds.height, &bytes) || bytes != byte_count ||
+  if (! pixels || ! glims_pixel_bytes (bounds.width, bounds.height, &bytes) || bytes != byte_count ||
       bounds.x < -GIMP_MAX_IMAGE_SIZE || bounds.x > GIMP_MAX_IMAGE_SIZE ||
       bounds.y < -GIMP_MAX_IMAGE_SIZE || bounds.y > GIMP_MAX_IMAGE_SIZE)
     return GLIMS_STATUS_INVALID_ARGUMENT;
