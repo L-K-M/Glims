@@ -1,0 +1,378 @@
+# Glims Help
+
+Glims is a native macOS image editor built on the GIMP image engine. This
+manual describes what Glims does today and how to drive it from the
+keyboard and the mouse.
+
+This window is searchable: type into the search field and Glims selects
+the first match; press Return to step to the next one, wrapping at the
+end of the manual. The section pop-up above the text shows one topic at
+a time. Help > Keyboard & Mouse Reference jumps straight to the key
+tables.
+
+The image engine behind Glims is GIMP; its own user manual is on the
+web. See "Engine Manual" at the end of this manual for the link.
+
+# The Workspace
+
+Every image opens in its own window. The image sits on a neutral
+surround whose gray you choose in Preferences. Along the bottom of the
+window a status strip shows messages on the left and the zoom on the
+right.
+
+Five palettes hold the controls:
+
+  Tools        the tool buttons, two columns.
+  Tool Options the settings of the current tool.
+  Layers       the image's layers and groups.
+  Paths        the image's vector paths.
+  History      the edit history and snapshots.
+
+Palettes always follow the front image. The Window menu shows and
+hides them by name, Hide Palettes (which becomes Show Palettes) hides
+them all, and Reset Palettes returns them to their default layout.
+With the canvas focused, Tab hides every palette and Shift-Tab hides
+all but Tools; pressing either key again brings them back. While a
+text field has focus, Tab stays with the field.
+
+Window > Workspaces saves named palette layouts: choose a saved name to
+apply that layout, Save Workspace… names the current arrangement (and
+asks before replacing a saved one), and Delete Workspace removes saved
+layouts.
+
+# Opening, Saving and Exporting
+
+File > New… (Command-N) creates a new image of a size you choose.
+File > Open… (Command-O) opens image files; XCF files keep all their
+layers. Open Recent lists the documents you opened lately. Close
+(Command-W) closes the front image, asking first when it has unsaved
+changes and naming the file Save would write.
+
+Saving and exporting are two separate jobs:
+
+  Save (Command-S) writes the layered XCF working file, and nothing
+  else. Save As… (Shift-Command-S) saves the image under a new XCF
+  name. Save a Copy… writes an XCF copy without changing the file you
+  are editing.
+
+  Export… (Shift-Command-E) writes a finished image as PNG, JPEG or
+  TIFF. After exporting once, File > Export Again… (Command-E) reads
+  "Export to name.png" and overwrites that file with the current
+  image.
+
+Exporting never marks the document saved; only Save does. The window
+title and the close prompt always name the XCF file that Save writes.
+
+# Editing and the Clipboard
+
+Edit > Undo (Command-Z) and Redo (Shift-Command-Z) step through the
+edit history; the History palette jumps to any state directly.
+
+Cut (Command-X) and Copy (Command-C) put the active layer's pixels on
+the macOS clipboard: the selected area when a selection is active, the
+whole layer otherwise. Cut removes the copied pixels from the layer
+once the clipboard has them. Copy Merged (Shift-Command-C) copies
+everything visible, flattened into one image.
+
+Paste (Command-V) pastes the clipboard as a new layer in the middle of
+the image. Paste in Place (Shift-Command-V) pastes it at the position
+it was copied from. Paste as New Image opens the clipboard's image as
+a new document of its own. Clear (Delete) erases the selected pixels
+of the active layer (or the whole layer when nothing is selected); on
+a layer without transparency it fills them with the background color.
+
+Edit > Stroke Path draws along the active path with the foreground
+color, at the width set in Tool Options.
+
+# Tools
+
+The Tools palette shows one cell per group. Press a tool's letter to
+select its group; press the letter with Shift to cycle through the
+grouped tools. The letter of each group:
+
+  V    Move, Transform
+  C    Crop
+  M    Rectangle Select, Ellipse Select
+  L    Lasso
+  W    Magic Wand, Select by Color
+  I    Eyedropper
+  T    Text
+  P    Path
+  B    Brush, Pencil, Airbrush
+  E    Eraser
+  S    Clone, Heal
+  R    Smudge, Blur, Sharpen
+  O    Dodge, Burn
+  G    Gradient, Paint Bucket
+  H    Hand
+  Z    Zoom
+
+What the tools do:
+
+  Move drags the active layer. Crop drags a rectangle; Return applies
+  it and Escape cancels it. Transform scales, moves and turns the
+  active layer: drag its handles, hold Shift to snap the rotation to
+  15-degree steps, press Return to apply and Escape to cancel.
+
+  Rectangle Select and Ellipse Select drag out a selection; Lasso
+  draws one freehand. Magic Wand selects the similar colors around a
+  click; Select by Color takes every similar pixel in the image.
+  Eyedropper sets the foreground color from the pixel you click.
+
+  Brush, Pencil and Airbrush paint with the foreground color; Eraser
+  removes pixels. Clone and Heal copy from another spot: Option-click
+  to set the source, then paint. Smudge, Blur and Sharpen retouch what
+  is already painted, and Dodge and Burn lighten and darken it.
+
+  Gradient drags out a gradient between the foreground and background
+  colors; Paint Bucket fills similar colors around the click, or the
+  whole selection.
+
+  Hand drags the view; Zoom clicks to zoom in and Option-clicks to zoom
+  out.
+
+  Text: click to place text and type. Escape, Command-Return, or a
+  click outside the text finishes it.
+
+  Path: click to add anchor points, drag for curves. Return or Escape
+  finishes the current subpath, and Delete removes the selected
+  anchor. The Paths palette lists the paths of the image.
+
+While painting, these keys adjust the current brush:
+
+  [ and ]              smaller and larger brush
+  Shift-[ and Shift-]  softer and harder brush
+  1 to 9               paint opacity in 10% steps
+  0                    paint opacity 100%
+
+Three keys work with any tool:
+
+  Space (hold)    temporary Hand, to pan the view
+  Command (hold)  move the active layer with any tool
+  Option (hold)   sample a color with any painting tool
+
+X swaps the foreground and background colors; D resets them to black
+on white. The arrow keys move the active layer one pixel, or ten with
+Shift.
+
+# Selections
+
+Select > All (Command-A), Deselect (Command-D) and Inverse
+(Shift-Command-I) manage the selection. Feather… softens its edges;
+Grow…, Shrink… and Border… reshape it; Remove Antialiasing hardens the
+edges again. From Layer Transparency selects the visible area of the
+active layer, and From Path selects along the active path.
+
+When you start a selection drag or click with the Magic Wand, hold a
+modifier to combine with the selection that exists:
+
+  Shift           add to the selection
+  Option          subtract from it
+  Shift-Option    keep only the overlap
+
+Without a modifier the mode set in Tool Options is used.
+
+# Layers
+
+The Layers palette lists the image's layers and groups, top layer
+first. Each row shows a visibility checkbox, the layer's name and a
+lock badge when locks apply. Click a row to make that layer or group
+the target of painting, filters and the Layer menu. Drag rows to
+reorder them or move them into a group; click into a name to edit it.
+Groups open and close with the disclosure triangle.
+
+The Layer menu: New Layer (Shift-Command-N), New Layer Group,
+Duplicate Layer (Command-J), Delete Layer, Layer Properties…,
+Arrange > (Bring to Front Shift-Command-], Bring Forward Command-],
+Send Backward Command-[, Send to Back Shift-Command-[),
+Transform > (rotate and flip the layer), and Merge Down.
+Image > Flatten Image merges everything into one layer.
+
+Layer > Lock protects work in progress:
+
+  Lock Pixels       nothing paints on the layer
+  Lock Position     the layer cannot move or transform
+  Lock Transparency the transparent areas stay transparent
+
+A lock on a group applies to every layer inside it.
+
+Layer masks are not part of this release; there are no mask commands
+in the Layer menu yet.
+
+# Filters
+
+Filter > Blur > Gaussian Blur… opens a settings window with a live
+preview on the active layer. The other entries under Filter open the
+same kind of window: the settings are in a small floating window
+instead of a dialog sheet, so the image stays fully visible. Move a
+slider and the canvas previews the result at once; you can still pan
+and zoom while the window is open.
+
+  Apply   commits the filter as one single undo step.
+  Cancel  closes the window and leaves the image untouched, as does
+          closing the window.
+
+Entries that cannot run yet stay listed but disabled, and their title
+says why (for example "needs a second layer as its source").
+
+Glims also runs the engine's plug-in commands. They appear at the end
+of the Image, Layer, Select and Filter menus and open their own
+settings windows; one command runs at a time. Filter > Last Filter
+(Command-F) runs the last plug-in command again with the settings it
+last used, and Last Filter Settings… (Option-Command-F) opens its
+settings window. Recently Used lists the plug-in commands you ran,
+most recent first.
+
+# History and Snapshots
+
+The History palette lists every edit state the image keeps, with the
+state you are viewing marked. Click any row to return the image to
+that state, then edit from there; Edit > Undo and Redo step one state
+at a time.
+
+Image > New Snapshot (also the Snapshot button in the History palette)
+opens an independent copy of the current image in a new window, named
+after the original with " snapshot" added. It is an ordinary document:
+edit it, export it or close it without affecting the original.
+
+# Zoom and Pixels
+
+View > Zoom In (Command-Plus), Zoom Out (Command-Minus), Fit Image
+(Command-0) and Actual Pixels (Command-1) change the view. Fit Image
+fits the window without enlarging a small image. The zoom field in the
+status strip shows the percentage; type a new value or step it with
+the - and + buttons beside it.
+
+Zoom percentages count physical pixels. At 100% (Actual Pixels) one
+image pixel is exactly one pixel of your screen, whatever display you
+are on: on a Retina display the image looks smaller in points than on
+a standard display, but every image pixel is shown crisply, one to
+one. Use Fit Image for an overview and Actual Pixels when the exact
+pixels matter.
+
+# Preferences
+
+Glims > Preferences… (Command-Comma) opens three choices; all apply
+immediately:
+
+  Appearance      Classic Light, Neutral Gray or Dark for Glims'
+                  windows and palettes.
+  Canvas Surround the gray around the image: Light Gray, Medium Gray
+                  or Dark Gray. A neutral surround keeps your tone
+                  judgement honest.
+  Open Images At  whether newly opened images start at Fit Image or
+                  at Actual Pixels.
+
+# Keyboard & Mouse Reference
+
+Keys are written Mac-style: Command-S means press S while holding the
+Command (⌘) key. Shift is ⇧, Option is ⌥, and Control is ⌃.
+
+Menu commands:
+
+  Preferences…            Command-Comma
+  Hide Glims              Command-H
+  Quit Glims              Command-Q
+  New…                    Command-N
+  Open…                   Command-O
+  Close                   Command-W
+  Save                    Command-S
+  Save As…                Shift-Command-S
+  Export…                 Shift-Command-E
+  Export Again…           Command-E
+  Undo                    Command-Z
+  Redo                    Shift-Command-Z
+  Cut                     Command-X
+  Copy                    Command-C
+  Copy Merged             Shift-Command-C
+  Paste                   Command-V
+  Paste in Place          Shift-Command-V
+  Clear                   Delete
+  New Layer               Shift-Command-N
+  Duplicate Layer         Command-J
+  Bring to Front          Shift-Command-]
+  Bring Forward           Command-]
+  Send Backward           Command-[
+  Send to Back        Shift-Command-[
+  All                     Command-A
+  Deselect                Command-D
+  Inverse                 Shift-Command-I
+  Zoom In                 Command-Plus
+  Zoom Out                Command-Minus
+  Fit Image               Command-0
+  Actual Pixels           Command-1
+  Last Filter             Command-F
+  Last Filter Settings…   Option-Command-F
+  Minimize                Command-M
+  Glims Help              Command-Question Mark
+
+Keys on the canvas (the canvas must have focus):
+
+  Tool groups:
+
+    V    Move / Transform        B    Brush / Pencil / Airbrush
+    M    Rectangle / Ellipse     S    Clone / Heal
+    W    Wand / Select by Color  R    Smudge / Blur / Sharpen
+    G    Gradient / Paint Bucket O    Dodge / Burn
+    C    Crop                    E    Eraser
+    L    Lasso                   I    Eyedropper
+    T    Text                    P    Path
+    H    Hand                    Z    Zoom
+
+  Shift with a letter  cycle through the grouped tools
+
+  X                    swap foreground and background colors
+  D                    reset colors to black on white
+  [ and ]              smaller and larger brush
+  Shift-[ and Shift-]  softer and harder brush
+  1 to 9               paint opacity 10% to 90%
+  0                    paint opacity 100%
+  Arrow keys           move the active layer 1 pixel
+  Shift-Arrow keys     move the active layer 10 pixels
+  Return               apply a crop, a transform, or finish the
+                       current path subpath
+  Escape               cancel a crop or transform; finish editing
+                       text; finish the current path subpath
+  Delete               remove the selected anchor with the Path tool
+  Tab                  hide all palettes (again to restore)
+  Shift-Tab            hide all palettes but Tools (again to restore)
+  Space (hold)         temporary Hand for panning
+  Command (hold)       move the active layer with any tool
+  Option (hold)        sample a color with a painting tool
+
+The mouse:
+
+  Drag                   use the current tool.
+  Space-drag             pan the view.
+  Command-drag           move the active layer.
+  Zoom tool click        zoom in; Option-click zooms out.
+  Selection drag start:  Shift adds, Option subtracts,
+                         Shift-Option intersects.
+  Painting tools:        Option-click samples the foreground color;
+                         with Clone or Heal, Option-click sets the
+                         source point to copy from.
+  Transform tool:        drag the handles of the layer's box; Shift
+                         snaps rotation to 15-degree steps.
+  Crop tool:             drag a rectangle, Return applies it,
+                         Escape cancels it.
+  Layers palette:        click a row to target it, drag to reorder or
+                         move into a group, click into a name to edit
+                         it, click the checkbox to show or hide the
+                         layer.
+
+# Engine Manual
+
+Glims is built on the GIMP image engine, and the GIMP user manual
+documents how that engine treats images: layers, selections, painting
+tools, filters, color modes and file formats. The concepts carry over
+to the images you edit in Glims.
+
+Help > Engine Manual opens the GIMP documentation website in your web
+browser:
+
+  https://docs.gimp.org/
+
+This is a link to a website outside Glims; nothing is downloaded
+until you choose the menu item. The windows and menus shown in that
+manual are GIMP's own; Glims drives the same engine through its own
+Mac interface, which the sections of this manual describe.
