@@ -923,6 +923,7 @@ Three regressions reproduced on the previous implementation: an opaque RGB
 layer cleared with a midtone background produced 188/137/225 instead of
 sRGB 128/64/191, and Clear proceeded during a native filter preview or
 active stroke. Clear now uses the shared edit-ready guard and an explicit
-sRGB color setter. The pinned native run passes, including selection
-clipping, undo/redo, the RGB sample and both busy refusals. Cross-engine
-checks and independent review follow before merge.
+sRGB color setter. All four native runs pass: 830 checks on GIMP 3.2.8,
+3.2.0 and master, and 797 on 3.0.8, including selection clipping,
+undo/redo, the RGB sample and both busy refusals. Independent source
+review found no important issues.
