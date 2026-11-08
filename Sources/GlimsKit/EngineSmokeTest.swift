@@ -98,6 +98,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "indexed-wrapper" {
+                try exerciseIndexedWrapper(session)
+                print(failures == 0 ? "PASSED (indexed wrapper)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "canvas-overlays" {
                 try exerciseCanvasOverlays(session, documents: documents)
                 print(failures == 0 ? "PASSED (canvas overlays)" : "FAILED: \(failures) failure(s)")
@@ -199,6 +204,7 @@ enum EngineSmokeTest {
             try exerciseResourceCatalog(session)
             try exerciseGuideCache(session, documents: documents)
             try exerciseLayerSourceCache(session, documents: documents)
+            try exerciseIndexedWrapper(session)
             try exerciseResourceGradient(session, documents: documents)
             try exerciseResourceThumbnails(session)
             try exerciseSelectedBrushStrokes(session, documents: documents)
@@ -7953,6 +7959,55 @@ enum EngineSmokeTest {
         wait { document.pendingWork == 0 }
         check(try session.copyPixels(image, merged: true).pixels == blank,
               "undo restores the pixels before chooser-selected painting")
+    }
+
+    private static func exerciseIndexedWrapper(_ session: EngineSession) throws {
+        let image = try session.newImage(width: 24, height: 16)
+        defer { try? session.closeImage(image) }
+        let pixels = try session.copyPixels(image, merged: true).pixels
+        let before = try session.undoInfo(image).undoCount
+        var settings = EngineSession.IndexedSettings()
+        settings.palette = .custom
+        settings.customColors = [NSColor(patternImage: NSImage(size: NSSize(width: 2, height: 2)))]
+        var refusedPattern = false
+        do { try session.convertToIndexed(image, settings: settings) }
+        catch let error as EngineSession.EngineError {
+            refusedPattern = error.status == Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue)
+        }
+        check(refusedPattern, "an unconvertible pattern color is refused instead of replaced with black")
+        check(try session.colorInfo(image).mode == .rgb && session.undoInfo(image).undoCount == before
+                && session.copyPixels(image, merged: true).pixels == pixels,
+              "a refused custom color leaves mode, pixels and history unchanged")
+        // Continue independently after the regression's unexpected success.
+        if try session.colorInfo(image).mode == .indexed { try session.undo(image) }
+        settings.customColors = [.black, .white]
+        let depth = try session.undoInfo(image).undoCount
+        try session.convertToIndexed(image, settings: settings)
+        check(try session.colorInfo(image).mode == .indexed && session.undoInfo(image).undoCount == depth + 1,
+              "the typed custom palette converts as one undo step")
+        check(try session.copyPixels(image, merged: true).pixels == pixels,
+              "the custom white entry preserves the white image")
+        try session.convertToIndexed(image, settings: settings)
+        check(try session.undoInfo(image).undoCount == depth + 1, "the typed already-indexed conversion is a no-op")
+        try session.undo(image)
+        check(try session.colorInfo(image).mode == .rgb && session.copyPixels(image, merged: true).pixels == pixels,
+              "undo restores RGB and the original pixels through the typed wrapper")
+        let text = try session.addTextLayer(image: image, text: "Index", settings: .init(), at: .zero)
+        settings.ditherText = true
+        var requiresConsent = false
+        do { try session.convertToIndexed(image, settings: settings) }
+        catch let error as EngineSession.EngineError { requiresConsent = error.requiresRasterization }
+        check(try requiresConsent && session.layers(image).first(where: { $0.id == text })?.kind == .text,
+              "the typed preservation refusal identifies rasterization consent without changing text")
+        settings.preservation = .allowRasterize
+        try session.convertToIndexed(image, settings: settings)
+        check(try session.colorInfo(image).mode == .indexed
+                && session.layers(image).first(where: { $0.id == text })?.kind == .pixel,
+              "explicit typed consent converts and rasterizes the text")
+        try session.undo(image)
+        check(try session.colorInfo(image).mode == .rgb
+                && session.layers(image).first(where: { $0.id == text })?.kind == .text,
+              "undo of consented typed conversion restores the editable text")
     }
 
     /// The guides controls end to end through the actual sheet: Image ▸
