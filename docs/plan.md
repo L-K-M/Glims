@@ -953,3 +953,14 @@ return on undo. Those checks also exposed the layer list reporting native
 link/vector classes after rasterization; it now reports current editability,
 consistent with text layers. Full cross-engine rechecks and UI consent
 coverage follow before merge.
+
+### Clear color and mutation readiness (2026-11-08)
+
+Three regressions reproduced on the previous implementation: an opaque RGB
+layer cleared with a midtone background produced 188/137/225 instead of
+sRGB 128/64/191, and Clear proceeded during a native filter preview or
+active stroke. Clear now uses the shared edit-ready guard and an explicit
+sRGB color setter. All four native runs pass: 830 checks on GIMP 3.2.8,
+3.2.0 and master, and 797 on 3.0.8, including selection clipping,
+undo/redo, the RGB sample and both busy refusals. Independent source
+review found no important issues.
