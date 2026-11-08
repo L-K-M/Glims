@@ -340,6 +340,11 @@ final class CanvasToolController {
         }
 
         switch key.lowercased() {
+        case "q":
+            if !event.isARepeat {
+                document.setQuickMask(!(document.quickMaskState?.enabled ?? false))
+            }
+            return true
         case "x":
             ToolState.shared.swapColors()
             return true
@@ -504,6 +509,16 @@ final class CanvasToolController {
             dragTool = nil
             return
         }
+        if document.isChannelTargetActive {
+            onStatus?("Return to Layers before transforming; the current channel cannot be transformed.")
+            dragTool = nil
+            return
+        }
+        guard document.activeDrawable != nil else {
+            onStatus?("Select a layer to transform after the target change finishes.")
+            dragTool = nil
+            return
+        }
         guard let layer = document.layers.first(where: { $0.id == document.activeLayer }),
               layer.bounds.width > 0, layer.bounds.height > 0 else {
             onStatus?("Select a layer to transform.")
@@ -529,11 +544,13 @@ final class CanvasToolController {
 
     /// Whether `session` still describes its layer as the document has it.
     private func isCurrent(_ session: LayerTransformSession) -> Bool {
-        document.layers.first { $0.id == session.layer }?.bounds == session.original
+        document.activeDrawable == session.layer
+            && document.layers.first { $0.id == session.layer }?.bounds == session.original
     }
 
     private func currentLayerSession() -> LayerTransformSession? {
-        guard let layer = document.layers.first(where: { $0.id == document.activeLayer }),
+        guard document.activeDrawable == document.activeLayer,
+              let layer = document.layers.first(where: { $0.id == document.activeLayer }),
               layer.bounds.width > 0, layer.bounds.height > 0 else { return nil }
         return LayerTransformSession(layer: layer.id, bounds: layer.bounds)
     }

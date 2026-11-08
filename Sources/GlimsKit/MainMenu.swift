@@ -143,6 +143,9 @@ enum MainMenu {
             .separator(),
             item("From Layer Transparency", #selector(DocumentWindowController.selectFromAlpha(_:))),
             item("From Path", #selector(DocumentWindowController.selectFromPath(_:))),
+            .separator(),
+            item("Save Selection as Channel…", #selector(DocumentWindowController.saveSelectionAsChannel(_:))),
+            item("Quick Mask", #selector(DocumentWindowController.toggleQuickMask(_:))),
         ])
         add(menu, "View", [
             item("Zoom In", #selector(DocumentWindowController.zoomIn(_:)), "+"),
@@ -170,6 +173,7 @@ enum MainMenu {
             item("Tools", #selector(AppController.showTools(_:))),
             item("Tool Options", #selector(AppController.showToolOptions(_:))),
             item("Layers", #selector(AppController.showLayers(_:))),
+            item("Channels", #selector(AppController.showChannels(_:))),
             item("Paths", #selector(AppController.showPaths(_:))),
             item("History", #selector(AppController.showHistory(_:))),
             item("Hide Palettes", #selector(AppController.togglePaletteVisibility(_:))),
