@@ -1933,3 +1933,13 @@ reopens that exact layer; deleting its content then saves correctly. The
 focused file-safety scenario passes. Unknown smoke selectors now fail
 explicitly rather than silently running the full suite. The integrated
 full run is repeated after adopting the Guides field fix.
+
+Guide field refresh regression: undoing a selected guide's move updated
+the list but left its idle position field stale because reselecting the
+same table row does not notify its delegate. The new actual-sheet check
+failed before the fix. Reload now synchronizes the selected guide's input
+fields explicitly while preserving an active text edit. Both Undo/Redo
+field checks and the existing active-edit preservation check pass on the
+pinned engine (30 focused checks). Before this fix, the source-cache
+integration passed 399 unit tests, all-four-engine guide checks and 971
+full pinned interface checks. Follow-up review and matrix are running.
