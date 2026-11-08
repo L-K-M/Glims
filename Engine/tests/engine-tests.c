@@ -1239,7 +1239,7 @@ test_layer_restore_source (const char *work)
       api->free_string (error);
       error = NULL;
       edited = render_all (image, &w2, &h2);
-      CHECK (shot && edited && memcmp (shot, edited, (size_t) w * h * 4) != 0,
+      CHECK (shot && edited && w == w2 && h == h2 && memcmp (shot, edited, (size_t) w * h * 4) != 0,
              "the paint changed the vector's composite");
       before = undo_depth (image);
       CHECK (api->layer_command (engine, image, vector, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
@@ -1249,7 +1249,7 @@ test_layer_restore_source (const char *work)
              source_test_row (image, vector, &row) && row.kind == GLIMS_LAYER_VECTOR,
              "restore regenerates the vector from its path in one undo step");
       after = render_all (image, &w2, &h2);
-      CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
+      CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
              "the vector's composite is pixel-identical to the source render");
       free (after);
       after = NULL;
@@ -1258,7 +1258,7 @@ test_layer_restore_source (const char *work)
              info.is_rasterized && source_test_row (image, vector, &row) && row.kind == GLIMS_LAYER_PIXEL,
              "undo returns the rasterized vector");
       after = render_all (image, &w2, &h2);
-      CHECK (edited && after && memcmp (edited, after, (size_t) w * h * 4) == 0,
+      CHECK (edited && after && w == w2 && h == h2 && memcmp (edited, after, (size_t) w * h * 4) == 0,
              "undo brings back the exact edited vector pixels");
       free (after);
       after = NULL;
@@ -1310,7 +1310,7 @@ test_layer_restore_source (const char *work)
              source_test_row (link_image, link, &row) && row.kind == GLIMS_LAYER_LINK,
              "restore after the explicit rasterize remonitors the link in one undo step");
       after = render_all (link_image, &w2, &h2);
-      CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
+      CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
              "the remonitored link re-renders pixel-identically");
       free (after);
       after = NULL;
@@ -1338,7 +1338,7 @@ test_layer_restore_source (const char *work)
       api->free_string (error);
       error = NULL;
       edited = render_all (link_image, &w2, &h2);
-      CHECK (shot && edited && memcmp (shot, edited, (size_t) w * h * 4) != 0,
+      CHECK (shot && edited && w == w2 && h == h2 && memcmp (shot, edited, (size_t) w * h * 4) != 0,
              "the paint changed the link's composite");
       CHECK (api->layer_source_info (engine, link_image, painted, &info, NULL) == GLIMS_STATUS_OK &&
              info.source_kind == GLIMS_LAYER_LINK && info.is_rasterized && info.has_source &&
@@ -1352,7 +1352,7 @@ test_layer_restore_source (const char *work)
              source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_LINK,
              "restore of the painted link (flag FALSE) regenerates the source in one undo step");
       after = render_all (link_image, &w2, &h2);
-      CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
+      CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
              "the painted pixels are discarded and the retained source renders again");
       free (after);
       after = NULL;
@@ -1361,7 +1361,7 @@ test_layer_restore_source (const char *work)
              info.is_rasterized && source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_PIXEL,
              "undo stops the monitor again (retained raster state)");
       after = render_all (link_image, &w2, &h2);
-      CHECK (edited && after && memcmp (edited, after, (size_t) w * h * 4) == 0,
+      CHECK (edited && after && w == w2 && h == h2 && memcmp (edited, after, (size_t) w * h * 4) == 0,
              "undo restores the exact painted link pixels");
       free (after);
       after = NULL;
@@ -1370,7 +1370,7 @@ test_layer_restore_source (const char *work)
              ! info.is_rasterized && source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_LINK,
              "redo restores the link source again");
       after = render_all (link_image, &w2, &h2);
-      CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
+      CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
              "redo re-renders the source pixel-identically");
       free (after);
       free (shot);
@@ -1429,7 +1429,7 @@ test_layer_restore_source (const char *work)
              source_test_row (link_image, gone, &row) && row.kind == GLIMS_LAYER_LINK,
              "restore with a missing file keeps the retained buffer and resumes monitoring");
       after = render_all (link_image, &w2, &h2);
-      CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
+      CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
              "the retained source buffer renders exactly as before the paint");
       free (after);
       free (shot);
