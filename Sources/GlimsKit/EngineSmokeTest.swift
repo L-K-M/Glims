@@ -98,14 +98,19 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
-            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "pattern-chooser" {
-                try exercisePatternChooser(session, documents: documents)
-                print(failures == 0 ? "PASSED (pattern-chooser)" : "FAILED: \(failures) failure(s)")
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brush-chooser" {
+                try exerciseBrushChooserPresentation(session, documents: documents)
+                print(failures == 0 ? "PASSED (brush chooser)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "resource-gradient" {
                 try exerciseResourceGradient(session, documents: documents)
                 print(failures == 0 ? "PASSED (resource-gradient)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "pattern-chooser" {
+                try exercisePatternChooser(session, documents: documents)
+                print(failures == 0 ? "PASSED (pattern chooser)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brush-resource" {
@@ -162,6 +167,8 @@ enum EngineSmokeTest {
             try exerciseResourceGradient(session, documents: documents)
             try exerciseResourceThumbnails(session)
             try exerciseSelectedBrushStrokes(session, documents: documents)
+            try exerciseBrushChooserSelection(session, documents: documents)
+            try exerciseBrushChooserPresentation(session, documents: documents)
 
             try exercisePatternFill(session, documents: documents)
             try exercisePatternChooser(session, documents: documents)
@@ -7244,75 +7251,17 @@ enum EngineSmokeTest {
         settle()
         check(document.undoInfo.undoCount == undoBefore, "the refused calls added no undo step")
     }
-    private static func exerciseResourceGradient(_ session: EngineSession,
-                                                  documents: DocumentList) throws {
-        let image = try session.newImage(width: 120, height: 80)
-        let document = try ImageDocument(session: session, image: image, name: "Resource Gradient")
-        documents.items.append(document)
-        var errors: [String] = []
-        document.onError = { errors.append($0) }
-        func wait(_ condition: () -> Bool) {
-            let deadline = Date().addingTimeInterval(10)
-            while !condition() && Date() < deadline { spin(0.01) }
-        }
-        func settle() {
-            document.inputQueue.sync {}
-            wait { document.pendingWork == 0 }
-            spin()
-        }
-        defer {
-            documents.items.removeAll { $0 === document }
-            var closed = false
-            document.closeImageWhenDrained { closed = true }
-            wait { closed }
-            check(closed && (try? session.info(image)) == nil,
-                  "the resource-gradient image closes before engine shutdown")
-        }
-        let identity: EngineSession.ResourceIdentity = try DispatchQueue.global(qos: .userInitiated).sync {
-            for resource in try session.resources(.gradient) {
-                let identity = try session.resourceIdentifiers(resource.id)
-                if identity.isInternal && identity.collection == "gimp-gradient-fg-bg-rgb" { return identity }
-            }
-            throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
-                                             message: "The native foreground/background gradient is unavailable.")
-        }
-        let before = try session.copyPixels(image, merged: true).pixels
-        let undoBefore = document.undoInfo.undoCount
-        var settings = EngineSession.ResourceGradientSettings()
-        let from = CGPoint(x: 0, y: 40), to = CGPoint(x: 100, y: 40)
-        document.gradientResource(identity, from: from, to: to, settings: settings)
-        settle()
-        let middle = pixel(session, image, x: 50, y: 40) ?? []
-        check(document.pendingWork == 0 && errors.isEmpty && middle.count == 4
-                && (118...138).contains(Int(middle.first ?? 0)),
-              "the queued resource gradient resolves its identity and renders a perceptual midpoint")
-        check(document.undoInfo.undoCount == undoBefore + 1,
-              "the queued resource gradient is one undo step")
-        document.undo()
-        settle()
-        check(try session.copyPixels(image, merged: true).pixels == before,
-              "undo restores the pixels before the resource gradient")
 
-        settings.blendSpace = .rgbLinear
-        let unsupportedErrors = errors.count
-        document.gradientResource(identity, from: from, to: to, settings: settings)
-        settle()
-        let afterUnsupported = try session.copyPixels(image, merged: true).pixels
-        check(errors.count == unsupportedErrors + 1 && document.undoInfo.undoCount == undoBefore
-                && afterUnsupported == before,
-              "unsupported linear-light resource blending reports refusal without editing")
-
-        settings.blendSpace = .rgbPerceptual
-        let missing = EngineSession.ResourceIdentity(name: "Glims Missing Gradient", collection: nil, isInternal: false)
-        let missingErrors = errors.count
-        document.gradientResource(missing, from: from, to: to, settings: settings)
-        settle()
-        let afterMissing = try session.copyPixels(image, merged: true).pixels
-        check(errors.count == missingErrors + 1 && document.undoInfo.undoCount == undoBefore
-                && afterMissing == before,
-              "a missing selected gradient reports refusal without a fallback or undo")
-    }
-
+    /// The Edit ▸ Fill pattern picker's pure model against the live
+    /// catalog: the full native list feeds a `PatternChooserModel`
+    /// exactly as `PatternFillPicker.load` does (off the main thread,
+    /// names plus persistent identities, the persisted identity resolved
+    /// fresh), the user pick commits an identity, and the document's
+    /// queued `fillPattern` lands it as one undo step. A missing
+    /// persisted identity stays a refusal — the model never substitutes
+    /// another pattern. Not wired into `run()` yet: this is the compiled
+    /// companion to the picker's UI, exercised like the other scenarios
+    /// once the sheet flow is part of the smoke drive.
     private static func exercisePatternChooser(_ session: EngineSession,
                                                 documents: DocumentList) throws {
         let originalChoice = PatternFillStore.shared.identity
@@ -7447,6 +7396,329 @@ enum EngineSmokeTest {
         check(errors.count == errorCount + 1 && afterMissing == before
                 && document.undoInfo.undoCount == undoBefore,
               "Fill with a missing pattern reports refusal and changes no pixels or undo")
+    }
+
+    private static func exerciseResourceGradient(_ session: EngineSession,
+                                                  documents: DocumentList) throws {
+        let image = try session.newImage(width: 120, height: 80)
+        let document = try ImageDocument(session: session, image: image, name: "Resource Gradient")
+        documents.items.append(document)
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func settle() {
+            document.inputQueue.sync {}
+            wait { document.pendingWork == 0 }
+            spin()
+        }
+        defer {
+            documents.items.removeAll { $0 === document }
+            var closed = false
+            document.closeImageWhenDrained { closed = true }
+            wait { closed }
+            check(closed && (try? session.info(image)) == nil,
+                  "the resource-gradient image closes before engine shutdown")
+        }
+        let identity: EngineSession.ResourceIdentity = try DispatchQueue.global(qos: .userInitiated).sync {
+            for resource in try session.resources(.gradient) {
+                let identity = try session.resourceIdentifiers(resource.id)
+                if identity.isInternal && identity.collection == "gimp-gradient-fg-bg-rgb" { return identity }
+            }
+            throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
+                                             message: "The native foreground/background gradient is unavailable.")
+        }
+        let before = try session.copyPixels(image, merged: true).pixels
+        let undoBefore = document.undoInfo.undoCount
+        var settings = EngineSession.ResourceGradientSettings()
+        let from = CGPoint(x: 0, y: 40), to = CGPoint(x: 100, y: 40)
+        document.gradientResource(identity, from: from, to: to, settings: settings)
+        settle()
+        let middle = pixel(session, image, x: 50, y: 40) ?? []
+        check(document.pendingWork == 0 && errors.isEmpty && middle.count == 4
+                && (118...138).contains(Int(middle.first ?? 0)),
+              "the queued resource gradient resolves its identity and renders a perceptual midpoint")
+        check(document.undoInfo.undoCount == undoBefore + 1,
+              "the queued resource gradient is one undo step")
+        document.undo()
+        settle()
+        check(try session.copyPixels(image, merged: true).pixels == before,
+              "undo restores the pixels before the resource gradient")
+
+        settings.blendSpace = .rgbLinear
+        let unsupportedErrors = errors.count
+        document.gradientResource(identity, from: from, to: to, settings: settings)
+        settle()
+        let afterUnsupported = try session.copyPixels(image, merged: true).pixels
+        check(errors.count == unsupportedErrors + 1 && document.undoInfo.undoCount == undoBefore
+                && afterUnsupported == before,
+              "unsupported linear-light resource blending reports refusal without editing")
+
+        settings.blendSpace = .rgbPerceptual
+        let missing = EngineSession.ResourceIdentity(name: "Glims Missing Gradient", collection: nil, isInternal: false)
+        let missingErrors = errors.count
+        document.gradientResource(missing, from: from, to: to, settings: settings)
+        settle()
+        let afterMissing = try session.copyPixels(image, merged: true).pixels
+        check(errors.count == missingErrors + 1 && document.undoInfo.undoCount == undoBefore
+                && afterMissing == before,
+              "a missing selected gradient reports refusal without a fallback or undo")
+    }
+
+    private static func exerciseBrushChooserSelection(_ session: EngineSession, documents: DocumentList) throws {
+        let suite = "ch.lkmc.Glims.smoke.brushchooser.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = BrushSelectionStore(defaults: defaults)
+        let state = ToolState.shared
+        let previousStore = state.brushStore
+        state.brushStore = store
+        defer { state.brushStore = previousStore }
+
+        let rows = try session.resources(.brush)
+        guard let soft = rows.first(where: { $0.displayName == "2. Hardness 025" }),
+              let block = rows.first(where: { $0.displayName == "2. Block 01" }) else {
+            check(false, "the soft and block brush fixtures exist for the chooser scenario")
+            return
+        }
+        let softIdentity = try session.resourceIdentifiers(soft.id)
+        let blockIdentity = try session.resourceIdentifiers(block.id)
+
+        let image = try session.newImage(width: 96, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Brush chooser")
+        documents.items.append(document)
+        defer {
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        guard let layer = document.activeLayer else {
+            check(false, "the chooser fixture has a paint layer")
+            return
+        }
+        func pixels() throws -> Data {
+            let rendered = try session.render(image, scale: 1, area: CGRect(x: 0, y: 0, width: 96, height: 64))
+            return rendered.dataProvider!.data! as Data
+        }
+        func settle() {
+            let deadline = Date().addingTimeInterval(10)
+            while document.pendingWork > 0 && Date() < deadline { spin(0.01) }
+            spin()
+        }
+
+        // The chooser captures the tool at open; switching tools while it
+        // is open must not retarget the selection.
+        state.select(.paintbrush)
+        let model = BrushChooserModel(capturedTool: state.current,
+                                      currentIdentity: state.brush(for: .paintbrush).resource)
+        check(model.capturedTool == .paintbrush, "the chooser captures the current tool at open")
+        state.select(.eraser)
+        check(model.capturedTool == .paintbrush, "switching tools keeps the captured tool")
+        state.select(.paintbrush)
+
+        // Load and choose through the model the panel drives, then apply
+        // exactly as the Choose button does.
+        model.deliver(generation: model.generation,
+                      rows: [BrushRow(id: soft.id, name: soft.displayName, identity: softIdentity),
+                             BrushRow(id: block.id, name: block.displayName, identity: blockIdentity)],
+                      thumbnails: [:], resolvedCurrent: nil, error: nil)
+        model.select(.resource(soft.id))
+        state.setBrushResource(model.pendingIdentity(), for: model.capturedTool)
+        check(state.brush(for: .paintbrush).resource == softIdentity,
+              "the UI choice sets the captured tool's brush identity")
+        check(state.brush(for: .eraser).resource == nil, "the selection never retargets another tool")
+        check(store.identity(for: .paintbrush) == softIdentity && store.identity(for: .eraser) == nil,
+              "only the identity persists per tool, never a session handle")
+        check(ToolState(brushStore: store).brush(for: .paintbrush).resource == softIdentity,
+              "the persisted identity restores into settings after a restart")
+
+        // A queued stroke paints with the chosen brush; undo restores the
+        // exact pixels as one step.
+        let first = EngineSession.StrokePoint(x: 4, y: 32, pressure: 1, timeMilliseconds: 0)
+        let points = (1...16).map {
+            EngineSession.StrokePoint(x: 4 + 88 * Double($0) / 16, y: 32, pressure: 1, timeMilliseconds: UInt32($0 * 8))
+        }
+        var brush = state.brush(for: .paintbrush)
+        brush.size = 20
+        brush.pressureSize = false
+        brush.blue = 1
+        let blank = try pixels()
+        let undoBefore = document.undoInfo.undoCount
+        document.beginStroke(at: first, brush: brush)
+        document.continueStroke(points)
+        document.endStroke()
+        settle()
+        check(try pixels() != blank && document.undoInfo.undoCount == undoBefore + 1,
+              "a stroke with the UI-chosen brush paints one undoable edit")
+        document.undo()
+        settle()
+        check(try pixels() == blank, "undo restores the exact original pixels")
+
+        // Cancel preserves the previous selection.
+        let cancelled = BrushChooserModel(capturedTool: .paintbrush, currentIdentity: softIdentity)
+        cancelled.deliver(generation: cancelled.generation,
+                          rows: [BrushRow(id: block.id, name: block.displayName, identity: blockIdentity)],
+                          thumbnails: [:], resolvedCurrent: nil, error: nil)
+        cancelled.select(.resource(block.id))
+        check(cancelled.pendingIdentity() == blockIdentity, "the cancelled chooser would have applied the other brush")
+        check(state.brush(for: .paintbrush).resource == softIdentity, "cancel preserves the previous selection")
+
+        // A missing persisted identity is shown and fails loudly: no silent
+        // fallback to the default, no paint, no undo step.
+        let missing = EngineSession.ResourceIdentity(name: "Glims missing brush", collection: nil, isInternal: false)
+        let missingModel = BrushChooserModel(capturedTool: .paintbrush, currentIdentity: missing)
+        missingModel.deliver(generation: missingModel.generation, rows: [], thumbnails: [:],
+                             resolvedCurrent: nil, error: nil)
+        check(missingModel.missingIdentity == missing, "a missing persisted identity is shown, not defaulted")
+        state.setBrushResource(missing, for: .paintbrush)
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        document.beginStroke(at: first, brush: state.brush(for: .paintbrush))
+        document.continueStroke(points)
+        document.endStroke()
+        settle()
+        check(!errors.isEmpty && (try? pixels()) == blank && document.undoInfo.undoCount == undoBefore,
+              "a missing brush choice reports failure without painting or adding undo")
+
+        // Reset to the native Default restores the ordinary stroke path.
+        state.setBrushResource(nil, for: .paintbrush)
+        check(state.brush(for: .paintbrush).resource == nil && store.identity(for: .paintbrush) == nil,
+              "reset stores nil, the original native default")
+        let legacy = try session.beginStroke(image: image, drawable: layer,
+                                             brush: state.brush(for: .paintbrush), first: first)
+        try session.continueStroke(legacy, points: points)
+        try session.endStroke(legacy)
+        check(try pixels() != blank && session.undoInfo(image).undoCount == undoBefore + 1,
+              "after reset the default brush path paints again")
+    }
+
+    private static func exerciseBrushChooserPresentation(_ session: EngineSession, documents: DocumentList) throws {
+        let suite = "ch.lkmc.Glims.smoke.brush-presentation.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        let state = ToolState.shared
+        let previousStore = state.brushStore
+        let previousTool = state.current
+        state.brushStore = BrushSelectionStore(defaults: defaults)
+        let image = try session.newImage(width: 32, height: 32)
+        let document = try ImageDocument(session: session, image: image, name: "Chooser presentation")
+        documents.items.append(document)
+        defer {
+            BrushChooser.shared.close()
+            state.brushStore = previousStore
+            state.select(previousTool)
+            defaults.removePersistentDomain(forName: suite)
+            documents.items.removeAll { $0 === document }
+            var closed = false
+            document.closeImageWhenDrained { closed = true }
+            let deadline = Date().addingTimeInterval(10)
+            while !closed && Date() < deadline { spin(0.01) }
+            check(closed && (try? session.info(image)) == nil,
+                  "chooser image-close completion arrives before stopping the engine")
+        }
+        func views<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
+            guard let root else { return [] }
+            return (root as? T).map { [$0] } ?? root.subviews.flatMap { views($0, as: type) }
+        }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(15)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        state.select(.paintbrush)
+        let options = ToolOptionsPaletteController()
+        _ = options.view
+        options.retarget(to: document)
+        func choiceButton() -> NSButton? {
+            views(options.view, as: NSButton.self).first { $0.toolTip == "Choose the Brush brush" }
+        }
+        let missing = EngineSession.ResourceIdentity(name: "Absent presentation brush", collection: nil, isInternal: false)
+        func openMissing() -> NSWindow? {
+            state.setBrushResource(missing, for: .paintbrush)
+            BrushChooser.shared.open(document: document, tool: .paintbrush)
+            wait { choiceButton()?.title.hasPrefix("Missing:") == true && !EngineActivity.shared.isBusy }
+            return NSApp.windows.first { $0.title == "Brush Brush" && $0.isVisible }
+        }
+        var panel = openMissing()
+        check(panel != nil && choiceButton()?.title == "Missing: Absent presentation brush",
+              "the real chooser reports a missing persisted brush in Tool Options")
+        views(options.view, as: NSButton.self).first { $0.title == "Reset" }?.performClick(nil)
+        check(state.brush(for: .paintbrush).resource == nil && choiceButton()?.title == "Default"
+                && choiceButton()?.image == nil,
+              "Reset replaces the Missing label and stale preview with Default")
+        BrushChooser.shared.close()
+        panel = openMissing()
+        let table = views(panel?.contentView, as: NSTableView.self).first
+        check((table?.numberOfRows ?? 0) > 1, "the actual chooser loads named catalog rows")
+        table?.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        views(panel?.contentView, as: NSButton.self).first { $0.title == "Choose" }?.performClick(nil)
+        check(state.brush(for: .paintbrush).resource == nil && choiceButton()?.title == "Default"
+                && choiceButton()?.image == nil && !BrushChooser.shared.isOpen,
+              "choosing Default clears a previous Missing marker and closes the real picker")
+        wait { !EngineActivity.shared.isBusy }
+
+        BrushChooser.shared.open(document: document, tool: .paintbrush)
+        panel = NSApp.windows.first { $0.title == "Brush Brush" && $0.isVisible }
+        let browse = views(panel?.contentView, as: NSTableView.self).first
+        wait { (browse?.numberOfRows ?? 0) > BrushThumbnailQueue.batchSize + 1 && !EngineActivity.shared.isBusy }
+        if let browse, browse.numberOfRows > BrushThumbnailQueue.batchSize + 1 {
+            let last = browse.numberOfRows - 1
+            browse.scrollRowToVisible(last)
+            panel?.displayIfNeeded()
+            _ = browse.view(atColumn: 0, row: last, makeIfNecessary: true)
+            wait {
+                !EngineActivity.shared.isBusy
+                    && (browse.view(atColumn: 0, row: last, makeIfNecessary: true) as? NSTableCellView)?.imageView?.image != nil
+            }
+            spin()
+            check((browse.enclosingScrollView?.contentView.bounds.origin.y ?? 0) > 0,
+                  "lazy previews preserve the user's scrolled catalog position")
+            let expected = try DispatchQueue.global(qos: .userInitiated).sync {
+                guard let last = try session.resources(.brush).last else { throw NoWindow() }
+                return try session.resourceIdentifiers(last.id)
+            }
+            browse.selectRowIndexes(IndexSet(integer: last), byExtendingSelection: false)
+            let search = views(panel?.contentView, as: NSSearchField.self).first
+            search?.stringValue = "Glims-no-matching-brush"
+            if let search, let picker = browse.delegate as? BrushChooserPanel {
+                picker.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
+            }
+            spin(0.1)
+            check(browse.numberOfRows == 1, "filtering can hide the chosen brush while leaving Default visible")
+            views(panel?.contentView, as: NSButton.self).first { $0.title == "Choose" }?.performClick(nil)
+            check(state.brush(for: .paintbrush).resource == expected && choiceButton()?.image != nil,
+                  "filtering out a chosen brush preserves its identity and Tool Options preview")
+        } else {
+            check(false, "the installed catalog exercises more than one thumbnail batch")
+        }
+        wait { !EngineActivity.shared.isBusy }
+        BrushChooser.shared.open(document: document, tool: .paintbrush)
+        panel = NSApp.windows.first { $0.title == "Brush Brush" && $0.isVisible }
+        let restored = views(panel?.contentView, as: NSTableView.self).first
+        wait { (restored?.numberOfRows ?? 0) > 1 && !EngineActivity.shared.isBusy }
+        check((restored?.selectedRow ?? -1) == (restored?.numberOfRows ?? 0) - 1,
+              "reopening the brush chooser highlights its persisted selection")
+        BrushChooser.shared.close()
+        wait { !EngineActivity.shared.isBusy }
+        let blank = try session.copyPixels(image, merged: true).pixels
+        let undoBefore = document.undoInfo.undoCount
+        var selectedBrush = state.brush(for: .paintbrush)
+        selectedBrush.size = 16
+        selectedBrush.red = 0
+        selectedBrush.green = 0
+        selectedBrush.blue = 0
+        selectedBrush.opacity = 1
+        selectedBrush.pressureSize = false
+        document.beginStroke(at: .init(x: 4, y: 16, pressure: 1, timeMilliseconds: 0), brush: selectedBrush)
+        document.continueStroke([.init(x: 28, y: 16, pressure: 1, timeMilliseconds: 20)])
+        document.endStroke()
+        wait { document.pendingWork == 0 }
+        let painted = try session.copyPixels(image, merged: true).pixels
+        check(painted != blank && document.undoInfo.undoCount == undoBefore + 1,
+              "the brush chosen in the real panel paints through Tool State and the document queue")
+        document.undo()
+        wait { document.pendingWork == 0 }
+        check(try session.copyPixels(image, merged: true).pixels == blank,
+              "undo restores the pixels before chooser-selected painting")
     }
 
 }
