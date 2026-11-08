@@ -83,6 +83,10 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
                 Self.item("duplicate", "Duplicate Layer", ["plus.square.on.square"]) { $0.layerCommand(.duplicate) }]
             .map(bind),
         trailingItems: [bind(Self.item("delete", "Delete Layer", ["trash"]) { $0.layerCommand(.delete) })])
+    /// The floating-selection footer (Anchor / New Layer / Discard),
+    /// shown only while the shown document has an active floating
+    /// selection; its state comes from the cached readiness only.
+    private let floatingBar = FloatingSelectionBar()
 
     /// A button bar command before it knows the palette's document.
     private struct Command {
@@ -132,11 +136,12 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         scroll.hasVerticalScroller = true
         scroll.borderType = .noBorder
 
-        let stack = NSStackView(views: [scroll, buttonBar])
+        let stack = NSStackView(views: [scroll, floatingBar, buttonBar])
         stack.orientation = .vertical
         stack.spacing = 0
         stack.alignment = .leading
         scroll.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        floatingBar.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         buttonBar.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         view = stack
     }
@@ -199,6 +204,22 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             item.tag = Int(lock.rawValue)
             menu.addItem(item)
         }
+        // While the shown document has an active floating selection, its
+        // resolution commands join the palette menu; validation reads
+        // only the cached floating state.
+        if let document, document.floatingState.isActive {
+            menu.addItem(.separator())
+            let floating = NSMenuItem(title: "Floating Selection", action: nil, keyEquivalent: "")
+            floating.submenu = NSMenu(title: "Floating Selection")
+            for (title, command) in [("Anchor", EngineSession.FloatingCommand.anchor),
+                                     ("New Layer", .toLayer), ("Discard", .discard)] {
+                let item = NSMenuItem(title: title, action: #selector(runFloatingCommand(_:)), keyEquivalent: "")
+                item.target = self
+                item.tag = Int(command.rawValue)
+                floating.submenu?.addItem(item)
+            }
+            menu.addItem(floating)
+        }
         // While an effect row is selected its stack commands live here
         // too, next to the row's own right-click menu.
         if let document, let selected = selectedEffect,
@@ -232,6 +253,14 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
 
     @objc private func toggleLock(_ sender: NSMenuItem) {
         document?.toggleLocks(document?.activeLayer ?? 0, EngineSession.LayerLocks(rawValue: UInt32(sender.tag)))
+    }
+
+    /// The Floating Selection submenu's commands: Anchor / New Layer /
+    /// Discard on the shown document, with its cached expected floating
+    /// id.
+    @objc private func runFloatingCommand(_ sender: NSMenuItem) {
+        guard let command = EngineSession.FloatingCommand(rawValue: UInt32(sender.tag)) else { return }
+        document?.resolveFloatingSelection(command, completion: { _ in })
     }
 
     // MARK: Mask commands
@@ -400,6 +429,20 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             return validateEffectItem(menuItem, item)
         }
         switch menuItem.action {
+        case #selector(runFloatingCommand(_:)):
+            // Cached-state validation only: eligibility includes the
+            // floating state, the target's cached pixel/source kind, and
+            // busy/preview/closing/pending-target readiness. New Layer
+            // is unavailable for mask/channel attachments and explains
+            // why in its tooltip.
+            guard let document, let command = EngineSession.FloatingCommand(rawValue: UInt32(menuItem.tag)) else {
+                return false
+            }
+            let readiness = document.floatingResolutionReadiness(command)
+            menuItem.toolTip = command == .toLayer
+                ? (readiness.allowed ? FloatingControlsLogic.newLayerTooltip : readiness.reason)
+                : readiness.reason
+            return readiness.allowed
         case #selector(runLayerCommand(_:)):
             guard let document, document.acceptsEdits else { return false }
             // The resize commands are pixel-only, like Apply Mask: the
@@ -479,10 +522,22 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         }
         let editable = document?.acceptsEdits == true
         let hasLayer = editable && document?.activeLayer != nil
-        buttonBar.setEnabled(editable, forItem: "new")
-        buttonBar.setEnabled(editable, forItem: "group")
-        buttonBar.setEnabled(hasLayer, forItem: "duplicate")
-        buttonBar.setEnabled(hasLayer, forItem: "delete")
+        // While a floating selection is active the structural layer
+        // commands are gated resolve-first, so their buttons go quiet too.
+        let floatingActive = document?.floatingState.isActive == true
+        buttonBar.setEnabled(editable && !floatingActive, forItem: "new")
+        buttonBar.setEnabled(editable && !floatingActive, forItem: "group")
+        buttonBar.setEnabled(hasLayer && !floatingActive, forItem: "duplicate")
+        buttonBar.setEnabled(hasLayer && !floatingActive, forItem: "delete")
+        // The floating-selection footer appears only while the shown
+        // document's cached floating state is active; its buttons read
+        // the cached readiness, never the engine.
+        if let document, document.floatingState.isActive {
+            floatingBar.update(document: document)
+            floatingBar.isHidden = false
+        } else {
+            floatingBar.isHidden = true
+        }
 
         // Reloading the rows would end a rename being typed and commit it
         // half done; the list catches up when the rename ends.
@@ -643,8 +698,9 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         return "\(indent)\(eye) \(layer.name)\(Self.detailsSuffix(for: layer))"
     }
 
-    /// The trailing row details: kind, mask and filter count.
-    static func detailsSuffix(for layer: EngineSession.Layer) -> String {
+    /// The trailing row details: kind, mask, filter count, and the
+    /// temporary floating-selection marker for the native floating row.
+    static func detailsSuffix(for layer: EngineSession.Layer, floating: Bool = false) -> String {
         var details: [String] = []
         switch layer.kind {
         case .group: details.append("group")
@@ -655,6 +711,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         }
         if layer.hasMask { details.append("mask") }
         if layer.filterCount > 0 { details.append("\(layer.filterCount) filter\(layer.filterCount == 1 ? "" : "s")") }
+        if floating { details.append("floating selection") }
         return details.isEmpty ? "" : "  (\(details.joined(separator: ", ")))"
     }
 
@@ -698,9 +755,11 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         let mask = document.maskStates[layer.id]
         let target: ThumbnailButton.Target = document.activeLayer == layer.id
             ? (document.isMaskTargetActive ? .mask : .layer) : .none
+        // The native floating layer shows as a temporary row, labelled so.
+        let isFloating = document.floatingState.isActive && document.floatingState.floating == layer.id
         let rowView = LayerRowView(layer: layer,
                                    context: LayerRowView.Context(document: document, layerID: layer.id),
-                                   details: Self.detailsSuffix(for: layer),
+                                   details: Self.detailsSuffix(for: layer, floating: isFloating),
                                    locks: locks, mask: mask, activeTarget: target) { [weak self] context, change in
             self?.commitLayerChange(context, change) ?? false
         }

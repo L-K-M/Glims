@@ -145,6 +145,13 @@ final class ImageDocument {
     /// pixels or the selection — so the cache refreshes with `reload`,
     /// which the undo-changed event schedules; no dedicated event.
     private(set) var grid = EngineSession.Grid()
+    /// The image's floating-selection state, read with the rest of the
+    /// state: a Paste Into result before it resolves. Every Paste Into
+    /// and resolution is one undo step, so the undo-changed event's
+    /// reload refreshes this cache — as do the explicit reloads after
+    /// Undo/Redo. The Layers palette, the Edit menu and the paint target
+    /// all read this cache; none asks the engine while validating.
+    private(set) var floatingState = EngineSession.FloatingState(floating: 0, target: 0, targetKind: nil)
     /// The image's paths, top first.
     private(set) var paths: [EngineSession.PathInfo] = []
     /// The path the Path tool edits and the Paths palette's commands use.
@@ -256,6 +263,7 @@ final class ImageDocument {
         colorInfo = try session.colorInfo(image)
         guides = try session.guides(image)
         grid = try session.grid(image)
+        floatingState = try session.floatingSelection(image)
         mirrorChannelIntents()
         if let pick = pendingTargetPick {
             channels = channels.map { row in
@@ -297,10 +305,14 @@ final class ImageDocument {
 
     /// The drawable painting, fills, gradients, filters, Copy and Clear
     /// act on. A selected channel takes precedence over the remembered
-    /// layer, just as it does for implicit engine edits.
+    /// layer, just as it does for implicit engine edits — except while a
+    /// floating selection is active: it owns painting even when it is
+    /// attached to a mask or channel, whose drawable would otherwise win
+    /// as the channel-priority (or mask-editing) target.
     private var paintTarget: PaintTarget? {
         guard !rejectedTargetPick, pendingTargetCommands.isEmpty else { return nil }
         if let pick = pendingTargetPick { return pick.target }
+        if floatingState.isActive { return .layer(floatingState.floating) }
         if let channel = channels.first(where: \.isSelected) { return .channel(channel.id) }
         guard let layer = activeLayer else { return nil }
         if let state = maskStates[layer], state.editing, state.mask != 0 {
@@ -362,6 +374,9 @@ final class ImageDocument {
     func selectLayer(_ id: Int32) {
         guard !isClosing else { return }
         guard !refuseWhileEditingUnavailable() else { return }
+        // A target switch would implicitly anchor an active floating
+        // selection in the engine; this slice refuses it instead.
+        guard !refuseWhileFloatingActive() else { return }
         endPendingUserEdits()
         selectTarget(id, editingMask: false)
     }
@@ -372,6 +387,7 @@ final class ImageDocument {
     func editMask(_ id: Int32) {
         guard !isClosing else { return }
         guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         endPendingUserEdits()
         guard let layer = layers.first(where: { $0.id == id }), layer.hasMask else { return }
         // Without a cached state the mask's drawable id is unknown, and
@@ -404,6 +420,7 @@ final class ImageDocument {
 
     func selectChannel(_ id: Int32) {
         guard !isClosing, !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         endPendingUserEdits()
         guard channels.contains(where: { $0.id == id }) else { return }
         queueTargetPick(.channel(id))
@@ -835,6 +852,7 @@ final class ImageDocument {
     /// layer explicitly instead.
     func layerCommand(_ command: EngineSession.LayerCommand) {
         guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         endPendingUserEdits()
         switch command {
         case .new, .duplicate, .delete, .mergeDown, .flatten:
@@ -939,6 +957,7 @@ final class ImageDocument {
     /// ahead of this call moves the group's spot.
     func createGroup() {
         guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         endPendingUserEdits()
         enqueueTargetCommand { session, image in
             let fresh = try session.layers(image)
@@ -956,6 +975,7 @@ final class ImageDocument {
     /// for the item's removal before the engine is asked.
     func moveLayer(_ item: Int32, toParent parent: Int32, atIndex rawIndex: Int32) {
         guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         switch LayerTree(layers: layers).resolveDrop(item: item, ontoParent: parent, at: rawIndex) {
         case .unchanged:
             return
@@ -994,9 +1014,12 @@ final class ImageDocument {
     /// Moves the active drawable. While its mask is the edit target the
     /// engine has no mask move — the mask's offset is part of the layer
     /// — so the gesture refuses rather than silently moving the layer.
+    /// Moving the floating selection's pixels is not implemented yet, so
+    /// it is gated with the resolve-first reason like a target switch.
     func moveActiveLayer(by offset: CGSize) {
         guard let layer = activeLayer, offset != .zero,
               !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         guard !isMaskTargetActive else { return refuseMaskEdit() }
         guard !isChannelTargetActive else { return refuseChannelTransform() }
         run { session, image in try session.moveLayer(layer, image: image, by: offset) }
@@ -1015,12 +1038,14 @@ final class ImageDocument {
 
     func transformImage(_ transform: EngineSession.Transform) {
         guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         run { session, image in try session.transformImage(image, transform) }
     }
 
     func transformActiveLayer(_ transform: EngineSession.Transform) {
         guard let layer = activeLayer,
               !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         guard !isMaskTargetActive else { return refuseMaskEdit() }
         guard !isChannelTargetActive else { return refuseChannelTransform() }
         run { session, image in try session.transformLayer(layer, image: image, transform) }
@@ -1029,6 +1054,7 @@ final class ImageDocument {
     // MARK: Channels
 
     func setComponentActive(_ component: EngineSession.Components, to enabled: Bool) {
+        guard !refuseWhileFloatingActive() else { return }
         changeComponents(component, enabled: enabled, editing: true)
     }
 
@@ -1073,6 +1099,7 @@ final class ImageDocument {
     func saveSelectionToChannel(name: String? = nil,
                                 completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
         guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         endPendingUserEdits()
         enqueueTargetCommand({ session, image in
             _ = try session.channelFromSelection(image, name: name)
@@ -1080,7 +1107,8 @@ final class ImageDocument {
     }
 
     func duplicateChannel(_ id: Int32) {
-        guard !refuseWhileEditingUnavailable(), channels.contains(where: { $0.id == id }) else { return }
+        guard !refuseWhileEditingUnavailable(), !refuseWhileFloatingActive(),
+              channels.contains(where: { $0.id == id }) else { return }
         endPendingUserEdits()
         enqueueTargetCommand { session, image in
             _ = try session.channelCommand(.duplicate, channel: id, image: image)
@@ -1088,7 +1116,8 @@ final class ImageDocument {
     }
 
     func deleteChannel(_ id: Int32) {
-        guard !refuseWhileEditingUnavailable(), let row = channels.first(where: { $0.id == id }) else { return }
+        guard !refuseWhileEditingUnavailable(), !refuseWhileFloatingActive(),
+              let row = channels.first(where: { $0.id == id }) else { return }
         guard !row.isQuickMask else {
             onError?("Turn off Quick Mask to remove its channel.")
             return
@@ -1101,7 +1130,8 @@ final class ImageDocument {
 
     func changeChannel(_ id: Int32, _ change: EngineSession.ChannelChange,
                        completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
-        guard !refuseWhileEditingUnavailable(), channels.contains(where: { $0.id == id }) else { return }
+        guard !refuseWhileEditingUnavailable(), !refuseWhileFloatingActive(),
+              channels.contains(where: { $0.id == id }) else { return }
         endPendingUserEdits()
         nextChannelIntent += 1
         let version = nextChannelIntent
@@ -1131,6 +1161,7 @@ final class ImageDocument {
 
     func setQuickMask(_ enabled: Bool) {
         guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         endPendingUserEdits()
         nextChannelIntent += 1
         let version = nextChannelIntent
@@ -1149,6 +1180,7 @@ final class ImageDocument {
     /// Adds a text layer at `position` and makes it the active layer.
     func addText(_ text: String, settings: EngineSession.TextSettings, at position: CGPoint) {
         guard !text.isEmpty, !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         enqueueTargetCommand { session, image in
             _ = try session.addTextLayer(image: image, text: text, settings: settings, at: position)
         }
@@ -1159,6 +1191,7 @@ final class ImageDocument {
     /// a target-changing edit, so it queues as a target command.
     func updateText(_ layer: Int32, text: String?, settings: EngineSession.TextSettings?) {
         guard text != nil || settings != nil, !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         if text?.isEmpty == true {
             enqueueTargetCommand { session, image in
                 _ = try session.layerCommand(.delete, image: image, layer: layer)
@@ -1182,6 +1215,7 @@ final class ImageDocument {
                         interpolation: EngineSession.Interpolation) {
         guard !matrix.isIdentity, !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileTargetPending() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         guard !isChannelTargetActive else { return refuseChannelTransform() }
         guard maskStates[layer]?.editing != true else {
             return refuseMaskEdit()
@@ -1193,16 +1227,19 @@ final class ImageDocument {
 
     func scale(toWidth width: Int, height: Int) {
         guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         run { session, image in try session.scaleImage(image, width: width, height: height) }
     }
 
     func resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: NSColor) {
         guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         run { session, image in try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill) }
     }
 
     func crop(to rect: CGRect) {
         guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         run { session, image in try session.crop(image: image, to: rect) }
     }
 
@@ -1221,6 +1258,7 @@ final class ImageDocument {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
               !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
+        guard !refuseFloatingForCompletion(completion) else { return }
         guard colorInfo.mode != mode else { return completion(.success(())) }
         endPendingUserEdits()
         enqueueExclusive(label: "Converting to \(mode.title)", rejected: {
@@ -1246,6 +1284,7 @@ final class ImageDocument {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
               !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
+        guard !refuseFloatingForCompletion(completion) else { return }
         guard colorInfo.component != component || colorInfo.trc != trc else {
             return completion(.success(()))
         }
@@ -1275,6 +1314,7 @@ final class ImageDocument {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
               !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
+        guard !refuseFloatingForCompletion(completion) else { return }
         guard colorInfo.mode != .indexed else { return completion(.success(())) }
         endPendingUserEdits()
         enqueueExclusive(label: "Converting to indexed", rejected: {
@@ -1304,6 +1344,7 @@ final class ImageDocument {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
               !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
+        guard !refuseFloatingForCompletion(completion) else { return }
         endPendingUserEdits()
         let label = path.map { "Assigning \(URL(fileURLWithPath: $0).lastPathComponent)" }
             ?? "Discarding the color profile"
@@ -1336,6 +1377,7 @@ final class ImageDocument {
         guard colorInfo.mode != .indexed else {
             return completion(.failure(DocumentError.indexedProfileConversion))
         }
+        guard !refuseFloatingForCompletion(completion) else { return }
         endPendingUserEdits()
         let label = path.map { "Converting to \(URL(fileURLWithPath: $0).lastPathComponent)" }
             ?? "Converting to the built-in profile"
@@ -1435,6 +1477,7 @@ final class ImageDocument {
         guard layers.contains(where: { $0.id == layer }) else { return }
         if edit {
             guard !isClosing, !refuseWhileEditingUnavailable() else { return }
+            guard !refuseWhileFloatingActive() else { return }
             endPendingUserEdits()
             enqueueTargetCommand { session, image in
                 // addLayerMask sets the mask's EDITING flag but does not
@@ -1445,6 +1488,7 @@ final class ImageDocument {
                 _ = try session.addLayerMask(layer, image: image, source: source, edit: true)
             }
         } else {
+            guard !refuseWhileFloatingActive() else { return }
             runMaskCommand { session, image in
                 _ = try session.addLayerMask(layer, image: image, source: source, edit: false)
             }
@@ -1456,14 +1500,14 @@ final class ImageDocument {
     /// paint target, so it queues as a target command. The engine
     /// refuses Apply on groups and text, link and vector layers.
     func applyMask() {
-        guard let layer = activeLayer else { return }
+        guard let layer = activeLayer, !refuseWhileFloatingActive() else { return }
         runMaskTargetCommand { session, image in
             try session.applyLayerMask(layer, image: image, mode: .apply)
         }
     }
 
     func deleteMask() {
-        guard let layer = activeLayer else { return }
+        guard let layer = activeLayer, !refuseWhileFloatingActive() else { return }
         runMaskTargetCommand { session, image in
             try session.applyLayerMask(layer, image: image, mode: .discard)
         }
@@ -1472,7 +1516,8 @@ final class ImageDocument {
     /// Layer ▸ Mask ▸ Enable Mask: toggles whether the active layer's
     /// mask affects the composite.
     func toggleMaskEnabled() {
-        guard let layer = activeLayer, let state = maskState(for: layer) else { return }
+        guard let layer = activeLayer, !refuseWhileFloatingActive(),
+              let state = maskState(for: layer) else { return }
         setMaskFlags(layer, flags: [.enabled], values: state.enabled ? [] : [.enabled])
     }
 
@@ -1480,7 +1525,7 @@ final class ImageDocument {
     /// layer — the same target change the layer and mask thumbnails
     /// make, so it queues ahead of later input like they do.
     func toggleMaskEditing() {
-        guard let layer = activeLayer else { return }
+        guard let layer = activeLayer, !refuseWhileFloatingActive() else { return }
         if isMaskTargetActive { selectLayer(layer) } else { editMask(layer) }
     }
 
@@ -1488,7 +1533,8 @@ final class ImageDocument {
     /// toggles `layer`'s mask display. This is a view flag — it neither
     /// selects the layer nor changes the paint target.
     func toggleMaskShowing(_ layer: Int32? = nil) {
-        guard let id = layer ?? activeLayer, let state = maskState(for: id) else { return }
+        guard let id = layer ?? activeLayer, !refuseWhileFloatingActive(),
+              let state = maskState(for: id) else { return }
         setMaskFlags(id, flags: [.showing], values: state.showing ? [] : [.showing])
     }
 
@@ -1599,6 +1645,7 @@ final class ImageDocument {
     /// black stroke) — the foreground color is not applied to it.
     func toVectorLayer(_ id: Int32, name: String? = nil) {
         guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         // A stale row's id (the path is gone) runs nothing.
         guard paths.contains(where: { $0.id == id }) else { return }
         if session.supportsVectorLayers == false {
@@ -1628,6 +1675,7 @@ final class ImageDocument {
             return
         }
         guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
         guard layers.contains(where: { $0.id == layer && $0.kind == .vector }) else {
             onError?(DocumentError.targetChanged.localizedDescription)
             NSSound.beep()
@@ -1902,15 +1950,89 @@ final class ImageDocument {
 
     /// Edit ▸ Paste: the payload becomes a new layer the engine selects,
     /// so it queues as a target command. `origin` resolves the placement
-    /// on the queue once the payload is decoded.
+    /// on the queue once the payload is decoded. While a floating
+    /// selection is active an ordinary Paste would implicitly anchor it,
+    /// so it is refused with the resolve-first reason; without one its
+    /// behavior is unchanged.
     func pastePixels(_ payload: ClipboardImage.Payload, origin: @escaping (ClipboardImage) -> CGPoint,
                      completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
+        guard !refuseFloatingForCompletion(completion) else { return }
         endPendingUserEdits()
         enqueueTargetCommand({ session, image in
             let pixels = try payload.decoded()
             _ = try session.pastePixels(image, pixels: pixels, at: origin(pixels))
+        }, completion: completion)
+    }
+
+    // MARK: Floating selection (Paste Into)
+
+    /// Whether Edit ▸ Paste Into may run on the current paint target,
+    /// from cached state only: an explicit drawable id (never 0), or the
+    /// refusal reason. Menu validation and the controller's capture read
+    /// this; no engine call happens here.
+    var pasteIntoReadiness: FloatingControlsLogic.PasteIntoTarget {
+        FloatingControlsLogic.pasteIntoTarget(activeDrawable, state: floatingState, layers: layers,
+                                              maskStates: maskStates, channels: channels, sources: layerSources,
+                                              locks: layerLocks, acceptsEdits: acceptsEdits,
+                                              pendingTarget: !pendingTargetCommands.isEmpty)
+    }
+
+    /// Whether resolving the active floating selection with `command`
+    /// may run now, from cached state only — the palette's Anchor / New
+    /// Layer / Discard controls and their menu items validate through it.
+    func floatingResolutionReadiness(_ command: EngineSession.FloatingCommand) -> FloatingControlsLogic.Readiness {
+        FloatingControlsLogic.resolution(command, state: floatingState, layers: layers, maskStates: maskStates,
+                                         sources: layerSources, locks: layerLocks, acceptsEdits: acceptsEdits,
+                                         pendingTarget: !pendingTargetCommands.isEmpty)
+    }
+
+    /// Edit ▸ Paste Into: the payload's pixels become a floating
+    /// selection attached to the explicit `target` drawable — the
+    /// document and the target id are captured with the payload here and
+    /// never fall back to the front document or a layer-0 target at
+    /// execution. The payload is decoded on the input queue and the
+    /// paste runs as one counted, serial target command behind every
+    /// accepted edit, so a close drains it before destroying the image.
+    func pasteIntoPixels(_ payload: ClipboardImage.Payload, target: Int32,
+                         completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
+        guard !refuseWhileTargetPending() else { return completion(.failure(DocumentError.busy)) }
+        let readiness = FloatingControlsLogic.pasteIntoTarget(target, state: floatingState, layers: layers,
+            maskStates: maskStates, channels: channels, sources: layerSources, locks: layerLocks,
+            acceptsEdits: acceptsEdits, pendingTarget: !pendingTargetCommands.isEmpty)
+        guard let drawable = readiness.drawable else {
+            return completion(.failure(FloatingError.refused(readiness.reason ?? DocumentError.busy.localizedDescription)))
+        }
+        endPendingUserEdits()
+        enqueueTargetCommand({ session, image in
+            let pixels = try payload.decoded()
+            _ = try session.pasteInto(image, target: drawable, pixels: pixels)
+        }, completion: completion)
+    }
+
+    /// Resolves the active floating selection with `command` — Anchor,
+    /// New Layer or Discard — as one counted, serial target command. The
+    /// expected floating id is the one this document cached at its last
+    /// reload, captured now and passed explicitly: the engine never
+    /// falls back to whichever floating selection happens to be active,
+    /// and a stale or zero id fails with NOT_FOUND / INVALID_ARGUMENT.
+    func resolveFloatingSelection(_ command: EngineSession.FloatingCommand,
+                                  completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
+        guard !refuseWhileTargetPending() else { return completion(.failure(DocumentError.busy)) }
+        let expected = floatingState.floating
+        let readiness = floatingResolutionReadiness(command)
+        guard readiness.allowed else {
+            return completion(.failure(FloatingError.refused(readiness.reason
+                ?? "The floating selection cannot be resolved now.")))
+        }
+        endPendingUserEdits()
+        enqueueTargetCommand({ session, image in
+            _ = try session.floatingCommand(command, image: image, expected: expected)
         }, completion: completion)
     }
 
@@ -2227,6 +2349,30 @@ final class ImageDocument {
             let result = Result { try session.setFilterProperty(filter, property, to: value) }
             DispatchQueue.main.async { completion(result) }
         }
+    }
+
+    /// While a floating selection is active, commands that would
+    /// implicitly anchor it or change the layer/mask/channel structure
+    /// underneath it — target switches, structural layer and mask
+    /// commands, channel edits, an ordinary Paste, image-wide pixel and
+    /// color operations — are refused with the resolve-first reason.
+    /// Painting, fills and Copy land on the floating layer instead (see
+    /// `paintTarget`), and Undo/Redo stay available and refresh the
+    /// cached floating state. No automatic anchor is performed.
+    private func refuseWhileFloatingActive() -> Bool {
+        guard let reason = FloatingControlsLogic.resolveFirstGate(floatingState) else { return false }
+        onUserCommand?()
+        onError?(reason)
+        NSSound.beep()
+        return true
+    }
+
+    /// The completion-taking form of the same gate.
+    private func refuseFloatingForCompletion(_ completion: @escaping @MainActor (Result<Void, Error>) -> Void) -> Bool {
+        guard let reason = FloatingControlsLogic.resolveFirstGate(floatingState) else { return false }
+        onUserCommand?()
+        completion(.failure(FloatingError.refused(reason)))
+        return true
     }
 
     /// While a queued command has yet to report the drawable it creates

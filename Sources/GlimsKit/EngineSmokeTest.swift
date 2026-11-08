@@ -105,6 +105,8 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+
+
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "file-safety" {
                 try exerciseFileSafety(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (file safety)" : "FAILED: \(failures) failure(s)")
@@ -224,6 +226,11 @@ enum EngineSmokeTest {
 
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "floating-controls" {
+                try exerciseFloatingControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (floating controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
                 check(false, "unknown engine smoke case: \(selected)")
 
@@ -277,6 +284,8 @@ enum EngineSmokeTest {
             try exerciseResourceCatalog(session)
             try exerciseGuideCache(session, documents: documents)
             try exerciseLayerSourceCache(session, documents: documents)
+            try exerciseFloatingControls(session, work: work, documents: documents)
+
             try exerciseLayerSourceControls(session, work: work, documents: documents)
 
             try exerciseIndexedWrapper(session)
@@ -5025,11 +5034,11 @@ enum EngineSmokeTest {
         windowB.orderOut(nil)
     }
 
-    private static func buttons(in view: NSView) -> [NSButton] {
+    static func buttons(in view: NSView) -> [NSButton] {
         ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(buttons)
     }
 
-    private static func descendant<View: NSView>(of view: NSView, as type: View.Type,
+    static func descendant<View: NSView>(of view: NSView, as type: View.Type,
                                                    matching predicate: (View) -> Bool = { _ in true }) -> View? {
         if let match = view as? View, predicate(match) { return match }
         for child in view.subviews {
@@ -10179,6 +10188,16 @@ enum EngineSmokeTest {
         check(try session.copyPixels(image, merged: true).pixels == beforeDefault,
               "undo restores the pixels before the Default gesture")
     }
+
+    /// The floating-selection controls end to end: Edit ▸ Paste Into's
+    /// two-document capture of document + explicit target + clipboard
+    /// RGBA payload, the selection-clipped preview, the selection staying
+    /// unchanged, explicit expected-id resolution and the Undo/Redo cache
+    /// refresh, BUSY/lock/rasterize refusals, the mask/channel New Layer
+    /// gates, the paint target owning painting while attached to a mask
+    /// or channel, the real menu and palette buttons, and close draining
+    /// accepted work before the image is destroyed. Oracles are the
+    /// session's own pixel, floating-state and selection reads.
 
 }
 
