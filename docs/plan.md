@@ -719,16 +719,15 @@ resets and owned strings freed. All four engine prefixes built by
 `scripts/build-engine.sh` install stock brush, pattern and gradient
 files (47/58/78), and the tests require at least one file-backed and
 one built-in resource per kind, so a built-in-only listing cannot pass.
-Checked here: compile and syntax checks only: every `Engine/*.c`
-against the pinned set and the changed translation units against all
-four sets with their existing `compile.rsp` flags, and
-`engine-tests.c` with its own `-std=c11 -Wall -Wextra -Werror` flags,
-plus the facade header standalone in C and C++. Not run here (the root
-owns the native runtime): adapter build and link, the conformance runs
-on the four engine sets, bundle checks and any Swift build. Pending
-runtime validation: `scripts/build-adapter.sh --test` per engine set
-before merge; later slices cover thumbnails, selection and application
-of resources, settings, management and the choosers' UI.
+Validation: all four private adapter builds and native conformance runs
+pass: 820 checks on 3.2.8, 3.2.0 and master, and 787 on 3.0.8. The
+installed stock files (47/58/78 above) differ from loaded factory totals:
+the pinned runtime lists 58 brushes, 59 patterns and 77 gradients. Added
+high-bit handle regressions prove that a 64-bit handle is rejected before
+narrowing it to a live 32-bit native id. Independent Mistral Large 4
+review found no important issues. Swift build and unit integration are
+recorded in the PR; thumbnails, resource selection and application,
+settings, management and chooser UI remain later slices.
 
 ## Later, before any public release
 
