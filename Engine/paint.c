@@ -178,10 +178,13 @@ set_tool_options (GimpPaintOptions         *options,
     }
 }
 
+/* `brush_resource` is the stroke's own selected brush, or NULL to inherit
+ * the user context's current brush as stroke_begin() always did. */
 static GimpPaintOptions *
 make_options (Gimp                     *gimp,
               GimpPaintInfo            *info,
-              const GlimsBrushSettings *brush)
+              const GlimsBrushSettings *brush,
+              GimpBrush                *brush_resource)
 {
   GimpPaintOptions *options;
   GimpContext      *context;
@@ -196,6 +199,18 @@ make_options (Gimp                     *gimp,
    * app chose. */
   gimp_context_define_properties (context, GIMP_CONTEXT_PROP_MASK_PAINT, FALSE);
   gimp_context_set_parent (context, gimp_get_user_context (gimp));
+
+  if (brush_resource)
+    {
+      /* Define the property locally BEFORE assigning it: for an undefined
+       * property gimp_context_set_brush() walks up to the parent — here
+       * the shared user context, which must never be mutated — and the
+       * local definition also shields this stroke from later parent
+       * changes. Set on the stroke's own context, the brush is held
+       * strongly (g_set_object) for the whole stroke. */
+      gimp_context_define_property (context, GIMP_CONTEXT_PROP_BRUSH, TRUE);
+      gimp_context_set_brush (context, brush_resource);
+    }
 
   color = gegl_color_new (NULL);
   gegl_color_set_rgba_with_space (color, brush->red, brush->green, brush->blue, 1.0, NULL);
@@ -257,14 +272,18 @@ read_brush (const GlimsBrushSettings *brush,
   return settings->tool < G_N_ELEMENTS (paint_infos);
 }
 
-GlimsStatus
-glims_stroke_begin (GlimsEngine              *engine,
-                    GlimsImageID              image_id,
-                    GlimsItemID               layer_id,
-                    const GlimsBrushSettings *brush,
-                    const GlimsStrokePoint   *first,
-                    GlimsStrokeID            *out,
-                    char                    **error)
+/* The one paint-begin path behind stroke_begin and
+ * stroke_begin_with_brush_resource: `brush_resource` is the stroke's own
+ * selected brush, or NULL to inherit the user context's brush. */
+static GlimsStatus
+stroke_begin_common (GlimsEngine              *engine,
+                     GlimsImageID              image_id,
+                     GlimsItemID               layer_id,
+                     const GlimsBrushSettings *brush,
+                     GimpBrush                *brush_resource,
+                     const GlimsStrokePoint   *first,
+                     GlimsStrokeID            *out,
+                     char                    **error)
 {
   GlimsOpenImage     *open = glims_lookup_image (engine, image_id);
   GlimsBrushSettings  settings;
@@ -278,6 +297,8 @@ glims_stroke_begin (GlimsEngine              *engine,
   GlimsStatus         status;
   uint32_t            locks = GLIMS_LOCK_PIXELS;
 
+  if (out)
+    *out = 0;  /* a refused call leaves no stroke id behind */
   if (! open)
     return GLIMS_STATUS_NOT_FOUND;
   if (! read_brush (brush, &settings) || ! first || ! out || ! (settings.size > 0.0))
@@ -317,7 +338,7 @@ glims_stroke_begin (GlimsEngine              *engine,
   stroke = g_new0 (GlimsStroke, 1);
   stroke->image     = g_object_ref (open->image);
   stroke->drawable  = g_object_ref (drawable);
-  stroke->options   = make_options (engine->gimp, info, brush);
+  stroke->options   = make_options (engine->gimp, info, brush, brush_resource);
   stroke->core      = g_object_new (info->paint_type, "undo-desc", info->blurb, NULL);
   set_tool_options (stroke->options, brush, source);
 
@@ -347,6 +368,51 @@ glims_stroke_begin (GlimsEngine              *engine,
   *out = id;
 
   return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_stroke_begin (GlimsEngine              *engine,
+                    GlimsImageID              image_id,
+                    GlimsItemID               layer_id,
+                    const GlimsBrushSettings *brush,
+                    const GlimsStrokePoint   *first,
+                    GlimsStrokeID            *out,
+                    char                    **error)
+{
+  return stroke_begin_common (engine, image_id, layer_id, brush, NULL, first, out, error);
+}
+
+GlimsStatus
+glims_stroke_begin_with_brush_resource (GlimsEngine              *engine,
+                                        GlimsImageID              image_id,
+                                        GlimsItemID               layer_id,
+                                        GlimsResourceID           brush_id,
+                                        const GlimsBrushSettings *brush,
+                                        const GlimsStrokePoint   *first,
+                                        GlimsStrokeID            *out,
+                                        char                    **error)
+{
+  GimpBrush   *resource = NULL;
+  GlimsStatus  status;
+
+  if (! out)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  *out = 0;
+
+  /* Resolved once, here at begin, on the engine thread: the stroke keeps
+   * exactly this brush for its whole life, whatever the caller's settings
+   * or the shared user context become later. */
+  status = glims_lookup_brush (engine, brush_id, &resource);
+  if (status != GLIMS_STATUS_OK)
+    {
+      if (error)
+        *error = strdup (status == GLIMS_STATUS_INVALID_ARGUMENT
+                         ? "This handle cannot name a brush."
+                         : "This brush is no longer in the engine's brush factory.");
+      return status;
+    }
+
+  return stroke_begin_common (engine, image_id, layer_id, brush, resource, first, out, error);
 }
 
 GlimsStatus
