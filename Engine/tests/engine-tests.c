@@ -675,6 +675,334 @@ test_layer_fit_trim (void)
   api->image_close (engine, image);
 }
 
+static int            supports_vector_layers (void);
+static int            supports_link_layers (void);
+static GlimsPathPoint corner (double x, double y);
+
+/* The source test deliberately creates a group, so an inserted source
+ * layer can be nested or follow another top-level layer. Match identity,
+ * never assume the edited layer is the first row of the tree. */
+static bool
+source_test_row (GlimsImageID image, GlimsItemID item, GlimsLayerInfo *out)
+{
+  GlimsLayerInfo rows[8];
+  int32_t count = 0;
+
+  if (api->image_layers (engine, image, rows, 8, &count) != GLIMS_STATUS_OK || count > 8)
+    return false;
+  for (int32_t i = 0; i < count; i++)
+    if (rows[i].id == item)
+      {
+        *out = rows[i];
+        return true;
+      }
+  return false;
+}
+
+/* Structured layer sources: layer_source_info's native kind and state,
+ * the retained source after pixel painting, the explicit RASTERIZE
+ * command with its undo/redo, unchanged render/selection/bounds, repeat
+ * no-ops, own and inherited locks, invalid/foreign/closed ids, BUSY and
+ * XCF round trips. Link and vector parts run on GIMP 3.2+ only. */
+static void
+test_layer_source (const char *work)
+{
+  GlimsImageID         image = 0, other = 0, reopened = 0;
+  GlimsItemID          layer = 0, other_layer = 0, group = 0, text = 0, painted = 0;
+  GlimsItemID          path = 0, vector = 0, link = 0, foreign = 0;
+  GlimsLayerInfo       rows[8], row = { 0 };
+  GlimsLayerSourceInfo info, small;
+  GlimsTextSettings    settings = { .struct_size = sizeof settings, .size = 24,
+                                    .color = { 0, 0, 0, 1 }, .justify = GLIMS_JUSTIFY_LEFT,
+                                    .antialias = true };
+  GlimsSubpath         square[1] = { { .count = 4, .closed = true } };
+  GlimsPathPoint       points[4] = { corner (20, 20), corner (80, 20), corner (80, 80), corner (20, 80) };
+  GlimsBrushSettings   brush = brush_for (GLIMS_PAINT_PENCIL, 8);
+  GlimsStrokePoint     point = { .x = 30, .y = 30, .pressure = 1.0 };
+  GlimsStrokeID        stroke = 0;
+  GlimsFilterID        filter = 0;
+  GlimsRect            bounds_before = { 0 }, sel_before = { 0 };
+  bool                 sel_empty = true;
+  GlimsImageID         saved_for_link = 0;
+  GlimsFillSettings    red = { .struct_size = sizeof red, .mode = GLIMS_FILL_SELECTION,
+                               .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  int32_t              n = 0, before, i, found;
+  char                *fonts = NULL, *error = NULL, *newline, xcf[1024], png[1024];
+  uint8_t             *shot = NULL, *after = NULL;
+  int32_t              w = 0, h = 0, w2 = 0, h2 = 0;
+  int                  vectors, links;
+
+  vectors = supports_vector_layers ();
+  links   = supports_link_layers ();
+
+  CHECK (api->fonts (engine, &fonts) == GLIMS_STATUS_OK && fonts && *fonts,
+         "the engine lists fonts for the source tests");
+  if (! fonts || ! *fonts)
+    {
+      api->free_string (fonts);
+      return;
+    }
+  if (strstr (fonts, "Sans-serif\n") == fonts || strstr (fonts, "\nSans-serif\n"))
+    strcpy (settings.font, "Sans-serif");
+  else
+    {
+      newline = strchr (fonts, '\n');
+      snprintf (settings.font, sizeof settings.font, "%.*s",
+                (int) (newline ? newline - fonts : (ptrdiff_t) strlen (fonts)), fonts);
+    }
+  api->free_string (fonts);
+
+  api->image_new (engine, 200, 120, &image, NULL);
+  layer = first_layer (image);
+  api->image_new (engine, 60, 40, &other, NULL);
+  other_layer = first_layer (other);
+
+  /* The read's validation: struct_size, identities, refusals. */
+  memset (&info, 0, sizeof info);
+  info.struct_size = sizeof info;
+  CHECK (api->layer_source_info (engine, 9999, layer, &info, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->layer_source_info (engine, image, layer, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->layer_source_info (engine, image, 4242, &info, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->layer_source_info (engine, image, other_layer, &info, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "source-info refuses unknown ids, a foreign layer and a missing output");
+  memset (&small, 0, sizeof small);
+  small.struct_size = sizeof small - 1;
+  CHECK (api->layer_source_info (engine, image, layer, &small, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a short output struct is refused");
+
+  CHECK (api->layer_source_info (engine, image, layer, &info, NULL) == GLIMS_STATUS_OK &&
+         info.struct_size == sizeof info && info.source_kind == GLIMS_LAYER_PIXEL &&
+         ! info.is_rasterized && ! info.has_source,
+         "an ordinary pixel layer reports PIXEL, editable, no source");
+  api->create_group (engine, image, 0, 0, "Group", &group, NULL);
+  CHECK (api->layer_source_info (engine, image, group, &info, NULL) == GLIMS_STATUS_OK &&
+         info.source_kind == GLIMS_LAYER_GROUP && ! info.is_rasterized && ! info.has_source,
+         "a group reports GROUP, editable, no source");
+
+  /* The command's refusals come before any mutation. */
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_RASTERIZE, NULL, &error)
+           == GLIMS_STATUS_UNSUPPORTED && error &&
+         api->layer_command (engine, image, group, GLIMS_LAYER_RASTERIZE, NULL, NULL)
+           == GLIMS_STATUS_UNSUPPORTED &&
+         api->layer_command (engine, image, 4242, GLIMS_LAYER_RASTERIZE, NULL, NULL)
+           == GLIMS_STATUS_NOT_FOUND &&
+         api->layer_command (engine, image, other_layer, GLIMS_LAYER_RASTERIZE, NULL, NULL)
+           == GLIMS_STATUS_NOT_FOUND &&
+         api->layer_command (engine, 4242, layer, GLIMS_LAYER_RASTERIZE, NULL, NULL)
+           == GLIMS_STATUS_NOT_FOUND &&
+         undo_depth (image) == before,
+         "pixels and groups are UNSUPPORTED, stale/foreign/unknown ids NOT_FOUND (%s)",
+         error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* A genuine text layer: source kind, rasterize, undo/redo, no-op. */
+  CHECK (api->text_layer_new (engine, image, "Hi", &settings, (GlimsPoint) { 10, 10 },
+                            &text, NULL) == GLIMS_STATUS_OK && text != 0,
+         "the text layer for the source tests exists");
+  CHECK (api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
+         info.source_kind == GLIMS_LAYER_TEXT && ! info.is_rasterized && info.has_source,
+         "a genuine text layer reports TEXT, editable, with its source");
+
+  api->layer_select (engine, image, text);
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 0, 0 }, { 150, 90 } }, 2, NULL);
+  api->selection_bounds (engine, image, &sel_empty, &sel_before);
+  CHECK (source_test_row (image, text, &row), "the text source row resolves by identity");
+  bounds_before = row.bounds;
+  shot = render_all (image, &w, &h);
+
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "rasterizing a genuine text layer is one undo step");
+  CHECK (api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
+         info.source_kind == GLIMS_LAYER_TEXT && info.is_rasterized && info.has_source,
+         "the rasterized text keeps its TEXT source kind and retained text");
+  CHECK (source_test_row (image, text, &row) && row.kind == GLIMS_LAYER_PIXEL &&
+         rect_equals (row.bounds, bounds_before.x, bounds_before.y,
+                      bounds_before.width, bounds_before.height),
+         "the layer reads PIXEL in the tree with unchanged bounds");
+  after = render_all (image, &w2, &h2);
+  CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
+         "the composite is pixel-identical after rasterizing");
+  free (shot);
+  free (after);
+  {
+    bool       empty = false;
+    GlimsRect  sel   = { 0 };
+
+    CHECK (api->selection_bounds (engine, image, &empty, &sel) == GLIMS_STATUS_OK &&
+           empty == sel_empty && rect_equals (sel, sel_before.x, sel_before.y,
+                                              sel_before.width, sel_before.height),
+           "the selection is unchanged");
+  }
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "repeating the command on the retained-source layer is a no-op without history");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
+         ! info.is_rasterized && info.has_source &&
+         source_test_row (image, text, &row) && row.kind == GLIMS_LAYER_TEXT,
+         "undo restores the editable text layer");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
+         info.is_rasterized,
+         "redo rasterizes it again");
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+
+  /* Painting the text's pixels rasterizes it natively; the source is
+   * retained and the explicit command is then a no-op without history. */
+  CHECK (api->text_layer_new (engine, image, "Yo", &settings, (GlimsPoint) { 100, 60 },
+                            &painted, NULL) == GLIMS_STATUS_OK && painted != 0,
+         "a second text layer is painted over");
+  CHECK (stroke_line (image, painted, &brush, 105, 65, 140, 65, &error) == GLIMS_STATUS_OK &&
+         api->layer_source_info (engine, image, painted, &info, NULL) == GLIMS_STATUS_OK &&
+         info.source_kind == GLIMS_LAYER_TEXT && info.is_rasterized && info.has_source,
+         "painting the text's pixels rasterizes it with the source retained%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, painted, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "the explicit command on the painted-over text is a no-op");
+
+  /* Locks refuse before mutation; a group's inherited lock counts. */
+  api->set_layer_locks (engine, image, text, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION,
+                        GLIMS_LOCK_PIXELS, NULL);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_LOCKED,
+         "a pixel lock refuses rasterize");
+  api->set_layer_locks (engine, image, text, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION,
+                        GLIMS_LOCK_POSITION, NULL);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_LOCKED,
+         "a position lock refuses rasterize");
+  api->set_layer_locks (engine, image, text, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, 0, NULL);
+  api->reparent_layer (engine, image, text, group, 0, NULL);
+  api->set_layer_locks (engine, image, group, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_LOCKED,
+         "an inherited group pixel lock refuses rasterize");
+  api->set_layer_locks (engine, image, group, GLIMS_LOCK_PIXELS, 0, NULL);
+
+  /* An open stroke or filter session makes the command BUSY, but the
+   * read stays allowed. */
+  if (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK)
+    {
+      CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_BUSY &&
+             api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK,
+             "rasterize is BUSY during a stroke while the read stays open");
+      api->stroke_end (engine, stroke);
+    }
+  else
+    CHECK (0, "the stroke for the rasterize busy check began");
+  api->layer_select (engine, image, layer);
+  if (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK)
+    {
+      CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_BUSY,
+             "rasterize is BUSY during a filter preview");
+      api->filter_abort (engine, filter);
+    }
+  else
+    CHECK (0, "the filter session for the busy check opened");
+
+  /* A rasterized text layer keeps kind, flag and source over XCF. */
+  api->reparent_layer (engine, image, text, 0, 0, NULL);
+  snprintf (xcf, sizeof xcf, "%s/rasterized-text.xcf", work);
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK,
+         "the image with the rasterized text saves and reopens");
+  if (reopened)
+    {
+      found = 0;
+      CHECK (api->image_layers (engine, reopened, rows, 8, &n) == GLIMS_STATUS_OK, "rows");
+      for (i = 0; i < n; i++)
+        if (strcmp (rows[i].name, "Hi") == 0 && rows[i].kind == GLIMS_LAYER_PIXEL &&
+            api->layer_source_info (engine, reopened, rows[i].id, &info, NULL) == GLIMS_STATUS_OK &&
+            info.source_kind == GLIMS_LAYER_TEXT && info.is_rasterized && info.has_source)
+          found = 1;
+      CHECK (found, "the XCF round trip keeps the rasterized text's kind, flag and source");
+      api->image_close (engine, reopened);
+      reopened = 0;
+    }
+
+  if (vectors)
+    {
+      /* A genuine vector layer: same contract through the path source. */
+      CHECK (api->path_set (engine, image, 0, "Shape", square, 1, points, 4, &path, NULL) == GLIMS_STATUS_OK &&
+             api->path_to_vector_layer (engine, image, path, "Vector", &vector, NULL) == GLIMS_STATUS_OK,
+             "the vector layer for the source tests exists");
+      CHECK (api->layer_source_info (engine, image, vector, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_VECTOR && ! info.is_rasterized && info.has_source,
+             "a genuine vector layer reports VECTOR, editable, with its path");
+      shot = render_all (image, &w, &h);
+      before = undo_depth (image);
+      CHECK (api->layer_command (engine, image, vector, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (image) == before + 1 &&
+             api->layer_source_info (engine, image, vector, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_VECTOR && info.is_rasterized && info.has_source &&
+             source_test_row (image, vector, &row) && row.kind == GLIMS_LAYER_PIXEL,
+             "rasterizing the vector is one undo step keeping kind, flag and path");
+      after = render_all (image, &w2, &h2);
+      CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
+             "the vector's composite is unchanged by rasterizing");
+      free (shot);
+      free (after);
+      before = undo_depth (image);
+      CHECK (api->layer_command (engine, image, vector, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (image) == before &&
+             api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+             api->layer_source_info (engine, image, vector, &info, NULL) == GLIMS_STATUS_OK &&
+             ! info.is_rasterized && info.has_source &&
+             api->image_redo (engine, image) == GLIMS_STATUS_OK,
+             "repeat is a no-op; undo restores the editable vector and its path");
+    }
+
+  if (links)
+    {
+      /* A link layer: rasterize stops the monitor; the link itself is
+       * retained; undo remonitors. */
+      snprintf (png, sizeof png, "%s/source-link.png", work);
+      CHECK (api->image_new (engine, 40, 30, &saved_for_link, NULL) == GLIMS_STATUS_OK &&
+             api->fill (engine, saved_for_link, (GlimsPoint) { 0, 0 }, &red, NULL) == GLIMS_STATUS_OK &&
+             api->image_export (engine, saved_for_link, png, NULL) == GLIMS_STATUS_OK &&
+             api->image_close (engine, saved_for_link) == GLIMS_STATUS_OK,
+             "a source PNG for the link test is exported");
+      saved_for_link = 0;
+      CHECK (api->image_place_link (engine, image, png, &link, NULL) == GLIMS_STATUS_OK && link != 0 &&
+             api->layer_source_info (engine, image, link, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_LINK && ! info.is_rasterized && info.has_source,
+             "a genuine link layer reports LINK, editable, with its link");
+      before = undo_depth (image);
+      CHECK (api->layer_command (engine, image, link, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (image) == before + 1 &&
+             api->layer_source_info (engine, image, link, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_LINK && info.is_rasterized && info.has_source,
+             "rasterizing the link unmonitors it but retains the source");
+      before = undo_depth (image);
+      CHECK (api->layer_command (engine, image, link, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (image) == before,
+             "the already unmonitored link is a no-op without history");
+      CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+             api->layer_source_info (engine, image, link, &info, NULL) == GLIMS_STATUS_OK &&
+             ! info.is_rasterized && info.has_source &&
+             source_test_row (image, link, &row) && row.kind == GLIMS_LAYER_LINK,
+             "undo remonitors the link layer");
+      api->image_redo (engine, image);
+    }
+
+  /* A closed image's layer id is NOT_FOUND everywhere. */
+  foreign = other_layer;
+  api->image_close (engine, other);
+  CHECK (api->layer_source_info (engine, image, foreign, &info, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->layer_command (engine, image, foreign, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a closed image's layer id is NOT_FOUND");
+  other = 0;
+
+  api->image_close (engine, image);
+}
+
 static void
 test_transforms (void)
 {
@@ -8846,6 +9174,7 @@ main (int argc, char **argv)
   test_selections ();
   test_editing ();
   test_layer_fit_trim ();
+  test_layer_source (argv[2]);
   test_clipboard ();
   test_clear_srgb_and_readiness (argv[3]);
   test_render_freshness ();
