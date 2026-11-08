@@ -2765,6 +2765,37 @@ test_drawable_effects (const char *work)
  * and gegl:value-invert complements the gamma value, so a +0.2 lift is
  * ~173, -0.2 ~34, +0.4 ~208; invert->lift->invert is ~84. */
 static void
+test_filter_edit_history_gate (void)
+{
+  GlimsImageID image = 0;
+  GlimsLayerInfo layer;
+  GlimsEffectInfo effect;
+  GlimsFilterID session = 0;
+  GlimsEffectID effect_id;
+  int32_t count = 0;
+
+  api->image_new (engine, 16, 16, &image, NULL);
+  api->image_layers (engine, image, &layer, 1, &count);
+  api->filter_begin (engine, image, layer.id, "gegl:brightness-contrast", &session, NULL);
+  api->filter_set_double (engine, session, "brightness", -0.1);
+  api->filter_commit (engine, session, NULL);
+  api->drawable_effects (engine, image, layer.id, &effect, 1, &count);
+  effect_id = effect.id;
+  api->filter_edit_begin (engine, image, layer.id, effect_id, &session, NULL);
+  api->filter_set_double (engine, session, "brightness", -0.2);
+
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_BUSY,
+         "raw redo refuses during an effect edit, even with an empty redo stack");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_BUSY,
+         "raw undo cannot detach the effect being edited");
+  CHECK (api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer.id, &effect, 1, &count) == GLIMS_STATUS_OK &&
+         count == 1 && effect.id == effect_id,
+         "commit after refused history commands keeps the edited effect reachable");
+  api->image_close (engine, image);
+}
+
+static void
 test_filter_edit (const char *work)
 {
   GlimsImageID       image = 0, reopened = 0, other = 0;
@@ -4900,6 +4931,7 @@ main (int argc, char **argv)
   test_channels (argv[2]);
   test_drawable_filters (argv[2]);
   test_drawable_effects (argv[2]);
+  test_filter_edit_history_gate ();
   test_filter_edit (argv[2]);
   test_qmask_name_fixture (argv[3]);
   test_procedures ();
