@@ -44,6 +44,11 @@ final class ImageDocument {
     private(set) var components: EngineSession.ComponentState?
     private(set) var channels: [EngineSession.Channel] = []
     private(set) var quickMaskState: EngineSession.QuickMaskState?
+    /// The image's color model, precision and effective profile, read
+    /// with the rest of the state. The window title, the Mode checkmarks,
+    /// the Precision form and the Image Information sheet all read this
+    /// cache; none of them asks the engine while it validates a menu.
+    private(set) var colorInfo: EngineSession.ColorInfo
     /// Bumped by every reload; thumbnail caches key on it so a result
     /// read for an older state never lands on a newer row.
     private(set) var stateVersion = 0
@@ -189,6 +194,7 @@ final class ImageDocument {
         self.name = name
         self.fileState = DocumentFileState(openedFrom: source)
         self.info = try session.info(image)
+        self.colorInfo = try session.colorInfo(image)
         try reload()
         EngineActivity.shared.register(self)
     }
@@ -225,6 +231,7 @@ final class ImageDocument {
         components = try session.components(image)
         channels = try session.channels(image)
         quickMaskState = try session.quickMask(image)
+        colorInfo = try session.colorInfo(image)
         mirrorChannelIntents()
         if let pick = pendingTargetPick {
             channels = channels.map { row in
@@ -455,6 +462,25 @@ final class ImageDocument {
         onStateChange?()
     }
 
+    /// The engine-reading refreshes `handle` asks for, collected while
+    /// an exclusive engine activity runs: a pure-core call (a mode or
+    /// precision conversion on a large image, a file call) can emit
+    /// events before it returns, and a synchronous reload would wait on
+    /// the engine thread behind that call, stalling the main thread.
+    /// The pending kinds coalesce into one deferred refresh that runs
+    /// through EngineActivity.whenIdle once the engine frees up.
+    private struct PendingRefresh: OptionSet {
+        let rawValue: Int
+        /// A full state reload (size, layers, undo, color state).
+        static let state = PendingRefresh(rawValue: 1 << 0)
+        /// The selection outline read.
+        static let selection = PendingRefresh(rawValue: 1 << 1)
+        /// Fires the size callback after the reload.
+        static let size = PendingRefresh(rawValue: 1 << 2)
+    }
+    private var pendingRefresh: PendingRefresh = []
+    private var refreshIsScheduled = false
+
     func handle(_ event: EngineSession.Event) {
         switch event {
         case .projectionChanged(let image, let rect) where image == self.image:
@@ -462,15 +488,36 @@ final class ImageDocument {
         case .layersChanged(let image) where image == self.image,
              .channelsChanged(let image) where image == self.image,
              .undoChanged(let image) where image == self.image:
-            try? reload()
+            scheduleRefresh(.state)
         case .selectionChanged(let image) where image == self.image:
-            refreshSelection()
+            scheduleRefresh(.selection)
         case .sizeChanged(let image) where image == self.image:
-            try? reload()
-            onSizeChange?()
+            scheduleRefresh([.state, .size])
         default:
             break
         }
+    }
+
+    /// Runs `kinds`' reads now, or once the exclusive engine activity
+    /// ends; several events inside one busy period fold into one
+    /// refresh. A closing document schedules nothing, and the deferred
+    /// run skips it again if the close began meanwhile.
+    private func scheduleRefresh(_ kinds: PendingRefresh) {
+        guard !isClosing else { return }
+        pendingRefresh.formUnion(kinds)
+        guard !refreshIsScheduled else { return }
+        refreshIsScheduled = true
+        EngineActivity.shared.whenIdle { [weak self] in self?.runPendingRefresh() }
+    }
+
+    private func runPendingRefresh() {
+        refreshIsScheduled = false
+        let pending = pendingRefresh
+        pendingRefresh = []
+        guard !isClosing, !pending.isEmpty else { return }
+        if pending.contains(.state) || pending.contains(.size) { try? reload() }
+        if pending.contains(.selection) { refreshSelection() }
+        if pending.contains(.size) { onSizeChange?() }
     }
 
     // MARK: Painting
@@ -846,6 +893,61 @@ final class ImageDocument {
     func crop(to rect: CGRect) {
         guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.crop(image: image, to: rect) }
+    }
+
+    // MARK: Color mode and precision
+
+    /// Image ▸ Mode ▸ RGB / Grayscale: the whole image's color model
+    /// through one core conversion, as one undo step. A conversion on a
+    /// large image holds the engine, so it takes the same exclusive
+    /// admission a file call gets: accepted input in every document
+    /// lands first, and the work counts toward close and Quit. Asking
+    /// for the current mode is a no-op — nothing queues, no undo
+    /// appears; a refusal (busy, closing, an active preview) reports
+    /// busy without queuing either.
+    func convertMode(to mode: EngineSession.ColorMode,
+                     completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
+              !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
+        guard colorInfo.mode != mode else { return completion(.success(())) }
+        endPendingUserEdits()
+        enqueueExclusive(label: "Converting to \(mode.title)", rejected: {
+            completion(.failure(DocumentError.busy))
+        }) { [session, image] in
+            let result = Result { try session.convertMode(image, to: mode) }
+            DispatchQueue.main.async {
+                // The conversion fires the engine's own events, whose
+                // coalesced refresh may still be pending behind this one.
+                if !self.isClosing { try? self.reload() }
+                completion(result)
+            }
+        }
+    }
+
+    /// Image ▸ Precision…: the component type and transfer curve the
+    /// Precision form picked, as one undo step with no dithering. Same
+    /// admission, no-op and refusal rules as `convertMode`; the facade
+    /// validates the combination before mutating, so a refused change
+    /// leaves the image exactly as it was.
+    func convertPrecision(component: EngineSession.ColorComponent, trc: EngineSession.ColorTRC,
+                          completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
+              !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
+        guard colorInfo.component != component || colorInfo.trc != trc else {
+            return completion(.success(()))
+        }
+        endPendingUserEdits()
+        enqueueExclusive(label: "Converting precision", rejected: {
+            completion(.failure(DocumentError.busy))
+        }) { [session, image] in
+            let result = Result { try session.convertPrecision(image, component: component, trc: trc) }
+            DispatchQueue.main.async {
+                if !self.isClosing { try? self.reload() }
+                completion(result)
+            }
+        }
     }
 
     // MARK: Paths

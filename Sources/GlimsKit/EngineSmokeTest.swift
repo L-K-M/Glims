@@ -103,6 +103,7 @@ enum EngineSmokeTest {
             try exerciseFileAdmission(session, work: work, documents: documents)
             try exerciseRevert(session, work: work, documents: documents)
             try exerciseFileImports(session, work: work, documents: documents)
+            try exerciseColorConversions(session, work: work, documents: documents)
             try exercisePrinting(session, work: work, documents: documents)
             try exerciseRecovery(session, work: work, documents: documents)
             try exerciseRecoveryInterface(session, work: work, documents: documents)
@@ -634,6 +635,356 @@ enum EngineSmokeTest {
         default:
             check(false, "Place reports placed, cancelled or failed (\(placed as Any))")
         }
+    }
+
+    /// Image ▸ Mode and Image ▸ Precision…: the cached color state
+    /// behind the title, the checkmarks and the form's seeding; the
+    /// conversions through counted exclusive admission; and the rules
+    /// they share with file work — accepted input drains first, busy
+    /// refuses, close waits, and event refreshes defer instead of
+    /// stalling the main thread on the running conversion.
+    private static func exerciseColorConversions(_ session: EngineSession, work: URL,
+                                                 documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(15)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func ok(_ result: Result<Void, Error>?) -> Bool {
+            if case .success? = result { return true }
+            return false
+        }
+        func failed(_ result: Result<Void, Error>?) -> Bool {
+            if case .failure? = result { return true }
+            return false
+        }
+        let directory = work.appendingPathComponent("color")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        // A red image gives the mode conversion pixels to judge.
+        let image = try session.newImage(width: 32, height: 24)
+        try session.select(.all, image: image)
+        try session.fill(image: image, at: .zero, mode: .selection, color: .red)
+        let document = try ImageDocument(session: session, image: image, name: "Color")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        defer {
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+            controller.window?.close()
+        }
+
+        check(document.colorInfo.mode == .rgb && document.colorInfo.component == .u8
+                && document.colorInfo.trc == .nonlinear
+                && !document.colorInfo.hasEmbeddedProfile
+                && !document.colorInfo.profileLabel.isEmpty,
+              "a fresh document caches RGB u8 non-linear state and the builtin profile")
+        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision))",
+              "the title reports the cached mode and precision")
+
+        // The Mode items check the cached mode — RGB here — and
+        // validate without asking the engine.
+        let modeRGB = NSMenuItem(title: "RGB", action: #selector(DocumentWindowController.convertImageMode(_:)),
+                                 keyEquivalent: "")
+        modeRGB.tag = Int(EngineSession.ColorMode.rgb.rawValue)
+        let modeGray = NSMenuItem(title: "Grayscale", action: #selector(DocumentWindowController.convertImageMode(_:)),
+                                  keyEquivalent: "")
+        modeGray.tag = Int(EngineSession.ColorMode.grayscale.rawValue)
+        check(controller.validateMenuItem(modeRGB) && controller.validateMenuItem(modeGray)
+                && modeRGB.state == .on && modeGray.state == .off,
+              "the Mode items check the cached RGB state")
+
+        // RGB to grayscale through the counted exclusive admission:
+        // one undo step, the title and the checkmarks follow the cache.
+        var undoBefore = document.undoInfo.undoCount
+        var modeResult: Result<Void, Error>?
+        document.convertMode(to: .grayscale) { modeResult = $0 }
+        wait { modeResult != nil && document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(ok(modeResult), "the mode conversion succeeds (\(modeResult as Any))")
+        check(document.colorInfo.mode == .grayscale && document.components?.mode == .grayscale,
+              "the reload reports the image grayscale")
+        check(document.undoInfo.undoCount == undoBefore + 1, "the conversion is one undo step")
+        check(document.hasUnsavedChanges, "the converted image is dirty")
+        check(controller.window?.title == "• Color @ 100% (Grayscale, \(document.info.precision))",
+              "the title follows the conversion")
+        _ = controller.validateMenuItem(modeRGB)
+        _ = controller.validateMenuItem(modeGray)
+        check(modeRGB.state == .off && modeGray.state == .on,
+              "the checkmarks follow the cached mode")
+        if let converted = pixel(session, image, x: 8, y: 8) {
+            check(converted[0] == converted[1] && converted[1] == converted[2],
+                  "the red pixel renders as one channel of gray")
+        }
+
+        // Back through the menu action itself; the checkmarks move.
+        undoBefore = document.undoInfo.undoCount
+        controller.convertImageMode(modeRGB)
+        wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(document.colorInfo.mode == .rgb, "the menu action converts back to RGB")
+        check(document.undoInfo.undoCount == undoBefore + 1, "the menu conversion is one undo step")
+        _ = controller.validateMenuItem(modeRGB)
+        _ = controller.validateMenuItem(modeGray)
+        check(modeRGB.state == .on && modeGray.state == .off, "the checkmark is back on RGB")
+
+        // The Precision form seeds the current values; Cancel queues
+        // nothing, and OK on the seeded values is the no-op.
+        controller.imagePrecision(nil)
+        var sheet = controller.window?.attachedSheet
+        check(sheet != nil, "the precision form opens as a sheet")
+        var popups: [NSPopUpButton] = []
+        if let contentView = sheet?.contentView {
+            func findPopups(_ view: NSView) {
+                for sub in view.subviews {
+                    if let popup = sub as? NSPopUpButton { popups.append(popup) }
+                    findPopups(sub)
+                }
+            }
+            findPopups(contentView)
+        }
+        check(popups.count == 2, "the form has component and curve popups")
+        check(popups.first?.titleOfSelectedItem == EngineSession.ColorComponent.u8.title
+                && popups.last?.titleOfSelectedItem == EngineSession.ColorTRC.nonlinear.title,
+              "the form seeds the image's current precision")
+        undoBefore = document.undoInfo.undoCount
+        if let sheet {
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertSecondButtonReturn.rawValue)
+        }
+        spin()
+        check(document.undoInfo.undoCount == undoBefore && document.pendingWork == 0,
+              "Cancel queues nothing and changes nothing")
+
+        controller.imagePrecision(nil)
+        sheet = controller.window?.attachedSheet
+        if let sheet {
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue)
+        }
+        spin()
+        check(document.undoInfo.undoCount == undoBefore && document.colorInfo.component == .u8,
+              "OK on the seeded values is the no-op the facade promises")
+
+        // The sheet can stay open while another document takes the
+        // engine. Convert must report its refusal instead of vanishing.
+        let originalError = document.onError
+        var precisionError: String?
+        document.onError = { message in precisionError = message; originalError?(message) }
+        controller.imagePrecision(nil)
+        sheet = controller.window?.attachedSheet
+        let activityGate = DispatchSemaphore(value: 0)
+        let held = EngineActivity.shared.perform(label: "Other document work", work: {
+            activityGate.wait()
+        }, completion: {})
+        if let sheet {
+            controller.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+        }
+        spin(0.2)
+        check(held && precisionError != nil && document.colorInfo.component == .u8,
+              "Precision reports Convert refused while another document holds the engine")
+        activityGate.signal()
+        wait { !EngineActivity.shared.isBusy }
+
+        // A native refusal must also reach the form's caller when it
+        // was not already known by the frontend's cached edit gates.
+        precisionError = nil
+        do {
+            let preview = try session.beginFilter(image: image, drawable: document.activeDrawable ?? 0,
+                                                   operation: "gegl:gaussian-blur")
+            defer { try? session.abortFilter(preview) }
+            controller.imagePrecision(nil)
+            sheet = controller.window?.attachedSheet
+            if let sheet, let content = sheet.contentView,
+               let component = descendant(of: content, as: NSPopUpButton.self) {
+                component.selectItem(withTitle: EngineSession.ColorComponent.u16.title)
+                controller.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+            }
+            wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+            spin()
+            check(precisionError != nil && document.colorInfo.component == .u8,
+                  "Precision reports an engine-side conversion refusal without changing the image")
+        }
+        document.onError = originalError
+
+        // Picking 16-bit float linear in the form runs one conversion.
+        controller.imagePrecision(nil)
+        sheet = controller.window?.attachedSheet
+        popups = []
+        if let sheet, let contentView = sheet.contentView {
+            func findPopups(_ view: NSView) {
+                for sub in view.subviews {
+                    if let popup = sub as? NSPopUpButton { popups.append(popup) }
+                    findPopups(sub)
+                }
+            }
+            findPopups(contentView)
+            popups.first?.selectItem(withTitle: EngineSession.ColorComponent.half.title)
+            popups.last?.selectItem(withTitle: EngineSession.ColorTRC.linear.title)
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue)
+        }
+        wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(document.colorInfo.component == .half && document.colorInfo.trc == .linear,
+              "the form's choice converts to 16-bit float linear")
+        check(document.undoInfo.undoCount == undoBefore + 1, "the precision conversion is one undo step")
+        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision))",
+              "the title shows the new precision")
+
+        // Undo and redo carry the color state; the title follows both.
+        document.undo()
+        wait { document.pendingWork == 0 }
+        spin()
+        check(document.colorInfo.component == .u8 && document.colorInfo.trc == .nonlinear,
+              "undo restores the earlier precision")
+        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision))",
+              "the title follows undo")
+        document.redo()
+        wait { document.pendingWork == 0 }
+        spin()
+        check(document.colorInfo.component == .half && document.colorInfo.trc == .linear,
+              "redo restores the converted precision")
+
+        // Saved state keeps the conversion; the conversion keeps the
+        // file identity.
+        let xcf = directory.appendingPathComponent("color.xcf")
+        var saved = false
+        document.save(to: xcf) { error in
+            if error == nil { document.noteSaved(to: xcf) }
+            saved = error == nil
+        }
+        wait { saved && document.pendingWork == 0 }
+        check(saved && document.fileState.nativeURL == xcf, "the converted image saves")
+        let nativeName = document.name
+        var modeAgain: Result<Void, Error>?
+        document.convertMode(to: .grayscale) { modeAgain = $0 }
+        wait { modeAgain != nil && document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        check(ok(modeAgain) && document.fileState.nativeURL == xcf && document.name == nativeName,
+              "the conversion keeps the file identity")
+        let reopened = try session.openImage(path: xcf.path)
+        let reopenedDocument = try ImageDocument(session: session, image: reopened, name: "Color")
+        documents.items.append(reopenedDocument)
+        defer {
+            documents.items.removeAll { $0 === reopenedDocument }
+            reopenedDocument.closeImageWhenDrained()
+        }
+        check(reopenedDocument.colorInfo.mode == .rgb
+                && reopenedDocument.colorInfo.component == .half
+                && reopenedDocument.colorInfo.trc == .linear,
+              "the saved XCF keeps the converted precision")
+        let reopenedController = DocumentWindowController(document: reopenedDocument)
+        reopenedController.showWindow(nil)
+        defer { reopenedController.window?.close() }
+        check(reopenedController.window?.title == "Color @ 100% (RGB, \(reopenedDocument.info.precision))",
+              "a reopened document titles from its own state")
+
+        // Asking for the mode the image already has is a no-op: no
+        // queued work, no undo step.
+        undoBefore = reopenedDocument.undoInfo.undoCount
+        var noopResult: Result<Void, Error>?
+        reopenedDocument.convertMode(to: .rgb) { noopResult = $0 }
+        spin()
+        check(ok(noopResult) && reopenedDocument.undoInfo.undoCount == undoBefore
+                && reopenedDocument.pendingWork == 0,
+              "converting to the current mode changes nothing")
+
+        // A filter preview owns the image; conversions refuse while it
+        // is open rather than queue behind it.
+        controller.gaussianBlur(nil)
+        wait { controller.previewPanel != nil }
+        var refused: Result<Void, Error>?
+        document.convertMode(to: .rgb) { refused = $0 }
+        check(failed(refused), "a conversion refuses while a preview is open (\(refused as Any))")
+        check(document.colorInfo.mode == .grayscale,
+              "the refused conversion changed nothing")
+        controller.cancelOperation(nil)
+        wait { !document.filterPreviewIsOpen }
+
+        // Input another document accepted first drains ahead of the
+        // conversion; edits there refuse behind the same gate.
+        let otherImage = try session.newImage(width: 16, height: 16)
+        let other = try ImageDocument(session: session, image: otherImage, name: "Other")
+        documents.items.append(other)
+        defer {
+            documents.items.removeAll { $0 === other }
+            other.closeImageWhenDrained()
+        }
+        other.inputQueue.async { usleep(200_000) }
+        other.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
+        other.endStroke()
+        var drained: Result<Void, Error>?
+        document.convertMode(to: .rgb) { drained = $0 }
+        other.beginStroke(at: .init(x: 4, y: 4, pressure: 1))
+        check(!other.strokeIsActive, "the other document's edits refuse behind the conversion gate")
+        if other.strokeIsActive { other.endStroke() }
+        wait { drained != nil && document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        check(ok(drained) && document.colorInfo.mode == .rgb,
+              "the conversion completes behind the other document's input")
+        check((pixel(session, otherImage, x: 8, y: 8)?[0] ?? 255) < 128,
+              "the accepted stroke in the other document survived the drain")
+
+        // Use a raw facade conversion, without the document command's
+        // completion reload. Only the deferred events can refresh the
+        // cache; several event kinds must survive the same busy period.
+        let refreshGate = DispatchSemaphore(value: 0)
+        let rawConversionReady = DispatchSemaphore(value: 0)
+        var rawConversion: Result<Void, Error>?
+        let refreshActivity = EngineActivity.shared.perform(label: "Color event refresh", work: {
+            rawConversion = Result { try session.convertMode(image, to: .grayscale) }
+            rawConversionReady.signal()
+            refreshGate.wait()
+        }, completion: {})
+        wait { rawConversionReady.wait(timeout: .now()) == .success }
+        let version = document.stateVersion
+        let oldSelectionChange = document.onSelectionChange
+        let oldSizeChange = document.onSizeChange
+        var selectionRefreshes = 0, sizeRefreshes = 0
+        document.onSelectionChange = { selectionRefreshes += 1; oldSelectionChange?() }
+        document.onSizeChange = { sizeRefreshes += 1; oldSizeChange?() }
+        document.handle(.undoChanged(image: image))
+        document.handle(.selectionChanged(image: image))
+        document.handle(.sizeChanged(image: image))
+        document.handle(.undoChanged(image: image))
+        spin(0.1)
+        check(refreshActivity && ok(rawConversion) && document.stateVersion == version
+                && document.colorInfo.mode == .rgb && selectionRefreshes == 0 && sizeRefreshes == 0,
+              "state, selection and size events defer every engine read while busy")
+        refreshGate.signal()
+        wait { !EngineActivity.shared.isBusy }
+        spin()
+        check(document.stateVersion == version + 1 && selectionRefreshes == 1 && sizeRefreshes == 1,
+              "one deferred refresh preserves all event kinds without a command completion reload")
+        check(document.colorInfo.mode == .grayscale, "the deferred refresh reads fresh state")
+        document.onSelectionChange = oldSelectionChange
+        document.onSizeChange = oldSizeChange
+
+        // A close while the conversion is queued waits for it, then
+        // destroys the image; the completion still lands.
+        let closingImage = try session.newImage(width: 16, height: 16)
+        let closing = try ImageDocument(session: session, image: closingImage, name: "Closing Color")
+        documents.items.append(closing)
+        let closingController = DocumentWindowController(document: closing)
+        closingController.showWindow(nil)
+        defer {
+            documents.items.removeAll { $0 === closing }
+            closing.closeImageWhenDrained()
+            closingController.window?.close()
+        }
+        closing.inputQueue.async { usleep(400_000) }
+        var closingOutcome: Result<Void, Error>?
+        closing.convertMode(to: .grayscale) { closingOutcome = $0 }
+        check(EngineActivity.shared.isBusy, "the closing document's conversion takes the gate")
+        var closed: Bool?
+        closingController.requestClose { closed = $0 }
+        check(closed == nil && !closing.isClosing, "close waits while the conversion is queued")
+        wait { closingOutcome != nil && closing.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        let sheetDeadline = Date().addingTimeInterval(5)
+        while closingController.window?.attachedSheet == nil && Date() < sheetDeadline { spin(0.05) }
+        if let attached = closingController.window?.attachedSheet {
+            NSApp.endSheet(attached, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+        }
+        wait { closed != nil }
+        check(closed == true && (try? session.info(closingImage)) == nil,
+              "the deferred close destroys the image after its conversion lands")
+        check(ok(closingOutcome), "the closing document's conversion still reports success")
     }
 
     /// File ▸ Print… and Page Setup…: a committed composite rendered in

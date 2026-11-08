@@ -208,10 +208,12 @@ final class DocumentFileStateTests: XCTestCase {
     /// The title's bullet tracks the unsaved-changes flag.
     func testTitleMarksUnsavedChanges() {
         XCTAssertEqual(
-            DocumentWindowController.title(name: "image.xcf", zoomPercent: 100, isDirty: true, precision: "u8-non-linear"),
+            DocumentWindowController.title(name: "image.xcf", zoomPercent: 100, isDirty: true,
+                                           mode: .rgb, precision: "u8-non-linear"),
             "• image.xcf @ 100% (RGB, u8-non-linear)")
         XCTAssertEqual(
-            DocumentWindowController.title(name: "image.xcf", zoomPercent: 50, isDirty: false, precision: "u8-non-linear"),
+            DocumentWindowController.title(name: "image.xcf", zoomPercent: 50, isDirty: false,
+                                           mode: .rgb, precision: "u8-non-linear"),
             "image.xcf @ 50% (RGB, u8-non-linear)")
     }
 }

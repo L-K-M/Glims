@@ -54,7 +54,20 @@ enum MainMenu {
             item("To Vector Layer", #selector(DocumentWindowController.toVectorLayer(_:))),
         ])
         // Plug-in commands are appended to Image, Layer and Select (PlugInMenus).
+        let mode = NSMenuItem(title: "Mode", action: nil, keyEquivalent: "")
+        mode.submenu = NSMenu(title: "Mode")
+        // No Indexed entry: an indexed image converts out through these,
+        // but conversion to indexed — palette and dither policy — is a
+        // later slice, so the menu advertises nothing toward it.
+        for target in [EngineSession.ColorMode.rgb, .grayscale] {
+            let entry = item(target.title, #selector(DocumentWindowController.convertImageMode(_:)))
+            entry.tag = Int(target.rawValue)
+            mode.submenu?.addItem(entry)
+        }
         add(menu, "Image", [
+            mode,
+            item("Precision…", #selector(DocumentWindowController.imagePrecision(_:))),
+            .separator(),
             item("Image Size…", #selector(DocumentWindowController.imageSize(_:))),
             item("Canvas Size…", #selector(DocumentWindowController.canvasSize(_:))),
             submenu("Rotate", [
@@ -69,6 +82,8 @@ enum MainMenu {
             item("Crop to Selection", #selector(DocumentWindowController.cropToSelection(_:))),
             item("Flatten Image", #selector(DocumentWindowController.flattenImage(_:))),
             item("New Snapshot", #selector(DocumentWindowController.newSnapshot(_:))),
+            .separator(),
+            item("Image Information…", #selector(DocumentWindowController.imageInformation(_:))),
         ])
         let newLayer = item("New Layer", #selector(DocumentWindowController.newLayer(_:)), "n")
         newLayer.keyEquivalentModifierMask = [.command, .shift]

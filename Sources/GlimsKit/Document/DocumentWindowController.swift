@@ -184,8 +184,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     /// Classic title and status: `name @ 100% (RGB, u8-non-linear)`.
-    static func title(name: String, zoomPercent: Int, isDirty: Bool, precision: String) -> String {
-        "\(isDirty ? "• " : "")\(name) @ \(zoomPercent)% (RGB, \(precision))"
+    /// The mode comes from the document's cached color info, so a
+    /// grayscale or indexed image — or one a conversion just made — no
+    /// longer titles itself RGB.
+    static func title(name: String, zoomPercent: Int, isDirty: Bool,
+                      mode: EngineSession.ColorMode, precision: String) -> String {
+        "\(isDirty ? "• " : "")\(name) @ \(zoomPercent)% (\(mode.title), \(precision))"
     }
 
     /// While true the status bar shows a refusal the user should read;
@@ -230,6 +234,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private func stateDidChange() {
         window?.title = Self.title(name: imageDocument.name, zoomPercent: canvas.zoomPercent,
                                    isDirty: imageDocument.hasUnsavedChanges,
+                                   mode: imageDocument.colorInfo.mode,
                                    precision: imageDocument.info.precision)
         let undo = imageDocument.undoInfo.nextUndo.isEmpty ? "" : " · Undo \(imageDocument.undoInfo.nextUndo)"
         if !statusIsError {
@@ -569,6 +574,35 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                              "hsv-hue", "hsv-saturation", "hsl-color", "hsv-value",
                              "lch-hue", "lch-chroma", "lch-color", "lch-lightness", "luminance"]
 
+    // MARK: Color mode and precision
+
+    /// Image ▸ Mode ▸ RGB / Grayscale; the item's tag carries the
+    /// target `ColorMode` raw value. Asking for the current mode is a
+    /// no-op in the document — no queued work, no undo step.
+    @objc func convertImageMode(_ sender: NSMenuItem) {
+        guard let mode = EngineSession.ColorMode(rawValue: UInt32(sender.tag)) else { return }
+        imageDocument.convertMode(to: mode) { [weak self] result in
+            guard let self, case .failure(let error) = result else { return }
+            self.showStatusError(String(describing: error))
+        }
+    }
+
+    /// Image ▸ Precision…: a sheet of component and transfer curve
+    /// popups seeded from the cached color state.
+    @objc func imagePrecision(_ sender: Any?) {
+        guard let window else { return }
+        endPendingEdits()
+        ColorForms.presentPrecision(for: imageDocument, on: window)
+    }
+
+    /// Image ▸ Image Information…: a read-only sheet of the mode,
+    /// precision and effective profile — the document's cached color
+    /// state, not a fresh engine ask.
+    @objc func imageInformation(_ sender: Any?) {
+        guard let window else { return }
+        ColorForms.presentInformation(for: imageDocument, on: window)
+    }
+
     // MARK: Image size and transforms
 
     @objc func rotateImage90(_ sender: Any?) { imageDocument.transformImage(.rotate90) }
@@ -808,6 +842,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             default: menuItem.state = mask.showing ? .on : .off
             }
             return true
+        case #selector(convertImageMode(_:)):
+            // The checkmark reads the cached color state, never the
+            // engine. Indexed and unknown modes check neither entry —
+            // they are the image's state, not a menu gap.
+            menuItem.state = imageDocument.colorInfo.mode.rawValue == UInt32(menuItem.tag) ? .on : .off
+            return !editingBlocked && !previewBusy
+        case #selector(imagePrecision(_:)):
+            // Indexed precision is fixed at u8 non-linear: the item
+            // stays listed but disabled, and says why in the tool tip.
+            let fixed = ColorForms.precisionIsFixed(mode: imageDocument.colorInfo.mode)
+            menuItem.toolTip = fixed ? "Indexed images keep 8-bit non-linear precision." : nil
+            return !fixed && !editingBlocked && !previewBusy
+        case #selector(imageInformation(_:)):
+            // Read-only and cheap: the sheet shows the cached state,
+            // so it works wherever another sheet does not already.
+            return !imageDocument.isClosing && window?.attachedSheet == nil
         case #selector(newSnapshot(_:)):
             // Without an app to adopt the copy there is nothing to run.
             return imageDocument.snapshotHandler != nil && !editingBlocked && !previewBusy
