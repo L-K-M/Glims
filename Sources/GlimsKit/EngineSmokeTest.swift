@@ -98,6 +98,16 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "pattern-fill" {
+                try exercisePatternFill(session, documents: documents)
+                print(failures == 0 ? "PASSED (pattern-fill)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "vector-style" {
+                try exerciseVectorStyleForm(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (vector style)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseFileAdmission(session, work: work, documents: documents)
@@ -124,6 +134,7 @@ enum EngineSmokeTest {
             try exercisePreferences(session, documents: documents)
             try exercisePaths(session, documents: documents)
             try exercisePathFillAndVector(session, work: work, documents: documents)
+            try exerciseVectorStyleForm(session, work: work, documents: documents)
             try exercisePaletteControls(session, documents: documents)
             try exercisePendingEditScope(session, documents: documents)
             try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
@@ -5179,6 +5190,231 @@ enum EngineSmokeTest {
         documents.items.removeAll { $0 === closing }
     }
 
+    /// Layer ▸ Vector Style…: the native style sheet of a genuine vector
+    /// layer — the menu gate from cached state only, the off-main read
+    /// seeding the sheet, cancel and no-op changing nothing, an
+    /// out-of-range width refused, real fill and stroke pixels as one undo
+    /// step, the XCF round trip of the style, a busy engine acquired after
+    /// the sheet opened, and a captured target deleted while it was up.
+    private static func exerciseVectorStyleForm(_ session: EngineSession, work: URL,
+                                                documents: DocumentList) throws {
+        // Before GIMP 3.2 there is no vector layer to style; the facade's
+        // UNSUPPORTED answers are covered by exercisePathFillAndVector.
+        guard session.supportsVectorLayers != false else { return }
+        let image = try session.newImage(width: 120, height: 80)
+        let document = try ImageDocument(session: session, image: image, name: "VectorStyle")
+        documents.items.append(document)
+        defer {
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        var errors: [String] = []
+        func settle() { document.inputQueue.sync {}; spin() }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func composite(_ x: Int, _ y: Int) -> [UInt8]? { pixel(session, image, x: x, y: y) }
+        func views<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
+            guard let root else { return [] }
+            return (root as? T).map { [$0] } ?? root.subviews.flatMap { views($0, as: type) }
+        }
+
+        let rect = VectorPath(subpaths: [.init(anchors: [.init(CGPoint(x: 20, y: 20)), .init(CGPoint(x: 100, y: 20)),
+                                                         .init(CGPoint(x: 100, y: 60)), .init(CGPoint(x: 20, y: 60))],
+                                               isClosed: true)])
+        guard let path = document.addPath(rect) else {
+            return check(false, "a path can be added for the style checks")
+        }
+        settle()
+        document.toVectorLayer(path, name: "Style vector")
+        settle()
+        guard let vector = document.layers.first(where: { $0.kind == .vector }) else {
+            return check(false, "a genuine vector layer exists for the style checks")
+        }
+
+        let controller = DocumentWindowController(document: document)
+        document.onError = { errors.append($0) }
+        controller.showWindow(nil)
+        defer {
+            if let attached = controller.window?.attachedSheet {
+                controller.window?.endSheet(attached, returnCode: .alertSecondButtonReturn)
+            }
+            controller.window?.close()
+        }
+        let item = NSMenuItem(title: "Vector Style…",
+                              action: #selector(DocumentWindowController.vectorStyle(_:)), keyEquivalent: "")
+        func sheet() -> NSWindow? { controller.window?.attachedSheet }
+        func finish(_ response: NSApplication.ModalResponse) {
+            if let attached = sheet() { controller.window?.endSheet(attached, returnCode: response) }
+            spin(0.1)
+        }
+        func applyButton() -> NSButton? {
+            buttons(in: sheet()?.contentView ?? NSView()).first { $0.title == "Apply" }
+        }
+        func seeded() -> Bool { applyButton()?.isEnabled == true }
+        func checkbox(_ label: String) -> NSButton? {
+            buttons(in: sheet()?.contentView ?? NSView()).first { $0.accessibilityLabel() == label }
+        }
+        func well(_ label: String) -> NSColorWell? {
+            views(sheet()?.contentView, as: NSColorWell.self).first { $0.accessibilityLabel() == label }
+        }
+        func field(_ label: String) -> NSTextField? {
+            views(sheet()?.contentView, as: NSTextField.self)
+                .first { $0.isEditable && $0.accessibilityLabel() == label }
+        }
+        func popup(_ label: String) -> NSPopUpButton? {
+            views(sheet()?.contentView, as: NSPopUpButton.self).first { $0.accessibilityLabel() == label }
+        }
+        func toggle(_ label: String, to state: NSControl.StateValue) {
+            if let button = checkbox(label), button.state != state { button.performClick(nil) }
+        }
+
+        // The menu gate reads the cached layer kind only: enabled for the
+        // genuine vector layer, disabled for a raster one.
+        if let base = document.layers.first(where: { $0.kind == .pixel }) {
+            document.selectLayer(base.id)
+            settle()
+            check(!controller.validateMenuItem(item),
+                  "Vector Style… is disabled for a cached non-vector layer")
+            document.selectLayer(vector.id)
+            settle()
+            check(controller.validateMenuItem(item),
+                  "Vector Style… is enabled for the cached genuine vector layer")
+        }
+
+        // Open and cancel: the read runs off the main thread through the
+        // global engine activity and seeds the sheet; Cancel changes
+        // nothing.
+        let undoBefore = document.undoInfo.undoCount
+        let errorsBefore = errors.count
+        controller.vectorStyle(nil)
+        wait { seeded() }
+        check(sheet() != nil && seeded() && !EngineActivity.shared.isBusy
+                && field("Stroke width, pixels")?.stringValue.isEmpty == false,
+              "the sheet opens and the off-main read seeds its controls")
+        finish(.alertSecondButtonReturn)
+        wait { document.pendingWork == 0 }
+        check(document.undoInfo.undoCount == undoBefore && errors.count == errorsBefore,
+              "cancelling the Vector Style sheet changes nothing and reports nothing")
+
+        // No-op: applying the captured style unchanged queues no work and
+        // pushes no undo.
+        controller.vectorStyle(nil)
+        wait { seeded() }
+        finish(.alertFirstButtonReturn)
+        wait { document.pendingWork == 0 }
+        check(document.undoInfo.undoCount == undoBefore && errors.count == errorsBefore,
+              "applying the unchanged style is a no-op with no undo and no error")
+
+        // Out-of-range input is refused by the sheet's validation before
+        // anything is queued.
+        controller.vectorStyle(nil)
+        wait { seeded() }
+        toggle("Stroke the path", to: .on)
+        field("Stroke width, pixels")?.stringValue = "0"
+        let invalidErrors = errors.count
+        let invalidUndo = document.undoInfo.undoCount
+        finish(.alertFirstButtonReturn)
+        wait { errors.count > invalidErrors }
+        check(errors.count > invalidErrors && document.pendingWork == 0
+                && document.undoInfo.undoCount == invalidUndo,
+              "an out-of-range width is refused without editing or adding undo")
+
+        // Real pixels: a red fill and a blue 6 px stroke land inside and on
+        // the path, as exactly one undo step, and read back through the
+        // facade.
+        controller.vectorStyle(nil)
+        wait { seeded() }
+        toggle("Fill the path", to: .on)
+        toggle("Stroke the path", to: .on)
+        well("Fill color")?.color = .red
+        well("Stroke color")?.color = .blue
+        field("Stroke width, pixels")?.stringValue = "6"
+        field("Miter limit")?.stringValue = "10"
+        popup("Stroke cap")?.selectItem(at: 1)
+        popup("Stroke join")?.selectItem(at: 1)
+        let applyUndo = document.undoInfo.undoCount
+        finish(.alertFirstButtonReturn)
+        wait { document.pendingWork == 0 }
+        settle()
+        let center = composite(60, 40) ?? []
+        let edge = composite(20, 40) ?? []
+        check(center.count == 4 && center[0] > 200 && center[2] < 64,
+              "the style's fill color lands inside the path (\(center))")
+        check(edge.count == 4 && edge[2] > 150 && edge[0] < 100,
+              "the style's stroke color and width land on the path edge (\(edge))")
+        check(document.undoInfo.undoCount == applyUndo + 1, "the style change is one undo step")
+        if let readBack = try? session.vectorLayerStyle(vector.id, image: image) {
+            let fill = VectorStyleFormValidation.colorComponents(readBack.fillColor)
+            let stroke = VectorStyleFormValidation.colorComponents(readBack.strokeColor)
+            check((fill?.red ?? 0) > 0.9 && (stroke?.blue ?? 0) > 0.9 && readBack.strokeWidth == 6
+                    && readBack.strokeCap == .round && readBack.strokeJoin == .round
+                    && readBack.strokeMiterLimit == 10,
+                  "the applied style reads back through the facade")
+        } else {
+            check(false, "the applied style reads back through the facade")
+        }
+
+        // XCF: the styled vector layer persists its native style.
+        let xcf = work.appendingPathComponent("vector-style.xcf")
+        var saved = false
+        document.saveCopy(to: xcf) { saved = $0 == nil }
+        wait { saved && document.pendingWork == 0 }
+        check(saved, "the styled vector layer saves a copy")
+        let reopened = try session.openImage(path: xcf.path)
+        if let reopenedVector = try session.layers(reopened).first(where: { $0.kind == .vector }),
+           let style = try? session.vectorLayerStyle(reopenedVector.id, image: reopened) {
+            let fill = VectorStyleFormValidation.colorComponents(style.fillColor)
+            let stroke = VectorStyleFormValidation.colorComponents(style.strokeColor)
+            check((fill?.red ?? 0) > 0.9 && (stroke?.blue ?? 0) > 0.9 && style.strokeWidth == 6,
+                  "the XCF round trip persists the native fill and stroke")
+        } else {
+            check(false, "the reopened vector layer's style reads back")
+        }
+        try session.closeImage(reopened)
+
+        // Undo restores the engine's default style.
+        document.undo()
+        wait { document.pendingWork == 0 }
+        settle()
+        check(composite(60, 40)?.prefix(3).allSatisfy { $0 > 240 } == true,
+              "undo restores the default white fill")
+
+        // A busy engine acquired after the sheet opened: Apply reports the
+        // busy state and changes nothing.
+        controller.vectorStyle(nil)
+        wait { seeded() }
+        well("Fill color")?.color = .green
+        let gate = DispatchSemaphore(value: 0)
+        let held = EngineActivity.shared.perform(label: "Other work", work: { gate.wait() }, completion: {})
+        let busyErrors = errors.count
+        let busyUndo = document.undoInfo.undoCount
+        finish(.alertFirstButtonReturn)
+        wait { errors.count > busyErrors }
+        check(held && errors.count > busyErrors && document.pendingWork == 0
+                && document.undoInfo.undoCount == busyUndo,
+              "a busy engine acquired after the sheet opened is reported and changes nothing")
+        gate.signal()
+        wait { !EngineActivity.shared.isBusy }
+
+        // The captured target deleted while the sheet was up: Apply refuses
+        // with the target-changed error instead of touching another layer.
+        controller.vectorStyle(nil)
+        wait { seeded() }
+        document.layerCommand(.delete)
+        settle()
+        wait { !document.layers.contains { $0.id == vector.id } }
+        well("Fill color")?.color = .green
+        let targetErrors = errors.count
+        let targetUndo = document.undoInfo.undoCount
+        finish(.alertFirstButtonReturn)
+        wait { errors.count > targetErrors }
+        check(errors.count > targetErrors && errors.last?.contains("changed") == true
+                && document.undoInfo.undoCount == targetUndo,
+              "a captured target deleted while the sheet was up is refused (\(errors.last ?? "none"))")
+    }
+
     private static func exercisePlugInCommands(_ session: EngineSession, documents: DocumentList) throws {
         let mainMenu = MainMenu.make()
         NSApp.mainMenu = mainMenu
@@ -6340,9 +6576,21 @@ enum EngineSmokeTest {
         let image = try session.newImage(width: 96, height: 64)
         let document = try ImageDocument(session: session, image: image, name: "Pattern Fill")
         documents.items.append(document)
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        defer {
+            documents.items.removeAll { $0 === document }
+            var closed = false
+            document.closeImageWhenDrained { closed = true }
+            wait { closed }
+            check(closed && (try? session.info(image)) == nil,
+                  "the pattern-fill image closes before engine shutdown")
+        }
         func settle() {
             document.inputQueue.sync {}
-            spin()
+            wait { document.pendingWork == 0 }
             spin()
         }
 

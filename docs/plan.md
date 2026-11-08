@@ -972,6 +972,35 @@ after the root's ICC integration to keep the append-only ABI order.
   this branch: the adapter compiles against all four engine sets with a
   private `GLIMS_ADAPTER_ROOT`; the runtime conformance run is left to
   the root checkout.
+- 2026-11-08: the frontend Vector Style sheet, on this worktree branch
+  (`feat/vector-style-controls`). `EngineSession` gained typed
+  `vectorLayerStyle` / `changeVectorLayerStyle` wrappers over the facade's
+  `GlimsVectorStyle` / `GlimsVectorStyleChange`, with own cap/join enums
+  and a `VectorStyleProperty` bitmask — stable facade values only, no GIMP
+  types. `ImageDocument.changeVectorLayerStyle` queues the apply as
+  counted input off the main thread behind accepted edits, treats an
+  empty `properties` as a no-op that queues nothing, refuses a layer no
+  longer cached as a genuine vector layer with targetChanged, and reports
+  busy/closed and the engine's LOCKED/UNSUPPORTED answers; it never
+  rasterizes. The new `VectorStyleForm` sheet (Layer ▸ Vector Style…,
+  gated in menu validation on the cached layer kind plus the 3.2
+  capability, old engines unsupported with no raster fallback) captures
+  document, layer id and the read style per sheet — no shared state, no
+  retarget. The style read runs off the main thread through the global
+  EngineActivity after accepted input drains, with close/window/target
+  guards; a native pattern style or a pre-3.2 engine reports UNSUPPORTED
+  and the sheet closes with the reason. Controls are fill
+  enable/color/antialias and stroke enable/color/antialias/width/cap/join/
+  miter — no opacity, paint mode, dashes or pattern claims; validation
+  mirrors the facade's exact finite/range flags and never reads a
+  disabled section's fields; the color panel is cleaned up only for the
+  sheet's own activation. Pure unit tests cover the parser, the guards,
+  change building and the facade values; compiled engine smoke cases cover
+  cancel, no-op, invalid input, real fill+stroke pixels, one undo step,
+  XCF round trip, busy-after-open and a captured target deleted mid-sheet.
+  Checked on this branch: `swift build` and `swift build --build-tests`
+  compile only — no test or smoke run, no adapter rebuild, no library
+  change (the root checkout runs the tests and the four-engine matrix).
 
 ## Open decisions
 
@@ -1188,6 +1217,12 @@ do. One undo/redo preserves imported pixels; resaving retains editable
 geometry and raster edits. No upstream source is changed. The image-lifetime
 criticals are gone; two existing startup g_file_test(NULL) diagnostics remain.
 
+The initial style interface run passed 322 pure/unit tests but failed nine
+native interface assertions: the Swift getter left the caller's output
+struct_size at zero, so the facade correctly refused every style snapshot.
+The getter now initializes its output size before the call. A full native
+interface rerun follows; compilation alone did not establish this workflow.
+
 After integration with the merged ICC/vector loader fixes, resource previews
 pass 941 native checks on 3.2.8, 3.2.0 and master, and 881 on 3.0.8. The
 Swift build, 308 unit tests, complete pinned interface smoke and older-table
@@ -1201,6 +1236,14 @@ paths in their destination and retain raster edits; style changes keep
 fractional float32 XCF width/miter values and avoid empty undo on reapplying
 the displayed values. Native style colors stay opaque sRGB. The sheet is a
 separate interface slice, with independent wrapper/runtime verification.
+
+The completed style interface passes 322 unit tests and 790/764/790/790
+interface checks across the four engines, including actual fill/outline
+pixels, undo and XCF persistence. The remaining three refusal failures were
+fixture errors: window construction replaced the test error callback, and
+the invalid-width case had its stroke disabled. Correcting the fixture
+makes invalid input, busy-engine and removed-target checks pass. Follow-up
+independent review found no important issues.
 
 ### Fill pattern source (2026-11-08)
 
