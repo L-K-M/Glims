@@ -1923,6 +1923,53 @@ typedef struct GlimsEngineAPI {
    * usual UNDO_CHANGED event — no new event kind. */
   GlimsStatus  (*image_set_grid) (GlimsEngine *engine, GlimsImageID image,
                                   const GlimsGrid *grid, char **error);
+
+  /* Strokes the image's selection boundary on `drawable` with a paint
+   * tool, through the native core path: gimp_item_stroke() on the
+   * image's mask, whose GimpSelection stroke vfunc suspends the
+   * selection for the call and resumes it after. The stroke therefore
+   * straddles the boundary — pixels on both sides of it change — and
+   * the selection mask itself is never modified; the pixels change as
+   * exactly one undo step ("Stroke Selection", pushed by
+   * gimp_item_stroke with push_undo TRUE). The stroke is painted with
+   * the brush settings' tool via the stroke options' paint method
+   * (GIMP_STROKE_PAINT_METHOD), on a temporary context that inherits
+   * the user context; neither the shared user context nor any factory
+   * resource is mutated.
+   *
+   * `drawable` follows path_stroke's admission exactly: 0 is the
+   * image's selected layer; an explicit id must be an attached layer
+   * of this image. A layer group, a layer mask or a channel id is
+   * refused with FAILED, never silently replaced by another drawable.
+   * `brush` is a full-width resource handle: 0 keeps the established
+   * convention of stroke_begin — the stroke inherits the user
+   * context's current brush; a non-zero handle is resolved strictly
+   * through the resource admission (INVALID_ARGUMENT for an
+   * out-of-native-range handle or one of another resource kind,
+   * NOT_FOUND for a stale handle no longer in the engine's brush
+   * factory) and a failed resolve never falls back to a default
+   * brush. `settings` is a GlimsBrushSettings, validated in full
+   * before any mutation.
+   *
+   * Everything is validated before any mutation, so refusals change
+   * no pixels and push no undo: INVALID_ARGUMENT for a missing or
+   * short `settings`, an unknown `tool`, a non-finite or
+   * non-positive `size`, a non-finite `opacity` or color component,
+   * and for the malformed `brush` handles above; NOT_FOUND for an
+   * unknown image or a stale brush handle; FAILED with `error` for an
+   * empty selection ("There is no selection to stroke.", checked
+   * before the native undo group opens), for a target that is no
+   * layer of the image, a group, or a core-reported failure; BUSY
+   * while a stroke, a filter session or a plug-in holds the image
+   * (glims_edit_ready); LOCKED when the target's effective pixel
+   * lock refuses the stroke — plus the alpha lock for the eraser on
+   * a layer with alpha, as stroke_begin does. The selection is left
+   * unchanged in every case, success included; the usual
+   * UNDO_CHANGED event follows a successful stroke — no new event
+   * kind. */
+  GlimsStatus  (*selection_stroke) (GlimsEngine *engine, GlimsImageID image,
+                                    GlimsItemID drawable, GlimsResourceID brush,
+                                    const GlimsBrushSettings *settings, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

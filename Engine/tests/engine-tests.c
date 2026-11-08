@@ -9291,6 +9291,259 @@ test_grid (const char *work)
          "a closed image refuses grid calls");
 }
 
+/* Stroking the selection's boundary on a layer: the native
+ * gimp_item_stroke on the image's mask with the selection suspended, so
+ * the stroke straddles the boundary (both sides painted) and the
+ * selection mask is unchanged. A rectangular and an elliptical
+ * selection, exact pixel undo/redo, the selection's bounds and outline
+ * segments as the shape invariant, and every refusal — empty selection,
+ * bad settings, malformed/stale/wrong-kind brush handles, unknown,
+ * foreign, group, mask and channel targets, locks, BUSY — with unchanged
+ * pixels and history. */
+static void
+test_selection_stroke (void)
+{
+  GlimsImageID       image = 0, other = 0;
+  GlimsItemID        layer, layer2 = 0, group = 0, mask = 0, channel = 0;
+  GlimsResourceID    soft = 0, wrong_kind = 0;
+  GlimsResourceInfo  pat = { 0 };
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PENCIL, 6.0);
+  GlimsBrushSettings bad;
+  GlimsSelectOptions sel = { .struct_size = sizeof sel, .operation = GLIMS_SELECT_REPLACE };
+  GlimsRect          bounds, sel_before = { 0 };
+  GlimsSegment       outline[1024], outline_before[1024];
+  int32_t            n = 0, n_before = 0, before, pcount = 0;
+  bool               empty = true, empty_before = true;
+  uint8_t            px[4];
+  uint8_t           *shot = NULL, *after = NULL;
+  int32_t            w = 0, h = 0;
+  GlimsStrokeID      stroke = 0;
+  GlimsFilterID      filter = 0;
+  GlimsStatus        status;
+  char              *error = NULL;
+
+  brush.pressure_size = false;  /* deterministic: pressure never scales the size */
+
+  soft = find_file_brush ("2. Hardness 025");
+  CHECK (soft != 0, "a stock file-backed brush is listed (%llu)", (unsigned long long) soft);
+  if (api->resources (engine, GLIMS_RESOURCE_PATTERN, &pat, 1, &pcount) == GLIMS_STATUS_OK && pcount > 0)
+    wrong_kind = pat.id;
+
+  api->image_new (engine, 200, 120, &image, NULL);
+  api->image_new (engine, 64, 64, &other, NULL);
+  layer = first_layer (image);
+
+  /* An empty selection fails actionably before any mutation. */
+  before = undo_depth (image);
+  shot = render_all (image, &w, &h);
+  status = api->selection_stroke (engine, image, layer, 0, &brush, &error);
+  CHECK (status == GLIMS_STATUS_FAILED && error && undo_depth (image) == before,
+         "stroking with no selection fails with an error and no undo (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  {
+    uint8_t *now = render_all (image, &w, &h);
+    CHECK (now && shot && memcmp (now, shot, (size_t) w * h * 4) == 0,
+           "the empty-selection refusal changed no pixels");
+    free (now);
+  }
+
+  /* A rectangular selection 20,20 ... 80,80; its shape is captured as
+   * the invariant to compare after every operation. */
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 20, 20 }, { 80, 80 } }, 2, &sel) == GLIMS_STATUS_OK,
+         "the rectangle selection is set");
+  api->selection_bounds (engine, image, &empty_before, &sel_before);
+  CHECK (api->selection_outline (engine, image, outline_before, 1024, &n_before) == GLIMS_STATUS_OK &&
+         n_before > 0 && n_before <= 1024,
+         "the selection outline is read (%d segments)", n_before);
+
+  /* Refusals with the selection present: ids, handles and settings —
+   * each with no undo and no pixel change. */
+  before = undo_depth (image);
+  CHECK (api->selection_stroke (engine, 9999, layer, 0, &brush, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->selection_stroke (engine, image, first_layer (other), 0, &brush, NULL) == GLIMS_STATUS_FAILED &&
+         api->selection_stroke (engine, image, 9999, 0, &brush, NULL) == GLIMS_STATUS_FAILED &&
+         api->selection_stroke (engine, image, layer, 0x80000000ull, &brush, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->selection_stroke (engine, image, layer, 0x7FFFFFFFull, &brush, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         undo_depth (image) == before,
+         "unknown image, foreign/unknown drawable and out-of-range or stale brush handles are refused, no undo");
+  if (wrong_kind)
+    CHECK (api->selection_stroke (engine, image, layer, wrong_kind, &brush, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+           undo_depth (image) == before,
+           "a handle of another resource kind is INVALID_ARGUMENT, no undo");
+  bad = brush;
+  bad.size = 0.0;
+  CHECK (api->selection_stroke (engine, image, layer, 0, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->selection_stroke (engine, image, layer, 0, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->selection_stroke (engine, image, layer, 0,
+                                 &(GlimsBrushSettings) { .struct_size = 4 }, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before,
+         "a zero size, missing and short settings are INVALID_ARGUMENT, no undo");
+  bad = brush; bad.size = NAN;
+  CHECK (api->selection_stroke (engine, image, layer, 0, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a non-finite size is refused");
+  bad = brush; bad.tool = 99;
+  CHECK (api->selection_stroke (engine, image, layer, 0, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown tool is refused");
+  bad = brush; bad.opacity = NAN;
+  CHECK (api->selection_stroke (engine, image, layer, 0, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a non-finite opacity is refused");
+  bad = brush; bad.red = NAN;
+  CHECK (api->selection_stroke (engine, image, layer, 0, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a non-finite color is refused");
+  {
+    uint8_t *now = render_all (image, &w, &h);
+    CHECK (now && shot && memcmp (now, shot, (size_t) w * h * 4) == 0 && undo_depth (image) == before,
+           "all refused calls changed no pixels and pushed no undo");
+    free (now);
+  }
+
+  /* A group, a layer mask and a channel as the explicit target are
+   * refused exactly as path_stroke refuses them. */
+  CHECK (api->create_group (engine, image, 0, 0, "G", &group, NULL) == GLIMS_STATUS_OK && group != 0 &&
+         api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer2, NULL) == GLIMS_STATUS_OK &&
+         api->layer_mask_add (engine, image, layer2, GLIMS_MASK_BLACK, false, &mask, NULL) == GLIMS_STATUS_OK &&
+         mask != 0 &&
+         api->channel_from_selection (engine, image, "sel", &channel, NULL) == GLIMS_STATUS_OK && channel != 0,
+         "a group, a mask and a channel exist for the target refusals");
+  before = undo_depth (image);
+  CHECK (api->selection_stroke (engine, image, group, 0, &brush, &error) == GLIMS_STATUS_FAILED && error &&
+         api->selection_stroke (engine, image, mask, 0, &brush, NULL) == GLIMS_STATUS_FAILED &&
+         api->selection_stroke (engine, image, channel, 0, &brush, NULL) == GLIMS_STATUS_FAILED &&
+         undo_depth (image) == before,
+         "group, mask and channel targets are refused like path_stroke's, no undo (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* The real stroke on the rectangle: one undo step, pixels on BOTH
+   * sides of the boundary, the interior and the far outside untouched,
+   * and the selection's shape invariant unchanged. */
+  before = undo_depth (image);
+  status = api->selection_stroke (engine, image, layer, 0, &brush, &error);
+  CHECK (status == GLIMS_STATUS_OK && undo_depth (image) == before + 1,
+         "stroking the rectangular selection is one undo step%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (red_at (image, 19, 50) < 64 && red_at (image, 21, 50) < 64,
+         "the boundary stroke paints both sides of the edge x=20 (%d outside, %d inside)",
+         red_at (image, 19, 50), red_at (image, 21, 50));
+  CHECK (red_at (image, 50, 50) > 200 && red_at (image, 10, 10) > 200,
+         "the interior and the far outside stay white (%d, %d)",
+         red_at (image, 50, 50), red_at (image, 10, 10));
+  CHECK (api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         empty == empty_before &&
+         rect_equals (bounds, sel_before.x, sel_before.y, sel_before.width, sel_before.height) &&
+         api->selection_outline (engine, image, outline, 1024, &n) == GLIMS_STATUS_OK &&
+         n == n_before && memcmp (outline, outline_before, sizeof outline[0] * (size_t) n) == 0,
+         "the selection's bounds and outline are unchanged by the stroke (%d segments)", n);
+
+  /* Exact pixel undo/redo, with the selection still unchanged. */
+  after = render_all (image, &w, &h);
+  CHECK (after && shot && memcmp (after, shot, (size_t) w * h * 4) != 0, "the stroke changed the pixels");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK, "undo runs");
+  {
+    uint8_t *undone = render_all (image, &w, &h);
+    CHECK (undone && shot && memcmp (undone, shot, (size_t) w * h * 4) == 0,
+           "undo restores the exact pre-stroke pixels");
+    free (undone);
+  }
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK, "redo runs");
+  {
+    uint8_t *redone = render_all (image, &w, &h);
+    CHECK (redone && after && memcmp (redone, after, (size_t) w * h * 4) == 0,
+           "redo brings the stroke back exactly");
+    free (redone);
+  }
+  CHECK (api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         empty == empty_before &&
+         rect_equals (bounds, sel_before.x, sel_before.y, sel_before.width, sel_before.height) &&
+         api->selection_outline (engine, image, outline, 1024, &n) == GLIMS_STATUS_OK &&
+         n == n_before && memcmp (outline, outline_before, sizeof outline[0] * (size_t) n) == 0,
+         "the selection survives undo/redo unchanged");
+  api->image_undo (engine, image);  /* back to the pre-stroke pixels */
+  free (after);
+  free (shot);
+  shot = NULL;
+
+  /* A nonrectangular (elliptical) selection, stroked with the selected
+   * soft brush resource: the resource handle is resolved and the
+   * boundary is painted while the interior stays untouched. */
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_ELLIPSE,
+                            (GlimsPoint[]) { { 100, 20 }, { 160, 100 } }, 2, &sel) == GLIMS_STATUS_OK,
+         "the ellipse selection replaces the rectangle");
+  api->selection_bounds (engine, image, &empty_before, &sel_before);
+  CHECK (api->selection_outline (engine, image, outline_before, 1024, &n_before) == GLIMS_STATUS_OK &&
+         n_before > 0 && n_before <= 1024,
+         "the ellipse outline is read (%d segments)", n_before);
+  before = undo_depth (image);
+  status = api->selection_stroke (engine, image, layer, soft, &brush, &error);
+  CHECK (status == GLIMS_STATUS_OK && undo_depth (image) == before + 1,
+         "stroking the elliptical selection with the selected soft brush is one undo step%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (red_at (image, 100, 60) < 200 && red_at (image, 130, 60) > 200,
+         "the ellipse's leftmost boundary point is painted, its center is not (%d, %d)",
+         red_at (image, 100, 60), red_at (image, 130, 60));
+  CHECK (api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         empty == empty_before &&
+         rect_equals (bounds, sel_before.x, sel_before.y, sel_before.width, sel_before.height) &&
+         api->selection_outline (engine, image, outline, 1024, &n) == GLIMS_STATUS_OK &&
+         n == n_before && memcmp (outline, outline_before, sizeof outline[0] * (size_t) n) == 0,
+         "the elliptical selection's shape is unchanged by the resource stroke (%d segments)", n);
+  api->image_undo (engine, image);
+
+  /* Locks: a pixel-locked target is LOCKED with unchanged pixels and
+   * history; the eraser on an alpha-locked layer with alpha is too. */
+  CHECK (api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL) == GLIMS_STATUS_OK,
+         "the layer's pixels lock");
+  before = undo_depth (image);
+  {
+    uint8_t previous[4];
+
+    render_pixel (image, 100, 60, previous);
+    status = api->selection_stroke (engine, image, layer, 0, &brush, &error);
+    CHECK (status == GLIMS_STATUS_LOCKED && error && undo_depth (image) == before &&
+           (render_pixel (image, 100, 60, px), memcmp (previous, px, sizeof px) == 0),
+           "a pixel-locked target is LOCKED with unchanged pixels and history (%s)", error ? error : "");
+    api->free_string (error);
+    error = NULL;
+  }
+  api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, 0, NULL);
+  bad = brush;
+  bad.tool = GLIMS_PAINT_ERASER;
+  CHECK (api->set_layer_locks (engine, image, layer2, GLIMS_LOCK_ALPHA, GLIMS_LOCK_ALPHA, NULL) == GLIMS_STATUS_OK,
+         "the alpha layer's transparency locks");
+  before = undo_depth (image);
+  status = api->selection_stroke (engine, image, layer2, 0, &bad, &error);
+  CHECK (status == GLIMS_STATUS_LOCKED && undo_depth (image) == before,
+         "the eraser on an alpha-locked layer with alpha is LOCKED, no undo (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->set_layer_locks (engine, image, layer2, GLIMS_LOCK_ALPHA, 0, NULL);
+
+  /* BUSY while a stroke or a filter session is open. */
+  {
+    GlimsStrokePoint point = { 5, 5, 1.0, 0.0, 0.0, 0 };
+
+    CHECK (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK &&
+           api->selection_stroke (engine, image, layer, 0, &brush, NULL) == GLIMS_STATUS_BUSY &&
+           api->stroke_end (engine, stroke) == GLIMS_STATUS_OK,
+           "stroking the selection during an open stroke is BUSY");
+  }
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, &error) == GLIMS_STATUS_OK &&
+         api->selection_stroke (engine, image, layer, 0, &brush, NULL) == GLIMS_STATUS_BUSY &&
+         api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+         "stroking the selection during an open filter session is BUSY%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+
+  api->image_close (engine, other);
+  api->image_close (engine, image);
+}
+
 static void
 test_procedures (void)
 {
@@ -10109,6 +10362,7 @@ main (int argc, char **argv)
   test_resource_gradient ();
   test_guides (argv[2]);
   test_grid (argv[2]);
+  test_selection_stroke ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 

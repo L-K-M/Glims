@@ -1761,6 +1761,108 @@ engine/adapter lock belongs to the root job): `build-adapter.sh
 `--engine-smoke-test`, the engine matrix and any on-screen check —
 no runtime behavior of the new slots was executed in this slice.
 
+### Stroke selection backend (2026-11-08)
+
+Backend slice on `feat/stroke-selection`: no UI and no action
+recording. One append-only facade footer slot after `image_set_grid`
+(slot 117): `selection_stroke(engine, image, drawable, brush,
+settings, error)`, API version 1 unchanged. The signature follows
+`path_stroke`'s target convention and `stroke_begin_with_brush_resource`'s
+resource convention: `drawable` 0 is the image's selected layer and an
+explicit id must be an attached layer of this image (a group, a layer
+mask or a channel is refused with FAILED, exactly as `path_stroke`
+refuses them); `brush` is a full-width `GlimsResourceID` — 0 keeps
+`stroke_begin`'s established convention of inheriting the shared user
+context's current brush, while a non-zero handle goes through
+`glims_lookup_brush`'s strict admission (INVALID_ARGUMENT for
+out-of-native-range or wrong-kind handles, NOT_FOUND for stale ones)
+with no silent default replacement; `settings` is the existing
+`GlimsBrushSettings`, no new struct and no native enum crosses the
+facade.
+
+The adapter (Engine/select.c, `glims_selection_stroke`) drives the GUI-
+free core path, not a hand-rendered bitmap: `gimp_item_stroke()` on the
+image's mask (`GIMP_ITEM (gimp_image_get_mask (image))`) with
+`push_undo` TRUE, exactly as the PDB's `drawable-edit-stroke-selection`
+invoker does (app/pdb/drawable-edit-cmds.c). Verified identical in all
+four engine trees (GIMP_3_0_8, GIMP_3_2_0, GIMP_3_2_8, master):
+`GimpSelection`'s stroke vfunc (app/core/gimpselection.c) fails with
+"There is no selection to stroke." when `gimp_channel_boundary` finds
+no boundary, then suspends the selection, calls `GimpChannel`'s stroke
+vfunc and resumes — so the stroke straddles the boundary (pixels on
+both sides change), the selection mask is never modified, and
+`gimp_item_stroke`'s own undo group makes the whole call exactly one
+"Stroke Selection" undo step. The adapter pre-checks the same boundary
+so an empty selection fails with FAILED before the native undo group
+opens. The stroke is painted through the stroke options' paint method
+(`GIMP_STROKE_PAINT_METHOD`, `gimp_paint_core_stroke_boundary`): a
+temporary context inheriting the user context carries the tool's paint
+info — defined locally (`gimp_context_define_property` before
+`gimp_context_set_paint_info`, so the setter cannot walk up to the
+shared user context) — and the tool's own paint options are built by
+paint.c's `glims_make_paint_options`/`glims_set_tool_options` (now shared
+with `stroke_begin_common`) and passed explicitly, as the PDB invoker
+does, with the selected brush pinned locally exactly as
+`stroke_begin_with_brush_resource` pins it. All temporary context,
+options and paint-options references are released on every path.
+Readiness is `glims_edit_ready` (BUSY during a stroke, a filter
+session or a plug-in); locks are `glims_check_item_locks` with
+`GLIMS_LOCK_PIXELS`, plus `GLIMS_LOCK_ALPHA` for the eraser on a layer
+with alpha — the same policy as `stroke_begin`. The whole request
+(settings, brush handle, target, locks, empty selection) is validated
+before any mutation, so refusals change no pixels and push no undo.
+No new event kind: the usual UNDO_CHANGED follows a success.
+
+Session side: `EngineSession.strokeSelection(image:drawable:brush:)`
+over the slot, reusing the captured `EngineSession.Brush` settings (via
+the new shared `nativeBrush` helper, also used by `beginStroke`) and the
+existing `ResourceIdentity` resolve — a nil resource passes 0 (the
+documented inherit convention) and a non-nil one is resolved on the
+worker with `resolveResource(_:kind: .brush)`; session ids are never
+stored. `ImageDocument.strokeSelection(_:)` queues the call as counted
+input on the input queue behind already accepted input, capturing the
+brush settings, the resource identity and the target drawable id by
+value, requiring the paint target inside the job and reporting errors
+through the usual path; mask/channel/group targets are refused up
+front like `strokePath`, and no synchronous native call runs on the
+main thread.
+
+Facade-only conformance adds `test_selection_stroke` (engine-tests.c,
+no engine headers): rectangular and elliptical selections; the boundary
+stroke visible on both sides of the edge while the interior and the
+far outside stay untouched; the selection's bounds AND outline
+segments (the shape invariant, not just pixels) unchanged across the
+stroke and across undo/redo; exact pixel undo/redo by full-render
+compare; an empty selection failing with an error before any undo;
+invalid/stale/foreign image and drawable ids; out-of-range, stale and
+wrong-kind brush handles; NULL/short settings, zero/NaN size, unknown
+tool, NaN opacity/color; group, mask and channel targets refused like
+path_stroke's; pixel lock LOCKED with unchanged pixels and history and
+the eraser on an alpha-locked alpha layer LOCKED; BUSY under an open
+stroke and an open filter session. Not covered by this test: a
+polygon-shaped selection (same boundary machinery as the ellipse), a
+clone/heal source drawable, XCF round trips of the stroke's result
+(covered by the existing undo/redo checks), and any on-screen result.
+
+Checks actually run on this branch: `swift build -j 2` and
+`swift build -j 2 --build-tests` pass; `clang -fsyntax-only` with the
+existing adapter flags (from `_engine/adapter/<ref>/compile.rsp`,
+paths rewritten to this worktree, plus the build's
+`-I Engine -I Sources/CGlimsEngine/include` and the two
+`GLIMS_ENGINE_*_PATH` defines from `scripts/build-adapter.sh`) is clean
+for `Engine/select.c`, `Engine/paint.c` and `Engine/engine.c` on all
+four refs (GIMP_3_2_8, GIMP_3_2_0, GIMP_3_0_8, master), and
+`Engine/select.c`/`Engine/paint.c` are also clean under the added
+`-Wextra -Werror` (the only -Wextra diagnostic in paint.c is
+pre-existing in untouched `to_coords`); `Engine/tests/engine-tests.c`
+and `Sources/CGlimsEngine/abi.c` pass `-std=c11 -O2 -Wall -Wextra
+-Werror -fsyntax-only -I Sources/CGlimsEngine/include`. NOT run here
+(the shared engine/adapter lock belongs to the root fixture job):
+`build-adapter.sh --test` conformance, any adapter compile/link,
+`swift test`, the app's `--engine-smoke-test`, the engine matrix and
+any on-screen check — no runtime behavior of the new slot was executed
+in this slice.
+
 ### Fill pattern source (2026-11-08)
 
 Interface slice on `feat/pattern-chooser`, frontend only: Edit ▸ Fill…

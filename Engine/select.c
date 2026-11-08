@@ -11,17 +11,24 @@
  */
 #include "engine-private.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "core/gimp.h"
 #include "core/gimpboundary.h"
+#include "core/gimpbrush.h"
 #include "core/gimpchannel.h"
 #include "core/gimpchannel-select.h"
+#include "core/gimpcontext.h"
 #include "core/gimpdrawable.h"
+#include "core/gimpgrouplayer.h"
 #include "core/gimpimage.h"
 #include "core/gimpitem.h"
+#include "core/gimplayer.h"
 #include "core/gimppickable.h"
 #include "core/gimpprojection.h"
+#include "core/gimpstrokeoptions.h"
+#include "core/gimpviewable.h"
 
 #include "libgimpmath/gimpmath.h"
 
@@ -404,6 +411,164 @@ glims_selection_outline (GlimsEngine  *engine,
     segments[i] = (GlimsSegment) { segs_in[i].x1, segs_in[i].y1, segs_in[i].x2, segs_in[i].y2 };
 
   *count = n_in;
+
+  return GLIMS_STATUS_OK;
+}
+
+/* Strokes the selection's boundary on `drawable` with the brush
+ * settings' paint tool: gimp_item_stroke() on the image's mask, whose
+ * GimpSelection stroke vfunc suspends the selection for the call, so
+ * the stroke straddles the boundary (both sides are painted) and the
+ * selection mask is left untouched. With push_undo TRUE the core wraps
+ * the call in exactly one undo group ("Stroke Selection"), as GIMP's
+ * own Select > Stroke does (app/pdb/drawable-edit-cmds.c,
+ * drawable_edit_stroke_selection_invoker; app/actions/select-commands.c
+ * select_stroke_cmd_callback). The paint method carries the caller's
+ * brush: a temporary context inherits the user context, the paint info
+ * is defined locally on it before it is set, and the tool's own paint
+ * options are built by paint.c's glims_make_paint_options, with the
+ * selected brush pinned the way stroke_begin_with_brush_resource
+ * pins it. */
+GlimsStatus
+glims_selection_stroke (GlimsEngine              *engine,
+                        GlimsImageID              id,
+                        GlimsItemID               drawable_id,
+                        GlimsResourceID           brush_id,
+                        const GlimsBrushSettings *brush,
+                        char                    **error)
+{
+  GlimsOpenImage     *open = glims_lookup_image (engine, id);
+  GlimsBrushSettings  settings;
+  GimpImage          *image;
+  GimpChannel        *mask;
+  GimpItem           *layer;
+  GimpPaintInfo      *info;
+  GimpBrush          *resource = NULL;
+  GimpContext        *context;
+  GimpStrokeOptions  *options;
+  GimpPaintOptions   *paint_options;
+  GimpDrawable       *source = NULL;
+  GList              *drawables;
+  GError             *gerror = NULL;
+  gboolean            done;
+  GlimsStatus         status;
+  uint32_t            locks = GLIMS_LOCK_PIXELS;
+  const GimpBoundSeg *segs_in, *segs_out;
+  gint                n_in, n_out;
+
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+  status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+
+  image = open->image;
+
+  /* The whole request is validated before any mutation. */
+  if (! glims_read_brush (brush, &settings) ||
+      ! isfinite (settings.size) || ! (settings.size > 0.0) ||
+      ! isfinite (settings.opacity) ||
+      ! isfinite (settings.red) || ! isfinite (settings.green) || ! isfinite (settings.blue))
+    return glims_fail (error, NULL, "The brush settings are not valid.");
+
+  /* brush_id 0 keeps stroke_begin's convention: the stroke inherits the
+   * shared user context's current brush. Any other handle is resolved
+   * strictly; there is no silent default replacement. */
+  if (brush_id != 0)
+    {
+      status = glims_lookup_brush (engine, brush_id, &resource);
+      if (status != GLIMS_STATUS_OK)
+        {
+          if (error)
+            *error = strdup (status == GLIMS_STATUS_INVALID_ARGUMENT
+                             ? "This handle cannot name a brush."
+                             : "This brush is no longer in the engine's brush factory.");
+          return status;
+        }
+    }
+
+  /* The target follows path_stroke's admission exactly: 0 is the
+   * selected layer; an explicit id must be an attached layer of this
+   * image. Groups, masks and channels are refused, never silently
+   * replaced. */
+  if (drawable_id == 0)
+    {
+      GList *selected = gimp_image_get_selected_layers (image);
+
+      layer = selected ? selected->data : NULL;
+      g_list_free (selected);
+    }
+  else
+    {
+      layer = gimp_item_get_by_id (engine->gimp, drawable_id);
+      if (! GIMP_IS_LAYER (layer) || gimp_item_get_image (layer) != image ||
+          ! gimp_item_is_attached (layer))
+        layer = NULL;
+    }
+  if (! layer)
+    return glims_fail (error, NULL, "Select a layer first.");
+  if (gimp_viewable_get_children (GIMP_VIEWABLE (layer)))
+    return glims_fail (error, NULL, "A selection cannot be stroked onto a layer group.");
+
+  /* The same lock policy as a paint stroke: pixels always, plus alpha
+   * for the eraser on a layer with alpha. */
+  if (settings.tool == GLIMS_PAINT_ERASER && gimp_drawable_has_alpha (GIMP_DRAWABLE (layer)))
+    locks |= GLIMS_LOCK_ALPHA;
+  status = glims_check_item_locks (layer, locks, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+
+  if (settings.tool == GLIMS_PAINT_CLONE || settings.tool == GLIMS_PAINT_HEAL)
+    {
+      GimpItem *item = gimp_item_get_by_id (engine->gimp, settings.source_drawable);
+
+      if (! GIMP_IS_DRAWABLE (item) || GIMP_IS_GROUP_LAYER (item) || ! gimp_item_is_attached (item))
+        return glims_fail (error, NULL, "Choose a source point on a layer first.");
+      source = GIMP_DRAWABLE (item);
+    }
+
+  /* An empty selection fails here, before the native undo group opens
+   * — the same boundary test the selection's stroke vfunc applies. */
+  mask = gimp_image_get_mask (image);
+  if (! gimp_channel_boundary (mask, &segs_in, &segs_out, &n_in, &n_out, 0, 0, 0, 0))
+    return glims_fail (error, NULL, "There is no selection to stroke.");
+
+  info = glims_paint_info_for_tool (engine->gimp, settings.tool);
+  if (! info)
+    return glims_fail (error, NULL, "The engine lacks this paint tool.");
+
+  /* A temporary context inheriting the user's settings; the shared user
+   * context is never mutated. The paint info property is defined
+   * locally BEFORE the setter runs: for an undefined property the
+   * setter walks up to the parent, which here is the shared user
+   * context. */
+  context = gimp_context_new (engine->gimp, "Glims selection stroke",
+                              gimp_get_user_context (engine->gimp));
+  gimp_context_define_property (context, GIMP_CONTEXT_PROP_PAINT_INFO, TRUE);
+  gimp_context_set_paint_info (context, info);
+
+  /* The paint method: the options' context carries the paint info, and
+   * the tool's own paint options are passed explicitly, as the PDB's
+   * stroke-selection invoker does, so gimp_stroke_options_prepare() uses
+   * them instead of rebuilding from the context. */
+  options = gimp_stroke_options_new (engine->gimp, context, FALSE);
+  g_object_set (options, "method", GIMP_STROKE_PAINT_METHOD, NULL);
+
+  paint_options = glims_make_paint_options (engine->gimp, info, &settings, resource);
+  glims_set_tool_options (paint_options, &settings, source);
+
+  drawables = g_list_prepend (NULL, GIMP_DRAWABLE (layer));
+  done = gimp_item_stroke (GIMP_ITEM (mask), drawables, context, options, paint_options,
+                           TRUE, NULL, &gerror);
+  g_list_free (drawables);
+  g_object_unref (paint_options);
+  g_object_unref (options);
+  g_object_unref (context);
+
+  if (! done)
+    return glims_fail (error, gerror, "The selection could not be stroked.");
+
+  gimp_image_flush (image);
 
   return GLIMS_STATUS_OK;
 }

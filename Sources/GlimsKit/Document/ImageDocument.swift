@@ -615,6 +615,49 @@ final class ImageDocument {
         run { session, image in try session.select(command, image: image, radius: radius) }
     }
 
+    /// Strokes the selection's boundary on the active layer with `brush`,
+    /// as one undo step ordered behind every already accepted input: the
+    /// job counts as queued input on the input queue, off the main
+    /// thread. `brush`'s settings and its selected brush's
+    /// `ResourceIdentity` — never a session handle — and the target
+    /// drawable are captured by value here and resolved on the worker, so
+    /// no synchronous native call runs on the main thread and a stale or
+    /// removed resource fails explicitly. The engine suspends the
+    /// selection for the stroke, so the line straddles the boundary and
+    /// the selection itself is unchanged; an empty selection fails
+    /// actionably with no mutation. Like path strokes, the target is a
+    /// layer only — a mask or channel target is refused rather than
+    /// silently painting the layer's pixels, as is a layer group.
+    func strokeSelection(_ brush: EngineSession.Brush = EngineSession.Brush()) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        guard !isChannelTargetActive else { return refuseChannelTransform() }
+        guard !isMaskTargetActive else {
+            onError?("A selection cannot be stroked onto a mask; select the layer first.")
+            NSSound.beep()
+            return
+        }
+        guard !refuseWhileTargetPending() else { return }
+        guard let drawable = activeDrawable else {
+            onError?(DocumentError.targetChanged.localizedDescription)
+            NSSound.beep()
+            return
+        }
+        if drawable == activeLayer,
+           layers.first(where: { $0.id == drawable })?.kind == .group {
+            onError?("A selection cannot be stroked onto a layer group; select a layer.")
+            NSSound.beep()
+            return
+        }
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            do {
+                try self.requirePaintTarget()
+                try session.strokeSelection(image: image, drawable: drawable, brush: brush)
+            } catch {
+                self.report(error)
+            }
+        }
+    }
+
     // MARK: Guides
 
     /// Adds a guide at `position` (image pixels on `orientation`'s

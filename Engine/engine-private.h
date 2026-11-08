@@ -148,6 +148,28 @@ GlimsStatus glims_stroke_continue  (GlimsEngine *e, GlimsStrokeID id,
 GlimsStatus glims_stroke_end       (GlimsEngine *e, GlimsStrokeID id);
 void        glims_strokes_free     (gpointer stroke);
 
+/* Shared brush-stroke setup, also used by select.c's selection_stroke.
+ * GimpPaintOptions lives in paint/, outside core-types.h. */
+typedef struct _GimpPaintOptions GimpPaintOptions;
+/* The caller's settings with the fields its struct_size lacks at
+ * defaults; FALSE for a missing/short struct or an unknown tool. */
+gboolean         glims_read_brush          (const GlimsBrushSettings *brush,
+                                            GlimsBrushSettings       *settings);
+/* The paint info behind a GlimsPaintTool, or NULL when the engine lacks
+ * the tool. */
+GimpPaintInfo *  glims_paint_info_for_tool (Gimp *gimp, uint32_t tool);
+/* The tool's own options with the brush pinned: `brush_resource` is the
+ * stroke's own selected brush, or NULL to inherit the user context's
+ * brush. Owned reference. */
+GimpPaintOptions *glims_make_paint_options (Gimp                     *gimp,
+                                            GimpPaintInfo            *info,
+                                            const GlimsBrushSettings *brush,
+                                            GimpBrush                *brush_resource);
+/* The tool-specific options (rate, flow, exposure, clone source, ...). */
+void             glims_set_tool_options    (GimpPaintOptions         *options,
+                                            const GlimsBrushSettings *brush,
+                                            GimpDrawable             *source);
+
 /* filter.c */
 gboolean glims_filters_active_for_image (GlimsEngine *, GimpImage *);
 void glims_filters_abort_for_image (GlimsEngine *, GimpImage *);
@@ -253,6 +275,12 @@ GlimsStatus glims_select_command   (GlimsEngine *e, GlimsImageID image, uint32_t
 GlimsStatus glims_selection_bounds (GlimsEngine *e, GlimsImageID image, bool *empty, GlimsRect *bounds);
 GlimsStatus glims_selection_outline(GlimsEngine *e, GlimsImageID image, GlimsSegment *segments,
                                     int32_t capacity, int32_t *count);
+/* Strokes the selection's boundary on `drawable` (0: the selected
+ * layer) with the brush settings' paint tool; `brush` 0 inherits the
+ * user context's brush, a non-zero handle is resolved strictly. */
+GlimsStatus glims_selection_stroke (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
+                                    GlimsResourceID brush, const GlimsBrushSettings *settings,
+                                    char **error);
 GimpChannelOps glims_channel_op   (uint32_t operation);  /* a GlimsSelectOperation */
 
 /* path.c */
