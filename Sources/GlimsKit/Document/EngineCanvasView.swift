@@ -59,6 +59,10 @@ final class EngineCanvasView: NSView {
     /// The current tool's handling of pointer and key events.
     private(set) lazy var tools = CanvasToolController(canvas: self)
 
+    /// This window's guide-drag gesture (ruler-created and Move-tool),
+    /// view-only until the release commits exactly one guide action.
+    private(set) lazy var guideDrag = GuideDragController(canvas: self)
+
     /// View ▸ Show Guides: whether the canvas draws the image's guides.
     /// Cached per window (the document window controller owns the toggle);
     /// flipping it is pure view state and just redraws.
@@ -364,7 +368,35 @@ final class EngineCanvasView: NSView {
         if showsLayerBoundary { drawLayerBoundary() }
         drawVisiblePaths()
         if showsGuides { drawGuidesOverlay() }
+        drawGuideGhost()
         tools.drawOverlay(scale: scale)
+    }
+
+    /// The guide being dragged, as a dashed ghost line clipped to the
+    /// displayed image. View-only: drawn over the cached tiles, never into
+    /// them, and invisible to export, print and the engine — printing draws
+    /// an immutable PrintSnapshot, not this view.
+    private func drawGuideGhost() {
+        guard let gesture = guideDrag.gesture else { return }
+        let imageSize = CGSize(width: Double(document.info.width), height: Double(document.info.height))
+        guard let (from, to) = GuideDragLogic.lineEndpoints(orientation: gesture.orientation,
+                                                            position: gesture.position, imageSize: imageSize,
+                                                            zoomPercent: zoomPercent, backingFactor: backingScale)
+        else { return }
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: CanvasGeometry.imageViewRect(imageSize: imageSize, zoomPercent: zoomPercent,
+                                                        backingFactor: backingScale)).addClip()
+        let path = NSBezierPath()
+        path.move(to: from)
+        path.line(to: to)
+        path.lineWidth = 3
+        NSColor.white.setStroke()
+        path.stroke()
+        path.lineWidth = 1
+        path.setLineDash([6, 4], count: 2, phase: 0)
+        NSColor.systemOrange.setStroke()
+        path.stroke()
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     /// Display-only bounds of the selected layer. Cached layer metadata
@@ -474,6 +506,8 @@ final class EngineCanvasView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        // Escape cancels an in-progress guide drag before anything else.
+        if guideDrag.keyDown(with: event) { return }
         if tools.keyDown(with: event) { return }
         if event.keyCode == 51, event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
            let controller = window?.windowController as? DocumentWindowController {
