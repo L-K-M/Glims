@@ -51,7 +51,7 @@ enum EngineSmokeTest {
             .usingColorSpace(.genericGray)?.whiteComponent).map(Double.init)
     }
 
-    private static func pixel(_ session: EngineSession, _ image: Int32, x: Int, y: Int) -> [UInt8]? {
+    static func pixel(_ session: EngineSession, _ image: Int32, x: Int, y: Int) -> [UInt8]? {
         guard let rendered = try? session.render(image, scale: 1, area: CGRect(x: x, y: y, width: 1, height: 1)),
               let data = rendered.dataProvider?.data as Data? else { return nil }
         return Array(data.prefix(4))
@@ -177,6 +177,22 @@ enum EngineSmokeTest {
                 return failures == 0 ? 0 : 1
             }
 
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "plugin-responsiveness" {
+                try measurePluginStalls(session, work: work)
+                print(failures == 0 ? "PASSED (plugin responsiveness)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "history-isolation" {
+                try exercisePendingEditScope(session, documents: documents)
+                try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (history isolation)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "stroke-selection-controls" {
+                try exerciseStrokeSelectionControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (stroke-selection-controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "grid-controls" {
                 try exerciseGridControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (grid controls)" : "FAILED: \(failures) failure(s)")
@@ -246,6 +262,7 @@ enum EngineSmokeTest {
             try exerciseGuidesControls(session, work: work, documents: documents)
             try exerciseGridControls(session, work: work, documents: documents)
             try exercisePixelRulers(session, work: work, documents: documents)
+            try exerciseStrokeSelectionControls(session, work: work, documents: documents)
 
 
             try exerciseIndexedControls(session, work: work, documents: documents)
@@ -5054,7 +5071,7 @@ enum EngineSmokeTest {
         document.endStroke()
         settle()
         guard let filled = document.history, filled.rows.count == 3, filled.currentPosition == 2 else {
-            check(false, "a fill and a stroke list three history states (\(document.history?.rows.count ?? -1))")
+            check(false, "a fill and a stroke list three history states (cached \(document.history?.rows.count ?? -1), native undo \(String(describing: try? session.undoInfo(image))), pending \(document.pendingWork), activity \(EngineActivity.shared.label ?? "none"), errors \(messages))")
             return
         }
         check(true, "a fill and a stroke list three history states")
@@ -7149,7 +7166,11 @@ enum EngineSmokeTest {
             maxLateness = max(maxLateness, Double(now.uptimeNanoseconds - lastTick.uptimeNanoseconds) / 1e6 - interval * 1000)
             let begin = DispatchTime.now()
             _ = try? session.render(image, scale: 1, area: CGRect(x: 0, y: 0, width: 64, height: 64))
-            maxRenderCall = max(maxRenderCall, milliseconds(since: begin))
+            let renderMilliseconds = milliseconds(since: begin)
+            if renderMilliseconds >= maximumMainThreadStallMilliseconds {
+                print("     slow render RPC sample \(ticks): \(String(format: "%.1f", renderMilliseconds)) ms")
+            }
+            maxRenderCall = max(maxRenderCall, renderMilliseconds)
             ticks += 1
             lastTick = DispatchTime.now()
         }

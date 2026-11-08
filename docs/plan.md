@@ -1944,6 +1944,7 @@ job): `swift test`, `--smoke-test`, `--engine-smoke-test` (including
 `GLIMS_SMOKE_CASE=grid-controls`), the adapter conformance tests and any
 native/engine command — no runtime behavior of the new UI was executed
 
+
 ### Stroke selection backend (2026-11-08)
 
 Backend slice on `feat/stroke-selection`: no UI and no action
@@ -2044,7 +2045,160 @@ and `Sources/CGlimsEngine/abi.c` pass `-std=c11 -O2 -Wall -Wextra
 `build-adapter.sh --test` conformance, any adapter compile/link,
 `swift test`, the app's `--engine-smoke-test`, the engine matrix and
 any on-screen check — no runtime behavior of the new slot was executed
+
 in this slice.
+
+### Stroke selection controls (2026-11-08)
+
+Interface slice on `feat/stroke-selection-controls`, frontend only: no
+facade, C, header or dependency change. Edit ▸ Stroke Selection… (listed
+in docs/design.md's Edit menu since the plan) now exists:
+`MainMenu` wires it to `DocumentWindowController.strokeSelection(_:)`,
+which opens a per-document sheet
+(`StrokeSelectionSheetController`, owned by the window controller exactly
+like the guides sheet — two documents keep independent sheets and
+controllers, and the document's existing onError/onStateChange/
+onWillChangeLayers/windowWillClose callbacks fan out to it alongside the
+guides sheet instead of being replaced). The sheet captures the document
+and each offered paint tool's brush — resource identity, size, opacity,
+color — BY VALUE at open from `ToolState.brush(for:)`; opening, editing
+or cancelling the sheet never mutates the global ToolState, the brush
+row shows the captured identity's real name ("Default", or the chooser's
+verified "Missing: …" marker — never silently replaced, never a session
+handle), and an accepted stroke carries the captured
+`ResourceIdentity`, resolved on the engine worker as before. Local
+fields are the paint tool (paintbrush/pencil/eraser), size, opacity and
+a color well owned by the sheet (deactivated and ordered out on close
+only when the sheet opened it). Validation is strict finite whole-string
+parsing with inline reasons (`StrokeSelectionFormValidation`): junk,
+whitespace, NaN/inf and out-of-range size (0 < s ≤ 500) or opacity
+(0…100 %) keep the sheet open with the reason; Cancel mutates nothing.
+Accept is one-shot: a reentry flag goes up before anything that can call
+back into the UI (ending field edits, ending pending input), so a
+duplicate/reentrant accept is blocked before it can mutate; on success
+exactly one counted input job is enqueued through
+`ImageDocument.strokeSelection` and the sheet closes. Native errors use
+the document's existing onError path.
+
+Gates read only cached state — no synchronous native RPC from menu
+validation, sheet open or accept (`ImageDocument.strokeSelectionRefusal`
+plus `validateMenuItem`, the refusal as tool tip): busy/plug-in, filter
+preview, closing/saving/clipboard, empty selection (cached
+`selectionOutline`), mask/channel/group targets, effective pixel locks,
+and an editable structured source from the cached `layerSources`
+(`hasSource && !isRasterized`) which refuses with a rasterize-first
+explanation — the rasterize UI is a separate pending change and is not
+adopted here.
+
+Queue-defect fix in the same slice: `ImageDocument.strokeSelection` now
+ends pending user edits and an active stroke (`endPendingUserEdits()` +
+`endStroke()`) before enqueueing, the `finishInput` convention — both
+land as input-queue jobs ahead of the selection stroke, so an active
+stroke and queued accepted input finish BEFORE it (previously the native
+readiness check could report BUSY under the open stroke). Counted
+input-queue ordering, captured identity/settings/target and the error
+path are unchanged.
+
+Tests: `StrokeSelectionFormTests` (pure parser ranges/reasons, by-value
+brush build with identity, menu wiring) and `EngineSmokeTest` gains
+`exerciseStrokeSelectionControls`, wired as
+`GLIMS_SMOKE_CASE=stroke-selection-controls` and into the default run:
+menu wiring and cached validation; two independent documents/sheets;
+non-default resource/size/opacity/color capture shown and used; accept
+while the other window is front; unchanged selection; exact one-step
+undo/redo; cancel and invalid input; busy (held gate, released on every
+path), busy-after-open, preview, empty-selection, mask, channel, group,
+pixel-lock and structured-source gates; the queue-order regression
+(active stroke + accepted fill behind a controlled gate finish before
+the selection stroke — no BUSY, three undo steps, "Stroke Selection"
+last); duplicate/reentrant accept and in-flight-field-edit accept
+enqueue exactly once; late callbacks after close; close-drain.
+
+Checks actually run on this branch: `swift build -j 2` and
+`swift build -j 2 --build-tests` pass. NOT run here (root owns all
+runtime): `swift test`, `GLIMS_SMOKE_CASE=stroke-selection-controls`,
+the full `--engine-smoke-test`, the engine matrix, any GUI/on-screen
+check, any adapter build — no runtime behavior of the new sheet, menu
+item, gate or queue fix was executed in this slice.
+
+
+### Grid controls (2026-11-08)
+
+Interface slice on `feat/grid-controls`, frontend only over the cached
+`ImageDocument.grid` / queued `ImageDocument.setGrid` — no native call
+from the UI or menu validation, no C/header change. Three pieces:
+
+- **Image ▸ Configure Grid…** (`GridSheetController`, one per window,
+  retained by its `DocumentWindowController` like the guides sheet). The
+  sheet captures its document and seeds a local draft (spacing X/Y,
+  offset X/Y, style popup with all five native styles, foreground and
+  background color wells) from the cached grid. All edits stay local
+  until Apply commits the field edits, parses strictly, and performs
+  ONE queued atomic `setGrid` (one undo step when changed; an identical
+  grid is a no-op). Cancel and window close write nothing. Parsing is
+  whole-field `Double` plus finiteness; spacings must additionally be
+  strictly positive; offsets only finite. The native range bounds are
+  deliberately not checked client-side — the adapter refuses them and
+  the refusal is fanned out through the document's existing `onError`
+  to the sheet's message label and the status bar, never clamped, and
+  the draft is preserved so the values can be corrected. A reload
+  re-seeds the draft only while it is clean (Undo/Redo and a
+  successful Apply's refresh land in the sheet; a dirty draft is
+  never clobbered). Color wells follow the Vector Style conventions:
+  the sheet records whether the shared color panel was already visible
+  at open and, on invalidate, closes only a panel its own wells
+  activated, deactivating both. Late close callbacks are discarded
+  (`isInvalidated` + identity-checked `beginSheet` completion). Menu
+  validation allows the item whenever the document is not closing and
+  no other sheet is attached — grid configuration is image metadata,
+  so a selected channel does not restrict it.
+- **View ▸ Show Grid** (`GridViewState`, cached per window, default
+  OFF): the checkmark reads the cached flag and the toggle stays
+  available while the engine is busy. It is pure view state — no image
+  pixels, file, dirty, history, selection, export or print mutation
+  (print draws an immutable `PrintSnapshot`, never the canvas).
+- **Canvas overlay** (`EngineCanvasView.drawGridOverlay`, drawn between
+  the image tiles and the selection/path/guide overlays) over the pure,
+  bounded `GridOverlayPlanner`: the visible rect is clipped to the
+  image FIRST, line positions come from closed-form `ceil`/`floor` of
+  `offset + k*spacing` inside the visible range (never a walk over the
+  whole image), with finite/overflow guards and fixed caps (4096 lines
+  per axis, 65536 intersections — over-cap axes/dot products are
+  suppressed as illegible, reported via plan flags). An axis whose
+  scaled spacing drops below 2 device pixels is suppressed, matching
+  the engine's own threshold (gimpcanvasgrid.c, bug #599267); Dots and
+  Intersections need both axes and draw only at intersections (1-device-
+  px mark / crosshair with the engine's CROSSHAIR reach); the three
+  line styles draw visible-length segments per legible axis. Foreground
+  colors everything; the background color is used only by Double Dash
+  as the interleaved second dash. Dash phase is anchored to image
+  coordinates (`fmod(from * viewScale, period)`), so scrolled segments
+  keep the pattern glued to the image. Invalid cached metadata (NaN,
+  non-positive spacing) is suppressed, never clamped. Image
+  coordinates map straight to view points, so zoom, backing scale,
+  scroll and the flipped canvas all stay aligned.
+
+Tests: `GridControlsTests` covers the strict parser, draft validation
+(including that over-maximum spacings pass to the engine rather than
+being clamped), the toggle policy, the five style names, and planner
+oracles — modular line positions, offset non-clamping, visible-rect
+clipping, the 2-device-px legibility boundary, per-axis suppression,
+dot Cartesian products, both caps, invalid-input guards and the
+dash-phase anchoring invariant against a closed-form oracle.
+`GLIMS_SMOKE_CASE=grid-controls` (and the default smoke run) drives
+`exerciseGridControls`: real sheet Apply/Cancel/invalid/native-refusal
+paths, view-bitmap toggle and style differences with native pixel
+isolation, undo/redo cache refresh, two-document ownership, busy and
+late-close paths, all controls reached by accessibility label; waits
+are predicate-based with queue gates released on every path.
+
+Checks actually run on this branch: `swift build -j 2` and
+`swift build -j 2 --build-tests` pass. NOT run here (owned by the root
+job): `swift test`, `--smoke-test`, `--engine-smoke-test` (including
+`GLIMS_SMOKE_CASE=grid-controls`), the adapter conformance tests and any
+native/engine command — no runtime behavior of the new UI was executed
+in this slice.
+
 
 ### Fill pattern source (2026-11-08)
 
@@ -2811,6 +2965,7 @@ six-position oracle passes, as do all 421 unit tests and 47 focused pinned
 interface checks. The four-engine focused and 1,067 full integration checks
 above preceded this pure planner correction.
 
+
 Grid integration validation passes 1,380 / 1,269 / 1,380 / 1,380 native
 checks on GIMP 3.2.8 / 3.0.8 / 3.2.0 / master. The initial failures were
 fixture errors: the color oracle required double precision although
@@ -2833,6 +2988,7 @@ six-position oracle passes, as do all 421 unit tests and 47 focused pinned
 interface checks. The four-engine focused and 1,067 full integration checks
 above preceded this pure planner correction.
 
+
 Stroke Selection runtime validation supersedes the compile-only report
 above: native suites pass 1,422 / 1,311 / 1,422 / 1,422 checks on GIMP
 3.2.8 / 3.0.8 / 3.2.0 / master. Runtime tests reproduced invalid settings
@@ -2845,6 +3001,9 @@ coordinates are checked for finite, native-integer range before conversion.
 The 3.2.0 suite still logs two startup GLib filename assertions before the
 checks, as recorded in its log; it reports zero failed checks. Swift document
 queue execution and user-facing Stroke Selection controls remain to verify.
+
+
+
 
 ### Floating-selection / Paste Into backend (2026-11-08)
 
@@ -2969,6 +3128,8 @@ an installed font, capture baselines after the setup stroke and preceding
 Anchor, and expect native To Layer to reveal the full payload after
 removing the selection clip. That appearance uses an independent known
 RGBA-cell oracle rather than assuming the clipped preview stays identical.
+
+
 
 
 
