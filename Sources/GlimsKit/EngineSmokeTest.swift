@@ -226,7 +226,7 @@ enum EngineSmokeTest {
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "floating-controls" {
                 try exerciseFloatingControls(session, work: work, documents: documents)
-                print(failures == 0 ? "PASSED (floating-controls)" : "FAILED: \(failures) failure(s)")
+                print(failures == 0 ? "PASSED (floating controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-multiselection-controls" {
