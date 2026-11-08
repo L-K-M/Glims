@@ -8,7 +8,8 @@ import XCTest
 final class AppMenuValidationTests: XCTestCase {
     func testDocumentPalettesWaitForTheEngine() {
         let controller = AppController()
-        for action in [#selector(AppController.showLayers(_:)), #selector(AppController.showPaths(_:)),
+        for action in [#selector(AppController.showLayers(_:)), #selector(AppController.showChannels(_:)),
+                       #selector(AppController.showPaths(_:)),
                        #selector(AppController.showHistory(_:)), #selector(AppController.showTools(_:)),
                        #selector(AppController.showToolOptions(_:))] {
             let item = NSMenuItem(title: "", action: action, keyEquivalent: "")
