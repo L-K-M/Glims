@@ -1090,6 +1090,10 @@ MARSHAL (image_convert_precision, return glims_image_convert_precision (e, a->im
                                                                        (uint32_t) a->width,
                                                                        (uint32_t) a->height,
                                                                        a->error);)
+MARSHAL (path_fill, return glims_path_fill (e, a->image, a->item, (GlimsItemID) a->width, a->in,
+                                            a->error);)
+MARSHAL (path_to_vector_layer, return glims_path_to_vector_layer (e, a->image, a->item, a->string,
+                                                                  a->out, a->error);)
 
 /* A path's geometry takes more arguments than GlimsArgs holds. */
 typedef struct
@@ -1850,6 +1854,22 @@ api_image_convert_precision (GlimsEngine *e, GlimsImageID image, uint32_t compon
   return glims_engine_call (e, image_convert_precision_on_engine, &a);
 }
 
+static GlimsStatus
+api_path_fill (GlimsEngine *e, GlimsImageID image, GlimsItemID path, GlimsItemID drawable,
+               const GlimsPathFillSettings *settings, char **error)
+{
+  GlimsArgs a = { .image = image, .item = path, .width = drawable, .in = settings, .error = error };
+  return glims_engine_call (e, path_fill_on_engine, &a);
+}
+
+static GlimsStatus
+api_path_to_vector_layer (GlimsEngine *e, GlimsImageID image, GlimsItemID path, const char *name,
+                          GlimsItemID *layer, char **error)
+{
+  GlimsArgs a = { .image = image, .item = path, .string = name, .out = layer, .error = error };
+  return glims_engine_call (e, path_to_vector_layer_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1948,6 +1968,8 @@ static const GlimsEngineAPI api_v1 = {
   .image_color_info = api_image_color_info,
   .image_convert_mode = api_image_convert_mode,
   .image_convert_precision = api_image_convert_precision,
+  .path_fill = api_path_fill,
+  .path_to_vector_layer = api_path_to_vector_layer,
 };
 
 __attribute__ ((visibility ("default")))

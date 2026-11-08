@@ -230,6 +230,7 @@ glims_image_open (GlimsEngine   *engine,
   gboolean           handles_vector = FALSE;
   const gchar       *mime_type      = NULL;
   GError            *gerror         = NULL;
+  GlimsVectorLoadGuard *vector_guard;
 
   if (! path || ! out)
     return GLIMS_STATUS_INVALID_ARGUMENT;
@@ -242,6 +243,7 @@ glims_image_open (GlimsEngine   *engine,
 
   /* Loading a non-XCF file runs a plug-in, which nests a main loop. */
   engine->busy++;
+  vector_guard = glims_vector_load_guard_begin (engine, NULL);
 #if GIMP_CHECK_VERSION (3, 2, 0)
   image = file_open_image (engine->gimp, gimp_get_user_context (engine->gimp), NULL, file,
                            0, 0, FALSE, FALSE, NULL, GIMP_RUN_NONINTERACTIVE,
@@ -253,6 +255,7 @@ glims_image_open (GlimsEngine   *engine,
                            &status, &mime_type, &gerror);
   (void) handles_vector;
 #endif
+  glims_vector_load_guard_end (vector_guard);
   engine->busy--;
 
   g_object_unref (file);
