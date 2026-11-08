@@ -107,3 +107,17 @@ execution): `swift test`, the app and `--engine-smoke-test` launches (including
 `GLIMS_SMOKE_CASE=tool-presets`), any GUI run, and engine/adapter builds. The
 unit tests and the smoke scenario are compile-checked only; their runtime
 results were not observed in this slice.
+
+Root acceptance: the pure capture fixture incorrectly expected optional
+keys from an untouched brush; it now seeds those settings explicitly, and
+all 12 capture/apply tests pass. The cross-tool UI fixture explicitly enables
+All tools before selecting a different tool.
+
+Actual controls testing reproduced a clipped Delete button, Delete hiding
+its own missing-preset error after reload, and Apply using a deleted cached
+preset. Buttons now reserve native bezel insets, the list stays within the
+content margins, and the panel reserves space for readable errors. Delete
+refreshes stale rows before showing its error. Apply rereads the store and
+requires the same UUID before changing settings. Four runtime assertions
+failed before the fixes; the focused pinned-engine controls scenario now
+passes. Current-parent unit, four-engine and full workflow checks follow.

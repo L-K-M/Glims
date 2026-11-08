@@ -221,9 +221,11 @@ final class PaintToolPresetPanelController: NSWindowController, NSTableViewDataS
         let editingRow = NSStackView(views: [saveButton, renameButton, updateButton, deleteButton])
         editingRow.orientation = .horizontal
         editingRow.spacing = 6
+        editingRow.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
         let panelRow = NSStackView(views: [applyButton, closeButton])
         panelRow.orientation = .horizontal
         panelRow.spacing = 6
+        panelRow.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
         let stack = NSStackView(views: [allToolsCheckbox, scroll, nameRow, includeForegroundCheckbox,
                                         editingRow, panelRow, messageLabel])
         stack.orientation = .vertical
@@ -238,7 +240,8 @@ final class PaintToolPresetPanelController: NSWindowController, NSTableViewDataS
             stack.trailingAnchor.constraint(equalTo: panel.contentView!.trailingAnchor),
             stack.topAnchor.constraint(equalTo: panel.contentView!.topAnchor),
             stack.bottomAnchor.constraint(equalTo: panel.contentView!.bottomAnchor),
-            scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24),
+            messageLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 40),
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 140),
             nameField.widthAnchor.constraint(greaterThanOrEqualToConstant: 220),
         ])
@@ -246,7 +249,7 @@ final class PaintToolPresetPanelController: NSWindowController, NSTableViewDataS
         // hide a button, the list or the message line.
         let fit = stack.fittingSize
         panel.setContentSize(fit)
-        panel.minSize = NSSize(width: fit.width + 2, height: fit.height + 24)
+        panel.contentMinSize = fit
         panel.initialFirstResponder = tableView
         reload()
     }
@@ -469,10 +472,11 @@ final class PaintToolPresetPanelController: NSWindowController, NSTableViewDataS
         do {
             try store.delete(id: id)
             lastError = nil
+            reload()
         } catch {
+            reload()
             showError("\(error)")
         }
-        reload()
     }
 
     /// Apply: selects the preset's tool and copies every stable field, the
@@ -485,10 +489,18 @@ final class PaintToolPresetPanelController: NSWindowController, NSTableViewDataS
     }
 
     func applySelected() {
-        guard let id = selectedPresetID, let preset = rows.first(where: { $0.id == id }) else { return }
-        PaintToolPresetControls.apply(preset, to: toolState)
-        lastError = nil
-        reload()
+        guard let id = selectedPresetID else { return }
+        do {
+            guard let preset = try store.load().first(where: { $0.id == id }) else {
+                throw PaintToolPresetError.unknownPreset(id)
+            }
+            PaintToolPresetControls.apply(preset, to: toolState)
+            lastError = nil
+            reload()
+        } catch {
+            reload()
+            showError("\(error)")
+        }
     }
 }
 

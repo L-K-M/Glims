@@ -227,8 +227,8 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tool-presets" {
                 try exerciseToolPresetControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (tool-presets)" : "FAILED: \(failures) failure(s)")
-
-
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "guide-dragging" {
                 try exerciseGuideDragging(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (guide dragging)" : "FAILED: \(failures) failure(s)")

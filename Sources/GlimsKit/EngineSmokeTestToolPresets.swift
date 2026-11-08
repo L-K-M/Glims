@@ -90,6 +90,14 @@ extension EngineSmokeTest {
         panel.open()
         defer { panel.closePanel(nil) }
         let win = panel.window
+        win?.contentView?.layoutSubtreeIfNeeded()
+        for label in ["Save current settings as preset", "Rename selected preset", "Update selected preset with current settings",
+                      "Delete selected preset", "Apply selected preset", "Close presets panel"] {
+            let control = button(win, label)
+            check(control != nil && control!.visibleRect.contains(control!.bounds),
+                  "the entire \(label) control fits inside the presets panel")
+        }
+
         check(win != nil && panel.isOpen, "the presets panel opens for the injected ToolState and store")
         if let win {
             // Minimum size must visibly fit every control.
@@ -152,6 +160,7 @@ extension EngineSmokeTest {
         // Apply through the controls: tool switch, every stable field, the
         // resource identity (persisted through the brushStore path), and the
         // foreground only because the preset carries an explicit color.
+        button(win, "All tools filter")?.performClick(nil)
         state.select(.eraser)
         state.update(.eraser) { $0.size = 77 }
         state.foreground = .green
@@ -232,6 +241,8 @@ extension EngineSmokeTest {
         check(!errors.isEmpty && doc.undoInfo.undoCount == undoMissing,
               "the missing identity is reported by the ordinary stroke and paints nothing")
 
+        // Return to the current-tool filter after the cross-tool Apply.
+        button(win, "All tools filter")?.performClick(nil)
         // The explicit All-tools filter through its real checkbox.
         state.select(.eraser)
         editableField(win, "Preset name")?.stringValue = "Eraser one"
@@ -265,6 +276,19 @@ extension EngineSmokeTest {
               "the stored preset persists across closing and reopening the panel")
         presetsTable(win2)?.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         check(reopened.selectedPresetID == created.id, "reopen selects the persisted preset by UUID")
+        state.update(.paintbrush) { $0.size = 77 }
+        try presetStore.delete(id: created.id)
+        reopened.applySelected()
+        check(reopened.lastError != nil && state.brush(for: .paintbrush).size == 77,
+              "Apply refuses a preset removed since the row was loaded and leaves settings untouched")
+
+        let stale = try presetStore.create(tool: .paintbrush, name: "Already removed", settings: storedSettings)
+        reopened.reload()
+        presetsTable(win2)?.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        try presetStore.delete(id: stale.id)
+        reopened.deleteSelected()
+        check(reopened.lastError != nil && reopened.rows.isEmpty && reopened.selectedPresetID == nil,
+              "a failed Delete refreshes stale rows and keeps its actionable error visible")
         reopened.closePanel(nil)
         check(!reopened.isOpen && !(reopened.window?.isVisible ?? false), "the reopened panel closes")
     }

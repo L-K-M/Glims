@@ -71,6 +71,7 @@ final class PaintToolPresetControlsTests: XCTestCase {
         try withDefaults { defaults in
             let state = makeState(defaults)
             state.select(.clone)
+            state.update(.clone) { $0.hardness = 0.4; $0.rate = 22; $0.flow = 33; $0.exposure = 44 }
             state.cloneSource = EngineSession.Brush.Source(drawable: 3, x: 4, y: 5)
             state.setBrushResource(Self.identity(), for: .clone)
             state.foreground = .red
