@@ -16,7 +16,7 @@ enum EngineSmokeTest {
 
     private static var failures = 0
 
-    private static func check(_ condition: Bool, _ message: String) {
+    static func check(_ condition: Bool, _ message: String) {
         print("\(condition ? "ok  " : "FAIL") \(message)")
         fflush(stdout)
         if !condition { failures += 1 }
@@ -27,7 +27,7 @@ enum EngineSmokeTest {
     }
 
     /// Lets queued main-queue work (engine events) run.
-    private static func spin(_ seconds: TimeInterval = 0.05) {
+    static func spin(_ seconds: TimeInterval = 0.05) {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
     }
 
@@ -76,6 +76,13 @@ enum EngineSmokeTest {
         try? FileManager.default.removeItem(at: work)
         defer { try? FileManager.default.removeItem(at: work) }
 
+        // Only the focused linked-close case needs its slow-loader plug-in
+        // in place before the engine's first plug-in query.
+        if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "linked-close",
+           !installLinkedCloseSlowLoader(work: work) {
+            return 2
+        }
+
         // A reference, so engine events delivered while the checks run can read it.
         let documents = DocumentList()
         let session: EngineSession
@@ -98,6 +105,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "linked-close" {
+                try exerciseLinkedClose(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (linked-close)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "indexed-wrapper" {
                 try exerciseIndexedWrapper(session)
                 print(failures == 0 ? "PASSED (indexed wrapper)" : "FAILED: \(failures) failure(s)")
@@ -9228,7 +9240,7 @@ enum EngineSmokeTest {
 }
 
 @MainActor
-private final class DocumentList {
+final class DocumentList {
     var items: [ImageDocument] = []
     var progressEvents: [EngineSession.Progress?] = []
 }
