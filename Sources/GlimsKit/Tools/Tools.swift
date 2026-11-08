@@ -185,6 +185,13 @@ final class ToolState {
     var pathLine: EngineSession.LineSettings {
         EngineSession.LineSettings(width: pathLineWidth, color: foreground)
     }
+    /// How Fill Path fills; its color is the foreground color.
+    var pathFillOpacity: Double = 1
+    var pathFillAntialias = true
+    var pathFill: EngineSession.PathFillSettings {
+        EngineSession.PathFillSettings(color: foreground, opacity: pathFillOpacity,
+                                        antialias: pathFillAntialias)
+    }
     /// The look of the next text; its color is the foreground color.
     var textSettings = EngineSession.TextSettings()
     /// The fonts a person can pick, once the engine's have loaded (in the
