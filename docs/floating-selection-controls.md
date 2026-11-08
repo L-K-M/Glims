@@ -115,3 +115,9 @@ Integrated checkpoint: all 492 unit tests, 53 focused controls checks on
 each supported engine, and 1,313 full pinned workflow checks pass. This
 precedes adoption of the later Float Selected Pixels backend; its footer
 does not change these controls. A current-footer launch follows.
+
+Current integration checkpoint (624f234): 521 unit tests, all 53 focused
+checks on all four engines using the current API123 adapters, and all 1,367
+full pinned workflow checks pass. Guide dragging, ordered-selection backend
+and preset-storage parents are included; UI preset and multi-selection
+controls remain later changes.

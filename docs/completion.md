@@ -42,22 +42,27 @@ behavior, not every adjacent feature in `design.md`.
 ## Remaining implementation and final verification
 
 - [x] Layer to Image Size and Trim Layer to Content, with pixel-only policy.
-- [ ] Layer multi-selection, saved sets and consistent rasterize/revert
-      controls for structured layers.
+- [x] Explicit Rasterize Layer and Restore Layer Source controls.
+- [ ] Palette multi-selection, saved sets and consistent gesture-time
+      rasterize/revert policy. The exact-selection backend is merged.
 - [ ] Adjustment layers/groups, remaining custom filter forms and filter inputs.
 - [x] Path fill, vector layers and vector style controls.
-- [ ] Multi-anchor path editing.
+- [x] Multi-anchor path editing with group move/delete and Undo.
 - [x] Searchable brush, pattern and gradient resource choosers, with
       thumbnails, retained identities and captured gesture settings.
 - [ ] Tool presets and resource creation/management.
 - [x] Color profile assignment and conversion with explicit rasterization consent.
-- [ ] Indexed conversion policy, display color management and soft proofing.
+- [x] Indexed conversion with generated/custom palettes, dithering and
+      explicit structured-source consent.
+- [ ] Full monitor color management, wide-gamut/HDR output and soft proofing.
 - [x] Native guides with undo/XCF persistence, per-document management
       sheets and a per-window Show Guides overlay toggle.
-- [ ] Rulers, grid, snapping, canvas guide dragging, view rotation,
-      trackpad/modifier behavior and initial fit that avoids palettes.
-- [ ] Paste Into/floating selection controls, Stroke Selection and resource
-      creation from selections.
+- [x] Pixel rulers, grid controls/overlay and canvas guide dragging.
+- [ ] Snapping, view rotation, trackpad/modifier behavior and initial fit
+      that avoids palettes.
+- [x] Stroke Selection and explicit Paste Into/Anchor/New Layer/Discard.
+- [ ] Moving selected/floating pixels, automatic anchoring policy and
+      resource creation from selections.
 - [ ] Image metadata editing, remaining Image Adjust commands,
       layer-boundary/selection-edge/proof view toggles, complete menu and
       keyboard coverage and shortcut customization.
@@ -369,3 +374,15 @@ input queue at execution; a removed pattern is reported missing and the
 fill refused, never substituted. Pure model/store/queue checks and actual
 sheet-driving checks cover selection, previews, source toggling, pixels,
 undo, persistence, refusals and cleanup. Final matrix verification is pending.
+
+2026-11-08 selection and layout checkpoint: Stroke Selection (#66),
+Paste Into and Float Selected Pixels backends (#67–#68), direct guide
+dragging (#69), ordered layer-selection backend (#70) and preset storage
+(#71) are merged. Floating-selection controls integrate those changes with
+521 passing unit tests, 53 focused checks on each engine and 1,367 full
+pinned workflow checks. Native ordered-selection suites pass 1,777 / 1,563 /
+1,777 / 1,777 checks. UI preset controls and layer multi-selection remain in
+progress; snapping has a checked pure planner but no merged gesture UI yet.
+The assembled app at 4ba46ee includes its engine and later controls, but
+has not had a new self-contained bundle check; it is an intermediate build.
+Final combined bundle and real editing verification remain open.
