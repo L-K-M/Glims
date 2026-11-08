@@ -2043,6 +2043,85 @@ the full `--engine-smoke-test`, the engine matrix, any GUI/on-screen
 check, any adapter build — no runtime behavior of the new sheet, menu
 item, gate or queue fix was executed in this slice.
 
+
+### Grid controls (2026-11-08)
+
+Interface slice on `feat/grid-controls`, frontend only over the cached
+`ImageDocument.grid` / queued `ImageDocument.setGrid` — no native call
+from the UI or menu validation, no C/header change. Three pieces:
+
+- **Image ▸ Configure Grid…** (`GridSheetController`, one per window,
+  retained by its `DocumentWindowController` like the guides sheet). The
+  sheet captures its document and seeds a local draft (spacing X/Y,
+  offset X/Y, style popup with all five native styles, foreground and
+  background color wells) from the cached grid. All edits stay local
+  until Apply commits the field edits, parses strictly, and performs
+  ONE queued atomic `setGrid` (one undo step when changed; an identical
+  grid is a no-op). Cancel and window close write nothing. Parsing is
+  whole-field `Double` plus finiteness; spacings must additionally be
+  strictly positive; offsets only finite. The native range bounds are
+  deliberately not checked client-side — the adapter refuses them and
+  the refusal is fanned out through the document's existing `onError`
+  to the sheet's message label and the status bar, never clamped, and
+  the draft is preserved so the values can be corrected. A reload
+  re-seeds the draft only while it is clean (Undo/Redo and a
+  successful Apply's refresh land in the sheet; a dirty draft is
+  never clobbered). Color wells follow the Vector Style conventions:
+  the sheet records whether the shared color panel was already visible
+  at open and, on invalidate, closes only a panel its own wells
+  activated, deactivating both. Late close callbacks are discarded
+  (`isInvalidated` + identity-checked `beginSheet` completion). Menu
+  validation allows the item whenever the document is not closing and
+  no other sheet is attached — grid configuration is image metadata,
+  so a selected channel does not restrict it.
+- **View ▸ Show Grid** (`GridViewState`, cached per window, default
+  OFF): the checkmark reads the cached flag and the toggle stays
+  available while the engine is busy. It is pure view state — no image
+  pixels, file, dirty, history, selection, export or print mutation
+  (print draws an immutable `PrintSnapshot`, never the canvas).
+- **Canvas overlay** (`EngineCanvasView.drawGridOverlay`, drawn between
+  the image tiles and the selection/path/guide overlays) over the pure,
+  bounded `GridOverlayPlanner`: the visible rect is clipped to the
+  image FIRST, line positions come from closed-form `ceil`/`floor` of
+  `offset + k*spacing` inside the visible range (never a walk over the
+  whole image), with finite/overflow guards and fixed caps (4096 lines
+  per axis, 65536 intersections — over-cap axes/dot products are
+  suppressed as illegible, reported via plan flags). An axis whose
+  scaled spacing drops below 2 device pixels is suppressed, matching
+  the engine's own threshold (gimpcanvasgrid.c, bug #599267); Dots and
+  Intersections need both axes and draw only at intersections (1-device-
+  px mark / crosshair with the engine's CROSSHAIR reach); the three
+  line styles draw visible-length segments per legible axis. Foreground
+  colors everything; the background color is used only by Double Dash
+  as the interleaved second dash. Dash phase is anchored to image
+  coordinates (`fmod(from * viewScale, period)`), so scrolled segments
+  keep the pattern glued to the image. Invalid cached metadata (NaN,
+  non-positive spacing) is suppressed, never clamped. Image
+  coordinates map straight to view points, so zoom, backing scale,
+  scroll and the flipped canvas all stay aligned.
+
+Tests: `GridControlsTests` covers the strict parser, draft validation
+(including that over-maximum spacings pass to the engine rather than
+being clamped), the toggle policy, the five style names, and planner
+oracles — modular line positions, offset non-clamping, visible-rect
+clipping, the 2-device-px legibility boundary, per-axis suppression,
+dot Cartesian products, both caps, invalid-input guards and the
+dash-phase anchoring invariant against a closed-form oracle.
+`GLIMS_SMOKE_CASE=grid-controls` (and the default smoke run) drives
+`exerciseGridControls`: real sheet Apply/Cancel/invalid/native-refusal
+paths, view-bitmap toggle and style differences with native pixel
+isolation, undo/redo cache refresh, two-document ownership, busy and
+late-close paths, all controls reached by accessibility label; waits
+are predicate-based with queue gates released on every path.
+
+Checks actually run on this branch: `swift build -j 2` and
+`swift build -j 2 --build-tests` pass. NOT run here (owned by the root
+job): `swift test`, `--smoke-test`, `--engine-smoke-test` (including
+`GLIMS_SMOKE_CASE=grid-controls`), the adapter conformance tests and any
+native/engine command — no runtime behavior of the new UI was executed
+in this slice.
+
+
 ### Fill pattern source (2026-11-08)
 
 Interface slice on `feat/pattern-chooser`, frontend only: Edit ▸ Fill…
@@ -2768,6 +2847,27 @@ No production renderer change was needed. This verifies the in-gamut sRGB
 path; physical monitor calibration, wide-gamut/HDR output, proof profiles,
 proof intents and gamut warnings remain unverified or unimplemented.
 
+Grid controls integration passes 417 unit tests, all 38 focused checks on
+all four engines and 1,030 full pinned interface checks. A controlled
+probe of the actual planner reproduced an infinite loop when a Double
+index could not advance by one; indices outside the exact-integer range
+are now suppressed and iteration has an integer bound. Its regression
+passes. An actual-sheet regression also reproduced idle fields staying
+stale after Apply then Undo. The document now reports counted completion;
+the sheet marks the committed draft clean only on success and refreshes
+it from the cache. Accepted work disables its controls through completion.
+Close discards unapplied edits, while applied changes remain undoable.
+Own color editing ends on Apply and close without hiding another owner's
+panel. Parent integration and independent review of this fix follow.
+
+A second grid regression reproduced the cache/completion stage becoming
+uncounted while another document held exclusive engine work. That stage
+now retains its own pending-work count through the deferred callback,
+including close and failure paths. All 39 focused checks pass on each of
+the four engines. A focused independent review of the supplied exact diff
+and surrounding source found no important findings; the helper could not
+independently execute Git. The broader current-file review was also clean.
+
 The source-controls integration passes 407 unit tests, all 33 focused
 sheet/dispatch checks on each supported engine, and the full pinned
 interface suite. Initial failures were assertions against the wrong
@@ -2776,6 +2876,7 @@ was still aimed at the retargeted pixel layer. Correcting those fixture
 expectations required no production change. Root reviewed the source
 controls, admission/drain and close paths. The independent broad UI
 helper timed out without a verdict and is not counted as approval.
+
 
 Grid integration validation passes 1,380 / 1,269 / 1,380 / 1,380 native
 checks on GIMP 3.2.8 / 3.0.8 / 3.2.0 / master. The initial failures were

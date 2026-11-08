@@ -51,7 +51,7 @@ enum EngineSmokeTest {
             .usingColorSpace(.genericGray)?.whiteComponent).map(Double.init)
     }
 
-    private static func pixel(_ session: EngineSession, _ image: Int32, x: Int, y: Int) -> [UInt8]? {
+    static func pixel(_ session: EngineSession, _ image: Int32, x: Int, y: Int) -> [UInt8]? {
         guard let rendered = try? session.render(image, scale: 1, area: CGRect(x: x, y: y, width: 1, height: 1)),
               let data = rendered.dataProvider?.data as Data? else { return nil }
         return Array(data.prefix(4))
@@ -188,6 +188,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (stroke-selection-controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "grid-controls" {
+                try exerciseGridControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (grid controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "pixel-rulers" {
                 try exercisePixelRulers(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (pixel rulers)" : "FAILED: \(failures) failure(s)")
@@ -250,6 +255,7 @@ enum EngineSmokeTest {
             try exerciseVectorStyleForm(session, work: work, documents: documents)
             try exercisePaletteControls(session, documents: documents)
             try exerciseGuidesControls(session, work: work, documents: documents)
+            try exerciseGridControls(session, work: work, documents: documents)
             try exercisePixelRulers(session, work: work, documents: documents)
             try exerciseStrokeSelectionControls(session, work: work, documents: documents)
 
@@ -8326,87 +8332,52 @@ enum EngineSmokeTest {
     /// movement under scroll/zoom checked against an independent geometry
     /// oracle plus a ruler view-bitmap check, display-only isolation of
     /// pixels/dirty/history/selection, and safe close.
-    private static func exerciseStrokeSelectionControls(_ session: EngineSession, work: URL,
-                                                        documents: DocumentList) throws {
-        func wait(_ condition: () -> Bool) {
-            let deadline = Date().addingTimeInterval(10)
-            while !condition() && Date() < deadline { spin(0.01) }
-        }
-        // Enumerates children recursively even when the root itself matches.
+    private static func exerciseGridControls(_ session: EngineSession, work: URL,
+                                             documents: DocumentList) throws {
+        // Recursive view search that recurses into children EVEN WHEN THE
+        // ROOT ITSELF MATCHES the type (an NSStackView root must not hide
+        // a nested match of the same class).
         func allViews<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
             guard let root else { return [] }
             var found: [T] = []
             if let match = root as? T { found.append(match) }
-            found += root.subviews.flatMap { allViews($0, as: type) }
+            for child in root.subviews { found += allViews(child, as: type) }
             return found
+        }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
         }
         func button(_ sheet: NSWindow?, _ label: String) -> NSButton? {
             allViews(sheet?.contentView, as: NSButton.self).first { $0.accessibilityLabel() == label }
         }
-        func editableField(_ sheet: NSWindow?, _ label: String) -> NSTextField? {
+        func field(_ sheet: NSWindow?, _ label: String) -> NSTextField? {
             allViews(sheet?.contentView, as: NSTextField.self)
                 .first { $0.isEditable && $0.accessibilityLabel() == label }
         }
-        func messageField(_ sheet: NSWindow?) -> NSTextField? {
+        func message(_ sheet: NSWindow?) -> NSTextField? {
             allViews(sheet?.contentView, as: NSTextField.self)
-                .first { !$0.isEditable && $0.accessibilityLabel() == "Stroke selection message" }
+                .first { !$0.isEditable && $0.accessibilityLabel() == "Grid message" }
         }
-        func brushLabel(_ sheet: NSWindow?) -> NSTextField? {
-            allViews(sheet?.contentView, as: NSTextField.self)
-                .first { !$0.isEditable && $0.accessibilityLabel() == "Captured brush name" }
+        func popup(_ sheet: NSWindow?, _ label: String) -> NSPopUpButton? {
+            allViews(sheet?.contentView, as: NSPopUpButton.self).first { $0.accessibilityLabel() == label }
         }
-        func colorWell(_ sheet: NSWindow?) -> NSColorWell? {
-            allViews(sheet?.contentView, as: NSColorWell.self)
-                .first { $0.accessibilityLabel() == "Stroke color" }
-        }
-        func strokeItem() -> NSMenuItem {
-            NSMenuItem(title: "Stroke Selection…",
-                       action: #selector(DocumentWindowController.strokeSelection(_:)), keyEquivalent: "")
+        func well(_ sheet: NSWindow?, _ label: String) -> NSColorWell? {
+            allViews(sheet?.contentView, as: NSColorWell.self).first { $0.accessibilityLabel() == label }
         }
 
-        // A throwaway store so the scenario's brush choice never persists.
-        let suite = "ch.lkmc.Glims.smoke.stroke-selection.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let store = BrushSelectionStore(defaults: defaults)
-        let state = ToolState.shared
-        let previousStore = state.brushStore
-        let previousTool = state.current
-        let previousForeground = state.foreground
-        let previousBackground = state.background
-        let previousPaintbrush = state.brush(for: .paintbrush)
-        state.brushStore = store
-        defer {
-            state.brushStore = previousStore
-            state.select(previousTool)
-            state.foreground = previousForeground
-            state.background = previousBackground
-            state.update(.paintbrush) { $0 = previousPaintbrush }
-        }
-
-        let rows = try session.resources(.brush)
-        guard let soft = rows.first(where: { $0.displayName == "2. Hardness 025" }) else {
-            check(false, "the hard brush fixture exists for the capture scenario")
-            return
-        }
-        let softIdentity = try session.resourceIdentifiers(soft.id)
-
-        let imageA = try session.newImage(width: 32, height: 32)
-        let imageB = try session.newImage(width: 32, height: 32)
-        let docA = try ImageDocument(session: session, image: imageA, name: "Stroke A")
-        let docB = try ImageDocument(session: session, image: imageB, name: "Stroke B")
+        let imageA = try session.newImage(width: 40, height: 24)
+        let imageB = try session.newImage(width: 30, height: 30)
+        let docA = try ImageDocument(session: session, image: imageA, name: "Grid A")
+        let docB = try ImageDocument(session: session, image: imageB, name: "Grid B")
         documents.items += [docA, docB]
         let a = DocumentWindowController(document: docA)
         let b = DocumentWindowController(document: docB)
         a.showWindow(nil)
         b.showWindow(nil)
-        var errorsA: [String] = []
-        var errorsB: [String] = []
-        // Chain onto the window's existing callback instead of replacing it.
-        let previousErrorA = docA.onError
-        docA.onError = { message in previousErrorA?(message); errorsA.append(message) }
-        let previousErrorB = docB.onError
-        docB.onError = { message in previousErrorB?(message); errorsB.append(message) }
+        var messages: [String] = []
+        let reportError = docA.onError
+        docA.onError = { reportError?($0); messages.append($0) }
         defer {
             for (controller, document) in [(a, docA), (b, docB)] {
                 if let sheet = controller.window?.attachedSheet {
@@ -8414,367 +8385,289 @@ enum EngineSmokeTest {
                 }
                 controller.window?.close()
                 documents.items.removeAll { $0 === document }
-                document.closeImageWhenDrained()
+                var closed = false
+                document.closeImageWhenDrained { closed = true }
+                let deadline = Date().addingTimeInterval(10)
+                while !closed && Date() < deadline { spin(0.01) }
             }
         }
 
-        // Non-default capture: a named brush resource, size, opacity and a
-        // non-default foreground color on the current paint tool.
-        state.select(.paintbrush)
-        state.setBrushResource(softIdentity, for: .paintbrush)
-        state.update(.paintbrush) { $0.size = 9; $0.opacity = 0.5 }
-        state.foreground = .blue
-        let fixturePaintbrush = state.brush(for: .paintbrush)
-        check(state.brush(for: .paintbrush).resource == softIdentity
-                && state.brush(for: .paintbrush).size == 9
-                && state.brush(for: .paintbrush).opacity == 0.5,
-              "the fixture sets a non-default brush resource, size and opacity")
+        // Menu wiring: both items sit on the document's own selectors.
+        let mainMenu = MainMenu.make()
+        let imageMenu = mainMenu.items.first { $0.title == "Image" }?.submenu
+        let viewMenu = mainMenu.items.first { $0.title == "View" }?.submenu
+        check(imageMenu?.items.first { $0.title == "Configure Grid…" }?.action
+                == #selector(DocumentWindowController.configureGrid(_:)),
+              "Image offers Configure Grid… on the document's selector")
+        check(viewMenu?.items.first { $0.title == "Show Grid" }?.action
+                == #selector(DocumentWindowController.toggleShowGrid(_:)),
+              "View offers Show Grid on the document's selector")
 
-        try session.select(.rectangle(CGRect(x: 4, y: 4, width: 16, height: 16)),
-                           image: imageA, options: .init())
-        try session.select(.rectangle(CGRect(x: 8, y: 8, width: 16, height: 16)),
-                           image: imageB, options: .init())
-        docA.refreshSelection()
-        docB.refreshSelection()
-        wait { docA.pendingWork == 0 && docB.pendingWork == 0 }
-        spin()
-
-        // Menu wiring: the item sits on the document's own selector.
-        let editMenu = MainMenu.make().items.first { $0.title == "Edit" }?.submenu
-        check(editMenu?.items.first { $0.title == "Stroke Selection…" }?.action
-                == #selector(DocumentWindowController.strokeSelection(_:)),
-              "Edit offers Stroke Selection… on the document's selector")
-        check(a.validateMenuItem(strokeItem()), "the item validates with a selection and a paint target")
+        // Menu validation reads only cached state: Show Grid unchecked by
+        // default and always valid; Configure Grid… enabled while no sheet
+        // is attached (image metadata: no channel-target restriction).
+        let showGridItem = NSMenuItem(title: "Show Grid",
+                                      action: #selector(DocumentWindowController.toggleShowGrid(_:)), keyEquivalent: "")
+        let configureItem = NSMenuItem(title: "Configure Grid…",
+                                       action: #selector(DocumentWindowController.configureGrid(_:)), keyEquivalent: "")
+        check(a.validateMenuItem(showGridItem) && showGridItem.state == .off,
+              "Show Grid validates unchecked by default")
+        check(a.validateMenuItem(configureItem), "Configure Grid… validates while no sheet is open")
 
         // Two documents open independent sheets through the actual action.
-        a.strokeSelection(nil)
-        b.strokeSelection(nil)
+        a.configureGrid(nil)
+        b.configureGrid(nil)
         let sheetA = a.window?.attachedSheet
         let sheetB = b.window?.attachedSheet
-        check(sheetA != nil && sheetB != nil && sheetA !== sheetB
-                && a.strokeSelectionSheet != nil && a.strokeSelectionSheet !== b.strokeSelectionSheet,
-              "two documents open independent Stroke Selection sheets owned by their windows")
-        check(!a.validateMenuItem(strokeItem()), "the item is disabled while its sheet is open")
-        for label in ["Stroke selection", "Cancel stroke selection"] {
-            let control = button(sheetA, label)
-            check(control != nil && control!.visibleRect.contains(control!.bounds),
-                  "the entire \(label) button is visible inside the sheet")
-        }
-        let well = colorWell(sheetA)
-        check(well != nil && well!.visibleRect.contains(well!.bounds),
-              "the captured color control is fully visible inside the sheet")
-        check(brushLabel(sheetA)?.stringValue == softIdentity.name,
-              "the sheet shows the captured current brush resource name (\(brushLabel(sheetA)?.stringValue ?? "nil"))")
-        check(editableField(sheetA, "Stroke size, pixels")?.stringValue == "9.0"
-                && editableField(sheetA, "Stroke opacity, percent")?.stringValue == "50",
-              "the sheet seeds size and opacity from the captured brush by value")
-        let capturedWell = colorWell(sheetA)?.color.usingColorSpace(.sRGB)
-        check(capturedWell != nil && capturedWell!.blueComponent > 0.9 && capturedWell!.redComponent < 0.1,
-              "the color well is seeded with the captured foreground color")
-        check(state.brush(for: .paintbrush) == fixturePaintbrush,
-              "opening the sheets never mutates the global ToolState")
+        check(sheetA != nil && sheetB != nil && sheetA !== sheetB && a.gridSheet !== b.gridSheet,
+              "two documents open independent grid sheets owned by their windows")
+        check(!a.validateMenuItem(configureItem), "Configure Grid… is disabled while its sheet is open")
 
-        // Cancel on B after local edits: nothing mutates anywhere.
-        let undoB0 = docB.undoInfo.undoCount
-        editableField(sheetB, "Stroke size, pixels")?.stringValue = "77"
-        button(sheetB, "Cancel stroke selection")?.performClick(nil)
-        spin(0.1)
-        check(b.window?.attachedSheet == nil && b.strokeSelectionSheet == nil, "Cancel closes B's sheet")
-        check(docB.undoInfo.undoCount == undoB0 && docB.pendingWork == 0 && errorsB.isEmpty,
-              "Cancel mutates nothing: no undo, no queued work, no error")
-        check(state.brush(for: .paintbrush) == fixturePaintbrush,
-              "editing and cancelling the sheet never mutates the global ToolState")
+        // The sheet seeds its draft from the cached grid (default 10/10, 0/0, solid).
+        check(field(sheetA, "Grid spacing X")?.stringValue == "10.0"
+                && field(sheetA, "Grid spacing Y")?.stringValue == "10.0"
+                && field(sheetA, "Grid offset X")?.stringValue == "0.0"
+                && field(sheetA, "Grid offset Y")?.stringValue == "0.0"
+                && popup(sheetA, "Grid style")?.titleOfSelectedItem == "Solid"
+                && well(sheetA, "Grid foreground color") != nil && well(sheetA, "Grid background color") != nil,
+              "the sheet seeds spacing, offset, style and both color wells from the cached grid")
 
-        // Accept on A while B's window is front: the captured document and
-        // settings still win.
-        b.window?.makeKeyAndOrderFront(nil)
-        let undoA0 = docA.undoInfo.undoCount
-        let boundsA = try session.selectionBounds(image: imageA)
-        let outlineA = docA.selectionOutline
-        let pixelsABefore = try session.copyPixels(imageA, merged: true).pixels
-        editableField(sheetA, "Stroke opacity, percent")?.stringValue = "100"
-        colorWell(sheetA)?.color = .red
-        button(sheetA, "Stroke selection")?.performClick(nil)
-        wait { docA.pendingWork == 0 }
+        // Apply through the sheet's real controls: one queued atomic
+        // setGrid, one undo step, pixels untouched, sheet stays open.
+        let pixelsBefore = try session.copyPixels(imageA, merged: true).pixels
+        let undoBefore = docA.undoInfo.undoCount
+        field(sheetA, "Grid spacing X")?.stringValue = "20"
+        a.gridSheet?.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification,
+                                                       object: field(sheetA, "Grid spacing X")))
+        let applyGate = DispatchSemaphore(value: 0)
+        docA.inputQueue.async { applyGate.wait() }
+        button(sheetA, "Apply grid")?.performClick(nil)
+        check(docA.pendingWork > 0 && button(sheetA, "Apply grid")?.isEnabled == false
+                && button(sheetA, "Close grid sheet")?.isEnabled == false
+                && field(sheetA, "Grid spacing X")?.isEnabled == false,
+              "accepted grid work is counted and disables controls until completion")
+        let otherWorkGate = DispatchSemaphore(value: 0)
+        let otherWorkAccepted = EngineActivity.shared.perform(label: "Grid completion accounting",
+                                                               work: { otherWorkGate.wait() }, completion: {})
+        applyGate.signal()
+        wait { (try? session.grid(imageA).spacingX) == 20 }
         spin()
-        check(a.window?.attachedSheet == nil && a.strokeSelectionSheet == nil,
-              "the sheet closes after one accepted enqueue")
-        check(errorsA.isEmpty, "a valid accept reports no error (\(errorsA))")
-        check(docA.undoInfo.undoCount == undoA0 + 1, "Stroke Selection is exactly one undo step")
-        check(docB.undoInfo.undoCount == undoB0, "the other document is untouched even while its window is front")
-        let boundary = pixel(session, imageA, x: 4, y: 12) ?? []
-        let inside = pixel(session, imageA, x: 12, y: 12) ?? []
-        let outside = pixel(session, imageA, x: 30, y: 30) ?? []
-        check(boundary.count == 4 && boundary[0] > 240 && boundary[1] < 20 && boundary[2] < 20,
-              "the boundary is stroked in the sheet's local color (\(boundary))")
-        check(inside.count == 4 && inside.prefix(3).allSatisfy({ $0 == 255 })
-                && outside.count == 4 && outside.prefix(3).allSatisfy({ $0 == 255 }),
-              "the selection interior and the far outside stay untouched")
-        check(try session.selectionBounds(image: imageA) == boundsA && docA.selectionOutline == outlineA,
-              "the selection itself is unchanged by the stroke")
+        check(otherWorkAccepted && EngineActivity.shared.isBusy && docA.pendingWork > 0
+                && button(sheetA, "Close grid sheet")?.isEnabled == false,
+              "grid completion remains counted while another engine activity defers its callback")
+        otherWorkGate.signal()
+        wait { !EngineActivity.shared.isBusy && docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+        spin()
+        check(docA.grid.spacingX == 20 && docA.grid.spacingY == 10
+                && docA.undoInfo.undoCount == undoBefore + 1,
+              "Apply performs one queued setGrid with one undo step")
+        check(try session.copyPixels(imageA, merged: true).pixels == pixelsBefore,
+              "the grid change leaves the image pixels untouched")
+        check(a.window?.attachedSheet === sheetA && a.gridSheet != nil,
+              "Apply keeps the sheet open")
         docA.undo()
-        wait { docA.pendingWork == 0 }
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 10 }
         spin()
-        check(try session.copyPixels(imageA, merged: true).pixels == pixelsABefore,
-              "undo restores the exact pixels before the stroke")
+        check(field(sheetA, "Grid spacing X")?.stringValue == "10.0",
+              "Undo after Apply refreshes the idle field in the still-open sheet")
         docA.redo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+        spin()
+        check(field(sheetA, "Grid spacing X")?.stringValue == "20.0",
+              "Redo refreshes the open grid sheet's committed field")
+
+        // Invalid input: refused visibly in the sheet, no mutation, and
+        // the draft is preserved for correcting.
+        let undoAfterApply = docA.undoInfo.undoCount
+        field(sheetA, "Grid spacing X")?.stringValue = "abc"
+        button(sheetA, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 }
+        check(docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply
+                && a.gridSheet?.lastError != nil && !(message(sheetA)?.stringValue ?? "").isEmpty
+                && field(sheetA, "Grid spacing X")?.stringValue == "abc",
+              "an unparsable spacing is refused in the sheet without mutation and the draft is kept")
+        field(sheetA, "Grid spacing X")?.stringValue = "0"
+        button(sheetA, "Apply grid")?.performClick(nil)
+        check(docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply
+                && (message(sheetA)?.stringValue ?? "").contains("greater than zero"),
+              "a zero spacing is refused visibly without mutation")
+
+        // A native bounds refusal (spacing beyond the engine's maximum)
+        // is reported, not clamped; the draft survives.
+        field(sheetA, "Grid spacing X")?.stringValue = "1000000000"
+        button(sheetA, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && !messages.isEmpty }
+        spin()
+        check(docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply
+                && a.gridSheet?.lastError != nil && !(message(sheetA)?.stringValue ?? "").isEmpty
+                && field(sheetA, "Grid spacing X")?.stringValue == "1000000000",
+              "an over-maximum spacing is refused by the engine and shown in the sheet, draft preserved")
+
+        // Cancel writes nothing and closes the sheet.
+        field(sheetA, "Grid spacing X")?.stringValue = "33"
+        button(sheetA, "Close grid sheet")?.performClick(nil)
+        wait { a.window?.attachedSheet == nil }
+        spin()
+        check(a.gridSheet == nil && docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply,
+              "Cancel closes the sheet without writing anything")
+
+        // A reopened sheet re-seeds from the cache; applying the identical
+        // grid is a no-op with no undo.
+        a.configureGrid(nil)
+        let reopened = a.window?.attachedSheet
+        check(field(reopened, "Grid spacing X")?.stringValue == "20.0",
+              "a reopened sheet re-seeds its draft from the cached grid")
+        button(reopened, "Apply grid")?.performClick(nil)
         wait { docA.pendingWork == 0 }
         spin()
-        check(pixel(session, imageA, x: 4, y: 12)?.prefix(3).contains(where: { $0 < 20 }) == true,
-              "redo repaints the boundary")
+        check(docA.undoInfo.undoCount == undoAfterApply && docA.grid.spacingX == 20,
+              "applying the identical grid is a no-op with no undo")
+        if let sheet = a.window?.attachedSheet {
+            a.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+        }
+        wait { a.window?.attachedSheet == nil }
 
-        // Invalid local input keeps the sheet open with an inline reason.
-        a.strokeSelection(nil)
+        // Undo/Redo refresh the cached grid.
+        docA.undo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 10 }
+        spin()
+        check(docA.grid.spacingX == 10, "undo refreshes the cached grid")
+        docA.redo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+        spin()
+        check(docA.grid.spacingX == 20, "redo refreshes the cached grid")
+
+        // Late close: after the sheet ended, a grid change must not
+        // reopen or update it.
+        docA.setGrid(EngineSession.Grid(style: .solid, spacingX: 15, spacingY: 10,
+                                        offsetX: 0, offsetY: 0,
+                                        foreground: .black, background: .white))
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 15 }
+        spin()
+        check(a.window?.attachedSheet == nil && a.gridSheet == nil,
+              "a late grid change does not reopen or update a closed sheet")
+        docA.undo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+
+        // Two-document ownership: A's sheet drives only docA.
+        a.configureGrid(nil)
+        b.configureGrid(nil)
         let sheetA2 = a.window?.attachedSheet
-        check(sheetA2 != nil, "the sheet reopens while a selection exists")
-        let undoInv = docA.undoInfo.undoCount
-        editableField(sheetA2, "Stroke size, pixels")?.stringValue = "12px"
-        button(sheetA2, "Stroke selection")?.performClick(nil)
-        spin(0.05)
-        check(a.window?.attachedSheet === sheetA2 && a.strokeSelectionSheet?.lastError != nil
-                && !(messageField(sheetA2)?.stringValue ?? "").isEmpty,
-              "invalid size text keeps the sheet open with an inline reason")
-        check(docA.undoInfo.undoCount == undoInv && docA.pendingWork == 0, "invalid input enqueues nothing")
-        editableField(sheetA2, "Stroke opacity, percent")?.stringValue = "nan"
-        button(sheetA2, "Stroke selection")?.performClick(nil)
-        spin(0.05)
-        check(a.window?.attachedSheet === sheetA2 && docA.undoInfo.undoCount == undoInv && docA.pendingWork == 0,
-              "a non-finite opacity is refused inline and the sheet stays open")
-        button(sheetA2, "Cancel stroke selection")?.performClick(nil)
-        spin(0.05)
-
-        // Gate: empty selection.
-        docA.select(.none)
-        wait { docA.pendingWork == 0 }
-        docA.refreshSelection()
+        field(sheetA2, "Grid spacing X")?.stringValue = "25"
+        button(sheetA2, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 25 }
         spin()
-        check(docA.selectionOutline.isEmpty && docA.strokeSelectionRefusal?.contains("no selection") == true
-                && !a.validateMenuItem(strokeItem()),
-              "an empty selection gates the item with a reason")
-        let errorsBeforeEmpty = errorsA.count
-        a.strokeSelection(nil)
-        check(a.window?.attachedSheet == nil && errorsA.count > errorsBeforeEmpty,
-              "opening the sheet without a selection refuses through the error path")
-        try session.select(.rectangle(CGRect(x: 4, y: 4, width: 16, height: 16)),
-                           image: imageA, options: .init())
-        docA.refreshSelection()
-        wait { docA.pendingWork == 0 }
-        spin()
-        check(a.validateMenuItem(strokeItem()), "the item validates again once a selection exists")
+        check(docA.grid.spacingX == 25 && docB.grid.spacingX == 10 && docB.undoInfo.undoCount == 0,
+              "the two sheets drive their own documents independently")
 
-        // Gate: busy engine, held by a controlled gate released on every path.
+        // Busy: the sheet's Apply gates on cached state, but Show Grid —
+        // pure view state — stays available while the engine is busy. The
+        // gate is released on every path by the defer.
         do {
             let gate = DispatchSemaphore(value: 0)
             defer { gate.signal() }
-            let held = EngineActivity.shared.perform(label: "Stroke selection busy gate",
-                                                     work: { gate.wait() }, completion: {})
-            check(held && docA.strokeSelectionRefusal != nil && !a.validateMenuItem(strokeItem()),
-                  "a busy engine gates the item with a cached reason")
-            let errorsBeforeBusy = errorsA.count
-            a.strokeSelection(nil)
-            check(a.window?.attachedSheet == nil && errorsA.count > errorsBeforeBusy,
-                  "opening the sheet while busy refuses through the error path")
+            let held = EngineActivity.shared.perform(label: "Holding the engine for grid", work: { gate.wait() },
+                                                     completion: {})
+            check(held && button(sheetA2, "Apply grid")?.isEnabled == false,
+                  "Apply disables while the engine is busy (cached state)")
+            check(a.validateMenuItem(showGridItem), "Show Grid stays valid while the engine is busy")
+            a.toggleShowGrid(showGridItem)
+            check(a.gridViewState.showsGrid && showGridItem.state == .on && a.canvas.showsGrid,
+                  "Show Grid toggles while the engine is busy")
+            a.toggleShowGrid(showGridItem)
+            check(!a.gridViewState.showsGrid && showGridItem.state == .off,
+                  "Show Grid toggles back while the engine is busy")
         }
         wait { !EngineActivity.shared.isBusy }
-        spin(0.05)
+        spin()
+        check(button(a.window?.attachedSheet, "Apply grid")?.isEnabled == true,
+              "Apply re-enables when the engine is idle again")
 
-        // Gate: busy acquired after the sheet opened — accept refuses inline.
-        a.strokeSelection(nil)
-        let sheetBusy = a.window?.attachedSheet
-        check(sheetBusy != nil, "the sheet opens while the engine is idle")
-        do {
-            let gate = DispatchSemaphore(value: 0)
-            defer { gate.signal() }
-            let held = EngineActivity.shared.perform(label: "Busy after open",
-                                                     work: { gate.wait() }, completion: {})
-            check(held, "the busy-after-open gate holds")
-            let undoBusy = docA.undoInfo.undoCount
-            button(sheetBusy, "Stroke selection")?.performClick(nil)
-            spin(0.05)
-            check(a.window?.attachedSheet === sheetBusy
-                    && !(messageField(sheetBusy)?.stringValue ?? "").isEmpty
-                    && docA.undoInfo.undoCount == undoBusy && docA.pendingWork == 0
-                    && button(sheetBusy, "Stroke selection")?.isEnabled == false,
-                  "accepting while the engine became busy keeps the sheet open with a reason and mutates nothing")
+        // Set a known grid (solid 10/10, 0/0) through the sheet for the
+        // bitmap checks, then close the sheet.
+        let sheetA3 = a.window?.attachedSheet
+        field(sheetA3, "Grid spacing X")?.stringValue = "10"
+        popup(sheetA3, "Grid style")?.selectItem(withTitle: "Solid")
+        button(sheetA3, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 10 && docA.grid.style == .solid }
+        spin()
+        if let sheet = a.window?.attachedSheet {
+            a.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
         }
-        wait { !EngineActivity.shared.isBusy }
-        spin(0.05)
-        button(sheetBusy, "Cancel stroke selection")?.performClick(nil)
-        spin(0.05)
-
-        // Gate: an open filter preview (cached flag).
-        docA.filterPreviewIsOpen = true
-        check(docA.strokeSelectionRefusal?.contains("preview") == true && !a.validateMenuItem(strokeItem()),
-              "an open filter preview gates the item")
-        docA.filterPreviewIsOpen = false
-
-        // Gates: mask, channel, group, pixel lock, editable structured source.
-        guard let layerA = docA.activeLayer else {
-            check(false, "the gate fixture has an active layer")
-            return
+        wait { a.window?.attachedSheet == nil }
+        for (controller, document) in [(a, docA), (b, docB)] where controller.window?.attachedSheet != nil {
+            controller.window?.endSheet(controller.window!.attachedSheet!, returnCode: .alertSecondButtonReturn)
         }
-        docA.addMask(layerA, source: .white, edit: true)
-        wait { docA.pendingWork == 0 }
-        spin()
-        check(docA.isMaskTargetActive && docA.strokeSelectionRefusal?.contains("mask") == true
-                && !a.validateMenuItem(strokeItem()),
-              "a mask target gates the item")
-        docA.selectLayer(layerA)
-        wait { docA.pendingWork == 0 }
-        spin()
+        wait { b.window?.attachedSheet == nil }
 
-        let channel = try session.channelFromSelection(imageA, name: "Stroke gate")
-        docA.selectChannel(channel)
-        wait { docA.pendingWork == 0 }
-        spin()
-        check(docA.isChannelTargetActive && docA.strokeSelectionRefusal?.contains("channel") == true
-                && !a.validateMenuItem(strokeItem()),
-              "a channel target gates the item")
-        docA.selectLayer(layerA)
-        wait { docA.pendingWork == 0 }
-        spin()
-
-        docA.createGroup()
-        wait { docA.pendingWork == 0 }
-        spin()
-        check(docA.activeLayer != layerA
-                && docA.layers.first(where: { $0.id == docA.activeLayer ?? 0 })?.kind == .group
-                && docA.strokeSelectionRefusal?.contains("group") == true
-                && !a.validateMenuItem(strokeItem()),
-              "a layer group target gates the item")
-        docA.layerCommand(.delete)
-        wait { docA.pendingWork == 0 }
-        docA.selectLayer(layerA)
-        wait { docA.pendingWork == 0 }
-        spin()
-
-        try session.setLayerLocks(layerA, image: imageA, mask: .pixels, values: .pixels)
-        try docA.reload()
-        check(docA.strokeSelectionRefusal?.contains("Unlock") == true && !a.validateMenuItem(strokeItem()),
-              "a pixel-locked target gates the item")
-        try session.setLayerLocks(layerA, image: imageA, mask: .pixels, values: [])
-        try docA.reload()
-
-        let text = try session.addTextLayer(image: imageA, text: "Src", settings: .init(),
-                                            at: CGPoint(x: 2, y: 2))
-        try session.selectLayer(text, image: imageA)
-        try docA.reload()
-        spin()
-        check(docA.layerSources[text]?.hasSource == true && docA.layerSources[text]?.isRasterized == false,
-              "the text layer's editable structured source is cached")
-        check(docA.strokeSelectionRefusal?.contains("Rasterize") == true && !a.validateMenuItem(strokeItem()),
-              "an editable structured source gates with a rasterize-first reason")
-        let errorsBeforeStruct = errorsA.count
-        let undoStruct = docA.undoInfo.undoCount
-        a.strokeSelection(nil)
-        check(a.window?.attachedSheet == nil && errorsA.count > errorsBeforeStruct
-                && errorsA.last?.contains("Rasterize") == true && docA.undoInfo.undoCount == undoStruct,
-              "the sheet refuses a structured target through the error path without mutating")
-        try session.selectLayer(layerA, image: imageA)
-        try docA.reload()
-        wait { docA.pendingWork == 0 }
-        spin()
-        check(docA.strokeSelectionRefusal == nil, "the gate clears once a plain pixel layer is active again")
-
-        // Hold this document's serial input queue without marking the
-        // engine globally busy: these are accepted input commands. A fill
-        // precedes a real stroke, then Stroke Selection must end that
-        // stroke before its own native boundary operation.
-        let undoB = docB.undoInfo.undoCount
-        var strokeBrush = EngineSession.Brush()
-        strokeBrush.size = 5
-        strokeBrush.pressureSize = false
-        let p0 = EngineSession.StrokePoint(x: 12, y: 12, pressure: 1, timeMilliseconds: 0)
-        let p1 = EngineSession.StrokePoint(x: 13, y: 12, pressure: 1, timeMilliseconds: 8)
-        var selectionBrush = EngineSession.Brush()
-        selectionBrush.size = 12
-        selectionBrush.pressureSize = false
-        selectionBrush.blue = 1
-        do {
-            let gate = DispatchSemaphore(value: 0)
-            defer { gate.signal() }
-            docB.inputQueue.async { gate.wait() }
-            docB.fill(at: CGPoint(x: 16, y: 16), mode: .selection, color: .green,
-                      threshold: 0, sampleMerged: false)
-            docB.beginStroke(at: p0, brush: strokeBrush)
-            docB.continueStroke([p1])
-            check(!EngineActivity.shared.isBusy && docB.pendingWork > 0 && docB.strokeIsActive,
-                  "the fill and active stroke are accepted behind the document input gate")
-            let pending = docB.pendingWork
-            docB.strokeSelection(selectionBrush)
-            check(!docB.strokeIsActive && docB.pendingWork >= pending + 2,
-                  "Stroke Selection queues the active stroke end and its own operation before the gate releases")
+        // View bitmap: Show Grid draws the cached grid between the image
+        // and the other overlays; toggling and re-styling change only the
+        // view, never the native pixels, dirty state or history.
+        let canvas = a.canvas
+        try canvas.renderVisibleTilesNow()
+        func bitmap() -> Data? {
+            guard let rep = canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds) else { return nil }
+            canvas.cacheDisplay(in: canvas.bounds, to: rep)
+            guard let bytes = rep.bitmapData else { return nil }
+            return Data(bytes: bytes, count: rep.bytesPerRow * rep.pixelsHigh)
         }
-        wait { docB.pendingWork == 0 }
-        spin()
-        check(errorsB.isEmpty, "no BUSY refusal: the active stroke finished before the selection stroke")
-        check(docB.undoInfo.undoCount == undoB + 3,
-              "stroke + accepted fill + selection stroke are exactly three undo steps, in queue order")
-        check(docB.undoInfo.nextUndo.contains("Stroke Selection"),
-              "the selection stroke is the last undo step, behind every accepted input")
-        let bInside = pixel(session, imageB, x: 16, y: 16) ?? []
-        check(bInside.count == 4 && bInside[1] > 240 && bInside[0] < 20,
-              "the queued accepted fill landed inside B's selection before the stroke (\(bInside))")
-        let bBoundary = pixel(session, imageB, x: 8, y: 16) ?? []
-        check(bBoundary.count == 4 && bBoundary[2] > bBoundary[0],
-              "the selection boundary was stroked after the fill, in the stroke's color (\(bBoundary))")
-
-        // No duplicate/reentrant acceptance: two synchronous clicks enqueue
-        // exactly one stroke.
-        b.strokeSelection(nil)
-        let sheetDup = b.window?.attachedSheet
-        let undoDup = docB.undoInfo.undoCount
-        button(sheetDup, "Stroke selection")?.performClick(nil)
-        button(sheetDup, "Stroke selection")?.performClick(nil)
-        wait { docB.pendingWork == 0 }
-        spin()
-        check(docB.undoInfo.undoCount == undoDup + 1,
-              "a duplicate/reentrant accept enqueues exactly one stroke")
-
-        // Accepting with an in-flight field edit commits it once (no UI
-        // reentry) and enqueues one stroke.
-        b.strokeSelection(nil)
-        let sheetRe = b.window?.attachedSheet
-        guard let sizeField = editableField(sheetRe, "Stroke size, pixels") else {
-            check(false, "the size field is reachable by its accessibility label")
-            return
+        func brightnessNear(_ x: Int, _ y: Int) -> Double? {
+            [CGPoint(x: x, y: y), CGPoint(x: x, y: y - 1), CGPoint(x: x, y: y + 1),
+             CGPoint(x: x - 1, y: y), CGPoint(x: x + 1, y: y)]
+                .compactMap { canvasBrightness(canvas, at: $0) }.min()
         }
-        sheetRe?.makeFirstResponder(sizeField)
-        sizeField.stringValue = "7"
-        let undoRe = docB.undoInfo.undoCount
-        button(sheetRe, "Stroke selection")?.performClick(nil)
-        wait { docB.pendingWork == 0 }
+        let pixelOnLine = pixel(session, imageA, x: 10, y: 5)
+        let pixelAtIntersection = pixel(session, imageA, x: 10, y: 10)
+        let dirtyBefore = docA.hasUnsavedChanges
+        let undoBeforeBitmap = docA.undoInfo
+        let bitmapOff = bitmap()
+        a.toggleShowGrid(showGridItem)
+        let bitmapOn = bitmap()
+        check(showGridItem.state == .on && canvas.showsGrid
+                && bitmapOff != nil && bitmapOn != nil && bitmapOn != bitmapOff,
+              "Show Grid changes the canvas view bitmap")
+        let onLine = brightnessNear(10, 5)   // on the vertical line x = 10
+        let offLine = brightnessNear(5, 5)   // between grid lines
+        check(onLine != nil && offLine != nil && onLine! < offLine! - 0.05,
+              "the solid grid draws its line in the view bitmap (\(String(describing: onLine)) vs \(String(describing: offLine)))")
+        check(!b.gridViewState.showsGrid && !b.canvas.showsGrid,
+              "Show Grid is cached per window: the other window stays off")
+        check(pixel(session, imageA, x: 10, y: 5) == pixelOnLine
+                && pixel(session, imageA, x: 10, y: 10) == pixelAtIntersection
+                && docA.hasUnsavedChanges == dirtyBefore && docA.undoInfo == undoBeforeBitmap,
+              "toggling Show Grid changes neither the engine pixels nor dirty state or history")
+        a.toggleShowGrid(showGridItem)
+        check(bitmap() == bitmapOff && showGridItem.state == .off,
+              "toggling Show Grid off restores the view bitmap")
+        check(pixel(session, imageA, x: 10, y: 5) == pixelOnLine,
+              "the image pixels on the grid line are identical after both toggles")
+
+        // Style differences in the view bitmap: Dots darken only the
+        // intersections, not the line between them.
+        a.configureGrid(nil)
+        let sheetA4 = a.window?.attachedSheet
+        popup(sheetA4, "Grid style")?.selectItem(withTitle: "Dots")
+        button(sheetA4, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && docA.grid.style == .dots }
         spin()
-        check(docB.undoInfo.undoCount == undoRe + 1,
-              "accepting with an in-flight field edit commits once and enqueues one stroke")
-
-        // Late callbacks after close never reopen or update the sheet.
-        b.strokeSelection(nil)
-        let stale = b.strokeSelectionSheet
-        if let sheet = b.window?.attachedSheet {
-            b.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+        if let sheet = a.window?.attachedSheet {
+            a.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
         }
-        spin(0.05)
-        stale?.showError("late error")
-        stale?.documentStateDidChange()
-        stale?.commitFieldEdit()
-        check(b.window?.attachedSheet == nil && b.strokeSelectionSheet == nil,
-              "late callbacks after close never reopen or update the sheet")
-
-        // Close-drain: accept, then close the document at once; the close
-        // drains the accepted stroke before destroying the image.
-        b.strokeSelection(nil)
-        let sheetClose = b.window?.attachedSheet
-        button(sheetClose, "Stroke selection")?.performClick(nil)
-        var closedB = false
-        docB.closeImageWhenDrained { closedB = true }
-        check(docB.strokeSelectionRefusal == ImageDocument.DocumentError.closed.localizedDescription,
-              "a closing document gates with the closed reason")
-        wait { closedB }
-        check(closedB && (try? session.info(imageB)) == nil,
-              "the close drains the accepted stroke before destroying the image")
-        check(errorsB.isEmpty,
-              "the whole scenario reports no error; every accept landed exactly once above (\(errorsB))")
+        wait { a.window?.attachedSheet == nil }
+        a.toggleShowGrid(showGridItem)
+        let bitmapDots = bitmap()
+        check(bitmapDots != nil && bitmapDots != bitmapOn,
+              "the Dots style draws a different view bitmap than Solid")
+        let dotsOnLine = brightnessNear(10, 5)
+        let dotsAtIntersection = brightnessNear(10, 10)
+        check(dotsOnLine != nil && offLine != nil && abs(dotsOnLine! - offLine!) < 0.05,
+              "Dots leave the line between intersections untouched")
+        check(dotsAtIntersection != nil && offLine != nil && dotsAtIntersection! < offLine! - 0.05,
+              "Dots darken the intersections in the view bitmap")
+        check(pixel(session, imageA, x: 10, y: 5) == pixelOnLine
+                && pixel(session, imageA, x: 10, y: 10) == pixelAtIntersection,
+              "re-styling the grid changes no native image pixel")
+        a.toggleShowGrid(showGridItem)
     }
 
     private static func exercisePixelRulers(_ session: EngineSession, work: URL,
