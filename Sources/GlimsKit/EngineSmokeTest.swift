@@ -132,6 +132,7 @@ enum EngineSmokeTest {
             try exerciseFilterStackInterface(session, work: work, documents: documents)
             try measurePluginStalls(session, work: work)
             try exerciseResourceCatalog(session)
+            try exerciseSelectedBrushStrokes(session, documents: documents)
         } catch {
             check(false, "unexpected engine error: \(error)")
         }
@@ -6137,6 +6138,92 @@ enum EngineSmokeTest {
     /// The bounded resource catalog scenario: counts and rows for all
     /// three kinds, one identity/resolve round trip per kind, a wrong
     /// identity and a high-bit handle. Reads only; no resource is applied.
+    private static func exerciseSelectedBrushStrokes(_ session: EngineSession, documents: DocumentList) throws {
+        let rows = try session.resources(.brush)
+        guard let soft = rows.first(where: { $0.displayName == "2. Hardness 025" }),
+              let block = rows.first(where: { $0.displayName == "2. Block 01" }) else {
+            check(false, "the installed soft round and square brush fixtures exist")
+            return
+        }
+        let softIdentity = try session.resourceIdentifiers(soft.id)
+        let blockIdentity = try session.resourceIdentifiers(block.id)
+        let image = try session.newImage(width: 96, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Selected brushes")
+        documents.items.append(document)
+        defer {
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        guard let layer = document.activeLayer else {
+            check(false, "the selected-brush fixture has a paint layer")
+            return
+        }
+        func pixels() throws -> Data {
+            let rendered = try session.render(image, scale: 1, area: CGRect(x: 0, y: 0, width: 96, height: 64))
+            return rendered.dataProvider!.data! as Data
+        }
+        func settle() {
+            let deadline = Date().addingTimeInterval(10)
+            while document.pendingWork > 0 && Date() < deadline { spin(0.01) }
+            spin()
+        }
+        let first = EngineSession.StrokePoint(x: 4, y: 32, pressure: 1, timeMilliseconds: 0)
+        let points = (1...16).map {
+            EngineSession.StrokePoint(x: 4 + 88 * Double($0) / 16, y: 32, pressure: 1, timeMilliseconds: UInt32($0 * 8))
+        }
+        var brush = EngineSession.Brush()
+        brush.size = 20
+        brush.pressureSize = false
+        brush.blue = 1
+        let blank = try pixels()
+        let undoBefore = document.undoInfo.undoCount
+
+        // The normal document input queue passes the persistent identity
+        // to the typed facade. Resolution occurs inside that queued job.
+        brush.resource = softIdentity
+        document.beginStroke(at: first, brush: brush)
+        document.continueStroke(points)
+        document.endStroke()
+        settle()
+        let softPixels = try pixels()
+        check(softPixels != blank && document.undoInfo.undoCount == undoBefore + 1,
+              "a queued stroke resolves the selected soft brush and paints one undoable edit")
+        document.undo()
+        settle()
+        check(try pixels() == blank, "undo selected-brush painting restores the exact original pixels")
+
+        brush.resource = blockIdentity
+        document.beginStroke(at: first, brush: brush)
+        document.continueStroke(points)
+        document.endStroke()
+        settle()
+        check(try pixels() != softPixels && document.undoInfo.undoCount == undoBefore + 1,
+              "a different persisted brush identity changes the painted shape")
+        document.undo()
+        settle()
+
+        // A stale identity fails instead of silently switching to the
+        // inherited brush. Neither a session nor an undo step is left.
+        brush.resource = EngineSession.ResourceIdentity(name: "Glims missing brush", collection: nil, isInternal: false)
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        document.beginStroke(at: first, brush: brush)
+        document.continueStroke(points)
+        document.endStroke()
+        settle()
+        check(try !errors.isEmpty && pixels() == blank && document.undoInfo.undoCount == undoBefore,
+              "a missing selected brush reports failure without painting or adding undo")
+
+        // nil still dispatches the original API. Resolve/select did not
+        // replace the default brush inherited by ordinary legacy strokes.
+        brush.resource = nil
+        let legacy = try session.beginStroke(image: image, drawable: layer, brush: brush, first: first)
+        try session.continueStroke(legacy, points: points)
+        try session.endStroke(legacy)
+        check(try pixels() != blank && session.undoInfo(image).undoCount == undoBefore + 1,
+              "clearing the resource choice retains the ordinary default brush path")
+    }
+
     private static func exerciseResourceCatalog(_ session: EngineSession) throws {
         var liveHandle: EngineSession.ResourceID = 0
         for kind in EngineSession.ResourceKind.allCases {
