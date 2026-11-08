@@ -102,6 +102,8 @@ enum EngineSmokeTest {
             try exerciseLayerTree(session, documents: documents)
             try exerciseLayerMasks(session, documents: documents)
             try exerciseChannelBindings(session, work: work)
+            try exerciseTargetCommands(session, documents: documents)
+            try exerciseTargetHistory(session, documents: documents)
             try exercisePreferences(session, documents: documents)
             try exercisePaths(session, documents: documents)
             try exercisePaletteControls(session, documents: documents)
@@ -1751,6 +1753,46 @@ enum EngineSmokeTest {
         settle()
         check(document.activeDrawable == layer, "picking a layer recovers from a refused mask target")
 
+        // The refused target also heals through a fresh creation: the
+        // engine selects the layer it makes, and the completion lifts
+        // the rejection — no pick needed. Re-arm the failed pick first.
+        document.addMask(layer, source: .white, edit: false)
+        settle()
+        check(document.maskStates[layer]?.mask != 0,
+              "the layer carries a mask again for the refused-pick recovery checks")
+        document.run { session, image in
+            try session.applyLayerMask(layer, image: image, mode: .discard)
+        }
+        document.editMask(layer)
+        settle()
+        check(document.activeDrawable == nil,
+              "a second queued mask pick that becomes invalid refuses the target too")
+        // A command that fails while the target is refused must not
+        // reopen it: the merge has nothing below it inside the group.
+        document.layerCommand(.mergeDown)
+        settle()
+        document.fill(at: .zero, mode: .selection, color: .magenta, threshold: 0, sampleMerged: false)
+        settle()
+        check(document.activeDrawable == nil && errors.contains { $0.contains("merge") },
+              "a failed target command does not reopen the refused target "
+                + "(drawable \(document.activeDrawable ?? -1), errors \(errors.suffix(3)))")
+        document.layerCommand(.new)
+        settle()
+        guard let recovered = document.activeLayer, recovered != layer else {
+            check(false, "a layer creation lands after the refused pick")
+            return
+        }
+        check(document.activeDrawable == recovered,
+              "a successful creation recovers the refused target without another pick")
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        document.beginStroke(at: .init(x: 56, y: 56, pressure: 1), brush: black)
+        document.continueStroke([.init(x: 58, y: 56, pressure: 1)])
+        document.endStroke()
+        settle()
+        check(luminance(thumbPixel(recovered, 28, 28)) < 64 && (thumbPixel(recovered, 28, 28)?[3] ?? 0) > 200,
+              "fills and strokes reach the recovered target "
+                + "(new layer pixel \(thumbPixel(recovered, 28, 28) ?? []))")
+
         let thumbnailGate = DispatchSemaphore(value: 0)
         document.inputQueue.async { thumbnailGate.wait() }
         let palette = LayersPaletteController()
@@ -1767,6 +1809,441 @@ enum EngineSmokeTest {
         settle()
 
         controller.window?.orderOut(nil)
+    }
+
+    /// A command whose result becomes or replaces the paint target — a new
+    /// or duplicated layer, a pasted or text layer, an editing mask —
+    /// learns its drawable id only when its queued job finishes. Edits
+    /// accepted meanwhile must be refused instead of capturing the
+    /// drawable the command is about to replace, and a completion must
+    /// never enqueue another native select that could land inside a
+    /// clipboard cut's read/clear pair.
+    private static func exerciseTargetCommands(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Target Commands")
+        documents.items.append(document)
+        defer {
+            document.onWillChangeLayers = nil
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+        func composite(_ x: Int, _ y: Int) -> [UInt8]? { pixel(session, image, x: x, y: y) }
+        func thumbPixel(_ drawable: Int32, _ x: Int, _ y: Int) -> [UInt8]? {
+            guard let cg = try? session.drawableThumbnail(drawable, image: image, maxSize: 32),
+                  let data = cg.dataProvider?.data as Data? else { return nil }
+            let offset = (y * cg.width + x) * 4
+            guard offset + 4 <= data.count else { return nil }
+            return Array(data[offset..<offset + 4])
+        }
+        func luminance(_ rgba: [UInt8]?) -> Int {
+            guard let rgba else { return -1 }
+            return (Int(rgba[0]) + Int(rgba[1]) + Int(rgba[2])) / 3
+        }
+        let black = EngineSession.Brush(size: 8, opacity: 1, red: 0, green: 0, blue: 0, pressureSize: false)
+        guard let layer = document.activeLayer else {
+            check(false, "a new image has a layer for the target-command checks")
+            return
+        }
+
+        // A mask added with Edit Mask Immediately replaces the paint
+        // target with a drawable whose id is unknown until the job lands.
+        // A stroke or fill accepted meanwhile is refused rather than
+        // painted on the layer the mask is about to cover.
+        let maskGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { maskGate.wait() }
+        document.addMask(layer, source: .white, edit: true)
+        document.beginStroke(at: .init(x: 40, y: 40, pressure: 1), brush: black)
+        document.continueStroke((41...46).map { .init(x: Double($0), y: 40, pressure: 1) })
+        document.endStroke()
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        maskGate.signal()
+        settle()
+        check(luminance(composite(43, 40)) > 200 && (composite(43, 40)?[3] ?? 0) > 200,
+              "edits accepted behind a queued mask creation are refused "
+                + "(composite \(composite(43, 40) ?? []))")
+        check(errors.contains { $0.contains("Wait") },
+              "the refused edits explain the pending target change (\(errors.last ?? "none"))")
+        guard let mask = document.maskStates[layer], mask.mask != 0, mask.editing else {
+            check(false, "the queued mask creation completes as the edit target")
+            return
+        }
+        check(document.activeDrawable == mask.mask,
+              "the mask becomes the active drawable once the creation lands")
+        document.beginStroke(at: .init(x: 40, y: 40, pressure: 1), brush: black)
+        document.continueStroke((41...46).map { .init(x: Double($0), y: 40, pressure: 1) })
+        document.endStroke()
+        settle()
+        check(luminance(thumbPixel(mask.mask, 21, 20)) < 64,
+              "a stroke accepted after the mask lands paints the mask")
+
+        // The same unknown-target window exists for a queued layer
+        // creation; an explicit stroke and an implicit fill must not
+        // disagree about the target.
+        let newGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { newGate.wait() }
+        let countBeforeNew = document.layers.count
+        document.layerCommand(.new)
+        document.beginStroke(at: .init(x: 20, y: 20, pressure: 1), brush: black)
+        document.continueStroke((21...24).map { .init(x: Double($0), y: 20, pressure: 1) })
+        document.endStroke()
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        newGate.signal()
+        settle()
+        check(document.layers.count == countBeforeNew + 1 && document.activeLayer == document.layers.first?.id,
+              "the queued layer creation still lands and becomes the active layer")
+        if let created = document.layers.first, created.id != layer {
+            check((thumbPixel(created.id, 11, 10)?[3] ?? 255) == 0,
+                  "a fill accepted behind a queued layer creation is refused "
+                    + "(new layer pixel \(thumbPixel(created.id, 11, 10) ?? []))")
+        }
+        check(luminance(thumbPixel(mask.mask, 11, 10)) > 200,
+              "a stroke accepted behind a queued layer creation is refused "
+                + "(mask pixel \(thumbPixel(mask.mask, 11, 10) ?? []))")
+
+        // A known pick accepted behind the queued creation resolves the
+        // target optimistically: input after it follows the pick in queue
+        // order, and the pick still wins over the creation's completion.
+        document.selectLayer(layer)
+        settle()
+        let pickGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { pickGate.wait() }
+        document.layerCommand(.new)
+        document.selectLayer(layer)
+        document.beginStroke(at: .init(x: 56, y: 56, pressure: 1), brush: black)
+        document.continueStroke((57...58).map { .init(x: Double($0), y: 56, pressure: 1) })
+        document.endStroke()
+        pickGate.signal()
+        settle()
+        check(document.activeLayer == layer && luminance(composite(57, 56)) < 64,
+              "a pick accepted behind a queued creation wins and the queued stroke follows it")
+
+        // A pick of a layer that does not exist must not reopen the gate.
+        let invalidGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { invalidGate.wait() }
+        document.layerCommand(.new)
+        document.selectLayer(999_999)
+        document.beginStroke(at: .init(x: 8, y: 8, pressure: 1), brush: black)
+        document.continueStroke([.init(x: 9, y: 8, pressure: 1)])
+        document.endStroke()
+        invalidGate.signal()
+        settle()
+        check(luminance(composite(8, 8)) > 200 && (composite(8, 8)?[3] ?? 0) > 200,
+              "an invalid pick does not reopen the unknown-target gate "
+                + "(composite \(composite(8, 8) ?? []))")
+
+        // Cut while a duplicate of a mask-editing layer is queued. The
+        // engine's duplicate selects the copy's mask; a completion that
+        // enqueued another native select could land between the cut's
+        // pixel read and its deferred clear and clear the layer instead.
+        let cutImage = try session.newImage(width: 64, height: 64)
+        let cutDocument = try ImageDocument(session: session, image: cutImage, name: "Cut Completion")
+        documents.items.append(cutDocument)
+        defer {
+            cutDocument.onWillChangeLayers = nil
+            documents.items.removeAll { $0 === cutDocument }
+            cutDocument.closeImageWhenDrained()
+        }
+        guard let cutLayer = cutDocument.activeLayer else {
+            check(false, "the cut document has a layer")
+            return
+        }
+        func cutThumb(_ drawable: Int32, _ x: Int, _ y: Int) -> [UInt8]? {
+            guard let cg = try? session.drawableThumbnail(drawable, image: cutImage, maxSize: 32),
+                  let data = cg.dataProvider?.data as Data? else { return nil }
+            let offset = (y * cg.width + x) * 4
+            guard offset + 4 <= data.count else { return nil }
+            return Array(data[offset..<offset + 4])
+        }
+        func boardPixel(_ copied: ClipboardImage, _ x: Int, _ y: Int) -> Int {
+            let bx = x - Int(copied.origin.x), by = y - Int(copied.origin.y)
+            guard bx >= 0, by >= 0, bx < copied.width, by < copied.height else { return -1 }
+            let offset = (by * copied.width + bx) * 4
+            guard offset + 3 < copied.pixels.count else { return -1 }
+            let px = copied.pixels
+            return (Int(px[offset]) + Int(px[offset + 1]) + Int(px[offset + 2])) / 3
+        }
+        cutDocument.addMask(cutLayer, source: .white, edit: true)
+        cutDocument.inputQueue.sync {}
+        spin()
+        guard cutDocument.maskStates[cutLayer]?.editing == true else {
+            check(false, "the cut document's mask is editing before the race")
+            return
+        }
+        cutDocument.beginStroke(at: .init(x: 40, y: 40, pressure: 1), brush: black)
+        cutDocument.continueStroke((41...46).map { .init(x: Double($0), y: 40, pressure: 1) })
+        cutDocument.endStroke()
+        cutDocument.inputQueue.sync {}
+        spin()
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        cutDocument.layerCommand(.duplicate)
+        var cutError: Error?
+        cutDocument.copyPixels(.cutLayer, background: .cyan, consume: { encoded in
+            // Hold the transaction open until anything the duplicate's
+            // completion queued has reached the engine; the deferred
+            // clear is enqueued only after this returns.
+            cutDocument.inputQueue.sync {}
+            try encoded.write(to: board)
+        }, completion: { cutError = $0 })
+        let cutDeadline = Date().addingTimeInterval(10)
+        while cutDocument.pendingWork > 0 && Date() < cutDeadline { spin() }
+        cutDocument.inputQueue.sync {}
+        spin()
+        check(cutError == nil, "the cut transaction completes")
+        guard let duplicate = cutDocument.layers.first(where: { $0.id != cutLayer }),
+              let duplicateMask = cutDocument.maskStates[duplicate.id] else {
+            check(false, "the duplicate and its mask exist after the race")
+            return
+        }
+        check((try? session.layerMask(duplicate.id, image: cutImage))?.editing == true
+                && (try? session.layerMask(cutLayer, image: cutImage))?.editing == true,
+              "the completion cannot change native mask editing after the duplicate selected its mask "
+                + "(duplicate \((try? session.layerMask(duplicate.id, image: cutImage))?.editing == true), "
+                + "source \((try? session.layerMask(cutLayer, image: cutImage))?.editing == true))")
+        if let cutPixels = try? ClipboardImage.read(from: board) {
+            check(boardPixel(cutPixels, 43, 40) < 64,
+                  "the cut copied the duplicate mask's pixels (read \(boardPixel(cutPixels, 43, 40)))")
+        } else {
+            check(false, "the cut wrote its copied mask to the clipboard")
+        }
+        check(luminance(cutThumb(duplicate.id, 21, 20)) > 200,
+              "the deferred cut clear left the duplicate's layer pixels alone "
+                + "(layer pixel \(cutThumb(duplicate.id, 21, 20) ?? []))")
+        check(luminance(cutThumb(duplicateMask.mask, 21, 20)) > 100,
+              "the deferred cut clear hit the duplicate's mask "
+                + "(mask pixel \(cutThumb(duplicateMask.mask, 21, 20) ?? []))")
+        check(cutDocument.activeDrawable == duplicateMask.mask,
+              "the adopted target after the race is the duplicate's mask")
+    }
+
+    /// Undo, redo and an emptied text layer replace the paint target like
+    /// a creation does, and the current-target layer commands must name
+    /// the layer the engine selects when they run — not the one the
+    /// interface captured while earlier commands were still queued.
+    private static func exerciseTargetHistory(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Target History")
+        documents.items.append(document)
+        defer {
+            document.onWillChangeLayers = nil
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+        func composite(_ x: Int, _ y: Int) -> [UInt8]? { pixel(session, image, x: x, y: y) }
+        func thumbPixel(_ drawable: Int32, _ x: Int, _ y: Int) -> [UInt8]? {
+            guard let cg = try? session.drawableThumbnail(drawable, image: image, maxSize: 32),
+                  let data = cg.dataProvider?.data as Data? else { return nil }
+            let offset = (y * cg.width + x) * 4
+            guard offset + 4 <= data.count else { return nil }
+            return Array(data[offset..<offset + 4])
+        }
+        func luminance(_ rgba: [UInt8]?) -> Int {
+            guard let rgba else { return -1 }
+            return (Int(rgba[0]) + Int(rgba[1]) + Int(rgba[2])) / 3
+        }
+        let black = EngineSession.Brush(size: 8, opacity: 1, red: 0, green: 0, blue: 0, pressureSize: false)
+        guard let layer = document.activeLayer else {
+            check(false, "a new image has a layer for the target-history checks")
+            return
+        }
+
+        // Undoing a creation moves the native selection back before the
+        // interface knows; a fill accepted meanwhile is refused rather
+        // than painted on the layer underneath.
+        document.layerCommand(.new)
+        settle()
+        let undoGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { undoGate.wait() }
+        document.undo()
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        undoGate.signal()
+        settle()
+        check(luminance(composite(4, 4)) > 200 && (composite(4, 4)?[3] ?? 0) > 200,
+              "a fill accepted behind an undo is refused "
+                + "(composite \(composite(4, 4) ?? []))")
+        check(errors.contains { $0.contains("Wait") },
+              "the refused fill explains the pending undo (\(errors.last ?? "none"))")
+
+        // Redoing the creation replaces the target the same way: the
+        // fill would land on the recreated layer the user could not see.
+        let redoGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { redoGate.wait() }
+        document.redo()
+        document.fill(at: .zero, mode: .selection, color: .red, threshold: 0, sampleMerged: false)
+        redoGate.signal()
+        settle()
+        check(luminance(composite(4, 4)) > 200 && (composite(4, 4)?[1] ?? 0) > 200,
+              "a fill accepted behind a redo is refused "
+                + "(composite \(composite(4, 4) ?? []))")
+
+        // Undoing a mask addition drops the editing mask: the implicit
+        // target reverts to the layer while the interface still reports
+        // the mask.
+        document.addMask(layer, source: .white, edit: true)
+        settle()
+        guard document.maskStates[layer]?.editing == true else {
+            check(false, "the mask is editing before the undo check")
+            return
+        }
+        let maskUndoGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { maskUndoGate.wait() }
+        document.undo()
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        maskUndoGate.signal()
+        settle()
+        check(luminance(thumbPixel(layer, 4, 4)) > 200,
+              "a fill accepted behind an undone mask addition is refused "
+                + "(layer pixel \(thumbPixel(layer, 4, 4) ?? []))")
+
+        // A Delete queued behind a creation must act on what the engine
+        // selects then — the created layer — not on the id the interface
+        // last saw selected. The redo's recreated layer goes first.
+        document.selectLayer(layer)
+        settle()
+        if let extra = document.layers.first(where: { $0.id != layer })?.id {
+            document.selectLayer(extra)
+            settle()
+            document.layerCommand(.delete)
+            settle()
+        }
+        check(document.layers.map(\.id) == [layer],
+              "the queue checks start from the original layer")
+        document.beginStroke(at: .init(x: 30, y: 30, pressure: 1), brush: black)
+        document.continueStroke([.init(x: 34, y: 30, pressure: 1)])
+        document.endStroke()
+        settle()
+        check(luminance(composite(31, 30)) < 64 && (composite(31, 30)?[3] ?? 0) > 200,
+              "the original layer carries a mark before the queue checks")
+        let delGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { delGate.wait() }
+        document.layerCommand(.new)
+        document.layerCommand(.delete)
+        delGate.signal()
+        settle()
+        check(document.layers.count == 1 && document.layers.first?.id == layer,
+              "a delete queued behind a creation removes the created layer, not the original "
+                + "(layers \(document.layers.map(\.id)), selected \(document.activeLayer ?? -1))")
+        check(luminance(composite(31, 30)) < 64 && (composite(31, 30)?[3] ?? 0) > 200,
+              "the original layer and its pixels survive the queued delete "
+                + "(composite \(composite(31, 30) ?? []))")
+
+        // A Duplicate queued behind a creation likewise copies the layer
+        // the queue produced, so the original is not duplicated in its
+        // place.
+        let dupGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { dupGate.wait() }
+        document.layerCommand(.new)
+        document.layerCommand(.duplicate)
+        dupGate.signal()
+        settle()
+        check(document.layers.count == 3 && document.layers.last?.id == layer,
+              "the queued new and duplicate leave the original layer at the bottom "
+                + "(layers \(document.layers.map(\.id)), selected \(document.activeLayer ?? -1))")
+        if document.layers.count == 3 {
+            let middle = document.layers[1].id
+            check((thumbPixel(middle, 15, 15)?[3] ?? 255) < 50,
+                  "the queued duplicate copies the created layer, not the original "
+                    + "(middle pixel \(thumbPixel(middle, 15, 15) ?? []))")
+        }
+
+        // A group created behind a creation takes its place from the
+        // layers the queue leaves — the created layer on top — not from
+        // the selection the interface captured first.
+        for extra in document.layers.map(\.id).filter({ $0 != layer }) {
+            document.selectLayer(extra)
+            settle()
+            document.layerCommand(.delete)
+            settle()
+        }
+        document.selectLayer(layer)
+        settle()
+        let groupGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { groupGate.wait() }
+        document.layerCommand(.new)
+        document.createGroup()
+        groupGate.signal()
+        settle()
+        check(document.layers.first?.kind == .group,
+              "a group queued behind a creation is placed from the post-queue selection "
+                + "(layers \(document.layers.map { "\($0.id):\($0.kind)" }), selected \(document.activeLayer ?? -1))")
+        document.layerCommand(.delete)
+        settle()
+        document.layerCommand(.delete)
+        settle()
+        check(document.layers.count == 1 && document.layers.first?.id == layer,
+              "the queue checks return to the original layer "
+                + "(layers \(document.layers.map(\.id)))")
+
+        // Emptying a text layer removes it — the same target change the
+        // text editor commits — so it queues like one.
+        let fonts = (try? session.fonts()) ?? []
+        var textSettings = EngineSession.TextSettings()
+        textSettings.font = fonts.contains("Sans-serif") ? "Sans-serif" : (fonts.first ?? "Sans-serif")
+        document.addText("Empty", settings: textSettings, at: CGPoint(x: 4, y: 40))
+        settle()
+        guard let textLayer = document.layers.first(where: { $0.kind == .text })?.id else {
+            check(false, "a text layer exists for the emptying check")
+            return
+        }
+        let emptyGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { emptyGate.wait() }
+        document.updateText(textLayer, text: "", settings: nil)
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        emptyGate.signal()
+        settle()
+        check(!document.layers.contains(where: { $0.id == textLayer }),
+              "an emptied text layer is removed like the text editor's commit")
+        check(luminance(composite(6, 42)) > 200,
+              "a fill accepted behind the emptied-text removal is refused "
+                + "(composite \(composite(6, 42) ?? []))")
+
+        // The emptied editor reaches that removal through the same flush
+        // an outer command runs; both queue in order.
+        let controller = DocumentWindowController(document: document)
+        defer { controller.window?.orderOut(nil) }
+        let canvas = controller.canvas
+        let previousTool = ToolState.shared.current
+        ToolState.shared.select(.text)
+        ToolState.shared.textSettings = textSettings
+        document.addText("Gone", settings: textSettings, at: CGPoint(x: 4, y: 50))
+        settle()
+        guard let goneLayer = document.layers.first(where: { $0.kind == .text })?.id,
+              let bounds = document.layers.first(where: { $0.id == goneLayer })?.bounds else {
+            check(false, "a second text layer exists for the flush check")
+            ToolState.shared.select(previousTool)
+            return
+        }
+        if let window = controller.window,
+           let press = NSEvent.mouseEvent(with: .leftMouseDown,
+                                          location: canvas.convert(CGPoint(x: bounds.midX * canvas.scale,
+                                                                           y: bounds.midY * canvas.scale), to: nil),
+                                          modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                          context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+            canvas.mouseDown(with: press)
+        }
+        let editor = canvas.tools.textEditor
+        check(editor?.textLayer == goneLayer, "the Text tool opens the layer about to be emptied")
+        editor?.string = ""
+        let flushGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { flushGate.wait() }
+        document.layerCommand(.new)
+        flushGate.signal()
+        settle()
+        check(!document.layers.contains(where: { $0.id == goneLayer }) && canvas.tools.textEditor == nil,
+              "an emptied editor commits its removal through the outer command's flush")
+        ToolState.shared.select(previousTool)
     }
 
     /// The Layer menu, the paint bucket and gradient, layer moves, and a
