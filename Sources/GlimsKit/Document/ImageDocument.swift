@@ -863,13 +863,26 @@ final class ImageDocument {
         pendingWork += 1
         enqueue(on: inputQueue, input: true) { [session, image] in
             let result = Result { try session.editMetadata(image, tag: tag, operation, values: values) }
+            let refresh: Result<(EngineSession.ImageInfo, EngineSession.UndoInfo, EngineSession.History), Error>?
+            if case .success = result {
+                refresh = Result { (try session.info(image), try session.undoInfo(image), try session.history(image)) }
+            } else { refresh = nil }
             DispatchQueue.main.async {
                 EngineActivity.shared.whenIdle {
                     defer { self.jobDidFinish(input: false) }
                     if !self.isClosing {
                         // Reload only after a successful change; a refusal
                         // leaves the cached state as it was.
-                        if case .success = result { try? self.reload() }
+                        if case .success(let state)? = refresh {
+                            self.info = state.0
+                            self.fileState.syncDirty(state.0.isDirty)
+                            self.undoInfo = state.1
+                            self.history = state.2
+                            self.stateVersion += 1
+                            self.onStateChange?()
+                        } else if case .failure(let error)? = refresh {
+                            self.onError?("Metadata changed, but its document state could not be refreshed: \(error)")
+                        }
                         if case .failure(let error) = result { self.onError?(String(describing: error)) }
                     }
                     completion(result)

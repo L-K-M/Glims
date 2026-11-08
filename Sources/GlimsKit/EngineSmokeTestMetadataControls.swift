@@ -150,8 +150,9 @@ extension EngineSmokeTest {
         check(tagRow(metaSheetA, tagTableA, "Exif.Image.Artist") != nil,
               "the sheet's queued tag load lists the seeded tag")
         settle(docB)
-        check(metaSheetB.numberOfRows(in: tagTableB) == 0,
-              "document B's sheet lists no tags (no front-document fallback)")
+        check(metaSheetB.numberOfRows(in: tagTableB) == (try session.metadataTags(imageB, domain: .exif)).count
+                && tagRow(metaSheetB, tagTableB, "Exif.Image.Artist") == nil,
+              "document B shows its native default catalog and no Artist from document A")
 
         // Domain popup and full-catalog search: no truncation, order kept.
         check(popup(sheetA, "Metadata domain")?.titleOfSelectedItem == "EXIF",
@@ -188,6 +189,37 @@ extension EngineSmokeTest {
                 && editorA.string == "Alice",
               "selecting a tag loads its ordered values into rows and the editor")
 
+        // A read in flight must not permit editing a draft that its
+        // completion would replace.
+        try session.editMetadata(imageA, tag: "Exif.Image.Copyright", .set, values: ["Rights"])
+        try docA.reload()
+        settle(docA)
+        wait { tagRow(metaSheetA, tagTableA, "Exif.Image.Copyright") != nil }
+        if let row = tagRow(metaSheetA, tagTableA, "Exif.Image.Copyright") {
+            let readGate = DispatchSemaphore(value: 0)
+            docA.inputQueue.async { readGate.wait() }
+            selectRow(tagTableA, metaSheetA, row)
+            check(button(sheetA, "Add metadata value")?.isEnabled == false && !editorA.isEditable,
+                  "pending metadata values disable draft editing until the captured read returns")
+            readGate.signal()
+            settle(docA)
+        }
+        var keywordsSeeded = false
+        docA.editMetadata("Iptc.Application2.Keywords", .set, values: ["Alice"]) { _ in keywordsSeeded = true }
+        wait { keywordsSeeded && docA.pendingWork == 0 }
+        func chooseDomain(_ index: Int) {
+            if let control = popup(sheetA, "Metadata domain") {
+                control.selectItem(at: index)
+                control.sendAction(control.action, to: control.target)
+            }
+            settle(docA)
+        }
+        chooseDomain(1)
+        if let row = tagRow(metaSheetA, tagTableA, "Iptc.Application2.Keywords") {
+            selectRow(tagTableA, metaSheetA, row)
+            settle(docA)
+        } else { check(false, "the repeatable IPTC keyword tag is listed") }
+
         // Edit through the real controls: multiline text, duplicates and
         // an empty string as separate ordered draft rows.
         setEditor(metaSheetA, editorA, "line1\nline2")
@@ -209,7 +241,7 @@ extension EngineSmokeTest {
         check(metaSheetA.numberOfRows(in: valuesTableA) == 3,
               "Remove Value deletes the explicit selected row from the local draft")
         button(sheetA, "Add metadata value")?.performClick(nil)
-        let expectedValues = ["line1\nline2", "dup", "dup", ""]
+        let attemptedValues = ["line1\nline2", "dup", "dup", ""]
 
         // Apply behind a controlled input-queue gate: counted, controls
         // disabled, capture explicit; the gate is released on every path.
@@ -222,14 +254,27 @@ extension EngineSmokeTest {
         check(docA.pendingWork == workBeforeApply + 2
                 && button(sheetA, "Apply metadata values")?.isEnabled == false,
               "an accepted Apply is counted as pending work and disables the write controls")
-        check(metaSheetA.lastCapture == MetadataSheetLogic.Capture(image: imageA, tag: "Exif.Image.Artist",
-                                                                   action: .setValues, values: expectedValues),
+        check(popup(sheetA, "Metadata domain")?.isEnabled == false && !tagTableA.isEnabled,
+              "an applying metadata command freezes tag and domain selection")
+        check(metaSheetA.lastCapture == MetadataSheetLogic.Capture(image: imageA, tag: "Iptc.Application2.Keywords",
+                                                                   action: .setValues, values: attemptedValues),
               "Apply captures the image, tag, action and the ordered value-array snapshot")
         gate.signal()
-        wait { docA.pendingWork == workBeforeApply && errorsA.isEmpty }
+        wait { docA.pendingWork == workBeforeApply }
         settle(docA)
-        check(try session.metadataValues(imageA, tag: "Exif.Image.Artist") == expectedValues,
-              "the committed whole array preserves order, duplicates, the newline and the empty string exactly")
+        check(try session.metadataValues(imageA, tag: "Iptc.Application2.Keywords") == ["Alice"]
+                && docA.undoInfo.undoCount == undoBeforeApply && metaSheetA.lastError != nil
+                && metaSheetA.numberOfRows(in: valuesTableA) == 4,
+              "an unrepresentable empty member is refused with the native value, history and local draft intact")
+        errorsA.removeAll()
+        selectRow(valuesTableA, metaSheetA, 3)
+        button(sheetA, "Remove metadata value")?.performClick(nil)
+        let expectedValues = ["line1\nline2", "dup", "dup"]
+        button(sheetA, "Apply metadata values")?.performClick(nil)
+        settle(docA)
+        let committedValues = try session.metadataValues(imageA, tag: "Iptc.Application2.Keywords")
+        check(committedValues == expectedValues,
+              "the committed whole array preserves order, duplicates, and the newline exactly (actual \(String(reflecting: committedValues)))")
         check(docA.undoInfo.undoCount == undoBeforeApply + 1,
               "the SET is exactly one undo step")
         check(metaSheetA.lastError == nil && (label(sheetA, "Metadata message")?.stringValue ?? "").isEmpty,
@@ -242,22 +287,46 @@ extension EngineSmokeTest {
         check(docA.undoInfo.undoCount == undoBeforeApply + 1,
               "applying the identical value list is a no-op with no undo")
 
+        // Adding a known absent tag creates only a local draft. The
+        // user supplies text before the first native write.
+        let beforeNewTag = docA.undoInfo.undoCount
+        editableField(sheetA, "New tag name")?.stringValue = "Iptc.Application2.Credit"
+        button(sheetA, "Add tag")?.performClick(nil)
+        settle(docA)
+        check(metaSheetA.selectedTag == "Iptc.Application2.Credit"
+                && editorA.string.isEmpty && metaSheetA.numberOfRows(in: valuesTableA) == 1
+                && docA.undoInfo.undoCount == beforeNewTag
+                && !(try session.metadataTags(imageA, domain: .iptc)).contains("Iptc.Application2.Credit"),
+              "Add Tag validates a registered name and starts an unapplied local draft without native changes")
+        setEditor(metaSheetA, editorA, "Credit Line")
+        button(sheetA, "Apply metadata values")?.performClick(nil)
+        settle(docA)
+        check(try session.metadataValues(imageA, tag: "Iptc.Application2.Credit") == ["Credit Line"]
+                && docA.undoInfo.undoCount == beforeNewTag + 1,
+              "Apply adds the new tag with its actual entered value as one undo step")
+        docA.undo()
+        settle(docA)
+        check(try session.metadataValues(imageA, tag: "Iptc.Application2.Credit").isEmpty
+                && docA.undoInfo.undoCount == beforeNewTag,
+              "one undo removes the newly applied tag")
+
         // A native refusal stays visible and never updates rows or draft
         // as if accepted: an unregistered dotted name is NOT_FOUND.
-        editableField(sheetA, "New tag name")?.stringValue = "Exif.Image.DefinitelyNotRegistered"
+        let captureBeforeInvalidTag = metaSheetA.lastCapture
+        editableField(sheetA, "New tag name")?.stringValue = "Iptc.Application2.DefinitelyNotRegistered"
         button(sheetA, "Add tag")?.performClick(nil)
         wait { metaSheetA.lastError != nil }
         settle(docA)
         check(!(label(sheetA, "Metadata message")?.stringValue ?? "").isEmpty
                 && metaSheetA.lastError != nil
-                && tagRow(metaSheetA, tagTableA, "Exif.Image.DefinitelyNotRegistered") == nil
-                && (try? session.metadataValues(imageA, tag: "Exif.Image.DefinitelyNotRegistered")) == nil,
+                && tagRow(metaSheetA, tagTableA, "Iptc.Application2.DefinitelyNotRegistered") == nil
+                && (try? session.metadataValues(imageA, tag: "Iptc.Application2.DefinitelyNotRegistered")) == nil,
               "an unregistered Add Tag is refused with the native error shown, nothing queued as accepted, no false row")
-        check(metaSheetA.lastCapture?.action == .setValues
-                && metaSheetA.lastCapture?.tag == "Exif.Image.DefinitelyNotRegistered",
-              "the refused action was still captured explicitly before the native answer")
+        check(metaSheetA.lastCapture == captureBeforeInvalidTag,
+              "unregistered tag validation never queues or captures a native write")
 
         // A protected (normalization-rewritten) tag is read-only in the UI.
+        chooseDomain(0)
         wait { tagRow(metaSheetA, tagTableA, "Exif.Image.ImageWidth") != nil }
         if let protectedRow = tagRow(metaSheetA, tagTableA, "Exif.Image.ImageWidth") {
             selectRow(tagTableA, metaSheetA, protectedRow)
@@ -270,15 +339,17 @@ extension EngineSmokeTest {
             check(false, "the first edit's normalization lists the protected dimension tag")
         }
 
+        chooseDomain(1)
+
         // An empty value list is not a SET: refused locally, actionably,
         // with no native call. (Re-look-up the row: reloads may reorder.)
-        guard let artistRowAgain = tagRow(metaSheetA, tagTableA, "Exif.Image.Artist") else {
+        guard let artistRowAgain = tagRow(metaSheetA, tagTableA, "Iptc.Application2.Keywords") else {
             check(false, "the tag is still listed before the empty-SET refusal")
             return
         }
         selectRow(tagTableA, metaSheetA, artistRowAgain)
-        wait { metaSheetA.numberOfRows(in: valuesTableA) == 4 }
-        for _ in 0..<4 {
+        wait { metaSheetA.numberOfRows(in: valuesTableA) == expectedValues.count }
+        for _ in 0..<expectedValues.count {
             if metaSheetA.numberOfRows(in: valuesTableA) > 0 {
                 selectRow(valuesTableA, metaSheetA, 0)
                 button(sheetA, "Remove metadata value")?.performClick(nil)
@@ -290,7 +361,7 @@ extension EngineSmokeTest {
         check(docA.pendingWork == workBeforeEmpty
                 && (label(sheetA, "Metadata message")?.stringValue ?? "").contains("Remove Tag") == true,
               "an empty value list is refused locally with the Remove Tag explanation, nothing queued")
-        check(try session.metadataValues(imageA, tag: "Exif.Image.Artist") == expectedValues,
+        check(try session.metadataValues(imageA, tag: "Iptc.Application2.Keywords") == expectedValues,
               "the refused empty SET did not touch the native values")
 
         // Restore the values through the sheet, then undo/redo them.
@@ -301,15 +372,18 @@ extension EngineSmokeTest {
         button(sheetA, "Apply metadata values")?.performClick(nil)
         wait { docA.pendingWork == workBeforeEmpty }
         settle(docA)
-        check(try session.metadataValues(imageA, tag: "Exif.Image.Artist") == expectedValues,
+        check(try session.metadataValues(imageA, tag: "Iptc.Application2.Keywords") == expectedValues,
               "re-applying the restored draft commits the same ordered array")
         docA.undo()
         settle(docA)
-        check(try session.metadataValues(imageA, tag: "Exif.Image.Artist") == [],
-              "undo of the SET restores the absent tag as an empty value list")
+        check(try session.metadataValues(imageA, tag: "Iptc.Application2.Keywords") == ["Alice"],
+              "undo restores the seeded keyword rather than removing an existing tag")
+        wait { editorA.string == "Alice" && metaSheetA.numberOfRows(in: valuesTableA) == 1 }
+        check(editorA.string == "Alice" && metaSheetA.numberOfRows(in: valuesTableA) == 1,
+              "Undo refreshes values for the same selected metadata tag")
         docA.redo()
         settle(docA)
-        check(try session.metadataValues(imageA, tag: "Exif.Image.Artist") == expectedValues,
+        check(try session.metadataValues(imageA, tag: "Iptc.Application2.Keywords") == expectedValues,
               "redo restores the exact ordered values")
 
         // Save/reopen round trip for the backend-supported tag.
@@ -317,13 +391,13 @@ extension EngineSmokeTest {
         try session.save(imageA, to: xcf.path)
         let reopened = try session.openImage(path: xcf.path)
         defer { try? session.closeImage(reopened) }
-        check(try session.metadataValues(reopened, tag: "Exif.Image.Artist") == expectedValues
-                && (try session.metadataTags(reopened, domain: .exif)).contains("Exif.Image.Artist"),
-              "save and reopen retain the tag and its ordered multiline/duplicate/empty values")
+        check(try session.metadataValues(reopened, tag: "Iptc.Application2.Keywords") == expectedValues
+                && (try session.metadataTags(reopened, domain: .iptc)).contains("Iptc.Application2.Keywords"),
+              "save and reopen retain the tag and its ordered multiline/duplicate values")
 
         // Two-document capture: B, frontmost, is untouched by all of A's
         // sheet work.
-        check((try? session.metadataTags(imageB, domain: .exif)).flatMap({ $0.contains("Exif.Image.Artist") }) != true,
+        check((try? session.metadataTags(imageB, domain: .iptc)).flatMap({ $0.contains("Iptc.Application2.Keywords") }) != true,
               "the front document B never received A's tag (captured document, not front)")
 
         // Queued completion, close drain and late results: accept an edit

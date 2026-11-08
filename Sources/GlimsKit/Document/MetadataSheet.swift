@@ -219,6 +219,9 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     /// older generation — or for another tag — is dropped, so it cannot
     /// clobber a newer selection's draft.
     private var valuesGeneration = 0
+    private var valuesAreLoading = false
+    private var updatingTagRows = false
+    private var lastDocumentStateVersion = -1
     /// The undo signature the tag list was last loaded against; a change
     /// (e.g. undo/redo of a metadata edit) triggers one refresh.
     private var lastUndoSignature: EngineSession.UndoInfo?
@@ -400,14 +403,22 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
             case .success(let tags):
                 self.lastUndoSignature = self.document.undoInfo
                 self.allTags = tags
+                self.updatingTagRows = true
+                defer { self.updatingTagRows = false }
                 self.tagTable.reloadData()
                 // Preserve the selection by name, never by row index.
                 if let selected = self.selectedTag, tags.contains(selected) {
                     if let row = self.filteredRows.firstIndex(of: selected) {
                         self.tagTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
                     }
-                } else {
+                } else if !self.draftIsDirty {
                     self.selectedTag = nil
+                    self.valuesGeneration += 1
+                    self.valuesAreLoading = false
+                    self.draft = []
+                    self.selectedValueIndex = nil
+                    self.valuesTable.reloadData()
+                    self.synchronizeEditor()
                     self.tagTable.deselectAll(nil)
                 }
                 self.updateControlStates()
@@ -421,11 +432,15 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     /// when a newer selection (generation) or a close happened meanwhile.
     private func loadValues(for tag: String) {
         valuesGeneration += 1
+        valuesAreLoading = true
+        updateControlStates()
         let generation = valuesGeneration
         let owner = document
         owner.readMetadataValues(tag) { [weak self] result in
             guard let self, !self.isInvalidated, generation == self.valuesGeneration,
                   tag == self.selectedTag else { return }
+            self.valuesAreLoading = false
+            defer { self.updateControlStates() }
             switch result {
             case .success(let values):
                 self.draft = values
@@ -455,8 +470,10 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     /// only the control gates otherwise — the draft is never clobbered.
     func documentStateDidChange() {
         guard !isInvalidated else { return }
-        if lastUndoSignature != document.undoInfo, !isApplying {
+        if lastDocumentStateVersion != document.stateVersion, !isApplying {
+            lastDocumentStateVersion = document.stateVersion
             loadTags()
+            if let tag = selectedTag, !draftIsDirty { loadValues(for: tag) }
         }
         updateControlStates()
     }
@@ -523,19 +540,20 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     }
 
     private func updateControlStates() {
-        let canWrite = !isInvalidated && !isApplying && writeRefusal == nil
+        let canWrite = !isInvalidated && !isApplying && !valuesAreLoading && writeRefusal == nil
+        let canNavigate = !isInvalidated && !isApplying
         let hasSelection = selectedTag != nil
         let protectedTag = selectedTagIsProtected
-        domainPopup.isEnabled = !isInvalidated
-        searchField.isEnabled = !isInvalidated
-        addTagField.isEnabled = !isInvalidated
-        tagTable.isEnabled = !isInvalidated
+        domainPopup.isEnabled = canNavigate
+        searchField.isEnabled = canNavigate
+        addTagField.isEnabled = canNavigate
+        tagTable.isEnabled = canNavigate
         addTagButton.isEnabled = canWrite
-        addValueButton.isEnabled = !isInvalidated && hasSelection && !protectedTag && !isApplying
-        removeValueButton.isEnabled = !isInvalidated && hasSelection && !protectedTag && !isApplying
+        addValueButton.isEnabled = !isInvalidated && hasSelection && !protectedTag && !isApplying && !valuesAreLoading
+        removeValueButton.isEnabled = !isInvalidated && hasSelection && !protectedTag && !isApplying && !valuesAreLoading
             && selectedValueIndex != nil
-        valueEditor.isEditable = !isInvalidated && hasSelection && !protectedTag && !isApplying
-        valuesTable.isEnabled = !isInvalidated && hasSelection && !protectedTag
+        valueEditor.isEditable = !isInvalidated && hasSelection && !protectedTag && !isApplying && !valuesAreLoading
+        valuesTable.isEnabled = !isInvalidated && hasSelection && !protectedTag && !isApplying && !valuesAreLoading
         applyButton.isEnabled = canWrite && hasSelection && !protectedTag
         removeTagButton.isEnabled = canWrite && hasSelection && !protectedTag
         closeButton.isEnabled = !isInvalidated
@@ -565,7 +583,9 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     // MARK: Actions
 
     @objc private func domainChanged(_ sender: Any?) {
-        guard !isInvalidated else { return }
+        guard !isInvalidated, !isApplying else { return }
+        valuesGeneration += 1
+        valuesAreLoading = false
         clearMessage()
         selectedTag = nil
         draft = []
@@ -580,11 +600,11 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     }
 
     /// Add Tag by explicit dotted name: a tag already in the catalog is
-    /// only selected (no write); an absent one is SET with a single
-    /// empty-string value — one undo step — and the native registry
-    /// validates its registration/type (NOT_FOUND otherwise).
+    /// only selected (no write). A registered absent tag starts a local
+    /// draft; no image change or undo occurs until Apply. The queued read
+    /// validates registration/type (NOT_FOUND otherwise).
     @objc private func addTag(_ sender: Any?) {
-        guard !isInvalidated, !isApplying, writeRefusal == nil else { return }
+        guard !isInvalidated, !isApplying, !valuesAreLoading, writeRefusal == nil else { return }
         panel.endEditing(for: nil)
         switch MetadataSheetLogic.validateNewTagName(addTagField.stringValue, domain: domain) {
         case .failure(let rejection):
@@ -599,20 +619,30 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
                 return
             }
             clearMessage()
-            let capture = MetadataSheetLogic.Capture(image: document.image, tag: name,
-                                                     action: .setValues, values: [""])
-            lastCapture = capture
+            // Validate registration without writing an empty native value.
+            // The field becomes a local draft; Apply commits the actual text.
             isApplying = true
             updateControlStates()
             let owner = document
-            owner.editMetadata(name, .set, values: capture.values) { [weak self] result in
+            owner.readMetadataValues(name) { [weak self] result in
                 guard let self, !self.isInvalidated else { return }
                 self.isApplying = false
                 switch result {
-                case .success:
-                    self.draftIsDirty = false
+                case .success(let values):
+                    self.valuesGeneration += 1
+                    self.valuesAreLoading = false
+                    self.selectedTag = name
+                    self.draft = values.isEmpty ? [""] : values
+                    self.draftIsDirty = values.isEmpty
+                    self.selectedValueIndex = 0
+                    self.valuesTable.reloadData()
+                    self.valuesTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+                    self.synchronizeEditor()
                     self.loadTags()
-                    self.selectTag(name)
+                    if values.isEmpty {
+                        self.messageLabel.textColor = .labelColor
+                        self.messageLabel.stringValue = "New tag \(name). Enter a value, then choose Apply."
+                    }
                 case .failure(let error):
                     self.refuse(String(describing: error))
                 }
@@ -637,7 +667,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     }
 
     @objc private func addValue(_ sender: Any?) {
-        guard !isInvalidated, !isApplying, selectedTag != nil,
+        guard !isInvalidated, !isApplying, !valuesAreLoading, selectedTag != nil,
               !selectedTagIsProtected else { return }
         panel.endEditing(for: nil)
         draft = MetadataSheetLogic.addValue(to: draft)
@@ -652,7 +682,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     }
 
     @objc private func removeValue(_ sender: Any?) {
-        guard !isInvalidated, !isApplying, !selectedTagIsProtected,
+        guard !isInvalidated, !isApplying, !valuesAreLoading, !selectedTagIsProtected,
               let index = selectedValueIndex,
               let updated = MetadataSheetLogic.removeValue(at: index, from: draft) else { return }
         draft = updated
@@ -678,7 +708,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     /// the rows reload (only after a successful change); on refusal the
     /// native error stays visible and the draft is preserved untouched.
     @objc private func apply(_ sender: Any?) {
-        guard !isInvalidated, !isApplying, let tag = selectedTag,
+        guard !isInvalidated, !isApplying, !valuesAreLoading, let tag = selectedTag,
               !selectedTagIsProtected, writeRefusal == nil else { return }
         panel.endEditing(for: nil)
         switch MetadataSheetLogic.validateSetValues(draft) {
@@ -712,7 +742,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     /// Remove Tag: the explicit selected tag only — never a stale row
     /// index — erased as one queued REMOVE (no values).
     @objc private func removeTag(_ sender: Any?) {
-        guard !isInvalidated, !isApplying, let tag = selectedTag,
+        guard !isInvalidated, !isApplying, !valuesAreLoading, let tag = selectedTag,
               !selectedTagIsProtected, writeRefusal == nil else { return }
         clearMessage()
         let capture = MetadataSheetLogic.Capture(image: document.image, tag: tag,
@@ -752,6 +782,9 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     func controlTextDidChange(_ notification: Notification) {
         guard !isInvalidated else { return }
         if notification.object as? NSTextField === searchField {
+            guard !isApplying else { return }
+            updatingTagRows = true
+            defer { updatingTagRows = false }
             tagTable.reloadData()
             if let selected = selectedTag, let row = filteredRows.firstIndex(of: selected) {
                 tagTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
@@ -761,7 +794,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     }
 
     func textDidChange(_ notification: Notification) {
-        guard !isInvalidated, !updatingEditor,
+        guard !isInvalidated, !updatingEditor, !isApplying, !valuesAreLoading,
               let index = selectedValueIndex,
               let updated = MetadataSheetLogic.replaceValue(at: index, with: valueEditor.string, in: draft) else { return }
         draft = updated
@@ -792,9 +825,12 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !isInvalidated else { return }
         if notification.object as? NSTableView === tagTable {
+            guard !updatingTagRows, !isApplying else { return }
             let row = tagTable.selectedRow
             let rows = filteredRows
             guard row >= 0, row < rows.count else {
+                valuesGeneration += 1
+                valuesAreLoading = false
                 selectedTag = nil
                 draft = []
                 draftIsDirty = false
