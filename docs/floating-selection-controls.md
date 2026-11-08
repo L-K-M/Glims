@@ -103,3 +103,10 @@ successful conversion of that same row. The focused pinned run passes after
 these corrections. The general clipboard is preserved and restored around
 the private test payload. Nine pure policy tests also pass. Final parent
 integration and four-engine/full runs remain pending.
+
+Minimum-size acceptance reproduced clipped native button bounds in the
+200 × 160 point Layers palette. The resolution controls now use a vertical
+stack with enough inset for the native bezel outsets. All three complete
+buttons are visible in the real minimum-size palette; the 55 focused
+pinned-engine checks pass. The first small-control-only correction still
+clipped Anchor by two points and was rejected by the same regression.

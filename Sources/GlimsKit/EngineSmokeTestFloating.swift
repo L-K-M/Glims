@@ -227,14 +227,25 @@ extension EngineSmokeTest {
         // all driven by cached state and accessibility queries.
         let palette = LayersPaletteController()
         palette.retarget(to: documentA)
-        _ = palette.view
+        let paletteHost = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 160),
+                                   styleMask: [.titled], backing: .buffered, defer: false)
+        paletteHost.isReleasedWhenClosed = false
+        paletteHost.contentView = palette.view
+        paletteHost.contentView?.frame = NSRect(x: 0, y: 0, width: 200, height: 160)
+        paletteHost.orderFront(nil)
+        defer { paletteHost.close() }
         palette.reload()
+        palette.view.layoutSubtreeIfNeeded()
         let bar = descendant(of: palette.view, as: FloatingSelectionBar.self)
         check(bar != nil && bar?.isHidden == false, "the Layers palette shows the floating-selection footer")
         let barButtons = bar.map { buttons(in: $0) } ?? []
         let anchorButton = barButtons.first { $0.accessibilityLabel() == "Anchor floating selection" }
         let newLayerButton = barButtons.first { $0.accessibilityLabel() == "New layer from floating selection" }
         let discardButton = barButtons.first { $0.accessibilityLabel() == "Discard floating selection" }
+        for button in [anchorButton, newLayerButton, discardButton] {
+            check(button != nil && button!.visibleRect.contains(button!.bounds),
+                  "the entire \(button?.title ?? "missing") floating control is visible at the palette's minimum size (bounds \(button?.bounds ?? .zero), visible \(button?.visibleRect ?? .zero))")
+        }
         check(anchorButton?.isEnabled == true && discardButton?.isEnabled == true && newLayerButton?.isEnabled == false,
               "the footer enables Anchor and Discard and disables New Layer for a mask attachment")
         check(newLayerButton?.toolTip?.contains("mask or channel") == true,

@@ -194,6 +194,7 @@ final class FloatingSelectionBar: NSStackView {
         anchor.setAccessibilityHelp(FloatingControlsLogic.anchorTooltip)
         anchor.toolTip = FloatingControlsLogic.anchorTooltip
         anchor.bezelStyle = .rounded
+        anchor.controlSize = .small
         anchor.font = .systemFont(ofSize: 11)
         self.anchorButton = anchor
 
@@ -202,6 +203,7 @@ final class FloatingSelectionBar: NSStackView {
         newLayer.setAccessibilityHelp(FloatingControlsLogic.newLayerTooltip)
         newLayer.toolTip = FloatingControlsLogic.newLayerTooltip
         newLayer.bezelStyle = .rounded
+        newLayer.controlSize = .small
         newLayer.font = .systemFont(ofSize: 11)
         self.newLayerButton = newLayer
 
@@ -210,14 +212,18 @@ final class FloatingSelectionBar: NSStackView {
         discard.setAccessibilityHelp(FloatingControlsLogic.discardTooltip)
         discard.toolTip = FloatingControlsLogic.discardTooltip
         discard.bezelStyle = .rounded
+        discard.controlSize = .small
         discard.font = .systemFont(ofSize: 11)
         self.discardButton = discard
 
         super.init(frame: frame)
-        orientation = .horizontal
-        alignment = .centerY
-        spacing = 6
-        edgeInsets = NSEdgeInsets(top: 3, left: 4, bottom: 3, right: 4)
+        // The palette can be only 200 points wide. The native button
+        // bezels exceed that width in a single row even with small
+        // controls; a vertical stack preserves every complete label.
+        orientation = .vertical
+        alignment = .leading
+        spacing = 2
+        edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
         for button in [anchor, newLayer, discard] {
             addArrangedSubview(button)
         }
