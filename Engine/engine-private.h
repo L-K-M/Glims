@@ -110,6 +110,11 @@ GlimsStatus      glims_check_item_locks  (GimpItem *item, uint32_t locks, char *
 gint             glims_next_session_id   (GlimsEngine *engine);
 GlimsStatus      glims_edit_ready        (GlimsEngine *engine, GlimsOpenImage *open, char **error);
 
+/* The largest pixel buffer the facade accepts, and its overflow-safe
+ * width*height*4 computation (clipboard.c, floating.c). */
+#define GLIMS_MAX_PIXEL_BUFFER_BYTES ((uint64_t) 512 * 1024 * 1024)
+gboolean         glims_pixel_bytes       (int width, int height, size_t *bytes);
+
 /* image.c */
 GlimsStatus glims_image_new        (GlimsEngine *e, int32_t w, int32_t h, GlimsImageID *out, char **error);
 GlimsStatus glims_image_open       (GlimsEngine *e, const char *path, GlimsImageID *out, char **error);
@@ -359,6 +364,20 @@ GlimsStatus glims_image_copy_pixels (GlimsEngine *, GlimsImageID, gboolean, Glim
 GlimsStatus glims_image_clear (GlimsEngine *, GlimsImageID, const GlimsColor *, char **);
 GlimsStatus glims_image_paste_pixels (GlimsEngine *, GlimsImageID, GlimsRect, const uint8_t *, size_t, GlimsItemID *, char **);
 GlimsStatus glims_image_from_pixels (GlimsEngine *, int32_t, int32_t, const uint8_t *, size_t, GlimsImageID *, char **);
+
+/* floating.c */
+GlimsStatus glims_image_floating_selection (GlimsEngine *e, GlimsImageID image,
+                                             GlimsFloatingState *out);
+GlimsStatus glims_image_paste_into (GlimsEngine *e, GlimsImageID image, GlimsItemID target,
+                                    GlimsRect bounds, const uint8_t *pixels, size_t byte_count,
+                                    GlimsItemID *result, char **error);
+GlimsStatus glims_floating_command (GlimsEngine *e, GlimsImageID image, GlimsItemID expected,
+                                    uint32_t command, GlimsItemID *result, char **error);
+/* Floats the current selection off `target` (0: the single selected
+ * drawable) as a floating selection, as one native FS_FLOAT undo step;
+ * `mode` is a GlimsFloatMode. */
+GlimsStatus glims_selection_float (GlimsEngine *e, GlimsImageID image, GlimsItemID target,
+                                   uint32_t mode, GlimsItemID *result, char **error);
 /* layer-structure.c */
 GlimsStatus glims_layer_state      (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                     GlimsLayerState *state);
@@ -416,6 +435,11 @@ GlimsStatus glims_image_set_grid (GlimsEngine *e, GlimsImageID image,
 /* layer-source.c */
 GlimsStatus glims_layer_source_info (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                      GlimsLayerSourceInfo *out, char **error);
+/* The facade source kind when `layer` is a genuine editable text, link
+ * or vector layer (the only targets Paste Into refuses with
+ * REQUIRES_RASTERIZE), 0 for anything else — pixel, group, or a
+ * structured class already behaving as pixels. */
+uint32_t    glims_layer_editable_source_kind (GimpLayer *layer);
 /* Rasterizes a genuine editable text/link/vector layer as one native undo
  * step; an already rasterized instance is a no-op. Readiness and locks
  * are the caller's. */

@@ -39,7 +39,7 @@ Deliberately **not** captured (transient or session-local):
 - `EngineSession.Brush.Source` / `ToolState.cloneSource`: the clone/heal
   source point is a native drawable id plus coordinates in that image.
   **Limitation:** a clone/heal preset does not restore its source point;
-  after applying such a preset the source must be set again (Option-click).
+  applying a preset leaves the current source point unchanged.
   This is documented here rather than pretending it is restored.
 - Session `ResourceID` handles, native drawable IDs, transient target
   coordinates.
@@ -52,7 +52,7 @@ into storage).
 
 | Field | Accepted | Source |
 |---|---|---|
-| `size` | finite, `0 < size <= 500` px | `Engine/paint.c` `stroke_begin_common` refuses `size <= 0`; Tool Options slider `Size 1...500` (`ToolPalettes.swift`, `addPaintRows`); `glims_engine.h` `GlimsBrushSettings.size` "diameter in image pixels" |
+| `size` | finite, `1 <= size <= 10000` px | native `gimppaintoptions.c` brush-size GParamSpec minimum 1 and `GIMP_BRUSH_MAX_SIZE` 10000, checked on all supported engines |
 | `opacity`, `hardness`, sRGB components | finite, `0...1` | `glims_engine.h` (`opacity 0...1`, `hardness 0...1`, `red/green/blue` "sRGB, 0...1"); `Engine/paint.c` clamps opacity to `0...1`; UI sliders 0...100% |
 | `rate`, `flow`, `exposure` | finite, `0...100` (or nil) | `glims_engine.h` ("0 ... 100"); UI sliders `0...100` |
 | name | trimmed, nonempty, ≤ 64 characters | this store's own rule (`PaintToolPresetLimits.maxNameLength`) |
@@ -110,10 +110,10 @@ suite's `UserDefaults`, the app uses `PaintToolPresetStore.shared`.
 
 ## Compatibility, corruption and atomicity policy
 
-- **Unknown fields:** under the *same* schema version, a rewrite (any
-  mutation) preserves unknown fields verbatim, both at the document level
-  and per preset — a future version's fields are never silently erased.
-  Fields of a *different* schema version are never interpreted.
+- **Unknown fields:** reject them at every object boundary, including
+  resource identities and nested settings. The original bytes stay intact;
+  a compatible reader is required. This prevents both dropped fields and
+  numeric precision loss during a rewrite. Extensions require a new schema.
 - **Unknown schema / corrupt data:** a stored document whose
   `schemaVersion` is missing or not 1, or whose bytes are unreadable,
   makes `load()` and every mutation **throw** — never silently reset to an
@@ -134,3 +134,19 @@ Compiled in this slice: `swift build -j 2 --build-tests` (see the commit).
 or adapter builds, smoke tests, GUI runs — root owns serialized test
 execution. The tests are compile-checked only; their runtime results were
 not observed in this slice.
+
+Root acceptance reproduced 26 storage failures before correction: unfamiliar
+fields could be dropped, a wrong-typed defaults value could be overwritten,
+reset deleted unreadable data, and duplicate preset identifiers/names were
+accepted. Strict schema-one decoding now rejects every unknown object key,
+including nested identities, and all mutations (including reset) validate
+the original document first. Duplicate identifiers and per-tool names are
+validated on load as well as mutation. Numeric limits use native 1–10,000 px
+brush size rather than the Tool Options slider's smaller offered range.
+
+Runtime verification: the two new storage regressions failed with 26
+assertions before correction. All 17 focused model/store tests now pass,
+including exact byte preservation for unfamiliar fields at every nesting
+level, duplicate UUIDs and names, wrong-typed defaults, corrupt data and
+reset. These are pure tests; no preset application or on-screen controls
+are claimed by this slice. UI work is separate.
