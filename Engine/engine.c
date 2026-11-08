@@ -1239,6 +1239,26 @@ stroke_begin_with_brush_resource_on_engine (GlimsEngine *e, gpointer data)
                                                  a->brush_settings, a->first, a->out, a->error);
 }
 
+/* selection_stroke carries a full 64-bit resource handle besides the
+ * brush settings, so it gets its own args struct; the id never travels
+ * in one of GlimsArgs' 32-bit fields. */
+typedef struct
+{
+  GlimsImageID              image;
+  GlimsItemID               drawable;
+  GlimsResourceID           brush;
+  const GlimsBrushSettings *settings;
+  char                    **error;
+} GlimsSelectionStrokeArgs;
+
+static GlimsStatus
+selection_stroke_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsSelectionStrokeArgs *a = data;
+
+  return glims_selection_stroke (e, a->image, a->drawable, a->brush, a->settings, a->error);
+}
+
 static GlimsStatus
 resource_thumbnail_on_engine (GlimsEngine *e, gpointer data)
 {
@@ -2169,6 +2189,15 @@ api_image_set_grid (GlimsEngine *e, GlimsImageID image, const GlimsGrid *grid, c
 }
 
 static GlimsStatus
+api_selection_stroke (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
+                      GlimsResourceID brush, const GlimsBrushSettings *settings, char **error)
+{
+  GlimsSelectionStrokeArgs a = { .image = image, .drawable = drawable, .brush = brush,
+                                 .settings = settings, .error = error };
+  return glims_engine_call (e, selection_stroke_on_engine, &a);
+}
+
+static GlimsStatus
 api_gradient_resource (GlimsEngine *e, GlimsImageID image, GlimsResourceID gradient,
                        GlimsPoint from, GlimsPoint to,
                        const GlimsResourceGradientSettings *settings, char **error)
@@ -2300,6 +2329,7 @@ static const GlimsEngineAPI api_v1 = {
   .image_convert_indexed = api_image_convert_indexed,
   .image_grid        = api_image_grid,
   .image_set_grid    = api_image_set_grid,
+  .selection_stroke  = api_selection_stroke,
 };
 
 __attribute__ ((visibility ("default")))

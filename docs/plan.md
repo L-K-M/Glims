@@ -1868,6 +1868,182 @@ engine/adapter lock belongs to the root job): `build-adapter.sh
 `--engine-smoke-test`, the engine matrix and any on-screen check —
 no runtime behavior of the new slots was executed in this slice.
 
+### Stroke selection backend (2026-11-08)
+
+Backend slice on `feat/stroke-selection`: no UI and no action
+recording. One append-only facade footer slot after `image_set_grid`
+(slot 117): `selection_stroke(engine, image, drawable, brush,
+settings, error)`, API version 1 unchanged. The signature follows
+`path_stroke`'s target convention and `stroke_begin_with_brush_resource`'s
+resource convention: `drawable` 0 is the image's selected layer and an
+explicit id must be an attached layer of this image (a group, a layer
+mask or a channel is refused with FAILED, exactly as `path_stroke`
+refuses them); `brush` is a full-width `GlimsResourceID` — 0 keeps
+`stroke_begin`'s established convention of inheriting the shared user
+context's current brush, while a non-zero handle goes through
+`glims_lookup_brush`'s strict admission (INVALID_ARGUMENT for
+out-of-native-range or wrong-kind handles, NOT_FOUND for stale ones)
+with no silent default replacement; `settings` is the existing
+`GlimsBrushSettings`, no new struct and no native enum crosses the
+facade.
+
+The adapter (Engine/select.c, `glims_selection_stroke`) drives the GUI-
+free core path, not a hand-rendered bitmap: `gimp_item_stroke()` on the
+image's mask (`GIMP_ITEM (gimp_image_get_mask (image))`) with
+`push_undo` TRUE, exactly as the PDB's `drawable-edit-stroke-selection`
+invoker does (app/pdb/drawable-edit-cmds.c). Verified identical in all
+four engine trees (GIMP_3_0_8, GIMP_3_2_0, GIMP_3_2_8, master):
+`GimpSelection`'s stroke vfunc (app/core/gimpselection.c) fails with
+"There is no selection to stroke." when `gimp_channel_boundary` finds
+no boundary, then suspends the selection, calls `GimpChannel`'s stroke
+vfunc and resumes — so the stroke straddles the boundary (pixels on
+both sides change), the selection mask is never modified, and
+`gimp_item_stroke`'s own undo group makes the whole call exactly one
+"Stroke Selection" undo step. The adapter pre-checks the same boundary
+so an empty selection fails with FAILED before the native undo group
+opens. The stroke is painted through the stroke options' paint method
+(`GIMP_STROKE_PAINT_METHOD`, `gimp_paint_core_stroke_boundary`): a
+temporary context inheriting the user context carries the tool's paint
+info — defined locally (`gimp_context_define_property` before
+`gimp_context_set_paint_info`, so the setter cannot walk up to the
+shared user context) — and the tool's own paint options are built by
+paint.c's `glims_make_paint_options`/`glims_set_tool_options` (now shared
+with `stroke_begin_common`) and passed explicitly, as the PDB invoker
+does, with the selected brush pinned locally exactly as
+`stroke_begin_with_brush_resource` pins it. All temporary context,
+options and paint-options references are released on every path.
+Readiness is `glims_edit_ready` (BUSY during a stroke, a filter
+session or a plug-in); locks are `glims_check_item_locks` with
+`GLIMS_LOCK_PIXELS`, plus `GLIMS_LOCK_ALPHA` for the eraser on a layer
+with alpha — the same policy as `stroke_begin`. The whole request
+(settings, brush handle, target, locks, empty selection) is validated
+before any mutation, so refusals change no pixels and push no undo.
+No new event kind: the usual UNDO_CHANGED follows a success.
+
+Session side: `EngineSession.strokeSelection(image:drawable:brush:)`
+over the slot, reusing the captured `EngineSession.Brush` settings (via
+the new shared `nativeBrush` helper, also used by `beginStroke`) and the
+existing `ResourceIdentity` resolve — a nil resource passes 0 (the
+documented inherit convention) and a non-nil one is resolved on the
+worker with `resolveResource(_:kind: .brush)`; session ids are never
+stored. `ImageDocument.strokeSelection(_:)` queues the call as counted
+input on the input queue behind already accepted input, capturing the
+brush settings, the resource identity and the target drawable id by
+value, requiring the paint target inside the job and reporting errors
+through the usual path; mask/channel/group targets are refused up
+front like `strokePath`, and no synchronous native call runs on the
+main thread.
+
+Facade-only conformance adds `test_selection_stroke` (engine-tests.c,
+no engine headers): rectangular and elliptical selections; the boundary
+stroke visible on both sides of the edge while the interior and the
+far outside stay untouched; the selection's bounds AND outline
+segments (the shape invariant, not just pixels) unchanged across the
+stroke and across undo/redo; exact pixel undo/redo by full-render
+compare; an empty selection failing with an error before any undo;
+invalid/stale/foreign image and drawable ids; out-of-range, stale and
+wrong-kind brush handles; NULL/short settings, zero/NaN size, unknown
+tool, NaN opacity/color; group, mask and channel targets refused like
+path_stroke's; pixel lock LOCKED with unchanged pixels and history and
+the eraser on an alpha-locked alpha layer LOCKED; BUSY under an open
+stroke and an open filter session. Not covered by this test: a
+polygon-shaped selection (same boundary machinery as the ellipse), a
+clone/heal source drawable, XCF round trips of the stroke's result
+(covered by the existing undo/redo checks), and any on-screen result.
+
+Checks actually run on this branch: `swift build -j 2` and
+`swift build -j 2 --build-tests` pass; `clang -fsyntax-only` with the
+existing adapter flags (from `_engine/adapter/<ref>/compile.rsp`,
+paths rewritten to this worktree, plus the build's
+`-I Engine -I Sources/CGlimsEngine/include` and the two
+`GLIMS_ENGINE_*_PATH` defines from `scripts/build-adapter.sh`) is clean
+for `Engine/select.c`, `Engine/paint.c` and `Engine/engine.c` on all
+four refs (GIMP_3_2_8, GIMP_3_2_0, GIMP_3_0_8, master), and
+`Engine/select.c`/`Engine/paint.c` are also clean under the added
+`-Wextra -Werror` (the only -Wextra diagnostic in paint.c is
+pre-existing in untouched `to_coords`); `Engine/tests/engine-tests.c`
+and `Sources/CGlimsEngine/abi.c` pass `-std=c11 -O2 -Wall -Wextra
+-Werror -fsyntax-only -I Sources/CGlimsEngine/include`. NOT run here
+(the shared engine/adapter lock belongs to the root fixture job):
+`build-adapter.sh --test` conformance, any adapter compile/link,
+`swift test`, the app's `--engine-smoke-test`, the engine matrix and
+any on-screen check — no runtime behavior of the new slot was executed
+in this slice.
+
+### Stroke selection controls (2026-11-08)
+
+Interface slice on `feat/stroke-selection-controls`, frontend only: no
+facade, C, header or dependency change. Edit ▸ Stroke Selection… (listed
+in docs/design.md's Edit menu since the plan) now exists:
+`MainMenu` wires it to `DocumentWindowController.strokeSelection(_:)`,
+which opens a per-document sheet
+(`StrokeSelectionSheetController`, owned by the window controller exactly
+like the guides sheet — two documents keep independent sheets and
+controllers, and the document's existing onError/onStateChange/
+onWillChangeLayers/windowWillClose callbacks fan out to it alongside the
+guides sheet instead of being replaced). The sheet captures the document
+and each offered paint tool's brush — resource identity, size, opacity,
+color — BY VALUE at open from `ToolState.brush(for:)`; opening, editing
+or cancelling the sheet never mutates the global ToolState, the brush
+row shows the captured identity's real name ("Default", or the chooser's
+verified "Missing: …" marker — never silently replaced, never a session
+handle), and an accepted stroke carries the captured
+`ResourceIdentity`, resolved on the engine worker as before. Local
+fields are the paint tool (paintbrush/pencil/eraser), size, opacity and
+a color well owned by the sheet (deactivated and ordered out on close
+only when the sheet opened it). Validation is strict finite whole-string
+parsing with inline reasons (`StrokeSelectionFormValidation`): junk,
+whitespace, NaN/inf and out-of-range size (0 < s ≤ 500) or opacity
+(0…100 %) keep the sheet open with the reason; Cancel mutates nothing.
+Accept is one-shot: a reentry flag goes up before anything that can call
+back into the UI (ending field edits, ending pending input), so a
+duplicate/reentrant accept is blocked before it can mutate; on success
+exactly one counted input job is enqueued through
+`ImageDocument.strokeSelection` and the sheet closes. Native errors use
+the document's existing onError path.
+
+Gates read only cached state — no synchronous native RPC from menu
+validation, sheet open or accept (`ImageDocument.strokeSelectionRefusal`
+plus `validateMenuItem`, the refusal as tool tip): busy/plug-in, filter
+preview, closing/saving/clipboard, empty selection (cached
+`selectionOutline`), mask/channel/group targets, effective pixel locks,
+and an editable structured source from the cached `layerSources`
+(`hasSource && !isRasterized`) which refuses with a rasterize-first
+explanation — the rasterize UI is a separate pending change and is not
+adopted here.
+
+Queue-defect fix in the same slice: `ImageDocument.strokeSelection` now
+ends pending user edits and an active stroke (`endPendingUserEdits()` +
+`endStroke()`) before enqueueing, the `finishInput` convention — both
+land as input-queue jobs ahead of the selection stroke, so an active
+stroke and queued accepted input finish BEFORE it (previously the native
+readiness check could report BUSY under the open stroke). Counted
+input-queue ordering, captured identity/settings/target and the error
+path are unchanged.
+
+Tests: `StrokeSelectionFormTests` (pure parser ranges/reasons, by-value
+brush build with identity, menu wiring) and `EngineSmokeTest` gains
+`exerciseStrokeSelectionControls`, wired as
+`GLIMS_SMOKE_CASE=stroke-selection-controls` and into the default run:
+menu wiring and cached validation; two independent documents/sheets;
+non-default resource/size/opacity/color capture shown and used; accept
+while the other window is front; unchanged selection; exact one-step
+undo/redo; cancel and invalid input; busy (held gate, released on every
+path), busy-after-open, preview, empty-selection, mask, channel, group,
+pixel-lock and structured-source gates; the queue-order regression
+(active stroke + accepted fill behind a controlled gate finish before
+the selection stroke — no BUSY, three undo steps, "Stroke Selection"
+last); duplicate/reentrant accept and in-flight-field-edit accept
+enqueue exactly once; late callbacks after close; close-drain.
+
+Checks actually run on this branch: `swift build -j 2` and
+`swift build -j 2 --build-tests` pass. NOT run here (root owns all
+runtime): `swift test`, `GLIMS_SMOKE_CASE=stroke-selection-controls`,
+the full `--engine-smoke-test`, the engine matrix, any GUI/on-screen
+check, any adapter build — no runtime behavior of the new sheet, menu
+item, gate or queue fix was executed in this slice.
+
+
 ### Grid controls (2026-11-08)
 
 Interface slice on `feat/grid-controls`, frontend only over the cached
@@ -1944,6 +2120,7 @@ job): `swift test`, `--smoke-test`, `--engine-smoke-test` (including
 `GLIMS_SMOKE_CASE=grid-controls`), the adapter conformance tests and any
 native/engine command — no runtime behavior of the new UI was executed
 in this slice.
+
 
 ### Fill pattern source (2026-11-08)
 
@@ -2713,6 +2890,20 @@ is verified from clone semantics in the sources; it is not directly
 covered by the facade-only XCF fixture. Swift/cache runtime follows with
 the configuration interface.
 
+Stroke Selection runtime validation supersedes the compile-only report
+above: native suites pass 1,422 / 1,311 / 1,422 / 1,422 checks on GIMP
+3.2.8 / 3.0.8 / 3.2.0 / master. Runtime tests reproduced invalid settings
+returning FAILED instead of INVALID_ARGUMENT and native stroke preparation
+replacing the requested translucent red with opaque black. The adapter now
+returns the specified validation status and pins the paint properties on
+the private context before preparation reparents the options. A separate
+ordinary paint stroke supplies the color/opacity oracle. Clone/heal source
+coordinates are checked for finite, native-integer range before conversion.
+The 3.2.0 suite still logs two startup GLib filename assertions before the
+checks, as recorded in its log; it reports zero failed checks. Swift document
+queue execution and user-facing Stroke Selection controls remain to verify.
+
+
 
 Ruler review reproduced a major/minor classification defect at large
 scrolled coordinates: a magnitude-relative tolerance eventually exceeded
@@ -2722,6 +2913,7 @@ now uses exact divisibility of the integral tick index. The independent
 six-position oracle passes, as do all 421 unit tests and 47 focused pinned
 interface checks. The four-engine focused and 1,067 full integration checks
 above preceded this pure planner correction.
+
 
 
 After integrating Indexed, one native conformance run failed during the
