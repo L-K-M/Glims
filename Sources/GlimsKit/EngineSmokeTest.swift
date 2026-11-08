@@ -5016,7 +5016,7 @@ enum EngineSmokeTest {
         windowB.orderOut(nil)
     }
 
-    private static func buttons(in view: NSView) -> [NSButton] {
+    static func buttons(in view: NSView) -> [NSButton] {
         ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(buttons)
     }
 
