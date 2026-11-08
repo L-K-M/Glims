@@ -1209,3 +1209,19 @@ sRGB color setter. All four native runs pass: 830 checks on GIMP 3.2.8,
 3.2.0 and master, and 797 on 3.0.8, including selection clipping,
 undo/redo, the RGB sample and both busy refusals. Independent source
 review found no important issues.
+
+Brush chooser verification and fixes: a native AppKit row regression first
+failed because fresh table cells had no text field or image view. The cells
+now render names and previews, and the test passes. The full catalog is
+searchable without a 512-row truncation; native thumbnails load lazily in
+batches of 32, with failed attempts cached for the generation.
+
+A focused real-panel regression reproduced Reset and choosing Default
+leaving a stale Missing label. Both now pass: presentation data is tied to
+the exact persistent identity, Default clears it, and an unchanged missing
+choice preserves its warning. A late preview cannot describe a different
+choice. All 326 unit tests pass. Two new lazy-queue test fixtures initially
+omitted the required begin/complete lifecycle; correcting those fixtures
+preserved the queue's no-overlap contract. GLIMS_SMOKE_CASE=brush-chooser
+selects this bounded interface scenario; ordinary engine smoke still runs
+all scenarios. Full interface/matrix and on-screen chooser checks follow.

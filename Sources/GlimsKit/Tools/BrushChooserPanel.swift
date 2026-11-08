@@ -12,8 +12,7 @@ final class BrushChooser {
 
     private var panel: BrushChooserPanel?
     private(set) var isOpen = false
-    private(set) var choiceThumbnails: [ToolID: NSImage] = [:]
-    private(set) var missing: [ToolID: EngineSession.ResourceIdentity] = [:]
+    private var choiceCache = BrushChoiceCache()
 
     private init() {}
 
@@ -37,16 +36,27 @@ final class BrushChooser {
         panel?.dismiss()
     }
 
-    func thumbnail(for tool: ToolID) -> NSImage? {
-        choiceThumbnails[tool]
+    func thumbnail(for tool: ToolID, choice: EngineSession.ResourceIdentity?) -> NSImage? {
+        choiceCache.preview(for: tool, choice: choice).map {
+            NSImage(cgImage: $0, size: NSSize(width: 32, height: 32))
+        }
     }
 
-    fileprivate func noteChoiceThumbnail(_ tool: ToolID, _ image: NSImage?) {
-        choiceThumbnails[tool] = image
+    func missingIdentity(for tool: ToolID, choice: EngineSession.ResourceIdentity?) -> EngineSession.ResourceIdentity? {
+        choiceCache.missingIdentity(for: tool, choice: choice)
+    }
+
+    func resetChoice(for tool: ToolID) {
+        choiceCache.reset(tool)
+        ToolState.shared.setBrushResource(nil, for: tool)
+    }
+
+    fileprivate func noteChoiceThumbnail(_ tool: ToolID, identity: EngineSession.ResourceIdentity?, _ image: CGImage?) {
+        choiceCache.setPreview(image, identity: identity, for: tool)
     }
 
     fileprivate func noteMissing(_ tool: ToolID, _ identity: EngineSession.ResourceIdentity?) {
-        missing[tool] = identity
+        choiceCache.setMissing(identity, for: tool)
         ToolState.shared.notifyChange()
     }
 
@@ -308,8 +318,7 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
         }
         guard model.deliverThumbnails(generation: generation, rendered: rendered, failed: failed) else { return }
         if let resolved = model.resolvedCurrentID, let cgImage = rendered[resolved] {
-            BrushChooser.shared.noteChoiceThumbnail(model.capturedTool,
-                                                    NSImage(cgImage: cgImage, size: NSSize(width: 32, height: 32)))
+            BrushChooser.shared.noteChoiceThumbnail(model.capturedTool, identity: model.currentIdentity, cgImage)
         }
         // Rows without a preview yet stay placeholders; reloading re-enters
         // viewFor, which re-requests them (deduplicated by the queue).
@@ -465,15 +474,16 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
     /// Applies the pending selection to the captured tool ONLY, then closes.
     @objc private func choose(_ sender: Any?) {
         guard !isClosed else { return }
-        let identity = model.pendingIdentity()
-        ToolState.shared.setBrushResource(identity, for: model.capturedTool)
-        if case .resource(let id) = model.selection, let cgImage = model.thumbnail(id) {
-            BrushChooser.shared.noteChoiceThumbnail(model.capturedTool,
-                                                    NSImage(cgImage: cgImage, size: NSSize(width: 32, height: 32)))
-        } else if identity == nil {
-            BrushChooser.shared.noteChoiceThumbnail(model.capturedTool, nil)
-        }
-        if identity != nil || model.missingIdentity == nil {
+        switch model.selection {
+        case .none:
+            // Closing an unselected/missing choice preserves its marker.
+            break
+        case .nativeDefault:
+            BrushChooser.shared.resetChoice(for: model.capturedTool)
+        case .resource(let id):
+            guard let identity = model.pendingIdentity() else { return }
+            ToolState.shared.setBrushResource(identity, for: model.capturedTool)
+            BrushChooser.shared.noteChoiceThumbnail(model.capturedTool, identity: identity, model.thumbnail(id))
             BrushChooser.shared.noteMissing(model.capturedTool, nil)
         }
         dismiss()

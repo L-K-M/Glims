@@ -132,7 +132,8 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
             let fontsArrived = self.shownTool == .text && self.shownFontCount != state.fontNames.count
             let brushChanged = state.current.paintTool != nil
                 && (self.shownBrushResource != state.brush(for: state.current).resource
-                    || self.shownMissingBrush != BrushChooser.shared.missing[state.current])
+                    || self.shownMissingBrush != BrushChooser.shared.missingIdentity(
+                        for: state.current, choice: state.brush(for: state.current).resource))
             guard self.shownTool != state.current || fontsArrived || brushChanged else { return }
             self.rebuild()
         }
@@ -157,7 +158,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         shownTool = tool
         shownFontCount = state.fontNames.count
         shownBrushResource = tool.paintTool != nil ? state.brush(for: tool).resource : nil
-        shownMissingBrush = BrushChooser.shared.missing[tool]
+        shownMissingBrush = BrushChooser.shared.missingIdentity(for: tool, choice: shownBrushResource)
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         actionBindings.removeAll()
 
@@ -311,14 +312,14 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         button.bezelStyle = .rounded
         button.controlSize = .small
         button.font = .systemFont(ofSize: 11)
-        if let missing = BrushChooser.shared.missing[tool] {
+        if let missing = BrushChooser.shared.missingIdentity(for: tool, choice: brush.resource) {
             button.title = "Missing: \(missing.name)"
         } else if let resource = brush.resource {
             button.title = resource.name
         } else {
             button.title = "Default"
         }
-        if let thumbnail = BrushChooser.shared.thumbnail(for: tool) {
+        if let thumbnail = BrushChooser.shared.thumbnail(for: tool, choice: brush.resource) {
             button.image = thumbnail
             button.imagePosition = .imageLeft
         }
@@ -334,7 +335,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         reset.toolTip = "Reset to the native Default brush"
         reset.setAccessibilityLabel("Reset brush to Default")
         actionBindings.append(ActionBinding(control: reset) { _ in
-            ToolState.shared.setBrushResource(nil, for: tool)
+            BrushChooser.shared.resetChoice(for: tool)
         })
         let controls = NSStackView(views: [button, reset])
         controls.spacing = 6

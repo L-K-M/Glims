@@ -172,6 +172,27 @@ final class BrushChooserTests: XCTestCase {
         XCTAssertEqual(model.pendingIdentity(), current, "an unlisted current choice must never reset to Default")
     }
 
+    func testCachedPreviewAndMissingMarkerNeverDescribeAnotherChoiceOrDefault() throws {
+        let provider = try XCTUnwrap(CGDataProvider(data: Data([0, 0, 0, 255]) as CFData))
+        let image = try XCTUnwrap(CGImage(width: 1, height: 1, bitsPerComponent: 8, bitsPerPixel: 32,
+                                        bytesPerRow: 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+                                        provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+        let first = Self.identity("First"), second = Self.identity("Second")
+        var cache = BrushChoiceCache()
+        cache.setPreview(image, identity: first, for: .paintbrush)
+        cache.setMissing(first, for: .paintbrush)
+        XCTAssertNotNil(cache.preview(for: .paintbrush, choice: first))
+        XCTAssertEqual(cache.missingIdentity(for: .paintbrush, choice: first), first)
+        for newerChoice in [nil, second] {
+            XCTAssertNil(cache.preview(for: .paintbrush, choice: newerChoice))
+            XCTAssertNil(cache.missingIdentity(for: .paintbrush, choice: newerChoice))
+        }
+        cache.reset(.paintbrush)
+        XCTAssertNil(cache.preview(for: .paintbrush, choice: first))
+        XCTAssertNil(cache.missingIdentity(for: .paintbrush, choice: first))
+    }
+
     func testPendingIdentityCoversDefaultRowAndNoSelection() {
         let model = BrushChooserModel(capturedTool: .paintbrush, currentIdentity: Self.identity("A"))
         model.select(.nativeDefault)
@@ -353,8 +374,11 @@ final class BrushChooserTests: XCTestCase {
         queue.request([1, 2, 3])
         XCTAssertEqual(queue.request([9], priority: true), 1)
         XCTAssertEqual(queue.beginBatch(max: 1), [9])
+        XCTAssertTrue(queue.complete(generation: 0, rendered: [9], failed: [:]))
         XCTAssertEqual(queue.beginBatch(max: 2), [1, 2])
+        XCTAssertTrue(queue.complete(generation: 0, rendered: [1, 2], failed: [:]))
         XCTAssertEqual(queue.beginBatch(max: 8), [3])
+        XCTAssertTrue(queue.complete(generation: 0, rendered: [3], failed: [:]))
         XCTAssertEqual(queue.beginBatch(), [])
     }
 
@@ -364,6 +388,8 @@ final class BrushChooserTests: XCTestCase {
         let model = BrushChooserModel(capturedTool: .paintbrush, currentIdentity: nil)
         model.deliver(generation: model.generation, rows: [Self.row(1, "A"), Self.row(2, "B")],
                       thumbnails: [:], resolvedCurrent: nil, error: nil)
+        model.thumbnailQueue.request([1, 2])
+        XCTAssertEqual(model.thumbnailQueue.beginBatch(), [1, 2])
         let image = Self.tinyImage()
         XCTAssertTrue(model.deliverThumbnails(generation: model.generation,
                                               rendered: [1: image], failed: [2: "bad"]))

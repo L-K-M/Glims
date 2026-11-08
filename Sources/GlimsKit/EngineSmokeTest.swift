@@ -98,6 +98,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brush-chooser" {
+                try exerciseBrushChooserPresentation(session, documents: documents)
+                print(failures == 0 ? "PASSED (brush chooser)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseFileAdmission(session, work: work, documents: documents)
@@ -134,6 +139,7 @@ enum EngineSmokeTest {
             try exerciseResourceCatalog(session)
             try exerciseSelectedBrushStrokes(session, documents: documents)
             try exerciseBrushChooserSelection(session, documents: documents)
+            try exerciseBrushChooserPresentation(session, documents: documents)
 
             try exerciseResourceThumbnails(session)
         } catch {
@@ -6358,6 +6364,65 @@ enum EngineSmokeTest {
         try session.endStroke(legacy)
         check(try pixels() != blank && session.undoInfo(image).undoCount == undoBefore + 1,
               "after reset the default brush path paints again")
+    }
+
+    private static func exerciseBrushChooserPresentation(_ session: EngineSession, documents: DocumentList) throws {
+        let suite = "ch.lkmc.Glims.smoke.brush-presentation.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        let state = ToolState.shared
+        let previousStore = state.brushStore
+        let previousTool = state.current
+        state.brushStore = BrushSelectionStore(defaults: defaults)
+        let image = try session.newImage(width: 32, height: 32)
+        let document = try ImageDocument(session: session, image: image, name: "Chooser presentation")
+        documents.items.append(document)
+        defer {
+            BrushChooser.shared.close()
+            state.brushStore = previousStore
+            state.select(previousTool)
+            defaults.removePersistentDomain(forName: suite)
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        func views<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
+            guard let root else { return [] }
+            return (root as? T).map { [$0] } ?? root.subviews.flatMap { views($0, as: type) }
+        }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(15)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        state.select(.paintbrush)
+        let options = ToolOptionsPaletteController()
+        _ = options.view
+        options.retarget(to: document)
+        func choiceButton() -> NSButton? {
+            views(options.view, as: NSButton.self).first { $0.toolTip == "Choose the Brush brush" }
+        }
+        let missing = EngineSession.ResourceIdentity(name: "Absent presentation brush", collection: nil, isInternal: false)
+        func openMissing() -> NSWindow? {
+            state.setBrushResource(missing, for: .paintbrush)
+            BrushChooser.shared.open(document: document, tool: .paintbrush)
+            wait { choiceButton()?.title.hasPrefix("Missing:") == true && !EngineActivity.shared.isBusy }
+            return NSApp.windows.first { $0.title == "Brush Brush" && $0.isVisible }
+        }
+        var panel = openMissing()
+        check(panel != nil && choiceButton()?.title == "Missing: Absent presentation brush",
+              "the real chooser reports a missing persisted brush in Tool Options")
+        views(options.view, as: NSButton.self).first { $0.title == "Reset" }?.performClick(nil)
+        check(state.brush(for: .paintbrush).resource == nil && choiceButton()?.title == "Default"
+                && choiceButton()?.image == nil,
+              "Reset replaces the Missing label and stale preview with Default")
+        BrushChooser.shared.close()
+        panel = openMissing()
+        let table = views(panel?.contentView, as: NSTableView.self).first
+        check((table?.numberOfRows ?? 0) > 1, "the actual chooser loads named catalog rows")
+        table?.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        views(panel?.contentView, as: NSButton.self).first { $0.title == "Choose" }?.performClick(nil)
+        check(state.brush(for: .paintbrush).resource == nil && choiceButton()?.title == "Default"
+                && choiceButton()?.image == nil && !BrushChooser.shared.isOpen,
+              "choosing Default clears a previous Missing marker and closes the real picker")
+        wait { !EngineActivity.shared.isBusy }
     }
 
     private static func exerciseResourceCatalog(_ session: EngineSession) throws {
