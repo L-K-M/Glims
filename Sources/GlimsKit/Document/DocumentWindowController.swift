@@ -451,6 +451,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func bringLayerForward(_ sender: Any?) { imageDocument.layerCommand(.raise) }
     @objc func sendLayerBackward(_ sender: Any?) { imageDocument.layerCommand(.lower) }
     @objc func sendLayerToBack(_ sender: Any?) { imageDocument.layerCommand(.toBottom) }
+    @objc func layerToImageSize(_ sender: Any?) { imageDocument.layerCommand(.fitToImage) }
+    @objc func trimLayerToContent(_ sender: Any?) { imageDocument.layerCommand(.trimToContent) }
     @objc func mergeDown(_ sender: Any?) { imageDocument.layerCommand(.mergeDown) }
     @objc func flattenImage(_ sender: Any?) { imageDocument.layerCommand(.flatten) }
 
@@ -864,6 +866,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 && imageDocument.supportsVectorLayers != false
         case #selector(newLayerGroup(_:)):
             return !editingBlocked && !previewBusy
+        case #selector(layerToImageSize(_:)), #selector(trimLayerToContent(_:)):
+            // Pixel layers only, from the cached list: the engine
+            // refuses groups and editable text, link and vector layers,
+            // so those never offer the item. Cached effective pixel and
+            // position locks hide the refusal the engine would report.
+            guard let layer = activeLayerInfo, layer.kind == .pixel,
+                  !editingBlocked, !previewBusy else { return false }
+            return imageDocument.layerLocks[layer.id]?.effective
+                .isDisjoint(with: [.pixels, .position]) != false
         case #selector(toggleLayerLock(_:)):
             guard !editingBlocked, !previewBusy, let id = imageDocument.activeLayer else { return false }
             let lock = EngineSession.LayerLocks(rawValue: UInt32(menuItem.tag))
