@@ -148,6 +148,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (guides controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-source-controls" {
+                try exerciseLayerSourceControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (layer source controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseFileAdmission(session, work: work, documents: documents)
@@ -187,6 +192,7 @@ enum EngineSmokeTest {
             try exerciseResourceCatalog(session)
             try exerciseGuideCache(session, documents: documents)
             try exerciseLayerSourceCache(session, documents: documents)
+            try exerciseLayerSourceControls(session, work: work, documents: documents)
             try exerciseResourceGradient(session, documents: documents)
             try exerciseResourceThumbnails(session)
             try exerciseSelectedBrushStrokes(session, documents: documents)
@@ -8035,6 +8041,271 @@ enum EngineSmokeTest {
         check(accepted && errors.count == baseline + 1 && document.pendingWork == 0,
               "busy admission refuses Rasterize before queueing input")
         settle()
+    }
+
+    /// Layer ▸ Rasterize Layer… / Restore Layer Source…: menu wiring and
+    /// cached gating, the per-window confirmation sheets (Cancel changes
+    /// nothing, Apply runs on the captured document and explicit layer
+    /// id), the counted explicit-id document methods, the exclusive
+    /// restore with its global input drain, BUSY refusal, stale-id
+    /// NOT_FOUND and late-close safety. Pixel and kind oracles read the
+    /// session directly, never the document cache; sheet buttons are
+    /// queried by their accessibility labels.
+    private static func exerciseLayerSourceControls(_ session: EngineSession, work: URL,
+                                                    documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(15)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func buttons(in view: NSView?) -> [NSButton] {
+            guard let view else { return [] }
+            if let button = view as? NSButton { return [button] }
+            return view.subviews.flatMap { buttons(in: $0) }
+        }
+        func alertButton(_ sheet: NSWindow?, _ label: String) -> NSButton? {
+            buttons(in: sheet?.contentView).first { $0.accessibilityLabel() == label }
+        }
+        func endSheet(_ controller: DocumentWindowController, _ response: NSApplication.ModalResponse) {
+            wait { controller.window?.attachedSheet != nil }
+            if let sheet = controller.window?.attachedSheet {
+                NSApp.endSheet(sheet, returnCode: response.rawValue)
+            }
+        }
+
+        // Document A holds a genuine text layer plus a plain pixel layer;
+        // document B only witnesses the global drain.
+        let imageA = try session.newImage(width: 96, height: 64)
+        let pixelLayer = try session.layerCommand(.new, image: imageA) ?? 0
+        let text = try session.addTextLayer(image: imageA, text: "Source", settings: .init(),
+                                            at: CGPoint(x: 4, y: 4))
+        try session.selectLayer(text, image: imageA)
+        let docA = try ImageDocument(session: session, image: imageA, name: "Source A")
+        let imageB = try session.newImage(width: 64, height: 64)
+        let docB = try ImageDocument(session: session, image: imageB, name: "Source B")
+        documents.items += [docA, docB]
+        let a = DocumentWindowController(document: docA)
+        let b = DocumentWindowController(document: docB)
+        a.showWindow(nil)
+        b.showWindow(nil)
+        var errors: [String] = []
+        docA.onError = { errors.append($0) }
+        docB.onError = { errors.append($0) }
+        func settle() {
+            docA.inputQueue.sync {}
+            docB.inputQueue.sync {}
+            wait { docA.pendingWork == 0 && docB.pendingWork == 0 && !EngineActivity.shared.isBusy }
+            spin()
+        }
+        defer {
+            for (controller, document) in [(a, docA), (b, docB)] {
+                if let sheet = controller.window?.attachedSheet {
+                    NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertSecondButtonReturn.rawValue)
+                }
+                controller.window?.close()
+                documents.items.removeAll { $0 === document }
+                document.closeImageWhenDrained()
+            }
+            wait { (try? session.info(imageA)) == nil && (try? session.info(imageB)) == nil }
+        }
+
+        // Menu wiring: both commands sit on the Layer menu, on the
+        // document window's own sheet selectors.
+        let mainMenu = MainMenu.make()
+        let layerMenu = mainMenu.items.first { $0.title == "Layer" }?.submenu
+        let rasterizeItem = NSMenuItem(title: "Rasterize Layer…",
+                                       action: #selector(DocumentWindowController.rasterizeLayer(_:)),
+                                       keyEquivalent: "")
+        let restoreItem = NSMenuItem(title: "Restore Layer Source…",
+                                     action: #selector(DocumentWindowController.restoreLayerSource(_:)),
+                                     keyEquivalent: "")
+        check(layerMenu?.items.first { $0.title == "Rasterize Layer…" }?.action
+                == #selector(DocumentWindowController.rasterizeLayer(_:))
+                && layerMenu?.items.first { $0.title == "Restore Layer Source…" }?.action
+                == #selector(DocumentWindowController.restoreLayerSource(_:)),
+              "the Layer menu lists Rasterize Layer… and Restore Layer Source… on the document's selectors")
+
+        let editable = EngineSession.LayerSource(kind: .text, isRasterized: false, hasSource: true)
+        let rasterized = EngineSession.LayerSource(kind: .text, isRasterized: true, hasSource: true)
+        check(docA.layerSources[text] == editable && docA.activeLayer == text,
+              "the text layer starts editable with its source retained")
+
+        // The ordinary unconfirmed restore route still refuses.
+        let bErrors0 = errors.count
+        docB.layerCommand(.restoreSource)
+        check(errors.count == bErrors0 + 1 && docB.pendingWork == 0,
+              "layerCommand(.restoreSource) still refuses unconfirmed calls")
+
+        // Cached gating: an editable text layer offers Rasterize only.
+        check(a.validateMenuItem(rasterizeItem) && !a.validateMenuItem(restoreItem),
+              "an editable text layer offers Rasterize only")
+        docA.selectLayer(pixelLayer)
+        settle()
+        check(!a.validateMenuItem(rasterizeItem) && !a.validateMenuItem(restoreItem),
+              "an ordinary pixel layer offers neither source command")
+        docA.selectLayer(text)
+        settle()
+        check(a.validateMenuItem(rasterizeItem) && !a.validateMenuItem(restoreItem),
+              "selecting the text layer again offers Rasterize only")
+        // An effective pixel lock (own or inherited) disables the item.
+        docA.setLayerLocks(text, .pixels, to: true)
+        settle()
+        try docA.reload()
+        check(!a.validateMenuItem(rasterizeItem), "a pixel-locked text layer disables Rasterize")
+        docA.setLayerLocks(text, .pixels, to: false)
+        settle()
+        try docA.reload()
+        check(a.validateMenuItem(rasterizeItem), "unlocking re-enables Rasterize")
+
+        // Sheet Cancel changes nothing; the sheet's buttons are found by
+        // their accessibility labels, and both items disable while it is
+        // attached.
+        let undo0 = docA.undoInfo.undoCount
+        let pixels0 = try session.copyPixels(imageA, merged: true).pixels
+        a.rasterizeLayer(nil)
+        wait { a.window?.attachedSheet != nil }
+        let cancelSheet = a.window?.attachedSheet
+        check(alertButton(cancelSheet, "Rasterize") != nil && alertButton(cancelSheet, "Cancel") != nil,
+              "the rasterize sheet offers labeled Rasterize and Cancel buttons")
+        check(!a.validateMenuItem(rasterizeItem) && !a.validateMenuItem(restoreItem),
+              "both source items disable while the sheet is attached")
+        if let cancelSheet {
+            NSApp.endSheet(cancelSheet, returnCode: NSApplication.ModalResponse.alertSecondButtonReturn.rawValue)
+        }
+        spin(0.15)
+        check(docA.pendingWork == 0 && docA.undoInfo.undoCount == undo0
+                && docA.layerSources[text] == editable
+                && (try? session.copyPixels(imageA, merged: true).pixels) == pixels0,
+              "the rasterize sheet's Cancel queues nothing and changes nothing")
+
+        // Sheet Apply rasterizes only the captured explicit id: the
+        // selection is retargeted to the pixel layer while the sheet is
+        // up, and the other document stays untouched.
+        let bLayersBefore = try session.layers(imageB)
+        let bPixelsBefore = try session.copyPixels(imageB, merged: true).pixels
+        a.rasterizeLayer(nil)
+        wait { a.window?.attachedSheet != nil }
+        docA.selectLayer(pixelLayer)
+        settle()
+        check(docA.activeLayer == pixelLayer, "the selection retargets while the sheet is up")
+        endSheet(a, .alertFirstButtonReturn)
+        wait { docA.layerSources[text]?.isRasterized == true && docA.pendingWork == 0 }
+        settle()
+        check(docA.undoInfo.undoCount == undo0 + 1, "Rasterize Apply is one undo step")
+        check(docA.layerSources[text] == rasterized
+                && docA.layers.first(where: { $0.id == text })?.kind == .pixel
+                && (try? session.layerSource(text, image: imageA)) == rasterized,
+              "Apply updates the cached kind and the session oracle agrees")
+        check(docA.layerSources[pixelLayer] == nil
+                && docA.layers.first(where: { $0.id == pixelLayer })?.kind == .pixel
+                && (try? session.layers(imageB)) == bLayersBefore
+                && (try? session.copyPixels(imageB, merged: true).pixels) == bPixelsBefore,
+              "retarget-before-Apply and the second document stay untouched")
+        check(!a.validateMenuItem(rasterizeItem) && a.validateMenuItem(restoreItem),
+              "after rasterize the gating flips: Restore offered, Rasterize not")
+        let sourcePixels = try session.copyPixels(imageA, merged: true).pixels
+        check(sourcePixels == pixels0, "rasterizing keeps the pixels identical")
+
+        // A pixel stroke on the rasterized layer, as one undo step.
+        docA.selectLayer(text)
+        settle()
+        let undoBeforeStroke = docA.undoInfo.undoCount
+        docA.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
+        docA.endStroke()
+        settle()
+        let paintedPixels = try session.copyPixels(imageA, merged: true).pixels
+        check(docA.undoInfo.undoCount == undoBeforeStroke + 1 && paintedPixels != sourcePixels,
+              "a stroke paints on the rasterized layer as one undo step")
+
+        // BUSY refusal: while a controlled pause holds the engine-wide
+        // gate, the explicit restore refuses before queueing, reports,
+        // and the menu item disables.
+        let gate = DispatchSemaphore(value: 0)
+        let held = EngineActivity.shared.perform(label: "Source controls hold", work: { gate.wait() },
+                                                 completion: {})
+        check(held && EngineActivity.shared.isBusy, "the controlled pause holds the engine-wide gate")
+        var busyResult: Result<Void, Error>?
+        let busyErrors = errors.count
+        docA.restoreLayerSource(text) { busyResult = $0 }
+        if case .failure(ImageDocument.DocumentError.busy) = busyResult {
+            check(docA.pendingWork == 0 && errors.count == busyErrors + 1,
+                  "a busy restore refuses without queueing and reports busy")
+        } else {
+            check(false, "a busy restore refuses with busy (got \(String(describing: busyResult)))")
+        }
+        check(!a.validateMenuItem(restoreItem), "the Restore item disables while the engine is busy")
+        gate.signal()
+        wait { !EngineActivity.shared.isBusy }
+        settle()
+
+        // The restore sheet's Cancel also changes nothing.
+        a.restoreLayerSource(nil)
+        wait { a.window?.attachedSheet != nil }
+        check(alertButton(a.window?.attachedSheet, "Restore") != nil
+                && alertButton(a.window?.attachedSheet, "Cancel") != nil,
+              "the restore sheet offers labeled Restore and Cancel buttons")
+        endSheet(a, .alertSecondButtonReturn)
+        spin(0.15)
+        check(docA.pendingWork == 0 && docA.layerSources[text] == rasterized
+                && docA.undoInfo.undoCount == undoBeforeStroke + 1,
+              "the restore sheet's Cancel queues nothing")
+
+        // Accepted input in the other document drains before the restore
+        // runs; the admitted restore stays counted until its completion.
+        docB.beginStroke(at: .init(x: 20, y: 20, pressure: 1))
+        docB.endStroke()
+        var restoreResult: Result<Void, Error>?
+        let undoBeforeRestore = docA.undoInfo.undoCount
+        docA.restoreLayerSource(text) { restoreResult = $0 }
+        check(docA.pendingWork == 1, "the admitted restore is counted in pendingWork until completion")
+        wait { restoreResult != nil && docA.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        settle()
+        if case .failure(let error) = restoreResult { check(false, "restore failed: \(error)") }
+        check(docA.undoInfo.undoCount == undoBeforeRestore + 1, "Restore is one undo step")
+        check(try session.copyPixels(imageA, merged: true).pixels == sourcePixels,
+              "Restore after a pixel stroke gives the exact source pixels")
+        check(docA.layerSources[text] == editable
+                && docA.layers.first(where: { $0.id == text })?.kind == .text
+                && (try? session.layerSource(text, image: imageA)) == editable,
+              "Restore refreshes the cached kind to editable text")
+        check((pixel(session, imageB, x: 20, y: 20)?.first ?? 255) < 128,
+              "input accepted in the other document drained before the restore ran")
+
+        // Undo brings the painted pixels back.
+        docA.undo()
+        settle()
+        check(try session.copyPixels(imageA, merged: true).pixels == paintedPixels
+                && docA.layerSources[text] == rasterized,
+              "undo restores the painted pixels and the rasterized cache")
+
+        // A deleted/stale explicit id reaches native NOT_FOUND and is
+        // never retargeted.
+        let errorsBeforeStale = errors.count
+        var staleResult: Result<Void, Error>?
+        docA.rasterizeLayerSource(424242) { staleResult = $0 }
+        wait { staleResult != nil && docA.pendingWork == 0 }
+        if case .failure(let error as EngineSession.EngineError) = staleResult {
+            check(error.isNotFound, "a stale explicit id reports native NOT_FOUND")
+        } else {
+            check(false, "a stale explicit id fails with NOT_FOUND (got \(String(describing: staleResult)))")
+        }
+        check(errors.count == errorsBeforeStale + 1 && docA.layerSources[text] == rasterized,
+              "the stale id changed nothing, was reported, and never retargeted")
+
+        // Late-close safety: a sheet still up when the document begins
+        // closing queues nothing on Apply.
+        a.restoreLayerSource(nil)
+        wait { a.window?.attachedSheet != nil }
+        var closedA = false
+        docA.closeImageWhenDrained { closedA = true }
+        let errorsBeforeLateApply = errors.count
+        endSheet(a, .alertFirstButtonReturn)
+        spin(0.2)
+        check(docA.pendingWork == 0 && errors.count == errorsBeforeLateApply,
+              "a late Apply after close queues nothing and reports nothing")
+        wait { closedA }
+        check(closedA && (try? session.info(imageA)) == nil,
+              "the late-closed document drained and its image is gone")
+        documents.items.removeAll { $0 === docA }
     }
 
     private static func exerciseGuideCache(_ session: EngineSession, documents: DocumentList) throws {
