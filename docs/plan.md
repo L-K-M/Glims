@@ -1928,6 +1928,145 @@ now pass. The compiled `layer-source` interface scenario additionally
 checks queued document cache refresh and busy admission; its runtime
 execution and the unit suite are pending the shared desktop.
 
+### Retained-source restore (2026-11-08)
+
+Backend slice on `feat/layer-source-restore`, engine plus a typed Swift
+case, no UI and no document dispatch. `GLIMS_LAYER_RESTORE_SOURCE = 13`
+on `layer_command` (purely additive enum value, ABI version stays 1) is
+the inverse of RASTERIZE for layers that still retain their structured
+source: it discards the pixel edits and regenerates the content from the
+retained text, link or path as ONE undo step, preserving the selection,
+the item id, the source kind and a mask attachment. Dispatch in
+`glims_layer_command` (Engine/edit.c) mirrors RASTERIZE exactly:
+`glims_edit_ready` first (BUSY during stroke/filter/plug-in), then
+`glims_check_item_locks` with PIXELS|POSITION (LOCKED, own or inherited),
+then `glims_layer_restore_source` (Engine/layer-source.c). An explicit
+layer id that names no attached layer of the image is NOT_FOUND before
+the switch, like RASTERIZE.
+
+Kind decision in `glims_layer_restore_source`: ordinary pixel layers,
+groups and structured layers whose source is gone (`source_is_retained`
+is false) report UNSUPPORTED with an actionable message before any
+mutation; an already editable instance (`source_is_editable`, the
+core's own `gimp_item_is_text/link/vector_layer` predicates) is a no-op
+that pushes no undo.
+
+On GIMP 3.2+ with the genuine rasterizable flag TRUE — text and vector
+always (their predicates ARE the flag), and a link rasterized
+explicitly — the mutation is `gimp_rasterizable_restore`
+(app/core/gimprasterizable.c): one "Revert Rasterize …" undo group
+around the rasterizable undo plus `gimp_image_undo_push_drawable_mod`
+(copy TRUE), then `set_rasterized(FALSE)`, whose handlers re-render
+the retained text (app/text/gimptextlayer.c), re-render the path
+(app/path/gimpvectorlayer.c) or thaw the link, reset its matrix and
+render its buffer (app/core/gimplinklayer.c).
+
+A link layer whose monitor stopped while the generic flag stayed FALSE
+— native pixel edits or an indexed conversion call
+`gimp_link_freeze` from `gimp_link_layer_set_buffer`, and
+`gimp_item_is_link_layer` computes `gimp_link_layer_is_monitored`, so
+`gimp_item_is_rasterized` sees it without the flag — never touches the
+restore guard or fakes the flag. The restore is assembled from public
+core headers as one undo group: `gimp_image_undo_push_drawable_mod`
+(copy TRUE) BEFORE `gimp_image_undo_push_link_layer`, so undo first
+stops the monitor (the link undo restores the unmonitored duplicate)
+and then restores the painted buffer; then `gimp_link_thaw` on the
+retained link and `gimp_link_layer_set_link(layer, same_link, FALSE)`,
+which resets the transform matrix to identity and re-renders the
+retained source. Link policy, stated exactly: the file is RELOADED when
+it is readable; on a read failure the RETAINED SOURCE BUFFER is kept and
+monitoring resumes — a missing file is NOT an error
+(`gimp_link_update_buffer` keeps the old buffer when the load fails,
+app/core/gimplink.c). The static `gimp_link_update_buffer` and the
+private flag setter are never called. `gimp_link_layer_set_link` returns
+FALSE only when the link has no buffer or the buffer's extents are zero
+(`gimp_link_layer_render_link`), so the retained link's GFile
+(`gimp_link_get_file`) and nonempty buffer (`gimp_link_get_buffer`) are
+prevalidated BEFORE the undo group; an unexpected FALSE after that is
+reported as FAILED with a message disclosing the gap, never silently
+OK.
+
+Before GIMP 3.2 only text exists; the restore reproduces
+`gimp_text_layer_set`'s own undo group (app/text/gimptextlayer.c):
+`gimp_image_undo_push_text_layer_modified` plus
+`gimp_image_undo_push_drawable_mod` (copy TRUE) in one
+GIMP_UNDO_GROUP_TEXT group, alpha added when the painted layer lost it,
+`"modified"=FALSE`, then the GimpText `"changed"` signal (no args)
+re-triggers the layer's existing private render callback.
+`gimp_text_layer_set` itself cannot be used while modified is TRUE —
+its `gimp_item_is_text_layer` predicate guard refuses — and
+`gimp_text_layer_discard` is never used: it would destroy the text.
+
+Swift: `EngineSession.LayerCommand.restoreSource = 13` (typed, routed
+through the existing `layerCommand(_:image:layer:)` call), but
+`ImageDocument.layerCommand` REFUSES `.restoreSource` with "Use the
+confirmed restore command." until the root's global confirmed-restore
+dispatch exists — the input queue must not run native file I/O (a link
+restore can reload its file). No new footer slots; no palette or menu
+entry.
+
+Tests: `test_layer_restore_source` in `Engine/tests/engine-tests.c`
+(exact oracles, rows matched by identity via `source_test_row`): edited
+pixels -> source restoration (pixel-identical render) -> UNDO exact
+edited pixels + retained raster state -> REDO source again, for the
+explicit-rasterize text on every engine (3.0's modified-flag path
+included), the vector on 3.2+, the explicitly rasterized link (flag
+TRUE) and the painted link (flag FALSE, monitor stopped); no-op without
+history on already editable layers; unchanged selection/bounds/item
+id/source kind/mask attachment; UNSUPPORTED for pixel/group and
+NOT_FOUND for stale/foreign/closed ids before any mutation; own and
+inherited PIXELS/POSITION locks LOCKED; BUSY during a stroke and a
+filter preview; the reload-file policy (rewritten file renders blue) and
+the missing-file retained-buffer policy (deleted file restores the
+exact retained render, monitoring resumed, no error). The adapter and
+these tests were NOT compiled or run in this slice — only
+`swift build --build-tests` (the facade header compiles through
+CGlimsEngine). Root compiles the C matrix.
+
+Root validation: the native restore suite passes 1,314 / 1,170 / 1,314 /
+1,314 checks on GIMP 3.2.8 / 3.0.8 / 3.2.0 / master. The first run's
+retained-source assertions used an uninitialized size-versioned output
+struct. Initializing `struct_size` fixes those tests; the independent
+pixel-restoration and exact undo assertions already passed. No runtime
+restore behavior required a change. User-facing confirmed dispatch and
+its interface checks follow separately.
+
+### Linked-load admission and object lifetime (2026-11-08)
+
+A controlled Python file loader reproduced edits being admitted during
+Restore Source, Undo, history navigation and automatic linked-file refresh.
+Restore/Undo/history now hold balanced native busy counters. RPC dispatch
+from a nested engine loop also raises busy for the call so mutation gates
+refuse while reads and cancellation remain deliverable. This is not a
+blanket dispatch block; existing stroke delivery keeps its prior contract.
+The public event callback contract already forbids synchronous reentry.
+
+A second red regression showed close destroying images during a load.
+Native close now returns BUSY and leaves the image alive; EngineActivity
+retries asynchronously without occupying its queue or reporting a false
+completion. The session stays retained until a real close result arrives.
+The retry intentionally waits for native completion; a permanently wedged
+loader can therefore keep the close pending while cancellation remains
+available.
+
+GIMP 3.2's link finalizer leaves a changed idle with bare link userdata.
+The adapter tracks links in current layers, detached undo-owned layers,
+link undo records and nested undo/redo stacks. A weak notification removes
+pending sources only when the link object actually dies, preserving live
+shared owners and future monitoring. Adoption, undo events and final image
+release install the hooks. Master cancels the idle natively, so this
+compatibility cleanup applies only to the pinned 3.2 engines. No upstream
+source was modified. Re-audit the workaround when updating those pins.
+
+Native suites pass 1,361 / 1,171 / 1,361 / 1,361 checks on GIMP 3.2.8 /
+3.0.8 / 3.2.0 / master, including close BUSY/no destruction, post-load
+close, unchanged pixels/history after refused edits, reads/cancel delivery
+and native monitor reload. The fixture now observes native close status
+rather than assuming a Python marker or a fixed delay proves completion.
+Independent review of the lifetime change found no important issues.
+Swift targets compile; application-side retry runtime remains part of
+subsequent interface integration.
+
 ### Native indexed conversion (2026-11-08)
 
 Backend slice on `feat/indexed-conversion`, adapter plus typed Swift
@@ -2188,3 +2327,42 @@ history/dirty state on reads and profile-assignment Undo/Redo appearance.
 No production renderer change was needed. This verifies the in-gamut sRGB
 path; physical monitor calibration, wide-gamut/HDR output, proof profiles,
 proof intents and gamut warnings remain unverified or unimplemented.
+
+After integrating Indexed, one native conformance run failed during the
+linked-file rewrite fixture and later crashed after cascading failures.
+A bounded debugger run did not reproduce the crash and produced no
+backtrace; its exact cause is unverified. The fixture did discard image
+ids after refused closes and continued dependent setup after BUSY.
+Its positive linked-file setup/cleanup now retries only pre-mutation BUSY
+with finite deadlines, reports individual statuses, retains owned ids
+until a real close, and stops dependent tests on setup/cleanup failure.
+Negative BUSY assertions remain single calls. All four suites pass
+1,459 / 1,245 / 1,459 / 1,459 checks. These runs observed zero retries in
+this fixture; controlled slow-loader tests separately verify the native
+BUSY contract. The earlier crash is not presented as a proven new UAF.
+
+### Focused linked-close smoke (2026-11-08)
+
+`GLIMS_SMOKE_CASE=linked-close` runs only `exerciseLinkedClose`
+(`Sources/GlimsKit/EngineSmokeTestLinkedClose.swift`). Before the engine
+starts, that case installs the slow-loader plug-in named by
+`GLIMS_SMOKE_SLOW_LOADER_SCRIPT` into the throwaway user directory, points
+`GLIMS_SLOWLOAD_DIR` at the smoke work directory and leaves the release
+marker present. The scenario places a `.gslow` link, rewrites the file in
+place, waits for the native link monitor's reload to park inside the
+loader, then closes through `closeImageWhenDrained`: while parked, the
+close stays deferred, the image stays alive (facade read-only oracle) and
+the main loop keeps advancing; after the marker is released the close
+completes exactly once and the native oracle reports the image gone.
+Engines before 3.2 skip explicitly. Added compile-checked only
+(`swift build`, `swift build --build-tests`); the runtime run is not
+exercised on this branch and happens on the review root.
+
+The linked-close smoke is now exercised. Replacing only EngineActivity's
+close method with the earlier one-shot implementation reproduced two
+failures: premature close completion during the paused loader and an image
+still present after completion. The fixed retry method passes on GIMP
+3.2.8, 3.2.0 and master; 3.0.8 explicitly skips unsupported link layers.
+The final fixture requires NOT_FOUND specifically, stops on a missing
+pause marker, checks that no app activity masks the native busy state,
+and cleans up any image left by the deliberate red implementation.

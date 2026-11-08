@@ -59,6 +59,78 @@ now_ms (void)
   return t.tv_sec * 1000.0 + t.tv_nsec / 1e6;
 }
 
+/* ---- Bounded BUSY waits at linked-file boundaries ----------------------
+ *
+ * A link layer's file monitor can reload its file inside a nested engine
+ * main loop with no facade call around it. A facade call dispatched in
+ * that window sees the engine busy, and every mutation gate refuses
+ * GLIMS_STATUS_BUSY before touching anything, so a refused setup or
+ * cleanup step mutated nothing and is safe to repeat. The retained-link
+ * fixture in test_layer_restore_source rewrites and deletes monitored
+ * files and closes its scratch images around those changes, so its steps
+ * there use WAIT_OUT_BUSY and close_image_wait_busy: they retry ONLY
+ * GLIMS_STATUS_BUSY, under a finite 15 s deadline with a tiny backoff,
+ * logging and counting every actual wait. Any other status passes through
+ * unchanged, and the genuine BUSY-refusal checks elsewhere in this file
+ * stay literal single calls. */
+
+/* Finite deadline for one bounded wait, and the backoff between attempts. */
+#define GLIMS_BUSY_WAIT_DEADLINE_MS 15000.0
+#define GLIMS_BUSY_WAIT_BACKOFF_US  20000
+
+/* Evaluates `expr` into `var`, re-evaluating it only while it answers
+ * GLIMS_STATUS_BUSY — never for any other status, and only for calls
+ * whose BUSY refusal happens before any mutation. `busy_waits` must be
+ * in scope; each actual wait is logged and counted. */
+#define WAIT_OUT_BUSY(var, expr, what)                                  \
+  do {                                                                  \
+    double busy_deadline_ = now_ms () + GLIMS_BUSY_WAIT_DEADLINE_MS;    \
+    (var) = (expr);                                                     \
+    while ((var) == GLIMS_STATUS_BUSY && now_ms () < busy_deadline_)    \
+      {                                                                 \
+        busy_waits++;                                                   \
+        printf ("      (BUSY wait #%d: %s refused, retrying)\n",        \
+                busy_waits, what);                                      \
+        fflush (stdout);                                                \
+        usleep (GLIMS_BUSY_WAIT_BACKOFF_US);                            \
+        (var) = (expr);                                                 \
+      }                                                                 \
+  } while (0)
+
+/* Closes an owned image, waiting out a bounded BUSY first (a monitored
+ * link can sit in a file plug-in's nested loop when the close arrives).
+ * The id is cleared only when the close actually succeeded; a mere close
+ * attempt never discards it. Returns the final status. */
+static GlimsStatus
+close_image_wait_busy (GlimsImageID *id, int *busy_waits)
+{
+  GlimsStatus status;
+  double      deadline;
+
+  if (! id || *id == 0)
+    return GLIMS_STATUS_OK;
+  status   = api->image_close (engine, *id);
+  deadline = now_ms () + GLIMS_BUSY_WAIT_DEADLINE_MS;
+  while (status == GLIMS_STATUS_BUSY && now_ms () < deadline)
+    {
+      (*busy_waits)++;
+      printf ("      (BUSY wait #%d: close of image %d refused, retrying)\n",
+              *busy_waits, *id);
+      fflush (stdout);
+      usleep (GLIMS_BUSY_WAIT_BACKOFF_US);
+      status = api->image_close (engine, *id);
+    }
+  if (status == GLIMS_STATUS_OK)
+    *id = 0;
+  else
+    {
+      printf ("      (close of image %d ended with status %d; id retained)\n",
+              *id, status);
+      fflush (stdout);
+    }
+  return status;
+}
+
 static void
 on_event (void *context, const GlimsEvent *event)
 {
@@ -143,10 +215,13 @@ brush_for (GlimsPaintTool tool, double size)
 }
 
 /* A stroke from (x0, y0) to (x1, y1) in 16 steps; returns the status of
- * the first failing call. */
+ * the first failing call. When `busy_waits` is not NULL, only the begin
+ * step waits out a bounded GLIMS_STATUS_BUSY: a refused begin leaves no
+ * stroke behind, while continue and end mutate the live stroke and are
+ * never retried. */
 static GlimsStatus
-stroke_line (GlimsImageID image, GlimsItemID layer, const GlimsBrushSettings *brush,
-             double x0, double y0, double x1, double y1, char **error)
+stroke_line_run (GlimsImageID image, GlimsItemID layer, const GlimsBrushSettings *brush,
+                 double x0, double y0, double x1, double y1, char **error, int *busy_waits)
 {
   GlimsStrokePoint first = { x0, y0, 1.0, 0.0, 0.0, 0 };
   GlimsStrokePoint points[16];
@@ -159,12 +234,37 @@ stroke_line (GlimsImageID image, GlimsItemID layer, const GlimsBrushSettings *br
                                      1.0, 0.0, 0.0, (uint32_t) (i + 1) * 8 };
 
   status = api->stroke_begin (engine, image, layer, brush, &first, &stroke, error);
+  if (busy_waits)
+    {
+      double deadline = now_ms () + GLIMS_BUSY_WAIT_DEADLINE_MS;
+
+      while (status == GLIMS_STATUS_BUSY && now_ms () < deadline)
+        {
+          (*busy_waits)++;
+          printf ("      (BUSY wait #%d: stroke begin refused, retrying)\n", *busy_waits);
+          fflush (stdout);
+          if (error && *error)
+            {
+              api->free_string (*error);
+              *error = NULL;
+            }
+          usleep (GLIMS_BUSY_WAIT_BACKOFF_US);
+          status = api->stroke_begin (engine, image, layer, brush, &first, &stroke, error);
+        }
+    }
   if (status != GLIMS_STATUS_OK)
     return status;
   status = api->stroke_continue (engine, stroke, points, 16);
   if (status != GLIMS_STATUS_OK)
     return status;
   return api->stroke_end (engine, stroke);
+}
+
+static GlimsStatus
+stroke_line (GlimsImageID image, GlimsItemID layer, const GlimsBrushSettings *brush,
+             double x0, double y0, double x1, double y1, char **error)
+{
+  return stroke_line_run (image, layer, brush, x0, y0, x1, y1, error, NULL);
 }
 
 static void
@@ -1001,6 +1101,934 @@ test_layer_source (const char *work)
   other = 0;
 
   api->image_close (engine, image);
+}
+
+/* RESTORE_SOURCE: the inverse of RASTERIZE for retained sources. Exact
+ * oracles: edited pixels -> source restoration -> UNDO brings back the
+ * exact edited pixels and the retained raster state -> REDO restores the
+ * source again; an already editable instance is a no-op without history;
+ * selection, bounds, item id, source kind and mask attachment survive;
+ * refusals happen before any mutation; own and inherited locks refuse;
+ * the text path runs on every engine (3.0's modified-flag restore
+ * included), the vector and link paths on GIMP 3.2+ — including the
+ * painted link whose generic rasterizable flag stayed FALSE (the monitor
+ * stopped) and the link policies for a changed or a missing file: the
+ * file is reloaded when readable, on a read failure the retained source
+ * buffer is kept and monitoring resumes; a missing file is not an
+ * error. */
+
+/* One positive setup step of the retained-link fixture below: the step
+ * reports its own status, and a failed prerequisite stops the dependent
+ * checks, straight to the fixture's cleanup label. */
+#define LINK_SETUP(ok, ...)                 \
+  do {                                      \
+    bool link_ok_ = (ok);                    \
+    CHECK (link_ok_, __VA_ARGS__);           \
+    if (! link_ok_)                         \
+      { fixture_healthy = false; goto links_cleanup; } \
+  } while (0)
+
+static bool
+test_layer_restore_source (const char *work)
+{
+  GlimsImageID         image = 0, other = 0, link_image = 0, saved = 0;
+  GlimsItemID          layer = 0, other_layer = 0, group = 0, text = 0;
+  GlimsItemID          path = 0, vector = 0, link = 0, painted = 0, reloaded = 0, gone = 0, foreign = 0;
+  GlimsLayerInfo       row = { 0 };
+  GlimsLayerSourceInfo info = { .struct_size = sizeof info };
+  GlimsTextSettings    settings = { .struct_size = sizeof settings, .size = 24,
+                                     .color = { 0, 0, 0, 1 }, .justify = GLIMS_JUSTIFY_LEFT,
+                                     .antialias = true };
+  GlimsSubpath         square[1] = { { .count = 4, .closed = true } };
+  GlimsPathPoint       points[4] = { corner (20, 20), corner (80, 20), corner (80, 80), corner (20, 80) };
+  GlimsBrushSettings   brush = brush_for (GLIMS_PAINT_PENCIL, 8);
+  GlimsStrokePoint     point = { .x = 30, .y = 30, .pressure = 1.0 };
+  GlimsStrokeID        stroke = 0;
+  GlimsFilterID        filter = 0;
+  GlimsRect            bounds_before = { 0 }, link_bounds = { 0 }, sel_before = { 0 };
+  bool                 sel_empty = true, ok = false;
+  bool                 fixture_healthy = true;
+  GlimsFillSettings    red  = { .struct_size = sizeof red,  .mode = GLIMS_FILL_SELECTION,
+                                .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  GlimsFillSettings    blue = { .struct_size = sizeof blue, .mode = GLIMS_FILL_SELECTION,
+                                .color = { 0, 0, 1, 1 }, .opacity = 1 };
+  GlimsStatus          st = GLIMS_STATUS_OK;
+  int32_t              before, w = 0, h = 0, w2 = 0, h2 = 0;
+  int                  busy_waits = 0, vectors, links;
+  char                *fonts = NULL, *error = NULL, *newline, png[1024], png2[1024], png3[1024];
+  uint8_t             *shot = NULL, *edited = NULL, *after = NULL;
+
+  vectors = supports_vector_layers ();
+  links   = supports_link_layers ();
+
+  CHECK (api->fonts (engine, &fonts) == GLIMS_STATUS_OK && fonts && *fonts,
+         "the engine lists fonts for the restore tests");
+  if (! fonts || ! *fonts)
+    {
+      api->free_string (fonts);
+      return false;
+    }
+  if (strstr (fonts, "Sans-serif\n") == fonts || strstr (fonts, "\nSans-serif\n"))
+    strcpy (settings.font, "Sans-serif");
+  else
+    {
+      newline = strchr (fonts, '\n');
+      snprintf (settings.font, sizeof settings.font, "%.*s",
+                (int) (newline ? newline - fonts : (ptrdiff_t) strlen (fonts)), fonts);
+    }
+  api->free_string (fonts);
+
+  api->image_new (engine, 200, 120, &image, NULL);
+  layer = first_layer (image);
+  api->image_new (engine, 60, 40, &other, NULL);
+  other_layer = first_layer (other);
+  api->create_group (engine, image, 0, 0, "Group", &group, NULL);
+
+  /* Refusals come before any mutation. */
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_RESTORE_SOURCE, NULL, &error)
+           == GLIMS_STATUS_UNSUPPORTED && error &&
+         api->layer_command (engine, image, group, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL)
+           == GLIMS_STATUS_UNSUPPORTED &&
+         api->layer_command (engine, image, 4242, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL)
+           == GLIMS_STATUS_NOT_FOUND &&
+         api->layer_command (engine, image, other_layer, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL)
+           == GLIMS_STATUS_NOT_FOUND &&
+         api->layer_command (engine, 4242, layer, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL)
+           == GLIMS_STATUS_NOT_FOUND &&
+         undo_depth (image) == before,
+         "pixels and groups are UNSUPPORTED, stale/foreign/unknown ids NOT_FOUND (%s)",
+         error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* A genuine text layer: an already editable instance is a no-op. */
+  CHECK (api->text_layer_new (engine, image, "Hi", &settings, (GlimsPoint) { 10, 10 },
+                            &text, NULL) == GLIMS_STATUS_OK && text != 0,
+         "the text layer for the restore tests exists");
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before &&
+         api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
+         info.source_kind == GLIMS_LAYER_TEXT && ! info.is_rasterized && info.has_source,
+         "restore on an already editable text is a no-op without history");
+
+  /* Rasterize explicitly (the genuine rasterizable flag goes TRUE on
+   * 3.2+, the modified flag on 3.0), paint over the pixels, then restore:
+   * edited pixels -> source restoration -> undo -> edited pixels and the
+   * retained raster state -> redo -> source again. */
+  api->layer_select (engine, image, text);
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 0, 0 }, { 150, 90 } }, 2, NULL);
+  api->selection_bounds (engine, image, &sel_empty, &sel_before);
+  CHECK (source_test_row (image, text, &row), "the text restore row resolves by identity");
+  bounds_before = row.bounds;
+  shot = render_all (image, &w, &h);
+
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "the explicit rasterize before the restore is one undo step");
+  CHECK (api->layer_mask_add (engine, image, text, GLIMS_MASK_WHITE, false, NULL, NULL) == GLIMS_STATUS_OK,
+         "a mask attaches to the rasterized text");
+  CHECK (stroke_line (image, text, &brush, 12, 14, 60, 14, &error) == GLIMS_STATUS_OK,
+         "painting over the rasterized text edits its pixels%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  edited = render_all (image, &w2, &h2);
+  CHECK (shot && edited && w == w2 && h == h2 &&
+         memcmp (shot, edited, (size_t) w * h * 4) != 0,
+         "the paint changed the composite");
+  CHECK (api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
+         info.source_kind == GLIMS_LAYER_TEXT && info.is_rasterized && info.has_source,
+         "the painted text keeps its TEXT source kind and retained text");
+
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "restore is one undo step");
+  CHECK (api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
+         info.source_kind == GLIMS_LAYER_TEXT && ! info.is_rasterized && info.has_source &&
+         source_test_row (image, text, &row) && row.id == text && row.kind == GLIMS_LAYER_TEXT &&
+         row.has_mask &&
+         rect_equals (row.bounds, bounds_before.x, bounds_before.y,
+                      bounds_before.width, bounds_before.height),
+         "restore returns the editable text: same id, TEXT source kind, mask and bounds kept");
+  after = render_all (image, &w2, &h2);
+  CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
+         "the composite is pixel-identical to the source render after the restore");
+  free (after);
+  after = NULL;
+  {
+    bool      empty = false;
+    GlimsRect sel   = { 0 };
+
+    CHECK (api->selection_bounds (engine, image, &empty, &sel) == GLIMS_STATUS_OK &&
+           empty == sel_empty && rect_equals (sel, sel_before.x, sel_before.y,
+                                              sel_before.width, sel_before.height),
+           "the selection is unchanged by the restore");
+  }
+
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
+         info.source_kind == GLIMS_LAYER_TEXT && info.is_rasterized && info.has_source &&
+         source_test_row (image, text, &row) && row.kind == GLIMS_LAYER_PIXEL,
+         "undo returns the retained raster state");
+  after = render_all (image, &w2, &h2);
+  CHECK (edited && after && w == w2 && h == h2 && memcmp (edited, after, (size_t) w * h * 4) == 0,
+         "undo brings back the exact edited pixels");
+  free (after);
+  after = NULL;
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
+         ! info.is_rasterized && info.has_source &&
+         source_test_row (image, text, &row) && row.kind == GLIMS_LAYER_TEXT,
+         "redo restores the source again");
+  after = render_all (image, &w2, &h2);
+  CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
+         "redo re-renders the source pixel-identically");
+  free (after);
+  free (shot);
+  free (edited);
+  shot = edited = after = NULL;
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+
+  /* Locks refuse before mutation; a group's inherited lock counts. */
+  api->set_layer_locks (engine, image, text, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION,
+                        GLIMS_LOCK_PIXELS, NULL);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_LOCKED,
+         "a pixel lock refuses restore");
+  api->set_layer_locks (engine, image, text, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION,
+                        GLIMS_LOCK_POSITION, NULL);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_LOCKED,
+         "a position lock refuses restore");
+  api->set_layer_locks (engine, image, text, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, 0, NULL);
+  api->reparent_layer (engine, image, text, group, 0, NULL);
+  api->set_layer_locks (engine, image, group, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL);
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_LOCKED &&
+         undo_depth (image) == before,
+         "an inherited group pixel lock refuses restore without an undo step");
+  api->set_layer_locks (engine, image, group, GLIMS_LOCK_PIXELS, 0, NULL);
+  api->reparent_layer (engine, image, text, 0, 0, NULL);
+
+  /* An open stroke or filter session makes the command BUSY. */
+  if (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK)
+    {
+      CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_BUSY,
+             "restore is BUSY during a stroke");
+      api->stroke_end (engine, stroke);
+    }
+  else
+    CHECK (0, "the stroke for the restore busy check began");
+  if (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK)
+    {
+      CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_BUSY,
+             "restore is BUSY during a filter preview");
+      api->filter_abort (engine, filter);
+    }
+  else
+    CHECK (0, "the filter session for the restore busy check opened");
+
+  if (vectors)
+    {
+      /* A genuine vector layer: same contract through the path source
+       * (the genuine rasterizable flag is TRUE after rasterize). */
+      CHECK (api->path_set (engine, image, 0, "Shape", square, 1, points, 4, &path, NULL) == GLIMS_STATUS_OK &&
+             api->path_to_vector_layer (engine, image, path, "Vector", &vector, NULL) == GLIMS_STATUS_OK,
+             "the vector layer for the restore tests exists");
+      before = undo_depth (image);
+      CHECK (api->layer_command (engine, image, vector, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (image) == before,
+             "restore on an editable vector is a no-op without history");
+      shot = render_all (image, &w, &h);
+      before = undo_depth (image);
+      CHECK (api->layer_command (engine, image, vector, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (image) == before + 1,
+             "the vector rasterizes in one undo step");
+      CHECK (stroke_line (image, vector, &brush, 25, 25, 75, 75, &error) == GLIMS_STATUS_OK,
+             "painting over the rasterized vector edits its pixels%s%s",
+             error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      edited = render_all (image, &w2, &h2);
+      CHECK (shot && edited && w == w2 && h == h2 && memcmp (shot, edited, (size_t) w * h * 4) != 0,
+             "the paint changed the vector's composite");
+      before = undo_depth (image);
+      CHECK (api->layer_command (engine, image, vector, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (image) == before + 1 &&
+             api->layer_source_info (engine, image, vector, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_VECTOR && ! info.is_rasterized && info.has_source &&
+             source_test_row (image, vector, &row) && row.kind == GLIMS_LAYER_VECTOR,
+             "restore regenerates the vector from its path in one undo step");
+      after = render_all (image, &w2, &h2);
+      CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
+             "the vector's composite is pixel-identical to the source render");
+      free (after);
+      after = NULL;
+      CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+             api->layer_source_info (engine, image, vector, &info, NULL) == GLIMS_STATUS_OK &&
+             info.is_rasterized && source_test_row (image, vector, &row) && row.kind == GLIMS_LAYER_PIXEL,
+             "undo returns the rasterized vector");
+      after = render_all (image, &w2, &h2);
+      CHECK (edited && after && w == w2 && h == h2 && memcmp (edited, after, (size_t) w * h * 4) == 0,
+             "undo brings back the exact edited vector pixels");
+      free (after);
+      after = NULL;
+      CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+             ! (api->layer_source_info (engine, image, vector, &info, NULL) == GLIMS_STATUS_OK &&
+                info.is_rasterized),
+             "redo restores the vector source again");
+      free (shot);
+      free (edited);
+      shot = edited = NULL;
+    }
+
+  if (links)
+    {
+      /* Link layers on their own image, so the composite is just the
+       * background and the link. Three source PNGs: one for the
+       * explicit-rasterize restore, one whose file is rewritten before
+       * the restore (reload policy), one whose file is deleted before
+       * the restore (retained-buffer policy).
+       *
+       * The fixture's positive setup and cleanup runs split into single
+       * steps, each reporting its own status. Once the link image exists,
+       * its monitored (and undo-owned) links can reload a changed file in
+       * a nested engine loop at any moment, so the steps at those
+       * linked-file boundaries wait out a bounded BUSY only. Scratch
+       * image ids are kept until their close actually succeeds, and a
+       * failed prerequisite stops the dependent checks at links_cleanup. */
+      snprintf (png, sizeof png, "%s/restore-link.png", work);
+      snprintf (png2, sizeof png2, "%s/restore-link-reload.png", work);
+      snprintf (png3, sizeof png3, "%s/restore-link-gone.png", work);
+
+      st = api->image_new (engine, 40, 30, &saved, NULL);
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: the scratch image for the link PNGs is created (status %d)", st);
+      WAIT_OUT_BUSY (st, api->fill (engine, saved, (GlimsPoint) { 0, 0 }, &red, NULL),
+                     "the scratch fill red");
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: the scratch image is filled red (status %d)", st);
+      WAIT_OUT_BUSY (st, api->image_export (engine, saved, png, NULL),
+                     "the export of restore-link.png");
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: restore-link.png is exported (status %d)", st);
+      WAIT_OUT_BUSY (st, api->image_export (engine, saved, png2, NULL),
+                     "the export of restore-link-reload.png");
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: restore-link-reload.png is exported (status %d)", st);
+      WAIT_OUT_BUSY (st, api->image_export (engine, saved, png3, NULL),
+                     "the export of restore-link-gone.png");
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: restore-link-gone.png is exported (status %d)", st);
+      st = close_image_wait_busy (&saved, &busy_waits);
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: the scratch image closes after the exports (status %d)", st);
+
+      st = api->image_new (engine, 200, 120, &link_image, NULL);
+      LINK_SETUP (st == GLIMS_STATUS_OK && link_image != 0,
+                  "setup: the link fixture image is created (status %d)", st);
+
+      /* Explicit rasterize puts the genuine flag TRUE: restore goes
+       * through gimp_rasterizable_restore and remonitors. */
+      WAIT_OUT_BUSY (st, api->image_place_link (engine, link_image, png, &link, NULL),
+                     "placing the explicit-rasterize link");
+      LINK_SETUP (st == GLIMS_STATUS_OK && link != 0,
+                  "the link for the explicit-rasterize restore exists (status %d)", st);
+      shot = render_all (link_image, &w, &h);
+      before = undo_depth (link_image);
+      WAIT_OUT_BUSY (st, api->layer_command (engine, link_image, link, GLIMS_LAYER_RASTERIZE, NULL, NULL), "linked restore/history");
+      LINK_SETUP (st == GLIMS_STATUS_OK, "the linked restore/history step succeeds (status %d)", st);
+      CHECK (st == GLIMS_STATUS_OK &&
+             undo_depth (link_image) == before + 1 &&
+             api->layer_source_info (engine, link_image, link, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_LINK && info.is_rasterized && info.has_source,
+             "the link rasterizes with its link retained");
+      before = undo_depth (link_image);
+      WAIT_OUT_BUSY (st, api->layer_command (engine, link_image, link, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL), "linked restore/history");
+      LINK_SETUP (st == GLIMS_STATUS_OK, "the linked restore/history step succeeds (status %d)", st);
+      CHECK (st == GLIMS_STATUS_OK &&
+             undo_depth (link_image) == before + 1 &&
+             api->layer_source_info (engine, link_image, link, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_LINK && ! info.is_rasterized && info.has_source &&
+             source_test_row (link_image, link, &row) && row.kind == GLIMS_LAYER_LINK,
+             "restore after the explicit rasterize remonitors the link in one undo step");
+      after = render_all (link_image, &w2, &h2);
+      CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
+             "the remonitored link re-renders pixel-identically");
+      free (after);
+      after = NULL;
+      WAIT_OUT_BUSY (st, api->image_undo (engine, link_image), "linked restore/history");
+      LINK_SETUP (st == GLIMS_STATUS_OK, "the linked restore/history step succeeds (status %d)", st);
+      CHECK (st == GLIMS_STATUS_OK &&
+             api->layer_source_info (engine, link_image, link, &info, NULL) == GLIMS_STATUS_OK &&
+             info.is_rasterized,
+             "undo rasterizes the link again");
+      api->image_redo (engine, link_image);
+      free (shot);
+      shot = NULL;
+
+      /* A painted link: pixel edits stop the monitor while the generic
+       * rasterizable flag stays FALSE — the manual restore path. */
+      WAIT_OUT_BUSY (st, api->image_place_link (engine, link_image, png, &painted, NULL),
+                     "placing the painted link");
+      LINK_SETUP (st == GLIMS_STATUS_OK && painted != 0,
+                  "the painted link exists (status %d)", st);
+      ok = source_test_row (link_image, painted, &row);
+      LINK_SETUP (ok, "the painted link row resolves by identity");
+      link_bounds = row.bounds;
+      shot = render_all (link_image, &w, &h);
+      st = stroke_line_run (link_image, painted, &brush,
+                            link_bounds.x + 2, link_bounds.y + 2,
+                            link_bounds.x + link_bounds.width - 2, link_bounds.y + link_bounds.height - 2,
+                            &error, &busy_waits);
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "painting over the link layer edits its pixels (status %d%s%s)",
+                  st, error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      edited = render_all (link_image, &w2, &h2);
+      CHECK (shot && edited && w == w2 && h == h2 && memcmp (shot, edited, (size_t) w * h * 4) != 0,
+             "the paint changed the link's composite");
+      CHECK (api->layer_source_info (engine, link_image, painted, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_LINK && info.is_rasterized && info.has_source &&
+             source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_PIXEL,
+             "the painted link is pixel-behaving (monitor stopped) with its link retained");
+      before = undo_depth (link_image);
+      WAIT_OUT_BUSY (st, api->layer_command (engine, link_image, painted, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL), "linked restore/history");
+      LINK_SETUP (st == GLIMS_STATUS_OK, "the linked restore/history step succeeds (status %d)", st);
+      CHECK (st == GLIMS_STATUS_OK &&
+             undo_depth (link_image) == before + 1 &&
+             api->layer_source_info (engine, link_image, painted, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_LINK && ! info.is_rasterized && info.has_source &&
+             source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_LINK,
+             "restore of the painted link (flag FALSE) regenerates the source in one undo step");
+      after = render_all (link_image, &w2, &h2);
+      CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
+             "the painted pixels are discarded and the retained source renders again");
+      free (after);
+      after = NULL;
+      WAIT_OUT_BUSY (st, api->image_undo (engine, link_image), "linked restore/history");
+      LINK_SETUP (st == GLIMS_STATUS_OK, "the linked restore/history step succeeds (status %d)", st);
+      CHECK (st == GLIMS_STATUS_OK &&
+             api->layer_source_info (engine, link_image, painted, &info, NULL) == GLIMS_STATUS_OK &&
+             info.is_rasterized && source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_PIXEL,
+             "undo stops the monitor again (retained raster state)");
+      after = render_all (link_image, &w2, &h2);
+      CHECK (edited && after && w == w2 && h == h2 && memcmp (edited, after, (size_t) w * h * 4) == 0,
+             "undo restores the exact painted link pixels");
+      free (after);
+      after = NULL;
+      WAIT_OUT_BUSY (st, api->image_redo (engine, link_image), "linked restore/history");
+      LINK_SETUP (st == GLIMS_STATUS_OK, "the linked restore/history step succeeds (status %d)", st);
+      CHECK (st == GLIMS_STATUS_OK &&
+             api->layer_source_info (engine, link_image, painted, &info, NULL) == GLIMS_STATUS_OK &&
+             ! info.is_rasterized && source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_LINK,
+             "redo restores the link source again");
+      after = render_all (link_image, &w2, &h2);
+      CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
+             "redo re-renders the source pixel-identically");
+      free (after);
+      free (shot);
+      free (edited);
+      shot = edited = after = NULL;
+
+      /* Reload policy: the file is rewritten between the paint and the
+       * restore — the restore reloads it. Rewriting png2 is a linked-file
+       * boundary: the reload-test link monitors that file, so the steps
+       * around the rewrite wait out a bounded BUSY. */
+      WAIT_OUT_BUSY (st, api->image_place_link (engine, link_image, png2, &reloaded, NULL),
+                     "placing the reload-test link");
+      LINK_SETUP (st == GLIMS_STATUS_OK && reloaded != 0,
+                  "the reload-test link exists (status %d)", st);
+      ok = source_test_row (link_image, reloaded, &row);
+      LINK_SETUP (ok, "the reload link row resolves by identity");
+      link_bounds = row.bounds;
+      st = stroke_line_run (link_image, reloaded, &brush,
+                            link_bounds.x + 2, link_bounds.y + 2,
+                            link_bounds.x + link_bounds.width - 2, link_bounds.y + link_bounds.height - 2,
+                            NULL, &busy_waits);
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "the reload-test link is painted over (status %d)", st);
+      st = api->image_new (engine, 40, 30, &saved, NULL);
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: the rewrite-blue scratch image is created (status %d)", st);
+      WAIT_OUT_BUSY (st, api->fill (engine, saved, (GlimsPoint) { 0, 0 }, &blue, NULL),
+                     "the rewrite-blue scratch fill");
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: the rewrite-blue scratch image is filled blue (status %d)", st);
+      WAIT_OUT_BUSY (st, api->image_export (engine, saved, png2, NULL),
+                     "the rewrite over restore-link-reload.png");
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "the link file is rewritten in blue before the restore (export status %d)", st);
+      st = close_image_wait_busy (&saved, &busy_waits);
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "setup: the rewrite-blue scratch image closes (status %d)", st);
+      WAIT_OUT_BUSY (st, api->layer_command (engine, link_image, reloaded, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL), "linked restore/history");
+      LINK_SETUP (st == GLIMS_STATUS_OK, "the linked restore/history step succeeds (status %d)", st);
+      CHECK (st == GLIMS_STATUS_OK &&
+             api->layer_source_info (engine, link_image, reloaded, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_LINK && ! info.is_rasterized && info.has_source,
+             "restore succeeds while the file is readable again");
+      after = render_all (link_image, &w2, &h2);
+      CHECK (after && pixel_at (after, w2, link_bounds.x + link_bounds.width / 2,
+                                link_bounds.y + link_bounds.height / 2)[2] == 255 &&
+             pixel_at (after, w2, link_bounds.x + link_bounds.width / 2,
+                       link_bounds.y + link_bounds.height / 2)[0] == 0,
+             "the restore reloaded the changed file (blue, not the retained red)");
+      free (after);
+      after = NULL;
+
+      /* Retained-buffer policy: the file is deleted between the paint
+       * and the restore — the read fails, the retained source buffer is
+       * kept and monitoring resumes; a missing file is not an error. */
+      WAIT_OUT_BUSY (st, api->image_place_link (engine, link_image, png3, &gone, NULL),
+                     "placing the missing-file link");
+      LINK_SETUP (st == GLIMS_STATUS_OK && gone != 0,
+                  "the missing-file link exists (status %d)", st);
+      ok = source_test_row (link_image, gone, &row);
+      LINK_SETUP (ok, "the missing-file link row resolves by identity");
+      link_bounds = row.bounds;
+      shot = render_all (link_image, &w, &h);
+      st = stroke_line_run (link_image, gone, &brush,
+                            link_bounds.x + 2, link_bounds.y + 2,
+                            link_bounds.x + link_bounds.width - 2, link_bounds.y + link_bounds.height - 2,
+                            NULL, &busy_waits);
+      LINK_SETUP (st == GLIMS_STATUS_OK,
+                  "the missing-file link is painted over (status %d)", st);
+      ok = unlink (png3) == 0;
+      LINK_SETUP (ok, "the link file is deleted before the restore");
+      before = undo_depth (link_image);
+      WAIT_OUT_BUSY (st, api->layer_command (engine, link_image, gone, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL), "linked restore/history");
+      LINK_SETUP (st == GLIMS_STATUS_OK, "the linked restore/history step succeeds (status %d)", st);
+      CHECK (st == GLIMS_STATUS_OK &&
+             undo_depth (link_image) == before + 1 &&
+             api->layer_source_info (engine, link_image, gone, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_LINK && ! info.is_rasterized && info.has_source &&
+             source_test_row (link_image, gone, &row) && row.kind == GLIMS_LAYER_LINK,
+             "restore with a missing file keeps the retained buffer and resumes monitoring");
+      after = render_all (link_image, &w2, &h2);
+      CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
+             "the retained source buffer renders exactly as before the paint");
+      free (after);
+      free (shot);
+      shot = after = NULL;
+
+    links_cleanup:
+      /* Owned buffers and images, on the normal path and after a failed
+       * prerequisite alike. The closes may wait out a bounded BUSY and
+       * clear their id only on success. */
+      free (shot);
+      free (edited);
+      free (after);
+      shot = edited = after = NULL;
+      api->free_string (error);
+      error = NULL;
+      GlimsStatus saved_close = close_image_wait_busy (&saved, &busy_waits);
+      GlimsStatus link_close = close_image_wait_busy (&link_image, &busy_waits);
+      CHECK (saved_close == GLIMS_STATUS_OK && link_close == GLIMS_STATUS_OK,
+             "the retained-link fixture releases its images (scratch %d, link %d)", saved_close, link_close);
+      if (saved_close != GLIMS_STATUS_OK || link_close != GLIMS_STATUS_OK) fixture_healthy = false;
+    }
+
+  /* A closed image's layer id is NOT_FOUND. */
+  foreign = other_layer;
+  GlimsStatus other_close = close_image_wait_busy (&other, &busy_waits);
+  CHECK (other_close == GLIMS_STATUS_OK, "the foreign source image closes (status %d)", other_close);
+  if (other_close != GLIMS_STATUS_OK) fixture_healthy = false;
+  CHECK (api->layer_command (engine, image, foreign, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a closed image's layer id is NOT_FOUND for restore");
+
+  GlimsStatus image_close = close_image_wait_busy (&image, &busy_waits);
+  CHECK (image_close == GLIMS_STATUS_OK, "the source fixture image closes (status %d)", image_close);
+  if (image_close != GLIMS_STATUS_OK) fixture_healthy = false;
+  printf ("      (test_layer_restore_source observed %d BUSY wait(s))\n", busy_waits);
+  fflush (stdout);
+  return fixture_healthy;
+}
+
+/* ---- Busy while a file load runs in a nested main loop -----------------
+ *
+ * The glims-slow-load Python plug-in (installed into the throwaway user
+ * directory before the engine starts, laid out like GIMP's own foggify:
+ * one directory per plug-in, an executable .py inside) registers a loader
+ * for the made-up ".gslow" extension. Its run writes the ENTERED marker,
+ * then waits at most ten seconds for the RELEASE file before returning a
+ * 2x2 image — a controlled pause inside a real load plug-in's nested main
+ * loop, which is exactly the window in which a queued facade mutation
+ * must see the engine as busy.
+ */
+
+static const char slow_load_source[] =
+"#!/usr/bin/env python3\n"
+"import gi\n"
+"gi.require_version('Gimp', '3.0')\n"
+"from gi.repository import Gimp\n"
+"gi.require_version('Gegl', '0.4')\n"
+"from gi.repository import Gegl\n"
+"from gi.repository import GObject\n"
+"from gi.repository import GLib\n"
+"from gi.repository import Gio\n"
+"import os, sys, time\n"
+"\n"
+"def load_slow(procedure, run_mode, file, metadata, flags, config, data):\n"
+"    work = os.environ.get('GLIMS_SLOWLOAD_DIR')\n"
+"    if work:\n"
+"        with open(os.path.join(work, 'slow-load-entered'), 'w') as marker:\n"
+"            marker.write('x')\n"
+"        release = os.path.join(work, 'slow-load-release')\n"
+"        deadline = time.monotonic() + 10.0\n"
+"        while not os.path.exists(release) and time.monotonic() < deadline:\n"
+"            time.sleep(0.02)\n"
+"        with open(os.path.join(work, 'slow-load-done'), 'w') as marker:\n"
+"            marker.write('x')\n"
+"    image = Gimp.Image.new(2, 2, Gimp.ImageBaseType.RGB)\n"
+"    layer = Gimp.Layer.new(image, 'slow', 2, 2, Gimp.ImageType.RGBA_IMAGE,\n"
+"                           100.0, Gimp.LayerMode.NORMAL)\n"
+"    image.insert_layer(layer, None, 0)\n"
+"    Gimp.context_set_foreground(Gegl.Color.new('#336699'))\n"
+"    layer.edit_fill(Gimp.FillType.FOREGROUND)\n"
+"    return Gimp.ValueArray.new_from_values([\n"
+"        GObject.Value(Gimp.PDBStatusType, Gimp.PDBStatusType.SUCCESS),\n"
+"        GObject.Value(Gimp.Image, image),\n"
+"    ])\n"
+"\n"
+"class GlimsSlowLoad(Gimp.PlugIn):\n"
+"    def do_query_procedures(self):\n"
+"        return ['file-glims-slow-load']\n"
+"    def do_create_procedure(self, name):\n"
+"        procedure = Gimp.LoadProcedure.new(self, name,\n"
+"                                           Gimp.PDBProcType.PLUGIN,\n"
+"                                           load_slow, None)\n"
+"        procedure.set_menu_label('Glims slow-load fixture')\n"
+"        procedure.set_documentation('load a .gslow test file',\n"
+"                                    'loads a .gslow test file', name)\n"
+"        procedure.set_mime_types('image/x-glims-slow')\n"
+"        procedure.set_extensions('gslow')\n"
+"        return procedure\n"
+"\n"
+"Gimp.main(GlimsSlowLoad.__gtype__, sys.argv)\n";
+
+/* Installs the fixture under <user_dir>/plug-ins before the engine starts;
+ * the plug-in finds the work directory through GLIMS_SLOWLOAD_DIR. */
+static void
+install_slow_load_plug_in (const char *user_dir)
+{
+  char   path[1100];
+  FILE  *file;
+
+  mkdir (user_dir, 0755);
+  snprintf (path, sizeof path, "%s/plug-ins", user_dir);
+  mkdir (path, 0755);
+  snprintf (path, sizeof path, "%s/plug-ins/glims-slow-load", user_dir);
+  mkdir (path, 0755);
+  snprintf (path, sizeof path, "%s/plug-ins/glims-slow-load/glims-slow-load.py", user_dir);
+  file = fopen (path, "w");
+  if (file)
+    {
+      fputs (slow_load_source, file);
+      fclose (file);
+      chmod (path, 0755);
+    }
+}
+
+static void
+slow_load_marker (const char *work, const char *name, char *out, size_t size)
+{
+  snprintf (out, size, "%s/%s", work, name);
+}
+
+/* Drops the release file so the next load returns immediately; the tests
+ * keep it present except inside a deliberately armed window. */
+static void
+slow_load_release (const char *work)
+{
+  char  path[1100];
+  FILE *file;
+
+  slow_load_marker (work, "slow-load-release", path, sizeof path);
+  file = fopen (path, "w");
+  if (file)
+    fclose (file);
+}
+
+/* Arms the next load: no markers, no release, so the plug-in marks ENTERED
+ * and then parks inside the load until released (ten seconds at most). */
+static void
+slow_load_arm (const char *work)
+{
+  char path[1100];
+
+  slow_load_marker (work, "slow-load-entered", path, sizeof path);
+  unlink (path);
+  slow_load_marker (work, "slow-load-done", path, sizeof path);
+  unlink (path);
+  slow_load_marker (work, "slow-load-release", path, sizeof path);
+  unlink (path);
+}
+
+static int
+slow_load_seen (const char *work, const char *name, double seconds)
+{
+  char   path[1100];
+  double deadline = now_ms () + seconds * 1000.0;
+
+  slow_load_marker (work, name, path, sizeof path);
+  while (now_ms () < deadline)
+    {
+      if (access (path, F_OK) == 0)
+        return 1;
+      usleep (2000);
+    }
+  return 0;
+}
+
+/* An operation whose nested .gslow load is probed from the main thread. */
+typedef struct
+{
+  GlimsImageID image;
+  GlimsItemID  layer;
+  uint64_t     revision;
+  int32_t      position;
+} BusyProbe;
+
+typedef struct
+{
+  GlimsStatus (*run) (BusyProbe *probe);
+  BusyProbe   *probe;
+  GlimsStatus   status;
+  atomic_bool   finished;
+} BusyThread;
+
+static void *
+busy_thread_run (void *data)
+{
+  BusyThread *thread = data;
+
+  thread->status = thread->run (thread->probe);
+  atomic_store (&thread->finished, true);
+  return NULL;
+}
+
+static GlimsStatus
+busy_run_restore (BusyProbe *probe)
+{
+  return api->layer_command (engine, probe->image, probe->layer,
+                             GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL);
+}
+
+static GlimsStatus
+busy_run_undo (BusyProbe *probe)
+{
+  return api->image_undo (engine, probe->image);
+}
+
+static GlimsStatus
+busy_run_history (BusyProbe *probe)
+{
+  return api->image_history_move (engine, probe->image, probe->revision, probe->position, NULL);
+}
+
+/* While ENTERED says a .gslow load sits inside its nested main loop, a
+ * queued fill on `other` must be refused BUSY and change nothing, while a
+ * read and a cancel still reach the engine. `before` is `other`'s render
+ * from before the load started. */
+static void
+check_busy_window (GlimsImageID other, const uint8_t *before, int32_t w, int32_t h,
+                   int32_t depth, const char *what)
+{
+  GlimsFillSettings  fill = { .struct_size = sizeof fill, .mode = GLIMS_FILL_SELECTION,
+                              .color = { 0, 1, 0, 1 }, .opacity = 1 };
+  GlimsImageInfo     info;
+  GlimsStatus        fill_status;
+  uint8_t           *after;
+  char              *error = NULL;
+
+  fill_status = api->fill (engine, other, (GlimsPoint) { 0, 0 }, &fill, &error);
+  CHECK (fill_status == GLIMS_STATUS_BUSY,
+         "%s: a queued fill during the nested load is refused BUSY (%d%s%s)",
+         what, fill_status, error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  CHECK (api->image_info (engine, other, &info) == GLIMS_STATUS_OK,
+         "%s: reads still work during the nested load", what);
+  CHECK (api->procedure_cancel (engine) == GLIMS_STATUS_NOT_FOUND,
+         "%s: cancel delivery still reaches the engine during the nested load", what);
+  CHECK (undo_depth (other) == depth,
+         "%s: the refused fill pushed no undo step (%d -> %d)", what, depth, undo_depth (other));
+  after = render_all (other, &w, &h);
+  CHECK (before && after && memcmp (before, after, (size_t) w * h * 4) == 0,
+         "%s: the refused fill changed no pixels", what);
+  free (after);
+}
+
+/* Runs `run` on a thread, waits for its nested .gslow load to mark
+ * ENTERED, probes the busy window, then releases the load and joins. */
+static void
+probe_busy_during_load (const char *work, GlimsImageID other,
+                        GlimsStatus (*run) (BusyProbe *), BusyProbe *probe,
+                        GlimsStatus expected, const char *what)
+{
+  BusyThread thread = { .run = run, .probe = probe };
+  pthread_t  id;
+  int32_t    depth = undo_depth (other), w = 0, h = 0;
+  uint8_t   *before = render_all (other, &w, &h);
+  int        entered;
+  GlimsImageID close_candidate = 0;
+  GlimsImageInfo close_info;
+
+  api->image_new (engine, 8, 8, &close_candidate, NULL);
+  slow_load_arm (work);
+  pthread_create (&id, NULL, busy_thread_run, &thread);
+  entered = slow_load_seen (work, "slow-load-entered", 15);
+  CHECK (entered, "%s: the .gslow load ran inside the operation", what);
+  if (entered)
+    {
+      check_busy_window (other, before, w, h, depth, what);
+      CHECK (api->image_close (engine, close_candidate) == GLIMS_STATUS_BUSY &&
+             api->image_info (engine, close_candidate, &close_info) == GLIMS_STATUS_OK,
+             "%s: close refuses BUSY and keeps the image alive during loading", what);
+    }
+  free (before);
+  slow_load_release (work);
+  pthread_join (id, NULL);
+  if (api->image_info (engine, close_candidate, &close_info) == GLIMS_STATUS_OK)
+    CHECK (api->image_close (engine, close_candidate) == GLIMS_STATUS_OK,
+           "%s: close succeeds after the loader returns", what);
+  CHECK (thread.status == expected, "%s: the operation completed once released (%d)",
+         what, thread.status);
+}
+
+/* A queued facade mutation must see the engine as busy for the whole
+ * duration of a file load inside a nested main loop: an explicit
+ * RESTORE_SOURCE that thaws a link, an undo or a history move that pops
+ * the rasterize step, and the link monitor's own reload, which no facade
+ * call wraps. The .gslow loader parks until released, so ENTERED proves
+ * the nested load is in flight before the probe runs. */
+static void
+test_busy_during_link_load (const char *work)
+{
+  GlimsImageID     image = 0, other = 0, monitor_image = 0;
+  GlimsItemID      link = 0, monitor_link = 0;
+  GlimsHistoryInfo hinfo = { 0 };
+  BusyProbe        probe = { 0 };
+  char             gslow[1100];
+  FILE            *file;
+  uint8_t         *before = NULL;
+  int32_t          w = 0, h = 0, depth;
+  int              entered;
+
+  if (! supports_link_layers ())
+    {
+      printf ("ok    skipping the link busy tests: the engine has no link layers\n");
+      return;
+    }
+
+  snprintf (gslow, sizeof gslow, "%s/slow-source.gslow", work);
+  file = fopen (gslow, "w");
+  CHECK (file != NULL, "the .gslow fixture file is written");
+  if (! file)
+    return;
+  fputs ("glims slow load fixture\n", file);
+  fclose (file);
+
+  api->image_new (engine, 8, 8, &image, NULL);
+  api->image_new (engine, 8, 8, &other, NULL);
+
+  /* The release marker is still present, so this first load returns at
+   * once; it also proves the fixture plug-in itself works. */
+  CHECK (api->image_place_link (engine, image, gslow, &link, NULL) == GLIMS_STATUS_OK && link != 0,
+         "a link layer on the .gslow file is placed through the slow loader");
+  if (! link)
+    {
+      api->image_close (engine, image);
+      api->image_close (engine, other);
+      return;
+    }
+  CHECK (api->layer_command (engine, image, link, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK,
+         "the .gslow link rasterizes");
+
+  /* Restore thaws the link: the file reloads inside the restore. */
+  probe = (BusyProbe) { .image = image, .layer = link };
+  probe_busy_during_load (work, other, busy_run_restore, &probe,
+                        GLIMS_STATUS_OK, "restore of the link");
+
+  /* Undo of the rasterize pops the same rasterizable undo record, which
+   * thaws the link and reloads the file. */
+  CHECK (api->layer_command (engine, image, link, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK,
+         "the link rasterizes again for the undo probe");
+  probe_busy_during_load (work, other, busy_run_undo, &probe,
+                        GLIMS_STATUS_OK, "undo of the link rasterize");
+
+  /* A history move across the rasterize step thaws it the same way. */
+  CHECK (api->layer_command (engine, image, link, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK,
+         "the link rasterizes for the history probe");
+  CHECK (api->fill (engine, image, (GlimsPoint) { 0, 0 },
+                    &(GlimsFillSettings) { .struct_size = sizeof (GlimsFillSettings),
+                                           .mode = GLIMS_FILL_SELECTION,
+                                           .color = { 1, 0, 0, 1 }, .opacity = 1 },
+                    NULL) == GLIMS_STATUS_OK,
+         "a fill adds a second step over the rasterize");
+  CHECK (api->image_history (engine, image, NULL, 0, &hinfo) == GLIMS_STATUS_OK &&
+         hinfo.current_position >= 2,
+         "the history sits two steps over the rasterize (position %d)", hinfo.current_position);
+  probe.revision = hinfo.revision;
+  probe.position = hinfo.current_position - 2;
+  probe_busy_during_load (work, other, busy_run_history, &probe,
+                        GLIMS_STATUS_OK, "history move across the link thaw");
+
+  /* The link monitor reloads on file change with no facade call around
+   * it: a queued mutation must still see the engine as busy. Keep exactly
+   * one monitored link so one load runs. */
+  CHECK (api->layer_command (engine, image, link, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK,
+         "the first link is frozen so only the monitor link reloads");
+  api->image_new (engine, 8, 8, &monitor_image, NULL);
+  CHECK (api->image_place_link (engine, monitor_image, gslow, &monitor_link, NULL) == GLIMS_STATUS_OK &&
+         monitor_link != 0,
+         "the monitored .gslow link is placed");
+
+  before     = render_all (other, &w, &h);
+  depth      = undo_depth (other);
+  slow_load_arm (work);
+  file = fopen (gslow, "w");
+  CHECK (file != NULL, "the .gslow file is rewritten for the monitor probe");
+  if (file)
+    {
+      fputs ("glims slow load fixture, changed\n", file);
+      fclose (file);
+    }
+  entered = slow_load_seen (work, "slow-load-entered", 15);
+  CHECK (entered, "the link monitor reloaded the changed file");
+  if (entered)
+    {
+      GlimsImageInfo live;
+      check_busy_window (other, before, w, h, depth, "the monitor's reload");
+      CHECK (api->image_close (engine, monitor_image) == GLIMS_STATUS_BUSY &&
+             api->image_info (engine, monitor_image, &live) == GLIMS_STATUS_OK,
+             "close keeps the monitored image alive until its native reload unwinds");
+    }
+  free (before);
+  slow_load_release (work);
+  /* Completion is observed through the status-bearing native close,
+   * not a Python marker written before the loader has returned. Pending
+   * callbacks on dying links must be cancelled by production teardown. */
+  GlimsImageID closing[] = { monitor_image, image, other };
+  for (size_t i = 0; i < sizeof closing / sizeof closing[0]; i++)
+    {
+      GlimsStatus status;
+      GlimsImageInfo live;
+      double deadline = now_ms () + 15000;
+      do
+        {
+          status = api->image_close (engine, closing[i]);
+          if (status == GLIMS_STATUS_BUSY) usleep (10000);
+        }
+      while (status == GLIMS_STATUS_BUSY && now_ms () < deadline);
+      CHECK (status == GLIMS_STATUS_OK &&
+             api->image_info (engine, closing[i], &live) == GLIMS_STATUS_NOT_FOUND,
+             "the linked-load fixture closes image %zu safely after native completion", i);
+    }
 }
 
 static void
@@ -9733,6 +10761,14 @@ main (int argc, char **argv)
 
   snprintf (user_dir, sizeof user_dir, "%s/user", argv[2]);
   snprintf (cache_dir, sizeof cache_dir, "%s/cache", argv[2]);
+
+  /* The slow-load fixture must be in place before the engine scans its
+   * plug-in path at start. The release marker stays preset: only a test
+   * that arms a load removes it. */
+  install_slow_load_plug_in (user_dir);
+  setenv ("GLIMS_SLOWLOAD_DIR", argv[2], 1);
+  slow_load_release (argv[2]);
+
   config.struct_size     = sizeof config;
   config.user_directory  = user_dir;
   config.cache_directory = cache_dir;
@@ -9781,6 +10817,13 @@ main (int argc, char **argv)
   test_editing ();
   test_layer_fit_trim ();
   test_layer_source (argv[2]);
+  if (! test_layer_restore_source (argv[2]))
+    {
+      printf ("FAILED: retained-source fixture setup or cleanup failed; dependent tests stopped\n");
+      api->stop (engine);
+      return 1;
+    }
+  test_busy_during_link_load (argv[2]);
   test_clipboard ();
   test_clear_srgb_and_readiness (argv[3]);
   test_render_freshness ();
