@@ -127,3 +127,49 @@ bits and a negative modifier value reproduced six failing assertions across
 assignment, unchanged storage and base catalog construction. Both catalog
 entry construction and override application now validate the same known-bit
 mask. All 39 focused tests pass after the fix.
+
+## Panel and menu integration (branch `feat/menu-shortcut-controls`)
+
+This slice adds the **panel and the menu bridge only** — no native/C, no
+plug-in, workspace or dynamic binding claims:
+
+- `Sources/GlimsKit/Shortcuts/MenuShortcutBridge.swift` collects the
+  built-in commands from a statically made `MainMenu`: every item created
+  by `MainMenu.item(_:_:_:)` carries `builtinIdentifier`, and only marked
+  items are collected — plug-in commands, workspaces and the recent list
+  are never marked and stay out. A command's stable id is
+  `NSStringFromSelector(action)` plus the item's final tag, never a
+  localized title. An uppercase factory letter adds Shift in the canonical
+  model base ("S" + ⌘ stays "S" + ⌘ on the item, s + ⌘⇧ in the model), so
+  Save As… never collides with Save. An unmodified DEL (0x7F) has no model
+  base; its factory snapshot still restores the item exactly. Factory
+  snapshots keep the original `keyEquivalent`/`modifierMask` in memory
+  only — raw AppKit flags are never serialized. Aliases sharing an id
+  merge; disagreeing factory bases are a visible conflict, never a silent
+  unbind.
+- `Sources/GlimsKit/Shortcuts/MenuShortcutManager.swift` attaches **once**,
+  from `AppController` after the real `NSApp.mainMenu` is installed
+  (`MainMenu.make()` never attaches, applies or rewrites anything global).
+  Mutations validate the full catalog and persist through the store
+  **first**, then update the actual menu items and the panel — never the
+  responder chain or targets. Load errors keep the factory menu and the
+  stored bytes and surface when the panel opens; no auto-reset, no startup
+  alert. macOS-reserved owners (Hide/Minimize/Quit/…) are read-only: no
+  assign, disable or reset via the UI or stored data.
+- `Sources/GlimsKit/Shortcuts/KeyboardShortcutsPanelController.swift` is the
+  App ▸ Keyboard Shortcuts… panel: a searchable command list with menu
+  path labels, a literal character key field, ⌘/⇧/⌥/⌃ checkboxes, a
+  function-key picker exposing the model's key tags, and Assign / Disable /
+  Reset Selected / Reset All / Close with a persistent error line. No
+  global or event key capture. The manager retains one panel.
+- `Sources/GlimsKit/EngineSmokeTestMenuShortcuts.swift` drives the panel
+  with a private UserDefaults suite and an injected manager as the
+  `menu-shortcuts` smoke case and in the default full run; it invokes one
+  real NSMenu action and never sends Quit/Hide/Minimize.
+
+Verification: `swift build --build-tests -j 2` plus the filtered pure tests
+(`swift test --filter MenuShortcutManagerTests|KeyboardShortcut…`) cover
+collection, ids, canonical bases, snapshots, reserved owners, aliases,
+conflicts, persist-first ordering, corrupt stores, the single panel and
+panel-driven assign/disable/reset. Not covered here: the engine smoke run
+(needs a built engine) and any interactive GUI run.
