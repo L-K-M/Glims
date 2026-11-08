@@ -707,7 +707,8 @@ enum EngineSmokeTest {
             spin(0.1)
         }
         func opacityField(_ sheet: NSWindow?) -> NSTextField? {
-            views(sheet?.contentView, as: NSTextField.self).first { $0.isEditable }
+            views(sheet?.contentView, as: NSTextField.self)
+                .first { $0.isEditable && $0.accessibilityLabel() == "Fill opacity, percent" }
         }
 
         let undoBefore = first.undoInfo.undoCount
