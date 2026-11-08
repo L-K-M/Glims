@@ -89,6 +89,7 @@ enum MainMenu {
             item("New Snapshot", #selector(DocumentWindowController.newSnapshot(_:))),
             .separator(),
             item("Guides…", #selector(DocumentWindowController.showGuides(_:))),
+            item("Configure Grid…", #selector(DocumentWindowController.configureGrid(_:))),
             item("Image Information…", #selector(DocumentWindowController.imageInformation(_:))),
         ])
         let newLayer = item("New Layer", #selector(DocumentWindowController.newLayer(_:)), "n")
@@ -186,6 +187,7 @@ enum MainMenu {
             .separator(),
             item("Show Rulers", #selector(DocumentWindowController.toggleShowRulers(_:))),
             item("Show Guides", #selector(DocumentWindowController.toggleShowGuides(_:))),
+            item("Show Grid", #selector(DocumentWindowController.toggleShowGrid(_:))),
             item("Show Layer Boundary", #selector(DocumentWindowController.toggleLayerBoundary(_:))),
             item("Show Selection Edges", #selector(DocumentWindowController.toggleSelectionEdges(_:))),
         ])

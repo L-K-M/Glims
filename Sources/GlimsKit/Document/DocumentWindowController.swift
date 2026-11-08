@@ -28,6 +28,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private(set) var indexedSheet: IndexedSheetController?
     /// View ▸ Show Guides' cached per-window state, defaulting to on.
     private(set) var guidesViewState = GuideViewState()
+    /// Image ▸ Configure Grid…'s sheet, retained by this window for its
+    /// lifetime; nil while none is open. Two documents keep independent
+    /// sheets through their own controllers — no global binding.
+    private(set) var gridSheet: GridSheetController?
+    /// View ▸ Show Grid's cached per-window state, defaulting to off.
+    private(set) var gridViewState = GridViewState()
+
     /// View ▸ Show Rulers' cached per-window state, defaulting to on. Kept
     /// separate from the guides state — the two toggles never couple.
     private(set) var rulerViewState = RulerViewState()
@@ -40,6 +47,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// They are removed when the window closes (and in deinit), so a
     /// closing window leaves no observation behind.
     private(set) var rulerObserversActive = false
+
     /// Bumped by every filter start and every cancellation, so a begin
     /// that lands late can tell it is stale and abort its session.
     private var previewRequest = 0
@@ -96,10 +104,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         imageDocument.onError = { [weak self] message in
             self?.showStatusError(message)
             self?.previewPanel?.showError(message)
-            // Fan out to the guides sheet as well, alongside the existing
-            // handlers — the sheet never installs its own callback.
+            // Fan out to the guides and grid sheets as well, alongside the
+            // existing handlers — the sheets never install their own callback.
             self?.guidesSheet?.showError(message)
+            self?.gridSheet?.showError(message)
             self?.indexedSheet?.showError(message)
+
         }
         // Palette picks and structural or lock changes first commit any
         // field/text edit and end an active stroke; each command also
@@ -296,7 +306,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         window?.endEditing(for: nil)
         previewPanel?.window?.endEditing(for: nil)
         guidesSheet?.commitFieldEdit()
+        gridSheet?.commitFieldEdit()
         indexedSheet?.commitFieldEdit()
+
         for paletteWindow in PaletteEditScope.windowsEditing(imageDocument) {
             paletteWindow.endEditing(for: nil)
         }
@@ -339,8 +351,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // the new extent on the next draw.
         invalidateRulers()
         // Fan out to the guides sheet through this existing hook.
+
         guidesSheet?.documentStateDidChange()
+        gridSheet?.documentStateDidChange()
         indexedSheet?.documentStateDidChange()
+
     }
 
     // MARK: Menu commands
@@ -522,6 +537,36 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         if let item = sender as? NSMenuItem { item.state = guidesViewState.menuState }
     }
 
+    // MARK: Grid
+
+    /// Image ▸ Configure Grid…: opens this window's grid configuration
+    /// sheet. The sheet is owned by this window controller, captures this
+    /// document and seeds its draft from the cached grid only, so opening
+    /// it never makes a native call.
+    @objc func configureGrid(_ sender: Any?) {
+        guard let window, !imageDocument.isClosing, window.attachedSheet == nil,
+              gridSheet == nil else { return }
+        let sheet = GridSheetController(document: imageDocument, hostWindow: window)
+        gridSheet = sheet
+        window.beginSheet(sheet.panel) { [weak self, weak sheet] _ in
+            guard let self, let sheet, self.gridSheet === sheet else { return }
+            sheet.invalidate()
+            self.gridSheet = nil
+        }
+    }
+
+    /// View ▸ Show Grid: flips this window's cached flag and redraws the
+    /// canvas. Pure view state — no image pixels, file, dirty, history,
+    /// selection, export or print change — so it works while the engine
+    /// is busy.
+    @objc func toggleShowGrid(_ sender: Any?) {
+        guard !imageDocument.isClosing else { return }
+        gridViewState.toggle()
+        canvas.showsGrid = gridViewState.showsGrid
+        canvas.needsDisplay = true
+        if let item = sender as? NSMenuItem { item.state = gridViewState.menuState }
+    }
+
     /// View ▸ Show Rulers: flips this window's cached flag and the scroll
     /// view's native ruler slots, which relayout the viewport around them.
     /// Pure view state — no engine call, no pixel, file, dirty, history,
@@ -534,6 +579,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         scrollView.tile()
         invalidateRulers()
         if let item = sender as? NSMenuItem { item.state = rulerViewState.menuState }
+
     }
 
     @objc func toggleLayerBoundary(_ sender: Any?) {
@@ -1208,6 +1254,18 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // wherever navigation is.
             menuItem.state = guidesViewState.menuState
             return !imageDocument.isClosing
+        case #selector(configureGrid(_:)):
+            // The sheet seeds only from cached state; it must not stack
+            // on another sheet of this window. Grid configuration is
+            // image metadata: a selected channel does not restrict it.
+            return !imageDocument.isClosing && window?.attachedSheet == nil
+        case #selector(toggleShowGrid(_:)):
+            // The checkmark reads the window's cached flag, never the
+            // engine; toggling is view-only, so it stays available even
+            // while the engine is busy.
+            menuItem.state = gridViewState.menuState
+            return !imageDocument.isClosing
+
         case #selector(toggleShowRulers(_:)):
             // Same contract as Show Guides, spelled out in RulerMenuLogic:
             // the checkmark reads the window's cached flag and an engine-
@@ -1217,6 +1275,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                                      engineIsBusy: EngineActivity.shared.isBusy)
             menuItem.state = rulerCheck.state
             return rulerCheck.enabled
+
 
         case #selector(toggleLayerBoundary(_:)):
             menuItem.state = canvas.showsLayerBoundary ? .on : .off
@@ -1792,7 +1851,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // views themselves go away with the scroll view's view hierarchy.
         removeRulerObservers()
         guidesSheet?.invalidate()
+        gridSheet?.invalidate()
         indexedSheet?.invalidate()
+
         previewPanel?.cancel()
         cancelPendingPreview()
         canvas.stopRendering { [self] in

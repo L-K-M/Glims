@@ -659,9 +659,29 @@ final class ImageDocument {
     /// the selection are never touched, and pixel locks do not refuse
     /// them. The cached `grid` refreshes through `reload` on the
     /// undo-changed event this step emits.
-    func setGrid(_ grid: EngineSession.Grid) {
-        guard !refuseWhileEditingUnavailable() else { return }
-        run { session, image in try session.setGrid(grid, image: image) }
+    func setGrid(_ grid: EngineSession.Grid,
+                 completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !refuseWhileEditingUnavailable() else {
+            return completion(.failure(isClosing ? DocumentError.closed : DocumentError.busy))
+        }
+        endPendingUserEdits()
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        // Keep the deferred cache/completion stage alive through another
+        // document's exclusive work as well as the native input job.
+        pendingWork += 1
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let result = Result { try session.setGrid(grid, image: image) }
+            DispatchQueue.main.async {
+                EngineActivity.shared.whenIdle {
+                    defer { self.jobDidFinish(input: false) }
+                    if !self.isClosing {
+                        try? self.reload()
+                        if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                    }
+                    completion(result)
+                }
+            }
+        }
     }
 
     // MARK: Editing
