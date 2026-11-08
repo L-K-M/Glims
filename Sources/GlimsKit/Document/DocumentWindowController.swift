@@ -848,12 +848,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
-    /// File ▸ Place as Link Layer…: one file, placed as a link layer.
+    /// File ▸ Place…: one file, placed as a link layer.
     /// Engines before GIMP 3.2 have no link layers; the menu already
     /// refuses them, and this guard keeps a programmatic trigger honest.
     @objc func placeLinkFromFile(_ sender: Any?) {
         guard imageDocument.supportsLinkLayers != false else {
-            statusBar.message = "This engine cannot place linked layers; it needs GIMP 3.2 or later."
+            statusBar.message = "Linked layers are unavailable in this build. Use Open as Layers to import a copy."
             NSSound.beep()
             return
         }

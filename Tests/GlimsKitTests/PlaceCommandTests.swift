@@ -2,7 +2,7 @@ import AppKit
 import XCTest
 @testable import GlimsKit
 
-/// File ▸ Open as Layers… and Place as Link Layer…: menu placement and
+/// File ▸ Open as Layers… and Place…: menu placement and
 /// selectors, and the engine version data that gates link layers — all
 /// without an engine.
 @MainActor
@@ -15,9 +15,9 @@ final class PlaceCommandTests: XCTestCase {
         let titles = file.items.map(\.title)
         let recent = try XCTUnwrap(titles.firstIndex(of: "Open Recent"))
         XCTAssertEqual(titles[recent + 1], "Open as Layers…")
-        XCTAssertEqual(titles[recent + 2], "Place as Link Layer…")
+        XCTAssertEqual(titles[recent + 2], "Place…")
         let layers = try XCTUnwrap(file.items.first { $0.title == "Open as Layers…" })
-        let place = try XCTUnwrap(file.items.first { $0.title == "Place as Link Layer…" })
+        let place = try XCTUnwrap(file.items.first { $0.title == "Place…" })
         XCTAssertEqual(layers.action, #selector(DocumentWindowController.openLayersFromFile(_:)))
         XCTAssertEqual(place.action, #selector(DocumentWindowController.placeLinkFromFile(_:)))
         XCTAssertNotEqual(layers.action, #selector(AppController.openDocument(_:)))
