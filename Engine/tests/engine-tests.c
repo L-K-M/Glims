@@ -7814,9 +7814,10 @@ test_guides (const char *work)
   CHECK (api->guide_remove (engine, image, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
          "removing id 0 is invalid");
 
-  /* Undo of the removal restores the same guide id. */
+  /* Undo of the removal restores the same guide id at the position it
+   * was removed from (65, after the metadata-check move). */
   CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && find_guide (image, v, &row) &&
-         row.position == 70 && row.orientation == GLIMS_GUIDE_VERTICAL,
+         row.position == 65 && row.orientation == GLIMS_GUIDE_VERTICAL,
          "undo restores the removed guide with its id");
 
   /* XCF round trip: ids change, the guide set compares by position

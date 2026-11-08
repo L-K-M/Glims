@@ -1473,8 +1473,13 @@ changes; XCF save/reopen compared by (orientation, position) sets
 rather than runtime ids; invalid orientation/position/id/struct
 refusals; unknown, foreign, stale and closed-image NOT_FOUND; BUSY
 under an open stroke with reads still allowed; and GUIDES event
-delivery. `swift build` and `swift build --build-tests` pass. Native
-adapter builds and the conformance run require the shared-lock grant
-and are recorded separately (see the final report); custom-guide
-exclusion has no facade-reachable creation path, so it is covered by
-the `is_custom` filter in code and code review only.
+delivery. `swift build` and `swift build --build-tests` pass. With the
+shared-lock grant, private-adapter-root conformance runs pass on both
+pinned engines (`build-adapter.sh --test` with
+`GLIMS_ADAPTER_ROOT=$PWD/.build/engine-adapters`): all checks green on
+GIMP_3_2_8 and GIMP_3_0_8, including the full `test_guides` block. The
+first 3.2.8 run caught one test-expectation error — undo of a removal
+restores the position the guide was removed at (65), not an earlier
+one — fixed in the test, not the adapter. Custom-guide exclusion has
+no facade-reachable creation path, so it is covered by the `is_custom`
+filter in code and code review only.
