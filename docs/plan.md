@@ -2850,6 +2850,15 @@ proof intents and gamut warnings remain unverified or unimplemented.
 
 
 
+Ruler review reproduced a major/minor classification defect at large
+scrolled coordinates: a magnitude-relative tolerance eventually exceeded
+the distance between ticks. At image coordinate 1,000,000 and 3,200% zoom,
+the actual planner mislabeled all 26 visible ticks as major. Classification
+now uses exact divisibility of the integral tick index. The independent
+six-position oracle passes, as do all 421 unit tests and 47 focused pinned
+interface checks. The four-engine focused and 1,067 full integration checks
+above preceded this pure planner correction.
+
 Grid controls integration passes 417 unit tests, all 38 focused checks on
 all four engines and 1,030 full pinned interface checks. A controlled
 probe of the actual planner reproduced an infinite loop when a Double

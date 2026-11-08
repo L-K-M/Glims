@@ -2137,6 +2137,8 @@ MARSHAL (image_paste_into, return glims_image_paste_into (e, a->image, a->item, 
                                                           a->pixels, a->n, a->out, a->error);)
 MARSHAL (floating_command, return glims_floating_command (e, a->image, a->item, (uint32_t) a->width,
                                                           a->out, a->error);)
+MARSHAL (selection_float, return glims_selection_float (e, a->image, a->item, (uint32_t) a->width,
+                                                         a->out, a->error);)
 
 static GlimsStatus
 api_image_guides (GlimsEngine *e, GlimsImageID image, GlimsGuideInfo *rows,
@@ -2234,6 +2236,14 @@ api_floating_command (GlimsEngine *e, GlimsImageID image, GlimsItemID expected, 
 {
   GlimsArgs a = { .image = image, .item = expected, .width = command, .out = result, .error = error };
   return glims_engine_call (e, floating_command_on_engine, &a);
+}
+
+static GlimsStatus
+api_selection_float (GlimsEngine *e, GlimsImageID image, GlimsItemID target, uint32_t mode,
+                     GlimsItemID *result, char **error)
+{
+  GlimsArgs a = { .image = image, .item = target, .width = (int32_t) mode, .out = result, .error = error };
+  return glims_engine_call (e, selection_float_on_engine, &a);
 }
 
 static const GlimsEngineAPI api_v1 = {
@@ -2362,6 +2372,7 @@ static const GlimsEngineAPI api_v1 = {
   .image_floating_selection = api_image_floating_selection,
   .image_paste_into  = api_image_paste_into,
   .floating_command  = api_floating_command,
+  .selection_float   = api_selection_float,
 };
 
 __attribute__ ((visibility ("default")))

@@ -373,6 +373,11 @@ GlimsStatus glims_image_paste_into (GlimsEngine *e, GlimsImageID image, GlimsIte
                                     GlimsItemID *result, char **error);
 GlimsStatus glims_floating_command (GlimsEngine *e, GlimsImageID image, GlimsItemID expected,
                                     uint32_t command, GlimsItemID *result, char **error);
+/* Floats the current selection off `target` (0: the single selected
+ * drawable) as a floating selection, as one native FS_FLOAT undo step;
+ * `mode` is a GlimsFloatMode. */
+GlimsStatus glims_selection_float (GlimsEngine *e, GlimsImageID image, GlimsItemID target,
+                                   uint32_t mode, GlimsItemID *result, char **error);
 /* layer-structure.c */
 GlimsStatus glims_layer_state      (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                     GlimsLayerState *state);
