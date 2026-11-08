@@ -10591,6 +10591,25 @@ test_selection_stroke (void)
          error ? ": " : "", error ? error : "");
   api->free_string (error);
 
+  /* Target 0 borrows the engine's selected-layer list; it must not
+   * destroy that list while resolving the selected item. */
+  {
+    GlimsImageID selected_image = 0;
+    GlimsLayerInfo row;
+    int32_t count = 0;
+    CHECK (api->image_new (engine, 24, 24, &selected_image, NULL) == GLIMS_STATUS_OK &&
+           api->select_shape (engine, selected_image, GLIMS_SHAPE_RECTANGLE,
+                               (GlimsPoint[]) { { 4, 4 }, { 20, 20 } }, 2, &sel) == GLIMS_STATUS_OK,
+           "the default-target selection stroke fixture is ready");
+    CHECK (api->selection_stroke (engine, selected_image, 0, 0, &brush, NULL) == GLIMS_STATUS_OK,
+           "selection stroke accepts the implicit selected layer");
+    CHECK (api->image_layers (engine, selected_image, &row, 1, &count) == GLIMS_STATUS_OK &&
+           count == 1 && row.selected,
+           "implicit-target stroke preserves the engine-owned selected-layer list");
+    CHECK (api->image_close (engine, selected_image) == GLIMS_STATUS_OK,
+           "the default-target image closes without freeing the selection list twice");
+  }
+
   api->image_close (engine, other);
   api->image_close (engine, image);
 }
