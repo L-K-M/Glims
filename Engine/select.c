@@ -498,8 +498,8 @@ glims_selection_stroke (GlimsEngine              *engine,
     {
       GList *selected = gimp_image_get_selected_layers (image);
 
+      /* The item tree owns this selection list; only borrow its item. */
       layer = selected ? selected->data : NULL;
-      g_list_free (selected);
     }
   else
     {
