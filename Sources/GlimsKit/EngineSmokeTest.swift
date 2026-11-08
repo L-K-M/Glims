@@ -224,6 +224,12 @@ enum EngineSmokeTest {
 
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tool-presets" {
+                try exerciseToolPresetControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (tool-presets)" : "FAILED: \(failures) failure(s)")
+
+                return failures == 0 ? 0 : 1
+            }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
                 check(false, "unknown engine smoke case: \(selected)")
 
@@ -263,6 +269,7 @@ enum EngineSmokeTest {
             try exerciseGridControls(session, work: work, documents: documents)
             try exercisePixelRulers(session, work: work, documents: documents)
             try exerciseStrokeSelectionControls(session, work: work, documents: documents)
+            try exerciseToolPresetControls(session, work: work, documents: documents)
 
 
             try exerciseIndexedControls(session, work: work, documents: documents)
