@@ -98,6 +98,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brush-resource" {
+                try exerciseSelectedBrushStrokes(session, documents: documents)
+                print(failures == 0 ? "PASSED (brush-resource)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseFileAdmission(session, work: work, documents: documents)
@@ -6153,7 +6158,12 @@ enum EngineSmokeTest {
         documents.items.append(document)
         defer {
             documents.items.removeAll { $0 === document }
-            document.closeImageWhenDrained()
+            var closed = false
+            document.closeImageWhenDrained { closed = true }
+            let deadline = Date().addingTimeInterval(10)
+            while !closed && Date() < deadline { spin(0.01) }
+            check(closed && (try? session.info(image)) == nil,
+                  "the selected-brush image closes before engine shutdown")
         }
         guard let layer = document.activeLayer else {
             check(false, "the selected-brush fixture has a paint layer")
