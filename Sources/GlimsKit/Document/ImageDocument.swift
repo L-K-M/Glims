@@ -106,6 +106,11 @@ final class ImageDocument {
     /// Layers palette's effect rows show them; the engine's listing
     /// never counts a live preview session among them.
     private(set) var layerEffects: [Int32: [EngineSession.Effect]] = [:]
+    /// Each layer's structured-source state by layer id, read with the
+    /// rest of the state: the layer's own class kind (kept after
+    /// rasterization, unlike `Layer.kind`), whether it currently behaves
+    /// as pixels, and whether its text, link or path source survived.
+    private(set) var layerSources: [Int32: EngineSession.LayerSource] = [:]
     /// While the window's filter preview is open, layer changes are
     /// refused — the preview owns its drawable. Set by the controller.
     var filterPreviewIsOpen = false
@@ -214,8 +219,10 @@ final class ImageDocument {
         var locks: [Int32: EngineSession.LayerLockState] = [:]
         var masks: [Int32: EngineSession.MaskState] = [:]
         var effects: [Int32: [EngineSession.Effect]] = [:]
+        var sources: [Int32: EngineSession.LayerSource] = [:]
         for layer in layers {
             locks[layer.id] = try? session.layerState(layer.id, image: image)
+            sources[layer.id] = try? session.layerSource(layer.id, image: image)
             if layer.hasMask, let state = try? session.layerMask(layer.id, image: image),
                state.mask != 0 {
                 masks[layer.id] = state
@@ -226,6 +233,7 @@ final class ImageDocument {
         }
         layerLocks = locks
         layerEffects = effects
+        layerSources = sources
         if let pick = pendingTargetPick, let pickedLayer = pick.target.layer {
             for (id, var mask) in masks {
                 mask.editing = id == pickedLayer && pick.target.mask != nil
@@ -700,7 +708,7 @@ final class ImageDocument {
             }
         case .raise, .lower, .toTop, .toBottom:
             run { session, image in _ = try session.layerCommand(command, image: image) }
-        case .fitToImage, .trimToContent:
+        case .fitToImage, .trimToContent, .rasterize:
             // Pixel edits like the layer transforms: a mask or channel
             // paint target refuses them.
             guard !refuseWhileTargetPending() else { return }

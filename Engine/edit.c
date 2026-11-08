@@ -571,7 +571,8 @@ glims_layer_command (GlimsEngine  *engine,
       /* The resize commands name their layer: an explicit id that is
        * gone is NOT_FOUND, while layer 0 asks for a pick first. */
       if (layer_id != 0 &&
-          (command == GLIMS_LAYER_FIT_TO_IMAGE || command == GLIMS_LAYER_TRIM_TO_CONTENT))
+          (command == GLIMS_LAYER_FIT_TO_IMAGE || command == GLIMS_LAYER_TRIM_TO_CONTENT ||
+           command == GLIMS_LAYER_RASTERIZE))
         return GLIMS_STATUS_NOT_FOUND;
       return glims_fail (error, NULL, "Select a layer first.");
     }
@@ -713,6 +714,21 @@ glims_layer_command (GlimsEngine  *engine,
               }
           }
       }
+      break;
+
+    case GLIMS_LAYER_RASTERIZE:
+      /* Explicit rasterize (layer-source.c): a genuine editable text,
+       * link or vector layer becomes pixel-behaving and keeps its
+       * source, one undo step; an already rasterized instance is a
+       * no-op. The same readiness and inherited pixel/position locks as
+       * the resize commands gate it. */
+      status = glims_edit_ready (engine, glims_lookup_image (engine, id), error);
+      if (status != GLIMS_STATUS_OK) return status;
+      status = glims_check_item_locks (GIMP_ITEM (layer),
+                                       GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, error);
+      if (status != GLIMS_STATUS_OK) return status;
+      status = glims_layer_rasterize (image, layer, error);
+      if (status != GLIMS_STATUS_OK) return status;
       break;
 
     default:
