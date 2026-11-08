@@ -96,6 +96,32 @@ valid_tag_name (const char *tag)
           g_str_has_prefix (tag, "Xmp."));
 }
 
+/* The native registry's type name for `tag`, shared by the value read,
+ * the edit and the tag descriptor so their registered-tag validation
+ * cannot drift apart. The registry decides what a tag is: a well-formed
+ * but unregistered name returns NULL with *status NOT_FOUND and the
+ * registry's message, never guessed XML handling. */
+static const gchar *
+lookup_tag_type (const char *tag, GlimsStatus *status, char **error)
+{
+  GError      *gerror = NULL;
+  const gchar *type   = gexiv2_metadata_try_get_tag_type (tag, &gerror);
+
+  if (! type)
+    {
+      if (error)
+        *error = g_strdup_printf ("The engine's metadata registry has no tag "
+                                  "'%s'%s%s", tag,
+                                  gerror && gerror->message ? ": " : "",
+                                  gerror && gerror->message ? gerror->message : "");
+      g_clear_error (&gerror);
+      *status = GLIMS_STATUS_NOT_FOUND;
+      return NULL;
+    }
+  *status = GLIMS_STATUS_OK;
+  return type;
+}
+
 /* Copies a NULL-terminated native string vector into an OWNED facade
  * vector: `count` entries plus the NULL terminator, every string
  * duplicated. `src` may be NULL (the empty vector). The caller owns the
@@ -217,17 +243,12 @@ glims_image_metadata_values (GlimsEngine *engine,
 
   /* The native registry decides what a tag is; a well-formed but
    * unregistered name is NOT_FOUND, never guessed XML handling. */
-  type = gexiv2_metadata_try_get_tag_type (tag, &gerror);
-  if (! type)
-    {
-      if (error)
-        *error = g_strdup_printf ("The engine's metadata registry has no tag "
-                                  "'%s'%s%s", tag,
-                                  gerror && gerror->message ? ": " : "",
-                                  gerror && gerror->message ? gerror->message : "");
-      g_clear_error (&gerror);
-      return GLIMS_STATUS_NOT_FOUND;
-    }
+  {
+    GlimsStatus registry_status;
+    type = lookup_tag_type (tag, &registry_status, error);
+    if (! type)
+      return registry_status;
+  }
 
   metadata = gimp_image_get_metadata (open->image);   /* borrowed, may be NULL */
   if (metadata)
@@ -410,17 +431,9 @@ glims_image_metadata_edit (GlimsEngine        *engine,
 
   /* Native registered-tag validation: the registry decides, unknown
    * names are NOT_FOUND with its message. */
-  type = gexiv2_metadata_try_get_tag_type (tag, &gerror);
+  type = lookup_tag_type (tag, &status, error);
   if (! type)
-    {
-      if (error)
-        *error = g_strdup_printf ("The engine's metadata registry has no tag "
-                                  "'%s'%s%s", tag,
-                                  gerror && gerror->message ? ": " : "",
-                                  gerror && gerror->message ? gerror->message : "");
-      g_clear_error (&gerror);
-      return GLIMS_STATUS_NOT_FOUND;
-    }
+    return status;
 
   /* Tags the native setter rewrites from the image's own state are
    * refused outright, so normalization can never override a requested
@@ -607,6 +620,204 @@ glims_image_metadata_edit (GlimsEngine        *engine,
    * it. The adapter's local reference ends here. */
   gimp_image_set_metadata (open->image, copy, TRUE);
   g_object_unref (copy);
+
+  return GLIMS_STATUS_OK;
+}
+
+/* ---- Tag descriptor (slot 128, read-only) ----------------------------- */
+
+/* The facade value kind of a registered tag. Only the five structural
+ * native type names map to a container kind; every other native type
+ * name (Exif and Iptc scalar types, XmpText, anything a future engine
+ * adds) maps through the native multiple-value capability — the native
+ * name itself never crosses as an enum, it is only reported as the
+ * bounded type_name string. */
+static uint32_t
+metadata_value_kind (const gchar *type, gboolean supports_multiple)
+{
+  if (type)
+    {
+      if (! g_strcmp0 (type, "LangAlt")) return GLIMS_METADATA_VALUE_LANG_ALT;
+      if (! g_strcmp0 (type, "XmpBag"))  return GLIMS_METADATA_VALUE_BAG;
+      if (! g_strcmp0 (type, "XmpSeq"))  return GLIMS_METADATA_VALUE_SEQ;
+      if (! g_strcmp0 (type, "XmpAlt"))  return GLIMS_METADATA_VALUE_ALT;
+    }
+  return supports_multiple ? GLIMS_METADATA_VALUE_REPEATABLE
+                           : GLIMS_METADATA_VALUE_SINGLE;
+}
+
+/* The TYPE/FORMAT policy bits of `tag`, mirroring exactly the refusals
+ * glims_image_metadata_edit makes before any mutation, so the
+ * descriptor and the edit path can never disagree: a normalization-
+ * protected tag and a LangAlt tag refuse both operations (no bits); an
+ * XMP container the image does not hold cannot be SET (a new container
+ * needs a chosen array type) but REMOVE stays allowed as a no-op. The
+ * bits say nothing about BUSY, locks or native validation: an actual
+ * edit can still refuse, so a set bit never promises a write. */
+static uint32_t
+metadata_format_policy (const gchar *tag, const gchar *type, gboolean is_xmp,
+                        gboolean is_container, gboolean present)
+{
+  if (metadata_tag_protected (tag))
+    return 0;
+  if (is_xmp && type && ! g_strcmp0 (type, "LangAlt"))
+    return 0;
+  if (is_container && ! present)
+    return GLIMS_METADATA_FORMAT_SUPPORTS_REMOVE;
+  return GLIMS_METADATA_FORMAT_SUPPORTS_SET | GLIMS_METADATA_FORMAT_SUPPORTS_REMOVE;
+}
+
+/* Copies the validated UTF-8 `text` into a bounded facade string field:
+ * NUL-terminated, cut at most to size - 1 bytes and never inside a
+ * multi-byte character (back off while the first excluded byte is a
+ * UTF-8 continuation byte). The caller validated `text`; invalid native
+ * bytes are refused before and never copied. */
+static void
+copy_bounded_utf8 (char *buffer, size_t size, const gchar *text)
+{
+  size_t length = strlen (text);
+
+  if (length > size - 1)
+    {
+      length = size - 1;
+      while (length > 0 && (text[length] & 0xC0) == 0x80)
+        length--;
+    }
+  memcpy (buffer, text, length);
+  buffer[length] = '\0';
+}
+
+/* A native registry string must be valid UTF-8; invalid bytes are
+ * refused explicitly (FAILED), never copied silently. NULL is allowed
+ * and reported as the empty string. */
+static GlimsStatus
+descriptor_string_utf8 (const gchar *text, const char *tag, const char *field,
+                        char **error)
+{
+  if (text && ! g_utf8_validate (text, -1, NULL))
+    {
+      if (error)
+        *error = g_strdup_printf ("The engine's registry %s of tag '%s' is "
+                                  "not valid UTF-8 and was not copied.",
+                                  field, tag);
+      return GLIMS_STATUS_FAILED;
+    }
+  return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_image_metadata_tag_info (GlimsEngine          *engine,
+                               GlimsImageID          id,
+                               const char           *tag,
+                               GlimsMetadataTagInfo *outInfo,
+                               char                **error)
+{
+  GlimsOpenImage *open;
+  GimpMetadata   *current, *probe;
+  GError         *gerror = NULL;
+  const gchar    *type, *label, *description;
+  gboolean        is_xmp, is_container, present, supports_multiple;
+  GlimsStatus     status;
+
+  /* Size-versioned out: a NULL or undersized struct is refused before
+   * anything is written. Once the size check passes, the caller's
+   * buffer covers the whole struct, so every failure below resets it to
+   * a safe all-zero descriptor and no write goes past the declared
+   * size. */
+  if (! outInfo)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (outInfo->struct_size < sizeof (GlimsMetadataTagInfo))
+    {
+      if (error)
+        *error = strdup ("outInfo is smaller than this facade's "
+                         "GlimsMetadataTagInfo.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  memset (outInfo, 0, sizeof *outInfo);
+  outInfo->struct_size = sizeof *outInfo;
+
+  if (! valid_tag_name (tag))
+    {
+      if (error)
+        *error = strdup ("A metadata tag must be a nonempty UTF-8 string "
+                         "starting with \"Exif.\", \"Iptc.\" or \"Xmp.\".");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  open = glims_lookup_image (engine, id);
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+
+  /* Registered-tag validation, shared with the reads and the edit. */
+  type = lookup_tag_type (tag, &status, error);
+  if (! type)
+    return status;
+
+  /* The registry's own label, description and type name (transfer
+   * none); a registered tag has all three, but NULL reads as "". */
+  label       = gexiv2_metadata_try_get_tag_label (tag, &gerror);
+  if (gerror)
+    return glims_fail (error, gerror, "The engine could not read the tag's label.");
+  description = gexiv2_metadata_try_get_tag_description (tag, &gerror);
+  if (gerror)
+    return glims_fail (error, gerror, "The engine could not read the tag's description.");
+
+  /* Invalid native bytes are refused explicitly, never copied. */
+  status = descriptor_string_utf8 (type, tag, "type name", error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  status = descriptor_string_utf8 (label, tag, "label", error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  status = descriptor_string_utf8 (description, tag, "description", error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+
+  /* Borrow the image's own metadata; when the image has none, answer
+   * presence and multiple-value questions on a PRIVATE empty metadata
+   * that is unref'd on every path below and never installed on the
+   * image — no metadata creation, no dirty, no undo, no pixels. */
+  current = gimp_image_get_metadata (open->image);   /* borrowed, may be NULL */
+  probe   = current ? current : gimp_metadata_new ();
+  if (! probe)
+    return glims_fail (error, NULL, "The image metadata could not be created for inspection.");
+
+  present = gexiv2_metadata_try_has_tag (GEXIV2_METADATA (probe), tag, &gerror);
+  if (gerror)
+    {
+      status = glims_fail (error, gerror, "The engine could not inspect the tag.");
+      g_clear_error (&gerror);
+      if (probe != current)
+        g_object_unref (probe);
+      return status;
+    }
+  supports_multiple = gexiv2_metadata_try_tag_supports_multiple_values (
+    GEXIV2_METADATA (probe), tag, &gerror);
+  if (gerror)
+    {
+      status = glims_fail (error, gerror, "The engine could not inspect the tag.");
+      g_clear_error (&gerror);
+      if (probe != current)
+        g_object_unref (probe);
+      return status;
+    }
+  if (probe != current)
+    g_object_unref (probe);
+
+  /* Plain read: no glims_edit_ready gate — allowed while a stroke, a
+   * filter preview or a plug-in holds the image. */
+  is_xmp       = g_str_has_prefix (tag, "Xmp.");
+  is_container = is_xmp && xmp_container_type (type);
+
+  outInfo->present           = present;
+  outInfo->supports_multiple = supports_multiple;
+  outInfo->value_kind        = metadata_value_kind (type, supports_multiple);
+  outInfo->format_policy     = metadata_format_policy (tag, type, is_xmp,
+                                                       is_container, present);
+  copy_bounded_utf8 (outInfo->label, sizeof outInfo->label, label ? label : "");
+  copy_bounded_utf8 (outInfo->description, sizeof outInfo->description,
+                     description ? description : "");
+  copy_bounded_utf8 (outInfo->type_name, sizeof outInfo->type_name, type);
 
   return GLIMS_STATUS_OK;
 }

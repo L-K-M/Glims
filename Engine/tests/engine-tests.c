@@ -10704,6 +10704,231 @@ test_image_metadata (const char *work)
          "a closed image refuses edits");
 }
 
+/* ---- Tag descriptor (slot 128) ------------------------------------------
+ * Facade-only checks of the READ-ONLY descriptor: real tags on a
+ * metadata-less image (still a pure query that creates nothing), the
+ * value kinds and policy bits of Exif/Iptc/Xmp tags, absent XMP
+ * containers and LangAlt, normalization-protected tags, presence after
+ * a supported SET, input validation, NULL/undersized outInfo (no write
+ * past the declared size), closed/stale image, reads during an active
+ * stroke and filter preview with metadata/undo/pixels unchanged, and
+ * edit refusals matching the policy bits. */
+static GlimsStatus
+metadata_tag_info (GlimsImageID image, const char *tag, GlimsMetadataTagInfo *info)
+{
+  memset (info, 0x55, sizeof *info);   /* poison: every path must fully write or reset */
+  info->struct_size = sizeof *info;
+  return api->image_metadata_tag_info (engine, image, tag, info, NULL);
+}
+
+static int
+tag_info_strings_bounded (const GlimsMetadataTagInfo *info)
+{
+  return strlen (info->label) < GLIMS_METADATA_TAG_INFO_LABEL_CAPACITY &&
+         strlen (info->description) < GLIMS_METADATA_TAG_INFO_DESCRIPTION_CAPACITY &&
+         strlen (info->type_name) < GLIMS_METADATA_TAG_INFO_TYPE_NAME_CAPACITY;
+}
+
+static void
+test_image_metadata_tag_info (const char *work)
+{
+  GlimsImageID       image = 0;
+  GlimsItemID        layer;
+  GlimsStrokeID      stroke = 0;
+  GlimsFilterID      filter = 0;
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+  GlimsStrokePoint   first = { 5, 5, 1.0, 0.0, 0.0, 0 };
+  GlimsMetadataTagInfo info;
+  GlimsImageInfo     before_info, after_info;
+  char              *error = NULL;
+  char             **vec, **vals;
+  int32_t            count, vcount, before;
+  static const char *const artist[1] = { "Alice" };
+  static const char *const kw[1]     = { "one" };
+
+  (void) work;
+  api->image_new (engine, 64, 48, &image, NULL);
+  layer = first_layer (image);
+
+  /* A metadata-less image is still a pure query: Exif.Image.Artist
+   * describes as an absent single-value tag with full format policy,
+   * and the descriptor read creates nothing (all three domains stay
+   * empty, the image stays not dirty, no undo). */
+  api->image_info (engine, image, &before_info);
+  before = undo_depth (image);
+  CHECK (metadata_tag_info (image, "Exif.Image.Artist", &info) == GLIMS_STATUS_OK &&
+         info.struct_size == sizeof (GlimsMetadataTagInfo) &&
+         info.present == false && info.supports_multiple == false &&
+         info.value_kind == GLIMS_METADATA_VALUE_SINGLE &&
+         info.format_policy == (GLIMS_METADATA_FORMAT_SUPPORTS_SET |
+                                GLIMS_METADATA_FORMAT_SUPPORTS_REMOVE) &&
+         info.label[0] != '\0' && info.type_name[0] != '\0' &&
+         tag_info_strings_bounded (&info),
+         "Exif.Image.Artist on a fresh image: absent, single, both policy bits, bounded native strings");
+  vec = metadata_tags (image, GLIMS_METADATA_XMP, &count);
+  CHECK (vec != NULL && count == 0, "the descriptor read created no XMP metadata");
+  api->free_metadata_strings (vec);
+  vec = metadata_tags (image, GLIMS_METADATA_IPTC, &count);
+  CHECK (vec != NULL && count == 0, "the descriptor read created no IPTC metadata");
+  api->free_metadata_strings (vec);
+  api->image_info (engine, image, &after_info);
+  CHECK (undo_depth (image) == before && after_info.dirty == before_info.dirty,
+         "the descriptor read changed no undo and no dirty state");
+
+  /* Repeatable Iptc tag: repeatable kind, native multiple support, both
+   * policy bits. */
+  CHECK (metadata_tag_info (image, "Iptc.Application2.Keywords", &info) == GLIMS_STATUS_OK &&
+         info.present == false && info.supports_multiple == true &&
+         info.value_kind == GLIMS_METADATA_VALUE_REPEATABLE &&
+         info.format_policy == (GLIMS_METADATA_FORMAT_SUPPORTS_SET |
+                                GLIMS_METADATA_FORMAT_SUPPORTS_REMOVE) &&
+         info.label[0] != '\0' && tag_info_strings_bounded (&info),
+         "Iptc.Application2.Keywords: repeatable, supports multiple, both policy bits");
+
+  /* Absent XMP containers: bag/seq kinds, SET refused by policy, REMOVE
+   * allowed (a no-op); LangAlt: langAlt kind, no policy bits at all. */
+  CHECK (metadata_tag_info (image, "Xmp.dc.subject", &info) == GLIMS_STATUS_OK &&
+         info.present == false && info.supports_multiple == true &&
+         info.value_kind == GLIMS_METADATA_VALUE_BAG &&
+         info.format_policy == GLIMS_METADATA_FORMAT_SUPPORTS_REMOVE,
+         "an absent XmpBag (Xmp.dc.subject): bag kind, REMOVE-only policy");
+  CHECK (metadata_tag_info (image, "Xmp.dc.creator", &info) == GLIMS_STATUS_OK &&
+         info.value_kind == GLIMS_METADATA_VALUE_SEQ &&
+         info.format_policy == GLIMS_METADATA_FORMAT_SUPPORTS_REMOVE,
+         "an absent XmpSeq (Xmp.dc.creator): seq kind, REMOVE-only policy");
+  CHECK (metadata_tag_info (image, "Xmp.dc.title", &info) == GLIMS_STATUS_OK &&
+         info.value_kind == GLIMS_METADATA_VALUE_LANG_ALT &&
+         info.supports_multiple == true &&
+         info.format_policy == 0,
+         "a LangAlt (Xmp.dc.title): langAlt kind, both operations refused by policy");
+  CHECK (metadata_tag_info (image, "Xmp.xmp.CreatorTool", &info) == GLIMS_STATUS_OK &&
+         info.value_kind == GLIMS_METADATA_VALUE_SINGLE &&
+         info.supports_multiple == false &&
+         info.format_policy == (GLIMS_METADATA_FORMAT_SUPPORTS_SET |
+                                GLIMS_METADATA_FORMAT_SUPPORTS_REMOVE),
+         "an XmpText tag: single kind, both policy bits");
+
+  /* Normalization-protected tags refuse both operations by policy. */
+  CHECK (metadata_tag_info (image, "Exif.Image.ImageWidth", &info) == GLIMS_STATUS_OK &&
+         info.value_kind == GLIMS_METADATA_VALUE_SINGLE && info.format_policy == 0,
+         "a normalization-protected tag (Exif.Image.ImageWidth): no policy bits");
+  CHECK (metadata_tag_info (image, "Xmp.exif.ColorSpace", &info) == GLIMS_STATUS_OK &&
+         info.format_policy == 0,
+         "Xmp.exif.ColorSpace is protected too");
+
+  /* Validation: malformed tags, NULL/undersized outInfo (refused before
+   * any write — the poisoned buffer must stay untouched), unknown image,
+   * unregistered tag with the registry message, and the safe zeroed
+   * reset on failure. */
+  CHECK (api->image_metadata_tag_info (engine, image, NULL, &info, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_metadata_tag_info (engine, image, "", &info, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_metadata_tag_info (engine, image, "Exif.\xff", &info, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_metadata_tag_info (engine, image, "Foo.Bar", &info, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "NULL, empty, non-UTF-8 and prefix-less tags are INVALID_ARGUMENT");
+  CHECK (api->image_metadata_tag_info (engine, image, "Exif.Image.Artist", NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a NULL outInfo is refused");
+  {
+    GlimsMetadataTagInfo poisoned;
+    unsigned char expect[sizeof poisoned];
+    uint32_t      short_size = sizeof (GlimsMetadataTagInfo) - 4;
+    memset (&poisoned, 0xAA, sizeof poisoned);
+    memset (expect, 0xAA, sizeof expect);
+    memcpy (expect, &short_size, sizeof short_size);
+    poisoned.struct_size = short_size;
+    CHECK (api->image_metadata_tag_info (engine, image, "Exif.Image.Artist", &poisoned, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+           "an undersized outInfo is refused");
+    CHECK (memcmp (&poisoned, expect, sizeof poisoned) == 0,
+           "the refusal wrote nothing, not past the declared struct size");
+  }
+  CHECK (api->image_metadata_tag_info (engine, 9999, "Exif.Image.Artist", &info, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an unknown image is NOT_FOUND for the descriptor");
+  memset (&info, 0x55, sizeof info);
+  info.struct_size = sizeof info;
+  CHECK (api->image_metadata_tag_info (engine, image, "Exif.Bogus.Tag", &info, &error) == GLIMS_STATUS_NOT_FOUND &&
+         error != NULL && info.present == false && info.value_kind == 0 &&
+         info.label[0] == '\0' && info.type_name[0] == '\0',
+         "an unregistered tag is NOT_FOUND with the registry message and a safe zeroed reset%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* Present after a supported SET, and the edit refusals match the
+   * policy bits where safe to test: the absent XmpBag refuses SET but
+   * allows REMOVE as a no-op; the LangAlt and the protected tag refuse
+   * both. */
+  before = undo_depth (image);
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_SET, artist, 1, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "SET of Exif.Image.Artist succeeds as one undo (policy bit supportsSet)");
+  CHECK (metadata_tag_info (image, "Exif.Image.Artist", &info) == GLIMS_STATUS_OK &&
+         info.present == true && info.value_kind == GLIMS_METADATA_VALUE_SINGLE,
+         "the descriptor reports the tag present after the supported SET");
+  CHECK (api->image_metadata_edit (engine, image, "Xmp.dc.subject", GLIMS_METADATA_SET, kw, 1, NULL) == GLIMS_STATUS_UNSUPPORTED,
+         "an absent XmpBag refuses SET, matching its REMOVE-only policy");
+  {
+    /* The REMOVE bit allows removing an absent container as a no-op;
+     * the current edit path's container guard still refuses it with
+     * UNSUPPORTED — flags are type/format policy only, never a write
+     * promise. Either way nothing may mutate. */
+    GlimsStatus remove_status = api->image_metadata_edit (engine, image, "Xmp.dc.subject",
+                                                          GLIMS_METADATA_REMOVE, NULL, 0, NULL);
+    CHECK ((remove_status == GLIMS_STATUS_OK || remove_status == GLIMS_STATUS_UNSUPPORTED) &&
+           undo_depth (image) == before + 1,
+           "REMOVE of the absent XmpBag mutates nothing (status %d)", (int) remove_status);
+  }
+  CHECK (api->image_metadata_edit (engine, image, "Xmp.dc.title", GLIMS_METADATA_SET, kw, 1, NULL) == GLIMS_STATUS_UNSUPPORTED &&
+         api->image_metadata_edit (engine, image, "Xmp.dc.title", GLIMS_METADATA_REMOVE, NULL, 0, NULL) == GLIMS_STATUS_UNSUPPORTED,
+         "a LangAlt refuses SET and REMOVE, matching its empty policy");
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.ImageWidth", GLIMS_METADATA_SET, kw, 1, NULL) == GLIMS_STATUS_UNSUPPORTED &&
+         api->image_metadata_edit (engine, image, "Exif.Image.ImageWidth", GLIMS_METADATA_REMOVE, NULL, 0, NULL) == GLIMS_STATUS_UNSUPPORTED,
+         "a protected tag refuses SET and REMOVE, matching its empty policy");
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_REMOVE, NULL, 0, NULL) == GLIMS_STATUS_OK,
+         "REMOVE of the present tag succeeds, matching its supportsRemove bit");
+
+  /* Reads during an active stroke and filter preview: allowed, and
+   * metadata, undo and pixels are unchanged by the descriptor reads. */
+  CHECK (api->image_metadata_edit (engine, image, "Iptc.Application2.Keywords", GLIMS_METADATA_SET, kw, 1, NULL) == GLIMS_STATUS_OK,
+         "SET the IPTC tag for the read-back checks");
+  before = undo_depth (image);
+  api->image_info (engine, image, &before_info);
+  if (api->stroke_begin (engine, image, layer, &brush, &first, &stroke, NULL) == GLIMS_STATUS_OK)
+    {
+      CHECK (metadata_tag_info (image, "Exif.Image.Artist", &info) == GLIMS_STATUS_OK &&
+             info.present == false,
+             "the descriptor reads during a stroke");
+      CHECK (metadata_tag_info (image, "Iptc.Application2.Keywords", &info) == GLIMS_STATUS_OK &&
+             info.present == true && info.value_kind == GLIMS_METADATA_VALUE_REPEATABLE,
+             "the descriptor reports the present IPTC tag during a stroke");
+      vals = metadata_values (image, "Iptc.Application2.Keywords", &vcount);
+      CHECK (vals != NULL && vcount == 1 && ! strcmp (vals[0], "one"),
+             "value reads still work during a stroke");
+      api->free_metadata_strings (vals);
+      api->image_info (engine, image, &after_info);
+      CHECK (undo_depth (image) == before && after_info.dirty == before_info.dirty,
+             "descriptor and value reads during a stroke changed no undo and no dirty state");
+      CHECK (api->stroke_end (engine, stroke) == GLIMS_STATUS_OK, "the busy-check stroke ends");
+    }
+  else
+    CHECK (0, "the stroke for the busy check began");
+  if (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK)
+    {
+      int32_t before_preview = undo_depth (image);
+      CHECK (metadata_tag_info (image, "Xmp.dc.title", &info) == GLIMS_STATUS_OK &&
+             info.value_kind == GLIMS_METADATA_VALUE_LANG_ALT && info.format_policy == 0,
+             "the descriptor reads during a filter preview");
+      CHECK (undo_depth (image) == before_preview,
+             "the descriptor read during a filter preview pushed no undo");
+      CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+             "the busy-check filter preview aborts");
+    }
+  else
+    CHECK (0, "the filter for the busy check began");
+
+  api->image_close (engine, image);
+  CHECK (api->image_metadata_tag_info (engine, image, "Exif.Image.Artist", &info, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a closed (stale) image refuses the descriptor read");
+}
+
 /* ---- Metadata preservation fixtures (.gmeta loader + oracle) -----------
  * The test-only loader seeds a raw XCF metadata parasite, bypassing the
  * native serializer's ancestor cap. Its MIME type is unset so automatic
@@ -13425,6 +13650,7 @@ main (int argc, char **argv)
   test_guides (argv[2]);
   test_grid (argv[2]);
   test_image_metadata (argv[2]);
+  test_image_metadata_tag_info (argv[2]);
   test_metadata_preservation_fixtures (argv[2]);
   test_selection_stroke ();
   test_floating_selection (argv[2]);
