@@ -260,8 +260,8 @@ final class CanvasToolController {
     }
 
     private func setCloneSource(at point: CGPoint) {
-        guard let layer = document.activeLayer else { return }
-        ToolState.shared.cloneSource = EngineSession.Brush.Source(drawable: layer, x: point.x, y: point.y)
+        guard let drawable = document.activeDrawable else { return }
+        ToolState.shared.cloneSource = EngineSession.Brush.Source(drawable: drawable, x: point.x, y: point.y)
         ToolState.shared.notifyChange()
         onStatus?("Source set at \(Int(point.x)), \(Int(point.y)).")
     }
@@ -492,6 +492,13 @@ final class CanvasToolController {
     /// Starts or continues the session on the selected layer and grabs the
     /// handle under the pointer. A double-click applies.
     private func beginTransformDrag(at point: CGPoint, clickCount: Int) {
+        if document.isMaskTargetActive {
+            // The transform session describes the layer's bounds; a mask
+            // target cannot be moved or transformed on its own.
+            onStatus?("Select the layer to transform; a mask cannot be moved or transformed.")
+            dragTool = nil
+            return
+        }
         guard let layer = document.layers.first(where: { $0.id == document.activeLayer }),
               layer.bounds.width > 0, layer.bounds.height > 0 else {
             onStatus?("Select a layer to transform.")
