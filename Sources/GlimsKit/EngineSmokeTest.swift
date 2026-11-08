@@ -158,6 +158,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (guides controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "grid-controls" {
+                try exerciseGridControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (grid controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseFileAdmission(session, work: work, documents: documents)
@@ -188,6 +193,7 @@ enum EngineSmokeTest {
             try exerciseVectorStyleForm(session, work: work, documents: documents)
             try exercisePaletteControls(session, documents: documents)
             try exerciseGuidesControls(session, work: work, documents: documents)
+            try exerciseGridControls(session, work: work, documents: documents)
             try exerciseCanvasOverlays(session, documents: documents)
             try exercisePendingEditScope(session, documents: documents)
             try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
@@ -8051,6 +8057,320 @@ enum EngineSmokeTest {
               "toggling Show Guides back on redraws the overlay in the view bitmap")
         check(pixel(session, imageA, x: 3, y: 12) == pixelOnGuide,
               "the image pixels on the guide are still identical after both toggles")
+    }
+
+    /// Image ▸ Configure Grid… and View ▸ Show Grid: the sheet's draft/
+    /// apply/cancel/error semantics through the real controls, the cached
+    /// per-window toggle with view-bitmap and native-pixel isolation, undo
+    /// cache refresh, two-document ownership, busy and late-close paths.
+    private static func exerciseGridControls(_ session: EngineSession, work: URL,
+                                             documents: DocumentList) throws {
+        // Recursive view search that recurses into children EVEN WHEN THE
+        // ROOT ITSELF MATCHES the type (an NSStackView root must not hide
+        // a nested match of the same class).
+        func allViews<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
+            guard let root else { return [] }
+            var found: [T] = []
+            if let match = root as? T { found.append(match) }
+            for child in root.subviews { found += allViews(child, as: type) }
+            return found
+        }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func button(_ sheet: NSWindow?, _ label: String) -> NSButton? {
+            allViews(sheet?.contentView, as: NSButton.self).first { $0.accessibilityLabel() == label }
+        }
+        func field(_ sheet: NSWindow?, _ label: String) -> NSTextField? {
+            allViews(sheet?.contentView, as: NSTextField.self)
+                .first { $0.isEditable && $0.accessibilityLabel() == label }
+        }
+        func message(_ sheet: NSWindow?) -> NSTextField? {
+            allViews(sheet?.contentView, as: NSTextField.self)
+                .first { !$0.isEditable && $0.accessibilityLabel() == "Grid message" }
+        }
+        func popup(_ sheet: NSWindow?, _ label: String) -> NSPopUpButton? {
+            allViews(sheet?.contentView, as: NSPopUpButton.self).first { $0.accessibilityLabel() == label }
+        }
+        func well(_ sheet: NSWindow?, _ label: String) -> NSColorWell? {
+            allViews(sheet?.contentView, as: NSColorWell.self).first { $0.accessibilityLabel() == label }
+        }
+
+        let imageA = try session.newImage(width: 40, height: 24)
+        let imageB = try session.newImage(width: 30, height: 30)
+        let docA = try ImageDocument(session: session, image: imageA, name: "Grid A")
+        let docB = try ImageDocument(session: session, image: imageB, name: "Grid B")
+        documents.items += [docA, docB]
+        let a = DocumentWindowController(document: docA)
+        let b = DocumentWindowController(document: docB)
+        a.showWindow(nil)
+        b.showWindow(nil)
+        var messages: [String] = []
+        let reportError = docA.onError
+        docA.onError = { reportError?($0); messages.append($0) }
+        defer {
+            for (controller, document) in [(a, docA), (b, docB)] {
+                if let sheet = controller.window?.attachedSheet {
+                    controller.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                }
+                controller.window?.close()
+                documents.items.removeAll { $0 === document }
+                var closed = false
+                document.closeImageWhenDrained { closed = true }
+                let deadline = Date().addingTimeInterval(10)
+                while !closed && Date() < deadline { spin(0.01) }
+            }
+        }
+
+        // Menu wiring: both items sit on the document's own selectors.
+        let mainMenu = MainMenu.make()
+        let imageMenu = mainMenu.items.first { $0.title == "Image" }?.submenu
+        let viewMenu = mainMenu.items.first { $0.title == "View" }?.submenu
+        check(imageMenu?.items.first { $0.title == "Configure Grid…" }?.action
+                == #selector(DocumentWindowController.configureGrid(_:)),
+              "Image offers Configure Grid… on the document's selector")
+        check(viewMenu?.items.first { $0.title == "Show Grid" }?.action
+                == #selector(DocumentWindowController.toggleShowGrid(_:)),
+              "View offers Show Grid on the document's selector")
+
+        // Menu validation reads only cached state: Show Grid unchecked by
+        // default and always valid; Configure Grid… enabled while no sheet
+        // is attached (image metadata: no channel-target restriction).
+        let showGridItem = NSMenuItem(title: "Show Grid",
+                                      action: #selector(DocumentWindowController.toggleShowGrid(_:)), keyEquivalent: "")
+        let configureItem = NSMenuItem(title: "Configure Grid…",
+                                       action: #selector(DocumentWindowController.configureGrid(_:)), keyEquivalent: "")
+        check(a.validateMenuItem(showGridItem) && showGridItem.state == .off,
+              "Show Grid validates unchecked by default")
+        check(a.validateMenuItem(configureItem), "Configure Grid… validates while no sheet is open")
+
+        // Two documents open independent sheets through the actual action.
+        a.configureGrid(nil)
+        b.configureGrid(nil)
+        let sheetA = a.window?.attachedSheet
+        let sheetB = b.window?.attachedSheet
+        check(sheetA != nil && sheetB != nil && sheetA !== sheetB && a.gridSheet !== b.gridSheet,
+              "two documents open independent grid sheets owned by their windows")
+        check(!a.validateMenuItem(configureItem), "Configure Grid… is disabled while its sheet is open")
+
+        // The sheet seeds its draft from the cached grid (default 10/10, 0/0, solid).
+        check(field(sheetA, "Grid spacing X")?.stringValue == "10.0"
+                && field(sheetA, "Grid spacing Y")?.stringValue == "10.0"
+                && field(sheetA, "Grid offset X")?.stringValue == "0.0"
+                && field(sheetA, "Grid offset Y")?.stringValue == "0.0"
+                && popup(sheetA, "Grid style")?.titleOfSelectedItem == "Solid"
+                && well(sheetA, "Grid foreground color") != nil && well(sheetA, "Grid background color") != nil,
+              "the sheet seeds spacing, offset, style and both color wells from the cached grid")
+
+        // Apply through the sheet's real controls: one queued atomic
+        // setGrid, one undo step, pixels untouched, sheet stays open.
+        let pixelsBefore = try session.copyPixels(imageA, merged: true).pixels
+        let undoBefore = docA.undoInfo.undoCount
+        field(sheetA, "Grid spacing X")?.stringValue = "20"
+        button(sheetA, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+        spin()
+        check(docA.grid.spacingX == 20 && docA.grid.spacingY == 10
+                && docA.undoInfo.undoCount == undoBefore + 1,
+              "Apply performs one queued setGrid with one undo step")
+        check(try session.copyPixels(imageA, merged: true).pixels == pixelsBefore,
+              "the grid change leaves the image pixels untouched")
+        check(a.window?.attachedSheet === sheetA && a.gridSheet != nil,
+              "Apply keeps the sheet open")
+
+        // Invalid input: refused visibly in the sheet, no mutation, and
+        // the draft is preserved for correcting.
+        let undoAfterApply = docA.undoInfo.undoCount
+        field(sheetA, "Grid spacing X")?.stringValue = "abc"
+        button(sheetA, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 }
+        check(docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply
+                && a.gridSheet?.lastError != nil && !(message(sheetA)?.stringValue ?? "").isEmpty
+                && field(sheetA, "Grid spacing X")?.stringValue == "abc",
+              "an unparsable spacing is refused in the sheet without mutation and the draft is kept")
+        field(sheetA, "Grid spacing X")?.stringValue = "0"
+        button(sheetA, "Apply grid")?.performClick(nil)
+        check(docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply
+                && (message(sheetA)?.stringValue ?? "").contains("greater than zero"),
+              "a zero spacing is refused visibly without mutation")
+
+        // A native bounds refusal (spacing beyond the engine's maximum)
+        // is reported, not clamped; the draft survives.
+        field(sheetA, "Grid spacing X")?.stringValue = "1000000000"
+        button(sheetA, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && !messages.isEmpty }
+        spin()
+        check(docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply
+                && a.gridSheet?.lastError != nil && !(message(sheetA)?.stringValue ?? "").isEmpty
+                && field(sheetA, "Grid spacing X")?.stringValue == "1000000000",
+              "an over-maximum spacing is refused by the engine and shown in the sheet, draft preserved")
+
+        // Cancel writes nothing and closes the sheet.
+        field(sheetA, "Grid spacing X")?.stringValue = "33"
+        button(sheetA, "Cancel grid changes")?.performClick(nil)
+        wait { a.window?.attachedSheet == nil }
+        spin()
+        check(a.gridSheet == nil && docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply,
+              "Cancel closes the sheet without writing anything")
+
+        // A reopened sheet re-seeds from the cache; applying the identical
+        // grid is a no-op with no undo.
+        a.configureGrid(nil)
+        let reopened = a.window?.attachedSheet
+        check(field(reopened, "Grid spacing X")?.stringValue == "20.0",
+              "a reopened sheet re-seeds its draft from the cached grid")
+        button(reopened, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 }
+        spin()
+        check(docA.undoInfo.undoCount == undoAfterApply && docA.grid.spacingX == 20,
+              "applying the identical grid is a no-op with no undo")
+        if let sheet = a.window?.attachedSheet {
+            a.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+        }
+        wait { a.window?.attachedSheet == nil }
+
+        // Undo/Redo refresh the cached grid.
+        docA.undo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 10 }
+        spin()
+        check(docA.grid.spacingX == 10, "undo refreshes the cached grid")
+        docA.redo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+        spin()
+        check(docA.grid.spacingX == 20, "redo refreshes the cached grid")
+
+        // Late close: after the sheet ended, a grid change must not
+        // reopen or update it.
+        docA.setGrid(EngineSession.Grid(style: .solid, spacingX: 15, spacingY: 10,
+                                        offsetX: 0, offsetY: 0,
+                                        foreground: .black, background: .white))
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 15 }
+        spin()
+        check(a.window?.attachedSheet == nil && a.gridSheet == nil,
+              "a late grid change does not reopen or update a closed sheet")
+        docA.undo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+
+        // Two-document ownership: A's sheet drives only docA.
+        a.configureGrid(nil)
+        b.configureGrid(nil)
+        let sheetA2 = a.window?.attachedSheet
+        field(sheetA2, "Grid spacing X")?.stringValue = "25"
+        button(sheetA2, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 25 }
+        spin()
+        check(docA.grid.spacingX == 25 && docB.grid.spacingX == 10 && docB.undoInfo.undoCount == 0,
+              "the two sheets drive their own documents independently")
+
+        // Busy: the sheet's Apply gates on cached state, but Show Grid —
+        // pure view state — stays available while the engine is busy. The
+        // gate is released on every path by the defer.
+        do {
+            let gate = DispatchSemaphore(value: 0)
+            defer { gate.signal() }
+            let held = EngineActivity.shared.perform(label: "Holding the engine for grid", work: { gate.wait() },
+                                                     completion: {})
+            check(held && button(sheetA2, "Apply grid")?.isEnabled == false,
+                  "Apply disables while the engine is busy (cached state)")
+            check(a.validateMenuItem(showGridItem), "Show Grid stays valid while the engine is busy")
+            a.toggleShowGrid(showGridItem)
+            check(a.gridViewState.showsGrid && showGridItem.state == .on && a.canvas.showsGrid,
+                  "Show Grid toggles while the engine is busy")
+            a.toggleShowGrid(showGridItem)
+            check(!a.gridViewState.showsGrid && showGridItem.state == .off,
+                  "Show Grid toggles back while the engine is busy")
+        }
+        wait { !EngineActivity.shared.isBusy }
+        spin()
+        check(button(a.window?.attachedSheet, "Apply grid")?.isEnabled == true,
+              "Apply re-enables when the engine is idle again")
+
+        // Set a known grid (solid 10/10, 0/0) through the sheet for the
+        // bitmap checks, then close the sheet.
+        let sheetA3 = a.window?.attachedSheet
+        field(sheetA3, "Grid spacing X")?.stringValue = "10"
+        popup(sheetA3, "Grid style")?.selectItem(withTitle: "Solid")
+        button(sheetA3, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 10 && docA.grid.style == .solid }
+        spin()
+        if let sheet = a.window?.attachedSheet {
+            a.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+        }
+        wait { a.window?.attachedSheet == nil }
+        for (controller, document) in [(a, docA), (b, docB)] where controller.window?.attachedSheet != nil {
+            controller.window?.endSheet(controller.window!.attachedSheet!, returnCode: .alertSecondButtonReturn)
+        }
+        wait { b.window?.attachedSheet == nil }
+
+        // View bitmap: Show Grid draws the cached grid between the image
+        // and the other overlays; toggling and re-styling change only the
+        // view, never the native pixels, dirty state or history.
+        let canvas = a.canvas
+        try canvas.renderVisibleTilesNow()
+        func bitmap() -> Data? {
+            guard let rep = canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds) else { return nil }
+            canvas.cacheDisplay(in: canvas.bounds, to: rep)
+            guard let bytes = rep.bitmapData else { return nil }
+            return Data(bytes: bytes, count: rep.bytesPerRow * rep.pixelsHigh)
+        }
+        func brightnessNear(_ x: Int, _ y: Int) -> Double? {
+            [CGPoint(x: x, y: y), CGPoint(x: x, y: y - 1), CGPoint(x: x, y: y + 1),
+             CGPoint(x: x - 1, y: y), CGPoint(x: x + 1, y: y)]
+                .compactMap { canvasBrightness(canvas, at: $0) }.min()
+        }
+        let pixelOnLine = pixel(session, imageA, x: 10, y: 5)
+        let pixelAtIntersection = pixel(session, imageA, x: 10, y: 10)
+        let dirtyBefore = docA.hasUnsavedChanges
+        let undoBeforeBitmap = docA.undoInfo
+        let bitmapOff = bitmap()
+        a.toggleShowGrid(showGridItem)
+        let bitmapOn = bitmap()
+        check(showGridItem.state == .on && canvas.showsGrid
+                && bitmapOff != nil && bitmapOn != nil && bitmapOn != bitmapOff,
+              "Show Grid changes the canvas view bitmap")
+        let onLine = brightnessNear(10, 5)   // on the vertical line x = 10
+        let offLine = brightnessNear(5, 5)   // between grid lines
+        check(onLine != nil && offLine != nil && onLine! < offLine! - 0.05,
+              "the solid grid draws its line in the view bitmap (\(String(describing: onLine)) vs \(String(describing: offLine)))")
+        check(!b.gridViewState.showsGrid && !b.canvas.showsGrid,
+              "Show Grid is cached per window: the other window stays off")
+        check(pixel(session, imageA, x: 10, y: 5) == pixelOnLine
+                && pixel(session, imageA, x: 10, y: 10) == pixelAtIntersection
+                && docA.hasUnsavedChanges == dirtyBefore && docA.undoInfo == undoBeforeBitmap,
+              "toggling Show Grid changes neither the engine pixels nor dirty state or history")
+        a.toggleShowGrid(showGridItem)
+        check(bitmap() == bitmapOff && showGridItem.state == .off,
+              "toggling Show Grid off restores the view bitmap")
+        check(pixel(session, imageA, x: 10, y: 5) == pixelOnLine,
+              "the image pixels on the grid line are identical after both toggles")
+
+        // Style differences in the view bitmap: Dots darken only the
+        // intersections, not the line between them.
+        a.configureGrid(nil)
+        let sheetA4 = a.window?.attachedSheet
+        popup(sheetA4, "Grid style")?.selectItem(withTitle: "Dots")
+        button(sheetA4, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && docA.grid.style == .dots }
+        spin()
+        if let sheet = a.window?.attachedSheet {
+            a.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+        }
+        wait { a.window?.attachedSheet == nil }
+        a.toggleShowGrid(showGridItem)
+        let bitmapDots = bitmap()
+        check(bitmapDots != nil && bitmapDots != bitmapOn,
+              "the Dots style draws a different view bitmap than Solid")
+        let dotsOnLine = brightnessNear(10, 5)
+        let dotsAtIntersection = brightnessNear(10, 10)
+        check(dotsOnLine != nil && offLine != nil && abs(dotsOnLine! - offLine!) < 0.05,
+              "Dots leave the line between intersections untouched")
+        check(dotsAtIntersection != nil && offLine != nil && dotsAtIntersection! < offLine! - 0.05,
+              "Dots darken the intersections in the view bitmap")
+        check(pixel(session, imageA, x: 10, y: 5) == pixelOnLine
+                && pixel(session, imageA, x: 10, y: 10) == pixelAtIntersection,
+              "re-styling the grid changes no native image pixel")
+        a.toggleShowGrid(showGridItem)
     }
 
     private static func exerciseCanvasOverlays(_ session: EngineSession, documents: DocumentList) throws {
