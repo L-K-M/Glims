@@ -361,7 +361,21 @@ typedef enum GlimsLayerCommand {
    * image is NOT_FOUND. PIXELS or POSITION locks of the layer or a group
    * around it refuse with LOCKED; stroke, filter and plug-in activity
    * with BUSY. */
-  GLIMS_LAYER_RASTERIZE        = 12
+  GLIMS_LAYER_RASTERIZE        = 12,
+  /* The inverse of RASTERIZE for layers that still retain their
+   * structured source: discards the pixel edits and regenerates the
+   * content from the retained text, link or vector source as one undo
+   * step, preserving the selection, the item id, the source kind and a
+   * mask attachment. Only retained text/vector/link classes restore:
+   * ordinary pixel layers, groups and structured layers whose source is
+   * gone report UNSUPPORTED before any mutation, an explicit layer id
+   * that names no attached layer of the image is NOT_FOUND, and an
+   * already editable instance is a no-op that pushes no undo. The same
+   * readiness and inherited PIXELS|POSITION locks as RASTERIZE gate it
+   * (LOCKED, BUSY). A link layer reloads its file when the file is
+   * readable; on a read failure it keeps its retained source buffer and
+   * resumes monitoring — a missing file is not an error. */
+  GLIMS_LAYER_RESTORE_SOURCE   = 13
 } GlimsLayerCommand;
 
 /* Which fields of GlimsLayerChange apply. */
@@ -1049,6 +1063,8 @@ typedef struct GlimsEngineAPI {
                                     GlimsImageID *image, char **error);
   GlimsStatus  (*image_open)       (GlimsEngine *engine, const char *path,
                                     GlimsImageID *image, char **error);
+  /* BUSY while a native file load owns a nested engine loop. The image
+   * stays alive on refusal; retry after the load unwinds. */
   GlimsStatus  (*image_close)      (GlimsEngine *engine, GlimsImageID image);
   GlimsStatus  (*image_info)       (GlimsEngine *engine, GlimsImageID image,
                                     GlimsImageInfo *info);

@@ -104,6 +104,7 @@ GlimsStatus      glims_fail              (char **error, GError *gerror, const gc
 GlimsOpenImage * glims_lookup_image      (GlimsEngine *engine, GlimsImageID id);
 GlimsStatus      glims_adopt_image       (GlimsEngine *engine, GimpImage *image, GlimsImageID *id);
 void             glims_release_image     (GlimsEngine *engine, GlimsImageID id);
+void             glims_track_image_links (GimpImage *image);
 GimpDrawable   * glims_lookup_drawable   (GlimsOpenImage *open, GlimsItemID id);
 GlimsStatus      glims_check_item_locks  (GimpItem *item, uint32_t locks, char **error);
 gint             glims_next_session_id   (GlimsEngine *engine);
@@ -438,6 +439,11 @@ uint32_t    glims_layer_editable_source_kind (GimpLayer *layer);
  * step; an already rasterized instance is a no-op. Readiness and locks
  * are the caller's. */
 GlimsStatus glims_layer_rasterize   (GimpImage *image, GimpLayer *layer, char **error);
+/* Restores a rasterized text/link/vector layer from its retained source as
+ * one native undo step, discarding pixel edits; an already editable
+ * instance is a no-op, pixel/group/missing-source layers are UNSUPPORTED
+ * before any mutation. Readiness and locks are the caller's. */
+GlimsStatus glims_layer_restore_source (GimpImage *image, GimpLayer *layer, char **error);
 
 /* resource.c */
 GlimsStatus glims_lookup_gradient      (GlimsEngine *e, GlimsResourceID id,
