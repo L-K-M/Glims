@@ -65,6 +65,13 @@ final class EngineCanvasView: NSView {
     var showsGuides = true {
         didSet { needsDisplay = true }
     }
+    /// View ▸ Show Grid: whether the canvas draws the image's cached
+    /// grid. Cached per window, default OFF; flipping it is pure view
+    /// state — no pixels, dirty flag, history, selection, export or print
+    /// change — and just redraws.
+    var showsGrid = false {
+        didSet { needsDisplay = true }
+    }
     var showsLayerBoundary = false {
         didSet { needsDisplay = true }
     }
@@ -360,11 +367,101 @@ final class EngineCanvasView: NSView {
             context.draw(image, in: CGRect(origin: .zero, size: rect.size))
             context.restoreGState()
         }
+        // The grid draws between the image and the selection/path/guide
+        // overlays: on top of the pixels, under everything else.
+        if showsGrid { drawGridOverlay() }
         if showsSelectionEdges { drawSelectionOutline() }
         if showsLayerBoundary { drawLayerBoundary() }
         drawVisiblePaths()
         if showsGuides { drawGuidesOverlay() }
         tools.drawOverlay(scale: scale)
+    }
+
+    /// The image's cached display grid, drawn between the image tiles and
+    /// the selection/path/guide overlays. A pure canvas overlay built by
+    /// the bounded `GridOverlayPlanner` from cached metadata only — it
+    /// touches neither the rendered tiles nor any pixel path, and
+    /// printing draws an immutable PrintSnapshot rendered from the
+    /// engine, never this view, so the grid cannot leak into print.
+    /// Image coordinates map straight to view points (the view is
+    /// flipped like the bitmap, so y is never mirrored), which keeps the
+    /// grid aligned across zoom, backing changes and scroll.
+    private func drawGridOverlay() {
+        let grid = document.grid
+        let imageSize = CGSize(width: Double(document.info.width), height: Double(document.info.height))
+        let imageRect = CanvasGeometry.imageViewRect(imageSize: imageSize, zoomPercent: zoomPercent,
+                                                     backingFactor: backingScale)
+        // Clip to the visible image FIRST: the planner only ever walks
+        // the visible range, never the whole image.
+        let visible = visibleRect.intersection(bounds).intersection(imageRect)
+        guard !visible.isEmpty else { return }
+        let visibleImage = CGRect(x: visible.minX / scale, y: visible.minY / scale,
+                                  width: visible.width / scale, height: visible.height / scale)
+        let plan = GridOverlayPlanner.plan(grid: grid, imageSize: imageSize,
+                                           visibleImageRect: visibleImage,
+                                           deviceScale: deviceScale, viewScale: scale)
+        guard !plan.isSuppressed else { return }
+        // One device pixel in view points: the engine strokes the grid at
+        // a 1-device-px hairline; dots and crosshair arms scale with it.
+        let device = scale / deviceScale
+        guard device.isFinite, device > 0 else { return }
+        let dash = GridOverlayPlanner.dashLengthDevicePixels * device
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: imageRect).addClip()
+        func stroke(_ path: NSBezierPath, color: NSColor, dashed: Bool, phase: CGFloat) {
+            path.lineWidth = device
+            if dashed { path.setLineDash([dash, dash], count: 2, phase: phase) }
+            color.setStroke()
+            path.stroke()
+        }
+        let foreground = grid.foreground
+        let background = grid.background
+        switch plan.style {
+        case .dots, .intersections:
+            for point in plan.points {
+                let p = CGPoint(x: point.x * scale, y: point.y * scale)
+                if plan.style == .dots {
+                    // One 1-device-px mark at the intersection.
+                    foreground.setFill()
+                    NSRect(x: p.x, y: p.y, width: device, height: device).fill()
+                } else {
+                    // A crosshair with the engine's arm reach (CROSSHAIR).
+                    let arm = GridOverlayPlanner.crosshairDevicePixels * device
+                    let path = NSBezierPath()
+                    path.move(to: CGPoint(x: p.x, y: p.y - arm))
+                    path.line(to: CGPoint(x: p.x, y: p.y + arm + device))
+                    path.move(to: CGPoint(x: p.x - arm, y: p.y))
+                    path.line(to: CGPoint(x: p.x + arm + device, y: p.y))
+                    stroke(path, color: foreground, dashed: false, phase: 0)
+                }
+            }
+        case .onOffDash, .doubleDash, .solid:
+            func linePath(_ line: GridOverlayPlanner.Line) -> NSBezierPath {
+                let path = NSBezierPath()
+                if line.isVertical {
+                    path.move(to: CGPoint(x: line.coordinate * scale, y: line.from * scale))
+                    path.line(to: CGPoint(x: line.coordinate * scale, y: line.to * scale))
+                } else {
+                    path.move(to: CGPoint(x: line.from * scale, y: line.coordinate * scale))
+                    path.line(to: CGPoint(x: line.to * scale, y: line.coordinate * scale))
+                }
+                return path
+            }
+            let dashed = plan.style != .solid
+            for line in plan.verticalLines + plan.horizontalLines {
+                let path = linePath(line)
+                if plan.style == .doubleDash {
+                    // Interleaved foreground/background dashes: the
+                    // background pass shifted by one dash length, both
+                    // phases anchored to image coordinates.
+                    stroke(path, color: background, dashed: true, phase: CGFloat(line.dashPhase))
+                    stroke(path, color: foreground, dashed: true, phase: CGFloat(line.dashPhase) + CGFloat(dash))
+                } else {
+                    stroke(path, color: foreground, dashed: dashed, phase: CGFloat(line.dashPhase))
+                }
+            }
+        }
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     /// Display-only bounds of the selected layer. Cached layer metadata
@@ -435,6 +532,14 @@ final class EngineCanvasView: NSView {
     func imagePoint(for event: NSEvent) -> CGPoint {
         CanvasGeometry.imagePoint(viewPoint: convert(event.locationInWindow, from: nil),
                                   zoomPercent: zoomPercent, backingFactor: backingScale)
+    }
+
+    /// The image-pixel point under a canvas view point — the same mapping
+    /// pointer input uses. The pixel rulers convert their own corners into
+    /// canvas coordinates and then through this, so their image-pixel
+    /// range matches the canvas exactly.
+    func imagePoint(at viewPoint: CGPoint) -> CGPoint {
+        CanvasGeometry.imagePoint(viewPoint: viewPoint, zoomPercent: zoomPercent, backingFactor: backingScale)
     }
 
     func strokePoint(for event: NSEvent) -> EngineSession.StrokePoint {

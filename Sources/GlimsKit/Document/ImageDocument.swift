@@ -193,6 +193,10 @@ final class ImageDocument {
             && !filterPreviewIsOpen && !EngineActivity.shared.isBusy
     }
 
+    /// A queued target command's drawable is still unknown. Menu
+    /// validation reads this cached flag instead of asking the engine.
+    var targetCommandIsPending: Bool { !pendingTargetCommands.isEmpty }
+
     /// Touched only on `inputQueue`.
     private nonisolated(unsafe) var currentStroke: Int32?
     private(set) var strokeIsActive = false
@@ -648,6 +652,15 @@ final class ImageDocument {
             NSSound.beep()
             return
         }
+        // End in-flight field/text edits and an active stroke first, the
+        // finishInput/endPendingUserEdits convention: both enqueue their
+        // jobs on this same serial input queue ahead of the one below, so
+        // every already accepted edit — and the open stroke's end — lands
+        // on the engine before the selection stroke runs. Without that,
+        // the native readiness check would report BUSY under the open
+        // stroke instead of stroking on the committed image.
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
         enqueue(on: inputQueue, input: true) { [session, image] in
             do {
                 try self.requirePaintTarget()
@@ -656,6 +669,49 @@ final class ImageDocument {
                 self.report(error)
             }
         }
+    }
+
+    /// The cached-state reason Edit ▸ Stroke Selection… cannot run right
+    /// now, or nil when it can. Reads only the document's cached state —
+    /// never the engine — so menu validation and the sheet's open/accept
+    /// gates make no synchronous native call. An editable structured
+    /// source (text, link or vector layer that still carries its source)
+    /// refuses with a rasterize-first explanation rather than silently
+    /// destroying it; the rasterize UI is a separate pending change and
+    /// is not adopted here.
+    var strokeSelectionRefusal: String? {
+        if let activity = EngineActivity.shared.label, !PlugInCommands.isRunning {
+            return "\(activity)… Wait for it to finish before editing."
+        }
+        if isClosing { return DocumentError.closed.localizedDescription }
+        if isSavingForClose || isTransferringClipboard { return DocumentError.busy.localizedDescription }
+        if filterPreviewIsOpen { return "Apply or cancel the filter preview first." }
+        if let running = PlugInCommands.running {
+            let title = running.procedure.label.replacingOccurrences(of: "…", with: "")
+            return "Finish or cancel \u{201C}\(title)\u{201D} first."
+        }
+        if selectionOutline.isEmpty { return "There is no selection to stroke; select an area first." }
+        if isChannelTargetActive {
+            return "A selection cannot be stroked onto a channel; select the layer first."
+        }
+        if isMaskTargetActive {
+            return "A selection cannot be stroked onto a mask; select the layer first."
+        }
+        guard let drawable = activeDrawable else { return DocumentError.targetChanged.localizedDescription }
+        if let layer = paintTarget?.layer,
+           layers.first(where: { $0.id == drawable })?.kind == .group {
+            return "A selection cannot be stroked onto a layer group; select a layer."
+        }
+        if let layer = paintTarget?.layer,
+           layerLocks[layer]?.effective.contains(.pixels) == true {
+            return "Unlock the layer's pixels (or its group's) before stroking the selection."
+        }
+        if let layer = paintTarget?.layer,
+           let source = layerSources[layer], source.hasSource, !source.isRasterized {
+            let what = source.kind == .text ? "text" : source.kind == .link ? "linked" : "vector"
+            return "Rasterize the \(what) layer first (Layer ▸ Rasterize): stroking the selection would paint over its editable source."
+        }
+        return nil
     }
 
     // MARK: Guides
@@ -698,9 +754,29 @@ final class ImageDocument {
     /// the selection are never touched, and pixel locks do not refuse
     /// them. The cached `grid` refreshes through `reload` on the
     /// undo-changed event this step emits.
-    func setGrid(_ grid: EngineSession.Grid) {
-        guard !refuseWhileEditingUnavailable() else { return }
-        run { session, image in try session.setGrid(grid, image: image) }
+    func setGrid(_ grid: EngineSession.Grid,
+                 completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !refuseWhileEditingUnavailable() else {
+            return completion(.failure(isClosing ? DocumentError.closed : DocumentError.busy))
+        }
+        endPendingUserEdits()
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        // Keep the deferred cache/completion stage alive through another
+        // document's exclusive work as well as the native input job.
+        pendingWork += 1
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let result = Result { try session.setGrid(grid, image: image) }
+            DispatchQueue.main.async {
+                EngineActivity.shared.whenIdle {
+                    defer { self.jobDidFinish(input: false) }
+                    if !self.isClosing {
+                        try? self.reload()
+                        if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                    }
+                    completion(result)
+                }
+            }
+        }
     }
 
     // MARK: Editing
@@ -782,6 +858,77 @@ final class ImageDocument {
             // dispatch refuses it rather than starting file I/O here.
             onError?("Use the confirmed restore command.")
             NSSound.beep()
+        }
+    }
+
+    /// Layer ▸ Rasterize Layer… after its confirmation sheet approved:
+    /// turns the genuine text, link or vector layer `layer` pixel-behaving
+    /// while its structured source is retained, as one undo step. The id
+    /// is explicit and was captured before the sheet — never layer 0, the
+    /// engine's selection or the front window's — and a deleted or stale
+    /// id travels to the engine as-is and comes back NOT_FOUND, never
+    /// retargeted. The work is counted and routed on the input queue
+    /// behind every accepted edit. The completion receives the Result on
+    /// the main actor exactly once; failures are also reported through
+    /// `onError`. A closing or busy document refuses without queueing.
+    func rasterizeLayerSource(_ layer: Int32,
+                              completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !isClosing else {
+            onError?(DocumentError.closed.localizedDescription)
+            return completion(.failure(DocumentError.closed))
+        }
+        guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
+              !filterPreviewIsOpen, !EngineActivity.shared.isBusy else {
+            onError?(DocumentError.busy.localizedDescription)
+            return completion(.failure(DocumentError.busy))
+        }
+        endPendingUserEdits()
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let result = Result<Void, Error> { _ = try session.layerCommand(.rasterize, image: image, layer: layer) }
+            DispatchQueue.main.async {
+                if !self.isClosing { try? self.reload() }
+                if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                completion(result)
+            }
+        }
+    }
+
+    /// Layer ▸ Restore Layer Source… after its confirmation sheet
+    /// approved: discards the pixel edits of the rasterized layer `layer`
+    /// and regenerates it from its retained text, path or linked source,
+    /// as one undo step (a linked layer reloads its file when readable,
+    /// otherwise it resumes from the retained source). Same explicit-id
+    /// and NOT_FOUND rules as `rasterizeLayerSource`. A restore may load
+    /// a file natively, so it never goes through the ordinary input
+    /// queue: it takes the engine-wide exclusive admission like a profile
+    /// conversion — pending edits end, accepted input in every document
+    /// drains first, and the work stays counted in `pendingWork` until the
+    /// completion, so a close waits for it. The completion receives the
+    /// Result on the main actor exactly once, after a reload when the
+    /// document is still alive; failures are also reported through
+    /// `onError`.
+    func restoreLayerSource(_ layer: Int32,
+                            completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !isClosing else {
+            onError?(DocumentError.closed.localizedDescription)
+            return completion(.failure(DocumentError.closed))
+        }
+        guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
+              !filterPreviewIsOpen, !EngineActivity.shared.isBusy else {
+            onError?(DocumentError.busy.localizedDescription)
+            return completion(.failure(DocumentError.busy))
+        }
+        endPendingUserEdits()
+        enqueueExclusive(label: "Restoring the layer's source", rejected: {
+            self.onError?(DocumentError.busy.localizedDescription)
+            completion(.failure(DocumentError.busy))
+        }) { [session, image] in
+            let result = Result<Void, Error> { _ = try session.layerCommand(.restoreSource, image: image, layer: layer) }
+            DispatchQueue.main.async {
+                if !self.isClosing { try? self.reload() }
+                if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                completion(result)
+            }
         }
     }
 

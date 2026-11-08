@@ -11,7 +11,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     let canvas: EngineCanvasView
     private let preferences: EditorPreferences
     let statusBar = StatusBarView(frame: .zero)
-    private let scrollView = NSScrollView()
+    /// The scroll view hosting the canvas and its native ruler slots;
+    /// readable for the smoke test's native-slot checks.
+    let scrollView = CanvasScrollView()
     private lazy var engineUndoManager = EngineUndoManager(document: imageDocument)
     /// The open filter preview, generic or dedicated; one at a time.
     private(set) var previewPanel: FilterPreviewPanel?
@@ -19,13 +21,38 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// nil while none is open. Two documents keep independent sheets
     /// through their own controllers — no global binding or singleton.
     private(set) var guidesSheet: GuidesSheetController?
+    /// Edit ▸ Stroke Selection…'s sheet, retained by this window for its
+    /// lifetime the same way; nil while none is open.
+    private(set) var strokeSelectionSheet: StrokeSelectionSheetController?
+
     /// Image ▸ Mode ▸ Indexed…'s sheet, retained by this window for its
     /// lifetime and capturing this window's document at open, so Apply and
     /// the rasterization consent act on that document, never on the front
     /// one. nil while none is open.
     private(set) var indexedSheet: IndexedSheetController?
+
     /// View ▸ Show Guides' cached per-window state, defaulting to on.
     private(set) var guidesViewState = GuideViewState()
+    /// Image ▸ Configure Grid…'s sheet, retained by this window for its
+    /// lifetime; nil while none is open. Two documents keep independent
+    /// sheets through their own controllers — no global binding.
+    private(set) var gridSheet: GridSheetController?
+    /// View ▸ Show Grid's cached per-window state, defaulting to off.
+    private(set) var gridViewState = GridViewState()
+
+    /// View ▸ Show Rulers' cached per-window state, defaulting to on. Kept
+    /// separate from the guides state — the two toggles never couple.
+    private(set) var rulerViewState = RulerViewState()
+    /// The pixel rulers in the scroll view's native ruler slots. They read
+    /// the canvas geometry through a weak reference at draw time, so no
+    /// global ruler controller exists.
+    let horizontalRuler = PixelRulerView(scrollView: nil, orientation: .horizontalRuler)
+    let verticalRuler = PixelRulerView(scrollView: nil, orientation: .verticalRuler)
+    /// Whether the ruler geometry observers are currently registered.
+    /// They are removed when the window closes (and in deinit), so a
+    /// closing window leaves no observation behind.
+    private(set) var rulerObserversActive = false
+
     /// Bumped by every filter start and every cancellation, so a begin
     /// that lands late can tell it is stale and abort its session.
     private var previewRequest = 0
@@ -73,6 +100,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         window.representedURL = imageDocument.fileState.nativeURL
 
         layOutContent(in: window)
+        observeRulerGeometry()
         NotificationCenter.default.addObserver(self, selector: #selector(applyPreferences),
                                                name: EditorPreferences.didChange, object: self.preferences)
         applyPreferences()
@@ -81,10 +109,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         imageDocument.onError = { [weak self] message in
             self?.showStatusError(message)
             self?.previewPanel?.showError(message)
-            // Fan out to the guides sheet as well, alongside the existing
-            // handlers — the sheet never installs its own callback.
+            // Fan out to the guides and grid sheets as well, alongside the
+            // existing handlers — the sheets never install their own callback.
             self?.guidesSheet?.showError(message)
+            self?.strokeSelectionSheet?.showError(message)
+
+            self?.gridSheet?.showError(message)
+
             self?.indexedSheet?.showError(message)
+
         }
         // Palette picks and structural or lock changes first commit any
         // field/text edit and end an active stroke; each command also
@@ -142,6 +175,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     private func layOutContent(in window: NSWindow) {
         scrollView.contentView = CanvasClipView()
+        // This scroll view is below the title bar. Ruler reservation
+        // must not also include automatic title-bar overlap insets.
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
         scrollView.documentView = canvas
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
@@ -151,6 +188,19 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         NotificationCenter.default.addObserver(self, selector: #selector(viewportChanged),
                                                name: NSView.boundsDidChangeNotification,
                                                object: scrollView.contentView)
+        // The pixel rulers live in the scroll view's native ruler slots; the
+        // scroll view itself relayouts and redraws them on content-bounds
+        // changes (scroll, ruler toggles), so AppKit keeps the scroll
+        // layout and the accessibility semantics.
+        horizontalRuler.canvas = canvas
+        verticalRuler.canvas = canvas
+        horizontalRuler.clientView = canvas
+        verticalRuler.clientView = canvas
+        scrollView.hasHorizontalRuler = true
+        scrollView.hasVerticalRuler = true
+        scrollView.horizontalRulerView = horizontalRuler
+        scrollView.verticalRulerView = verticalRuler
+        scrollView.rulersVisible = rulerViewState.showsRulers
 
         let content = NSView()
         for view in [scrollView, statusBar] as [NSView] {
@@ -173,6 +223,44 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     @objc private func viewportChanged() {
         canvas.setNeedsRender()
+        // Scrolling moves the rulers with the content; the scroll view also
+        // relayouts its native ruler slots here.
+        invalidateRulers()
+    }
+
+    /// Watches the geometry the rulers depend on besides the scroll offset:
+    /// the canvas frame (zoom and image extent changes resize it) and the
+    /// window's backing scale. Registered like the window's other
+    /// notifications and removed when the window closes, so a closed window
+    /// observes nothing.
+    private func observeRulerGeometry() {
+        NotificationCenter.default.addObserver(self, selector: #selector(canvasFrameChanged),
+                                               name: NSView.frameDidChangeNotification, object: canvas)
+        NotificationCenter.default.addObserver(self, selector: #selector(windowBackingChanged(_:)),
+                                               name: NSWindow.didChangeBackingPropertiesNotification, object: nil)
+        rulerObserversActive = true
+    }
+
+    @objc private func canvasFrameChanged() { invalidateRulers() }
+
+    @objc private func windowBackingChanged(_ note: Notification) {
+        guard let window = note.object as? NSWindow, window === self.window else { return }
+        invalidateRulers()
+    }
+
+    private func removeRulerObservers() {
+        guard rulerObserversActive else { return }
+        NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: canvas)
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeBackingPropertiesNotification, object: nil)
+        rulerObserversActive = false
+    }
+
+    /// Redraws both rulers from the live canvas geometry. Display-only.
+    private func invalidateRulers() {
+        horizontalRuler.invalidateHashMarks()
+        verticalRuler.invalidateHashMarks()
+        horizontalRuler.needsDisplay = true
+        verticalRuler.needsDisplay = true
     }
 
     /// The image-space point at the viewport's center; a revert
@@ -226,7 +314,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         window?.endEditing(for: nil)
         previewPanel?.window?.endEditing(for: nil)
         guidesSheet?.commitFieldEdit()
+        strokeSelectionSheet?.commitFieldEdit()
+
+        gridSheet?.commitFieldEdit()
+
         indexedSheet?.commitFieldEdit()
+
         for paletteWindow in PaletteEditScope.windowsEditing(imageDocument) {
             paletteWindow.endEditing(for: nil)
         }
@@ -265,9 +358,18 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // the cached guide list arrives with it too (reloadGuides fires
         // this same callback), so the canvas redraws the guide overlay.
         canvas.needsDisplay = true
+        // Image-size changes arrive with the state too; the rulers track
+        // the new extent on the next draw.
+        invalidateRulers()
         // Fan out to the guides sheet through this existing hook.
+
         guidesSheet?.documentStateDidChange()
+        strokeSelectionSheet?.documentStateDidChange()
+
+        gridSheet?.documentStateDidChange()
+
         indexedSheet?.documentStateDidChange()
+
     }
 
     // MARK: Menu commands
@@ -447,6 +549,51 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         canvas.showsGuides = guidesViewState.showsGuides
         canvas.needsDisplay = true
         if let item = sender as? NSMenuItem { item.state = guidesViewState.menuState }
+    }
+
+    // MARK: Grid
+
+    /// Image ▸ Configure Grid…: opens this window's grid configuration
+    /// sheet. The sheet is owned by this window controller, captures this
+    /// document and seeds its draft from the cached grid only, so opening
+    /// it never makes a native call.
+    @objc func configureGrid(_ sender: Any?) {
+        guard let window, !imageDocument.isClosing, window.attachedSheet == nil,
+              gridSheet == nil else { return }
+        let sheet = GridSheetController(document: imageDocument, hostWindow: window)
+        gridSheet = sheet
+        window.beginSheet(sheet.panel) { [weak self, weak sheet] _ in
+            guard let self, let sheet, self.gridSheet === sheet else { return }
+            sheet.invalidate()
+            self.gridSheet = nil
+        }
+    }
+
+    /// View ▸ Show Grid: flips this window's cached flag and redraws the
+    /// canvas. Pure view state — no image pixels, file, dirty, history,
+    /// selection, export or print change — so it works while the engine
+    /// is busy.
+    @objc func toggleShowGrid(_ sender: Any?) {
+        guard !imageDocument.isClosing else { return }
+        gridViewState.toggle()
+        canvas.showsGrid = gridViewState.showsGrid
+        canvas.needsDisplay = true
+        if let item = sender as? NSMenuItem { item.state = gridViewState.menuState }
+    }
+
+    /// View ▸ Show Rulers: flips this window's cached flag and the scroll
+    /// view's native ruler slots, which relayout the viewport around them.
+    /// Pure view state — no engine call, no pixel, file, dirty, history,
+    /// selection, export or print change — and it never waits for the
+    /// engine, so the toggle works while the engine is busy.
+    @objc func toggleShowRulers(_ sender: Any?) {
+        guard !imageDocument.isClosing else { return }
+        rulerViewState.toggle()
+        scrollView.rulersVisible = rulerViewState.showsRulers
+        scrollView.tile()
+        invalidateRulers()
+        if let item = sender as? NSMenuItem { item.state = rulerViewState.menuState }
+
     }
 
     @objc func toggleLayerBoundary(_ sender: Any?) {
@@ -893,6 +1040,31 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         FillForm.present(in: imageDocument, on: window)
     }
 
+    /// Edit ▸ Stroke Selection…: opens this document's stroke-selection
+    /// sheet. The sheet is owned by this window controller and captures
+    /// the current brush settings by value at open, so two documents keep
+    /// independent sheets and no global ToolState changes. The open gate
+    /// reads only the cached document state — busy, preview, closing,
+    /// empty selection, mask/channel/group target, locks and editable
+    /// structured sources refuse with a reason, never a native call on
+    /// the main thread.
+    @objc func strokeSelection(_ sender: Any?) {
+        guard let window, !imageDocument.isClosing, window.attachedSheet == nil,
+              strokeSelectionSheet == nil else { return }
+        if let reason = imageDocument.strokeSelectionRefusal {
+            imageDocument.onError?(reason)
+            NSSound.beep()
+            return
+        }
+        let sheet = StrokeSelectionSheetController(document: imageDocument, hostWindow: window)
+        strokeSelectionSheet = sheet
+        window.beginSheet(sheet.panel) { [weak self, weak sheet] _ in
+            guard let self, let sheet, self.strokeSelectionSheet === sheet else { return }
+            sheet.invalidate()
+            self.strokeSelectionSheet = nil
+        }
+    }
+
     /// Edit ▸ Fill Path: fills the active path's area on the current paint
     /// target using the Path tool's foreground color and fill settings.
     @objc func fillPath(_ sender: Any?) {
@@ -923,6 +1095,76 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         VectorStyleForm.present(in: imageDocument, layer: id, on: window)
     }
 
+    /// Layer ▸ Rasterize Layer…: the per-window confirmation sheet that
+    /// turns the active genuine text, link or vector layer into pixels
+    /// while its source is retained.
+    @objc func rasterizeLayer(_ sender: Any?) {
+        presentLayerSourceConfirmation(.rasterize)
+    }
+
+    /// Layer ▸ Restore Layer Source…: the inverse sheet, regenerating a
+    /// rasterized layer from its retained source and discarding its pixel
+    /// edits.
+    @objc func restoreLayerSource(_ sender: Any?) {
+        presentLayerSourceConfirmation(.restore)
+    }
+
+    /// The confirmation sheet shared by both layer-source commands. The
+    /// document and the explicit layer id are captured by value before the
+    /// alert is shown, so Apply can never fall back to layer 0, the
+    /// engine's selection or the front window, and a retarget while the
+    /// sheet is up does not move the captured id. Each window owns its own
+    /// sheet — `attachedSheet` guards stacking — so two documents keep
+    /// independent forms; no singleton, no shared state, and no existing
+    /// callback hook is replaced. Cancel queues nothing. A document that
+    /// began closing after the sheet opened wins over a late Apply.
+    private func presentLayerSourceConfirmation(_ command: LayerSourceMenuPolicy.Command) {
+        guard let window, window.attachedSheet == nil, !previewBusy,
+              !imageDocument.isClosing, !imageDocument.isSavingForClose,
+              !imageDocument.isTransferringClipboard,
+              !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
+              !imageDocument.targetCommandIsPending,
+              !imageDocument.isMaskTargetActive, !imageDocument.isChannelTargetActive,
+              let layer = activeLayerInfo,
+              LayerSourceMenuPolicy.isEnabled(command,
+                                              source: imageDocument.layerSources[layer.id],
+                                              locks: imageDocument.layerLocks[layer.id],
+                                              targetIsLayer: true,
+                                              stateBlocked: false) else { return }
+        endPendingEdits()
+        let document = imageDocument
+        let layerID = layer.id
+        let layerName = layer.name
+        let alert = NSAlert()
+        switch command {
+        case .rasterize:
+            alert.messageText = "Rasterize \u{201C}\(layerName)\u{201D}?"
+            alert.informativeText = "The layer's text, link or path content becomes pixels, as one undo step. "
+                + "The source is retained, so Restore Layer Source can bring it back; while rasterized, "
+                + "a linked layer stops following changes to its file."
+            alert.addButton(withTitle: "Rasterize")
+        case .restore:
+            alert.messageText = "Restore the source of \u{201C}\(layerName)\u{201D}?"
+            alert.informativeText = "The layer's pixel edits are discarded and its text, path or linked source "
+                + "is regenerated, as one undo step; Undo brings the painted pixels back. A linked layer "
+                + "reloads its file when it can be read, otherwise it resumes from the retained source "
+                + "and follows the file again."
+            alert.addButton(withTitle: "Restore")
+        }
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.forEach { $0.setAccessibilityLabel($0.title) }
+        alert.beginSheetModal(for: window) { [weak self] response in
+            // Cancel queues nothing; only the captured document's Apply
+            // runs, on the captured explicit id alone.
+            guard let self, response == .alertFirstButtonReturn,
+                  self.imageDocument === document, !document.isClosing else { return }
+            switch command {
+            case .rasterize: document.rasterizeLayerSource(layerID)
+            case .restore: document.restoreLayerSource(layerID)
+            }
+        }
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
             || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || EngineActivity.shared.isBusy || window?.attachedSheet != nil
@@ -941,6 +1183,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return imageDocument.activePath != nil && !editingBlocked
         case #selector(fill(_:)):
             return !editingBlocked && !previewBusy && imageDocument.activeDrawable != nil
+        case #selector(strokeSelection(_:)):
+            // The gate reads only cached state — no native call while a
+            // menu validates; the reason becomes the item's tool tip.
+            if let reason = imageDocument.strokeSelectionRefusal {
+                menuItem.toolTip = reason
+                return false
+            }
+            menuItem.toolTip = nil
+            return !editingBlocked && !previewBusy
         case #selector(toVectorLayer(_:)):
             // Vector layers arrived in GIMP 3.2; older engines report
             // UNSUPPORTED when the command runs, so the item stays listed.
@@ -956,6 +1207,21 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // layer never gets the item.
             return activeLayerInfo?.kind == .vector && !editingBlocked && !previewBusy
                 && imageDocument.supportsVectorLayers != false
+        case #selector(rasterizeLayer(_:)), #selector(restoreLayerSource(_:)):
+            // Cached source state only — never a synchronous native call:
+            // Rasterize on genuine unrasterized text/link/vector with its
+            // source retained, Restore on a rasterized retained source.
+            // Mask and channel targets, inherited pixel/position locks,
+            // a pending target command and every busy/closing/preview/
+            // attached-sheet state disable the item.
+            let command: LayerSourceMenuPolicy.Command =
+                menuItem.action == #selector(rasterizeLayer(_:)) ? .rasterize : .restore
+            guard let layer = activeLayerInfo else { return false }
+            return LayerSourceMenuPolicy.isEnabled(command,
+                source: imageDocument.layerSources[layer.id],
+                locks: imageDocument.layerLocks[layer.id],
+                targetIsLayer: !imageDocument.isMaskTargetActive && !imageDocument.isChannelTargetActive,
+                stateBlocked: editingBlocked || previewBusy || imageDocument.targetCommandIsPending)
         case #selector(newLayerGroup(_:)):
             return !editingBlocked && !previewBusy
         case #selector(layerToImageSize(_:)), #selector(trimLayerToContent(_:)):
@@ -1036,6 +1302,29 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // wherever navigation is.
             menuItem.state = guidesViewState.menuState
             return !imageDocument.isClosing
+        case #selector(configureGrid(_:)):
+            // The sheet seeds only from cached state; it must not stack
+            // on another sheet of this window. Grid configuration is
+            // image metadata: a selected channel does not restrict it.
+            return !imageDocument.isClosing && window?.attachedSheet == nil
+        case #selector(toggleShowGrid(_:)):
+            // The checkmark reads the window's cached flag, never the
+            // engine; toggling is view-only, so it stays available even
+            // while the engine is busy.
+            menuItem.state = gridViewState.menuState
+            return !imageDocument.isClosing
+
+        case #selector(toggleShowRulers(_:)):
+            // Same contract as Show Guides, spelled out in RulerMenuLogic:
+            // the checkmark reads the window's cached flag and an engine-
+            // busy gate never applies to this display-only toggle.
+            let rulerCheck = RulerMenuLogic.validate(showsRulers: rulerViewState.showsRulers,
+                                                     isClosing: imageDocument.isClosing,
+                                                     engineIsBusy: EngineActivity.shared.isBusy)
+            menuItem.state = rulerCheck.state
+            return rulerCheck.enabled
+
+
         case #selector(toggleLayerBoundary(_:)):
             menuItem.state = canvas.showsLayerBoundary ? .on : .off
             return !imageDocument.isClosing
@@ -1595,10 +1884,27 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         PaletteCenter.shared.frontDocumentDidChange()
     }
 
+    deinit {
+        // deinit is nonisolated, so the removal is inlined here rather than
+        // routed through the main-actor-isolated helper; safe even if the
+        // window never went through windowWillClose.
+        if rulerObserversActive {
+            NotificationCenter.default.removeObserver(self)
+        }
+    }
+
     func windowWillClose(_ notification: Notification) {
         closeStarted = true
+        // A closing window leaves no ruler observation behind; the ruler
+        // views themselves go away with the scroll view's view hierarchy.
+        removeRulerObservers()
         guidesSheet?.invalidate()
+        strokeSelectionSheet?.invalidate()
+
+        gridSheet?.invalidate()
+
         indexedSheet?.invalidate()
+
         previewPanel?.cancel()
         cancelPendingPreview()
         canvas.stopRendering { [self] in

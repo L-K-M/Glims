@@ -1059,6 +1059,64 @@ row/edit preservation and overlay geometry; the GLIMS_SMOKE_CASE=
 guides-controls scenario is wired but NOT run — root owns the runtime
 matrix against the native-guides libraries.
 
+### Pixel rulers (2026-11-08)
+
+View > Show Rulers (default on) puts app-specific pixel rulers in the
+scroll view's native ruler slots: `DocumentWindowController` assigns two
+`PixelRulerView`s (an `NSRulerView` subclass) to
+`scrollView.horizontalRulerView`/`verticalRulerView` with
+`hasHorizontalRuler`/`hasVerticalRuler`, so AppKit keeps the scroll
+layout (toggling relayouts the viewport around the ruler thickness) and
+the rulers' accessibility semantics. The toggle state is a cached
+per-window `RulerViewState` (default on), separate from
+`guidesViewState`; the menu checkmark reads the cache via
+`RulerMenuLogic.validate`, which deliberately takes `engineIsBusy` and
+ignores it, so the item stays enabled and the toggle works while the
+engine is busy. Drawing is display-only: `PixelRulerView` reads the
+canvas's live geometry (weak `canvas` reference, cached image size) and
+maps image pixels through `NSView.convert(_:from:)` from the canvas —
+never assuming a vertical direction — so scroll, zoom, backing scale,
+image extent and flips come out right; no facade call, pixel, file,
+dirty, history, selection, export or print path is touched (printing
+draws an immutable PrintSnapshot, not the scroll view). Ruler
+invalidation rides the existing content-bounds notification (scroll and
+ruler toggles), plus canvas frame changes (zoom, image extent) and the
+window's backing-properties notification; the selector observers are
+removed in `windowWillClose` and in `deinit` (`rulerObserversActive`
+tracks them), and the ruler holds the canvas weakly, so closing a window
+leaves no observation or dangling geometry source behind. There is no
+global ruler controller.
+
+Ticks and labels come from a pure bounded planner, `PixelRulerPlan`: it
+validates all inputs finite (nil for non-finite inputs, non-positive
+scale, negative extent or an inverted range), clamps the visible range
+to the image extent `0...extent` (an off-image range or zero extent is
+the deliberate empty-plan fallback), picks the major spacing as the
+smallest whole 1/2/5 * 10^n reaching ~50 view points (whole pixels, so
+labels are whole image pixels), plans minor ticks at major/5 only when
+they land at least 4 view points apart, and caps the output at 512
+ticks with a progress guard, so extreme zoom, nonzero origins and
+damaged huge sizes terminate with a finite, sorted, bounded plan.
+`PixelRulerGeometry.deviceAligned` snaps strokes to the half-device-
+pixel grid (at most half a device pixel) without changing the ticks'
+image coordinates. Guides keep working independently; their state and
+overlay are untouched.
+
+Compile-checked here: `swift build` and `swift build --build-tests`
+both pass. Unit tests (`PixelRulerTests`) cover the planner against
+independent oracles (brute-force nice spacing, CanvasGeometry zoom/
+backing point scale, explicit range arithmetic) across nonzero origins,
+zoom and backing, clamping, cap/finiteness at extremes, damaged inputs,
+label semantics, device alignment, and the per-window default plus the
+busy-independent menu-validation contract. The smoke scenario
+`GLIMS_SMOKE_CASE=pixel-rulers` (`exercisePixelRulers`, also in the
+default engine-smoke run) is wired but NOT run here — it drives the
+real ruler slots and menu action (on/off viewport and checkmark changes,
+independent two-window state, busy-independent toggling, scroll/zoom
+tick movement and a ruler view bitmap against the geometry oracle,
+pixel/dirty/history/selection isolation, observer removal on close);
+root owns the runtime matrix against the native libraries.
+
 ### Path tool multi-anchor selection (2026-11-08)
 
 Scope: `Sources/GlimsKit/Tools/VectorPath.swift`,
@@ -1912,6 +1970,158 @@ and `Sources/CGlimsEngine/abi.c` pass `-std=c11 -O2 -Wall -Wextra
 any on-screen check — no runtime behavior of the new slot was executed
 in this slice.
 
+### Stroke selection controls (2026-11-08)
+
+Interface slice on `feat/stroke-selection-controls`, frontend only: no
+facade, C, header or dependency change. Edit ▸ Stroke Selection… (listed
+in docs/design.md's Edit menu since the plan) now exists:
+`MainMenu` wires it to `DocumentWindowController.strokeSelection(_:)`,
+which opens a per-document sheet
+(`StrokeSelectionSheetController`, owned by the window controller exactly
+like the guides sheet — two documents keep independent sheets and
+controllers, and the document's existing onError/onStateChange/
+onWillChangeLayers/windowWillClose callbacks fan out to it alongside the
+guides sheet instead of being replaced). The sheet captures the document
+and each offered paint tool's brush — resource identity, size, opacity,
+color — BY VALUE at open from `ToolState.brush(for:)`; opening, editing
+or cancelling the sheet never mutates the global ToolState, the brush
+row shows the captured identity's real name ("Default", or the chooser's
+verified "Missing: …" marker — never silently replaced, never a session
+handle), and an accepted stroke carries the captured
+`ResourceIdentity`, resolved on the engine worker as before. Local
+fields are the paint tool (paintbrush/pencil/eraser), size, opacity and
+a color well owned by the sheet (deactivated and ordered out on close
+only when the sheet opened it). Validation is strict finite whole-string
+parsing with inline reasons (`StrokeSelectionFormValidation`): junk,
+whitespace, NaN/inf and out-of-range size (0 < s ≤ 500) or opacity
+(0…100 %) keep the sheet open with the reason; Cancel mutates nothing.
+Accept is one-shot: a reentry flag goes up before anything that can call
+back into the UI (ending field edits, ending pending input), so a
+duplicate/reentrant accept is blocked before it can mutate; on success
+exactly one counted input job is enqueued through
+`ImageDocument.strokeSelection` and the sheet closes. Native errors use
+the document's existing onError path.
+
+Gates read only cached state — no synchronous native RPC from menu
+validation, sheet open or accept (`ImageDocument.strokeSelectionRefusal`
+plus `validateMenuItem`, the refusal as tool tip): busy/plug-in, filter
+preview, closing/saving/clipboard, empty selection (cached
+`selectionOutline`), mask/channel/group targets, effective pixel locks,
+and an editable structured source from the cached `layerSources`
+(`hasSource && !isRasterized`) which refuses with a rasterize-first
+explanation — the rasterize UI is a separate pending change and is not
+adopted here.
+
+Queue-defect fix in the same slice: `ImageDocument.strokeSelection` now
+ends pending user edits and an active stroke (`endPendingUserEdits()` +
+`endStroke()`) before enqueueing, the `finishInput` convention — both
+land as input-queue jobs ahead of the selection stroke, so an active
+stroke and queued accepted input finish BEFORE it (previously the native
+readiness check could report BUSY under the open stroke). Counted
+input-queue ordering, captured identity/settings/target and the error
+path are unchanged.
+
+Tests: `StrokeSelectionFormTests` (pure parser ranges/reasons, by-value
+brush build with identity, menu wiring) and `EngineSmokeTest` gains
+`exerciseStrokeSelectionControls`, wired as
+`GLIMS_SMOKE_CASE=stroke-selection-controls` and into the default run:
+menu wiring and cached validation; two independent documents/sheets;
+non-default resource/size/opacity/color capture shown and used; accept
+while the other window is front; unchanged selection; exact one-step
+undo/redo; cancel and invalid input; busy (held gate, released on every
+path), busy-after-open, preview, empty-selection, mask, channel, group,
+pixel-lock and structured-source gates; the queue-order regression
+(active stroke + accepted fill behind a controlled gate finish before
+the selection stroke — no BUSY, three undo steps, "Stroke Selection"
+last); duplicate/reentrant accept and in-flight-field-edit accept
+enqueue exactly once; late callbacks after close; close-drain.
+
+Checks actually run on this branch: `swift build -j 2` and
+`swift build -j 2 --build-tests` pass. NOT run here (root owns all
+runtime): `swift test`, `GLIMS_SMOKE_CASE=stroke-selection-controls`,
+the full `--engine-smoke-test`, the engine matrix, any GUI/on-screen
+check, any adapter build — no runtime behavior of the new sheet, menu
+item, gate or queue fix was executed in this slice.
+
+
+### Grid controls (2026-11-08)
+
+Interface slice on `feat/grid-controls`, frontend only over the cached
+`ImageDocument.grid` / queued `ImageDocument.setGrid` — no native call
+from the UI or menu validation, no C/header change. Three pieces:
+
+- **Image ▸ Configure Grid…** (`GridSheetController`, one per window,
+  retained by its `DocumentWindowController` like the guides sheet). The
+  sheet captures its document and seeds a local draft (spacing X/Y,
+  offset X/Y, style popup with all five native styles, foreground and
+  background color wells) from the cached grid. All edits stay local
+  until Apply commits the field edits, parses strictly, and performs
+  ONE queued atomic `setGrid` (one undo step when changed; an identical
+  grid is a no-op). Cancel and window close write nothing. Parsing is
+  whole-field `Double` plus finiteness; spacings must additionally be
+  strictly positive; offsets only finite. The native range bounds are
+  deliberately not checked client-side — the adapter refuses them and
+  the refusal is fanned out through the document's existing `onError`
+  to the sheet's message label and the status bar, never clamped, and
+  the draft is preserved so the values can be corrected. A reload
+  re-seeds the draft only while it is clean (Undo/Redo and a
+  successful Apply's refresh land in the sheet; a dirty draft is
+  never clobbered). Color wells follow the Vector Style conventions:
+  the sheet records whether the shared color panel was already visible
+  at open and, on invalidate, closes only a panel its own wells
+  activated, deactivating both. Late close callbacks are discarded
+  (`isInvalidated` + identity-checked `beginSheet` completion). Menu
+  validation allows the item whenever the document is not closing and
+  no other sheet is attached — grid configuration is image metadata,
+  so a selected channel does not restrict it.
+- **View ▸ Show Grid** (`GridViewState`, cached per window, default
+  OFF): the checkmark reads the cached flag and the toggle stays
+  available while the engine is busy. It is pure view state — no image
+  pixels, file, dirty, history, selection, export or print mutation
+  (print draws an immutable `PrintSnapshot`, never the canvas).
+- **Canvas overlay** (`EngineCanvasView.drawGridOverlay`, drawn between
+  the image tiles and the selection/path/guide overlays) over the pure,
+  bounded `GridOverlayPlanner`: the visible rect is clipped to the
+  image FIRST, line positions come from closed-form `ceil`/`floor` of
+  `offset + k*spacing` inside the visible range (never a walk over the
+  whole image), with finite/overflow guards and fixed caps (4096 lines
+  per axis, 65536 intersections — over-cap axes/dot products are
+  suppressed as illegible, reported via plan flags). An axis whose
+  scaled spacing drops below 2 device pixels is suppressed, matching
+  the engine's own threshold (gimpcanvasgrid.c, bug #599267); Dots and
+  Intersections need both axes and draw only at intersections (1-device-
+  px mark / crosshair with the engine's CROSSHAIR reach); the three
+  line styles draw visible-length segments per legible axis. Foreground
+  colors everything; the background color is used only by Double Dash
+  as the interleaved second dash. Dash phase is anchored to image
+  coordinates (`fmod(from * viewScale, period)`), so scrolled segments
+  keep the pattern glued to the image. Invalid cached metadata (NaN,
+  non-positive spacing) is suppressed, never clamped. Image
+  coordinates map straight to view points, so zoom, backing scale,
+  scroll and the flipped canvas all stay aligned.
+
+Tests: `GridControlsTests` covers the strict parser, draft validation
+(including that over-maximum spacings pass to the engine rather than
+being clamped), the toggle policy, the five style names, and planner
+oracles — modular line positions, offset non-clamping, visible-rect
+clipping, the 2-device-px legibility boundary, per-axis suppression,
+dot Cartesian products, both caps, invalid-input guards and the
+dash-phase anchoring invariant against a closed-form oracle.
+`GLIMS_SMOKE_CASE=grid-controls` (and the default smoke run) drives
+`exerciseGridControls`: real sheet Apply/Cancel/invalid/native-refusal
+paths, view-bitmap toggle and style differences with native pixel
+isolation, undo/redo cache refresh, two-document ownership, busy and
+late-close paths, all controls reached by accessibility label; waits
+are predicate-based with queue gates released on every path.
+
+Checks actually run on this branch: `swift build -j 2` and
+`swift build -j 2 --build-tests` pass. NOT run here (owned by the root
+job): `swift test`, `--smoke-test`, `--engine-smoke-test` (including
+`GLIMS_SMOKE_CASE=grid-controls`), the adapter conformance tests and any
+native/engine command — no runtime behavior of the new UI was executed
+in this slice.
+
+
 ### Fill pattern source (2026-11-08)
 
 Interface slice on `feat/pattern-chooser`, frontend only: Edit ▸ Fill…
@@ -2132,6 +2342,23 @@ now pass. The compiled `layer-source` interface scenario additionally
 checks queued document cache refresh and busy admission; its runtime
 execution and the unit suite are pending the shared desktop.
 
+Ruler runtime validation caught overlapping native ruler/clip rectangles:
+this AppKit build left the viewport full-sized even with zero content
+insets. CanvasScrollView now reserves only rectangles that actually
+overlap, leaving traditional native tiling alone, and preserves the
+scrolled position across repeated tiling. The focused checks pass on all
+four engines, including real scrolling and rectangle separation.
+Independent reviews of the original rulers and the layout fix found no
+important issues. All 417 unit tests pass.
+
+The first full run exposed a stale synthetic text click: after layout
+changed, its old window coordinates mapped to image (4,-17), outside the
+saved text at (4,4). Recomputing a click inside the current text bounds
+reopens that exact layer; deleting its content then saves correctly. The
+focused file-safety scenario passes. Unknown smoke selectors now fail
+explicitly rather than silently running the full suite. The integrated
+full run is repeated after adopting the Guides field fix.
+
 ### Retained-source restore (2026-11-08)
 
 Backend slice on `feat/layer-source-restore`, engine plus a typed Swift
@@ -2235,6 +2462,84 @@ pixel-restoration and exact undo assertions already passed. No runtime
 restore behavior required a change. User-facing confirmed dispatch and
 its interface checks follow separately.
 
+### Layer source controls: Rasterize Layer… / Restore Layer Source… (2026-11-08)
+
+UI slice on `feat/layer-source-controls`, Swift-only over the existing
+C API 113 (`LayerCommand.rasterize = 12`, `.restoreSource = 13`,
+`layer_source_info`): no C, header or dependency change.
+
+- `Sources/GlimsKit/Document/LayerSourceMenuPolicy.swift`: pure
+  cached-state gating. Rasterize only on genuine TEXT/LINK/VECTOR with
+  `hasSource && !isRasterized`; Restore only on `hasSource &&
+  isRasterized`; ordinary pixels/groups and a missing cache entry offer
+  neither; inherited (effective) PIXELS|POSITION locks, mask/channel
+  targets and the caller-composed closing/busy/pending-target/preview/
+  attached-sheet states disable. No synchronous native RPC in
+  validation or UI.
+- `ImageDocument`: `targetCommandIsPending` cached flag;
+  `rasterizeLayerSource(_:completion:)` — counted, explicit-id, routed on
+  the input queue behind accepted edits; `restoreLayerSource(_:completion:)`
+  — same explicit-id rules, but through the existing `enqueueExclusive`
+  mechanism like `convertProfile`: pending edits end, accepted input in
+  every document drains first, `pendingWork` holds until completion, and
+  the restore never goes through the ordinary input queue (a link
+  restore may load a file). Both deliver the `Result` on main exactly
+  once, reload when the document is alive, report failures through
+  `onError`, refuse closed/busy without queueing, and pass a stale id to
+  the engine untouched so it comes back NOT_FOUND, never retargeted.
+  `layerCommand(.restoreSource)` still refuses unconfirmed calls.
+- `MainMenu` Layer menu gains "Rasterize Layer…" and "Restore Layer
+  Source…"; `DocumentWindowController` owns the per-window NSAlert
+  confirmation sheets (no singleton, no callback-hook clobbering): the
+  document and explicit layer id are captured by value before the alert,
+  so Apply never uses layer 0, the front window or the current selection;
+  Cancel queues nothing; a close since the sheet opened wins over a late
+  Apply. Rasterize's text explains pixel behavior with the source
+  retained and linked layers stopping source updates; Restore's text
+  explains discarded pixel edits, undo availability, retained
+  text/path/linked source, and the native link contract (reload when
+  readable, otherwise retained source with monitoring resumed). Sheet
+  buttons carry explicit accessibility labels. `validateMenuItem` gates
+  both items through the policy over `layerSources`/`layerLocks` and the
+  existing mask/channel/busy/closing/preview/attached-sheet guards.
+- Tests: `LayerSourceMenuPolicyTests` (pure policy: kinds, source
+  states, missing cache, locks, target and blocked states),
+  `LayerMenuTests` gains the Layer-menu wiring for both selectors, and
+  `EngineSmokeTest` gains `GLIMS_SMOKE_CASE=layer-source-controls` plus
+  `exerciseLayerSourceControls` in the full suite: menu wiring and
+  cached gating (text/pixel/locks/attached-sheet/busy), sheet Cancel
+  changing nothing, Rasterize Apply as one undo with the cached kind
+  flipped, retarget-before-Apply and a second document staying untouched,
+  a pixel stroke then Restore giving the exact source pixels plus one
+  undo, undo restoring the painted pixels, BUSY refusal under a
+  controlled semaphore pause, the admitted restore counted in
+  `pendingWork` and draining the other document's accepted stroke first,
+  stale-id native NOT_FOUND, and late-close Apply queueing nothing.
+  Pixel/kind oracles read the session directly (`copyPixels`,
+  `layerSource`, `layers`), never the cache under test.
+
+Checked in this slice: `swift build -j 2` — Build complete;
+`swift build -j 2 --build-tests` — Build complete (the new
+`LayerSourceMenuPolicyTests.o` is in the build tree). NOT RUN here (the
+Mac's shared process limits; root owns runtime): `swift test`, the
+`GLIMS_SMOKE_CASE=layer-source-controls` and full `--engine-smoke-test`
+runs, all AppKit/GUI execution, and every native adapter/engine build —
+the four-engine suite 1314/1170/1314/1314 green under root predates
+this slice and does not validate it. Remaining gaps: runtime behavior
+of the sheets, the restore's link-file reload path through the UI, and
+mask/channel-target gating exercised only in the pure policy tests, not
+against a live mask/channel target.
+
+Guide field refresh regression: undoing a selected guide's move updated
+the list but left its idle position field stale because reselecting the
+same table row does not notify its delegate. The new actual-sheet check
+failed before the fix. Reload now synchronizes the selected guide's input
+fields explicitly while preserving an active text edit. Both Undo/Redo
+field checks and the existing active-edit preservation check pass on the
+pinned engine (30 focused checks). Before this fix, the source-cache
+integration passed 399 unit tests, all-four-engine guide checks and 971
+full pinned interface checks. Follow-up review and matrix are running.
+
 ### Linked-load admission and object lifetime (2026-11-08)
 
 A controlled Python file loader reproduced edits being admitted during
@@ -2270,6 +2575,7 @@ rather than assuming a Python marker or a fixed delay proves completion.
 Independent review of the lifetime change found no important issues.
 Swift targets compile; application-side retry runtime remains part of
 subsequent interface integration.
+
 
 ### Native indexed conversion (2026-11-08)
 
@@ -2414,6 +2720,14 @@ pinned engine (30 focused checks). Before this fix, the source-cache
 integration passed 399 unit tests, all-four-engine guide checks and 971
 full pinned interface checks. Follow-up review and matrix are running.
 
+The combined rulers/Guides-field revision passes all 417 unit tests and
+1,021 full pinned-engine interface checks. The focused rulers scenario
+passes 47 checks on each of the four supported engines.
+
+Pinned CI uses Swift 6.2 and requires explicit CGFloat-to-Double tuple
+conversion in the ruler axis mapping; the newer local compiler had
+accepted it implicitly. The conversions are now explicit.
+
 ### Indexed conversion controls (2026-11-08)
 
 UI slice on `feat/indexed-controls`, Swift only — no C/header/dependency
@@ -2501,6 +2815,7 @@ Root reviewed form state, explicit consent, captured settings/document,
 validation, exclusive work and close handling. The separate independent
 UI review failed without findings and provides no approval.
 
+
 Integrated with the merged Guides/source cache: all 402 unit tests,
 focused anchor checks on all four engines and 1,000 full pinned interface
 checks pass. The synthetic Escape key now also carries the correct ESC
@@ -2531,6 +2846,37 @@ history/dirty state on reads and profile-assignment Undo/Redo appearance.
 No production renderer change was needed. This verifies the in-gamut sRGB
 path; physical monitor calibration, wide-gamut/HDR output, proof profiles,
 proof intents and gamut warnings remain unverified or unimplemented.
+
+Grid controls integration passes 417 unit tests, all 38 focused checks on
+all four engines and 1,030 full pinned interface checks. A controlled
+probe of the actual planner reproduced an infinite loop when a Double
+index could not advance by one; indices outside the exact-integer range
+are now suppressed and iteration has an integer bound. Its regression
+passes. An actual-sheet regression also reproduced idle fields staying
+stale after Apply then Undo. The document now reports counted completion;
+the sheet marks the committed draft clean only on success and refreshes
+it from the cache. Accepted work disables its controls through completion.
+Close discards unapplied edits, while applied changes remain undoable.
+Own color editing ends on Apply and close without hiding another owner's
+panel. Parent integration and independent review of this fix follow.
+
+A second grid regression reproduced the cache/completion stage becoming
+uncounted while another document held exclusive engine work. That stage
+now retains its own pending-work count through the deferred callback,
+including close and failure paths. All 39 focused checks pass on each of
+the four engines. A focused independent review of the supplied exact diff
+and surrounding source found no important findings; the helper could not
+independently execute Git. The broader current-file review was also clean.
+
+The source-controls integration passes 407 unit tests, all 33 focused
+sheet/dispatch checks on each supported engine, and the full pinned
+interface suite. Initial failures were assertions against the wrong
+state: ordinary pixels have a source-info cache entry, and the menu
+was still aimed at the retargeted pixel layer. Correcting those fixture
+expectations required no production change. Root reviewed the source
+controls, admission/drain and close paths. The independent broad UI
+helper timed out without a verdict and is not counted as approval.
+
 
 Grid integration validation passes 1,380 / 1,269 / 1,380 / 1,380 native
 checks on GIMP 3.2.8 / 3.0.8 / 3.2.0 / master. The initial failures were
@@ -2680,6 +3026,19 @@ an installed font, capture baselines after the setup stroke and preceding
 Anchor, and expect native To Layer to reveal the full payload after
 removing the selection clip. That appearance uses an independent known
 RGBA-cell oracle rather than assuming the clipped preview stays identical.
+
+
+
+Ruler review reproduced a major/minor classification defect at large
+scrolled coordinates: a magnitude-relative tolerance eventually exceeded
+the distance between ticks. At image coordinate 1,000,000 and 3,200% zoom,
+the actual planner mislabeled all 26 visible ticks as major. Classification
+now uses exact divisibility of the integral tick index. The independent
+six-position oracle passes, as do all 421 unit tests and 47 focused pinned
+interface checks. The four-engine focused and 1,067 full integration checks
+above preceded this pure planner correction.
+
+
 
 After integrating Indexed, one native conformance run failed during the
 linked-file rewrite fixture and later crashed after cascading failures.
