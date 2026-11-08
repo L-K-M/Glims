@@ -3,9 +3,10 @@ import AppKit
 /// Pure logic behind Image ▸ Metadata…: the domain table, the full-tag
 /// catalog search, the dotted-name rule for adding a registered tag, the
 /// read-only (normalization-protected) tag list, the cached admission
-/// policy, the ordered value-draft edits and the per-action capture. No
-/// AppKit state and no engine calls, so the rules are unit-testable
-/// without an engine.
+/// policy, the descriptor-driven write gates (facade slot 128), the
+/// ordered value-draft edits and the per-action capture. No AppKit state
+/// and no engine calls, so the rules are unit-testable without an
+/// engine.
 enum MetadataSheetLogic {
     /// A local validation refusal shown in the sheet's error row.
     struct Rejection: Error, Equatable {
@@ -107,6 +108,91 @@ enum MetadataSheetLogic {
     static let langAltNote = "XMP language-alternative tags read as plain text without their "
         + "language qualifiers; the engine refuses edits to them."
 
+    // MARK: Descriptor-driven gates (facade slot 128 policy)
+
+    /// The gates the native tag descriptor puts on the selected tag's
+    /// controls. `canSet` and `canRemove` are independent: an absent XMP
+    /// container admits REMOVE (a native no-op) but not SET. `canAddValue`
+    /// additionally needs a multiple-value kind. `isReadOnly` marks tags
+    /// whose descriptor admits no edit at all (LangAlt, protected). The
+    /// policy bits describe the tag's format only: a real accepted write
+    /// can still fail (BUSY, copy preservation, native validation), and
+    /// that native refusal is then reported unchanged. `refusal` is the
+    /// actionable reason shown while writes are disabled.
+    struct DescriptorGates: Equatable {
+        let canSet: Bool
+        let canRemove: Bool
+        let canAddValue: Bool
+        let isReadOnly: Bool
+        let refusal: String?
+    }
+
+    /// The read-only reason for XMP language-alternative tags: they read as
+    /// plain text without their `xml:lang` qualifiers, so the sheet shows
+    /// them read-only BEFORE any native edit could fail — qualifiers are
+    /// never invented and the texts are never flattened into a setter.
+    static let langAltReadOnlyReason = "XMP language-alternative tags are read-only here: their "
+        + "language qualifiers cannot be represented faithfully, so the engine refuses edits to them."
+
+    /// Computes the descriptor gates for the selected tag. Fails closed:
+    /// without a successfully read descriptor AND values list for the same
+    /// current selection, no write is enabled — never a stale descriptor
+    /// or a hardcoded permissive policy. When the descriptor is known it
+    /// is authoritative for the format policy; the local protected list
+    /// stays only as the conservative fallback while it is not.
+    static func writeGates(descriptor: EngineSession.MetadataTagInfo?,
+                           valuesReady: Bool,
+                           locallyProtected: Bool) -> DescriptorGates {
+        guard valuesReady, let info = descriptor else {
+            return DescriptorGates(canSet: false, canRemove: false, canAddValue: false,
+                                   isReadOnly: locallyProtected,
+                                   refusal: valuesReady
+                                       ? "The tag descriptor is still loading or could not be read; writes stay disabled."
+                                       : "The tag's values are still loading or could not be read; writes stay disabled.")
+        }
+        let langAlt = info.valueKind == .langAlt
+        let canSet = !langAlt && info.formatPolicy.contains(.supportsSet)
+        let canRemove = !langAlt && info.formatPolicy.contains(.supportsRemove)
+        // A single-value kind (or a tag the native registry says holds one
+        // value) cannot gain a second value; LangAlt stays read-only
+        // despite its native multiple-value flag.
+        let multipleAllowed = !langAlt && info.valueKind != .single && info.supportsMultiple
+        let readOnly = langAlt || (!canSet && !canRemove)
+        let refusal: String?
+        if langAlt {
+            refusal = langAltReadOnlyReason
+        } else if !canSet && canRemove {
+            refusal = "The tag's format policy does not allow setting it from here (a new XMP "
+                + "container needs a chosen array type); Remove Tag remains available."
+        } else if readOnly {
+            refusal = locallyProtected ? protectedNote : "The engine's descriptor admits no edits to this tag."
+        } else {
+            refusal = nil
+        }
+        return DescriptorGates(canSet: canSet, canRemove: canRemove,
+                               canAddValue: canSet && multipleAllowed,
+                               isReadOnly: readOnly, refusal: refusal)
+    }
+
+    /// A queued read's completion may land only for the same tag and the
+    /// still-current generation; anything older, for another tag, or after
+    /// a close is stale and must not update the sheet.
+    static func readIsCurrent(tag: String, generation: Int, selectedTag: String?, currentGeneration: Int) -> Bool {
+        tag == selectedTag && generation == currentGeneration
+    }
+
+    /// The compact descriptor title: the native label (falling back to the
+    /// dotted tag name) plus the native type name.
+    static func descriptorTitle(tag: String, info: EngineSession.MetadataTagInfo) -> String {
+        let label = info.label.isEmpty ? tag : info.label
+        return info.typeName.isEmpty ? label : "\(label) — \(info.typeName)"
+    }
+
+    /// The descriptor's presence line for the selected tag.
+    static func descriptorPresenceText(_ info: EngineSession.MetadataTagInfo) -> String {
+        info.present ? "Present on this image." : "Not present on this image yet."
+    }
+
     /// Cached admission for a write (Apply / Remove Tag / Add Tag). Reads
     /// only cached state — never the engine — so menu validation and the
     /// sheet's gates make no native call. Image metadata is image-level:
@@ -175,9 +261,20 @@ enum MetadataSheetLogic {
 /// reloads; a refusal (UNSUPPORTED, NOT_FOUND, INVALID_ARGUMENT, BUSY)
 /// is shown unchanged in the persistent error row and never updates the
 /// rows or the draft as if accepted. Normalization-protected tags are
-/// read-only. Close discards the unapplied draft; applied changes stay
-/// and are undoable — closing never implies a rollback. Late callbacks
-/// after invalidation or a newer selection/generation do nothing.
+/// read-only. The selected tag's native descriptor (facade slot 128) is
+/// read as counted queued work alongside its values: its label, type
+/// name, presence and description are shown compactly, and its own
+/// valueKind/supportsMultiple/formatPolicy gate SET and REMOVE
+/// separately — a pending or failed descriptor or values read fails
+/// closed with an actionable reason, LangAlt is visibly read-only before
+/// any native edit could fail, and an absent XMP container keeps Remove
+/// Tag enabled while Apply stays disabled. The policy bits describe the
+/// format only; a real accepted write can still refuse natively and is
+/// then shown unchanged. The descriptor refreshes after Apply/Remove and
+/// Undo/Redo without ever overwriting a dirty local draft. Close
+/// discards the unapplied draft; applied changes stay and are undoable
+/// — closing never implies a rollback. Late callbacks after invalidation
+/// or a newer selection/generation do nothing.
 @MainActor
 final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSTextViewDelegate {
     let document: ImageDocument
@@ -198,6 +295,9 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     private let closeButton = NSButton(title: "Close", target: nil, action: nil)
     private let noteLabel = NSTextField(labelWithString: "")
     private let messageLabel = NSTextField(labelWithString: "")
+    private let descriptorTitleLabel = NSTextField(labelWithString: "")
+    private let descriptorPresenceLabel = NSTextField(labelWithString: "")
+    private let descriptorDescriptionText = NSTextView(frame: .zero)
     private let hintLabel = NSTextField(labelWithString:
         "Values are separate rows; edit the selected one in the text field. Apply commits the whole "
         + "list in order — one undo step. Close discards only unapplied draft edits; applied changes stay undoable.")
@@ -220,6 +320,21 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     /// clobber a newer selection's draft.
     private var valuesGeneration = 0
     private var valuesAreLoading = false
+    /// True only when the values read succeeded for the current selection
+    /// and generation; a pending or failed values read leaves it false, so
+    /// writes fail closed instead of falling back to stale info.
+    private var valuesReady = false
+    /// Bumped on every tag selection change together with
+    /// `valuesGeneration`; a descriptor completion from an older
+    /// generation — or for another tag — is dropped, so it cannot land on
+    /// a newer selection.
+    private var descriptorGeneration = 0
+    private var descriptorIsLoading = false
+    /// The last successfully read descriptor of the CURRENTLY selected
+    /// tag; nil while pending, failed, or after a selection/domain/close
+    /// invalidation. It holds format facts only — it never rewrites the
+    /// local draft.
+    private(set) var tagDescriptor: EngineSession.MetadataTagInfo?
     private var updatingTagRows = false
     private var lastDocumentStateVersion = -1
     /// The undo signature the tag list was last loaded against; a change
@@ -352,6 +467,43 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
             label.maximumNumberOfLines = 2
         }
         hintLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        noteLabel.maximumNumberOfLines = 3
+
+        // The native descriptor of the selected tag: compact wrapping
+        // title/presence lines plus the description in a fixed-height
+        // scrolling text, so a long native description never reflows or
+        // resizes the sheet under the pointer.
+        descriptorTitleLabel.setAccessibilityLabel("Metadata tag descriptor")
+        descriptorPresenceLabel.setAccessibilityLabel("Metadata tag presence")
+        descriptorDescriptionText.setAccessibilityLabel("Metadata tag description")
+        descriptorTitleLabel.lineBreakMode = .byWordWrapping
+        descriptorTitleLabel.maximumNumberOfLines = 2
+        descriptorPresenceLabel.lineBreakMode = .byWordWrapping
+        descriptorPresenceLabel.maximumNumberOfLines = 1
+        descriptorPresenceLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        descriptorDescriptionText.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        descriptorDescriptionText.isRichText = false
+        descriptorDescriptionText.isEditable = false
+        descriptorDescriptionText.isSelectable = true
+        descriptorDescriptionText.drawsBackground = false
+        descriptorDescriptionText.isHorizontallyResizable = false
+        descriptorDescriptionText.isVerticallyResizable = true
+        descriptorDescriptionText.textContainer?.widthTracksTextView = true
+        descriptorDescriptionText.textContainer?.containerSize =
+            NSSize(width: 584, height: CGFloat.greatestFiniteMagnitude)
+        descriptorDescriptionText.minSize = NSSize(width: 584, height: 48)
+        descriptorDescriptionText.maxSize = NSSize(width: 584, height: CGFloat.greatestFiniteMagnitude)
+        let descriptorScroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 48))
+        descriptorScroll.hasVerticalScroller = true
+        descriptorScroll.hasHorizontalScroller = false
+        descriptorScroll.autohidesScrollers = true
+        descriptorScroll.borderType = .bezelBorder
+        descriptorScroll.documentView = descriptorDescriptionText
+        descriptorDescriptionText.frame = NSRect(x: 0, y: 0, width: 584, height: 48)
+        let descriptorBox = NSStackView(views: [descriptorTitleLabel, descriptorPresenceLabel, descriptorScroll])
+        descriptorBox.orientation = .vertical
+        descriptorBox.alignment = .leading
+        descriptorBox.spacing = 2
 
         let topRow = NSStackView(views: [
             NSTextField(labelWithString: "Domain:"), domainPopup,
@@ -369,7 +521,8 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
                                              removeTagButton, closeButton])
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
-        let stack = NSStackView(views: [hintLabel, topRow, middleRow, buttonRow, noteLabel, messageLabel])
+        let stack = NSStackView(views: [hintLabel, topRow, middleRow, descriptorBox, buttonRow,
+                                        noteLabel, messageLabel])
         stack.orientation = .vertical
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
@@ -414,7 +567,11 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
                 } else if !self.draftIsDirty {
                     self.selectedTag = nil
                     self.valuesGeneration += 1
+                    self.descriptorGeneration += 1
                     self.valuesAreLoading = false
+                    self.descriptorIsLoading = false
+                    self.valuesReady = false
+                    self.tagDescriptor = nil
                     self.draft = []
                     self.selectedValueIndex = nil
                     self.valuesTable.reloadData()
@@ -429,20 +586,25 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     }
 
     /// Requests the ordered values of `tag`; the completion is dropped
-    /// when a newer selection (generation) or a close happened meanwhile.
+    /// when a newer selection (generation), another tag or a close happened
+    /// meanwhile.
     private func loadValues(for tag: String) {
         valuesGeneration += 1
         valuesAreLoading = true
+        valuesReady = false
         updateControlStates()
         let generation = valuesGeneration
         let owner = document
         owner.readMetadataValues(tag) { [weak self] result in
-            guard let self, !self.isInvalidated, generation == self.valuesGeneration,
-                  tag == self.selectedTag else { return }
+            guard let self, !self.isInvalidated,
+                  MetadataSheetLogic.readIsCurrent(tag: tag, generation: generation,
+                                                   selectedTag: self.selectedTag,
+                                                   currentGeneration: self.valuesGeneration) else { return }
             self.valuesAreLoading = false
             defer { self.updateControlStates() }
             switch result {
             case .success(let values):
+                self.valuesReady = true
                 self.draft = values
                 self.draftIsDirty = false
                 self.valuesTable.reloadData()
@@ -463,6 +625,36 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         }
     }
 
+    /// Requests the read-only descriptor of `tag` (facade slot 128) as
+    /// counted queued document work, exactly like `loadValues(for:)`. The
+    /// completion is dropped when a newer selection (generation), another
+    /// tag or a close happened meanwhile. It refreshes format facts only —
+    /// presence, kind, policy, label, description, type name — and never
+    /// touches the local draft, dirty or not. A failed query keeps writes
+    /// disabled (the descriptor stays nil) and shows the native error.
+    private func loadDescriptor(for tag: String) {
+        descriptorGeneration += 1
+        descriptorIsLoading = true
+        updateControlStates()
+        let generation = descriptorGeneration
+        let owner = document
+        owner.readMetadataTagInfo(tag) { [weak self] result in
+            guard let self, !self.isInvalidated,
+                  MetadataSheetLogic.readIsCurrent(tag: tag, generation: generation,
+                                                   selectedTag: self.selectedTag,
+                                                   currentGeneration: self.descriptorGeneration) else { return }
+            self.descriptorIsLoading = false
+            switch result {
+            case .success(let info):
+                self.tagDescriptor = info
+            case .failure(let error):
+                self.tagDescriptor = nil
+                self.refuse(String(describing: error))
+            }
+            self.updateControlStates()
+        }
+    }
+
     // MARK: Reload, error and close routing (called by the owning window)
 
     /// The document's cached state changed: refresh the tag catalog only
@@ -473,7 +665,14 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         if lastDocumentStateVersion != document.stateVersion, !isApplying {
             lastDocumentStateVersion = document.stateVersion
             loadTags()
-            if let tag = selectedTag, !draftIsDirty { loadValues(for: tag) }
+            if let tag = selectedTag {
+                // An undo/redo of a metadata edit moved the undo signature:
+                // refresh the descriptor's presence/policy even while a
+                // dirty local draft is kept — only format facts refresh,
+                // the draft is never overwritten to refresh them.
+                if lastUndoSignature != document.undoInfo { loadDescriptor(for: tag) }
+                if !draftIsDirty { loadValues(for: tag) }
+            }
         }
         updateControlStates()
     }
@@ -499,6 +698,11 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         isInvalidated = true
         tagLoadGeneration += 1
         valuesGeneration += 1
+        descriptorGeneration += 1
+        valuesAreLoading = false
+        descriptorIsLoading = false
+        valuesReady = false
+        tagDescriptor = nil
         tagTable.dataSource = nil
         tagTable.delegate = nil
         valuesTable.dataSource = nil
@@ -544,27 +748,67 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         let canNavigate = !isInvalidated && !isApplying
         let hasSelection = selectedTag != nil
         let protectedTag = selectedTagIsProtected
+        // The descriptor and the values must BOTH have been read
+        // successfully for the SAME currently selected tag (valid
+        // generation) before any write is enabled; a pending or failed
+        // read fails closed with an actionable reason — never a stale
+        // descriptor or a hardcoded permissive policy.
+        let descriptorKnown = !descriptorIsLoading && tagDescriptor != nil
+        let gates = MetadataSheetLogic.writeGates(descriptor: descriptorKnown ? tagDescriptor : nil,
+                                                  valuesReady: valuesReady && !valuesAreLoading,
+                                                  locallyProtected: protectedTag)
         domainPopup.isEnabled = canNavigate
         searchField.isEnabled = canNavigate
         addTagField.isEnabled = canNavigate
         tagTable.isEnabled = canNavigate
         addTagButton.isEnabled = canWrite
-        addValueButton.isEnabled = !isInvalidated && hasSelection && !protectedTag && !isApplying && !valuesAreLoading
-        removeValueButton.isEnabled = !isInvalidated && hasSelection && !protectedTag && !isApplying && !valuesAreLoading
+        addValueButton.isEnabled = !isInvalidated && hasSelection && !isApplying && !valuesAreLoading
+            && gates.canAddValue
+        removeValueButton.isEnabled = !isInvalidated && hasSelection && !gates.isReadOnly && !isApplying && !valuesAreLoading
             && selectedValueIndex != nil
-        valueEditor.isEditable = !isInvalidated && hasSelection && !protectedTag && !isApplying && !valuesAreLoading
-        valuesTable.isEnabled = !isInvalidated && hasSelection && !protectedTag && !isApplying && !valuesAreLoading
-        applyButton.isEnabled = canWrite && hasSelection && !protectedTag
-        removeTagButton.isEnabled = canWrite && hasSelection && !protectedTag
+        valueEditor.isEditable = !isInvalidated && hasSelection && !gates.isReadOnly && !isApplying && !valuesAreLoading
+        valuesTable.isEnabled = !isInvalidated && hasSelection && !gates.isReadOnly && !isApplying && !valuesAreLoading
+        applyButton.isEnabled = canWrite && hasSelection && gates.canSet
+        removeTagButton.isEnabled = canWrite && hasSelection && gates.canRemove
         closeButton.isEnabled = !isInvalidated
-        if protectedTag, let tag = selectedTag {
+        updateDescriptorDisplay()
+        if let tag = selectedTag, descriptorKnown, tagDescriptor?.valueKind == .langAlt {
+            // LangAlt is visibly read-only from the descriptor itself,
+            // before any native edit could fail.
+            noteLabel.textColor = .secondaryLabelColor
+            noteLabel.stringValue = MetadataSheetLogic.langAltNote + " (\(tag))"
+        } else if protectedTag, let tag = selectedTag {
             noteLabel.textColor = .secondaryLabelColor
             noteLabel.stringValue = MetadataSheetLogic.protectedNote + " (\(tag))"
+        } else if hasSelection, let refusal = gates.refusal {
+            noteLabel.textColor = .secondaryLabelColor
+            noteLabel.stringValue = refusal
         } else if domain == .xmp {
             noteLabel.textColor = .secondaryLabelColor
             noteLabel.stringValue = MetadataSheetLogic.langAltNote
         } else {
             noteLabel.stringValue = ""
+        }
+    }
+
+    /// Shows the native descriptor of the selected tag — label, type name,
+    /// presence and description — or the pending state while it loads.
+    /// Format facts only; the local draft is never touched here.
+    private func updateDescriptorDisplay() {
+        guard let tag = selectedTag else {
+            descriptorTitleLabel.stringValue = ""
+            descriptorPresenceLabel.stringValue = ""
+            descriptorDescriptionText.string = ""
+            return
+        }
+        if let info = tagDescriptor, !descriptorIsLoading {
+            descriptorTitleLabel.stringValue = MetadataSheetLogic.descriptorTitle(tag: tag, info: info)
+            descriptorPresenceLabel.stringValue = MetadataSheetLogic.descriptorPresenceText(info)
+            descriptorDescriptionText.string = info.description
+        } else {
+            descriptorTitleLabel.stringValue = tag
+            descriptorPresenceLabel.stringValue = descriptorIsLoading ? "Reading tag descriptor…" : ""
+            descriptorDescriptionText.string = ""
         }
     }
 
@@ -585,7 +829,11 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     @objc private func domainChanged(_ sender: Any?) {
         guard !isInvalidated, !isApplying else { return }
         valuesGeneration += 1
+        descriptorGeneration += 1
         valuesAreLoading = false
+        descriptorIsLoading = false
+        valuesReady = false
+        tagDescriptor = nil
         clearMessage()
         selectedTag = nil
         draft = []
@@ -630,7 +878,11 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
                 switch result {
                 case .success(let values):
                     self.valuesGeneration += 1
+                    self.descriptorGeneration += 1
                     self.valuesAreLoading = false
+                    self.descriptorIsLoading = false
+                    self.tagDescriptor = nil
+                    self.valuesReady = true
                     self.selectedTag = name
                     self.draft = values.isEmpty ? [""] : values
                     self.draftIsDirty = values.isEmpty
@@ -639,6 +891,11 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
                     self.valuesTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
                     self.synchronizeEditor()
                     self.loadTags()
+                    // Validate the new tag's kind and policy through its
+                    // descriptor too: an absent scalar becomes a one-value
+                    // local draft (Apply opens once the descriptor lands);
+                    // an absent bag/seq/alt stays Remove-only.
+                    self.loadDescriptor(for: name)
                     if values.isEmpty {
                         self.messageLabel.textColor = .labelColor
                         self.messageLabel.stringValue = "New tag \(name). Enter a value, then choose Apply."
@@ -660,9 +917,17 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         draft = []
         draftIsDirty = false
         selectedValueIndex = nil
+        // Invalidate the old selection's descriptor and its result: only
+        // reads of the SAME currently selected tag at a valid generation
+        // may land and enable writes.
+        tagDescriptor = nil
+        descriptorGeneration += 1
+        descriptorIsLoading = false
+        valuesReady = false
         valuesTable.reloadData()
         synchronizeEditor()
         loadValues(for: tag)
+        loadDescriptor(for: tag)
         updateControlStates()
     }
 
@@ -731,6 +996,8 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
                     self.draftIsDirty = false
                     self.loadTags()
                     self.loadValues(for: tag)
+                    // Refresh the descriptor's presence/policy after Apply.
+                    self.loadDescriptor(for: tag)
                 case .failure(let error):
                     self.refuse(String(describing: error))
                 }
@@ -760,6 +1027,10 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
                 self.draft = []
                 self.draftIsDirty = false
                 self.selectedValueIndex = nil
+                self.descriptorGeneration += 1
+                self.descriptorIsLoading = false
+                self.valuesReady = false
+                self.tagDescriptor = nil
                 self.valuesTable.reloadData()
                 self.synchronizeEditor()
                 self.loadTags()
@@ -830,7 +1101,11 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
             let rows = filteredRows
             guard row >= 0, row < rows.count else {
                 valuesGeneration += 1
+                descriptorGeneration += 1
                 valuesAreLoading = false
+                descriptorIsLoading = false
+                valuesReady = false
+                tagDescriptor = nil
                 selectedTag = nil
                 draft = []
                 draftIsDirty = false

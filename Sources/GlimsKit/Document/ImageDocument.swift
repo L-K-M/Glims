@@ -829,6 +829,25 @@ final class ImageDocument {
         }
     }
 
+    /// The read-only descriptor of one registered metadata `tag` (facade
+    /// slot 128: presence, native multiple-value support, the facade value
+    /// kind, the type/format policy bits and the bounded native label,
+    /// description and type name), queued and counted exactly like
+    /// `readMetadataValues(_:)`: the session, image and tag are captured
+    /// explicitly by the queued job, the native call never runs on the
+    /// main thread, the read still counts in `pendingWork` so a close
+    /// drains it before the image is destroyed, and a completion always
+    /// lands on a live image or reports `closed`. An unregistered tag
+    /// reports the native NOT_FOUND through the completion.
+    func readMetadataTagInfo(_ tag: String,
+                             completion: @escaping @MainActor (Result<EngineSession.MetadataTagInfo, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueue(on: inputQueue) { [session, image] in
+            let result = Result { try session.metadataTagInfo(image, tag: tag) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     /// Sets or removes ONE metadata `tag` with the captured ordered
     /// `values` array (SET requires at least one value; REMOVE takes [])
     /// as one undo step, as counted input work on the input queue — the
