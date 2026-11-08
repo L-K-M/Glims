@@ -5,47 +5,64 @@ opened a disabled placeholder. This ledger distinguishes working features
 from the remaining design in `design.md`. Compilation alone does not close
 an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
-## Current slice: make the existing editor usable
+## Implemented and checked
 
-- [x] Ordinary builds bundle the pinned engine; missing prerequisites fail
-      before packaging. Hosted CI explicitly builds only the interface.
-- [x] Real first-window drawing requests tiles without a zoom interaction.
-- [x] New Image asks for pixel dimensions; Finder opens wait for startup.
-- [x] Save, Save As and native/imported file identity behave consistently.
-- [x] Closing and quitting protect unsaved work and drain queued operations.
-- [x] Cut, Copy, Copy Merged, Paste, Paste in Place and Clear use the system
-      clipboard, honor selection alpha and preserve undo. Keyboard Copy/Paste,
-      menu Undo and layer visibility changes were also checked on screen.
-- [ ] Fit Image, Open Recent, repeat export and basic file command validation.
-- [ ] A bundled app passes engine checks with development trees inaccessible,
-      and actual pointer/keyboard editing, save, reopen and export work.
+These entries describe the merged implementation as of 2026-11-08. The
+whole editor remains in progress; each checked entry covers the stated
+behavior, not every adjacent feature in `design.md`.
 
-## Remaining implementation from the design
+- [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
+      fail before packaging. Hosted CI explicitly builds only the interface.
+- [x] First-window tiled drawing, New Image dimensions, deferred file opens,
+      Save/Save As, imported/native identity, close and Quit protection.
+- [x] Fit Image, Open Recent, repeat export and file-command validation.
+- [x] Cut, Copy, Copy Merged, Paste, Paste in Place, Paste as New Image and
+      Clear, including selection alpha and undo.
+- [x] Nested layer groups, masks and paint targets, thumbnails, rename,
+      drag reparent/reorder, visibility and pixel/position/transparency locks.
+- [x] Component channels, saved selection channels and paintable Quick Mask.
+- [x] History palette, undo/redo traversal and image snapshots.
+- [x] Periodic private recovery copies, startup recovery/discard and original
+      file identity and dirty-state preservation.
+- [x] Native filter discovery and supported property forms. Committed-effect
+      listing/reorder/edit APIs are present; their Layers controls are pending.
+- [x] Open as Layers and native link-layer Place, including failure recovery,
+      undo and source refresh. Link layers require an engine with that feature.
+- [x] Save a Copy, Revert, native Print/Page Setup, metadata and editor preferences.
+- [x] Retina Actual Pixels and display-density changes.
+- [x] Searchable native help content.
+- [x] A self-contained bundle passes native and interface checks with the
+      development trees inaccessible. Pointer painting, keyboard editing,
+      Save, Quit/reopen, mask/channel controls and PDF printing have separate
+      on-screen evidence below and in the reviewed changes.
 
-- [ ] Layers: groups, masks and mask targets, thumbnails, inline rename,
-      drag reorder, multi-selection, locks, fit/trim and rasterization policy.
-- [ ] Channels and saved selections; Quick Mask with paintable overlay.
-- [ ] History palette and image snapshots.
-- [ ] Periodic recovery copies that preserve native file identity and dirty state.
-- [ ] Filter discovery and native property forms; editable, reorderable
-      non-destructive filter stacks; adjustments and adjustment groups.
-- [ ] Place images as layers and GIMP 3.2 link layers.
+## Remaining implementation and final verification
+
+- [ ] Layer multi-selection and saved sets, fit/trim, and consistent
+      rasterize/revert policy for structured layers.
+- [ ] Committed-effect controls, adjustment layers/groups, remaining custom
+      filter forms and filter inputs. The backend alone does not close this.
+- [ ] Integrated file-panel verification for Open as Layers, Place and Revert.
 - [ ] Path fill, vector layers and multi-anchor editing.
-- [ ] Brushes, patterns and gradients: resource choosers and presets.
-- [ ] Color management: accurate image mode/precision/profile state,
-      conversion/assignment and soft proofing.
-- [x] Retina Actual Pixels maps an image pixel to a device pixel, including
-      changing displays while a document is open.
-- [ ] Canvas navigation: rulers, guides, grid, snapping, rotation and
-      consistent modifier/trackpad behavior; initial fit avoids palettes.
-- [ ] Complete menu coverage, keyboard settings, preferences and persistence.
-- [ ] Save a Copy, Revert, Paste as New Image, print and metadata.
+- [ ] Brush, pattern and gradient resource choosers and presets.
+- [ ] Accurate mode/precision/profile controls, profile assignment/conversion
+      and soft proofing.
+- [ ] Rulers, guides, grid, snapping, view rotation, trackpad/modifier behavior
+      and initial fit that avoids palettes.
+- [ ] Paste Into/floating selection controls, Stroke Selection and resource
+      creation from selections.
+- [ ] Complete menu/keyboard coverage and shortcut customization.
 - [ ] Recorder and semantic command replay.
-- [ ] Accessibility and help content, English UI copy audit.
-- [ ] Public distribution checks from `plan.md`: complete corresponding
-      sources, remaining license texts, signing/notarization and update process.
+- [ ] Full accessibility/focus, appearance and English-copy audit.
+- [ ] Public distribution checks from `plan.md`: corresponding sources,
+      remaining license texts, signing/notarization and update process.
+- [ ] Final combined build, engine matrix, self-contained bundles and real
+      end-to-end editing/file workflows on the final integrated revision.
 
-## Evidence
+## Evidence and initial implementation reports
+
+The dated reports below retain the checks and open work at each slice. The
+status above and later checkpoints supersede earlier pending-check notes.
 
 Initial inspection: tools, engine-backed layers, selections, transformations,
 text, paths, Gaussian Blur and plug-in commands already existed. The ordinary
@@ -121,8 +138,9 @@ no canvas checks, overlays or palettes — through NSPrintOperation's document
 sheet, and AppKit's PDF write produced the same page with the queued stroke
 in place. A second Print during a job is refused, a close requested while
 the snapshot renders drops the job, and printing never adds an undo step or
-touches file identity. On-screen panel and physical-printer behavior were
-not exercised.
+touches file identity. A later on-screen pass exercised Page Setup Apply
+and Cancel, Print Cancel, and a one-page landscape A4 PDF with correct
+quadrant placement and paper margins. A physical printer was not available.
 
 2026-11-08: facade support for Open as Layers and Place, engine side only.
 Two additive calls (`image_open_layers`, `image_place_link`) route through
@@ -164,3 +182,12 @@ load and the link layer's save/reload/reread; it was added but not run —
 engine smoke stays with the desktop pass against the private adapters.
 `swift build` and `swift test` (229 tests, including new menu-placement
 and version-parsing cases) pass headless.
+
+2026-11-08 verification checkpoint: the checked self-contained bundle at
+`9deb9ae` passed 603 native and 474 interface checks with development trees
+denied. The later existing-effect backend passed 662 native checks on
+3.2.8/3.2.0/master and 644 on 3.0.8. The file-placement interface passed
+517 checks on 3.2.8/3.2.0/master and 514 on 3.0.8. These are separate
+revisions and checks, not a claim that the final combined editor is done.
+The implementation PRs and their verification comments retain the exact
+heads, review findings and remaining manual gaps.
