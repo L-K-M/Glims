@@ -7,11 +7,16 @@ import AppKit
 /// - Click adds a corner anchor; drag pulls out a smooth anchor's handles.
 /// - New anchors extend the subpath being drawn; Shift-click starts a new
 ///   one. Clicking its first anchor closes it; Return or Escape ends it.
-/// - Drag an anchor or a handle of the selected anchor to move it
+/// - Drag an anchor or a handle of a selected anchor to move it
 ///   (Shift: the opposite handle mirrors it); Option-drag an anchor pulls
 ///   out new handles.
 /// - Clicking the end anchor of an open subpath continues that subpath.
-/// - Delete removes the selected anchor.
+/// - Shift-click an existing anchor toggles it in the selected set, without
+///   closing, editing or undoing anything. A normal click on a selected
+///   anchor keeps the whole set, so a drag moves all selected anchors and
+///   their handles together in one edit on release; a click on any other
+///   anchor selects only that one.
+/// - Delete removes all selected anchors in one edit.
 @MainActor
 final class PathTool {
     private unowned let canvas: EngineCanvasView
@@ -28,8 +33,10 @@ final class PathTool {
     /// last. The subpath is reversed when the next anchor is added, so a
     /// click on its start alone changes nothing.
     private var extendsFromStart = false
-    /// The anchor whose handles show and Delete removes.
-    private(set) var selected: VectorPath.AnchorIndex?
+    /// The anchors whose handles show and Delete removes. Shift-click
+    /// toggles membership; a normal click on one of them keeps the set for
+    /// a group drag, a click on any other anchor selects only that one.
+    private(set) var selectedAnchors: Set<VectorPath.AnchorIndex> = []
     /// The path the state above belongs to.
     private var statePath: Int32?
     /// The active path and its shape when the press began. An undo or
@@ -46,7 +53,12 @@ final class PathTool {
 
     private enum Drag {
         case newAnchor(VectorPath.AnchorIndex)
-        case anchor(VectorPath.AnchorIndex, start: CGPoint, original: VectorPath.Anchor)
+        /// Moves every anchor in `indices` with its handles by the delta
+        /// from `start`. `originals` holds the anchors as the press found
+        /// them, so the shape is rebuilt from them on every motion event
+        /// and repeated motion cannot drift.
+        case moveAnchors(indices: Set<VectorPath.AnchorIndex>, start: CGPoint,
+                         originals: [VectorPath.AnchorIndex: VectorPath.Anchor])
         case pullHandles(VectorPath.AnchorIndex)
         case handleIn(VectorPath.AnchorIndex)
         case handleOut(VectorPath.AnchorIndex)
@@ -63,22 +75,21 @@ final class PathTool {
         working ?? document.activePath.flatMap { document.pathShapes[$0] } ?? VectorPath()
     }
 
-    /// Forgets the subpath being drawn and the selected anchor when another
-    /// path became active, or an undo took them away.
+    /// Forgets the subpath being drawn and clears the selected set when
+    /// another path became active; prunes the selected anchors an undo or
+    /// an edit took away.
     private func syncWithDocument() {
         if statePath != document.activePath {
             statePath = document.activePath
             extending = nil
-            selected = nil
+            selectedAnchors = []
         }
         let current = shape
         if let index = extending,
            !current.subpaths.indices.contains(index) || current.subpaths[index].isClosed {
             extending = nil
         }
-        if let index = selected, !current.contains(index) {
-            selected = nil
-        }
+        selectedAnchors = current.pruned(selectedAnchors)
     }
 
     // MARK: Pointer
@@ -89,8 +100,20 @@ final class PathTool {
         dragBase = (document.activePath, path)
         let tolerance = Self.reach / canvas.scale
 
-        switch path.part(at: point, tolerance: tolerance, handlesOf: selected.map { [$0] } ?? []) {
+        switch path.part(at: point, tolerance: tolerance, handlesOf: selectedAnchors) {
         case .anchor(let index)?:
+            // Shift-click toggles the anchor in the selected set: it ends
+            // the subpath being drawn, but never closes, edits or undoes.
+            if flags.contains(.shift) {
+                if selectedAnchors.contains(index) {
+                    selectedAnchors.remove(index)
+                } else {
+                    selectedAnchors.insert(index)
+                }
+                extending = nil
+                drag = nil
+                break
+            }
             let subpath = path.subpaths[index.subpath]
             let last = subpath.anchors.count - 1
             // The anchor the subpath being drawn started from closes it.
@@ -99,12 +122,17 @@ final class PathTool {
                !flags.contains(.option) {
                 path.subpaths[index.subpath].isClosed = true
                 extending = nil
-                selected = index
+                selectedAnchors = [index]
                 drag = .closed
                 break
             }
-            // Picking an end of an open subpath continues it from that end.
-            if !subpath.isClosed, index.anchor == last {
+            // A click inside a multi-selection keeps the whole set, so the
+            // drag moves it as a group; any other click picks one anchor.
+            let groupDrag = selectedAnchors.contains(index) && selectedAnchors.count > 1
+            if groupDrag {
+                // The set stays as it is.
+            } else if !subpath.isClosed, index.anchor == last {
+                // Picking an end of an open subpath continues it from that end.
                 extending = index.subpath
                 extendsFromStart = false
             } else if !subpath.isClosed, index.anchor == 0 {
@@ -113,9 +141,14 @@ final class PathTool {
             } else {
                 extending = nil
             }
-            selected = index
+            if flags.contains(.option) || !selectedAnchors.contains(index) {
+                selectedAnchors = [index]
+            }
             drag = flags.contains(.option) ? .pullHandles(index)
-                : .anchor(index, start: point, original: path[index])
+                : .moveAnchors(indices: selectedAnchors, start: point,
+                               originals: Dictionary(uniqueKeysWithValues: selectedAnchors
+                                   .filter { path.contains($0) }
+                                   .map { ($0, path[$0]) }))
         case .handleIn(let index)?:
             drag = .handleIn(index)
         case .handleOut(let index)?:
@@ -135,7 +168,7 @@ final class PathTool {
                 index = VectorPath.AnchorIndex(subpath: path.subpaths.count - 1, anchor: 0)
                 extending = index.subpath
             }
-            selected = index
+            selectedAnchors = [index]
             drag = .newAnchor(index)
         }
         working = path
@@ -153,10 +186,13 @@ final class PathTool {
             } else {
                 path[index] = VectorPath.Anchor(anchor)
             }
-        case .anchor(let index, let start, let original):
-            var moved = original
-            moved.move(by: CGSize(width: point.x - start.x, height: point.y - start.y))
-            path[index] = moved
+        case .moveAnchors(let indices, let start, let originals):
+            // Rebuilt from the press baseline on every event, so repeated
+            // motion applies the total delta once, never cumulatively.
+            for (index, original) in originals where path.contains(index) {
+                path[index] = original
+            }
+            path.moveAnchors(indices, by: CGSize(width: point.x - start.x, height: point.y - start.y))
         case .handleIn(let index):
             path[index].handleIn = point
             if flags.contains(.shift) { path[index].handleOut = Self.mirror(point, around: path[index].point) }
@@ -220,23 +256,28 @@ final class PathTool {
         }
         syncWithDocument()
         if Self.returnKeys.contains(keyCode) || keyCode == Self.escapeKey {
-            guard extending != nil || selected != nil else { return false }
+            guard extending != nil || !selectedAnchors.isEmpty else { return false }
             extending = nil
-            selected = nil
+            selectedAnchors = []
             canvas.needsDisplay = true
             onStatus?("Click to start another subpath.")
             return true
         }
-        if Self.deleteKeys.contains(keyCode), let index = selected {
+        if Self.deleteKeys.contains(keyCode), !selectedAnchors.isEmpty {
             var path = shape
-            let removedLast = path.subpaths[index.subpath].anchors.count == 1
-            path.removeAnchor(at: index)
-            if removedLast, extending == index.subpath {
-                extending = nil
-            } else if let current = extending, removedLast, current > index.subpath {
-                extending = current - 1
+            // Subpaths the batch empties drop away, shifting the indices of
+            // the ones after them.
+            let dropped = Set(selectedAnchors.map(\.subpath)).filter { subpath in
+                path.subpaths.indices.contains(subpath)
+                    && path.subpaths[subpath].anchors.count == selectedAnchors.filter { $0.subpath == subpath }.count
             }
-            selected = nil
+            if let current = extending {
+                let shifted = current - dropped.filter { $0 < current }.count
+                extending = dropped.contains(current) || !path.subpaths.indices.contains(shifted)
+                    ? nil : shifted
+            }
+            path.removeAnchors(selectedAnchors)
+            selectedAnchors = []
             commit(path)
             canvas.needsDisplay = true
             return true
@@ -249,7 +290,8 @@ final class PathTool {
     /// The color paths draw in on the canvas.
     static let pathColor = NSColor(calibratedRed: 0.1, green: 0.35, blue: 0.95, alpha: 1)
 
-    /// The active path with its anchors, and the selected anchor's handles.
+    /// The active path with its anchors, and the selected anchors' handles.
+    /// Selected anchors fill with the path color, the others stay white.
     func draw(scale: Double) {
         syncWithDocument()
         let path = shape
@@ -260,7 +302,7 @@ final class PathTool {
         outline.stroke()
 
         let toView = { (point: CGPoint) in NSPoint(x: point.x * scale, y: point.y * scale) }
-        if let index = selected, path.contains(index) {
+        for index in selectedAnchors where path.contains(index) {
             let anchor = path[index]
             for handle in [anchor.handleIn, anchor.handleOut] where handle != anchor.point {
                 let line = NSBezierPath()
@@ -278,7 +320,7 @@ final class PathTool {
             for (a, anchor) in subpath.anchors.enumerated() {
                 let center = toView(anchor.point)
                 let square = NSRect(x: center.x - 3.5, y: center.y - 3.5, width: 7, height: 7)
-                let isSelected = selected == VectorPath.AnchorIndex(subpath: s, anchor: a)
+                let isSelected = selectedAnchors.contains(VectorPath.AnchorIndex(subpath: s, anchor: a))
                 (isSelected ? Self.pathColor : NSColor.white).setFill()
                 square.fill()
                 Self.pathColor.setStroke()

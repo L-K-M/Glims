@@ -572,7 +572,7 @@ glims_layer_command (GlimsEngine  *engine,
        * gone is NOT_FOUND, while layer 0 asks for a pick first. */
       if (layer_id != 0 &&
           (command == GLIMS_LAYER_FIT_TO_IMAGE || command == GLIMS_LAYER_TRIM_TO_CONTENT ||
-           command == GLIMS_LAYER_RASTERIZE))
+           command == GLIMS_LAYER_RASTERIZE || command == GLIMS_LAYER_RESTORE_SOURCE))
         return GLIMS_STATUS_NOT_FOUND;
       return glims_fail (error, NULL, "Select a layer first.");
     }
@@ -728,6 +728,27 @@ glims_layer_command (GlimsEngine  *engine,
                                        GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, error);
       if (status != GLIMS_STATUS_OK) return status;
       status = glims_layer_rasterize (image, layer, error);
+      if (status != GLIMS_STATUS_OK) return status;
+      break;
+
+    case GLIMS_LAYER_RESTORE_SOURCE:
+      /* Restore the retained source (layer-source.c): a rasterized
+       * text, link or vector layer with its source still attached is
+       * regenerated from that source as one undo step, discarding the
+       * pixel edits; an already editable instance is a no-op. The same
+       * readiness and inherited pixel/position locks as RASTERIZE gate
+       * it. */
+      status = glims_edit_ready (engine, glims_lookup_image (engine, id), error);
+      if (status != GLIMS_STATUS_OK) return status;
+      status = glims_check_item_locks (GIMP_ITEM (layer),
+                                       GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, error);
+      if (status != GLIMS_STATUS_OK) return status;
+      /* A link restore thaws the layer, which reloads its file through a
+       * load plug-in's nested main loop — hold busy for the duration, as
+       * the open, place and procedure paths do. */
+      engine->busy++;
+      status = glims_layer_restore_source (image, layer, error);
+      engine->busy--;
       if (status != GLIMS_STATUS_OK) return status;
       break;
 

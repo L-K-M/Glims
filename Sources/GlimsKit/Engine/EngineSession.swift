@@ -27,6 +27,7 @@ final class EngineSession: @unchecked Sendable {
         /// failure (busy, locked, engine error, ...) must not be read as
         /// "missing".
         var isNotFound: Bool { status == Int32(GLIMS_STATUS_NOT_FOUND.rawValue) }
+        var isBusy: Bool { status == Int32(GLIMS_STATUS_BUSY.rawValue) }
 
         /// Any thrown error as an `EngineError`, wrapping non-facade errors
         /// so callers can classify results (NOT_FOUND vs other) uniformly.
@@ -155,6 +156,14 @@ final class EngineSession: @unchecked Sendable {
         /// step); an already rasterized instance is a no-op. Ordinary
         /// pixel layers and groups throw UNSUPPORTED.
         case rasterize = 12
+        /// The inverse: discards the pixel edits of a rasterized text,
+        /// link or vector layer and regenerates it from its retained
+        /// source (one undo step); an already editable instance is a
+        /// no-op. Pixel layers, groups and layers without a retained
+        /// source throw UNSUPPORTED. Not routed through the ordinary
+        /// document queue yet — the root owns the confirmed-restore
+        /// dispatch, and a link restore may read its file natively.
+        case restoreSource = 13
     }
 
     /// Layer properties to change; nil fields stay as they are.

@@ -75,12 +75,23 @@ glims_image_history_move (GlimsEngine *engine, GlimsImageID id,
       if (error) *error = strdup ("The image history changed. Select the state again.");
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
+  /* Each popped state can thaw a link layer — a file reload that runs a
+   * load plug-in and its nested main loop — so busy is held across the
+   * whole walk. */
+  engine->busy++;
   for (i = info.current_position; i > position; i--)
     if (! gimp_image_undo (open->image))
-      return glims_fail (error, NULL, "The image could not reach the selected history state.");
+      {
+        engine->busy--;
+        return glims_fail (error, NULL, "The image could not reach the selected history state.");
+      }
   for (i = info.current_position; i < position; i++)
     if (! gimp_image_redo (open->image))
-      return glims_fail (error, NULL, "The image could not reach the selected history state.");
+      {
+        engine->busy--;
+        return glims_fail (error, NULL, "The image could not reach the selected history state.");
+      }
+  engine->busy--;
   gimp_image_flush (open->image);
   return GLIMS_STATUS_OK;
 }
