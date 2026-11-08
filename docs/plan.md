@@ -1943,3 +1943,7 @@ field checks and the existing active-edit preservation check pass on the
 pinned engine (30 focused checks). Before this fix, the source-cache
 integration passed 399 unit tests, all-four-engine guide checks and 971
 full pinned interface checks. Follow-up review and matrix are running.
+
+The combined rulers/Guides-field revision passes all 417 unit tests and
+1,021 full pinned-engine interface checks. The focused rulers scenario
+passes 47 checks on each of the four supported engines.
