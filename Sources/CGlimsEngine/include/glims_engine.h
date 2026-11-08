@@ -102,6 +102,24 @@ typedef enum GlimsLayerKind {
   GLIMS_LAYER_VECTOR = 5
 } GlimsLayerKind;
 
+/* A layer's structured-content source, as layer_source_info reports it.
+ * `source_kind` is a GlimsLayerKind naming the layer's own class, so a
+ * rasterized text, link or vector layer keeps TEXT/LINK/VECTOR here while
+ * GlimsLayerInfo.kind already reports PIXEL for it. `is_rasterized` says
+ * the layer's editable predicate is currently off and its content is
+ * pixels: a text layer whose pixels were edited (its "modified" flag),
+ * a link layer that stopped monitoring its file, or a rasterized vector
+ * layer. `has_source` says the layer still carries its structured
+ * source: a retained GimpText, an associated path, or the file link,
+ * which a link layer keeps after monitoring stops. An ordinary pixel or
+ * group layer reports source_kind PIXEL/GROUP with both flags false. */
+typedef struct GlimsLayerSourceInfo {
+  uint32_t struct_size;    /* sizeof (GlimsLayerSourceInfo) */
+  uint32_t source_kind;    /* GlimsLayerKind */
+  bool     is_rasterized;
+  bool     has_source;
+} GlimsLayerSourceInfo;
+
 /* One row of the layer tree, top of the stack first, depth-first. */
 typedef struct GlimsLayerInfo {
   GlimsItemID id;
@@ -331,7 +349,19 @@ typedef enum GlimsLayerCommand {
    * genuine editable layer reports UNSUPPORTED with a reason, and an
    * already fitting, already tight or empty layer is a no-op. */
   GLIMS_LAYER_FIT_TO_IMAGE     = 10,
-  GLIMS_LAYER_TRIM_TO_CONTENT  = 11
+  GLIMS_LAYER_TRIM_TO_CONTENT  = 11,
+  /* Turns a genuine editable text, link or vector layer pixel-behaving
+   * while it keeps its structured source, as one undo step ("Rasterize
+   * Text/Link/Vector Layer"); the rendered pixels, bounds and selection
+   * are unchanged. A layer of one of those classes that already behaves
+   * as pixels — a painted-over text, an unmonitored link, a rasterized
+   * vector — is a no-op that pushes no undo, whether or not its source
+   * survived. Ordinary pixel layers and groups report UNSUPPORTED with
+   * a reason; an explicit layer id that names no attached layer of the
+   * image is NOT_FOUND. PIXELS or POSITION locks of the layer or a group
+   * around it refuse with LOCKED; stroke, filter and plug-in activity
+   * with BUSY. */
+  GLIMS_LAYER_RASTERIZE        = 12
 } GlimsLayerCommand;
 
 /* Which fields of GlimsLayerChange apply. */
@@ -1726,6 +1756,19 @@ typedef struct GlimsEngineAPI {
    * GLIMS_EVENT_GUIDES follows. */
   GlimsStatus  (*guide_remove)          (GlimsEngine *engine, GlimsImageID image,
                                          GlimsGuideID guide, char **error);
+
+  /* The layer's structured-source state (GlimsLayerSourceInfo): its own
+   * class kind, whether it currently behaves as pixels and whether its
+   * text, link or path source survived. A read: allowed at any time.
+   * `layer` 0 means the selected layer. `out` is validated by its
+   * struct_size before it is written: INVALID_ARGUMENT for a missing
+   * `out` or one whose struct_size is too small; NOT_FOUND for an
+   * unknown image or a `layer` that names no attached layer of the
+   * image — stale, foreign or closed — including a 0 `layer` while
+   * nothing is selected. */
+  GlimsStatus  (*layer_source_info)     (GlimsEngine *engine, GlimsImageID image,
+                                         GlimsItemID layer, GlimsLayerSourceInfo *out,
+                                         char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

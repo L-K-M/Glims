@@ -150,6 +150,11 @@ final class EngineSession: @unchecked Sendable {
         /// text, link and vector layers (rasterized instances count as
         /// pixels). Already fitting or already tight layers are a no-op.
         case fitToImage = 10, trimToContent
+        /// Turns a genuine editable text, link or vector layer
+        /// pixel-behaving while it keeps its structured source (one undo
+        /// step); an already rasterized instance is a no-op. Ordinary
+        /// pixel layers and groups throw UNSUPPORTED.
+        case rasterize = 12
     }
 
     /// Layer properties to change; nil fields stay as they are.
@@ -1041,6 +1046,40 @@ final class EngineSession: @unchecked Sendable {
         try check(api.gradient_resource(engine, image, gradient,
                                         GlimsPoint(x: from.x, y: from.y), GlimsPoint(x: to.x, y: to.y),
                                         &values, &error), error)
+    }
+
+    /// A layer's structured-content source (layer_source_info): its own
+    /// class kind — kept after rasterization, unlike `Layer.kind` —
+    /// whether it currently behaves as pixels, and whether the text,
+    /// link or path source survived.
+    struct LayerSource: Equatable {
+        let kind: LayerKind
+        /// The editable predicate is off: the layer's content is pixels.
+        let isRasterized: Bool
+        /// The layer still carries its text, link or path source.
+        let hasSource: Bool
+    }
+
+    /// The layer's structured-source state (`layer` 0: the selected
+    /// layer). A read; throws NOT_FOUND for a stale, foreign or closed
+    /// id.
+    func layerSource(_ layer: Int32, image: Int32) throws -> LayerSource {
+        var info = GlimsLayerSourceInfo()
+        info.struct_size = UInt32(MemoryLayout<GlimsLayerSourceInfo>.size)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.layer_source_info(engine, image, layer, &info, &error), error)
+        let kind: LayerKind
+        switch Int(info.source_kind) {
+        case Int(GLIMS_LAYER_GROUP.rawValue): kind = .group
+        case Int(GLIMS_LAYER_TEXT.rawValue): kind = .text
+        case Int(GLIMS_LAYER_LINK.rawValue): kind = .link
+        case Int(GLIMS_LAYER_VECTOR.rawValue): kind = .vector
+        case Int(GLIMS_LAYER_PIXEL.rawValue): kind = .pixel
+        default:
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The engine returned an unknown layer source kind.")
+        }
+        return LayerSource(kind: kind, isRasterized: info.is_rasterized, hasSource: info.has_source)
     }
 
     func selectLayer(_ layer: Int32, image: Int32) throws {

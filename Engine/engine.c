@@ -2084,6 +2084,7 @@ api_vector_layer_style_set (GlimsEngine *e, GlimsImageID image, GlimsItemID laye
 MARSHAL (image_guides, return glims_image_guides (e, a->image, a->out, a->capacity, a->count);)
 MARSHAL (guide_put, return glims_guide_put (e, a->image, a->in, a->out, a->error);)
 MARSHAL (guide_remove, return glims_guide_remove (e, a->image, a->width, a->error);)
+MARSHAL (layer_source_info, return glims_layer_source_info (e, a->image, a->item, a->out, a->error);)
 
 static GlimsStatus
 api_image_guides (GlimsEngine *e, GlimsImageID image, GlimsGuideInfo *rows,
@@ -2106,6 +2107,14 @@ api_guide_remove (GlimsEngine *e, GlimsImageID image, GlimsGuideID guide, char *
 {
   GlimsArgs a = { .image = image, .width = guide, .error = error };
   return glims_engine_call (e, guide_remove_on_engine, &a);
+}
+
+static GlimsStatus
+api_layer_source_info (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                       GlimsLayerSourceInfo *out, char **error)
+{
+  GlimsArgs a = { .image = image, .item = layer, .out = out, .error = error };
+  return glims_engine_call (e, layer_source_info_on_engine, &a);
 }
 
 static GlimsStatus
@@ -2236,6 +2245,7 @@ static const GlimsEngineAPI api_v1 = {
   .image_guides    = api_image_guides,
   .guide_put       = api_guide_put,
   .guide_remove    = api_guide_remove,
+  .layer_source_info = api_layer_source_info,
 };
 
 __attribute__ ((visibility ("default")))
