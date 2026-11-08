@@ -1274,6 +1274,32 @@ final class ImageDocument {
         }
     }
 
+    /// Layer ▸ Vector Style…: applies the sheet's change to the genuine
+    /// vector layer `layer` as one native undo step, queued as counted
+    /// input on the input queue — off the main thread, behind every
+    /// accepted edit. An empty `properties` is a no-op: nothing is queued
+    /// and no undo is pushed. A layer that is no longer a cached genuine
+    /// vector layer — deleted, rasterized or retargeted while the sheet
+    /// was up — is refused with targetChanged; busy and closed states are
+    /// refused up front, and the engine's own BUSY, LOCKED, NOT_FOUND and
+    /// UNSUPPORTED (pattern style, pre-3.2) answers are reported as they
+    /// come. The call never rasterizes anything.
+    func changeVectorLayerStyle(_ layer: Int32, _ change: EngineSession.VectorStyleChange) {
+        if isClosing {
+            onError?(DocumentError.closed.localizedDescription)
+            return
+        }
+        guard !refuseWhileEditingUnavailable() else { return }
+        guard layers.contains(where: { $0.id == layer && $0.kind == .vector }) else {
+            onError?(DocumentError.targetChanged.localizedDescription)
+            NSSound.beep()
+            return
+        }
+        guard !change.properties.isEmpty else { return }
+        endPendingUserEdits()
+        run { session, image in try session.changeVectorLayerStyle(layer, image: image, change) }
+    }
+
     /// Re-reads the outline; the engine caches it until the selection changes.
     func refreshSelection() {
         selectionOutline = (try? session.selectionOutline(image: image)) ?? []

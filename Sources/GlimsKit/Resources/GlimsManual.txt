@@ -190,6 +190,8 @@ Groups open and close with the disclosure triangle.
 
 The Layer menu: New Layer (Shift-Command-N), New Layer Group,
 Duplicate Layer (Command-J), Delete Layer, Layer Properties…,
+Vector Style… (the native fill and stroke of a selected vector layer,
+engine 3.2 and later; solid colors only, one undo step),
 Arrange > (Bring to Front Shift-Command-], Bring Forward Command-],
 Send Backward Command-[, Send to Back Shift-Command-[),
 Transform > (rotate and flip the layer), and Merge Down.

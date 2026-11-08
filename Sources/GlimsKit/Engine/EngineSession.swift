@@ -1765,6 +1765,138 @@ final class EngineSession: @unchecked Sendable {
         return layer
     }
 
+    // MARK: Vector layer style
+
+    /// A vector layer's stroke cap; facade-owned values only
+    /// (GlimsVectorCapStyle) — the engine's enum never crosses.
+    enum VectorCapStyle: UInt32, CaseIterable, Equatable {
+        case butt = 1, round, square
+
+        var name: String {
+            switch self {
+            case .butt: return "Butt"
+            case .round: return "Round"
+            case .square: return "Square"
+            }
+        }
+    }
+
+    /// A vector layer's stroke join; facade-owned values only
+    /// (GlimsVectorJoinStyle).
+    enum VectorJoinStyle: UInt32, CaseIterable, Equatable {
+        case miter = 1, round, bevel
+
+        var name: String {
+            switch self {
+            case .miter: return "Miter"
+            case .round: return "Round"
+            case .bevel: return "Bevel"
+            }
+        }
+    }
+
+    /// Which fields of a `VectorStyleChange` apply; the bits are the
+    /// facade's own (GlimsVectorStyleProperty). A change that flags nothing
+    /// alters nothing and pushes no undo.
+    struct VectorStyleProperty: OptionSet, Equatable {
+        let rawValue: UInt32
+        static let enableFill = VectorStyleProperty(rawValue: GLIMS_VECTOR_STYLE_ENABLE_FILL.rawValue)
+        static let fillColor = VectorStyleProperty(rawValue: GLIMS_VECTOR_STYLE_FILL_COLOR.rawValue)
+        static let fillAntialias = VectorStyleProperty(rawValue: GLIMS_VECTOR_STYLE_FILL_ANTIALIAS.rawValue)
+        static let enableStroke = VectorStyleProperty(rawValue: GLIMS_VECTOR_STYLE_ENABLE_STROKE.rawValue)
+        static let strokeColor = VectorStyleProperty(rawValue: GLIMS_VECTOR_STYLE_STROKE_COLOR.rawValue)
+        static let strokeAntialias = VectorStyleProperty(rawValue: GLIMS_VECTOR_STYLE_STROKE_ANTIALIAS.rawValue)
+        static let strokeWidth = VectorStyleProperty(rawValue: GLIMS_VECTOR_STYLE_STROKE_WIDTH.rawValue)
+        static let strokeCap = VectorStyleProperty(rawValue: GLIMS_VECTOR_STYLE_STROKE_CAP.rawValue)
+        static let strokeJoin = VectorStyleProperty(rawValue: GLIMS_VECTOR_STYLE_STROKE_JOIN.rawValue)
+        static let strokeMiter = VectorStyleProperty(rawValue: GLIMS_VECTOR_STYLE_STROKE_MITER.rawValue)
+    }
+
+    /// A genuine vector layer's native fill/stroke style, as
+    /// `vector_layer_style_get` reports it. Solid paint only: a layer whose
+    /// native fill or stroke is a pattern reports UNSUPPORTED instead of
+    /// converting it. Opacity, paint mode, unit, dash offset, feather and
+    /// stroke method are not persisted by the native format and are not
+    /// exposed here. Colors are explicit sRGB; `strokeWidth` is in image
+    /// pixels.
+    struct VectorStyle: Equatable {
+        var fillEnabled: Bool
+        var fillColor: NSColor
+        var fillAntialias: Bool
+        var strokeEnabled: Bool
+        var strokeColor: NSColor
+        var strokeAntialias: Bool
+        var strokeWidth: Double
+        var strokeCap: VectorCapStyle
+        var strokeJoin: VectorJoinStyle
+        var strokeMiterLimit: Double
+    }
+
+    /// A requested change; the bits of `properties` say which fields
+    /// apply, the rest keep their state — including every option the
+    /// facade does not expose.
+    struct VectorStyleChange: Equatable {
+        var properties: VectorStyleProperty = []
+        var fillEnabled = false
+        var fillColor: NSColor = .black
+        var fillAntialias = true
+        var strokeEnabled = false
+        var strokeColor: NSColor = .black
+        var strokeAntialias = true
+        var strokeWidth: Double = 2
+        var strokeCap: VectorCapStyle = .butt
+        var strokeJoin: VectorJoinStyle = .miter
+        var strokeMiterLimit: Double = 4
+    }
+
+    /// Reads a genuine vector layer's native style (GIMP 3.2+). This is a
+    /// read, always allowed — but it still touches the engine, so callers
+    /// off the main thread keep it there. NOT_FOUND for a non-vector
+    /// layer, UNSUPPORTED before GIMP 3.2 and for a native pattern style.
+    func vectorLayerStyle(_ layer: Int32, image: Int32) throws -> VectorStyle {
+        var style = GlimsVectorStyle()
+        style.struct_size = UInt32(MemoryLayout<GlimsVectorStyle>.size)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.vector_layer_style_get(engine, image, layer, &style, &error), error)
+        return Self.vectorStyle(style)
+    }
+
+    /// Applies the flagged fields of `change` to a genuine vector layer as
+    /// exactly one native undo step; a change that would alter nothing is
+    /// a no-op that pushes no undo. All guards run before any mutation:
+    /// BUSY, INVALID_ARGUMENT, NOT_FOUND, LOCKED, UNSUPPORTED (before
+    /// GIMP 3.2 or a native pattern style).
+    func changeVectorLayerStyle(_ layer: Int32, image: Int32, _ change: VectorStyleChange) throws {
+        var values = GlimsVectorStyleChange(
+            struct_size: UInt32(MemoryLayout<GlimsVectorStyleChange>.size),
+            properties: change.properties.rawValue,
+            enable_fill: change.fillEnabled,
+            fill_color: Self.color(change.fillColor),
+            fill_antialias: change.fillAntialias,
+            enable_stroke: change.strokeEnabled,
+            stroke_color: Self.color(change.strokeColor),
+            stroke_antialias: change.strokeAntialias,
+            stroke_width: change.strokeWidth,
+            stroke_cap: change.strokeCap.rawValue,
+            stroke_join: change.strokeJoin.rawValue,
+            stroke_miter_limit: change.strokeMiterLimit)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.vector_layer_style_set(engine, image, layer, &values, &error), error)
+    }
+
+    private static func vectorStyle(_ style: GlimsVectorStyle) -> VectorStyle {
+        VectorStyle(fillEnabled: style.enable_fill,
+                    fillColor: nsColor(style.fill_color),
+                    fillAntialias: style.fill_antialias,
+                    strokeEnabled: style.enable_stroke,
+                    strokeColor: nsColor(style.stroke_color),
+                    strokeAntialias: style.stroke_antialias,
+                    strokeWidth: style.stroke_width,
+                    strokeCap: VectorCapStyle(rawValue: style.stroke_cap) ?? .butt,
+                    strokeJoin: VectorJoinStyle(rawValue: style.stroke_join) ?? .miter,
+                    strokeMiterLimit: style.stroke_miter_limit)
+    }
+
     private func withOptionalCString(_ string: String?,
                                      _ body: (UnsafePointer<CChar>?) throws -> Void) rethrows {
         guard let string else { return try body(nil) }
