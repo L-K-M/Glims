@@ -39,6 +39,26 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     /// The selection the outline last applied; a new selection inside a
     /// collapsed group opens its parents, an unchanged one does not.
     private var lastSyncedSelection: Int32?
+    /// Layer and mask thumbnails, bounded small and read off the main
+    /// thread. Keys carry the document's state version, so a result read
+    /// for an older state can never land on a newer row.
+    private static let thumbnailMaxSize: Int32 = 32
+    private struct ThumbnailKey: Hashable {
+        let image: Int32
+        let drawable: Int32
+        let version: Int
+    }
+    private var thumbnailCache: [ThumbnailKey: NSImage] = [:]
+    /// Rows asking for the same drawable while its read is in flight;
+    /// a reload replaces the rows but the queued read still serves them.
+    private var thumbnailWaiters: [ThumbnailKey: [(NSImage?) -> Void]] = [:]
+    private final class ThumbnailRequest: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+        var isCancelled: Bool { lock.withLock { cancelled } }
+        func cancel() { lock.withLock { cancelled = true } }
+    }
+    private var thumbnailRequests: [ThumbnailKey: ThumbnailRequest] = [:]
     private lazy var buttonBar = ClassicPaletteButtonBar(
         items: [Self.item("new", "New Layer", ["plus"]) { $0.layerCommand(.new) },
                 Self.item("group", "New Layer Group", ["folder.badge.plus", "folder", "plus"]) { $0.createGroup() },
@@ -116,6 +136,34 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         group.target = self
         menu.addItem(group)
         menu.addItem(.separator())
+        let mask = NSMenuItem(title: "Mask", action: nil, keyEquivalent: "")
+        mask.submenu = NSMenu(title: "Mask")
+        for (title, action) in [("Add Layer Mask…", #selector(addLayerMask(_:))),
+                                ("Apply Mask", #selector(applyLayerMask(_:))),
+                                ("Delete Mask", #selector(deleteLayerMask(_:))),
+                                ("Enable Mask", #selector(toggleMaskEnabled(_:))),
+                                ("Edit Mask", #selector(toggleMaskEditing(_:))),
+                                ("Show Mask", #selector(toggleMaskShowing(_:)))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            mask.submenu?.addItem(item)
+        }
+        mask.submenu?.addItem(.separator())
+        let toSelection = NSMenuItem(title: "Mask to Selection", action: nil, keyEquivalent: "")
+        toSelection.submenu = NSMenu(title: "Mask to Selection")
+        let operations: [(String, EngineSession.SelectOperation)] = [
+            ("Replace Selection", .replace), ("Add to Selection", .add),
+            ("Subtract from Selection", .subtract), ("Intersect with Selection", .intersect),
+        ]
+        for (title, operation) in operations {
+            let item = NSMenuItem(title: title, action: #selector(maskToSelection(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = Int(operation.rawValue)
+            toSelection.submenu?.addItem(item)
+        }
+        mask.submenu?.addItem(toSelection)
+        menu.addItem(mask)
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Layer Properties…", action: #selector(DocumentWindowController.layerProperties(_:)),
                      keyEquivalent: "")
         menu.addItem(.separator())
@@ -151,6 +199,24 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         document?.toggleLocks(document?.activeLayer ?? 0, EngineSession.LayerLocks(rawValue: UInt32(sender.tag)))
     }
 
+    // MARK: Mask commands
+
+    @objc private func addLayerMask(_ sender: Any?) {
+        guard let document, let window = view.window else { return }
+        AddMaskForm.present(for: document, on: window)
+    }
+
+    @objc private func applyLayerMask(_ sender: Any?) { document?.applyMask() }
+    @objc private func deleteLayerMask(_ sender: Any?) { document?.deleteMask() }
+    @objc private func toggleMaskEnabled(_ sender: Any?) { document?.toggleMaskEnabled() }
+    @objc private func toggleMaskEditing(_ sender: Any?) { document?.toggleMaskEditing() }
+    @objc private func toggleMaskShowing(_ sender: Any?) { document?.toggleMaskShowing() }
+
+    @objc private func maskToSelection(_ sender: NSMenuItem) {
+        guard let operation = EngineSession.SelectOperation(rawValue: UInt32(sender.tag)) else { return }
+        document?.maskToSelection(operation)
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
         case #selector(runLayerCommand(_:)):
@@ -166,6 +232,32 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             menuItem.state = sources?.local.contains(lock) == true ? .on : .off
             menuItem.toolTip = DocumentWindowController.lockNote(lock, sources: sources)
             return document.acceptsEdits
+        case #selector(addLayerMask(_:)):
+            guard let document, document.acceptsEdits, let active = document.activeLayer,
+                  let layer = document.layers.first(where: { $0.id == active }) else { return false }
+            return !layer.hasMask
+        case #selector(applyLayerMask(_:)):
+            // Apply is raster-only; the engine refuses groups and
+            // text, link and vector layers, so they never offer it.
+            guard let document, document.acceptsEdits, let active = document.activeLayer,
+                  let layer = document.layers.first(where: { $0.id == active }) else { return false }
+            return layer.hasMask && layer.kind == .pixel
+        case #selector(deleteLayerMask(_:)), #selector(maskToSelection(_:)):
+            guard let document, document.acceptsEdits, let active = document.activeLayer else { return false }
+            return document.layers.first(where: { $0.id == active })?.hasMask == true
+        case #selector(toggleMaskEnabled(_:)), #selector(toggleMaskEditing(_:)),
+             #selector(toggleMaskShowing(_:)):
+            guard let document, document.acceptsEdits, let active = document.activeLayer,
+                  let mask = document.maskStates[active] else { return false }
+            switch menuItem.action {
+            case #selector(toggleMaskEnabled(_:)):
+                menuItem.state = mask.enabled ? .on : .off
+            case #selector(toggleMaskEditing(_:)):
+                menuItem.state = mask.editing ? .on : .off
+            default:
+                menuItem.state = mask.showing ? .on : .off
+            }
+            return true
         default:
             return true
         }
@@ -182,6 +274,14 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     }
 
     func reload() {
+        // Cancel obsolete reads before rebuilding rows. Workers consult
+        // only this synchronized token; document and view state stays on
+        // the main actor.
+        for key in Array(thumbnailRequests.keys)
+        where key.image != document?.image || key.version != document?.stateVersion {
+            thumbnailRequests.removeValue(forKey: key)?.cancel()
+            thumbnailWaiters.removeValue(forKey: key)?.forEach { $0(nil) }
+        }
         let editable = document?.acceptsEdits == true
         let hasLayer = editable && document?.activeLayer != nil
         buttonBar.setEnabled(editable, forItem: "new")
@@ -343,18 +443,106 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
               let layer = snapshot.layer(for: item, for: document, currentLayers: document.layers),
               let node = item as? LayerTree.Node else { return nil }
         let locks = snapshot.tree.lockSources(for: node, states: document.layerLocks)
+        let mask = document.maskStates[layer.id]
+        let target: ThumbnailButton.Target = document.activeLayer == layer.id
+            ? (document.isMaskTargetActive ? .mask : .layer) : .none
         let rowView = LayerRowView(layer: layer,
                                    context: LayerRowView.Context(document: document, layerID: layer.id),
                                    details: Self.detailsSuffix(for: layer),
-                                   locks: locks) { [weak self] context, change in
+                                   locks: locks, mask: mask, activeTarget: target) { [weak self] context, change in
             self?.commitLayerChange(context, change) ?? false
         }
         rowView.checkbox.isEnabled = document.acceptsEdits
         rowView.nameField.isEditable = document.acceptsEdits
+        rowView.layerThumb.isEnabled = document.acceptsEdits
+        rowView.maskThumb?.isEnabled = document.acceptsEdits
+        rowView.onThumbnail = { [weak self, weak rowView] pick, option in
+            guard let self, let rowView else { return }
+            self.thumbnailPicked(pick, option, row: rowView)
+        }
         rowView.onEditEnded = { [weak self] in
             DispatchQueue.main.async { self?.reload() }
         }
+        requestThumbnails(layer: layer, mask: mask, into: rowView, document: document)
         return rowView
+    }
+
+    /// A row thumbnail's click, with the stale guards every row edit
+    /// takes: the document must still be the palette's target and the
+    /// layer still in it.
+    private func thumbnailPicked(_ pick: LayerRowView.ThumbnailPick, _ option: Bool,
+                                 row: LayerRowView) {
+        guard let document, document.acceptsEdits,
+              LayerRowView.canChange(row.context, document: document, layers: document.layers)
+        else { return }
+        switch (pick, option) {
+        case (.layer, _):
+            document.selectLayer(row.context.layerID)
+        case (.mask, true):
+            // Option-click is View Mask, a display flag on that layer.
+            document.toggleMaskShowing(row.context.layerID)
+        case (.mask, false):
+            document.editMask(row.context.layerID)
+        }
+    }
+
+    /// Reads `drawable`'s bounded thumbnail off the main thread and hands
+    /// it to `apply` only while the document and state version it was
+    /// read for still stand — a retarget, reload or removal makes the
+    /// result stale and it is dropped, never painted onto a newer row.
+    private func requestThumbnails(layer: EngineSession.Layer, mask: EngineSession.MaskState?,
+                                   into row: LayerRowView, document: ImageDocument) {
+        let version = document.stateVersion
+        loadThumbnail(document: document, drawable: layer.id, version: version) { image in
+            row.layerThumb.thumbnail = image
+        }
+        if let mask, mask.mask != 0 {
+            loadThumbnail(document: document, drawable: mask.mask, version: version) { image in
+                row.maskThumb?.thumbnail = image
+            }
+        }
+    }
+
+    private func loadThumbnail(document: ImageDocument, drawable: Int32, version: Int,
+                               apply: @escaping (NSImage?) -> Void) {
+        let key = ThumbnailKey(image: document.image, drawable: drawable, version: version)
+        if let cached = thumbnailCache[key] { return apply(cached) }
+        if thumbnailWaiters[key] != nil {
+            thumbnailWaiters[key]?.append(apply)
+            return
+        }
+        thumbnailWaiters[key] = [apply]
+        let request = ThumbnailRequest()
+        thumbnailRequests[key] = request
+        let maxSize = Self.thumbnailMaxSize
+        let owner = ObjectIdentifier(document)
+        // Count the read in the document's input queue, so close, Quit
+        // and exclusive engine operations drain it before destruction.
+        let accepted = document.run(effect: .readsPixels) { [weak self] session, imageID in
+            guard !request.isCancelled else { return }
+            let cgImage = try? session.drawableThumbnail(drawable, image: imageID,
+                                                         maxSize: maxSize)
+            DispatchQueue.main.async {
+                guard let self, self.thumbnailRequests[key] === request else { return }
+                self.thumbnailRequests.removeValue(forKey: key)
+                let waiters = self.thumbnailWaiters.removeValue(forKey: key) ?? []
+                guard let document = self.document,
+                      ObjectIdentifier(document) == owner, document.stateVersion == version
+                else { return waiters.forEach { $0(nil) } }
+                let image = cgImage.map {
+                    NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height))
+                }
+                if let image {
+                    if self.thumbnailCache.count > 512 { self.thumbnailCache.removeAll() }
+                    self.thumbnailCache[key] = image
+                }
+                waiters.forEach { $0(image) }
+            }
+        }
+        if !accepted {
+            thumbnailRequests.removeValue(forKey: key)?.cancel()
+            thumbnailWaiters.removeValue(forKey: key)?.forEach { $0(nil) }
+        }
     }
 
     // MARK: Selection

@@ -364,6 +364,38 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// Layer ▸ New Layer Group.
     @objc func newLayerGroup(_ sender: Any?) { imageDocument.createGroup() }
 
+    // MARK: Layer mask menu
+
+    /// Layer ▸ Mask ▸ Add…: the native source form on the active layer.
+    @objc func addLayerMask(_ sender: Any?) {
+        guard let window, let id = imageDocument.activeLayer else { return }
+        AddMaskForm.present(for: imageDocument, on: window)
+    }
+    @objc func applyLayerMask(_ sender: Any?) { imageDocument.applyMask() }
+    @objc func deleteLayerMask(_ sender: Any?) { imageDocument.deleteMask() }
+    @objc func toggleMaskEnabled(_ sender: Any?) { imageDocument.toggleMaskEnabled() }
+    @objc func toggleMaskEditing(_ sender: Any?) { imageDocument.toggleMaskEditing() }
+    @objc func toggleMaskShowing(_ sender: Any?) { imageDocument.toggleMaskShowing() }
+
+    /// Layer ▸ Mask ▸ Mask to Selection ▸ …; the item's tag carries the
+    /// operation's raw value.
+    @objc func maskToSelection(_ sender: NSMenuItem) {
+        guard let operation = EngineSession.SelectOperation(rawValue: UInt32(sender.tag)) else { return }
+        imageDocument.maskToSelection(operation)
+    }
+
+    /// The active layer's mask state, when it has one.
+    private var activeMask: EngineSession.MaskState? {
+        guard let id = imageDocument.activeLayer else { return nil }
+        return imageDocument.maskStates[id]
+    }
+
+    /// The active layer, when the menu has one to act on.
+    private var activeLayerInfo: EngineSession.Layer? {
+        guard let id = imageDocument.activeLayer else { return nil }
+        return imageDocument.layers.first(where: { $0.id == id })
+    }
+
     /// Layer ▸ Lock ▸ …: toggles the active item's own lock; the item's
     /// tag carries the lock's raw value.
     @objc func toggleLayerLock(_ sender: NSMenuItem) {
@@ -624,6 +656,27 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let sources = tree.nodesByID[id].map { tree.lockSources(for: $0, states: imageDocument.layerLocks) }
             menuItem.state = sources?.local.contains(lock) == true ? .on : .off
             menuItem.toolTip = Self.lockNote(lock, sources: sources)
+            return true
+        case #selector(addLayerMask(_:)):
+            guard !editingBlocked, !previewBusy, let layer = activeLayerInfo else { return false }
+            return !layer.hasMask
+        case #selector(applyLayerMask(_:)):
+            guard !editingBlocked, !previewBusy, let layer = activeLayerInfo,
+                  activeMask != nil else { return false }
+            // Apply is raster-only: the engine refuses groups and text,
+            // link and vector layers, so they never offer it.
+            return layer.kind == .pixel
+        case #selector(deleteLayerMask(_:)), #selector(maskToSelection(_:)):
+            guard !editingBlocked, !previewBusy, let layer = activeLayerInfo else { return false }
+            return layer.hasMask
+        case #selector(toggleMaskEnabled(_:)), #selector(toggleMaskEditing(_:)),
+             #selector(toggleMaskShowing(_:)):
+            guard !editingBlocked, !previewBusy, let mask = activeMask else { return false }
+            switch menuItem.action {
+            case #selector(toggleMaskEnabled(_:)): menuItem.state = mask.enabled ? .on : .off
+            case #selector(toggleMaskEditing(_:)): menuItem.state = mask.editing ? .on : .off
+            default: menuItem.state = mask.showing ? .on : .off
+            }
             return true
         case #selector(newSnapshot(_:)):
             // Without an app to adopt the copy there is nothing to run.
