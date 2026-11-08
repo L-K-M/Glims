@@ -65,6 +65,9 @@ final class CanvasToolController {
             if ToolState.shared.current != .text, self.textEditor != nil {
                 self.finishTextEditing()
             }
+            // A tool change cancels this window's in-progress guide drag
+            // (ghost cleared, no native guide action).
+            self.canvas.guideDrag.cancel()
             self.canvas.needsDisplay = true
         }
     }
@@ -146,7 +149,16 @@ final class CanvasToolController {
             dragTool = nil
         case .path:
             pathTool.mouseDown(at: point, flags: event.modifierFlags)
-        case .move, .gradient, .crop:
+        case .move:
+            dragStart = point
+            dragCurrent = point
+            // An actual guide hit under the pointer takes the gesture;
+            // the ordinary layer move must not start then.
+            if canvas.guideDrag.beginMoveOfGuide(at: event) {
+                dragTool = nil
+                return
+            }
+        case .gradient, .crop:
             dragStart = point
             dragCurrent = point
             if tool == .crop { pendingCrop = nil }
@@ -163,6 +175,8 @@ final class CanvasToolController {
     }
 
     func mouseDragged(with event: NSEvent) {
+        // A guide drag owns the gesture: view-only ghost, no native call.
+        if canvas.guideDrag.mouseDragged(with: event) { return }
         guard let tool = dragTool else { return }
         let point = canvas.imagePoint(for: event)
 
@@ -209,6 +223,9 @@ final class CanvasToolController {
             gradientCapture = nil
             canvas.needsDisplay = true
         }
+        // An intentional release of a guide drag commits exactly one
+        // addGuide/moveGuide/removeGuide action.
+        if canvas.guideDrag.mouseUp(with: event) { return }
         guard let tool = dragTool else { return }
 
         if tool.paintTool != nil {
