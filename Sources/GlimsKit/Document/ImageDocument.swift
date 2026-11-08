@@ -950,6 +950,71 @@ final class ImageDocument {
         }
     }
 
+    // MARK: Color profile
+
+    /// Image ▸ Color Profile ▸ Assign…: embed the ICC profile at `path`
+    /// without converting pixel values, or discard the embedded profile
+    /// when `path` is nil, as one undo step. Same admission as the color
+    /// conversions — counted engine-wide exclusive work, so accepted
+    /// input in every document drains first and close/Quit wait — with
+    /// the same refusal reporting (busy, closing) and no-op rules (the
+    /// facade treats an equal profile as a no-op that pushes no undo).
+    /// File identity is untouched; only the edit's dirty state reaches
+    /// `fileState` through the reload.
+    func assignProfile(path: String?,
+                       completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
+              !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
+        endPendingUserEdits()
+        let label = path.map { "Assigning \(URL(fileURLWithPath: $0).lastPathComponent)" }
+            ?? "Discarding the color profile"
+        enqueueExclusive(label: label, rejected: {
+            completion(.failure(DocumentError.busy))
+        }) { [session, image] in
+            let result = Result { try session.assignProfile(image, path: path) }
+            DispatchQueue.main.async {
+                if !self.isClosing { try? self.reload() }
+                completion(result)
+            }
+        }
+    }
+
+    /// Image ▸ Color Profile ▸ Convert…: convert the pixels to preserve
+    /// appearance in the destination profile — nil `path` for the
+    /// builtin — as one undo step with the form's `intent` and
+    /// `blackPointCompensation`. Same admission, refusal, no-op and
+    /// file-identity rules as `assignProfile`. Indexed images refuse up
+    /// front: their native palette conversion ignores intent and BPC
+    /// (the facade reports UNSUPPORTED), so the document never queues it
+    /// — assignment stays allowed on them.
+    func convertProfile(path: String?, intent: EngineSession.ProfileIntent,
+                        blackPointCompensation: Bool,
+                        policy: EngineSession.ProfileConversionPolicy = .preserveEditableLayers,
+                        completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
+              !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
+        guard colorInfo.mode != .indexed else {
+            return completion(.failure(DocumentError.indexedProfileConversion))
+        }
+        endPendingUserEdits()
+        let label = path.map { "Converting to \(URL(fileURLWithPath: $0).lastPathComponent)" }
+            ?? "Converting to the built-in profile"
+        enqueueExclusive(label: label, rejected: {
+            completion(.failure(DocumentError.busy))
+        }) { [session, image] in
+            let result = Result {
+                try session.convertProfile(image, path: path, intent: intent,
+                                           blackPointCompensation: blackPointCompensation, policy: policy)
+            }
+            DispatchQueue.main.async {
+                if !self.isClosing { try? self.reload() }
+                completion(result)
+            }
+        }
+    }
+
     // MARK: Paths
 
     /// Makes `id` the path the Path tool edits, here and in the engine.
@@ -1404,13 +1469,15 @@ final class ImageDocument {
     }
 
     enum DocumentError: LocalizedError {
-        case closed, busy, noLayer, targetChanged
+        case closed, busy, noLayer, targetChanged, indexedProfileConversion
         var errorDescription: String? {
             switch self {
             case .closed: return "This image has already closed."
             case .busy: return "Wait for the current image operation to finish."
             case .noLayer: return "There is no layer to work on."
             case .targetChanged: return "The selected layer, mask or channel changed. Select a paint target again."
+            case .indexedProfileConversion:
+                return "An indexed image cannot convert its color profile: the palette conversion ignores the intent and black-point settings. Convert the image to RGB first."
             }
         }
     }
