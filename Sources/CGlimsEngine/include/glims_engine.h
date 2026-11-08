@@ -1047,6 +1047,16 @@ typedef enum GlimsFloatingCommand {
   GLIMS_FLOATING_DISCARD  = 3   /* remove it without merging */
 } GlimsFloatingCommand;
 
+/* How selection_float takes the selected pixels off their target:
+ * MOVE cuts them out of it (the target keeps a transparent hole where
+ * the selection was), COPY leaves the target's pixels untouched.
+ * Facade-owned values; the native cut_image boolean never crosses this
+ * boundary. */
+typedef enum GlimsFloatMode {
+  GLIMS_FLOAT_MOVE = 1,
+  GLIMS_FLOAT_COPY = 2
+} GlimsFloatMode;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -2086,6 +2096,46 @@ typedef struct GlimsEngineAPI {
    * and leave the floating selection active. */
   GlimsStatus  (*floating_command) (GlimsEngine *engine, GlimsImageID image, GlimsItemID expected,
                                     uint32_t command, GlimsItemID *result, char **error);
+
+  /* Floats the current selection of `image` into a floating selection,
+   * through the engine's own GUI-free gimp_selection_float: the selected
+   * region is extracted from `target` (cut for GLIMS_FLOAT_MOVE, copied
+   * for GLIMS_FLOAT_COPY), the selection is cleared, and a new layer
+   * holding the extracted region — same format, profile and bounds as
+   * the selection's intersection with the target, at offset 0 — is
+   * attached to `target` as the floating selection. Exactly one native
+   * undo step ("Float Selection"); undo restores the target's pixels
+   * (MOVE) and the selection. `result` (may be NULL) receives the
+   * floating layer's id, which is image-owned and needs no release; the
+   * existing layer_move moves it once the selection is cleared.
+   * `target` 0 means the image's selected drawable, but only when
+   * exactly one drawable is selected — zero or several selected
+   * drawables are refused; an explicit id must name an attached layer,
+   * layer mask or saved channel of this image. The layer/mask/channel
+   * admission is image_paste_into's: the selection mask itself and
+   * layer groups are refused, and a genuine editable text, link or
+   * vector layer target reports REQUIRES_RASTERIZE (never an implicit
+   * rasterization).
+   *
+   * Everything is validated before any native call, so every refusal
+   * changes no pixels, pushes no undo, clears no selection and leaves
+   * the floating state alone: INVALID_ARGUMENT for an unknown `mode`;
+   * NOT_FOUND for an unknown image or a stale, foreign or detached
+   * `target` id; FAILED with `error` when a floating selection already
+   * exists (the native attach would silently anchor it), when there is
+   * no selection or it does not intersect the target, when the target
+   * is the selection mask itself, a layer group, or not a channel of
+   * the image's channel list, or when the core float fails; LOCKED for
+   * MOVE when the target's — or an ancestor group's — pixels are
+   * locked, plus the alpha lock when the target has an alpha channel
+   * (the cut punches through it, as image_clear does; COPY is
+   * non-destructive and checks no locks beyond readiness);
+   * REQUIRES_RASTERIZE for a genuine editable text/link/vector target;
+   * BUSY while a stroke, a filter session or a plug-in holds the image.
+   * The temporary drawable list, context and error are released on
+   * every path. */
+  GlimsStatus  (*selection_float) (GlimsEngine *engine, GlimsImageID image, GlimsItemID target,
+                                   uint32_t mode, GlimsItemID *result, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

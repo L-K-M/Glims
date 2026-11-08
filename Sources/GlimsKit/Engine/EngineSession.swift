@@ -1100,6 +1100,39 @@ final class EngineSession: @unchecked Sendable {
         return result == 0 ? nil : result
     }
 
+    /// How `floatSelection(_:image:target:mode:)` takes the selected
+    /// pixels off their target (GlimsFloatMode): `.move` cuts them out of
+    /// it, `.copy` leaves the target untouched.
+    enum FloatMode: UInt32 {
+        /// Cut the selection out of the target; it keeps a transparent hole.
+        case move = 1
+        /// Copy the selection; the target's pixels stay as they are.
+        case copy = 2
+    }
+
+    /// Floats the current selection of `image` into a floating selection
+    /// attached to `target` (0: the image's selected drawable, which must
+    /// be exactly one), as exactly one undo step, and returns the floating
+    /// layer's id. The selection is cleared by the float; `move` leaves a
+    /// transparent hole in the target where the selection was, `copy`
+    /// does not. The floating layer lands on the selection's bounds and
+    /// `moveLayer` moves it from there; resolve it with `floatingCommand`.
+    /// Throws FAILED when a floating selection already exists, when there
+    /// is no selection or it does not intersect the target, or for the
+    /// selection mask itself, a group target or a core failure;
+    /// NOT_FOUND for an unknown image or a stale/foreign target id;
+    /// INVALID_ARGUMENT for an unknown mode; LOCKED for `.move` on a
+    /// content- or alpha-locked target (`.copy` is non-destructive);
+    /// REQUIRES_RASTERIZE for a genuine editable text/link/vector target;
+    /// BUSY while a stroke, filter session or plug-in holds the image.
+    @discardableResult
+    func floatSelection(_ image: Int32, target: Int32 = 0, mode: FloatMode) throws -> Int32 {
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.selection_float(engine, image, target, mode.rawValue, &result, &error), error)
+        return result
+    }
+
     private static func corners(_ rect: CGRect) -> [GlimsPoint] {
         [GlimsPoint(x: rect.minX, y: rect.minY), GlimsPoint(x: rect.maxX, y: rect.maxY)]
     }
