@@ -54,17 +54,20 @@ extension PrintSnapshot {
 /// snapshot, so the printing thread can draw it safely.
 final class ImagePrintView: NSView {
     let snapshot: PrintSnapshot
+    /// The print info the job was created with. The operation copies it,
+    /// and the panel can change that copy — paper, orientation or
+    /// printer — so the imageable area the job finally prints may not
+    /// be the one this view was built with.
+    private let printInfo: NSPrintInfo
     /// Where the image lands, in bounds coordinates, aspect preserved.
-    let imageRect: CGRect
+    private(set) var imageRect: CGRect
 
     init(snapshot: PrintSnapshot, printInfo: NSPrintInfo, title: String) {
         self.snapshot = snapshot
-        let imageable = printInfo.imageablePageBounds
-        // The view is exactly the imageable area; printing places a
-        // bounds-filling rect on the sheet's printable rect itself.
-        imageRect = PrintGeometry.placement(imageSize: snapshot.pixelSize,
-                                            in: CGRect(origin: .zero, size: imageable.size))
-        super.init(frame: NSRect(origin: imageable.origin, size: imageable.size))
+        self.printInfo = printInfo
+        self.imageRect = .zero
+        super.init(frame: .zero)
+        refit()
         setAccessibilityRole(.image)
         setAccessibilityLabel("\(title), printed page")
     }
@@ -72,15 +75,32 @@ final class ImagePrintView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    /// Fits the frame and image rect to the imageable area the job
+    /// currently uses: the running operation's own print info wins once
+    /// the job starts, so a paper, orientation or printer change made
+    /// in the panel is honored. A no-op when nothing changed; without an
+    /// operation the print info the view was built with stands.
+    private func refit() {
+        let imageable = (NSPrintOperation.current?.printInfo ?? printInfo).imageablePageBounds
+        frame = NSRect(origin: imageable.origin, size: imageable.size)
+        imageRect = PrintGeometry.placement(imageSize: snapshot.pixelSize,
+                                            in: CGRect(origin: .zero, size: imageable.size))
+    }
+
     /// Always one page: the view is exactly the imageable area.
     override func knowsPageRange(_ range: NSRangePointer) -> Bool {
+        refit()
         range.pointee = NSRange(location: 1, length: 1)
         return true
     }
 
-    override func rectForPage(_ page: Int) -> NSRect { bounds }
+    override func rectForPage(_ page: Int) -> NSRect {
+        refit()
+        return bounds
+    }
 
     override func draw(_ dirtyRect: NSRect) {
+        refit()
         NSColor.white.setFill()
         dirtyRect.fill()
         guard let context = NSGraphicsContext.current?.cgContext else { return }

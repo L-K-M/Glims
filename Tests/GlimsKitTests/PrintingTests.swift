@@ -49,6 +49,18 @@ final class PrintingTests: XCTestCase {
         XCTAssertEqual(size.width / size.height, 2, accuracy: 0.01)
     }
 
+    /// The engine rejects render scales above 32, so a tiny image must
+    /// get a smaller snapshot instead of a refusal: a 64-pixel image
+    /// asks for 2048 pixels, and a single pixel for 32.
+    func testSnapshotSizeStaysUnderTheRenderScaleCap() {
+        let size = PrintGeometry.snapshotSize(imagePixels: CGSize(width: 64, height: 64),
+                                              imageablePoints: CGSize(width: 540, height: 720))
+        XCTAssertEqual(size, CGSize(width: 2048, height: 2048))
+        XCTAssertEqual(PrintGeometry.snapshotSize(imagePixels: CGSize(width: 1, height: 1),
+                                                  imageablePoints: CGSize(width: 540, height: 720)),
+                       CGSize(width: 32, height: 32))
+    }
+
     /// Degenerate inputs still produce a renderable size.
     func testSnapshotSizeNeverReturnsZero() {
         XCTAssertEqual(PrintGeometry.snapshotSize(imagePixels: CGSize(width: 0, height: 0),
@@ -130,5 +142,78 @@ final class PrintingTests: XCTestCase {
         let paper = try XCTUnwrap(color(atX: imageRect.minX + imageRect.width * 0.875,
                                         y: imageRect.midY))
         XCTAssertEqual(paper.redComponent, 1, accuracy: 0.05)
+    }
+
+    /// The print panel can change paper, orientation or printer after
+    /// the view was built; its imageable area moves with it. The view
+    /// must re-fit to the print info the operation finally uses instead
+    /// of drawing the geometry frozen at Print time.
+    func testPrintViewRefitsToTheOperationsPrintInfo() throws {
+        // A 4:1 snapshot fills the imageable width at a quarter of its
+        // height; its placement visibly differs between the two paper
+        // sizes used here.
+        let pixels: [UInt8] = [255, 0, 0, 255, 0, 255, 0, 255,
+                               0, 0, 255, 255, 255, 0, 255, 255]
+        let snapshot = PrintSnapshot(image: image(pixels, width: 4, height: 1),
+                                     pixelSize: CGSize(width: 400, height: 100), scale: 1)
+        let info = configuredPrintInfo()
+        let view = ImagePrintView(snapshot: snapshot, printInfo: info, title: "Doc")
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("glims-print-refit-\(ProcessInfo.processInfo.processIdentifier).pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let operation = NSPrintOperation(view: view, printInfo: info)
+        // The panel's effect on the operation's own print info.
+        operation.printInfo.paperSize = CGSize(width: 396, height: 612)
+        operation.printInfo.jobDisposition = .save
+        operation.printInfo.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = url
+        operation.showsPrintPanel = false
+        operation.showsProgressPanel = false
+        XCTAssertTrue(operation.run())
+
+        let imageable = operation.printInfo.imageablePageBounds
+        XCTAssertEqual(view.bounds.size, imageable.size,
+                       "the view re-fits to the operation's final imageable area")
+        let expected = PrintGeometry.placement(imageSize: snapshot.pixelSize,
+                                               in: CGRect(origin: .zero, size: imageable.size))
+        XCTAssertEqual(view.imageRect, expected)
+
+        // The rasterized page: the printed image extent has the image
+        // rect's size, not the one computed for the earlier print info.
+        let extent = try XCTUnwrap(coloredExtent(in: url))
+        XCTAssertEqual(extent.width, expected.width, accuracy: 6)
+        XCTAssertEqual(extent.height, expected.height, accuracy: 6)
+    }
+
+    /// The bounds of non-white pixels in a PDF's first page, in media
+    /// coordinates (y up).
+    private func coloredExtent(in url: URL) throws -> CGRect? {
+        guard let pdf = CGPDFDocument(url as CFURL), let page = pdf.page(at: 1) else { return nil }
+        let box = page.getBoxRect(.mediaBox)
+        let scale = 0.5
+        let width = Int(box.width * scale), height = Int(box.height * scale)
+        guard let raster = CGContext(data: nil, width: width, height: height,
+                                     bitsPerComponent: 8, bytesPerRow: width * 4,
+                                     space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                     bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue).rawValue)
+        else { return nil }
+        raster.scaleBy(x: scale, y: scale)
+        raster.drawPDFPage(page)
+        guard let rendered = raster.makeImage(),
+              let data = rendered.dataProvider?.data as Data? else { return nil }
+        var minX = width, minY = height, maxX = -1, maxY = -1
+        for y in 0..<height {
+            for x in 0..<width {
+                let offset = y * rendered.bytesPerRow + x * 4
+                guard offset + 2 < data.count,
+                      data[offset] < 240 || data[offset + 1] < 240 || data[offset + 2] < 240
+                else { continue }
+                minX = min(minX, x); maxX = max(maxX, x)
+                minY = min(minY, y); maxY = max(maxY, y)
+            }
+        }
+        guard maxX >= 0 else { return nil }
+        return CGRect(x: Double(minX) / scale, y: Double(height - 1 - maxY) / scale,
+                      width: Double(maxX - minX + 1) / scale,
+                      height: Double(maxY - minY + 1) / scale)
     }
 }

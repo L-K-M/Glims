@@ -269,6 +269,16 @@ enum EngineSmokeTest {
               "Page Setup adds no undo step and keeps file identity")
         document.printInfo.orientation = .portrait
 
+        // Cancel preserves the document's settings even if the sheet
+        // edited the object it was given before the user backed out.
+        controller.pageSetupRunner = { info, _, finish in
+            info.orientation = .landscape
+            finish(nil)
+        }
+        controller.runGlimsPageSetup(nil)
+        check(document.printInfo.orientation == .portrait,
+              "a cancelled Page Setup cannot rewrite the document's print info")
+
         // The print sheet is replaced by AppKit's own PDF write — the
         // same view, print info and pagination, no panel and no printer.
         let pdfURL = work.appendingPathComponent("printed.pdf")
@@ -351,7 +361,7 @@ enum EngineSmokeTest {
         // The snapshot is the same composite the canvas draws.
         var snapshotDone = false
         var snapshot: PrintSnapshot?
-        document.preparePrintSnapshot(pixelSize: CGSize(width: 240, height: 160)) { result in
+        document.preparePrintSnapshot(imageablePoints: CGSize(width: 57.6, height: 38.4)) { result in
             snapshot = try? result.get()
             snapshotDone = true
         }
@@ -378,7 +388,7 @@ enum EngineSmokeTest {
         documents.items.append(transparent)
         var alphaDone = false
         var alphaSnapshot: PrintSnapshot?
-        transparent.preparePrintSnapshot(pixelSize: CGSize(width: 40, height: 40)) { result in
+        transparent.preparePrintSnapshot(imageablePoints: CGSize(width: 9.6, height: 9.6)) { result in
             alphaSnapshot = try? result.get()
             alphaDone = true
         }
@@ -421,6 +431,8 @@ enum EngineSmokeTest {
         controller.printGlimsImage(nil)
         wait { runnerCalls == 3 }
         check(!controller.printJobIsOpen, "a cancelled run releases the job")
+        check(controller.statusBar.message != "Preparing to print…",
+              "a cancelled run restores the document status")
 
         // A close while the snapshot still renders drops the job; the
         // deferred close proceeds and the image is destroyed on time.
@@ -447,6 +459,146 @@ enum EngineSmokeTest {
         wait { (try? session.info(closingImage)) == nil }
         check((try? session.info(closingImage)) == nil, "the image is destroyed after its queued work")
         documents.items.removeAll { $0 === closing }
+
+        // A plain ⌘W during the render must behave like a requested
+        // close: the job drops before any sheet attaches, and the dirty
+        // prompt still asks. Don't Save then closes on time.
+        let plainImage = try session.newImage(width: 32, height: 32)
+        let plain = try ImageDocument(session: session, image: plainImage, name: "Plain Close")
+        documents.items.append(plain)
+        let plainController = DocumentWindowController(document: plain)
+        plainController.showWindow(nil)
+        let plainWindow = try XCTUnwrapWindow(plainController)
+        var plainRunnerCalls = 0
+        plainController.printJobRunner = { _, _, _, _ in plainRunnerCalls += 1 }
+        plain.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
+        plain.endStroke()
+        wait { plain.fileState.hasUnsavedChanges }
+        var plainClosed = false
+        plainController.onClose = { _ in plainClosed = true }
+        plain.inputQueue.async { usleep(300_000) }
+        plainController.printGlimsImage(nil)
+        check(plainController.printJobIsOpen, "the close-during-render print job is in flight")
+        plainWindow.performClose(nil)
+        wait { plainWindow.attachedSheet != nil || plainClosed }
+        check(plainRunnerCalls == 0 && !plainClosed,
+              "a plain close during the render drops the job before the save prompt")
+        if let sheet = plainWindow.attachedSheet {
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+        }
+        wait { plainClosed }
+        check(plainClosed && !plainController.printJobIsOpen,
+              "Don't Save finishes the close the dropped job deferred")
+        wait { (try? session.info(plainImage)) == nil }
+        check((try? session.info(plainImage)) == nil,
+              "the image is destroyed after the dropped job drains")
+        documents.items.removeAll { $0 === plain }
+
+        // Tiny images print too: the engine refuses render scales above
+        // 32, so the snapshot asks for fewer pixels instead of failing.
+        var redPixels: [UInt8] = []
+        for _ in 0..<64 { redPixels += [255, 0, 0, 255] }
+        let tinyImage = try session.newImage(pixels: ClipboardImage(
+            width: 8, height: 8, pixels: Data(redPixels), origin: .zero))
+        let tiny = try ImageDocument(session: session, image: tinyImage, name: "Tiny")
+        documents.items.append(tiny)
+        let tinyController = DocumentWindowController(document: tiny)
+        tinyController.showWindow(nil)
+        let tinyPDF = work.appendingPathComponent("tiny.pdf")
+        var tinyRunnerFinished = false
+        var tinyView: ImagePrintView?
+        tinyController.printJobRunner = { view, info, _, finish in
+            tinyView = view
+            let operation = NSPrintOperation.pdfOperation(with: view, inside: view.bounds,
+                                                          toPath: tinyPDF.path, printInfo: info)
+            operation.showsPrintPanel = false
+            operation.showsProgressPanel = false
+            finish(operation.run())
+            tinyRunnerFinished = true
+        }
+        tinyController.printGlimsImage(nil)
+        wait { tinyRunnerFinished }
+        check(tinyView?.snapshot.pixelSize == CGSize(width: 256, height: 256),
+              "an 8-pixel image prints at the engine's render limit")
+        if let pdf = CGPDFDocument(tinyPDF as CFURL), let page = pdf.page(at: 1),
+           let rect = tinyView?.imageRect, !rect.isEmpty {
+            let box = page.getBoxRect(.mediaBox)
+            let rScale = 0.25
+            let rw = Int(box.width * rScale), rh = Int(box.height * rScale)
+            let raster = CGContext(data: nil, width: rw, height: rh, bitsPerComponent: 8,
+                                   bytesPerRow: rw * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                   bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue).rawValue)
+            raster?.scaleBy(x: rScale, y: rScale)
+            raster?.drawPDFPage(page)
+            let printed = raster?.makeImage()
+            let center = printed.flatMap { argb($0, x: Int(rect.midX * rScale), y: rh - 1 - Int(rect.midY * rScale)) }
+            check((center?.first ?? 0) > 200 && (center?[1] ?? 255) < 60,
+                  "the tiny image's pixels reach the fitted page")
+        } else { check(false, "the tiny image's PDF is written") }
+        tiny.closeImageWhenDrained()
+        documents.items.removeAll { $0 === tiny }
+
+        // A rotate accepted but still queued decides the printed
+        // geometry: the snapshot sizes itself from the dimensions the
+        // engine reports after the drain, not those at Print time.
+        // Split red/blue so a wrong region shows in the pixels.
+        var splitPixels: [UInt8] = []
+        for _ in 0..<80 {
+            for x in 0..<120 {
+                splitPixels += x < 60 ? [255, 0, 0, 255] : [0, 0, 255, 255]
+            }
+        }
+        let splitImage = try session.newImage(pixels: ClipboardImage(
+            width: 120, height: 80, pixels: Data(splitPixels), origin: .zero))
+        let split = try ImageDocument(session: session, image: splitImage, name: "Split")
+        documents.items.append(split)
+        let splitController = DocumentWindowController(document: split)
+        splitController.showWindow(nil)
+        let splitPDF = work.appendingPathComponent("split.pdf")
+        var splitRunnerFinished = false
+        var splitView: ImagePrintView?
+        splitController.printJobRunner = { view, info, _, finish in
+            splitView = view
+            let operation = NSPrintOperation.pdfOperation(with: view, inside: view.bounds,
+                                                          toPath: splitPDF.path, printInfo: info)
+            operation.showsPrintPanel = false
+            operation.showsProgressPanel = false
+            finish(operation.run())
+            splitRunnerFinished = true
+        }
+        split.inputQueue.async { usleep(300_000) }
+        split.transformImage(.rotate90)
+        splitController.printGlimsImage(nil)
+        wait { splitRunnerFinished }
+        let splitSize = splitView?.snapshot.pixelSize
+        check(splitSize.map { $0.height > $0.width && abs($0.height - $0.width * 1.5) < 4 } ?? false,
+              "a queued rotation sizes the snapshot to the rotated image")
+        if let pdf = CGPDFDocument(splitPDF as CFURL), let page = pdf.page(at: 1),
+           let rect = splitView?.imageRect, !rect.isEmpty {
+            let box = page.getBoxRect(.mediaBox)
+            let rScale = 0.25
+            let rw = Int(box.width * rScale), rh = Int(box.height * rScale)
+            let raster = CGContext(data: nil, width: rw, height: rh, bitsPerComponent: 8,
+                                   bytesPerRow: rw * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                   bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue).rawValue)
+            raster?.scaleBy(x: rScale, y: rScale)
+            raster?.drawPDFPage(page)
+            if let printed = raster?.makeImage() {
+                func splitSample(mediaX: Double, mediaY: Double) -> [UInt8]? {
+                    argb(printed, x: Int(mediaX * rScale), y: rh - 1 - Int(mediaY * rScale))
+                }
+                let top = splitSample(mediaX: rect.midX, mediaY: rect.maxY - rect.height * 0.25)
+                let bottom = splitSample(mediaX: rect.midX, mediaY: rect.minY + rect.height * 0.25)
+                check((top?.first ?? 0) > 200 && (top?[2] ?? 255) < 60,
+                      "the rotated image's red half prints on top")
+                check((bottom?[2] ?? 0) > 200 && (bottom?.first ?? 255) < 60,
+                      "the rotated image's blue half prints on the bottom")
+                check((splitSample(mediaX: 6, mediaY: rect.midY)?.first ?? 0) > 240,
+                      "paper shows outside the rotated image")
+            } else { check(false, "the rotated print rasterizes") }
+        } else { check(false, "the rotated print PDF is written with a fitted image") }
+        split.closeImageWhenDrained()
+        documents.items.removeAll { $0 === split }
     }
 
     /// Saving/closing must use the same asynchronous queues and sheets as

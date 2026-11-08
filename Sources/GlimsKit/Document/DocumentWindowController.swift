@@ -27,6 +27,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// second Print is refused, and a close asked for during the engine
     /// render drops the snapshot instead of attaching a sheet.
     private(set) var printJobIsOpen = false
+    /// A close asked for while the snapshot still renders; the job ends
+    /// without attaching the print sheet and the close goes on.
+    private var printJobDropped = false
     private var activePrintOperation: NSPrintOperation?
     private var pageLayout: NSPageLayout?
     /// Substitute for the print-panel sheet (tests); whoever runs the
@@ -674,8 +677,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func runGlimsPageSetup(_ sender: Any?) {
         guard let window, !imageDocument.isClosing, pageLayout == nil,
               window.attachedSheet == nil else { return }
+        // A copy: the sheet may edit the object it gets while it is up,
+        // and only OK may change the document's settings.
+        let printInfo = (imageDocument.printInfo.copy() as? NSPrintInfo) ?? imageDocument.printInfo
         if let runner = pageSetupRunner {
-            runner(imageDocument.printInfo, window) { [weak self] newInfo in
+            runner(printInfo, window) { [weak self] newInfo in
                 guard let self, let newInfo else { return }
                 self.imageDocument.printInfo = newInfo
             }
@@ -683,7 +689,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
         let layout = NSPageLayout()
         pageLayout = layout
-        layout.beginSheet(with: imageDocument.printInfo, modalFor: window, delegate: self,
+        layout.beginSheet(with: printInfo, modalFor: window, delegate: self,
                           didEnd: #selector(pageLayoutDidEnd(_:returnCode:contextInfo:)),
                           contextInfo: nil)
     }
@@ -707,12 +713,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // A copy so later Page Setup changes cannot rewrite a page
         // that is already rendering.
         let printInfo = (imageDocument.printInfo.copy() as? NSPrintInfo) ?? imageDocument.printInfo
-        let pixelSize = PrintGeometry.snapshotSize(
-            imagePixels: CGSize(width: imageDocument.info.width, height: imageDocument.info.height),
-            imageablePoints: printInfo.imageablePageBounds.size)
         printJobIsOpen = true
         statusBar.message = "Preparing to print…"
-        imageDocument.preparePrintSnapshot(pixelSize: pixelSize) { [weak self] result in
+        imageDocument.preparePrintSnapshot(imageablePoints: printInfo.imageablePageBounds.size) {
+            [weak self] result in
             self?.printPreparationDidFinish(result, printInfo: printInfo)
         }
     }
@@ -721,8 +725,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                            printInfo: NSPrintInfo) {
         // A close requested while the engine rendered takes precedence
         // over showing the panel.
-        guard let window, !imageDocument.isClosing, closeCompletion == nil else {
-            printJobIsOpen = false
+        guard let window, !imageDocument.isClosing, !printJobDropped, closeCompletion == nil else {
+            printJobDidFinish(printed: false)
             return
         }
         switch result {
@@ -754,11 +758,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     /// The run ended — printed, cancelled or failed — or the job was
     /// dropped: the operation and its snapshot are released on every
-    /// path. Cancellation stays silent like everywhere on macOS.
+    /// path. Cancellation stays silent like everywhere on macOS; the
+    /// preparation status goes back to the document's either way.
     func printJobDidFinish(printed: Bool) {
         activePrintOperation = nil
         printJobIsOpen = false
-        if printed { stateDidChange() }
+        printJobDropped = false
+        stateDidChange()
     }
 
     // MARK: Saving, exporting and closing
@@ -927,6 +933,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if EngineActivity.shared.isBusy {
+            // A close during the snapshot render drops the print job;
+            // the deferred close then continues without a print sheet.
+            if printJobIsOpen { printJobDropped = true }
             if !waitingForActivityToClose {
                 waitingForActivityToClose = true
                 EngineActivity.shared.whenIdle { [weak self, weak sender] in

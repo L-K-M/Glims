@@ -8,6 +8,11 @@ enum PrintGeometry {
     static let defaultDPI = 300.0
     /// No rendered edge exceeds this, whatever the paper size.
     static let maximumDimension = 8192
+    /// The engine's own render limit (the adapter's MAX_RENDER_SCALE in
+    /// Engine/image.c): image_render rejects any larger scale, so a tiny
+    /// image fitted to the page must get fewer pixels instead of an
+    /// error. The facade does not export it; keep the values in step.
+    static let maximumRenderScale = 32.0
     /// Total snapshot pixels stay under this (about 128 MB of RGBA):
     /// on larger paper the effective resolution drops instead of the
     /// allocation growing without bound.
@@ -21,6 +26,7 @@ enum PrintGeometry {
     /// image's aspect ratio is kept exactly.
     static func snapshotSize(imagePixels: CGSize, imageablePoints: CGSize,
                              dpi: Double = defaultDPI,
+                             maximumScale: Double = Self.maximumRenderScale,
                              maximumDimension: Int = Self.maximumDimension,
                              maximumPixels: Int = Self.maximumPixels) -> CGSize {
         guard imagePixels.width >= 1, imagePixels.height >= 1,
@@ -31,7 +37,7 @@ enum PrintGeometry {
         // inch), then ask for `dpi` pixels per printed inch.
         var scale = min(imageablePoints.width / imagePixels.width,
                         imageablePoints.height / imagePixels.height) * dpi / 72
-        scale = min(scale,
+        scale = min(scale, maximumScale,
                     Double(maximumDimension) / imagePixels.width,
                     Double(maximumDimension) / imagePixels.height,
                     (Double(maximumPixels) / (imagePixels.width * imagePixels.height)).squareRoot())
