@@ -941,3 +941,15 @@ that unsupported conversion succeeding. The facade now refuses indexed
 conversion before changing the palette profile, while compatible profile
 assignment remains supported. Convert indexed images to RGB first. Swift
 controls and display/proof transforms remain separate work.
+
+Structured-layer safety: a new regression reproduced ordinary profile
+conversion silently rasterizing editable text. The normal entry point now
+returns REQUIRES_RASTERIZE without mutation when conversion would affect
+editable text, vector or linked layers; equal-profile no-ops remain safe.
+The separate image_convert_profile_rasterizing entry point records explicit
+caller consent and keeps the native conversion/rasterization in one undo
+step. Pinned checks verify text content and all three editable layer kinds
+return on undo. Those checks also exposed the layer list reporting native
+link/vector classes after rasterization; it now reports current editability,
+consistent with text layers. Full cross-engine rechecks and UI consent
+coverage follow before merge.
