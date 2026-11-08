@@ -169,12 +169,19 @@ enum ToolID: String, CaseIterable {
 final class ToolState {
     static let shared = ToolState()
 
+    /// Where the per-tool brush identities persist; tests inject a suite.
+    var brushStore: BrushSelectionStore
+
     private(set) var current: ToolID = .paintbrush
     /// The tool each group shows, so a shortcut returns to the last one used.
     private var lastInGroup: [Int: ToolID] = [:]
 
     /// Brush settings per painting tool; `brush(for:)` fills in the tool.
     private var brushes: [ToolID: EngineSession.Brush] = [:]
+
+    init(brushStore: BrushSelectionStore = .shared) {
+        self.brushStore = brushStore
+    }
     var selectOptions = EngineSession.SelectOptions()
     var foreground = NSColor.black
     var background = NSColor.white
@@ -244,8 +251,18 @@ final class ToolState {
         }
     }
 
+    /// The stored brush of `tool`: an in-session edit if there is one,
+    /// otherwise the default seeded with the persisted resource identity
+    /// (restored after a restart; nil means the native default brush).
+    private func baseBrush(for tool: ToolID) -> EngineSession.Brush {
+        if let existing = brushes[tool] { return existing }
+        var brush = Self.defaultBrush(for: tool)
+        brush.resource = brushStore.identity(for: tool)
+        return brush
+    }
+
     func brush(for tool: ToolID) -> EngineSession.Brush {
-        var brush = brushes[tool] ?? Self.defaultBrush(for: tool)
+        var brush = baseBrush(for: tool)
         if let paintTool = tool.paintTool { brush.tool = paintTool }
         let color = foreground.usingColorSpace(.sRGB) ?? .black
         brush.red = Double(color.redComponent)
@@ -256,10 +273,19 @@ final class ToolState {
     }
 
     func update(_ tool: ToolID, _ change: (inout EngineSession.Brush) -> Void) {
-        var brush = brushes[tool] ?? Self.defaultBrush(for: tool)
+        var brush = baseBrush(for: tool)
         change(&brush)
         brushes[tool] = brush
         notify()
+    }
+
+    /// Sets the tool's brush resource choice and persists its identity (nil
+    /// resets to the native default brush). Only the identity crosses into
+    /// UserDefaults — never a session `ResourceID`; the stroke resolves the
+    /// identity fresh on the engine worker.
+    func setBrushResource(_ identity: EngineSession.ResourceIdentity?, for tool: ToolID) {
+        brushStore.set(identity, for: tool)
+        update(tool) { $0.resource = identity }
     }
 
     func notifyChange() { notify() }
