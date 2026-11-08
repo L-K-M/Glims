@@ -352,5 +352,9 @@ GlimsStatus glims_resource_identifiers (GlimsEngine *e, GlimsResourceID id,
 GlimsStatus glims_resource_resolve     (GlimsEngine *e, uint32_t kind, const char *name,
                                         const char *collection, bool internal,
                                         GlimsResourceID *outID, char **error);
+GlimsStatus glims_resource_thumbnail   (GlimsEngine *e, GlimsResourceID id, int32_t max_size,
+                                        const GlimsColor *foreground,
+                                        const GlimsColor *background,
+                                        GlimsPixelBuffer *out, char **error);
 
 #endif /* GLIMS_ENGINE_PRIVATE_H */
