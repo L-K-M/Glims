@@ -279,7 +279,7 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let cell = tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("cell"), owner: self)
-            as? NSTableCellView ?? NSTableCellView()
+            as? NSTableCellView ?? makeCell()
         cell.identifier = NSUserInterfaceItemIdentifier("cell")
         if row == 0 {
             cell.textField?.stringValue = "Default"
@@ -295,6 +295,32 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
                 cell.imageView?.image = nil
             }
         }
+        return cell
+    }
+
+    private func makeCell() -> NSTableCellView {
+        let cell = NSTableCellView()
+        let preview = NSImageView()
+        preview.imageScaling = .scaleProportionallyDown
+        preview.setAccessibilityElement(false)
+        let name = NSTextField(labelWithString: "")
+        name.font = .systemFont(ofSize: 12)
+        name.lineBreakMode = .byTruncatingTail
+        for view in [preview, name] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            cell.addSubview(view)
+        }
+        cell.imageView = preview
+        cell.textField = name
+        NSLayoutConstraint.activate([
+            preview.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 6),
+            preview.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            preview.widthAnchor.constraint(equalToConstant: 32),
+            preview.heightAnchor.constraint(equalToConstant: 32),
+            name.leadingAnchor.constraint(equalTo: preview.trailingAnchor, constant: 8),
+            name.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6),
+            name.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+        ])
         return cell
     }
 

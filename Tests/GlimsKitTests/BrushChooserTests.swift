@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import GlimsKit
 
@@ -94,6 +95,33 @@ final class BrushChooserTests: XCTestCase {
     }
 
     // MARK: Captured tool, cancel, missing
+
+    @MainActor
+    func testTableRowsHaveVisibleNamesAndThumbnails() throws {
+        let model = BrushChooserModel(capturedTool: .paintbrush, currentIdentity: nil)
+        let provider = try XCTUnwrap(CGDataProvider(data: Data([0, 0, 0, 255]) as CFData))
+        let image = try XCTUnwrap(CGImage(width: 1, height: 1, bitsPerComponent: 8, bitsPerPixel: 32,
+                                        bytesPerRow: 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+                                        provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+        model.deliver(generation: model.generation, rows: [Self.row(7, "Stock Brush")],
+                      thumbnails: [7: image], resolvedCurrent: nil, error: nil)
+        let picker = BrushChooserPanel(document: nil, model: model)
+        defer { picker.dismiss() }
+        func findTable(_ view: NSView) -> NSTableView? {
+            if let table = view as? NSTableView { return table }
+            return view.subviews.lazy.compactMap(findTable).first
+        }
+        let content = try XCTUnwrap(picker.window?.contentView)
+        content.layoutSubtreeIfNeeded()
+        let table = try XCTUnwrap(findTable(content))
+        XCTAssertEqual(table.numberOfRows, 2)
+        let defaultCell = try XCTUnwrap(table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? NSTableCellView)
+        let brushCell = try XCTUnwrap(table.view(atColumn: 0, row: 1, makeIfNecessary: true) as? NSTableCellView)
+        XCTAssertEqual(defaultCell.textField?.stringValue, "Default")
+        XCTAssertEqual(brushCell.textField?.stringValue, "Stock Brush")
+        XCTAssertNotNil(brushCell.imageView?.image, "the native brush preview must be visible in its row")
+    }
 
     func testStaleGenerationDeliveryChangesNothing() {
         let model = BrushChooserModel(capturedTool: .paintbrush, currentIdentity: nil)
