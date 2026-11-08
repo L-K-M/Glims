@@ -23,6 +23,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var previewStartIsPending = false
     /// An open panel or a start still queued on the input queue.
     private var previewBusy: Bool { previewPanel != nil || previewStartIsPending }
+    /// A print job anywhere between Print… and the end of the run: a
+    /// second Print is refused, and a close asked for during the engine
+    /// render drops the snapshot instead of attaching a sheet.
+    private(set) var printJobIsOpen = false
+    /// A close asked for while the snapshot still renders; the job ends
+    /// without attaching the print sheet and the close goes on.
+    private var printJobDropped = false
+    private var activePrintOperation: NSPrintOperation?
+    private var pageLayout: NSPageLayout?
+    /// Substitute for the print-panel sheet (tests); whoever runs the
+    /// job must report back through `printJobDidFinish(printed:)`.
+    var printJobRunner: ((ImagePrintView, NSPrintInfo, NSWindow,
+                         @escaping @MainActor (Bool) -> Void) -> Void)?
+    /// Substitute for the NSPageLayout sheet (tests).
+    var pageSetupRunner: ((NSPrintInfo, NSWindow,
+                          @escaping @MainActor (NSPrintInfo?) -> Void) -> Void)?
     var onClose: ((DocumentWindowController) -> Void)?
     let fileAccessID = UUID()
     var reserveWrite: ((URL) throws -> (() -> Void))?
@@ -183,6 +199,20 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
         canvas.tools.finishTextEditing()
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
+    }
+
+    /// Whether a background recovery copy may start now. The engine-wide
+    /// input drain that precedes a file call commits every open
+    /// document's in-flight text and field edits — the same ones
+    /// `endPendingEdits` commits — so a recovery pass must not admit
+    /// this document while any of them is open. It checks the same
+    /// scope instead of committing, and the scheduler checks every
+    /// tracked window before it admits any.
+    var isReadyForRecoveryCopy: Bool {
+        guard !canvas.tools.hasPendingInteraction else { return false }
+        let scoped = [window, previewPanel?.window].compactMap { $0 }
+            + PaletteEditScope.windowsEditing(imageDocument)
+        return scoped.allSatisfy { !PaletteEditScope.isFieldEditing($0) }
     }
 
     private func stateDidChange() {
@@ -349,6 +379,38 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     /// Layer ▸ New Layer Group.
     @objc func newLayerGroup(_ sender: Any?) { imageDocument.createGroup() }
+
+    // MARK: Layer mask menu
+
+    /// Layer ▸ Mask ▸ Add…: the native source form on the active layer.
+    @objc func addLayerMask(_ sender: Any?) {
+        guard let window, let id = imageDocument.activeLayer else { return }
+        AddMaskForm.present(for: imageDocument, on: window)
+    }
+    @objc func applyLayerMask(_ sender: Any?) { imageDocument.applyMask() }
+    @objc func deleteLayerMask(_ sender: Any?) { imageDocument.deleteMask() }
+    @objc func toggleMaskEnabled(_ sender: Any?) { imageDocument.toggleMaskEnabled() }
+    @objc func toggleMaskEditing(_ sender: Any?) { imageDocument.toggleMaskEditing() }
+    @objc func toggleMaskShowing(_ sender: Any?) { imageDocument.toggleMaskShowing() }
+
+    /// Layer ▸ Mask ▸ Mask to Selection ▸ …; the item's tag carries the
+    /// operation's raw value.
+    @objc func maskToSelection(_ sender: NSMenuItem) {
+        guard let operation = EngineSession.SelectOperation(rawValue: UInt32(sender.tag)) else { return }
+        imageDocument.maskToSelection(operation)
+    }
+
+    /// The active layer's mask state, when it has one.
+    private var activeMask: EngineSession.MaskState? {
+        guard let id = imageDocument.activeLayer else { return nil }
+        return imageDocument.maskStates[id]
+    }
+
+    /// The active layer, when the menu has one to act on.
+    private var activeLayerInfo: EngineSession.Layer? {
+        guard let id = imageDocument.activeLayer else { return nil }
+        return imageDocument.layers.first(where: { $0.id == id })
+    }
 
     /// Layer ▸ Lock ▸ …: toggles the active item's own lock; the item's
     /// tag carries the lock's raw value.
@@ -611,6 +673,27 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             menuItem.state = sources?.local.contains(lock) == true ? .on : .off
             menuItem.toolTip = Self.lockNote(lock, sources: sources)
             return true
+        case #selector(addLayerMask(_:)):
+            guard !editingBlocked, !previewBusy, let layer = activeLayerInfo else { return false }
+            return !layer.hasMask
+        case #selector(applyLayerMask(_:)):
+            guard !editingBlocked, !previewBusy, let layer = activeLayerInfo,
+                  activeMask != nil else { return false }
+            // Apply is raster-only: the engine refuses groups and text,
+            // link and vector layers, so they never offer it.
+            return layer.kind == .pixel
+        case #selector(deleteLayerMask(_:)), #selector(maskToSelection(_:)):
+            guard !editingBlocked, !previewBusy, let layer = activeLayerInfo else { return false }
+            return layer.hasMask
+        case #selector(toggleMaskEnabled(_:)), #selector(toggleMaskEditing(_:)),
+             #selector(toggleMaskShowing(_:)):
+            guard !editingBlocked, !previewBusy, let mask = activeMask else { return false }
+            switch menuItem.action {
+            case #selector(toggleMaskEnabled(_:)): menuItem.state = mask.enabled ? .on : .off
+            case #selector(toggleMaskEditing(_:)): menuItem.state = mask.editing ? .on : .off
+            default: menuItem.state = mask.showing ? .on : .off
+            }
+            return true
         case #selector(newSnapshot(_:)):
             // Without an app to adopt the copy there is nothing to run.
             return imageDocument.snapshotHandler != nil && !editingBlocked && !previewBusy
@@ -642,9 +725,113 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             menuItem.title = menuItem.action == #selector(repeatLastFilter(_:))
                 ? "Last Filter: \(title)" : "Last Filter Settings: \(title)…"
             return !editingBlocked && !previewBusy && imageDocument.canRun(last)
+        case #selector(runGlimsPageSetup(_:)):
+            // Page setup edits only the document's print info; it just
+            // must not compete with another sheet on the same window.
+            return !imageDocument.isClosing && pageLayout == nil && window?.attachedSheet == nil
+        case #selector(printGlimsImage(_:)):
+            return !editingBlocked && !previewBusy && !printJobIsOpen
         default:
             return !editingBlocked
         }
+    }
+
+    // MARK: Printing
+
+    /// File ▸ Page Setup…: edits only this document's page layout —
+    /// paper, orientation and margins. The image, its history and its
+    /// file identity are untouched.
+    @objc func runGlimsPageSetup(_ sender: Any?) {
+        guard let window, !imageDocument.isClosing, pageLayout == nil,
+              window.attachedSheet == nil else { return }
+        // A copy: the sheet may edit the object it gets while it is up,
+        // and only OK may change the document's settings.
+        let printInfo = (imageDocument.printInfo.copy() as? NSPrintInfo) ?? imageDocument.printInfo
+        if let runner = pageSetupRunner {
+            runner(printInfo, window) { [weak self] newInfo in
+                guard let self, let newInfo else { return }
+                self.imageDocument.printInfo = newInfo
+            }
+            return
+        }
+        let layout = NSPageLayout()
+        pageLayout = layout
+        layout.beginSheet(with: printInfo, modalFor: window, delegate: self,
+                          didEnd: #selector(pageLayoutDidEnd(_:returnCode:contextInfo:)),
+                          contextInfo: nil)
+    }
+
+    @objc private func pageLayoutDidEnd(_ layout: NSPageLayout, returnCode: Int,
+                                        contextInfo: UnsafeMutableRawPointer?) {
+        pageLayout = nil
+        guard returnCode == NSApplication.ModalResponse.OK.rawValue,
+              let newInfo = layout.printInfo else { return }
+        imageDocument.printInfo = newInfo
+    }
+
+    /// File ▸ Print…: renders the committed composite once behind every
+    /// accepted edit, then opens the standard print panel as a sheet.
+    /// The page shows the state Print was chosen at; later edits cannot
+    /// smear across a page the way a live render could.
+    @objc func printGlimsImage(_ sender: Any?) {
+        guard let window, !imageDocument.isClosing, !printJobIsOpen, !previewBusy,
+              !PlugInCommands.isRunning, !imageDocument.isSavingForClose,
+              !imageDocument.isTransferringClipboard else { return }
+        // A copy so later Page Setup changes cannot rewrite a page
+        // that is already rendering.
+        let printInfo = (imageDocument.printInfo.copy() as? NSPrintInfo) ?? imageDocument.printInfo
+        printJobIsOpen = true
+        statusBar.message = "Preparing to print…"
+        imageDocument.preparePrintSnapshot(imageablePoints: printInfo.imageablePageBounds.size) {
+            [weak self] result in
+            self?.printPreparationDidFinish(result, printInfo: printInfo)
+        }
+    }
+
+    private func printPreparationDidFinish(_ result: Result<PrintSnapshot, Error>,
+                                           printInfo: NSPrintInfo) {
+        // A close requested while the engine rendered takes precedence
+        // over showing the panel.
+        guard let window, !imageDocument.isClosing, !printJobDropped, closeCompletion == nil else {
+            printJobDidFinish(printed: false)
+            return
+        }
+        switch result {
+        case .failure(let error):
+            printJobIsOpen = false
+            showStatusError(error.localizedDescription)
+        case .success(let snapshot):
+            let view = ImagePrintView(snapshot: snapshot, printInfo: printInfo,
+                                      title: imageDocument.name)
+            if let runner = printJobRunner {
+                runner(view, printInfo, window) { [weak self] printed in
+                    self?.printJobDidFinish(printed: printed)
+                }
+            } else {
+                let operation = NSPrintOperation(view: view, printInfo: printInfo)
+                operation.jobTitle = imageDocument.name
+                activePrintOperation = operation
+                operation.runModal(for: window, delegate: self,
+                                   didRun: #selector(printOperation(_:didRunToSuccess:contextInfo:)),
+                                   contextInfo: nil)
+            }
+        }
+    }
+
+    @objc private func printOperation(_ operation: NSPrintOperation, didRunToSuccess success: Bool,
+                                      contextInfo: UnsafeMutableRawPointer?) {
+        printJobDidFinish(printed: success)
+    }
+
+    /// The run ended — printed, cancelled or failed — or the job was
+    /// dropped: the operation and its snapshot are released on every
+    /// path. Cancellation stays silent like everywhere on macOS; the
+    /// preparation status goes back to the document's either way.
+    func printJobDidFinish(printed: Bool) {
+        activePrintOperation = nil
+        printJobIsOpen = false
+        printJobDropped = false
+        stateDidChange()
     }
 
     // MARK: Saving, exporting and closing
@@ -813,6 +1000,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if EngineActivity.shared.isBusy {
+            // A close during the snapshot render drops the print job;
+            // the deferred close then continues without a print sheet.
+            if printJobIsOpen { printJobDropped = true }
             if !waitingForActivityToClose {
                 waitingForActivityToClose = true
                 EngineActivity.shared.whenIdle { [weak self, weak sender] in

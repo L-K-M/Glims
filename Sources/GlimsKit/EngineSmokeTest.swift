@@ -57,6 +57,15 @@ enum EngineSmokeTest {
         return Array(data.prefix(4))
     }
 
+    /// One RGBA pixel of a rendered CGImage (row 0 at the top).
+    private static func argb(_ image: CGImage, x: Int, y: Int) -> [UInt8]? {
+        guard x >= 0, y >= 0, x < image.width, y < image.height,
+              let data = image.dataProvider?.data as Data? else { return nil }
+        let offset = y * image.bytesPerRow + x * 4
+        guard offset + 3 < data.count else { return nil }
+        return Array(data[offset...offset + 3])
+    }
+
     static func run() -> Int32 {
         guard let path = EngineLibrary.configuredPath() else {
             print("FAIL no engine library; set \(EngineLibrary.environmentVariable)")
@@ -92,12 +101,18 @@ enum EngineSmokeTest {
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseFileAdmission(session, work: work, documents: documents)
+            try exercisePrinting(session, work: work, documents: documents)
+            try exerciseRecovery(session, work: work, documents: documents)
+            try exerciseRecoveryInterface(session, work: work, documents: documents)
             try exerciseClipboard(session, documents: documents)
             try exercisePreviewLifetimes(session, work: work, documents: documents)
             try exerciseDisplayDensity(session, documents: documents)
             try exerciseTools(session, documents: documents)
             try exerciseEditing(session, documents: documents)
             try exerciseLayerTree(session, documents: documents)
+            try exerciseLayerMasks(session, documents: documents)
+            try exerciseTargetCommands(session, documents: documents)
+            try exerciseTargetHistory(session, documents: documents)
             try exercisePreferences(session, documents: documents)
             try exercisePaths(session, documents: documents)
             try exercisePaletteControls(session, documents: documents)
@@ -200,6 +215,749 @@ enum EngineSmokeTest {
         while (!finished || b.pendingWork > 0 || b.filterPreviewIsOpen) && Date() < deadline { spin(0.01) }
         check(finished && writeError == nil && !b.filterPreviewIsOpen && controller.previewPanel == nil,
               "preview cancellation in another document waits safely for the file operation")
+    }
+
+    /// File ▸ Print… and Page Setup…: a committed composite rendered in
+    /// bounded stripes behind accepted input, the operation's lifecycle,
+    /// and the same close safety file work gets. The panel is replaced
+    /// by AppKit's own PDF write — the same view, print info and page
+    /// layout — so no sheet or printer is involved.
+    private static func exercisePrinting(_ session: EngineSession, work: URL,
+                                         documents: DocumentList) throws {
+        let image = try session.newImage(width: 120, height: 80)
+        let document = try ImageDocument(session: session, image: image, name: "Print")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        let window = try XCTUnwrapWindow(controller)
+        defer {
+            controller.window?.close()
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+
+        // US Letter paper; the imageable rect is the printer's, margins
+        // included, well inside the sheet.
+        document.printInfo.paperSize = CGSize(width: 612, height: 792)
+        let imageable = document.printInfo.imageablePageBounds
+        check(imageable.minX > 0 && imageable.minY > 0 && imageable.width > 400
+                && imageable.maxX <= 612 && imageable.maxY <= 792,
+              "the document's print info reports the imageable area")
+
+        // Menu wiring: unique selectors; a generic printDocument: would
+        // route nowhere here (the showHelp: interception lesson).
+        let fileMenu = MainMenu.make().items.first { $0.title == "File" }?.submenu
+        let printItem = fileMenu?.items.first { $0.title == "Print…" }
+        let setupItem = fileMenu?.items.first { $0.title == "Page Setup…" }
+        check(printItem?.action == #selector(DocumentWindowController.printGlimsImage(_:))
+                && printItem?.keyEquivalent == "p"
+                && setupItem?.action == #selector(DocumentWindowController.runGlimsPageSetup(_:)),
+              "File offers Page Setup… and Print… on the document's own selectors")
+
+        // Page Setup changes the per-document print info alone.
+        let undoBeforeSetup = document.undoInfo
+        let fileStateBefore = document.fileState
+        controller.pageSetupRunner = { info, _, finish in
+            let changed = (info.copy() as? NSPrintInfo) ?? info
+            changed.orientation = .landscape
+            finish(changed)
+        }
+        controller.runGlimsPageSetup(nil)
+        wait { document.printInfo.orientation == .landscape }
+        check(document.printInfo.orientation == .landscape,
+              "Page Setup stores the sheet's print info on this document")
+        check(document.undoInfo == undoBeforeSetup && document.fileState == fileStateBefore,
+              "Page Setup adds no undo step and keeps file identity")
+        document.printInfo.orientation = .portrait
+
+        // Cancel preserves the document's settings even if the sheet
+        // edited the object it was given before the user backed out.
+        controller.pageSetupRunner = { info, _, finish in
+            info.orientation = .landscape
+            finish(nil)
+        }
+        controller.runGlimsPageSetup(nil)
+        check(document.printInfo.orientation == .portrait,
+              "a cancelled Page Setup cannot rewrite the document's print info")
+
+        // The print sheet is replaced by AppKit's own PDF write — the
+        // same view, print info and pagination, no panel and no printer.
+        let pdfURL = work.appendingPathComponent("printed.pdf")
+        var runnerCalls = 0
+        var runnerFinished = false
+        controller.printJobRunner = { view, info, _, finish in
+            runnerCalls += 1
+            let operation = NSPrintOperation.pdfOperation(with: view, inside: view.bounds,
+                                                          toPath: pdfURL.path, printInfo: info)
+            operation.showsPrintPanel = false
+            operation.showsProgressPanel = false
+            finish(operation.run())
+            runnerFinished = true
+        }
+
+        // Edits accepted but still queued must land in the printed
+        // page: a stroke queues behind a slow input job and Print is
+        // chosen before the stroke reaches the engine.
+        document.inputQueue.async { usleep(300_000) }
+        document.beginStroke(at: .init(x: 20, y: 20, pressure: 1),
+                             brush: EngineSession.Brush(size: 12, opacity: 1, red: 0, green: 0,
+                                                        blue: 0, pressureSize: false))
+        document.endStroke()
+        let printStart = DispatchTime.now()
+        check(printItem?.action.map({ window.tryToPerform($0, with: printItem) }) == true
+                && controller.printJobIsOpen,
+              "Print… routes through the window's responder chain to the document")
+        check(milliseconds(since: printStart) < 100,
+              "Print returns at once; the snapshot renders off the main thread")
+        check(document.pendingWork > 0, "the snapshot render counts like a file write")
+        check(!(printItem.flatMap { controller.validateMenuItem($0) } ?? true),
+              "a second Print is refused while a job is open")
+        controller.printGlimsImage(nil)
+        wait { runnerFinished }
+        check(runnerCalls == 1, "the duplicate Print started no other job")
+        check(!controller.printJobIsOpen, "a finished run releases the operation and its snapshot")
+        check(printItem.map { controller.validateMenuItem($0) } == true,
+              "Print is offered again once the job released")
+
+        // The written PDF: one page the size of the printed view; the
+        // image is centered in it over white paper, stroke included.
+        guard let pdf = CGPDFDocument(pdfURL as CFURL), let page = pdf.page(at: 1) else {
+            check(false, "the print PDF is written")
+            return
+        }
+        check(pdf.numberOfPages == 1, "the image fits on exactly one page")
+        let box = page.getBoxRect(.mediaBox)
+        check(abs(box.width - imageable.width) < 1 && abs(box.height - imageable.height) < 1,
+              "the printed page is the imageable area")
+        let rasterScale = 0.25
+        let rw = Int(box.width * rasterScale), rh = Int(box.height * rasterScale)
+        let raster = CGContext(data: nil, width: rw, height: rh, bitsPerComponent: 8,
+                               bytesPerRow: rw * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                               bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue).rawValue)
+        raster?.scaleBy(x: rasterScale, y: rasterScale)
+        raster?.drawPDFPage(page)
+        guard let pagePixels = raster?.makeImage() else {
+            check(false, "the printed page rasterizes")
+            return
+        }
+        // CGImage row 0 is the page's top; media point (x, y) reads
+        // raster (x*s, rh - 1 - y*s) in the y-up page.
+        func rasterSample(mediaX: Double, mediaY: Double) -> [UInt8]? {
+            argb(pagePixels, x: Int(mediaX * rasterScale),
+                 y: rh - 1 - Int(mediaY * rasterScale))
+        }
+        // The image is centered: 120×80 px fitted to the page gives
+        // fit = width/120; its bottom edge sits at (pageH - h)/2.
+        let fit = box.width / 120, imageH = 80 * fit
+        let imageBottom = (box.height - imageH) / 2
+        // The queued stroke at image (20,20) lands inside the image,
+        // measured from the image's top edge down.
+        let stroke = rasterSample(mediaX: 20 * fit, mediaY: imageBottom + imageH - 20 * fit)
+        check((stroke?.first ?? 255) < 150, "the queued stroke reached the printed page")
+        check((rasterSample(mediaX: box.width / 2, mediaY: imageBottom / 2)?.first ?? 0) > 240,
+              "outside the image prints white, not canvas checks")
+        check((rasterSample(mediaX: 100 * fit, mediaY: imageBottom + 62 * fit)?.first ?? 0) > 200,
+              "the image's own background prints white")
+
+        // The snapshot is the same composite the canvas draws.
+        var snapshotDone = false
+        var snapshot: PrintSnapshot?
+        document.preparePrintSnapshot(imageablePoints: CGSize(width: 57.6, height: 38.4)) { result in
+            snapshot = try? result.get()
+            snapshotDone = true
+        }
+        wait { snapshotDone }
+        if let snapshot {
+            let snapPixel = argb(snapshot.image, x: 40, y: 40)
+            let live = (try? session.render(image, scale: snapshot.scale,
+                                            area: CGRect(x: 40, y: 40, width: 1, height: 1)))
+                .flatMap { argb($0, x: 0, y: 0) }
+            check(snapPixel != nil && snapPixel == live,
+                  "snapshot pixels equal the committed composite")
+            check((snapPixel?.first ?? 255) < 150, "the queued stroke is in the snapshot")
+        } else { check(false, "the snapshot renders") }
+
+        // Alpha: the transparent half of an imported image stays
+        // transparent in the snapshot, so paper shows through.
+        var transparentPixels: [UInt8] = []
+        for _ in 0..<4 {
+            transparentPixels += [255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0]
+        }
+        let transparentImage = try session.newImage(pixels: ClipboardImage(
+            width: 4, height: 4, pixels: Data(transparentPixels), origin: .zero))
+        let transparent = try ImageDocument(session: session, image: transparentImage, name: "Transparent")
+        documents.items.append(transparent)
+        var alphaDone = false
+        var alphaSnapshot: PrintSnapshot?
+        transparent.preparePrintSnapshot(imageablePoints: CGSize(width: 9.6, height: 9.6)) { result in
+            alphaSnapshot = try? result.get()
+            alphaDone = true
+        }
+        wait { alphaDone }
+        if let alphaSnapshot {
+            check(argb(alphaSnapshot.image, x: 5, y: 20)?[3] == 255
+                    && argb(alphaSnapshot.image, x: 35, y: 20)?[3] == 0,
+                  "the snapshot keeps composite alpha for white paper")
+        } else { check(false, "the transparent snapshot renders") }
+        transparent.closeImageWhenDrained()
+        documents.items.removeAll { $0 === transparent }
+
+        // Identity: a second run changes neither history nor file
+        // state; the stroke's own step was the only new one.
+        document.inputQueue.sync {}
+        spin()
+        let undoAfterEdits = document.undoInfo
+        let fileStateAfterEdits = document.fileState
+        runnerFinished = false
+        controller.printGlimsImage(nil)
+        wait { runnerFinished }
+        check(runnerCalls == 2 && document.undoInfo == undoAfterEdits
+                && document.fileState == fileStateAfterEdits,
+              "printing adds no undo step and keeps identity and dirty state")
+
+        // A busy engine refuses the job instead of queueing a phantom.
+        var exportDone = false
+        document.export(to: work.appendingPathComponent("while-printing.png")) { _ in exportDone = true }
+        controller.printGlimsImage(nil)
+        wait { !controller.printJobIsOpen }
+        check(runnerCalls == 2 && !controller.statusBar.message.isEmpty,
+              "Print while the engine is busy is refused with a reason")
+        wait { exportDone }
+
+        // Cancelling releases the job like a finished run.
+        controller.printJobRunner = { _, _, _, finish in
+            runnerCalls += 1
+            finish(false)
+        }
+        controller.printGlimsImage(nil)
+        wait { runnerCalls == 3 }
+        check(!controller.printJobIsOpen, "a cancelled run releases the job")
+        check(controller.statusBar.message != "Preparing to print…",
+              "a cancelled run restores the document status")
+
+        // A close while the snapshot still renders drops the job; the
+        // deferred close proceeds and the image is destroyed on time.
+        let closingImage = try session.newImage(width: 32, height: 32)
+        let closing = try ImageDocument(session: session, image: closingImage, name: "Close While Printing")
+        documents.items.append(closing)
+        let closingController = DocumentWindowController(document: closing)
+        closingController.showWindow(nil)
+        closingController.printJobRunner = { _, _, _, _ in
+            check(false, "no panel opens over a closing window")
+        }
+        closing.inputQueue.async { usleep(300_000) }
+        closingController.printGlimsImage(nil)
+        check(closingController.printJobIsOpen, "the print job is still in flight")
+        var closed: Bool?
+        closingController.requestClose { closed = $0 }
+        wait { closed != nil || closingController.window?.attachedSheet != nil }
+        if let sheet = closingController.window?.attachedSheet {
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+        }
+        wait { closed != nil }
+        check(closed == true && !closingController.printJobIsOpen,
+              "close during the render drops the job and finishes")
+        wait { (try? session.info(closingImage)) == nil }
+        check((try? session.info(closingImage)) == nil, "the image is destroyed after its queued work")
+        documents.items.removeAll { $0 === closing }
+
+        // A plain ⌘W during the render must behave like a requested
+        // close: the job drops before any sheet attaches, and the dirty
+        // prompt still asks. Don't Save then closes on time.
+        let plainImage = try session.newImage(width: 32, height: 32)
+        let plain = try ImageDocument(session: session, image: plainImage, name: "Plain Close")
+        documents.items.append(plain)
+        let plainController = DocumentWindowController(document: plain)
+        plainController.showWindow(nil)
+        let plainWindow = try XCTUnwrapWindow(plainController)
+        var plainRunnerCalls = 0
+        plainController.printJobRunner = { _, _, _, _ in plainRunnerCalls += 1 }
+        plain.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
+        plain.endStroke()
+        wait { plain.fileState.hasUnsavedChanges }
+        var plainClosed = false
+        plainController.onClose = { _ in plainClosed = true }
+        plain.inputQueue.async { usleep(300_000) }
+        plainController.printGlimsImage(nil)
+        check(plainController.printJobIsOpen, "the close-during-render print job is in flight")
+        plainWindow.performClose(nil)
+        wait { plainWindow.attachedSheet != nil || plainClosed }
+        check(plainRunnerCalls == 0 && !plainClosed,
+              "a plain close during the render drops the job before the save prompt")
+        if let sheet = plainWindow.attachedSheet {
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+        }
+        wait { plainClosed }
+        check(plainClosed && !plainController.printJobIsOpen,
+              "Don't Save finishes the close the dropped job deferred")
+        wait { (try? session.info(plainImage)) == nil }
+        check((try? session.info(plainImage)) == nil,
+              "the image is destroyed after the dropped job drains")
+        documents.items.removeAll { $0 === plain }
+
+        // Tiny images print too: the engine refuses render scales above
+        // 32, so the snapshot asks for fewer pixels instead of failing.
+        var redPixels: [UInt8] = []
+        for _ in 0..<64 { redPixels += [255, 0, 0, 255] }
+        let tinyImage = try session.newImage(pixels: ClipboardImage(
+            width: 8, height: 8, pixels: Data(redPixels), origin: .zero))
+        let tiny = try ImageDocument(session: session, image: tinyImage, name: "Tiny")
+        documents.items.append(tiny)
+        let tinyController = DocumentWindowController(document: tiny)
+        tinyController.showWindow(nil)
+        let tinyPDF = work.appendingPathComponent("tiny.pdf")
+        var tinyRunnerFinished = false
+        var tinyView: ImagePrintView?
+        tinyController.printJobRunner = { view, info, _, finish in
+            tinyView = view
+            let operation = NSPrintOperation.pdfOperation(with: view, inside: view.bounds,
+                                                          toPath: tinyPDF.path, printInfo: info)
+            operation.showsPrintPanel = false
+            operation.showsProgressPanel = false
+            finish(operation.run())
+            tinyRunnerFinished = true
+        }
+        tinyController.printGlimsImage(nil)
+        wait { tinyRunnerFinished }
+        check(tinyView?.snapshot.pixelSize == CGSize(width: 256, height: 256),
+              "an 8-pixel image prints at the engine's render limit")
+        if let pdf = CGPDFDocument(tinyPDF as CFURL), let page = pdf.page(at: 1),
+           let rect = tinyView?.imageRect, !rect.isEmpty {
+            let box = page.getBoxRect(.mediaBox)
+            let rScale = 0.25
+            let rw = Int(box.width * rScale), rh = Int(box.height * rScale)
+            let raster = CGContext(data: nil, width: rw, height: rh, bitsPerComponent: 8,
+                                   bytesPerRow: rw * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                   bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue).rawValue)
+            raster?.scaleBy(x: rScale, y: rScale)
+            raster?.drawPDFPage(page)
+            let printed = raster?.makeImage()
+            let center = printed.flatMap { argb($0, x: Int(rect.midX * rScale), y: rh - 1 - Int(rect.midY * rScale)) }
+            check((center?.first ?? 0) > 200 && (center?[1] ?? 255) < 60,
+                  "the tiny image's pixels reach the fitted page")
+        } else { check(false, "the tiny image's PDF is written") }
+        tiny.closeImageWhenDrained()
+        documents.items.removeAll { $0 === tiny }
+
+        // A rotate accepted but still queued decides the printed
+        // geometry: the snapshot sizes itself from the dimensions the
+        // engine reports after the drain, not those at Print time.
+        // Split red/blue so a wrong region shows in the pixels.
+        var splitPixels: [UInt8] = []
+        for _ in 0..<80 {
+            for x in 0..<120 {
+                splitPixels += x < 60 ? [255, 0, 0, 255] : [0, 0, 255, 255]
+            }
+        }
+        let splitImage = try session.newImage(pixels: ClipboardImage(
+            width: 120, height: 80, pixels: Data(splitPixels), origin: .zero))
+        let split = try ImageDocument(session: session, image: splitImage, name: "Split")
+        documents.items.append(split)
+        let splitController = DocumentWindowController(document: split)
+        splitController.showWindow(nil)
+        let splitPDF = work.appendingPathComponent("split.pdf")
+        var splitRunnerFinished = false
+        var splitView: ImagePrintView?
+        splitController.printJobRunner = { view, info, _, finish in
+            splitView = view
+            let operation = NSPrintOperation.pdfOperation(with: view, inside: view.bounds,
+                                                          toPath: splitPDF.path, printInfo: info)
+            operation.showsPrintPanel = false
+            operation.showsProgressPanel = false
+            finish(operation.run())
+            splitRunnerFinished = true
+        }
+        split.inputQueue.async { usleep(300_000) }
+        split.transformImage(.rotate90)
+        splitController.printGlimsImage(nil)
+        wait { splitRunnerFinished }
+        let splitSize = splitView?.snapshot.pixelSize
+        check(splitSize.map { $0.height > $0.width && abs($0.height - $0.width * 1.5) < 4 } ?? false,
+              "a queued rotation sizes the snapshot to the rotated image")
+        if let pdf = CGPDFDocument(splitPDF as CFURL), let page = pdf.page(at: 1),
+           let rect = splitView?.imageRect, !rect.isEmpty {
+            let box = page.getBoxRect(.mediaBox)
+            let rScale = 0.25
+            let rw = Int(box.width * rScale), rh = Int(box.height * rScale)
+            let raster = CGContext(data: nil, width: rw, height: rh, bitsPerComponent: 8,
+                                   bytesPerRow: rw * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                   bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue).rawValue)
+            raster?.scaleBy(x: rScale, y: rScale)
+            raster?.drawPDFPage(page)
+            if let printed = raster?.makeImage() {
+                func splitSample(mediaX: Double, mediaY: Double) -> [UInt8]? {
+                    argb(printed, x: Int(mediaX * rScale), y: rh - 1 - Int(mediaY * rScale))
+                }
+                let top = splitSample(mediaX: rect.midX, mediaY: rect.maxY - rect.height * 0.25)
+                let bottom = splitSample(mediaX: rect.midX, mediaY: rect.minY + rect.height * 0.25)
+                check((top?.first ?? 0) > 200 && (top?[2] ?? 255) < 60,
+                      "the rotated image's red half prints on top")
+                check((bottom?[2] ?? 0) > 200 && (bottom?.first ?? 255) < 60,
+                      "the rotated image's blue half prints on the bottom")
+                check((splitSample(mediaX: 6, mediaY: rect.midY)?.first ?? 0) > 240,
+                      "paper shows outside the rotated image")
+            } else { check(false, "the rotated print rasterizes") }
+        } else { check(false, "the rotated print PDF is written with a fitted image") }
+        split.closeImageWhenDrained()
+        documents.items.removeAll { $0 === split }
+    }
+
+    /// A recovery pass writes a real native copy through the same
+    /// engine-wide admission as the interface, then commits it into the
+    /// private store — without touching the document's file identity,
+    /// dirty state or undo history. Closing the document while a write
+    /// is counted as its work removes the record, so no recovery copy
+    /// survives a successful close.
+    private static func exerciseRecovery(_ session: EngineSession, work: URL,
+                                         documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Recovery")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        let window = try XCTUnwrapWindow(controller)
+
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin() }
+        }
+        func paint(_ x: Double) {
+            document.beginStroke(at: .init(x: x, y: 20, pressure: 1))
+            document.endStroke()
+            document.inputQueue.sync {}
+            spin()
+        }
+
+        let native = work.appendingPathComponent("recovery-source.xcf")
+        var saved = false
+        document.save(to: native) { error in
+            if error == nil { document.noteSaved(to: native); saved = true }
+        }
+        wait { saved && document.pendingWork == 0 }
+        check(saved && document.fileState.nativeURL == native && !document.hasUnsavedChanges,
+              "the document saves natively before recovery begins")
+
+        let store = RecoveryStore(base: work.appendingPathComponent("recovery-store"))
+        try store.prepare()
+        var tickFire: (@MainActor () -> Void)?
+        let scheduler = RecoveryScheduler(store: store) { _, fire in tickFire = fire; return {} }
+        controller.onClose = { closed in scheduler.untrack(closed.imageDocument) }
+        scheduler.track(document, isReady: { [weak controller] in
+            controller?.isReadyForRecoveryCopy ?? false
+        })
+        scheduler.start()
+
+        let previousTool = ToolState.shared.current
+        ToolState.shared.select(.rectangleSelect)
+        func pointer(_ type: NSEvent.EventType, _ point: CGPoint) -> NSEvent? {
+            NSEvent.mouseEvent(with: type,
+                location: controller.canvas.convert(CGPoint(x: point.x * controller.canvas.scale,
+                                                             y: point.y * controller.canvas.scale), to: nil),
+                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+        }
+        if let down = pointer(.leftMouseDown, CGPoint(x: 8, y: 8)),
+           let dragged = pointer(.leftMouseDragged, CGPoint(x: 40, y: 40)),
+           let up = pointer(.leftMouseUp, CGPoint(x: 40, y: 40)) {
+            controller.canvas.mouseDown(with: down)
+            controller.canvas.mouseDragged(with: dragged)
+            check(!controller.isReadyForRecoveryCopy,
+                  "recovery waits for an accepted selection gesture to finish")
+            controller.canvas.mouseUp(with: up)
+            document.inputQueue.sync {}
+            spin()
+            check(controller.isReadyForRecoveryCopy,
+                  "a finished selection gesture permits recovery again")
+            document.select(.none)
+            document.inputQueue.sync {}
+            spin()
+            ToolState.shared.select(.crop)
+            controller.canvas.mouseDown(with: down)
+            controller.canvas.mouseDragged(with: dragged)
+            controller.canvas.mouseUp(with: up)
+            check(!controller.isReadyForRecoveryCopy,
+                  "recovery waits for a crop preview awaiting Return")
+            if let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                    characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                    isARepeat: false, keyCode: 53) {
+                _ = controller.canvas.tools.keyDown(with: escape)
+            }
+            check(controller.isReadyForRecoveryCopy,
+                  "cancelling a crop preview permits recovery again")
+        } else {
+            check(false, "the recovery gesture readiness check receives pointer events")
+        }
+        ToolState.shared.select(previousTool)
+
+        paint(20)
+        let revision = document.history?.revision
+        let undoSteps = document.undoInfo.undoCount
+        check(document.hasUnsavedChanges && revision != nil, "a new edit makes the document dirty")
+
+        let second = try ImageDocument(session: session, image: session.newImage(width: 32, height: 32), name: "Recovery 2")
+        documents.items.append(second)
+        let secondController = DocumentWindowController(document: second)
+        scheduler.track(second, isReady: { [weak secondController] in
+            secondController?.isReadyForRecoveryCopy ?? false
+        })
+        second.beginStroke(at: .init(x: 12, y: 12, pressure: 1))
+        second.endStroke()
+        second.inputQueue.sync {}
+        spin()
+        defer {
+            scheduler.untrack(second)
+            secondController.window?.orderOut(nil)
+            documents.items.removeAll { $0 === second }
+            second.closeImageWhenDrained()
+        }
+
+        tickFire?()
+        wait { store.record(for: document.recoveryID) != nil && scheduler.copying == nil
+                && document.pendingWork == 0 && second.pendingWork == 0 }
+        check(store.record(for: second.recoveryID) != nil,
+              "one recovery pass copies both dirty documents through real engine admission")
+        let record = store.record(for: document.recoveryID)
+        check(record?.documentID == document.recoveryID && record?.nativeURL == native
+                && record?.importedSourceURL == nil && record?.revision == revision
+                && record?.name == "recovery-source.xcf",
+              "a recovery pass commits a manifest naming the native file and revision")
+        let copy = store.copyURL(for: document.recoveryID)
+        if let copyImage = try? session.openImage(path: copy.path) {
+            check((pixel(session, copyImage, x: 20, y: 20)?[0] ?? 255) < 128,
+                  "the recovery copy holds the painted pixels")
+            try session.closeImage(copyImage)
+        } else {
+            check(false, "the recovery copy reopens as an XCF")
+        }
+        let copyMode = (try? FileManager.default.attributesOfItem(atPath: copy.path)[.posixPermissions]) as? Int
+        check(copyMode == 0o600, "the committed recovery copy is private")
+        check(document.fileState.nativeURL == native && document.hasUnsavedChanges
+                && document.undoInfo.undoCount == undoSteps && document.history?.revision == revision,
+              "the recovery copy preserves file identity, dirty state and undo history")
+
+        let firstDate = record?.date
+        tickFire?()
+        wait { scheduler.copying == nil && document.pendingWork == 0 }
+        check(store.record(for: document.recoveryID)?.date == firstDate,
+              "an unchanged revision is not copied again")
+
+        // A close asked for while the write is counted as document work
+        // finishes only after it; the store then holds no record.
+        paint(40)
+        document.inputQueue.async { usleep(400_000) }
+        tickFire?()
+        check(document.pendingWork > 0, "the recovery write counts as document work")
+        var closed: Bool?
+        controller.requestClose { closed = $0 }
+        let deadline = Date().addingTimeInterval(10)
+        while closed == nil && Date() < deadline {
+            spin(0.02)
+            if let sheet = window.attachedSheet {
+                NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+            }
+        }
+        check(closed == true, "a close asked for during the recovery write finishes after it")
+        check(store.record(for: document.recoveryID) == nil && !store.copyExists(for: document.recoveryID),
+              "a successful close removes the document's recovery record")
+        check((try? session.info(image)) == nil, "the closed image is destroyed")
+        documents.items.removeAll { $0 === document }
+        scheduler.stop()
+    }
+
+    /// The recovery interface end to end: a dead run's real committed
+    /// records are listed by the panel, a selected one opens as an
+    /// unsaved recovered document through counted engine admission, the
+    /// prior record stays until that document explicitly closes, and a
+    /// recovery finishing during Quit is cleaned up instead of opened.
+    private static func exerciseRecoveryInterface(_ session: EngineSession, work: URL,
+                                                  documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin() }
+        }
+
+        // A document with real pixels saved natively: the "crashed" run's
+        // copies are committed through the store's own atomic path.
+        let sourceImage = try session.newImage(width: 64, height: 64)
+        let source = try ImageDocument(session: session, image: sourceImage, name: "Crash Source")
+        documents.items.append(source)
+        source.beginStroke(at: .init(x: 16, y: 16, pressure: 1))
+        source.endStroke()
+        source.inputQueue.sync {}
+        spin()
+        let native = work.appendingPathComponent("original.xcf")
+        try session.save(sourceImage, to: native.path)
+        source.noteSaved(to: native)
+        let nativeBytes = try Data(contentsOf: native)
+        let sourceLayers = source.layers.count
+        defer {
+            documents.items.removeAll { $0 === source }
+            source.closeImageWhenDrained()
+        }
+
+        let storeBase = work.appendingPathComponent("recovery-ui-store")
+        let priorStore = RecoveryStore(base: storeBase, runID: UUID(), ownerPID: Int32.max - 1234,
+                                       processIsAlive: { _ in false })
+        try priorStore.prepare()
+        func commitPrior(_ id: UUID, _ name: String, imported: URL? = nil,
+                         native nativeURL: URL? = nil, revision: UInt64 = 1) throws {
+            let temp = priorStore.temporaryCopyURL(for: id)
+            try session.saveCopy(sourceImage, to: temp.path)
+            _ = try priorStore.commitCopy(at: temp, for: id, metadata: .init(
+                name: name, nativeURL: nativeURL, importedSourceURL: imported, revision: revision))
+        }
+        let firstID = UUID(), otherID = UUID(), quitID = UUID(), badID = UUID()
+        try commitPrior(firstID, "original.xcf", native: native, revision: 7)
+        let ghost = work.appendingPathComponent("ghost.png")
+        try Data("png".utf8).write(to: ghost)
+        try commitPrior(otherID, "other.xcf", imported: ghost, revision: 2)
+        try commitPrior(quitID, "quit.xcf")
+        let badTemp = priorStore.temporaryCopyURL(for: badID)
+        try Data("not an xcf".utf8).write(to: badTemp)
+        _ = try priorStore.commitCopy(at: badTemp, for: badID, metadata: .init(
+            name: "bad.xcf", nativeURL: nil, importedSourceURL: nil, revision: 1))
+
+        // A foreign run whose owner is this live process is never offered.
+        let liveRunID = UUID()
+        let liveDir = storeBase.appendingPathComponent(liveRunID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: liveDir, withIntermediateDirectories: true)
+        try JSONEncoder().encode(RecoveryStore.Run(runID: liveRunID,
+                                                 pid: ProcessInfo.processInfo.processIdentifier,
+                                                 started: Date()))
+            .write(to: liveDir.appendingPathComponent(RecoveryStore.runFilename))
+        try Data("live".utf8).write(to: liveDir.appendingPathComponent("\(UUID().uuidString).xcf"))
+
+        let store = RecoveryStore(base: storeBase, runID: UUID(),
+                                  processIsAlive: { $0 == ProcessInfo.processInfo.processIdentifier })
+        try store.prepare()
+        let app = AppController()
+        app.recoveryStore = store
+        let found = store.discoverRecoverableDocuments()
+        check(found.count == 4 && !found.contains { $0.runID == liveRunID },
+              "dead runs' committed records are discoverable; live runs' are not")
+        guard let candidate = found.first(where: { $0.documentID == firstID }) else { return }
+
+        app.recoverDocuments(nil)
+        let panel = app.recoveryPanel
+        check(panel != nil && panel?.window?.canBecomeMain == false && panel?.records.count == 4,
+              "the recovery panel lists prior records without taking main")
+
+        // A repeated click while the recovery is counted cannot
+        // duplicate it.
+        app.recover([candidate], using: session)
+        check(!app.inFlightRecoveries.isEmpty, "the recovery is counted in flight")
+        app.recover([candidate], using: session)
+        wait { app.inFlightRecoveries.isEmpty }
+        let recovered = app.documents.last?.imageDocument
+        if let recovered { documents.items.append(recovered) }
+        check(app.documents.count == 1 && recovered?.name == "original.xcf recovered",
+              "the record opens once as 'name recovered'")
+        check(recovered?.hasUnsavedChanges == true && recovered?.fileState.nativeURL == nil
+                && recovered?.fileState.importedSourceURL == nil
+                && recovered?.fileState.saveRoute == .askForFile,
+              "the recovered document is unsaved with no file identity, so Save asks a destination")
+        check(recovered?.undoInfo.undoCount == 0,
+              "the recovered image carries fresh undo")
+        if let image = recovered?.image {
+            check((pixel(session, image, x: 16, y: 16)?[0] ?? 255) < 128
+                    && recovered?.layers.count == sourceLayers,
+                  "the recovered document holds the same pixels and layers")
+        }
+        check((try? Data(contentsOf: native)) == nativeBytes,
+              "the original file is never opened or overwritten")
+        check(!NSDocumentController.shared.recentDocumentURLs.contains {
+            $0.path.hasPrefix(storeBase.path)
+        }, "recovery copies are never marked recent")
+        check(store.discoverRecoverableDocuments().contains { $0.documentID == firstID },
+              "a recovered record is kept while its document is open")
+
+        app.recover([candidate], using: session)
+        wait { app.inFlightRecoveries.isEmpty }
+        check(app.documents.count == 1,
+              "recovering an already-open record brings its window forward")
+        app.discardSelected([candidate])
+        check(store.discoverRecoverableDocuments().contains { $0.documentID == firstID }
+                && app.lastRecoveryFailure != nil,
+              "a record open as a recovered document refuses discard visibly")
+
+        // Only an explicit close (Save or Don't Save) retires the prior
+        // record and deletes its copy.
+        let recoveredController = app.documents.last
+        var recoveredClosed: Bool?
+        recoveredController?.requestClose { recoveredClosed = $0 }
+        let closeDeadline = Date().addingTimeInterval(10)
+        while recoveredClosed == nil && Date() < closeDeadline {
+            spin(0.02)
+            if let sheet = recoveredController?.window?.attachedSheet {
+                NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+            }
+        }
+        wait { app.documents.isEmpty }
+        check(recoveredClosed == true
+                && !store.discoverRecoverableDocuments().contains { $0.documentID == firstID }
+                && !FileManager.default.fileExists(atPath: candidate.copyURL.path),
+              "an explicit close retires the prior record and deletes its copy")
+        if let recovered { documents.items.removeAll { $0 === recovered } }
+        recovered?.longQueue.sync {}
+        PaletteCenter.shared.closeAll()
+
+        // A failed open keeps the record and reports it; a stale row and
+        // a live run refuse without deleting anything.
+        guard let bad = store.discoverRecoverableDocuments().first(where: { $0.documentID == badID }) else { return }
+        app.recover([bad], using: session)
+        wait { app.inFlightRecoveries.isEmpty }
+        check(app.documents.isEmpty && app.lastRecoveryFailure?.contains("bad.xcf") == true,
+              "a failed recovery shows an error and opens nothing")
+        check(store.discoverRecoverableDocuments().contains { $0.documentID == badID },
+              "a failed recovery keeps the record available")
+
+        guard let other = store.discoverRecoverableDocuments().first(where: { $0.documentID == otherID }),
+              let quitCandidate = store.discoverRecoverableDocuments().first(where: { $0.documentID == quitID })
+        else { return }
+        var stale = quitCandidate
+        stale.name = "changed.xcf"
+        app.recover([stale], using: session)
+        wait { app.inFlightRecoveries.isEmpty }
+        check(app.documents.isEmpty && app.lastRecoveryFailure?.contains("no longer available") == true,
+              "a stale record refuses visibly instead of opening")
+        check(store.discoverRecoverableDocuments().contains { $0.documentID == quitID },
+              "a refused record stays on disk")
+
+        app.discardSelected([other])
+        check(!store.discoverRecoverableDocuments().contains { $0.documentID == otherID }
+                && !FileManager.default.fileExists(atPath: other.copyURL.path),
+              "Discard deletes the prior record and its copy")
+        check((try? String(contentsOf: ghost, encoding: .utf8)) == "png",
+              "an informational source URL is never a deletion target")
+
+        let liveCandidate = RecoveryStore.RecoveredDocument(
+            runID: liveRunID, documentID: UUID(), name: "live.xcf",
+            nativeURL: nil, importedSourceURL: nil,
+            copyURL: liveDir.appendingPathComponent("planted.xcf"),
+            date: Date(), revision: 1)
+        app.discardSelected([liveCandidate])
+        check(app.lastRecoveryFailure != nil && FileManager.default.fileExists(atPath: liveDir.path),
+              "a live run's folder is never deleted")
+
+        // Quit ordering: an in-flight recovery holds Quit; a recovery
+        // that finishes during Quit is closed again, not opened, and its
+        // record survives for the next launch.
+        check(app.applicationShouldTerminate(NSApp) == .terminateNow,
+              "with nothing open and nothing in flight, Quit proceeds")
+        app.recover([quitCandidate], using: session)
+        check(app.applicationShouldTerminate(NSApp) == .terminateLater,
+              "an in-flight recovery holds Quit")
+        wait { app.inFlightRecoveries.isEmpty }
+        wait { app.applicationShouldTerminate(NSApp) == .terminateNow }
+        check(app.documents.isEmpty,
+              "a recovery finished during Quit is cleaned up, not opened")
+        check(store.discoverRecoverableDocuments().contains { $0.documentID == quitID },
+              "the record survives a recovery interrupted by Quit")
     }
 
     /// Saving/closing must use the same asynchronous queues and sheets as
@@ -953,6 +1711,850 @@ enum EngineSmokeTest {
         check(!document.filterPreviewIsOpen, "canceling the preview reopens layer commands")
 
         controller.window?.orderOut(nil)
+    }
+
+    /// Layer masks end to end through the document: the mask thumbnail
+    /// pick and its queued ordering, mask painting, disabled and shown
+    /// masks, Copy/Clear targeting, mask-to-selection, apply and undo,
+    /// group masks, filter preview on a mask, and the refusals for edits
+    /// a mask cannot take.
+    private static func exerciseLayerMasks(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Masks")
+        documents.items.append(document)
+        defer {
+            document.onWillChangeLayers = nil
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        let controller = DocumentWindowController(document: document)
+        var errors: [String] = []
+        let previousError = document.onError
+        document.onError = { message in errors.append(message); previousError?(message) }
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+        /// One pixel of the rendered composite at image coordinates.
+        func composite(_ x: Int, _ y: Int) -> [UInt8]? { pixel(session, image, x: x, y: y) }
+        /// One pixel of `drawable`'s bounded thumbnail; thumbnails come
+        /// back at half size for this 64 px image.
+        func thumbPixel(_ drawable: Int32, _ x: Int, _ y: Int) -> [UInt8]? {
+            guard let cg = try? session.drawableThumbnail(drawable, image: image, maxSize: 32),
+                  let data = cg.dataProvider?.data as Data? else { return nil }
+            let offset = (y * cg.width + x) * 4
+            guard offset + 4 <= data.count else { return nil }
+            return Array(data[offset..<offset + 4])
+        }
+        func luminance(_ rgba: [UInt8]?) -> Int {
+            guard let rgba else { return -1 }
+            return (Int(rgba[0]) + Int(rgba[1]) + Int(rgba[2])) / 3
+        }
+        let black = EngineSession.Brush(size: 8, opacity: 1, red: 0, green: 0, blue: 0, pressureSize: false)
+        guard let layer = document.activeLayer else {
+            check(false, "a new image has a layer to mask")
+            return
+        }
+
+        if let window = controller.window {
+            controller.showWindow(nil)
+            AddMaskForm.present(for: document, on: window)
+            spin()
+            if let sheet = window.attachedSheet, let content = sheet.contentView {
+                let source = descendant(of: content, as: NSPopUpButton.self)
+                check((source?.visibleRect.width ?? 0) > 20 && (source?.visibleRect.height ?? 0) > 10,
+                      "the Add Mask sheet shows its source picker")
+                window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                spin()
+            } else { check(false, "Add Mask opens a cancellable sheet") }
+        }
+
+        // A dark mark on the layer the mask tests must not lose.
+        document.beginStroke(at: .init(x: 10, y: 10, pressure: 1), brush: black)
+        document.continueStroke((11...20).map { .init(x: Double($0), y: 10, pressure: 1) })
+        document.endStroke()
+        settle()
+        check(luminance(composite(15, 10)) < 64, "the layer carries a dark mark before masking")
+
+        // Add Mask: white source with Edit Mask Immediately, as the form
+        // offers; the mask becomes the active drawable.
+        document.addMask(layer, source: .white, edit: true)
+        settle()
+        guard let mask = document.maskStates[layer], mask.mask != 0, mask.editing else {
+            check(false, "Add Mask with Edit Mask Immediately creates an editing mask")
+            return
+        }
+        check(document.activeDrawable == mask.mask && document.isMaskTargetActive,
+              "the mask pick makes the mask the active drawable")
+        check(document.layers.first(where: { $0.id == layer })?.hasMask == true,
+              "the layer reports its mask")
+
+        // Painting on the mask: black over a white mask hides the layer
+        // there while the layer's own pixels stay untouched.
+        document.beginStroke(at: .init(x: 38, y: 38, pressure: 1), brush: black)
+        document.continueStroke((39...46).map { .init(x: Double($0), y: 38, pressure: 1) })
+        document.endStroke()
+        settle()
+        check(luminance(thumbPixel(mask.mask, 21, 19)) < 64,
+              "the stroke landed on the mask (dark at the thumbnail)")
+        check((composite(42, 38)?[3] ?? 255) < 64,
+              "the composite is masked out where the mask is black")
+        check(luminance(composite(15, 10)) < 64,
+              "the layer's dark mark still shows through the white mask")
+
+        // Copy while the mask is the target copies the mask: its black
+        // patch reads dark where the layer's dark mark reads light.
+        if let copied = try? session.copyPixels(image, merged: false) {
+            func copyPixel(_ x: Int, _ y: Int) -> Int {
+                let bx = x - Int(copied.origin.x), by = y - Int(copied.origin.y)
+                guard bx >= 0, by >= 0, bx < copied.width, by < copied.height else { return -1 }
+                let offset = (by * copied.width + bx) * 4
+                guard offset + 3 < copied.pixels.count else { return -1 }
+                let px = copied.pixels
+                return (Int(px[offset]) + Int(px[offset + 1]) + Int(px[offset + 2])) / 3
+            }
+            check(copyPixel(42, 38) >= 0 && copyPixel(15, 10) >= 0
+                    && copyPixel(42, 38) < copyPixel(15, 10),
+                  "Copy targeted the mask (patch \(copyPixel(42, 38)) vs mark \(copyPixel(15, 10)))")
+        } else {
+            check(false, "Copy while mask editing reads the mask")
+        }
+
+        // A disabled mask stops affecting the composite but keeps its
+        // pixels; re-enabling restores the masked view.
+        document.toggleMaskEnabled()
+        settle()
+        check((composite(42, 38)?[3] ?? 0) > 200 && luminance(composite(42, 38)) > 200,
+              "a disabled mask shows the layer unchanged")
+        check(luminance(thumbPixel(mask.mask, 21, 19)) < 64,
+              "the disabled mask kept its painted pixels")
+        document.toggleMaskEnabled()
+        settle()
+        check((composite(42, 38)?[3] ?? 255) < 64, "re-enabling restores the masked composite")
+
+        // View Mask (the Option-click flag): the canvas shows the mask's
+        // gray levels instead of the composite.
+        document.toggleMaskShowing(layer)
+        settle()
+        check(document.maskStates[layer]?.showing == true, "Show Mask sets the flag")
+        check(luminance(composite(15, 10)) > 200 && (composite(15, 10)?[3] ?? 0) > 200,
+              "View Mask shows the white mask where the layer is dark")
+        check(luminance(composite(42, 38)) < 64, "View Mask shows the black mask patch")
+        document.toggleMaskShowing(layer)
+        settle()
+        check(luminance(composite(15, 10)) < 64, "hiding the mask restores the composite")
+
+        // Multi-layer View Mask: natively the shown mask composites in
+        // the layer's own slot, so a layer above still covers it — it
+        // is not an isolation view that hides the rest of the stack.
+        controller.newLayer(nil)
+        settle()
+        guard let top = document.activeLayer, top != layer else {
+            check(false, "a second layer exists above the masked layer")
+            return
+        }
+        document.fill(at: .zero, mode: .selection, color: .red, threshold: 0, sampleMerged: false)
+        settle()
+        document.toggleMaskShowing(layer)
+        settle()
+        check(document.maskStates[layer]?.showing == true
+                && (composite(15, 10)?[0] ?? 0) > 200
+                && (composite(15, 10)?[1] ?? 0) < 64,
+              "View Mask stays in the layer's slot; the layer above composites over it")
+        document.toggleMaskShowing(layer)
+        settle()
+        document.layerCommand(.delete)
+        settle()
+        document.editMask(layer)
+        settle()
+        check(document.isMaskTargetActive,
+              "the mask target is restored for the remaining checks")
+
+        // Clear while the mask is the target hits the mask: the layer's
+        // dark mark survives, the mask's patch does not.
+        _ = document.run { session, img in try session.clearPixels(img, background: .white) }
+        settle()
+        check(luminance(composite(15, 10)) < 64,
+              "Clear targeted the mask; the layer's pixels are intact")
+        check((composite(42, 38)?[3] ?? 0) > 200, "the cleared mask shows the layer again")
+
+        // A fill queued right behind the mask pick lands on the mask:
+        // the pick's engine-side flag is already set when the fill runs.
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        settle()
+        check(luminance(thumbPixel(mask.mask, 10, 10)) < 64,
+              "a fill queued after the mask pick lands on the mask")
+        check((composite(30, 30)?[3] ?? 255) < 64,
+              "the mask fill hid the layer composite-wide")
+
+        // Mask to Selection: a black mask selects nothing; paint a white
+        // patch back and the selection follows it.
+        document.maskToSelection(.replace)
+        settle()
+        check((try? session.selectionBounds(image: image)) == nil
+                || (try? session.selectionBounds(image: image))?.isEmpty == true,
+              "an empty (black) mask gives an empty selection")
+        document.beginStroke(at: .init(x: 20, y: 50, pressure: 1), brush: EngineSession.Brush(size: 8, opacity: 1, red: 1, green: 1, blue: 1, pressureSize: false))
+        document.continueStroke((21...28).map { .init(x: Double($0), y: 50, pressure: 1) })
+        document.endStroke()
+        settle()
+        document.maskToSelection(.replace)
+        settle()
+        if let bounds = try? session.selectionBounds(image: image) {
+            check(bounds.width < 40 && bounds.height < 40 && bounds.contains(CGPoint(x: 24, y: 50)),
+                  "Mask to Selection outlines the mask's white patch (\(bounds))")
+        } else {
+            check(false, "Mask to Selection on a white patch selects it")
+        }
+        document.select(.none)
+        settle()
+
+        // Refusals while the mask is the target: moves, transforms and
+        // path strokes have no mask backend and must not touch pixels.
+        let markBefore = luminance(composite(15, 10))
+        document.moveActiveLayer(by: CGSize(width: 4, height: 4))
+        document.transformLayer(layer, matrix: CGAffineTransform(scaleX: 2, y: 2),
+                                interpolation: .linear)
+        document.strokePath(1, settings: EngineSession.LineSettings())
+        settle()
+        check(errors.contains { $0.contains("mask") },
+              "move, transform and path stroke refuse on a mask target (\(errors.suffix(3))")
+        check(luminance(composite(15, 10)) == markBefore,
+              "the refused edits left the layer's pixels alone")
+
+        // Apply bakes the mask into the layer: only the white patch
+        // survives, and the mask is gone.
+        document.applyMask()
+        settle()
+        check(document.maskStates[layer] == nil
+                && document.layers.first(where: { $0.id == layer })?.hasMask == false,
+              "Apply Mask removes the mask")
+        check((composite(24, 50)?[3] ?? 0) > 200 && (composite(30, 30)?[3] ?? 255) < 64,
+              "Apply Mask bakes the mask into the layer's alpha")
+
+        // Undo and redo cover the apply.
+        document.undo()
+        settle()
+        check(document.maskStates[layer]?.mask != 0
+                && document.layers.first(where: { $0.id == layer })?.hasMask == true,
+              "undo restores the mask")
+        document.redo()
+        settle()
+        check(document.maskStates[layer] == nil, "redo re-applies the mask removal")
+
+        // Delete discards a mask without baking it.
+        document.addMask(layer, source: .black, edit: false)
+        settle()
+        check(document.maskStates[layer]?.mask != 0, "a second mask can be added")
+        document.deleteMask()
+        settle()
+        check(document.maskStates[layer] == nil
+                && document.layers.first(where: { $0.id == layer })?.hasMask == false,
+              "Delete Mask removes the mask")
+
+        // A group mask is editable: the group itself still refuses paint.
+        controller.newLayerGroup(nil)
+        settle()
+        guard let group = document.layers.first(where: { $0.kind == .group }) else {
+            check(false, "a group exists for the group-mask checks")
+            return
+        }
+        document.moveLayer(layer, toParent: group.id, atIndex: 0)
+        settle()
+        document.addMask(group.id, source: .white, edit: true)
+        settle()
+        guard let groupMask = document.maskStates[group.id], groupMask.editing else {
+            check(false, "a group can carry an editing mask")
+            return
+        }
+        check(document.activeDrawable == groupMask.mask,
+              "the group's mask is the active drawable while editing")
+        document.beginStroke(at: .init(x: 30, y: 30, pressure: 1), brush: black)
+        document.endStroke()
+        settle()
+        check(luminance(thumbPixel(groupMask.mask, 15, 15)) < 64,
+              "painting lands on the group's mask")
+        document.selectLayer(layer)
+        settle()
+        check(!document.isMaskTargetActive, "picking the layer leaves mask editing")
+
+        // A stale EDITING flag on one layer cannot hijack another's
+        // target: editing layer A's mask then picking layer B clears it.
+        document.addMask(layer, source: .white, edit: true)
+        settle()
+        check(document.maskStates[layer]?.editing == true,
+              "Add Mask with edit starts mask editing on the nested layer")
+        document.selectLayer(group.id)
+        settle()
+        check(document.activeLayer == group.id && !document.isMaskTargetActive
+                && document.maskStates[layer]?.editing == false,
+              "picking another layer clears the previous mask's edit target")
+        document.editMask(layer)
+        settle()
+        check(document.maskStates[layer]?.editing == true && document.isMaskTargetActive,
+              "the mask thumbnail pick restores the mask target")
+
+        // Let the first pick complete while the second remains queued.
+        // Its old result must not redirect input accepted for the newer pick.
+        let targetGate = DispatchSemaphore(value: 0)
+        document.editMask(layer)
+        document.inputQueue.async { targetGate.wait() }
+        document.selectLayer(layer)
+        spin(0.1)
+        check(document.activeDrawable == layer,
+              "an older mask-pick completion preserves the newer layer target")
+        targetGate.signal()
+        settle()
+        let reloadGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { reloadGate.wait() }
+        document.editMask(layer)
+        try document.reload()
+        check(document.activeDrawable == document.maskStates[layer]?.mask,
+              "a reload preserves an accepted mask pick still waiting on the input queue")
+        reloadGate.signal()
+        settle()
+
+        let savedTool = ToolState.shared.current
+        let savedSource = ToolState.shared.cloneSource
+        ToolState.shared.select(.clone)
+        if let window = controller.window,
+           let sourceClick = NSEvent.mouseEvent(with: .leftMouseDown,
+                location: controller.canvas.convert(CGPoint(x: 12 * controller.canvas.scale,
+                                                             y: 12 * controller.canvas.scale), to: nil),
+                modifierFlags: [.option], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+            controller.canvas.mouseDown(with: sourceClick)
+            check(ToolState.shared.cloneSource?.drawable == document.activeDrawable,
+                  "Option-click Clone samples the selected mask instead of its layer")
+        } else { check(false, "the mask clone-source check receives a pointer event") }
+        ToolState.shared.cloneSource = savedSource
+        ToolState.shared.select(savedTool)
+
+        // A filter preview begins on the mask drawable.
+        var preview: Result<ImageDocument.FilterPreviewStart, Error>?
+        document.beginFilterPreview(operation: GaussianBlurPanel.operation, properties: []) {
+            preview = $0
+        }
+        settle()
+        if case .success(let start) = preview {
+            document.finishFilter(start.filter, commit: false) { _ in }
+            settle()
+            check(true, "a filter preview begins on the mask drawable")
+        } else {
+            check(false, "a filter preview begins on the mask drawable: \(String(describing: preview))")
+        }
+
+        document.select(.none)
+        settle()
+        let layerBeforeFailedPick = try session.drawableThumbnail(layer, image: image, maxSize: 32)?
+            .dataProvider?.data as Data?
+        document.run { session, image in
+            try session.applyLayerMask(layer, image: image, mode: .discard)
+        }
+        document.editMask(layer)
+        document.fill(at: .zero, mode: .selection, color: .magenta, threshold: 0, sampleMerged: false)
+        settle()
+        let layerAfterFailedPick = try session.drawableThumbnail(layer, image: image, maxSize: 32)?
+            .dataProvider?.data as Data?
+        check(layerBeforeFailedPick != nil && layerBeforeFailedPick == layerAfterFailedPick,
+              "a queued mask pick that becomes invalid refuses the following fill instead of painting its layer")
+        check(document.activeDrawable == nil,
+              "a failed mask pick asks for a fresh target instead of silently falling back to the layer")
+        document.selectLayer(layer)
+        settle()
+        check(document.activeDrawable == layer, "picking a layer recovers from a refused mask target")
+
+        // The refused target also heals through a fresh creation: the
+        // engine selects the layer it makes, and the completion lifts
+        // the rejection — no pick needed. Re-arm the failed pick first.
+        document.addMask(layer, source: .white, edit: false)
+        settle()
+        check(document.maskStates[layer]?.mask != 0,
+              "the layer carries a mask again for the refused-pick recovery checks")
+        document.run { session, image in
+            try session.applyLayerMask(layer, image: image, mode: .discard)
+        }
+        document.editMask(layer)
+        settle()
+        check(document.activeDrawable == nil,
+              "a second queued mask pick that becomes invalid refuses the target too")
+        // A command that fails while the target is refused must not
+        // reopen it: the merge has nothing below it inside the group.
+        document.layerCommand(.mergeDown)
+        settle()
+        document.fill(at: .zero, mode: .selection, color: .magenta, threshold: 0, sampleMerged: false)
+        settle()
+        check(document.activeDrawable == nil && errors.contains { $0.contains("merge") },
+              "a failed target command does not reopen the refused target "
+                + "(drawable \(document.activeDrawable ?? -1), errors \(errors.suffix(3)))")
+        document.layerCommand(.new)
+        settle()
+        guard let recovered = document.activeLayer, recovered != layer else {
+            check(false, "a layer creation lands after the refused pick")
+            return
+        }
+        check(document.activeDrawable == recovered,
+              "a successful creation recovers the refused target without another pick")
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        document.beginStroke(at: .init(x: 56, y: 56, pressure: 1), brush: black)
+        document.continueStroke([.init(x: 58, y: 56, pressure: 1)])
+        document.endStroke()
+        settle()
+        check(luminance(thumbPixel(recovered, 28, 28)) < 64 && (thumbPixel(recovered, 28, 28)?[3] ?? 0) > 200,
+              "fills and strokes reach the recovered target "
+                + "(new layer pixel \(thumbPixel(recovered, 28, 28) ?? []))")
+
+        let thumbnailGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { thumbnailGate.wait() }
+        let palette = LayersPaletteController()
+        _ = palette.view
+        palette.retarget(to: document)
+        if let outline = descendant(of: palette.view, as: NSOutlineView.self),
+           let item = outline.item(atRow: 0) {
+            _ = palette.outlineView(outline, viewFor: nil, item: item)
+            check(document.pendingWork > 0,
+                  "thumbnail reads count as document work until the image is safe to close")
+        } else { check(false, "the thumbnail lifetime check has a layer row") }
+        palette.retarget(to: nil)
+        thumbnailGate.signal()
+        settle()
+
+        controller.window?.orderOut(nil)
+    }
+
+    /// A command whose result becomes or replaces the paint target — a new
+    /// or duplicated layer, a pasted or text layer, an editing mask —
+    /// learns its drawable id only when its queued job finishes. Edits
+    /// accepted meanwhile must be refused instead of capturing the
+    /// drawable the command is about to replace, and a completion must
+    /// never enqueue another native select that could land inside a
+    /// clipboard cut's read/clear pair.
+    private static func exerciseTargetCommands(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Target Commands")
+        documents.items.append(document)
+        defer {
+            document.onWillChangeLayers = nil
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+        func composite(_ x: Int, _ y: Int) -> [UInt8]? { pixel(session, image, x: x, y: y) }
+        func thumbPixel(_ drawable: Int32, _ x: Int, _ y: Int) -> [UInt8]? {
+            guard let cg = try? session.drawableThumbnail(drawable, image: image, maxSize: 32),
+                  let data = cg.dataProvider?.data as Data? else { return nil }
+            let offset = (y * cg.width + x) * 4
+            guard offset + 4 <= data.count else { return nil }
+            return Array(data[offset..<offset + 4])
+        }
+        func luminance(_ rgba: [UInt8]?) -> Int {
+            guard let rgba else { return -1 }
+            return (Int(rgba[0]) + Int(rgba[1]) + Int(rgba[2])) / 3
+        }
+        let black = EngineSession.Brush(size: 8, opacity: 1, red: 0, green: 0, blue: 0, pressureSize: false)
+        guard let layer = document.activeLayer else {
+            check(false, "a new image has a layer for the target-command checks")
+            return
+        }
+
+        // A mask added with Edit Mask Immediately replaces the paint
+        // target with a drawable whose id is unknown until the job lands.
+        // A stroke or fill accepted meanwhile is refused rather than
+        // painted on the layer the mask is about to cover.
+        let maskGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { maskGate.wait() }
+        document.addMask(layer, source: .white, edit: true)
+        document.beginStroke(at: .init(x: 40, y: 40, pressure: 1), brush: black)
+        document.continueStroke((41...46).map { .init(x: Double($0), y: 40, pressure: 1) })
+        document.endStroke()
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        maskGate.signal()
+        settle()
+        check(luminance(composite(43, 40)) > 200 && (composite(43, 40)?[3] ?? 0) > 200,
+              "edits accepted behind a queued mask creation are refused "
+                + "(composite \(composite(43, 40) ?? []))")
+        check(errors.contains { $0.contains("Wait") },
+              "the refused edits explain the pending target change (\(errors.last ?? "none"))")
+        guard let mask = document.maskStates[layer], mask.mask != 0, mask.editing else {
+            check(false, "the queued mask creation completes as the edit target")
+            return
+        }
+        check(document.activeDrawable == mask.mask,
+              "the mask becomes the active drawable once the creation lands")
+        document.beginStroke(at: .init(x: 40, y: 40, pressure: 1), brush: black)
+        document.continueStroke((41...46).map { .init(x: Double($0), y: 40, pressure: 1) })
+        document.endStroke()
+        settle()
+        check(luminance(thumbPixel(mask.mask, 21, 20)) < 64,
+              "a stroke accepted after the mask lands paints the mask")
+
+        // The same unknown-target window exists for a queued layer
+        // creation; an explicit stroke and an implicit fill must not
+        // disagree about the target.
+        let newGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { newGate.wait() }
+        let countBeforeNew = document.layers.count
+        document.layerCommand(.new)
+        document.beginStroke(at: .init(x: 20, y: 20, pressure: 1), brush: black)
+        document.continueStroke((21...24).map { .init(x: Double($0), y: 20, pressure: 1) })
+        document.endStroke()
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        newGate.signal()
+        settle()
+        check(document.layers.count == countBeforeNew + 1 && document.activeLayer == document.layers.first?.id,
+              "the queued layer creation still lands and becomes the active layer")
+        if let created = document.layers.first, created.id != layer {
+            check((thumbPixel(created.id, 11, 10)?[3] ?? 255) == 0,
+                  "a fill accepted behind a queued layer creation is refused "
+                    + "(new layer pixel \(thumbPixel(created.id, 11, 10) ?? []))")
+        }
+        check(luminance(thumbPixel(mask.mask, 11, 10)) > 200,
+              "a stroke accepted behind a queued layer creation is refused "
+                + "(mask pixel \(thumbPixel(mask.mask, 11, 10) ?? []))")
+
+        // A known pick accepted behind the queued creation resolves the
+        // target optimistically: input after it follows the pick in queue
+        // order, and the pick still wins over the creation's completion.
+        document.selectLayer(layer)
+        settle()
+        let pickGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { pickGate.wait() }
+        document.layerCommand(.new)
+        document.selectLayer(layer)
+        document.beginStroke(at: .init(x: 56, y: 56, pressure: 1), brush: black)
+        document.continueStroke((57...58).map { .init(x: Double($0), y: 56, pressure: 1) })
+        document.endStroke()
+        pickGate.signal()
+        settle()
+        check(document.activeLayer == layer && luminance(composite(57, 56)) < 64,
+              "a pick accepted behind a queued creation wins and the queued stroke follows it")
+
+        // A pick of a layer that does not exist must not reopen the gate.
+        let invalidGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { invalidGate.wait() }
+        document.layerCommand(.new)
+        document.selectLayer(999_999)
+        document.beginStroke(at: .init(x: 8, y: 8, pressure: 1), brush: black)
+        document.continueStroke([.init(x: 9, y: 8, pressure: 1)])
+        document.endStroke()
+        invalidGate.signal()
+        settle()
+        check(luminance(composite(8, 8)) > 200 && (composite(8, 8)?[3] ?? 0) > 200,
+              "an invalid pick does not reopen the unknown-target gate "
+                + "(composite \(composite(8, 8) ?? []))")
+
+        // Cut while a duplicate of a mask-editing layer is queued. The
+        // engine's duplicate selects the copy's mask; a completion that
+        // enqueued another native select could land between the cut's
+        // pixel read and its deferred clear and clear the layer instead.
+        let cutImage = try session.newImage(width: 64, height: 64)
+        let cutDocument = try ImageDocument(session: session, image: cutImage, name: "Cut Completion")
+        documents.items.append(cutDocument)
+        defer {
+            cutDocument.onWillChangeLayers = nil
+            documents.items.removeAll { $0 === cutDocument }
+            cutDocument.closeImageWhenDrained()
+        }
+        guard let cutLayer = cutDocument.activeLayer else {
+            check(false, "the cut document has a layer")
+            return
+        }
+        func cutThumb(_ drawable: Int32, _ x: Int, _ y: Int) -> [UInt8]? {
+            guard let cg = try? session.drawableThumbnail(drawable, image: cutImage, maxSize: 32),
+                  let data = cg.dataProvider?.data as Data? else { return nil }
+            let offset = (y * cg.width + x) * 4
+            guard offset + 4 <= data.count else { return nil }
+            return Array(data[offset..<offset + 4])
+        }
+        func boardPixel(_ copied: ClipboardImage, _ x: Int, _ y: Int) -> Int {
+            let bx = x - Int(copied.origin.x), by = y - Int(copied.origin.y)
+            guard bx >= 0, by >= 0, bx < copied.width, by < copied.height else { return -1 }
+            let offset = (by * copied.width + bx) * 4
+            guard offset + 3 < copied.pixels.count else { return -1 }
+            let px = copied.pixels
+            return (Int(px[offset]) + Int(px[offset + 1]) + Int(px[offset + 2])) / 3
+        }
+        cutDocument.addMask(cutLayer, source: .white, edit: true)
+        cutDocument.inputQueue.sync {}
+        spin()
+        guard cutDocument.maskStates[cutLayer]?.editing == true else {
+            check(false, "the cut document's mask is editing before the race")
+            return
+        }
+        cutDocument.beginStroke(at: .init(x: 40, y: 40, pressure: 1), brush: black)
+        cutDocument.continueStroke((41...46).map { .init(x: Double($0), y: 40, pressure: 1) })
+        cutDocument.endStroke()
+        cutDocument.inputQueue.sync {}
+        spin()
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        cutDocument.layerCommand(.duplicate)
+        var cutError: Error?
+        cutDocument.copyPixels(.cutLayer, background: .cyan, consume: { encoded in
+            // Hold the transaction open until anything the duplicate's
+            // completion queued has reached the engine; the deferred
+            // clear is enqueued only after this returns.
+            cutDocument.inputQueue.sync {}
+            try encoded.write(to: board)
+        }, completion: { cutError = $0 })
+        let cutDeadline = Date().addingTimeInterval(10)
+        while cutDocument.pendingWork > 0 && Date() < cutDeadline { spin() }
+        cutDocument.inputQueue.sync {}
+        spin()
+        check(cutError == nil, "the cut transaction completes")
+        guard let duplicate = cutDocument.layers.first(where: { $0.id != cutLayer }),
+              let duplicateMask = cutDocument.maskStates[duplicate.id] else {
+            check(false, "the duplicate and its mask exist after the race")
+            return
+        }
+        check((try? session.layerMask(duplicate.id, image: cutImage))?.editing == true
+                && (try? session.layerMask(cutLayer, image: cutImage))?.editing == true,
+              "the completion cannot change native mask editing after the duplicate selected its mask "
+                + "(duplicate \((try? session.layerMask(duplicate.id, image: cutImage))?.editing == true), "
+                + "source \((try? session.layerMask(cutLayer, image: cutImage))?.editing == true))")
+        if let cutPixels = try? ClipboardImage.read(from: board) {
+            check(boardPixel(cutPixels, 43, 40) < 64,
+                  "the cut copied the duplicate mask's pixels (read \(boardPixel(cutPixels, 43, 40)))")
+        } else {
+            check(false, "the cut wrote its copied mask to the clipboard")
+        }
+        check(luminance(cutThumb(duplicate.id, 21, 20)) > 200,
+              "the deferred cut clear left the duplicate's layer pixels alone "
+                + "(layer pixel \(cutThumb(duplicate.id, 21, 20) ?? []))")
+        check(luminance(cutThumb(duplicateMask.mask, 21, 20)) > 100,
+              "the deferred cut clear hit the duplicate's mask "
+                + "(mask pixel \(cutThumb(duplicateMask.mask, 21, 20) ?? []))")
+        check(cutDocument.activeDrawable == duplicateMask.mask,
+              "the adopted target after the race is the duplicate's mask")
+    }
+
+    /// Undo, redo and an emptied text layer replace the paint target like
+    /// a creation does, and the current-target layer commands must name
+    /// the layer the engine selects when they run — not the one the
+    /// interface captured while earlier commands were still queued.
+    private static func exerciseTargetHistory(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Target History")
+        documents.items.append(document)
+        defer {
+            document.onWillChangeLayers = nil
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+        func composite(_ x: Int, _ y: Int) -> [UInt8]? { pixel(session, image, x: x, y: y) }
+        func thumbPixel(_ drawable: Int32, _ x: Int, _ y: Int) -> [UInt8]? {
+            guard let cg = try? session.drawableThumbnail(drawable, image: image, maxSize: 32),
+                  let data = cg.dataProvider?.data as Data? else { return nil }
+            let offset = (y * cg.width + x) * 4
+            guard offset + 4 <= data.count else { return nil }
+            return Array(data[offset..<offset + 4])
+        }
+        func luminance(_ rgba: [UInt8]?) -> Int {
+            guard let rgba else { return -1 }
+            return (Int(rgba[0]) + Int(rgba[1]) + Int(rgba[2])) / 3
+        }
+        let black = EngineSession.Brush(size: 8, opacity: 1, red: 0, green: 0, blue: 0, pressureSize: false)
+        guard let layer = document.activeLayer else {
+            check(false, "a new image has a layer for the target-history checks")
+            return
+        }
+
+        // Undoing a creation moves the native selection back before the
+        // interface knows; a fill accepted meanwhile is refused rather
+        // than painted on the layer underneath.
+        document.layerCommand(.new)
+        settle()
+        let undoGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { undoGate.wait() }
+        document.undo()
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        undoGate.signal()
+        settle()
+        check(luminance(composite(4, 4)) > 200 && (composite(4, 4)?[3] ?? 0) > 200,
+              "a fill accepted behind an undo is refused "
+                + "(composite \(composite(4, 4) ?? []))")
+        check(errors.contains { $0.contains("Wait") },
+              "the refused fill explains the pending undo (\(errors.last ?? "none"))")
+
+        // Redoing the creation replaces the target the same way: the
+        // fill would land on the recreated layer the user could not see.
+        let redoGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { redoGate.wait() }
+        document.redo()
+        document.fill(at: .zero, mode: .selection, color: .red, threshold: 0, sampleMerged: false)
+        redoGate.signal()
+        settle()
+        check(luminance(composite(4, 4)) > 200 && (composite(4, 4)?[1] ?? 0) > 200,
+              "a fill accepted behind a redo is refused "
+                + "(composite \(composite(4, 4) ?? []))")
+
+        // Undoing a mask addition drops the editing mask: the implicit
+        // target reverts to the layer while the interface still reports
+        // the mask.
+        document.addMask(layer, source: .white, edit: true)
+        settle()
+        guard document.maskStates[layer]?.editing == true else {
+            check(false, "the mask is editing before the undo check")
+            return
+        }
+        let maskUndoGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { maskUndoGate.wait() }
+        document.undo()
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        maskUndoGate.signal()
+        settle()
+        check(luminance(thumbPixel(layer, 4, 4)) > 200,
+              "a fill accepted behind an undone mask addition is refused "
+                + "(layer pixel \(thumbPixel(layer, 4, 4) ?? []))")
+
+        // A Delete queued behind a creation must act on what the engine
+        // selects then — the created layer — not on the id the interface
+        // last saw selected. The redo's recreated layer goes first.
+        document.selectLayer(layer)
+        settle()
+        if let extra = document.layers.first(where: { $0.id != layer })?.id {
+            document.selectLayer(extra)
+            settle()
+            document.layerCommand(.delete)
+            settle()
+        }
+        check(document.layers.map(\.id) == [layer],
+              "the queue checks start from the original layer")
+        document.beginStroke(at: .init(x: 30, y: 30, pressure: 1), brush: black)
+        document.continueStroke([.init(x: 34, y: 30, pressure: 1)])
+        document.endStroke()
+        settle()
+        check(luminance(composite(31, 30)) < 64 && (composite(31, 30)?[3] ?? 0) > 200,
+              "the original layer carries a mark before the queue checks")
+        let delGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { delGate.wait() }
+        document.layerCommand(.new)
+        document.layerCommand(.delete)
+        delGate.signal()
+        settle()
+        check(document.layers.count == 1 && document.layers.first?.id == layer,
+              "a delete queued behind a creation removes the created layer, not the original "
+                + "(layers \(document.layers.map(\.id)), selected \(document.activeLayer ?? -1))")
+        check(luminance(composite(31, 30)) < 64 && (composite(31, 30)?[3] ?? 0) > 200,
+              "the original layer and its pixels survive the queued delete "
+                + "(composite \(composite(31, 30) ?? []))")
+
+        // A Duplicate queued behind a creation likewise copies the layer
+        // the queue produced, so the original is not duplicated in its
+        // place.
+        let dupGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { dupGate.wait() }
+        document.layerCommand(.new)
+        document.layerCommand(.duplicate)
+        dupGate.signal()
+        settle()
+        check(document.layers.count == 3 && document.layers.last?.id == layer,
+              "the queued new and duplicate leave the original layer at the bottom "
+                + "(layers \(document.layers.map(\.id)), selected \(document.activeLayer ?? -1))")
+        if document.layers.count == 3 {
+            let middle = document.layers[1].id
+            check((thumbPixel(middle, 15, 15)?[3] ?? 255) < 50,
+                  "the queued duplicate copies the created layer, not the original "
+                    + "(middle pixel \(thumbPixel(middle, 15, 15) ?? []))")
+        }
+
+        // A group created behind a creation takes its place from the
+        // layers the queue leaves — the created layer on top — not from
+        // the selection the interface captured first.
+        for extra in document.layers.map(\.id).filter({ $0 != layer }) {
+            document.selectLayer(extra)
+            settle()
+            document.layerCommand(.delete)
+            settle()
+        }
+        document.selectLayer(layer)
+        settle()
+        let groupGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { groupGate.wait() }
+        document.layerCommand(.new)
+        document.createGroup()
+        groupGate.signal()
+        settle()
+        check(document.layers.first?.kind == .group,
+              "a group queued behind a creation is placed from the post-queue selection "
+                + "(layers \(document.layers.map { "\($0.id):\($0.kind)" }), selected \(document.activeLayer ?? -1))")
+        document.layerCommand(.delete)
+        settle()
+        document.layerCommand(.delete)
+        settle()
+        check(document.layers.count == 1 && document.layers.first?.id == layer,
+              "the queue checks return to the original layer "
+                + "(layers \(document.layers.map(\.id)))")
+
+        // Emptying a text layer removes it — the same target change the
+        // text editor commits — so it queues like one.
+        let fonts = (try? session.fonts()) ?? []
+        var textSettings = EngineSession.TextSettings()
+        textSettings.font = fonts.contains("Sans-serif") ? "Sans-serif" : (fonts.first ?? "Sans-serif")
+        document.addText("Empty", settings: textSettings, at: CGPoint(x: 4, y: 40))
+        settle()
+        guard let textLayer = document.layers.first(where: { $0.kind == .text })?.id else {
+            check(false, "a text layer exists for the emptying check")
+            return
+        }
+        let emptyGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { emptyGate.wait() }
+        document.updateText(textLayer, text: "", settings: nil)
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        emptyGate.signal()
+        settle()
+        check(!document.layers.contains(where: { $0.id == textLayer }),
+              "an emptied text layer is removed like the text editor's commit")
+        check(luminance(composite(6, 42)) > 200,
+              "a fill accepted behind the emptied-text removal is refused "
+                + "(composite \(composite(6, 42) ?? []))")
+
+        // The emptied editor reaches that removal through the same flush
+        // an outer command runs; both queue in order.
+        let controller = DocumentWindowController(document: document)
+        defer { controller.window?.orderOut(nil) }
+        let canvas = controller.canvas
+        let previousTool = ToolState.shared.current
+        ToolState.shared.select(.text)
+        ToolState.shared.textSettings = textSettings
+        document.addText("Gone", settings: textSettings, at: CGPoint(x: 4, y: 50))
+        settle()
+        guard let goneLayer = document.layers.first(where: { $0.kind == .text })?.id,
+              let bounds = document.layers.first(where: { $0.id == goneLayer })?.bounds else {
+            check(false, "a second text layer exists for the flush check")
+            ToolState.shared.select(previousTool)
+            return
+        }
+        if let window = controller.window,
+           let press = NSEvent.mouseEvent(with: .leftMouseDown,
+                                          location: canvas.convert(CGPoint(x: bounds.midX * canvas.scale,
+                                                                           y: bounds.midY * canvas.scale), to: nil),
+                                          modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                          context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+            canvas.mouseDown(with: press)
+        }
+        let editor = canvas.tools.textEditor
+        check(editor?.textLayer == goneLayer, "the Text tool opens the layer about to be emptied")
+        editor?.string = ""
+        let flushGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { flushGate.wait() }
+        document.layerCommand(.new)
+        flushGate.signal()
+        settle()
+        check(!document.layers.contains(where: { $0.id == goneLayer }) && canvas.tools.textEditor == nil,
+              "an emptied editor commits its removal through the outer command's flush")
+        ToolState.shared.select(previousTool)
     }
 
     /// The Layer menu, the paint bucket and gradient, layer moves, and a

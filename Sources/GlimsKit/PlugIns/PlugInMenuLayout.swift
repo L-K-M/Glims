@@ -63,6 +63,13 @@ extension PlugInMenuPlacement {
 
 /// A menu's plug-in commands as a tree, ready to become `NSMenu`s.
 struct PlugInMenuNode: Equatable {
+    /// Glims supplies these commands through AppKit. Advertising the
+    /// engine's GTK print plug-in as well creates a second Print entry
+    /// with a different dialog and output path.
+    private static let nativePrintingReplacements: Set<String> = [
+        "file-print-gtk", "file-print-gtk-page-setup",
+    ]
+
     struct Entry: Equatable {
         let procedure: EngineSession.Procedure
     }
@@ -107,6 +114,7 @@ struct PlugInMenuNode: Equatable {
     static func layout(_ procedures: [EngineSession.Procedure]) -> [GlimsMenu: PlugInMenuNode] {
         var menus: [GlimsMenu: PlugInMenuNode] = [:]
         for procedure in procedures {
+            guard !nativePrintingReplacements.contains(procedure.name) else { continue }
             guard let placement = PlugInMenuPlacement(menuPath: procedure.menuPath) else { continue }
             menus[placement.menu, default: PlugInMenuNode()].insert(procedure, at: placement)
         }
