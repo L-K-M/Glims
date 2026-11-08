@@ -332,6 +332,14 @@ GlimsStatus glims_gradient_resource (GlimsEngine *e, GlimsImageID image, GlimsRe
                                     GlimsPoint from, GlimsPoint to,
                                     const GlimsResourceGradientSettings *settings, char **error);
 GlimsStatus glims_layer_select     (GlimsEngine *e, GlimsImageID image, GlimsItemID layer);
+/* The whole selected-layer list: an exact, ordered, transient write
+ * (no undo/dirty/pixel change; refuses anything but [floating] while a
+ * floating selection is active) and a borrowed-order read allowed at
+ * any time. */
+GlimsStatus glims_image_select_layers (GlimsEngine *e, GlimsImageID image,
+                                       const GlimsItemID *layers, size_t count, char **error);
+GlimsStatus glims_image_selected_layers (GlimsEngine *e, GlimsImageID image,
+                                         GlimsItemID *ids, int32_t capacity, int32_t *count);
 GlimsStatus glims_layer_command    (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                     uint32_t command, GlimsItemID *result, char **error);
 GlimsStatus glims_layer_change     (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,

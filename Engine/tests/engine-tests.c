@@ -37,6 +37,7 @@ static atomic_int            selection_events;
 static atomic_int            size_events;
 static atomic_int            channels_events;
 static atomic_int            guide_events;
+static atomic_int            layers_events;
 
 #define CHECK(condition, ...)                       \
   do {                                              \
@@ -149,6 +150,8 @@ on_event (void *context, const GlimsEvent *event)
     atomic_fetch_add (&channels_events, 1);
   else if (event->kind == GLIMS_EVENT_GUIDES)
     atomic_fetch_add (&guide_events, 1);
+  else if (event->kind == GLIMS_EVENT_LAYERS_CHANGED)
+    atomic_fetch_add (&layers_events, 1);
   else if (event->kind == GLIMS_EVENT_PROGRESS)
     {
       if (event->active && ! atomic_exchange (&progress_active, true))
@@ -11563,6 +11566,281 @@ test_selection_float (void)
   api->image_close (engine, other);
 }
 
+/* Multi-layer selection (image_select_layers / image_selected_layers):
+ * the exact ordered write and its read-back, nested children and groups
+ * in the list, the empty clear, whole-input validation with atomic
+ * refusals, the transient guarantees (no undo, no dirty, no pixel
+ * change, LAYERS_CHANGED only on a real change), the genuine native
+ * edit-mask-flag clearing on a multi-selection with the mask's pixel
+ * data untouched, the floating-selection gate, and read-vs-write
+ * readiness while busy — through the facade only. */
+static void
+test_layer_multiselection (void)
+{
+  GlimsImageID       image = 0, other = 0;
+  GlimsItemID        background, a = 0, b = 0, group = 0, mask = 0, channel = 0, gone = 0, floating = 0;
+  GlimsItemID        foreign, ids[8];
+  GlimsLayerInfo     rows[8];
+  GlimsMaskState     mask_state;
+  GlimsFloatingState fs_state;
+  GlimsImageInfo     info;
+  GlimsSelectOptions sel = { .struct_size = sizeof sel, .operation = GLIMS_SELECT_REPLACE, .antialias = false };
+  GlimsStrokeID      stroke = 0;
+  GlimsStrokePoint   point = { 2, 2, 1.0, 0.0, 0.0, 0 };
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PENCIL, 4.0);
+  uint8_t            thumb_before[64 * 64 * 4], thumb_after[64 * 64 * 4];
+  int32_t            tw = 0, th = 0;
+  int32_t            count = 0, n = 0, before, events;
+  int32_t            w = 0, h = 0;
+  uint8_t           *shot = NULL, *now = NULL;
+  char              *error = NULL;
+  GlimsStatus        status;
+  int                i, selected_count;
+  bool               dirty_before;
+
+  api->image_new (engine, 64, 48, &image, NULL);
+  background = first_layer (image);
+
+  /* Fixture: top level b, group, background with the nested child a
+   * inside the group; tree top-first: b, group, a, background. */
+  CHECK (api->create_group (engine, image, 0, 0, "G", &group, NULL) == GLIMS_STATUS_OK && group != 0,
+         "a group exists");
+  api->layer_select (engine, image, background);
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &a, NULL);
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &b, NULL);
+  CHECK (api->reparent_layer (engine, image, a, group, 0, NULL) == GLIMS_STATUS_OK &&
+         api->reparent_layer (engine, image, b, 0, 0, NULL) == GLIMS_STATUS_OK &&
+         tree_is (image, (GlimsItemID[]) { b, group, a, background },
+                  (GlimsItemID[]) { 0, 0, group, 0 }, (int32_t[]) { 0, 0, 1, 0 }, 4),
+         "the fixture tree is b, group, nested child a, background");
+
+  /* The read's own validation, its count-only form and its order. */
+  CHECK (api->image_selected_layers (engine, 9999, ids, 8, &count) == GLIMS_STATUS_NOT_FOUND,
+         "the read reports an unknown image");
+  CHECK (api->image_selected_layers (engine, image, ids, 8, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_selected_layers (engine, image, ids, -1, &count) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a missing count or a negative capacity is INVALID_ARGUMENT");
+  CHECK (api->image_selected_layers (engine, image, ids, 8, &count) == GLIMS_STATUS_OK &&
+         count == 1 && ids[0] == b,
+         "the read returns the single selected layer (%d ids)", count);
+
+  /* Exact ordered write: a nested child, a group and a top-level layer,
+   * in an order that is not the tree order. */
+  events = atomic_load (&layers_events);
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { a, group, b }, 3, &error) == GLIMS_STATUS_OK,
+         "a multi-selection of a nested child, a group and a layer is accepted%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_selected_layers (engine, image, ids, 8, &count) == GLIMS_STATUS_OK &&
+         count == 3 && ids[0] == a && ids[1] == group && ids[2] == b,
+         "the read returns the exact list in the exact order (%d ids)", count);
+  CHECK (api->image_selected_layers (engine, image, NULL, 0, &count) == GLIMS_STATUS_OK && count == 3,
+         "the count-only read agrees (%d)", count);
+  CHECK (api->image_selected_layers (engine, image, ids, 2, &count) == GLIMS_STATUS_OK &&
+         count == 3 && ids[0] == a && ids[1] == group,
+         "a smaller capacity fills what fits and still counts all (%d)", count);
+  CHECK (api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK && n == 4 &&
+         rows[0].id == b && rows[0].selected &&
+         rows[1].id == group && rows[1].selected &&
+         rows[2].id == a && rows[2].selected &&
+         rows[3].id == background && ! rows[3].selected,
+         "the rows' selected flags match the multi-selection exactly");
+  CHECK (atomic_load (&layers_events) > events, "the change sent LAYERS_CHANGED");
+
+  /* A request identical to the current selection is a no-op: no event.
+   * The same set in a different order is a real change and sticks. */
+  events = atomic_load (&layers_events);
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { a, group, b }, 3, NULL) == GLIMS_STATUS_OK &&
+         atomic_load (&layers_events) == events,
+         "an identical selection is a no-op with no event");
+  events = atomic_load (&layers_events);
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { b, a }, 2, NULL) == GLIMS_STATUS_OK &&
+         api->image_selected_layers (engine, image, ids, 8, &count) == GLIMS_STATUS_OK &&
+         count == 2 && ids[0] == b && ids[1] == a &&
+         atomic_load (&layers_events) > events,
+         "a reordered selection is a real change and the new order is kept");
+  events = atomic_load (&layers_events);
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { a, b }, 2, NULL) == GLIMS_STATUS_OK &&
+         api->image_selected_layers (engine, image, ids, 8, &count) == GLIMS_STATUS_OK &&
+         count == 2 && ids[0] == a && ids[1] == b &&
+         atomic_load (&layers_events) > events,
+         "changing only the primary layer preserves the requested order");
+
+  /* Transient: no undo step, no dirty flag, no pixel change. */
+  before = undo_depth (image);
+  api->image_info (engine, image, &info);
+  dirty_before = info.dirty;
+  shot = render_all (image, &w, &h);
+  CHECK (shot != NULL, "the fixture renders");
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { group, background }, 2, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "a selection change pushes no undo step");
+  CHECK (api->image_info (engine, image, &info) == GLIMS_STATUS_OK && info.dirty == dirty_before,
+         "a selection change leaves the dirty flag alone");
+  now = render_all (image, &w, &h);
+  CHECK (now && shot && memcmp (now, shot, (size_t) w * h * 4) == 0,
+         "a selection change alters no pixels");
+  free (now);
+  now = NULL;
+
+  /* The empty list clears the selection — the core permits an empty
+   * selection when no floating selection is active. */
+  CHECK (api->image_select_layers (engine, image, NULL, 0, NULL) == GLIMS_STATUS_OK &&
+         api->image_selected_layers (engine, image, NULL, 0, &count) == GLIMS_STATUS_OK && count == 0,
+         "an empty list clears the selection");
+  CHECK (api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK && n == 4, "the rows still read");
+  selected_count = 0;
+  for (i = 0; i < n; i++)
+    if (rows[i].selected)
+      selected_count++;
+  CHECK (selected_count == 0, "no row reports selected after the clear");
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { a }, 1, NULL) == GLIMS_STATUS_OK &&
+         api->image_selected_layers (engine, image, ids, 8, &count) == GLIMS_STATUS_OK && count == 1 && ids[0] == a,
+         "a single-layer selection reads back");
+  CHECK (api->layer_select (engine, image, b) == GLIMS_STATUS_OK &&
+         api->image_selected_layers (engine, image, ids, 8, &count) == GLIMS_STATUS_OK && count == 1 && ids[0] == b,
+         "layer_select and the multi read agree");
+  api->image_select_layers (engine, image, (GlimsItemID[]) { a }, 1, NULL);
+
+  /* Whole-input validation; every refusal happens before any mutation. */
+  api->layer_mask_add (engine, image, a, GLIMS_MASK_BLACK, true, &mask, NULL);
+  CHECK (api->layer_mask (engine, image, a, &mask_state) == GLIMS_STATUS_OK &&
+         mask_state.mask == mask && mask_state.editing,
+         "the mask exists and is the edit target while its layer is the only selected one");
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 4, 4 }, { 12, 12 } }, 2, &sel);
+  CHECK (api->channel_from_selection (engine, image, "chan", &channel, NULL) == GLIMS_STATUS_OK && channel != 0,
+         "a saved channel exists");
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  api->channel_command (engine, image, 0, GLIMS_CHANNEL_SELECT, NULL, NULL);
+  api->image_new (engine, 16, 16, &other, NULL);
+  foreign = first_layer (other);
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &gone, NULL);
+  api->layer_command (engine, image, gone, GLIMS_LAYER_DELETE, NULL, NULL);
+
+  before = undo_depth (image);
+  CHECK (api->image_select_layers (engine, image, NULL, 1, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a NULL list with a positive count is INVALID_ARGUMENT");
+  CHECK (api->image_select_layers (engine, image, &a, SIZE_MAX, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an oversized count is refused before allocation or reading input ids");
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { a, a }, 2, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "a repeated id is INVALID_ARGUMENT (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { 0 }, 1, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "the id 0 is INVALID_ARGUMENT (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { a, 9999 }, 2, &error) == GLIMS_STATUS_NOT_FOUND && error,
+         "an unknown id is NOT_FOUND (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { a, gone }, 2, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a deleted (stale) id is NOT_FOUND");
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { a, foreign }, 2, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an id of another image (foreign) is NOT_FOUND");
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { mask }, 1, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "a layer-mask id is refused as a non-layer (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { channel }, 1, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "a channel id is refused as a non-layer (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_select_layers (engine, 9999, (GlimsItemID[]) { a }, 1, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an unknown image is NOT_FOUND");
+  CHECK (api->image_selected_layers (engine, image, ids, 8, &count) == GLIMS_STATUS_OK &&
+         count == 1 && ids[0] == a && undo_depth (image) == before,
+         "every refusal left the selection and the history untouched (atomic)");
+
+  /* Genuine native behavior: changing to a multi-selection clears the
+   * edit-mask flag of the selected layers that have masks — transient
+   * edit state, not mask data. The mask's pixels and its enabled flag
+   * stay, and no undo or dirty follows. */
+  CHECK (api->drawable_thumbnail (engine, image, mask, 64, thumb_before, sizeof thumb_before, &tw, &th) == GLIMS_STATUS_OK,
+         "the mask thumbnail reads (%dx%d)", tw, th);
+  before = undo_depth (image);
+  api->image_info (engine, image, &info);
+  dirty_before = info.dirty;
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { a, b }, 2, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "the multi-selection pushes no undo step");
+  CHECK (api->layer_mask (engine, image, a, &mask_state) == GLIMS_STATUS_OK &&
+         mask_state.mask == mask && ! mask_state.editing && mask_state.enabled,
+         "the native multi-selection cleared the transient edit-mask flag (enabled kept)");
+  CHECK (api->drawable_thumbnail (engine, image, mask, 64, thumb_after, sizeof thumb_after, &tw, &th) == GLIMS_STATUS_OK &&
+         memcmp (thumb_before, thumb_after, (size_t) tw * th * 4) == 0,
+         "the mask's pixel data is unchanged");
+  CHECK (api->image_info (engine, image, &info) == GLIMS_STATUS_OK && info.dirty == dirty_before,
+         "no dirty flag from the selection change");
+
+  /* The floating-selection gate: while a FS is active the native setter
+   * silently ignores anything but [FS]; the facade refuses explicitly
+   * and never anchors. */
+  api->image_select_layers (engine, image, (GlimsItemID[]) { a }, 1, NULL);
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 4, 4 }, { 12, 12 } }, 2, &sel);
+  fs_state.struct_size = sizeof fs_state;
+  before = undo_depth (image);
+  status = api->selection_float (engine, image, a, GLIMS_FLOAT_MOVE, &floating, &error);
+  CHECK (status == GLIMS_STATUS_OK && floating != 0 && undo_depth (image) == before + 1,
+         "the fixture floating selection is created%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_selected_layers (engine, image, ids, 8, &count) == GLIMS_STATUS_OK &&
+         count == 1 && ids[0] == floating,
+         "the floating selection is the selected layer");
+  before = undo_depth (image);
+  status = api->image_select_layers (engine, image, (GlimsItemID[]) { b }, 1, &error);
+  CHECK (status == GLIMS_STATUS_FAILED && error && undo_depth (image) == before,
+         "an alternate selection is explicitly refused while a FS is active, no undo (%s)",
+         error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  status = api->image_select_layers (engine, image, NULL, 0, &error);
+  CHECK (status == GLIMS_STATUS_FAILED && error,
+         "clearing the selection is refused while a FS is active (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_selected_layers (engine, image, ids, 8, &count) == GLIMS_STATUS_OK &&
+         count == 1 && ids[0] == floating &&
+         api->image_floating_selection (engine, image, &fs_state) == GLIMS_STATUS_OK &&
+         fs_state.active && fs_state.floating == floating,
+         "the refusals changed nothing and never anchored the FS");
+  events = atomic_load (&layers_events);
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { floating }, 1, NULL) == GLIMS_STATUS_OK &&
+         atomic_load (&layers_events) == events &&
+         api->image_floating_selection (engine, image, &fs_state) == GLIMS_STATUS_OK && fs_state.active,
+         "selecting exactly [FS] is accepted as a no-op and leaves the FS active");
+  CHECK (api->floating_command (engine, image, floating, GLIMS_FLOATING_DISCARD, NULL, NULL) == GLIMS_STATUS_OK,
+         "the FS discards");
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { a, b }, 2, NULL) == GLIMS_STATUS_OK &&
+         api->image_selected_layers (engine, image, ids, 8, &count) == GLIMS_STATUS_OK &&
+         count == 2 && ids[0] == a && ids[1] == b,
+         "after the FS is resolved the multi-selection works again");
+
+  /* Readiness: the read is allowed while busy; the write has
+   * layer_select's readiness — no BUSY gate. */
+  api->image_select_layers (engine, image, (GlimsItemID[]) { a }, 1, NULL);
+  CHECK (api->stroke_begin (engine, image, a, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK,
+         "the busy-probe stroke begins");
+  CHECK (api->image_selected_layers (engine, image, ids, 8, &count) == GLIMS_STATUS_OK &&
+         count == 1 && ids[0] == a,
+         "the selected-layers read is allowed while the engine is busy");
+  CHECK (api->layer_select (engine, image, b) == GLIMS_STATUS_OK,
+         "layer_select is not BUSY-gated during a stroke (its readiness)");
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { b, group }, 2, NULL) == GLIMS_STATUS_OK &&
+         api->image_selected_layers (engine, image, ids, 8, &count) == GLIMS_STATUS_OK &&
+         count == 2 && ids[0] == b && ids[1] == group,
+         "image_select_layers has the same readiness as layer_select during a stroke");
+  CHECK (api->stroke_end (engine, stroke) == GLIMS_STATUS_OK, "the probe stroke ends");
+
+  free (shot);
+  if (other)
+    api->image_close (engine, other);
+  if (image)
+    api->image_close (engine, image);
+}
+
 static void
 test_procedures (void)
 {
@@ -12399,6 +12677,7 @@ main (int argc, char **argv)
   test_selection_stroke ();
   test_floating_selection (argv[2]);
   test_selection_float ();
+  test_layer_multiselection ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 

@@ -1245,6 +1245,38 @@ final class EngineSession: @unchecked Sendable {
         try check(api.layer_select(engine, image, layer), nil)
     }
 
+    /// The image's selected layer ids in the engine's own order — the
+    /// order `selectLayers(_:image:)` last set, active layer first
+    /// (image_selected_layers). A plain read: allowed at any time, also
+    /// while a stroke, a filter session or a plug-in holds the image;
+    /// throws NOT_FOUND for an unknown image.
+    func selectedLayers(_ image: Int32) throws -> [Int32] {
+        var count: Int32 = 0
+        try check(api.image_selected_layers(engine, image, nil, 0, &count), nil)
+        var ids = [GlimsItemID](repeating: 0, count: Int(count))
+        var filled: Int32 = 0
+        try ids.withUnsafeMutableBufferPointer { buffer in
+            try check(api.image_selected_layers(engine, image, buffer.baseAddress, count, &filled), nil)
+        }
+        return ids.prefix(Int(min(count, filled))).map { Int32($0) }
+    }
+
+    /// Selects exactly `layers`, in that order, as the image's whole
+    /// selected-layer list (image_select_layers); an empty array clears
+    /// it. Transient: no undo step, no dirty flag, no pixel, selection
+    /// or mask change; a change delivers `layersChanged`. The whole
+    /// input is validated before any mutation: INVALID_ARGUMENT for a
+    /// repeated id, the id 0, or a mask/channel/path id; NOT_FOUND for a
+    /// stale, foreign or detached id, or an unknown image; FAILED while
+    /// a floating selection is active unless `layers` is exactly that
+    /// floating layer (which is a no-op, never an anchor).
+    func selectLayers(_ layers: [Int32], image: Int32) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try layers.withUnsafeBufferPointer { buffer in
+            try check(api.image_select_layers(engine, image, buffer.baseAddress, buffer.count, &error), error)
+        }
+    }
+
     /// Returns the layer the command created, if any.
     @discardableResult
     func layerCommand(_ command: LayerCommand, image: Int32, layer: Int32 = 0) throws -> Int32? {
