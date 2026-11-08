@@ -967,6 +967,14 @@ Conversion first preserves editable layers. A native rasterization refusal
 opens a separate Rasterize and Convert confirmation after the engine gate
 drains. Cancel preserves the image; approval rechecks admission and performs
 conversion/rasterization as one undoable edit. The pinned interface run
-passes 756 checks including Cancel, approval, undo restoration, busy-engine
-refusal and direct facade NUL validation. All 324 unit tests pass. Additional
-closing coverage and cross-engine interface validation follow before merge.
+passes 758 checks including Cancel, approval, undo restoration, busy-engine
+refusal, direct facade NUL validation and late-close suppression while
+accepted input drains. All 324 unit tests pass. Independent Beam review of
+the consent delta found no important issues.
+
+In a real window the ICC source enabled its path and Choose controls;
+cancelling the file picker returned to the form. Assignment embedded the
+fixture. Conversion of newly typed text asked for rasterization; Cancel
+kept text editable, approval converted, and Undo restored the text layer
+and its embedded source profile. The test app quit with Don't Save and left
+no dialog. Cross-engine interface validation follows before merge.
