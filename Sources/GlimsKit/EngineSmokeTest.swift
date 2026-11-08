@@ -98,6 +98,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "vector-style" {
+                try exerciseVectorStyleForm(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (vector style)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseFileAdmission(session, work: work, documents: documents)
@@ -5198,7 +5203,6 @@ enum EngineSmokeTest {
             document.closeImageWhenDrained()
         }
         var errors: [String] = []
-        document.onError = { errors.append($0) }
         func settle() { document.inputQueue.sync {}; spin() }
         func wait(_ condition: () -> Bool) {
             let deadline = Date().addingTimeInterval(10)
@@ -5224,6 +5228,7 @@ enum EngineSmokeTest {
         }
 
         let controller = DocumentWindowController(document: document)
+        document.onError = { errors.append($0) }
         controller.showWindow(nil)
         defer {
             if let attached = controller.window?.attachedSheet {
@@ -5279,7 +5284,7 @@ enum EngineSmokeTest {
         let errorsBefore = errors.count
         controller.vectorStyle(nil)
         wait { seeded() }
-        check(sheet() != nil && seeded()
+        check(sheet() != nil && seeded() && !EngineActivity.shared.isBusy
                 && field("Stroke width, pixels")?.stringValue.isEmpty == false,
               "the sheet opens and the off-main read seeds its controls")
         finish(.alertSecondButtonReturn)
@@ -5300,10 +5305,12 @@ enum EngineSmokeTest {
         // anything is queued.
         controller.vectorStyle(nil)
         wait { seeded() }
+        toggle("Stroke the path", to: .on)
         field("Stroke width, pixels")?.stringValue = "0"
         let invalidErrors = errors.count
         let invalidUndo = document.undoInfo.undoCount
         finish(.alertFirstButtonReturn)
+        wait { errors.count > invalidErrors }
         check(errors.count > invalidErrors && document.pendingWork == 0
                 && document.undoInfo.undoCount == invalidUndo,
               "an out-of-range width is refused without editing or adding undo")
@@ -5378,6 +5385,7 @@ enum EngineSmokeTest {
         let busyErrors = errors.count
         let busyUndo = document.undoInfo.undoCount
         finish(.alertFirstButtonReturn)
+        wait { errors.count > busyErrors }
         check(held && errors.count > busyErrors && document.pendingWork == 0
                 && document.undoInfo.undoCount == busyUndo,
               "a busy engine acquired after the sheet opened is reported and changes nothing")
@@ -5395,6 +5403,7 @@ enum EngineSmokeTest {
         let targetErrors = errors.count
         let targetUndo = document.undoInfo.undoCount
         finish(.alertFirstButtonReturn)
+        wait { errors.count > targetErrors }
         check(errors.count > targetErrors && errors.last?.contains("changed") == true
                 && document.undoInfo.undoCount == targetUndo,
               "a captured target deleted while the sheet was up is refused (\(errors.last ?? "none"))")
