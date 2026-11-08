@@ -113,6 +113,15 @@ extension DocumentWindowController {
     func canPerformClipboardCommand(_ action: Selector?) -> Bool {
         guard !PlugInCommands.isRunning, !imageDocument.isClosing, !EngineActivity.shared.isBusy,
               !imageDocument.isTransferringClipboard, !imageDocument.isSavingForClose else { return false }
+        // Copy/Cut/Clear of the active layer and an ordinary Paste are
+        // single-layer commands: they would silently act on the primary
+        // layer alone under a multi-selection. Copy Merged reads the
+        // whole composite and stays available. Paste Into also requires
+        // one selected layer before capturing its explicit target.
+        let singleLayerClipboard = action == #selector(cut(_:)) || action == #selector(copy(_:))
+            || action == #selector(paste(_:)) || action == #selector(pasteInPlace(_:))
+            || action == #selector(deleteBackward(_:)) || action == #selector(pasteInto(_:))
+        if singleLayerClipboard, imageDocument.hasMultipleSelectedLayers { return false }
         switch action {
         case #selector(paste(_:)), #selector(pasteInPlace(_:)):
             // An ordinary Paste would implicitly anchor an active
