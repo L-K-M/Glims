@@ -402,6 +402,16 @@ typedef struct GlimsLineSettings {
   bool       antialias;
 } GlimsLineSettings;
 
+/* How path_fill fills a path: a solid color, the engine's foreground
+ * fill. No pattern and no fill rule of its own; the core's scan
+ * converter decides coverage. */
+typedef struct GlimsPathFillSettings {
+  uint32_t   struct_size;    /* sizeof (GlimsPathFillSettings) */
+  GlimsColor color;          /* sRGB, 0 ... 1; its alpha multiplies the fill */
+  double     opacity;        /* 0 ... 1 */
+  bool       antialias;      /* the fill edge */
+} GlimsPathFillSettings;
+
 typedef enum GlimsRunMode {
   GLIMS_RUN_INTERACTIVE      = 1, /* the plug-in may show its dialog */
   GLIMS_RUN_WITH_LAST_VALUES = 2  /* repeat with the last settings, no dialog */
@@ -1241,6 +1251,48 @@ typedef struct GlimsEngineAPI {
                                            uint32_t mode, char **error);
   GlimsStatus  (*image_convert_precision) (GlimsEngine *engine, GlimsImageID image,
                                            uint32_t component, uint32_t trc, char **error);
+
+  /* Fills the area `path` encloses on `drawable` with a solid color, as
+   * the engine's own Fill Path does (gimp_item_fill over GimpFillOptions;
+   * app/actions/items-commands.c). `drawable` is a layer, a layer mask
+   * or a channel of the image (0: the selected drawable, which is the
+   * layer's mask while mask editing is on, or a selected channel); the
+   * fill stays inside the selection and honors the drawable's mask, its
+   * active components and its pixel locks (LOCKED, also when a group
+   * around it holds them). One undo step ("Fill Path"). The fill is the
+   * settings' color at `opacity` with `antialias`; on a drawable without
+   * an alpha channel the fill is opaque, as the core makes it. The path,
+   * the selection and the image's file identity are unchanged. NOT_FOUND
+   * for an unknown image, path or drawable id, also one from another
+   * image; INVALID_ARGUMENT for NULL or short settings, a non-finite
+   * color or an opacity outside 0 ... 1; FAILED for a group as the
+   * target and for a path with no fillable geometry ("Not enough points
+   * to fill"), both without touching the image; BUSY while a stroke, a
+   * filter session or a plug-in holds the image. */
+  GlimsStatus  (*path_fill)               (GlimsEngine *engine, GlimsImageID image,
+                                           GlimsItemID path, GlimsItemID drawable,
+                                           const GlimsPathFillSettings *settings, char **error);
+  /* Makes a genuine vector layer from `path`, as Paths > New Vector
+   * Layer does (gimp_vector_layer_new plus gimp_image_add_layer;
+   * app/actions/paths-commands.c path_to_vector_layer_cmd_callback):
+   * above the selected layer, itself selected, rendered, one undo step.
+   * `name` (NULL: the path's name, which the core copies to the layer)
+   * sets the layer's name; `layer` (may be NULL) receives the layer.
+   * Engines without vector layers (before GIMP 3.2) report UNSUPPORTED
+   * and change nothing; the call never degrades to a raster copy.
+   *
+   * Ownership: while the image is open the layer's options hold the same
+   * path object, not a clone, so editing the path re-renders the layer;
+   * XCF stores the path once in the image's path list and the layer
+   * references it by tattoo, re-associated on load, so the layer
+   * survives save and reopen as structured content and keeps reporting
+   * GLIMS_LAYER_VECTOR. Deleting the path detaches it from the layer
+   * (the core clears the options' path). NOT_FOUND for an unknown image
+   * or path; INVALID_ARGUMENT for a bad `name`; BUSY while a stroke, a
+   * filter session or a plug-in holds the image. */
+  GlimsStatus  (*path_to_vector_layer)    (GlimsEngine *engine, GlimsImageID image,
+                                           GlimsItemID path, const char *name,
+                                           GlimsItemID *layer, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

@@ -711,6 +711,27 @@ and substantial parts of `design.md`, still need implementation and checks.
   its existing path. The initial GitHub build also exposed a Swift
   6.2 tuple-conversion error in path hit testing; its distance now
   explicitly uses Double, matching the stored distance type.
+- 2026-11-08: two more additive path facade calls, engine side only, on
+  `feat/path-fill-vector`. `path_fill` fills a path onto an explicit
+  drawable (layer, mask or channel; 0 = the selected drawable) through
+  the core's `gimp_item_fill`/`GimpFillOptions` — the same call GIMP's
+  Fill Path actions make (`app/actions/items-commands.c`) — with a new
+  facade-owned `GlimsPathFillSettings` (color, opacity, antialias; no
+  fill rule or pattern), one undo step, selection and mask honored by
+  the core, pixel locks (group-inherited) refused up front, unusable
+  paths failed before any undo group opens. `path_to_vector_layer`
+  makes a genuine vector layer via `gimp_vector_layer_new` +
+  `gimp_image_add_layer`, as Paths > New Vector Layer does
+  (`app/actions/paths-commands.c`), one undo step, the layer selected;
+  before GIMP 3.2 it reports UNSUPPORTED without mutating. Ownership as
+  the core keeps it: the layer's options reference the same path object
+  while the image is open (`g_value_dup_object` in
+  `app/path/gimpvectorlayeroptions.c`), so editing the path re-renders
+  the layer; XCF stores the path once in the image's path list and the
+  layer by tattoo (`PROP_VECTOR_LAYER` in `app/xcf/xcf-save.c`,
+  re-associated in `app/xcf/xcf-load.c`), so the layer survives save
+  and reopen as structured content. Conformance tests cover both; the
+  four-engine run is left to the root checkout.
 
 ## Open decisions
 
@@ -735,3 +756,17 @@ and substantial parts of `design.md`, still need implementation and checks.
 | 2026-11-05 | GIMP_3_2_x | GIMP_3_0_8 | +15 / 1 | none | not timed; one edit round | `interface-diff.py` (all 3, before compiling), then the compiler | Reverse minor-release drill; environment: `mypaint-brushes1` port, typelib repair |
 | 2026-11-05 | GIMP_3_2_8 (adapter with plug-in procedures) | master `32c1ddaa2d` | +5 / 1 | none | minutes | the compiler; `interface-diff.py` did not compare struct members then, and does now | `GimpProgressInterface.get_window_id` renamed `get_window_handle` (ed668b3e2d); 3.0.8 and 3.2.0 needed nothing |
 | 2026-11-05 | master `32c1ddaa2d` | master `5374deeec1` | 0 / 0 | none | none (matrix run) | no break; `interface-diff.py` reports only the known rename | First run of `scripts/engine-matrix.sh` |
+
+### Vector-layer load compatibility (2026-11-08)
+
+The path-fill/vector slice exposed GIMP 3.2.0's XCF loader replacing an
+explicit vector-layer name with its path name during conversion. The new
+name-preservation assertion reproduced this after save/reopen. A scoped
+adapter hook now observes native layer-container insertion while loading,
+before the core refresh can rename the converted layer. It also covers
+nested groups and imported layers; existing destination layers retain
+their naming policy. Hooks disconnect on success and failure. The guard
+is compiled only for 3.2.0; later engines restore the saved name themselves.
+No upstream source, file metadata, dirty state or undo history changes.
+Pinned and cross-version checks plus independent review are recorded in
+the PR before merge. Frontend path controls remain a separate slice.
