@@ -125,6 +125,33 @@ lookup_resource (GlimsEngine *engine, GlimsResourceID id, GimpData **out)
   return GLIMS_STATUS_OK;
 }
 
+/* The narrowly typed lookup the paint path needs. It reuses
+ * lookup_resource(), which already refuses 0 and out-of-native-range
+ * handles before the native id table (INVALID_ARGUMENT) and stale,
+ * foreign or out-of-factory handles (NOT_FOUND), so the id is never
+ * truncated unsafely here; a live resource of another kind is a
+ * wrong-kind argument for a brush. */
+GlimsStatus
+glims_lookup_brush (GlimsEngine *engine, GlimsResourceID id, GimpBrush **out)
+{
+  GimpData   *data;
+  GlimsStatus status;
+
+  if (! out)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  *out = NULL;
+
+  status = lookup_resource (engine, id, &data);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+
+  if (! GIMP_IS_BRUSH (data))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  *out = GIMP_BRUSH (data);
+  return GLIMS_STATUS_OK;
+}
+
 GlimsStatus
 glims_resources (GlimsEngine       *engine,
                  uint32_t           kind,

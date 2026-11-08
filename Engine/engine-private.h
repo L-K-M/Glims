@@ -130,6 +130,13 @@ GlimsStatus glims_image_redo       (GlimsEngine *e, GlimsImageID id);
 GlimsStatus glims_stroke_begin     (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                     const GlimsBrushSettings *brush, const GlimsStrokePoint *first,
                                     GlimsStrokeID *out, char **error);
+/* As glims_stroke_begin, but the stroke paints with the brush the
+ * `brush` resource handle names; resolved only here, at begin. */
+GlimsStatus glims_stroke_begin_with_brush_resource (GlimsEngine *e, GlimsImageID image,
+                                                    GlimsItemID layer, GlimsResourceID brush,
+                                                    const GlimsBrushSettings *settings,
+                                                    const GlimsStrokePoint *first,
+                                                    GlimsStrokeID *out, char **error);
 GlimsStatus glims_stroke_continue  (GlimsEngine *e, GlimsStrokeID id,
                                     const GlimsStrokePoint *points, size_t count);
 GlimsStatus glims_stroke_end       (GlimsEngine *e, GlimsStrokeID id);
@@ -341,5 +348,10 @@ GlimsStatus glims_resource_identifiers (GlimsEngine *e, GlimsResourceID id,
 GlimsStatus glims_resource_resolve     (GlimsEngine *e, uint32_t kind, const char *name,
                                         const char *collection, bool internal,
                                         GlimsResourceID *outID, char **error);
+/* Resolves a facade handle to a live GimpBrush of this engine's own brush
+ * factory, reusing lookup_resource()'s id validation: INVALID_ARGUMENT
+ * for 0, out-of-native-range or non-brush handles, NOT_FOUND for stale
+ * handles or brushes absent from the current factory. */
+GlimsStatus glims_lookup_brush         (GlimsEngine *e, GlimsResourceID id, GimpBrush **out);
 
 #endif /* GLIMS_ENGINE_PRIVATE_H */

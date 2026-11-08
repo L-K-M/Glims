@@ -1165,6 +1165,29 @@ resource_resolve_on_engine (GlimsEngine *e, gpointer data)
                                  a->out_id, a->error);
 }
 
+/* stroke_begin_with_brush_resource carries a full 64-bit resource handle,
+ * so it gets its own args struct with a typed uint64_t field; the id never
+ * travels in one of GlimsArgs' 32-bit fields. */
+typedef struct
+{
+  GlimsImageID              image;
+  GlimsItemID               item;
+  GlimsResourceID           brush;
+  const GlimsBrushSettings *brush_settings;
+  const GlimsStrokePoint   *first;
+  GlimsStrokeID            *out;
+  char                    **error;
+} GlimsStrokeResourceArgs;
+
+static GlimsStatus
+stroke_begin_with_brush_resource_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsStrokeResourceArgs *a = data;
+
+  return glims_stroke_begin_with_brush_resource (e, a->image, a->item, a->brush,
+                                                 a->brush_settings, a->first, a->out, a->error);
+}
+
 static GlimsStatus
 procedure_cancel_on_engine (GlimsEngine *e, gpointer data)
 {
@@ -1279,6 +1302,18 @@ api_stroke_end (GlimsEngine *e, GlimsStrokeID stroke)
 {
   GlimsArgs a = { .item = stroke };
   return glims_engine_call (e, stroke_end_on_engine, &a);
+}
+
+static GlimsStatus
+api_stroke_begin_with_brush_resource (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                      GlimsResourceID brush, const GlimsBrushSettings *settings,
+                                      const GlimsStrokePoint *first, GlimsStrokeID *stroke,
+                                      char **error)
+{
+  GlimsStrokeResourceArgs a = { .image = image, .item = layer, .brush = brush,
+                                .brush_settings = settings, .first = first,
+                                .out = stroke, .error = error };
+  return glims_engine_call (e, stroke_begin_with_brush_resource_on_engine, &a);
 }
 
 static GlimsStatus
@@ -2033,6 +2068,7 @@ static const GlimsEngineAPI api_v1 = {
   .resources = api_resources,
   .resource_identifiers = api_resource_identifiers,
   .resource_resolve = api_resource_resolve,
+  .stroke_begin_with_brush_resource = api_stroke_begin_with_brush_resource,
 };
 
 __attribute__ ((visibility ("default")))
