@@ -331,4 +331,15 @@ GlimsStatus glims_image_convert_mode      (GlimsEngine *e, GlimsImageID image,
 GlimsStatus glims_image_convert_precision (GlimsEngine *e, GlimsImageID image,
                                            uint32_t component, uint32_t trc, char **error);
 
+/* resource.c */
+GlimsStatus glims_resources            (GlimsEngine *e, uint32_t kind,
+                                        GlimsResourceInfo *rows, int32_t capacity,
+                                        int32_t *count);
+GlimsStatus glims_resource_identifiers (GlimsEngine *e, GlimsResourceID id,
+                                        char **name, char **collection, bool *internal,
+                                        char **error);
+GlimsStatus glims_resource_resolve     (GlimsEngine *e, uint32_t kind, const char *name,
+                                        const char *collection, bool internal,
+                                        GlimsResourceID *outID, char **error);
+
 #endif /* GLIMS_ENGINE_PRIVATE_H */

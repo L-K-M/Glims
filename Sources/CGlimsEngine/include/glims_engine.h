@@ -720,6 +720,27 @@ typedef struct GlimsColorInfo {
   char     profile_label[256];  /* UTF-8, truncated; "" when none */
 } GlimsColorInfo;
 
+/* Brushes, patterns and gradients. These are the facade's own kind
+ * values; the engine's own enums never cross this boundary. */
+typedef enum GlimsResourceKind {
+  GLIMS_RESOURCE_BRUSH    = 1,
+  GLIMS_RESOURCE_PATTERN  = 2,
+  GLIMS_RESOURCE_GRADIENT = 3
+} GlimsResourceKind;
+
+/* A handle to one brush, pattern or gradient. It is opaque and valid
+ * only for the running engine that issued it in this session: a handle
+ * carried across a restart resolves to nothing. 0 means none. */
+typedef uint64_t GlimsResourceID;
+
+/* One row of the resources() list, in the engine's own order. */
+typedef struct GlimsResourceInfo {
+  GlimsResourceID id;
+  uint32_t        kind;      /* GlimsResourceKind */
+  char            name[256]; /* display label, UTF-8, truncated at a
+                              * character boundary */
+} GlimsResourceInfo;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -1293,6 +1314,55 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*path_to_vector_layer)    (GlimsEngine *engine, GlimsImageID image,
                                            GlimsItemID path, const char *name,
                                            GlimsItemID *layer, char **error);
+
+  /* Brushes, patterns and gradients: what a resource chooser lists,
+   * and the persistent identity that restores a saved choice after a
+   * restart. All three are reads: they change nothing and are allowed
+   * at any time.
+   *
+   * resources() lists the engine's resources of `kind` (a
+   * GlimsResourceKind) in the engine's own order; the interface sorts
+   * as it likes. Only names and handles are collected; nothing is
+   * rendered. `rows` receives up to `capacity` rows, `count` the total.
+   * INVALID_ARGUMENT for an unknown `kind`, a missing `count`, a
+   * negative `capacity`, or `rows` missing while `capacity` is
+   * positive. */
+  GlimsStatus  (*resources)            (GlimsEngine *engine, uint32_t kind,
+                                        GlimsResourceInfo *rows, int32_t capacity,
+                                        int32_t *count);
+  /* The persistent identity of the resource `id` names: the triplet to
+   * store and later feed to resource_resolve(). `name` and `collection`
+   * are owned strings (free with free_string) and `internal` says
+   * whether the resource is the engine's built-in data. A NULL
+   * `collection` is a value of its own, not an empty collection: pass
+   * back exactly what was received. The identity survives restarting
+   * the engine; nothing else is promised, since moving or renaming the
+   * underlying file changes it. INVALID_ARGUMENT when `id` is 0 or
+   * outside the range of the issued handles (such a value can never
+   * name a resource) or when an output is missing; NOT_FOUND for a
+   * validly shaped handle that no longer resolves: stale, or issued
+   * by another engine; FAILED when the resource has no usable identity
+   * (a missing or invalid name, or a collection that is not UTF-8),
+   * with all outputs reset. */
+  GlimsStatus  (*resource_identifiers) (GlimsEngine *engine, GlimsResourceID id,
+                                        char **name, char **collection, bool *internal,
+                                        char **error);
+  /* The handle of the resource of `kind` that the identity (name,
+   * collection, internal) names, as resource_identifiers() reported
+   * it; `outID` receives 0 when the identity resolves to nothing. The
+   * match is exactly the engine's own: `collection` (NULL and "" are
+   * distinct) and `internal` must agree, and for non-internal
+   * resources the name too. An internal resource's name is not
+   * compared (its display name is localized), and there is no
+   * name-only fallback for the rest. `name` must be nonempty UTF-8,
+   * and `collection`, when given, UTF-8. INVALID_ARGUMENT for an
+   * unknown `kind`, an invalid `name` or `collection`, or a missing
+   * `outID`; NOT_FOUND when no resource of `kind` carries the
+   * identity. */
+  GlimsStatus  (*resource_resolve)     (GlimsEngine *engine, uint32_t kind,
+                                        const char *name, const char *collection,
+                                        bool internal, GlimsResourceID *outID,
+                                        char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

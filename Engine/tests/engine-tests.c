@@ -4876,6 +4876,293 @@ background_run (void *data)
   return NULL;
 }
 
+/* Minimal UTF-8 validation for the resource labels and identities. */
+static int
+valid_utf8 (const char *text)
+{
+  const unsigned char *p = (const unsigned char *) text;
+
+  while (*p)
+    {
+      unsigned cp;
+      int      length, i;
+
+      if (*p < 0x80)
+        {
+          p++;
+          continue;
+        }
+      else if ((*p & 0xE0) == 0xC0)
+        {
+          length = 2;
+          cp     = *p & 0x1F;
+        }
+      else if ((*p & 0xF0) == 0xE0)
+        {
+          length = 3;
+          cp     = *p & 0x0F;
+        }
+      else if ((*p & 0xF8) == 0xF0)
+        {
+          length = 4;
+          cp     = *p & 0x07;
+        }
+      else
+        return 0;
+
+      for (i = 1; i < length; i++)
+        {
+          if ((p[i] & 0xC0) != 0x80)
+            return 0;
+          cp = (cp << 6) | (p[i] & 0x3F);
+        }
+      if ((length == 2 && cp < 0x80) ||
+          (length == 3 && (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF))) ||
+          (length == 4 && (cp < 0x10000 || cp > 0x10FFFF)))
+        return 0;
+      p += length;
+    }
+
+  return 1;
+}
+
+/* Brushes, patterns and gradients: names-only enumeration of the stock
+ * factories, and the persistent identity that survives a restart. The
+ * engine prefix these tests run against installs stock .gbr/.gih, .pat
+ * and .ggr files, so every kind must list file-backed data, not only
+ * built-ins. */
+static void
+test_resources (void)
+{
+  static const struct
+  {
+    uint32_t    kind;
+    const char *label;
+  } kinds[] = {
+    { GLIMS_RESOURCE_BRUSH, "brush" },
+    { GLIMS_RESOURCE_PATTERN, "pattern" },
+    { GLIMS_RESOURCE_GRADIENT, "gradient" },
+  };
+  char              bad_name_utf8[] = { (char) 0xC3, (char) 0x28, 0 };
+  char              bad_coll_utf8[] = { (char) 0xFF, (char) 0xFE, 0 };
+  GlimsResourceInfo  short_rows[2] = { { 0 } };
+  GlimsResourceInfo *rows = NULL;
+  size_t             k;
+
+  for (k = 0; k < sizeof kinds / sizeof kinds[0]; k++)
+    {
+      uint32_t           kind  = kinds[k].kind;
+      const char        *label = kinds[k].label;
+      GlimsResourceID    ext_id = 0, int_id = 0;
+      char              *ext_name = NULL, *ext_collection = NULL;
+      char              *int_name = NULL, *int_collection = NULL;
+      bool               ext_internal = false;
+      int32_t            count = 0, filled = 0, short_count = 0, bad_rows = 0, i;
+      int                identity_failures = 0;
+
+      CHECK (api->resources (engine, kind, NULL, 0, &count) == GLIMS_STATUS_OK && count > 0,
+             "resources lists the engine's stock %s resources (%d)", label, count);
+      rows = calloc ((size_t) (count > 0 ? count : 1), sizeof *rows);
+      CHECK (api->resources (engine, kind, rows, count, &filled) == GLIMS_STATUS_OK &&
+             filled == count, "resources fills every %s row (%d)", label, filled);
+
+      for (i = 0; i < filled; i++)
+        if (rows[i].id == 0 || rows[i].id > 0x7FFFFFFF || rows[i].kind != kind ||
+            ! rows[i].name[0] || ! valid_utf8 (rows[i].name))
+          bad_rows++;
+      CHECK (filled > 0 && bad_rows == 0,
+             "every %s row has a current-engine id, its kind and a UTF-8 label (%d bad)",
+             label, bad_rows);
+
+      CHECK (api->resources (engine, kind, short_rows, 2, &short_count) == GLIMS_STATUS_OK &&
+             short_count == count && short_rows[0].id == rows[0].id &&
+             short_rows[0].kind == rows[0].kind &&
+             strcmp (short_rows[0].name, rows[0].name) == 0 &&
+             (count < 2 || (short_rows[1].id == rows[1].id &&
+                            strcmp (short_rows[1].name, rows[1].name) == 0)),
+             "a short %s buffer reports the total %d and keeps the first rows", label, count);
+
+      count = 99;
+      CHECK (api->resources (engine, 0, rows, 2, &count) == GLIMS_STATUS_INVALID_ARGUMENT && count == 0 &&
+             api->resources (engine, 4, rows, 2, &count) == GLIMS_STATUS_INVALID_ARGUMENT && count == 0 &&
+             api->resources (engine, kind, rows, -1, &count) == GLIMS_STATUS_INVALID_ARGUMENT && count == 0 &&
+             api->resources (engine, kind, NULL, 2, &count) == GLIMS_STATUS_INVALID_ARGUMENT && count == 0 &&
+             api->resources (engine, kind, rows, 2, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+             "resources rejects a wrong kind, a negative capacity and missing outputs");
+
+      /* Identity of every listed row; keep one built-in and one
+       * file-backed triplet for the round trips below. */
+      for (i = 0; i < filled; i++)
+        {
+          char      *name = NULL, *collection = NULL;
+          bool       internal = false;
+          GlimsStatus status;
+
+          status = api->resource_identifiers (engine, rows[i].id, &name, &collection,
+                                              &internal, NULL);
+          if (status != GLIMS_STATUS_OK || ! name || ! name[0] || ! valid_utf8 (name) ||
+              (collection && ! valid_utf8 (collection)) ||
+              strncmp (rows[i].name, name, strlen (rows[i].name)) != 0)
+            {
+              identity_failures++;
+            }
+          else if (internal && ! int_name)
+            {
+              int_id    = rows[i].id;
+              int_name  = name;
+              int_collection = collection;
+              name = collection = NULL;
+            }
+          else if (! internal && ! ext_name)
+            {
+              ext_id    = rows[i].id;
+              ext_name  = name;
+              ext_collection = collection;
+              ext_internal = internal;
+              name = collection = NULL;
+            }
+          api->free_string (name);
+          api->free_string (collection);
+        }
+      CHECK (identity_failures == 0,
+             "every listed %s reports a usable identity (%d bad)", label, identity_failures);
+      CHECK (ext_name != NULL,
+             "the installed engine prefix ships stock %s files, so at least one "
+             "file-backed %s is listed", label, label);
+      CHECK (int_name != NULL, "at least one built-in %s is listed", label);
+
+      if (ext_name)
+        {
+          GlimsResourceID again = 1, wrong = 1;
+          char           *name2 = NULL, *collection2 = NULL;
+          bool            internal2 = true;
+          char           *error = NULL;
+
+          CHECK (api->resource_resolve (engine, kind, ext_name, ext_collection, false,
+                                        &again, &error) == GLIMS_STATUS_OK && again == ext_id,
+                 "a file-backed %s identity round-trips%s%s", label,
+                 error ? ": " : "", error ? error : "");
+          api->free_string (error);
+          error = NULL;
+          CHECK (api->resource_identifiers (engine, again, &name2, &collection2, &internal2, NULL) ==
+                 GLIMS_STATUS_OK && name2 && strcmp (name2, ext_name) == 0 && ! internal2 &&
+                 ((collection2 == NULL) == (ext_collection == NULL)) &&
+                 (! collection2 || strcmp (collection2, ext_collection) == 0),
+                 "the resolved %s reports the same identity again", label);
+          api->free_string (name2);
+          api->free_string (collection2);
+
+          CHECK (api->resource_resolve (engine, kind, "Glims No Such Resource", ext_collection,
+                                        false, &wrong, NULL) == GLIMS_STATUS_NOT_FOUND && wrong == 0,
+                 "an unknown %s identity does not resolve", label);
+          CHECK (api->resource_resolve (engine, kind, ext_name, "glims-no-such-collection",
+                                        false, &wrong, NULL) == GLIMS_STATUS_NOT_FOUND && wrong == 0,
+                 "a %s identity with a stale collection never falls back to name-only matching",
+                 label);
+          if (ext_collection)
+            CHECK (api->resource_resolve (engine, kind, ext_name, NULL, false, &wrong, NULL) ==
+                   GLIMS_STATUS_NOT_FOUND && wrong == 0,
+                   "a %s identity needs its collection: NULL matches only a NULL collection",
+                   label);
+          CHECK (api->resource_resolve (engine, kinds[(k + 1) % 3].kind, ext_name,
+                                        ext_collection, ext_internal, &wrong, NULL) ==
+                 GLIMS_STATUS_NOT_FOUND && wrong == 0,
+                 "a %s identity does not resolve as a %s", label, kinds[(k + 1) % 3].label);
+        }
+
+      if (int_name)
+        {
+          GlimsResourceID again = 1;
+
+          CHECK (api->resource_resolve (engine, kind, int_name, int_collection, true,
+                                        &again, NULL) == GLIMS_STATUS_OK && again == int_id,
+                 "a built-in %s identity round-trips", label);
+          CHECK (api->resource_resolve (engine, kind, "Glims Not The Localized Name",
+                                        int_collection, true, &again, NULL) ==
+                 GLIMS_STATUS_OK && again == int_id,
+                 "a built-in %s identity ignores its localized display name", label);
+          CHECK (api->resource_resolve (engine, kind, int_name, int_collection, false,
+                                        &again, NULL) == GLIMS_STATUS_NOT_FOUND && again == 0,
+                 "a built-in %s identity keeps its internal flag", label);
+        }
+
+      /* Handles that were never issued, and missing outputs. */
+      {
+        char *bad_name = "reset", *bad_collection = "reset";
+        bool  bad_internal = true;
+        char *error = NULL;
+
+        CHECK (api->resource_identifiers (engine, 0, &bad_name, &bad_collection,
+                                          &bad_internal, &error) == GLIMS_STATUS_INVALID_ARGUMENT &&
+               ! bad_name && ! bad_collection && ! bad_internal && error,
+               "the zero resource id is refused and the outputs reset (%s)",
+               error ? error : "");
+        api->free_string (error);
+        error = NULL;
+        bad_name = bad_collection = "reset";
+        bad_internal = true;
+        CHECK (api->resource_identifiers (engine, 0xFFFFFFFFFFFFFFFFull, &bad_name,
+                                          &bad_collection, &bad_internal, NULL) ==
+               GLIMS_STATUS_INVALID_ARGUMENT && ! bad_name && ! bad_collection && ! bad_internal,
+               "a resource id outside the native id range is refused");
+        bad_name = bad_collection = "reset";
+        bad_internal = true;
+        CHECK (api->resource_identifiers (engine, 0x80000000ull, &bad_name, &bad_collection,
+                                          &bad_internal, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+               ! bad_name && ! bad_collection && ! bad_internal,
+               "a resource id just above the native id range is refused");
+        bad_name = bad_collection = "reset";
+        bad_internal = true;
+        CHECK (api->resource_identifiers (engine, 0x7FFFFFFFull, &bad_name, &bad_collection,
+                                          &bad_internal, NULL) == GLIMS_STATUS_NOT_FOUND &&
+               ! bad_name && ! bad_collection && ! bad_internal,
+               "a well-shaped but unissued resource id reports NOT_FOUND");
+        if (filled > 0)
+          CHECK (api->resource_identifiers (engine, rows[0].id, NULL, &bad_collection,
+                                            &bad_internal, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+                 api->resource_identifiers (engine, rows[0].id, &bad_name, NULL,
+                                            &bad_internal, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+                 api->resource_identifiers (engine, rows[0].id, &bad_name, &bad_collection,
+                                            NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+                 "resource_identifiers requires its name, collection and internal outputs");
+      }
+
+      /* resolve: wrong kinds, invalid identity text, missing output. */
+      {
+        GlimsResourceID out = 1;
+        char           *error = NULL;
+
+        CHECK (api->resource_resolve (engine, 0, "name", NULL, false, &out, NULL) ==
+               GLIMS_STATUS_INVALID_ARGUMENT && out == 0 &&
+               api->resource_resolve (engine, 4, "name", NULL, false, &out, NULL) ==
+               GLIMS_STATUS_INVALID_ARGUMENT && out == 0 &&
+               api->resource_resolve (engine, kind, NULL, NULL, false, &out, NULL) ==
+               GLIMS_STATUS_INVALID_ARGUMENT && out == 0 &&
+               api->resource_resolve (engine, kind, "", NULL, false, &out, NULL) ==
+               GLIMS_STATUS_INVALID_ARGUMENT && out == 0 &&
+               api->resource_resolve (engine, kind, bad_name_utf8, NULL, false, &out, NULL) ==
+               GLIMS_STATUS_INVALID_ARGUMENT && out == 0 &&
+               api->resource_resolve (engine, kind, "name", bad_coll_utf8, false, &out, NULL) ==
+               GLIMS_STATUS_INVALID_ARGUMENT && out == 0 &&
+               api->resource_resolve (engine, kind, "name", NULL, false, NULL, &error) ==
+               GLIMS_STATUS_INVALID_ARGUMENT && error,
+               "resolve rejects a wrong kind, invalid identity text and a missing output (%s)",
+               error ? error : "");
+        api->free_string (error);
+        CHECK (api->resource_resolve (engine, kind, "Glims No Such Resource", NULL, false,
+                                      &out, NULL) == GLIMS_STATUS_NOT_FOUND && out == 0,
+               "an unknown %s identity reports NOT_FOUND with the output reset", label);
+      }
+
+      api->free_string (ext_name);
+      api->free_string (ext_collection);
+      api->free_string (int_name);
+      api->free_string (int_collection);
+      free (rows);
+      rows = NULL;
+    }
+}
+
 static void
 test_procedures (void)
 {
@@ -5618,6 +5905,7 @@ main (int argc, char **argv)
   test_filter_edit (argv[2]);
   test_color_state (argv[3], argv[2]);
   test_qmask_name_fixture (argv[3]);
+  test_resources ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 
