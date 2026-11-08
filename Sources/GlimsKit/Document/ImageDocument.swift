@@ -140,6 +140,11 @@ final class ImageDocument {
     /// selection — so the cache refreshes with `reload` and on the
     /// deferred guides-changed refresh.
     private(set) var guides: [EngineSession.Guide] = []
+    /// The image's display grid, read with the rest of the state. A
+    /// grid change is one undo step and metadata — it never touches
+    /// pixels or the selection — so the cache refreshes with `reload`,
+    /// which the undo-changed event schedules; no dedicated event.
+    private(set) var grid = EngineSession.Grid()
     /// The image's paths, top first.
     private(set) var paths: [EngineSession.PathInfo] = []
     /// The path the Path tool edits and the Paths palette's commands use.
@@ -250,6 +255,7 @@ final class ImageDocument {
         quickMaskState = try session.quickMask(image)
         colorInfo = try session.colorInfo(image)
         guides = try session.guides(image)
+        grid = try session.grid(image)
         mirrorChannelIntents()
         if let pick = pendingTargetPick {
             channels = channels.map { row in
@@ -644,6 +650,18 @@ final class ImageDocument {
     func removeGuide(_ guide: Int32) {
         guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.removeGuide(guide, image: image) }
+    }
+
+    // MARK: Grid
+
+    /// Applies `grid` to the image as one undo step; an identical grid
+    /// is a no-op with no undo. Grid changes are metadata: pixels and
+    /// the selection are never touched, and pixel locks do not refuse
+    /// them. The cached `grid` refreshes through `reload` on the
+    /// undo-changed event this step emits.
+    func setGrid(_ grid: EngineSession.Grid) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        run { session, image in try session.setGrid(grid, image: image) }
     }
 
     // MARK: Editing

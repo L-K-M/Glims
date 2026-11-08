@@ -979,6 +979,37 @@ typedef struct GlimsGuideInfo {
                               * 0 ... image width (vertical) */
 } GlimsGuideInfo;
 
+/* How the image's display grid renders its lines. Facade-owned values
+ * mapped to the engine's named GimpGridStyle constants inside the
+ * adapter; the native enum value never crosses this boundary. */
+typedef enum GlimsGridStyle {
+  GLIMS_GRID_DOTS          = 1,  /* dots at the intersections */
+  GLIMS_GRID_INTERSECTIONS = 2,  /* crosshairs at the intersections */
+  GLIMS_GRID_ON_OFF_DASH   = 3,  /* single dashed lines */
+  GLIMS_GRID_DOUBLE_DASH   = 4,  /* double dashed lines (bgcolor shows) */
+  GLIMS_GRID_SOLID         = 5   /* solid lines */
+} GlimsGridStyle;
+
+/* The image's display grid, as image_grid reports it and image_set_grid
+ * applies. Size-versioned: the caller sets `struct_size` to
+ * sizeof (GlimsGrid) before a call and the adapter refuses a smaller
+ * one. Spacings and offsets are in the grid's own (unexposed) unit —
+ * the engine's default on a fresh image — as the native "xspacing",
+ * "yspacing", "xoffset" and "yoffset" properties hold them; the
+ * native bounds apply: spacings must be finite and > 0 up to the
+ * native maximum, offsets finite inside the native signed range.
+ * The colors are non-linear sRGB, 0 ... 1, alpha included. */
+typedef struct GlimsGrid {
+  uint32_t   struct_size;   /* sizeof (GlimsGrid) */
+  uint32_t   style;         /* GlimsGridStyle */
+  double     spacing_x;     /* > 0, <= the native "xspacing" maximum */
+  double     spacing_y;     /* > 0, <= the native "yspacing" maximum */
+  double     offset_x;      /* inside the native "xoffset" signed range */
+  double     offset_y;      /* inside the native "yoffset" signed range */
+  GlimsColor foreground;    /* sRGB 0 ... 1, alpha included */
+  GlimsColor background;    /* sRGB 0 ... 1, alpha included; double-dash only */
+} GlimsGrid;
+
 /* One row of the resources() list, in the engine's own order. */
 typedef struct GlimsResourceInfo {
   GlimsResourceID id;
@@ -1878,6 +1909,36 @@ typedef struct GlimsEngineAPI {
                                          const GlimsIndexedSettings *settings,
                                          const GlimsColor *colors, int32_t color_count,
                                          char **error);
+
+  /* The image's display grid (a GlimsGrid), as a plain read of the
+   * current engine state: allowed at any time, also while a stroke,
+   * a filter session or a plug-in holds the image, and it mutates
+   * nothing. `out` is validated by its struct_size before it is
+   * written: INVALID_ARGUMENT for a missing `out` or one whose
+   * struct_size is too small; NOT_FOUND for an unknown image — stale
+   * or closed. The colors come back as non-linear sRGB with alpha. */
+  GlimsStatus  (*image_grid)     (GlimsEngine *engine, GlimsImageID image,
+                                  GlimsGrid *out, char **error);
+
+  /* Applies `grid` to the image through the core's
+   * gimp_image_set_grid(image, grid, TRUE): a changed grid is exactly
+   * one native undo step ("Grid") and an identical grid is a no-op
+   * that pushes no undo. The engine's own unexposed grid properties
+   * (the spacing and offset units) are retained. Everything is
+   * validated before any mutation, so the native property clamps can
+   * neither hide invalid input nor leave a partial change:
+   * INVALID_ARGUMENT for a missing `grid`, a short struct, an unknown
+   * `style`, a non-finite spacing/offset, a spacing that is zero,
+   * negative or beyond the native property maximum, an offset outside
+   * the native signed range, or a non-finite or out-of-range color
+   * component (alpha included); NOT_FOUND for an unknown image; BUSY
+   * while a stroke, a filter session or a plug-in holds the image.
+   * Refusals change no pixels, push no undo and leave the dirty state
+   * alone; grid changes are metadata and never touch the image's
+   * pixels or its selection. The applied change is followed by the
+   * usual UNDO_CHANGED event — no new event kind. */
+  GlimsStatus  (*image_set_grid) (GlimsEngine *engine, GlimsImageID image,
+                                  const GlimsGrid *grid, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
