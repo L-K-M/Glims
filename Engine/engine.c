@@ -2139,6 +2139,12 @@ MARSHAL (floating_command, return glims_floating_command (e, a->image, a->item, 
                                                           a->out, a->error);)
 MARSHAL (selection_float, return glims_selection_float (e, a->image, a->item, (uint32_t) a->width,
                                                          a->out, a->error);)
+MARSHAL (image_select_layers, return glims_image_select_layers (e, a->image,
+                                                                (const GlimsItemID *) a->in,
+                                                                a->n, a->error);)
+MARSHAL (image_selected_layers, return glims_image_selected_layers (e, a->image,
+                                                                    (GlimsItemID *) a->out,
+                                                                    a->capacity, a->count);)
 
 static GlimsStatus
 api_image_guides (GlimsEngine *e, GlimsImageID image, GlimsGuideInfo *rows,
@@ -2244,6 +2250,22 @@ api_selection_float (GlimsEngine *e, GlimsImageID image, GlimsItemID target, uin
 {
   GlimsArgs a = { .image = image, .item = target, .width = (int32_t) mode, .out = result, .error = error };
   return glims_engine_call (e, selection_float_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_select_layers (GlimsEngine *e, GlimsImageID image, const GlimsItemID *layers,
+                         size_t count, char **error)
+{
+  GlimsArgs a = { .image = image, .in = layers, .n = count, .error = error };
+  return glims_engine_call (e, image_select_layers_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_selected_layers (GlimsEngine *e, GlimsImageID image, GlimsItemID *ids,
+                           int32_t capacity, int32_t *count)
+{
+  GlimsArgs a = { .image = image, .out = ids, .capacity = capacity, .count = count };
+  return glims_engine_call (e, image_selected_layers_on_engine, &a);
 }
 
 static const GlimsEngineAPI api_v1 = {
@@ -2373,6 +2395,8 @@ static const GlimsEngineAPI api_v1 = {
   .image_paste_into  = api_image_paste_into,
   .floating_command  = api_floating_command,
   .selection_float   = api_selection_float,
+  .image_select_layers = api_image_select_layers,
+  .image_selected_layers = api_image_selected_layers,
 };
 
 __attribute__ ((visibility ("default")))

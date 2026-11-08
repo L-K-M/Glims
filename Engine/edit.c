@@ -548,6 +548,168 @@ glims_layer_select (GlimsEngine  *engine,
   return GLIMS_STATUS_OK;
 }
 
+/* ---- Multi-layer selection --------------------------------------------- */
+
+/* The image's selected layer ids in the engine's own order — the order
+ * glims_image_select_layers last set, active layer first. The list
+ * gimp_image_get_selected_layers returns is the item tree's own
+ * selected_items: borrowed, never freed here (the owned-list variant
+ * gimp_image_get_selected_drawables is deliberately not used). A plain
+ * read, so no readiness gate beyond the image existing. */
+GlimsStatus
+glims_image_selected_layers (GlimsEngine  *engine,
+                             GlimsImageID  id,
+                             GlimsItemID  *ids,
+                             int32_t       capacity,
+                             int32_t      *count)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GList          *selected;
+  GList          *iter;
+  int32_t         fill, n;
+
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+  if (! count || capacity < 0)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  selected = gimp_image_get_selected_layers (open->image);
+  *count = (int32_t) g_list_length (selected);
+  fill   = ids ? capacity : 0;
+  for (iter = selected, n = 0; iter && n < fill; iter = iter->next, n++)
+    ids[n] = gimp_item_get_id (GIMP_ITEM (iter->data));
+
+  return GLIMS_STATUS_OK;
+}
+
+/* Selects exactly `layers`, in the given order, as the image's whole
+ * selected-layer list. Transient: no undo, no dirty, no pixel or mask
+ * change; the core emits "selected-layers-changed" (the facade's
+ * LAYERS_CHANGED) only when the selection actually changes. Same
+ * readiness as glims_layer_select: the image must exist, and there is
+ * no BUSY gate. */
+GlimsStatus
+glims_image_select_layers (GlimsEngine       *engine,
+                           GlimsImageID       id,
+                           const GlimsItemID *layers,
+                           size_t             count,
+                           char             **error)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GimpImage      *image;
+  GimpLayer     **resolved = NULL;
+  GHashTable     *seen = NULL;
+  GList          *list = NULL;
+  GList          *selected;
+  GimpLayer      *floating;
+  size_t          i;
+  gboolean        applied;
+  GlimsStatus     status = GLIMS_STATUS_OK;
+
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+  image = open->image;
+
+  if (count > 0 && ! layers)
+    return glims_fail (error, NULL, "A NULL layer list needs count 0.");
+
+  /* Validate the ENTIRE input before any mutation: duplicates, id 0,
+   * stale/foreign/detached ids and non-layer items (masks, channels,
+   * paths) are all refused here, leaving the selection untouched.
+   * Groups are layers and pass. */
+  if (count > 0)
+    {
+      resolved = g_new (GimpLayer *, count);
+      seen     = g_hash_table_new (g_direct_hash, g_direct_equal);
+      for (i = 0; i < count && status == GLIMS_STATUS_OK; i++)
+        {
+          GlimsItemID item_id = layers[i];
+          GimpItem   *item;
+
+          if (item_id == 0)
+            status = glims_fail (error, NULL, "The layer list contains the id 0, which names no layer.");
+          else if (g_hash_table_contains (seen, GINT_TO_POINTER (item_id)))
+            status = glims_fail (error, NULL, "The layer list repeats an id.");
+          else
+            {
+              item = gimp_item_get_by_id (image->gimp, item_id);
+              if (! item || gimp_item_get_image (item) != image || ! gimp_item_is_attached (item))
+                status = GLIMS_STATUS_NOT_FOUND;
+              else if (! GIMP_IS_LAYER (item))
+                status = glims_fail (error, NULL, "The id names a mask, channel or path, not a layer.");
+              else
+                {
+                  g_hash_table_add (seen, GINT_TO_POINTER (item_id));
+                  resolved[i] = GIMP_LAYER (item);
+                }
+            }
+        }
+      if (status != GLIMS_STATUS_OK)
+        {
+          g_free (resolved);
+          g_hash_table_destroy (seen);
+          return status;
+        }
+    }
+
+  /* While a floating selection is active the native setter silently
+   * ignores every request that is not exactly [floating selection].
+   * Refuse those explicitly — the floating selection is never anchored
+   * here — and let the identical [FS] list through: with the FS active
+   * that already is the selection, so the native call is a no-op. An
+   * empty request is refused the same way, since the core does not
+   * permit clearing the selection under a floating selection. */
+  floating = gimp_image_get_floating_selection (image);
+  if (floating && ! (count == 1 && resolved[0] == floating))
+    {
+      g_free (resolved);
+      if (seen)
+        g_hash_table_destroy (seen);
+      return glims_fail (error, NULL,
+                        "A floating selection is active; resolve it before changing the layer selection.");
+    }
+
+  /* g_list_append keeps the caller's order; the first id becomes the
+   * active layer. */
+  for (i = 0; i < count; i++)
+    list = g_list_append (list, resolved[i]);
+
+  gimp_image_set_selected_layers (image, list);
+
+  /* The native call copies the passed list (the item tree takes the
+   * copy as its selected_items), so the adapter's own list is freed
+   * exactly once here. */
+  g_list_free (list);
+
+  /* Postcondition: the core stores the passed list verbatim, so the
+   * read-back must be the exact list in the exact order (the borrowed
+   * selected list is not freed). A mismatch means the core silently
+   * refused — report it rather than returning success. */
+  applied  = TRUE;
+  selected = gimp_image_get_selected_layers (image);
+  if (g_list_length (selected) != count)
+    applied = FALSE;
+  else
+    {
+      GList *iter;
+
+      for (iter = selected, i = 0; iter; iter = iter->next, i++)
+        if (iter->data != resolved[i])
+          {
+            applied = FALSE;
+            break;
+          }
+    }
+
+  g_free (resolved);
+  if (seen)
+    g_hash_table_destroy (seen);
+  if (! applied)
+    return glims_fail (error, NULL, "The engine did not apply the requested layer selection.");
+
+  return GLIMS_STATUS_OK;
+}
+
 GlimsStatus
 glims_layer_command (GlimsEngine  *engine,
                      GlimsImageID  id,
