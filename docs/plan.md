@@ -1851,10 +1851,9 @@ the fixed palettes, as the engine's own dialog default does).
 native post-pass applies to WEB and CUSTOM only and skips for
 GENERATED and MONO — forwarded verbatim and documented as ignored
 there. `dither_alpha` and `dither_text` map to the same-named core
-arguments. FIXED dithering resets the process-global matrix
-(`gimp_image_convert_indexed_set_dither_matrix(NULL,0,0)`) first so a
-matrix set through the PDB cannot leak in; the facade exposes only the
-engine default.
+arguments. FIXED dithering uses the engine's current ordered-dither
+matrix, whose native default is initialized statically. Conversion does
+not reset process-wide state configured by another command.
 
 CUSTOM takes a caller-owned `colors`/`color_count` argument (1 ... 256
 opaque sRGB entries), validated element-wise — finite, 0 ... 1, alpha
@@ -1934,3 +1933,27 @@ worktree built no engine or adapter. Only `swift build` and
 `swift build --build-tests` were run (the facade header compiles
 through CGlimsEngine). Serialization and the four-engine matrix stay
 with the root harness.
+
+Owner review retains the existing facade's REQUIRES_RASTERIZE status
+for the preservation refusal, matching profile conversion and allowing
+the interface to offer explicit consent without treating other
+unsupported states as rasterization requests. The first native run
+confirmed the refusal happens before mutation. Its filter-busy fixture
+initially compared history against the depth before a preceding stroke
+was committed; it now captures the depth after that stroke. FIXED
+dithering passed using the native statically initialized matrix after
+removing the unnecessary per-conversion global reset.
+
+Integrated validation passes 1,319 / 1,208 / 1,319 / 1,319 native checks
+on GIMP 3.2.8 / 3.0.8 / 3.2.0 / master, plus 387 unit tests and nine
+typed-wrapper checks on each engine. The full pinned interface suite
+passes 952 checks. An actual pattern-color palette input reproduced an
+AppKit component-access exception in the shared NSColor serializer: a
+failed RGB conversion fell back to a generic-gray black, then read RGB
+components. Serialization now throws INVALID_ARGUMENT before component
+access or engine mutation; throwing propagation covers its existing typed
+callers. Non-custom palettes ignore the unused custom-color list.
+Independent native and shared-color reviews found no important issues.
+One minor existing wrapper caveat remains deferred: vector-style changes
+serialize both colors even when their property bits are absent; current
+forms supply valid captured colors for those unused fields.

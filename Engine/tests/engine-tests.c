@@ -5586,6 +5586,7 @@ test_indexed_conversion (const char *work)
     }
   else
     CHECK (0, "the stroke for the busy check began");
+  before = undo_depth (image); /* ending the stroke above commits its own undo */
   if (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK)
     {
       CHECK (api->image_convert_indexed (engine, image, &gen, NULL, 0, NULL) == GLIMS_STATUS_BUSY &&

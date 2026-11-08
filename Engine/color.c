@@ -440,11 +440,9 @@ glims_image_convert_indexed (GlimsEngine                 *engine,
         }
     }
 
-  /* FIXED dithers with a process-global matrix; reset it so a PDB call
-   * that changed it cannot leak into this conversion (the facade
-   * exposes only the engine's default matrix). */
-  if (dither == GIMP_CONVERT_DITHER_FIXED)
-    gimp_image_convert_indexed_set_dither_matrix (NULL, 0, 0);
+  /* Use the engine's current ordered-dither matrix. The native default
+   * is initialized statically; converting an image must not reset
+   * process-wide settings that another command configured. */
 
   /* One validated core call: its own "Convert Image to Indexed" undo
    * group is the single undo step — no extra group is opened here.
