@@ -191,6 +191,12 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (pixel rulers)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "history-isolation" {
+                try exercisePendingEditScope(session, documents: documents)
+                try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (history isolation)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "stroke-selection-controls" {
                 try exerciseStrokeSelectionControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (stroke-selection-controls)" : "FAILED: \(failures) failure(s)")
@@ -5039,7 +5045,7 @@ enum EngineSmokeTest {
         document.endStroke()
         settle()
         guard let filled = document.history, filled.rows.count == 3, filled.currentPosition == 2 else {
-            check(false, "a fill and a stroke list three history states (\(document.history?.rows.count ?? -1))")
+            check(false, "a fill and a stroke list three history states (cached \(document.history?.rows.count ?? -1), native undo \(String(describing: try? session.undoInfo(image))), pending \(document.pendingWork), activity \(EngineActivity.shared.label ?? "none"), errors \(messages))")
             return
         }
         check(true, "a fill and a stroke list three history states")
