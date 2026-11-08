@@ -104,7 +104,7 @@ final class PixelRulerView: NSRulerView {
         let origin = orientation == .horizontalRuler ? originPoint.x : originPoint.y
         let perPixel = orientation == .horizontalRuler ? unitPoint.x - originPoint.x : unitPoint.y - originPoint.y
         guard origin.isFinite, perPixel.isFinite else { return nil }
-        return (origin, perPixel)
+        return (Double(origin), Double(perPixel))
     }
 
     override func drawHashMarksAndLabels(in dirtyRect: NSRect) {

@@ -1947,3 +1947,7 @@ full pinned interface checks. Follow-up review and matrix are running.
 The combined rulers/Guides-field revision passes all 417 unit tests and
 1,021 full pinned-engine interface checks. The focused rulers scenario
 passes 47 checks on each of the four supported engines.
+
+Pinned CI uses Swift 6.2 and requires explicit CGFloat-to-Double tuple
+conversion in the ruler axis mapping; the newer local compiler had
+accepted it implicitly. The conversions are now explicit.
