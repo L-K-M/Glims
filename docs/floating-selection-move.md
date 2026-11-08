@@ -133,4 +133,4 @@ Undo/Redo, exact preview/commit bounds, target identity, cancellation and
 close draining. Mask/channel target pixel baselines precede Paste Into,
 because drawable thumbnails include the floating effect. Independent source
 review found no unresolved important issue after these fixes. The full
-combined app run remains pending.
+combined pinned app run passes after integration with the layer and snapping controls.
