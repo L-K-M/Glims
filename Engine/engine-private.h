@@ -314,4 +314,12 @@ GlimsStatus glims_procedure_run    (GlimsEngine *e, GlimsImageID image, const ch
                                     uint32_t run_mode, char **error);
 GlimsStatus glims_procedure_cancel (GlimsEngine *e);
 
+/* color.c */
+GlimsStatus glims_image_color_info        (GlimsEngine *e, GlimsImageID image,
+                                           GlimsColorInfo *info);
+GlimsStatus glims_image_convert_mode      (GlimsEngine *e, GlimsImageID image,
+                                           uint32_t mode, char **error);
+GlimsStatus glims_image_convert_precision (GlimsEngine *e, GlimsImageID image,
+                                           uint32_t component, uint32_t trc, char **error);
+
 #endif /* GLIMS_ENGINE_PRIVATE_H */

@@ -140,3 +140,30 @@ when a saved destination meets a file nothing loads. EngineSession grew
 `openLayers` and `placeLink`. 603 adapter checks pass on 3.2.0, 3.2.8 and master; 585 pass on
 3.0.8, including a monitored reread of a rewritten source; the menu
 commands that would call them are not wired yet.
+
+2026-11-08: facade slice for image color state and conversions, engine side
+only. Three additive slots after `filter_edit_begin` (API version stays 1):
+`image_color_info` fills a caller-owned `GlimsColorInfo` (facade-owned
+`GlimsColorMode`/`GlimsColorComponent`/`GlimsColorTRC` enums, never the
+engine's, plus the effective profile's label and whether an ICC profile is
+embedded) with fixed UTF-8 buffers; `GlimsImageInfo.precision` keeps the
+engine's nick string unchanged. `image_convert_mode` and
+`image_convert_precision` are each one validated call into the GUI-free
+core (`gimp_image_convert_type`, `gimp_image_convert_precision` with
+no-dither defaults), so each is exactly one undo step with no partial
+failure path; both honor `glims_edit_ready` (BUSY during a stroke, preview
+or plug-in), validate enums and combinations before mutating (unknown
+enums INVALID_ARGUMENT, closed images NOT_FOUND, no-ops OK with no undo),
+and refuse indexed targets (mode) and non-u8-non-linear precision on
+indexed images (UNSUPPORTED) while indexed info still reports accurately.
+Conformance tests cover fresh-state info, RGB/grayscale round trips,
+precision and TRC changes with pixel/layer/size preservation, undo/redo,
+XCF save/reopen of the color state, no-op and invalid-enum side-effect
+freedom, BUSY during a stroke and a preview, a closed image, and an
+indexed PNG fixture. Not run here: the native matrix — the shared engine
+lock and libraries are in use, so `build-adapter.sh --test` on the four
+engine sets is left to the root pass; what was checked in this worktree is
+a `clang -fsyntax-only` pass of the changed C files against all four
+engine source trees plus the header-only TU and the test file.
+Profile assignment/conversion, soft proofing, the indexed palette dialog
+and the Swift forms are deliberately out of this slice.
