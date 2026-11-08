@@ -2173,10 +2173,98 @@ pinned engine (30 focused checks). Before this fix, the source-cache
 integration passed 399 unit tests, all-four-engine guide checks and 971
 full pinned interface checks. Follow-up review and matrix are running.
 
+### Indexed conversion controls (2026-11-08)
+
+UI slice on `feat/indexed-controls`, Swift only — no C/header/dependency
+change; the facade's `image_convert_indexed` and the typed wrapper from
+the backend slice are reused as they are.
+
+Image ▸ Mode ▸ Indexed… (`MainMenu` adds the entry to the Mode submenu;
+`DocumentWindowController.convertImageToIndexed`) opens a
+document-owned per-window policy sheet (`IndexedSheetController`,
+retained by its window like the guides sheet; the DOCUMENT is captured
+at sheet open, so Apply and the rasterization confirmation act on the
+captured document, never on the global/front one). Cached menu gates in
+`validateMenuItem`: the checkmark reads `colorInfo.mode` (already indexed
+is checked and disabled — the document method no-ops too), and the item
+is unavailable while BUSY/closing/preview or another sheet is attached,
+and while the cached native eligibility fails — u8 non-linear precision
+and no layer groups — with the reason in the tooltip. Precision is never
+auto-converted and groups are never auto-flattened; the sheet's
+informative text says the same. The action itself re-checks the cached
+eligibility (silent no-op when already indexed, refusal with the reason
+otherwise).
+
+Form controls, each with an accessibility label used by the actual
+control queries: Palette popup Generated/Web/Monochrome/Custom; Maximum
+colors field + stepper (2 ... 256, enabled only for Generated); Custom
+plain multiline `#RRGGBB` text (exactly one color per nonblank line,
+blank lines allowed, 1 ... 256 colors, enabled only for Custom); Remove
+unused colors (enabled only for Web/Custom); Dithering popup
+None/FS/Reduced Bleeding/Ordered; Dither transparency and Dither text
+toggles. `IndexedFormLogic` is the pure, unit-tested layer: a strict
+parser (ASCII hex only, no trimming, NUL refused before any color is
+built, count 1 ... 256, per-line error messages; opaque
+`NSColor(srgbRed:green:blue:alpha: 1)` values), the eligibility gate,
+the choice lists and `makeSettings` (max colors checked only for
+Generated; `removeUnused` forced off for Generated/Mono; Custom text
+parsed strictly).
+
+Apply always builds settings with `preservation.preserveEditable` and
+runs them through the new counted exclusive
+`ImageDocument.convertToIndexed(settings:completion:)` — the same
+`enqueueExclusive` admission as the other color conversions: accepted
+input in every document drains first, the work counts toward close and
+Quit (`pendingWork`), busy/closing refusals report through the
+completion, an already indexed image is a no-op, and success reloads
+the document on main before the exactly-once completion. Local invalid
+input shows an inline error in the sheet: no mutation, no sheet close.
+ONLY an `EngineError.requiresRasterization` failure admits the second
+explicit consent step — an inline confirmation region in the SAME sheet
+(no nested sheet): the validated settings are preserved, the fields stay
+disabled, and Rasterize and Convert / Back / Cancel are offered. Confirm
+re-runs the captured settings with only `allowRasterize` on the captured
+document. Back returns to the form; Cancel closes with no mutation. Any
+other UNSUPPORTED/native error stays visible inline and returns to the
+form — never reinterpreted as consent. Once native work is accepted the
+mutating controls stay disabled and no Cancel is offered; the sheet and
+window close invalidate the controller (`invalidate()`), so late
+completions touch no UI while the accepted work remains counted and
+drained before the image is destroyed. Success closes the sheet.
+
+Wired `GLIMS_SMOKE_CASE=indexed-controls` plus a full-suite
+`exerciseIndexedControls`: actual-sheet Generated and Custom conversions
+pinned against independent session pixel/mode/undo oracles with one undo
+step; Cancel and invalid Custom change nothing; text with Dither text
+off stays editable; Dither text triggers the consent region, Back/Cancel
+mutate nothing, explicit confirm rasterizes and undo restores; BUSY
+refusal, exclusive counts and the global accepted-input drain; two
+documents retaining their captured owner across a retarget; menu gates
+for indexed/u16/grouped/preview/busy; late close safety. Controls are
+queried by accessibility label; admission pauses follow the existing
+profile tests. No production debug flows.
+
+Checked here: `swift build -j 2` and `swift build -j 2 --build-tests`
+both complete (compile only). NOT RUN: `swift test`, every
+GLIMS_SMOKE_CASE including indexed-controls, any GUI/native/adapter run —
+no engine or adapter was started in this worktree; root owns the unit,
+native and full-suite validation.
+
+Indexed controls validation passes 425 unit tests, 64 focused actual-sheet
+checks on every engine and 1,045 full pinned interface checks. A real
+numeric-prefix bug accepted “12px” as 12; complete canonical integer
+parsing now rejects it before conversion. The first fixture also skipped
+nested action stacks and tried to open a new sheet while already busy;
+its traversal/action setup and controlled input-drain gates are corrected.
+Root reviewed form state, explicit consent, captured settings/document,
+validation, exclusive work and close handling. The separate independent
+UI review failed without findings and provides no approval.
+
 Integrated with the merged Guides/source cache: all 402 unit tests,
 focused anchor checks on all four engines and 1,000 full pinned interface
 checks pass. The synthetic Escape key now also carries the correct ESC
 character; key-code dispatch was already correct.
+
 
 Post-merge validation with Guides passes 399 unit tests, all-four-engine
 typed wrapper checks and 982 full pinned interface checks. Review also
