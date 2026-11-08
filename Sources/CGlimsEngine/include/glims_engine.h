@@ -51,7 +51,8 @@ typedef enum GlimsStatus {
   GLIMS_STATUS_NOT_RUNNING      = 5,
   GLIMS_STATUS_CANCELLED        = 6, /* the user cancelled, e.g. a plug-in dialog */
   GLIMS_STATUS_LOCKED           = 7, /* a layer or ancestor protects this edit */
-  GLIMS_STATUS_UNSUPPORTED      = 8  /* the engine version cannot do this */
+  GLIMS_STATUS_UNSUPPORTED      = 8, /* the engine version cannot do this */
+  GLIMS_STATUS_REQUIRES_RASTERIZE = 9 /* explicit consent is needed to turn editable layers into pixels */
 } GlimsStatus;
 
 typedef struct GlimsRect {
@@ -775,6 +776,14 @@ typedef enum GlimsColorTRC {
   GLIMS_COLOR_TRC_PERCEPTUAL = 3
 } GlimsColorTRC;
 
+/* Rendering intents owned by the facade, not native engine enum values. */
+typedef enum GlimsProfileIntent {
+  GLIMS_PROFILE_PERCEPTUAL = 1,
+  GLIMS_PROFILE_RELATIVE_COLORIMETRIC = 2,
+  GLIMS_PROFILE_SATURATION = 3,
+  GLIMS_PROFILE_ABSOLUTE_COLORIMETRIC = 4
+} GlimsProfileIntent;
+
 /* The image's color state. Caller-owned: image_color_info fills the
  * struct in place; the fixed buffers are UTF-8, truncated, and need no
  * release. `component` and `trc` together are the image's precision;
@@ -790,6 +799,27 @@ typedef struct GlimsColorInfo {
   bool     profile_embedded;
   char     profile_label[256];  /* UTF-8, truncated; "" when none */
 } GlimsColorInfo;
+
+/* Brushes, patterns and gradients. These are the facade's own kind
+ * values; the engine's own enums never cross this boundary. */
+typedef enum GlimsResourceKind {
+  GLIMS_RESOURCE_BRUSH    = 1,
+  GLIMS_RESOURCE_PATTERN  = 2,
+  GLIMS_RESOURCE_GRADIENT = 3
+} GlimsResourceKind;
+
+/* A handle to one brush, pattern or gradient. It is opaque and valid
+ * only for the running engine that issued it in this session: a handle
+ * carried across a restart resolves to nothing. 0 means none. */
+typedef uint64_t GlimsResourceID;
+
+/* One row of the resources() list, in the engine's own order. */
+typedef struct GlimsResourceInfo {
+  GlimsResourceID id;
+  uint32_t        kind;      /* GlimsResourceKind */
+  char            name[256]; /* display label, UTF-8, truncated at a
+                              * character boundary */
+} GlimsResourceInfo;
 
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
@@ -1365,6 +1395,111 @@ typedef struct GlimsEngineAPI {
                                            GlimsItemID path, const char *name,
                                            GlimsItemID *layer, char **error);
 
+  /* Brushes, patterns and gradients: what a resource chooser lists,
+   * and the persistent identity that restores a saved choice after a
+   * restart. All of these are reads: they change nothing and are
+   * allowed at any time.
+   *
+   * resources() lists the engine's resources of `kind` (a
+   * GlimsResourceKind) in the engine's own order; the interface sorts
+   * as it likes. Only names and handles are collected; nothing is
+   * rendered. `rows` receives up to `capacity` rows, `count` the total.
+   * INVALID_ARGUMENT for an unknown `kind`, a missing `count`, a
+   * negative `capacity`, or `rows` missing while `capacity` is
+   * positive. */
+  GlimsStatus  (*resources)            (GlimsEngine *engine, uint32_t kind,
+                                        GlimsResourceInfo *rows, int32_t capacity,
+                                        int32_t *count);
+  /* The persistent identity of the resource `id` names: the triplet to
+   * store and later feed to resource_resolve(). `name` and `collection`
+   * are owned strings (free with free_string) and `internal` says
+   * whether the resource is the engine's built-in data. A NULL
+   * `collection` is a value of its own, not an empty collection: pass
+   * back exactly what was received. The identity survives restarting
+   * the engine; nothing else is promised, since moving or renaming the
+   * underlying file changes it. INVALID_ARGUMENT when `id` is 0 or
+   * outside the range of the issued handles (such a value can never
+   * name a resource) or when an output is missing; NOT_FOUND for a
+   * validly shaped handle that no longer resolves: stale, or issued
+   * by another engine; FAILED when the resource has no usable identity
+   * (a missing or invalid name, or a collection that is not UTF-8),
+   * with all outputs reset. */
+  GlimsStatus  (*resource_identifiers) (GlimsEngine *engine, GlimsResourceID id,
+                                        char **name, char **collection, bool *internal,
+                                        char **error);
+  /* The handle of the resource of `kind` that the identity (name,
+   * collection, internal) names, as resource_identifiers() reported
+   * it; `outID` receives 0 when the identity resolves to nothing. The
+   * match is exactly the engine's own: `collection` (NULL and "" are
+   * distinct) and `internal` must agree, and for non-internal
+   * resources the name too. An internal resource's name is not
+   * compared (its display name is localized), and there is no
+   * name-only fallback for the rest. `name` must be nonempty UTF-8,
+   * and `collection`, when given, UTF-8. INVALID_ARGUMENT for an
+   * unknown `kind`, an invalid `name` or `collection`, or a missing
+   * `outID`; NOT_FOUND when no resource of `kind` carries the
+   * identity. */
+  GlimsStatus  (*resource_resolve)     (GlimsEngine *engine, uint32_t kind,
+                                        const char *name, const char *collection,
+                                        bool internal, GlimsResourceID *outID,
+                                        char **error);
+  /* Assign an ICC profile without converting pixel component values, or
+   * discard embedded/hidden profiles when path is NULL. Non-NULL paths
+   * must be absolute, nonempty UTF-8 paths to valid ICC profiles compatible
+   * with the image model. A native single undo group, no mutation on refusal;
+   * BUSY during strokes/previews/plugin work. Discarding an already builtin
+   * profile and assigning an equal profile are no-ops. */
+  GlimsStatus (*image_assign_profile) (GlimsEngine *engine, GlimsImageID image,
+                                       const char *path, char **error);
+  /* Convert pixels to preserve appearance in the destination ICC profile.
+   * NULL path chooses the image model/precision's builtin profile. The own
+   * GlimsProfileIntent mapping and explicit black-point compensation apply
+   * only to this conversion. Same path/compatibility, undo and busy rules as
+   * assignment; converting to an equal effective profile is a no-op.
+   * A non-no-op that would rasterize editable text/vector/link layers
+   * reports REQUIRES_RASTERIZE without changing anything. The caller can
+   * obtain consent and use image_convert_profile_rasterizing instead.
+   * Indexed images report UNSUPPORTED: their native palette conversion
+   * ignores intent/BPC. Convert to RGB first. Assignment remains supported. */
+  GlimsStatus (*image_convert_profile) (GlimsEngine *engine, GlimsImageID image,
+                                        const char *path, uint32_t intent,
+                                        bool black_point_compensation,
+                                        char **error);
+  /* Explicitly permits the native conversion to rasterize editable text,
+   * vector and link layers. The caller must obtain consent first. The
+   * complete conversion remains one undo step; undo restores editability.
+   * Equal-profile no-ops still rasterize nothing. All other conversion
+   * validation and indexed-image restrictions apply. */
+  GlimsStatus (*image_convert_profile_rasterizing) (GlimsEngine *engine, GlimsImageID image,
+                                                    const char *path, uint32_t intent,
+                                                    bool black_point_compensation, char **error);
+  /* An owned thumbnail of the resource `id` names, rendered fresh on
+   * every call and fitted inside a `max_size` x `max_size` box
+   * (1 ... 512). `foreground` and `background` are optional explicit
+   * colors (finite components inside 0 ... 1) for previews that react
+   * to them: the foreground recolors mask-only brushes, and both feed
+   * gradients with foreground/background segments. Native FG/BG contexts
+   * are opaque; the resource supplies alpha through its brush mask or
+   * transparent gradient stops. NULL uses the
+   * engine's canonical black foreground and white background. The
+   * colors apply to this call only; no user or global context is read
+   * or changed. `out` receives a straight-alpha sRGB RGBA buffer of
+   * byte_count = width * height * 4 (release with free_pixels) and is
+   * reset first, on every failure too. Brushes and patterns keep their
+   * source aspect and are never scaled up, so a small resource comes
+   * back at its native size; gradients render exactly
+   * max_size x max (1, max_size / 2). INVALID_ARGUMENT for a missing
+   * `out`, a `max_size` outside 1 ... 512, a color component that is
+   * not finite or outside 0 ... 1, or an `id` of 0 or outside the
+   * range of the issued handles (such a value can never name a
+   * resource); NOT_FOUND for a validly shaped handle that no longer
+   * resolves: stale, or issued by another engine; FAILED when the
+   * engine cannot render a thumbnail, with `out` reset. */
+  GlimsStatus  (*resource_thumbnail)   (GlimsEngine *engine, GlimsResourceID id,
+                                        int32_t max_size,
+                                        const GlimsColor *foreground,
+                                        const GlimsColor *background,
+                                        GlimsPixelBuffer *out, char **error);
   /* A genuine vector layer's native fill/stroke style (GIMP 3.2+).
    * vector_layer_style_get is a read: it fills `style` from the layer's
    * own options and is always allowed, also during a stroke, a preview

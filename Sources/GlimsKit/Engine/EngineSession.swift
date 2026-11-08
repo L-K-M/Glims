@@ -1699,6 +1699,12 @@ final class EngineSession: @unchecked Sendable {
         try string.withCString { try body($0) }
     }
 
+    private func withOptionalPointer<T, Result>(_ value: T?,
+                                                _ body: (UnsafePointer<T>?) throws -> Result) rethrows -> Result {
+        guard let value else { return try body(nil) }
+        return try withUnsafePointer(to: value) { try body($0) }
+    }
+
     func scaleImage(_ image: Int32, width: Int, height: Int) throws {
         var error: UnsafeMutablePointer<CChar>?
         try check(api.image_scale(engine, image, Int32(width), Int32(height), &error), error)
@@ -1771,6 +1777,203 @@ final class EngineSession: @unchecked Sendable {
     @discardableResult
     func cancelProcedure() -> Bool {
         api.procedure_cancel(engine) == GLIMS_STATUS_OK
+    }
+
+    // MARK: Resources
+
+    /// The kind of a brush, pattern or gradient (GlimsResourceKind).
+    /// Facade-owned values; the engine's own enum never crosses the boundary.
+    enum ResourceKind: UInt32, CaseIterable {
+        case brush = 1, pattern = 2, gradient = 3
+    }
+
+    /// A handle to one brush, pattern or gradient (GlimsResourceID):
+    /// opaque, and local to the current engine session. A number can be
+    /// reused after a restart. Persisted selections store
+    /// `ResourceIdentity`, never these ids.
+    typealias ResourceID = UInt64
+
+    /// One row of the resource catalog (GlimsResourceInfo): the display
+    /// name and handle of one brush, pattern or gradient; nothing rendered.
+    struct Resource: Equatable {
+        let id: ResourceID
+        let kind: ResourceKind
+        let displayName: String
+    }
+
+    /// The persistent identity of a resource: the triplet to store and
+    /// later feed to `resolveResource(_:kind:)`. A nil `collection` is a
+    /// value of its own, not an empty collection: Codable keeps the NULL
+    /// and empty values apart so a persisted selection restores exactly
+    /// what was stored.
+    struct ResourceIdentity: Equatable, Codable {
+        let name: String
+        let collection: String?
+        let isInternal: Bool
+    }
+
+    /// The engine's resources of `kind`, in the engine's own order (sort
+    /// in the interface as you like): names and handles only, nothing
+    /// rendered. The catalog can list hundreds of rows, so call this when
+    /// a chooser opens, never eagerly on the main thread or at startup.
+    func resources(_ kind: ResourceKind) throws -> [Resource] {
+        var count: Int32 = 0
+        try check(api.resources(engine, kind.rawValue, nil, 0, &count), nil)
+        var rows = [GlimsResourceInfo](repeating: GlimsResourceInfo(), count: Int(count))
+        var filled: Int32 = 0
+        while true {
+            let capacity = Int32(rows.count)
+            filled = 0
+            try rows.withUnsafeMutableBufferPointer { buffer in
+                try check(api.resources(engine, kind.rawValue, buffer.baseAddress, capacity, &filled), nil)
+            }
+            // The second count is the total again: one above the buffer
+            // means the catalog grew between the calls, so retry at the
+            // reported size instead of returning a short list.
+            guard filled > capacity else { break }
+            rows = [GlimsResourceInfo](repeating: GlimsResourceInfo(), count: Int(filled))
+        }
+        return try rows.prefix(Int(max(filled, 0))).map { row in
+            Resource(id: row.id, kind: try Self.resourceKind(row.kind), displayName: Self.string(row.name))
+        }
+    }
+
+    /// The persistent identity of the resource `id` names: the triplet to
+    /// store and later feed to `resolveResource(_:kind:)`. A nil
+    /// `collection` is a value of its own, not an empty collection: pass
+    /// back exactly what was received. The identity survives restarting
+    /// the engine; nothing else is promised, since moving or renaming the
+    /// underlying file changes it.
+    func resourceIdentifiers(_ id: ResourceID) throws -> ResourceIdentity {
+        var name: UnsafeMutablePointer<CChar>?
+        var collection: UnsafeMutablePointer<CChar>?
+        var isInternal = false
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.resource_identifiers(engine, id, &name, &collection, &isInternal, &error)
+        // Own the returned strings until this call finishes, including
+        // any error path that supplied them.
+        defer {
+            api.free_string(name)
+            api.free_string(collection)
+        }
+        try check(status, error)
+        guard let rawName = name else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine reported no resource identity.")
+        }
+        return ResourceIdentity(name: String(cString: rawName),
+                                collection: collection.map { String(cString: $0) },
+                                isInternal: isInternal)
+    }
+
+    /// The handle of the resource of `kind` that `identity` names, as
+    /// `resourceIdentifiers(_:)` reported it. The match is exactly the
+    /// engine's own: `collection` (nil and "" are distinct) and
+    /// `isInternal` must agree, and for non-internal resources the name
+    /// too. An internal resource's name is not compared (its display name
+    /// is localized), and there is no name-only fallback for the rest.
+    /// Throws NOT_FOUND when no resource of `kind` carries the identity.
+    func resolveResource(_ identity: ResourceIdentity, kind: ResourceKind) throws -> ResourceID {
+        guard !identity.name.utf8.contains(0), identity.collection?.utf8.contains(0) != true else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The resource identity contains invalid text.")
+        }
+        var handle: ResourceID = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try withOptionalCString(identity.name) { name in
+            try withOptionalCString(identity.collection) { collection in
+                try check(api.resource_resolve(engine, kind.rawValue, name, collection,
+                                               identity.isInternal, &handle, &error), error)
+            }
+        }
+        return handle
+    }
+
+    /// An owned thumbnail of one brush, pattern or gradient: the
+    /// straight-alpha 8-bit sRGB RGBA pixels of one `resource_thumbnail`
+    /// call, copied out of the native buffer, plus the same pixels as a
+    /// CGImage for display.
+    struct ResourceThumbnail {
+        let width: Int
+        let height: Int
+        /// Straight-alpha sRGB RGBA, exactly `width * height * 4` bytes.
+        let pixels: Data
+        /// The same pixels (sRGB, straight alpha, `width * 4` bytes per row).
+        let image: CGImage
+    }
+
+    /// Renders a fresh thumbnail of the resource `id` names, fitted
+    /// inside a `maxSize` x `maxSize` box (1 ... 512): gradients come
+    /// back exactly `maxSize` x `max(1, maxSize / 2)`, brushes and
+    /// patterns keep their source aspect and are never scaled up. Every
+    /// call renders fresh; nothing is cached between calls.
+    ///
+    /// `foreground` and `background` are optional explicit recolor
+    /// inputs: the foreground recolors mask-only brushes, and both feed
+    /// gradients with foreground/background segments. Native contexts
+    /// use opaque FG/BG, so a color's alpha never makes the preview
+    /// transparent — the resource supplies alpha through its brush mask
+    /// or transparent gradient stops. Nil uses the engine's canonical
+    /// black foreground and white background. The colors apply to this
+    /// call only: no user or global context is read or changed, and no
+    /// image, catalog or resource is mutated.
+    ///
+    /// The render runs synchronously on the engine thread, so call this
+    /// off the main thread, like `resources(_:)`.
+    func resourceThumbnail(_ id: ResourceID, maxSize: Int32 = 32,
+                           foreground: NSColor? = nil,
+                           background: NSColor? = nil) throws -> ResourceThumbnail {
+        var output = GlimsPixelBuffer()
+        var error: UnsafeMutablePointer<CChar>?
+        // The native buffer is owned from the call on, so it is freed on
+        // every path, validation and CGImage-construction failures too.
+        defer { api.free_pixels(output.pixels) }
+        let foregroundColor = foreground.map { Self.color($0) }
+        let backgroundColor = background.map { Self.color($0) }
+        let status = withOptionalPointer(foregroundColor) { foreground in
+            withOptionalPointer(backgroundColor) { background in
+                api.resource_thumbnail(engine, id, maxSize, foreground, background, &output, &error)
+            }
+        }
+        try check(status, error)
+
+        let width = Int(output.bounds.width)
+        let height = Int(output.bounds.height)
+        let (pixelCount, countOverflow) = width.multipliedReportingOverflow(by: height)
+        let (expectedBytes, byteOverflow) = pixelCount.multipliedReportingOverflow(by: 4)
+        guard output.bounds.x == 0, output.bounds.y == 0,
+              width > 0, height > 0, width <= Int(maxSize), height <= Int(maxSize),
+              !countOverflow, !byteOverflow,
+              let nativePixels = output.pixels,
+              output.byte_count == expectedBytes else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine returned a malformed resource thumbnail.")
+        }
+        let pixels = Data(bytes: nativePixels, count: expectedBytes)
+        // Straight alpha, like drawableThumbnail: CGImageAlphaInfo.last
+        // with an sRGB space and a width * 4 row stride over the copied
+        // bytes.
+        guard let provider = CGDataProvider(data: pixels as CFData),
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                                  bytesPerRow: width * 4, space: space,
+                                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+                                  provider: provider, decode: nil, shouldInterpolate: true,
+                                  intent: .defaultIntent) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The resource thumbnail could not be decoded as straight-alpha sRGB.")
+        }
+        return ResourceThumbnail(width: width, height: height, pixels: pixels, image: image)
+    }
+
+    /// The facade kind of an engine row; unknown kind values never reach
+    /// the interface.
+    private static func resourceKind(_ raw: UInt32) throws -> ResourceKind {
+        guard let kind = ResourceKind(rawValue: raw) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The engine returned an unknown resource kind.")
+        }
+        return kind
     }
 
     // MARK: Helpers

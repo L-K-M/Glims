@@ -49,6 +49,7 @@ enum MainMenu {
             item("Paste as New Image", #selector(AppController.pasteAsNewImage(_:))),
             clearItem(),
             .separator(),
+            item("Fill…", #selector(DocumentWindowController.fill(_:))),
             item("Stroke Path", #selector(DocumentWindowController.strokePath(_:))),
             item("Fill Path", #selector(DocumentWindowController.fillPath(_:))),
             item("To Vector Layer", #selector(DocumentWindowController.toVectorLayer(_:))),

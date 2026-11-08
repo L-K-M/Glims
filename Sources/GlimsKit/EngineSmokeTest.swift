@@ -103,6 +103,7 @@ enum EngineSmokeTest {
             try exerciseFileAdmission(session, work: work, documents: documents)
             try exerciseRevert(session, work: work, documents: documents)
             try exerciseFileImports(session, work: work, documents: documents)
+            try exerciseFillForm(session, documents: documents)
             try exerciseColorConversions(session, work: work, documents: documents)
             try exercisePrinting(session, work: work, documents: documents)
             try exerciseRecovery(session, work: work, documents: documents)
@@ -130,6 +131,8 @@ enum EngineSmokeTest {
             try exerciseNativeFilterForms(session, work: work, documents: documents)
             try exerciseFilterStackInterface(session, work: work, documents: documents)
             try measurePluginStalls(session, work: work)
+            try exerciseResourceCatalog(session)
+            try exerciseResourceThumbnails(session)
         } catch {
             check(false, "unexpected engine error: \(error)")
         }
@@ -637,6 +640,143 @@ enum EngineSmokeTest {
         }
     }
 
+    /// The Edit Fill sheet, including independent controls when two
+    /// documents have sheets open and a refusal after opening the sheet.
+    private static func exerciseFillForm(_ session: EngineSession, documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func views<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
+            guard let root else { return [] }
+            return (root as? T).map { [$0] } ?? root.subviews.flatMap { views($0, as: type) }
+        }
+        let first = try ImageDocument(session: session, image: session.newImage(width: 16, height: 16), name: "Fill A")
+        let second = try ImageDocument(session: session, image: session.newImage(width: 16, height: 16), name: "Fill B")
+        documents.items += [first, second]
+        let a = DocumentWindowController(document: first)
+        let b = DocumentWindowController(document: second)
+        a.showWindow(nil)
+        b.showWindow(nil)
+        var errors: [String] = []
+        first.onError = { errors.append($0) }
+        second.onError = { errors.append($0) }
+        let foreground = ToolState.shared.foreground
+        let background = ToolState.shared.background
+        ToolState.shared.foreground = .red
+        ToolState.shared.background = .green
+        defer {
+            ToolState.shared.foreground = foreground
+            ToolState.shared.background = background
+            for (controller, document) in [(a, first), (b, second)] {
+                if let sheet = controller.window?.attachedSheet { controller.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn) }
+                controller.window?.close()
+                document.onError = nil
+                documents.items.removeAll { $0 === document }
+                document.closeImageWhenDrained()
+            }
+        }
+        func finish(_ controller: DocumentWindowController, _ response: NSApplication.ModalResponse) {
+            if let sheet = controller.window?.attachedSheet { controller.window?.endSheet(sheet, returnCode: response) }
+            spin(0.1)
+        }
+        func opacityField(_ sheet: NSWindow?) -> NSTextField? {
+            views(sheet?.contentView, as: NSTextField.self).first { $0.isEditable }
+        }
+
+        let undoBefore = first.undoInfo.undoCount
+        a.fill(nil)
+        let firstSheet = a.window?.attachedSheet
+        b.fill(nil)
+        let secondSheet = b.window?.attachedSheet
+        check(firstSheet != nil && secondSheet != nil, "two documents can open independent Fill sheets")
+        finish(a, .alertSecondButtonReturn)
+        let slider = views(secondSheet?.contentView, as: NSSlider.self).first
+        slider?.doubleValue = 25
+        if let slider, let action = slider.action { NSApp.sendAction(action, to: slider.target, from: slider) }
+        check(opacityField(secondSheet)?.stringValue == "25",
+              "closing one Fill sheet preserves the other sheet's slider binding")
+        finish(b, .alertSecondButtonReturn)
+        check(first.undoInfo.undoCount == undoBefore && first.pendingWork == 0 && second.pendingWork == 0,
+              "cancelling Fill changes neither document nor its undo history")
+
+        try session.select(.rectangle(CGRect(x: 4, y: 4, width: 8, height: 8)), image: first.image, options: .init())
+        try first.reload()
+        let beforeFill = first.undoInfo.undoCount
+        a.fill(nil)
+        let sheet = a.window?.attachedSheet
+        opacityField(sheet)?.stringValue = "50"
+        finish(a, .alertFirstButtonReturn)
+        wait { first.pendingWork == 0 }
+        let inside = pixel(session, first.image, x: 6, y: 6) ?? []
+        let outside = pixel(session, first.image, x: 1, y: 1) ?? []
+        check(inside.count == 4 && inside[0] > 240 && (175...200).contains(Int(inside[1]))
+                && outside.count == 4 && outside.prefix(3).allSatisfy { $0 == 255 },
+              "Fill uses the foreground at 50 percent only inside the selection (\(inside), \(outside))")
+        check(first.undoInfo.undoCount == beforeFill + 1, "Fill is one undo step")
+        first.undo()
+        wait { first.pendingWork == 0 }
+        check(pixel(session, first.image, x: 6, y: 6)?.prefix(3).allSatisfy { $0 == 255 } == true,
+              "undo restores the area before Fill")
+
+        b.fill(nil)
+        let customSheet = b.window?.attachedSheet
+        let choice = views(customSheet?.contentView, as: NSPopUpButton.self).first
+        choice?.selectItem(at: 4)
+        if let choice, let action = choice.action { NSApp.sendAction(action, to: choice.target, from: choice) }
+        let well = views(customSheet?.contentView, as: NSColorWell.self).first
+        check(well?.isEnabled == true, "choosing Custom enables the Fill color well")
+        well?.color = .blue
+        finish(b, .alertFirstButtonReturn)
+        wait { second.pendingWork == 0 }
+        let custom = pixel(session, second.image, x: 8, y: 8) ?? []
+        check(custom.count == 4 && custom[0] < 20 && custom[2] > 240,
+              "Custom Fill uses its chosen color across the whole layer without a selection (\(custom))")
+
+        b.fill(nil)
+        let backgroundSheet = b.window?.attachedSheet
+        views(backgroundSheet?.contentView, as: NSPopUpButton.self).first?.selectItem(at: 1)
+        finish(b, .alertFirstButtonReturn)
+        wait { second.pendingWork == 0 }
+        let green = pixel(session, second.image, x: 8, y: 8) ?? []
+        check(green.count == 4 && green[0] < 20 && green[1] > 240 && green[2] < 20,
+              "Background Fill uses the background color independently of the foreground")
+
+        a.fill(nil)
+        let invalidSheet = a.window?.attachedSheet
+        opacityField(invalidSheet)?.stringValue = "50percent-junk"
+        let invalidErrorsBefore = errors.count, invalidUndoBefore = first.undoInfo.undoCount
+        finish(a, .alertFirstButtonReturn)
+        check(errors.count > invalidErrorsBefore && first.pendingWork == 0
+                && first.undoInfo.undoCount == invalidUndoBefore,
+              "Fill refuses a malformed opacity without editing or adding undo")
+
+        a.fill(nil)
+        let errorsBefore = errors.count
+        let gate = DispatchSemaphore(value: 0)
+        let held = EngineActivity.shared.perform(label: "Other work", work: { gate.wait() }, completion: {})
+        finish(a, .alertFirstButtonReturn)
+        check(held && errors.count > errorsBefore && first.pendingWork == 0,
+              "Fill reports a busy engine acquired after its sheet opened")
+        gate.signal()
+        wait { !EngineActivity.shared.isBusy }
+
+        a.fill(nil)
+        let nativeErrorsBefore = errors.count
+        if let layer = first.activeLayer {
+            try session.setLayerLocks(layer, image: first.image, mask: .pixels, values: .pixels)
+            finish(a, .alertFirstButtonReturn)
+            wait { first.pendingWork == 0 }
+            spin()
+            check(errors.count > nativeErrorsBefore
+                    && pixel(session, first.image, x: 6, y: 6)?.prefix(3).allSatisfy { $0 == 255 } == true,
+                  "Fill reports a native locked-target refusal and preserves its pixels")
+            try session.setLayerLocks(layer, image: first.image, mask: .pixels, values: [])
+        } else {
+            check(false, "the Fill refusal fixture has an active layer")
+        }
+    }
+
     /// Image ▸ Mode and Image ▸ Precision…: the cached color state
     /// behind the title, the checkmarks and the form's seeding; the
     /// conversions through counted exclusive admission; and the rules
@@ -769,6 +909,7 @@ enum EngineSmokeTest {
         let originalError = document.onError
         var precisionError: String?
         document.onError = { message in precisionError = message; originalError?(message) }
+        defer { document.onError = originalError }
         controller.imagePrecision(nil)
         sheet = controller.window?.attachedSheet
         let activityGate = DispatchSemaphore(value: 0)
@@ -778,7 +919,7 @@ enum EngineSmokeTest {
         if let sheet {
             controller.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn)
         }
-        spin(0.2)
+        wait { precisionError != nil }
         check(held && precisionError != nil && document.colorInfo.component == .u8,
               "Precision reports Convert refused while another document holds the engine")
         activityGate.signal()
@@ -798,8 +939,7 @@ enum EngineSmokeTest {
                 component.selectItem(withTitle: EngineSession.ColorComponent.u16.title)
                 controller.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn)
             }
-            wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
-            spin()
+            wait { precisionError != nil && document.pendingWork == 0 && !EngineActivity.shared.isBusy }
             check(precisionError != nil && document.colorInfo.component == .u8,
                   "Precision reports an engine-side conversion refusal without changing the image")
         }
@@ -5993,6 +6133,200 @@ enum EngineSmokeTest {
               "main thread never stalled ≥ \(Int(maximumMainThreadStallMilliseconds)) ms during plug-in calls (worst \(String(format: "%.1f", maxLateness)) ms)")
         check(maxRenderCall < maximumMainThreadStallMilliseconds,
               "engine calls from the main thread stay responsive during plug-in calls (worst \(String(format: "%.1f", maxRenderCall)) ms)")
+    }
+
+    /// The bounded resource catalog scenario: counts and rows for all
+    /// three kinds, one identity/resolve round trip per kind, a wrong
+    /// identity and a high-bit handle. Reads only; no resource is applied.
+    private static func exerciseResourceCatalog(_ session: EngineSession) throws {
+        var liveHandle: EngineSession.ResourceID = 0
+        for kind in EngineSession.ResourceKind.allCases {
+            let rows = try session.resources(kind)
+            let second = try session.resources(kind)
+            check(!rows.isEmpty && rows.count == second.count && rows.map(\.id) == second.map(\.id),
+                  "the engine lists \(rows.count) \(kind) resources, with the count honored and stable")
+            check(rows.allSatisfy { $0.kind == kind && !$0.displayName.isEmpty },
+                  "every \(kind) row carries its kind and a display name")
+            guard let first = rows.first else { continue }
+            if liveHandle == 0 { liveHandle = first.id }
+            let identity = try session.resourceIdentifiers(first.id)
+            check(!identity.name.isEmpty, "a \(kind) handle reports a usable identity")
+            let resolved = try session.resolveResource(identity, kind: kind)
+            check(resolved == first.id, "the \(kind) identity resolves back to its own handle")
+            check(try session.resourceIdentifiers(resolved) == identity,
+                  "the resolved \(kind) handle reports the same identity, NULL and empty collections apart")
+        }
+
+        do {
+            _ = try session.resolveResource(
+                EngineSession.ResourceIdentity(name: "Glims No Such Resource", collection: nil, isInternal: false),
+                kind: .brush)
+            check(false, "a wrong identity fails")
+        } catch let error as EngineSession.EngineError {
+            check(error.status == Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
+                  "a wrong identity fails with NOT_FOUND")
+        }
+
+        do {
+            _ = try session.resourceIdentifiers((UInt64(1) << 32) | liveHandle)
+            check(false, "a high-bit resource id is refused")
+        } catch let error as EngineSession.EngineError {
+            check(error.status == Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                  "a high-bit resource id is refused without narrowing to a live handle")
+        }
+        let brushRows = try session.resources(.brush)
+        if let row = brushRows.first {
+            let identity = try session.resourceIdentifiers(row.id)
+            for bad in [
+                EngineSession.ResourceIdentity(name: identity.name + "\u{0}suffix",
+                                               collection: identity.collection, isInternal: identity.isInternal),
+                EngineSession.ResourceIdentity(name: identity.name,
+                                               collection: (identity.collection ?? "") + "\u{0}suffix",
+                                               isInternal: identity.isInternal)
+            ] {
+                do {
+                    _ = try session.resolveResource(bad, kind: .brush)
+                    check(false, "embedded NUL identity text is refused before CString truncation")
+                } catch let error as EngineSession.EngineError {
+                    check(error.status == Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                          "embedded NUL identity text is refused before CString truncation")
+                }
+            }
+        }
+
+    }
+
+    /// The bounded resource thumbnail scenario: stock brushes, patterns
+    /// and gradients render through the Swift wrapper, the built-in FG/BG
+    /// gradient proves fresh per-call rendering with explicit colors,
+    /// malformed and high-bit handles are refused, and no image, catalog
+    /// or global context changes. Renders only; no resource is applied.
+    private static func exerciseResourceThumbnails(_ session: EngineSession) throws {
+        let catalogBefore = try EngineSession.ResourceKind.allCases.map { try session.resources($0) }
+        var liveHandle: EngineSession.ResourceID = 0
+
+        for kind in EngineSession.ResourceKind.allCases {
+            let rows = try session.resources(kind)
+            guard let first = rows.first else {
+                check(false, "the engine lists at least one \(kind) to thumbnail")
+                continue
+            }
+            if liveHandle == 0 { liveHandle = first.id }
+
+            var contentSeen = false
+            var alphaSeen = false
+            for row in rows.prefix(3) {
+                let thumbnail = try session.resourceThumbnail(row.id, maxSize: 32)
+                check(thumbnail.width >= 1 && thumbnail.height >= 1
+                        && thumbnail.width <= 32 && thumbnail.height <= 32,
+                      "\(kind) '\(row.displayName)' thumbnail fits 32 x 32 at its own bounds (\(thumbnail.width) x \(thumbnail.height))")
+                check(thumbnail.pixels.count == thumbnail.width * thumbnail.height * 4,
+                      "\(kind) '\(row.displayName)' thumbnail buffer is exactly width * height * 4 straight RGBA bytes")
+                check(thumbnail.image.width == thumbnail.width && thumbnail.image.height == thumbnail.height
+                        && thumbnail.image.bytesPerRow == thumbnail.width * 4,
+                      "\(kind) '\(row.displayName)' CGImage keeps the buffer's dimensions and row stride")
+                check(argb(thumbnail.image, x: 0, y: 0) == Array(thumbnail.pixels.prefix(4)),
+                      "\(kind) '\(row.displayName)' CGImage reads back the buffer's first pixel as RGBA")
+                contentSeen = contentSeen || thumbnail.pixels.contains { $0 != 0 }
+                alphaSeen = alphaSeen || thumbnail.pixels.enumerated().contains { $0.offset % 4 == 3 && $0.element != 0 }
+            }
+            check(contentSeen && alphaSeen,
+                  "stock \(kind) thumbnails carry native content and alpha coverage")
+
+            if kind == .gradient {
+                let strip = try session.resourceThumbnail(first.id, maxSize: 15)
+                check(strip.width == 15 && strip.height == 7 && strip.pixels.count == 15 * 7 * 4,
+                      "a gradient thumbnail is exactly 15 x 7 at maxSize 15 (\(strip.width) x \(strip.height))")
+                let tiny = try session.resourceThumbnail(first.id, maxSize: 1)
+                check(tiny.width == 1 && tiny.height == 1 && tiny.pixels.count == 4,
+                      "a gradient thumbnail is exactly 1 x 1 (4 bytes) at maxSize 1")
+            }
+
+            check(try session.resources(kind) == rows,
+                  "\(kind) resource handles are stable across the thumbnail calls")
+            let identity = try session.resourceIdentifiers(first.id)
+            check(try session.resolveResource(identity, kind: kind) == first.id,
+                  "the \(kind) identity still resolves to its own handle after thumbnails")
+        }
+
+        // The built-in FG/BG gradient's identity is stable across engine
+        // sets; an internal resource's display name is localized and not
+        // compared, so resolve by its collection.
+        let fgBg = try session.resolveResource(
+            EngineSession.ResourceIdentity(name: "FG to BG", collection: "gimp-gradient-fg-bg-rgb", isInternal: true),
+            kind: .gradient)
+        check(fgBg != 0, "the built-in FG to BG (RGB) gradient resolves by its exact internal identity")
+
+        let midtone = NSColor(srgbRed: 0.5, green: 0.25, blue: 0.75, alpha: 1)
+        let mid = try session.resourceThumbnail(fgBg, maxSize: 16, foreground: midtone, background: midtone)
+        let firstPixel = Array(mid.pixels.prefix(4))
+        check(abs(Int(firstPixel[0]) - 128) <= 1 && abs(Int(firstPixel[1]) - 64) <= 1
+                && abs(Int(firstPixel[2]) - 191) <= 1 && firstPixel[3] == 255,
+              "explicit thumbnail colors land as sRGB RGBA in R,G,B,A order (\(firstPixel))")
+        check(argb(mid.image, x: 0, y: 0) == firstPixel,
+              "the thumbnail CGImage exposes the same straight-alpha bytes as the pixel buffer")
+
+        let redBlue = try session.resourceThumbnail(fgBg, maxSize: 32, foreground: .red, background: .blue)
+        check(redBlue.width == 32 && redBlue.height == 16
+                && redBlue.pixels.enumerated().allSatisfy { $0.offset % 4 != 3 || $0.element == 255 },
+              "an opaque FG/BG gradient thumbnail is exactly 32 x 16 with alpha 255")
+        let redBlueAgain = try session.resourceThumbnail(fgBg, maxSize: 32, foreground: .red, background: .blue)
+        check(redBlue.pixels == redBlueAgain.pixels,
+              "repeated same-color FG/BG gradient thumbnails agree byte for byte")
+        let redGreen = try session.resourceThumbnail(fgBg, maxSize: 32, foreground: .red, background: .green)
+        let yellowBlue = try session.resourceThumbnail(fgBg, maxSize: 32, foreground: .yellow, background: .blue)
+        check(redBlue.pixels != redGreen.pixels,
+              "changing only the background re-renders the gradient thumbnail fresh")
+        check(redBlue.pixels != yellowBlue.pixels,
+              "changing only the foreground re-renders the gradient thumbnail fresh")
+
+        let defaultBefore = try session.resourceThumbnail(fgBg, maxSize: 32)
+        check(defaultBefore.pixels != redBlue.pixels,
+              "the default black/white colors differ from explicit red/blue")
+        let defaultAfter = try session.resourceThumbnail(fgBg, maxSize: 32)
+        check(defaultBefore.pixels == defaultAfter.pixels,
+              "explicit-color calls leave the engine's default FG/BG untouched (no global context mutation)")
+
+        for bad in [EngineSession.ResourceID(0), .max, (UInt64(1) << 32) | fgBg, 0x8000_0000] {
+            do {
+                _ = try session.resourceThumbnail(bad, maxSize: 32)
+                check(false, "resource id \(bad) is refused")
+            } catch let error as EngineSession.EngineError {
+                check(error.status == Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                      "malformed/high-bit resource id \(bad) is refused without narrowing to a live handle")
+            }
+        }
+        do {
+            _ = try session.resourceThumbnail(0x7FFF_FFFF, maxSize: 32)
+            check(false, "an unissued well-shaped resource id reports NOT_FOUND")
+        } catch let error as EngineSession.EngineError {
+            check(error.status == Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
+                  "an unissued well-shaped resource id reports NOT_FOUND")
+        }
+        for badSize: Int32 in [0, -1, 513] {
+            do {
+                _ = try session.resourceThumbnail(fgBg, maxSize: badSize)
+                check(false, "maxSize \(badSize) is refused")
+            } catch let error as EngineSession.EngineError {
+                check(error.status == Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                      "maxSize \(badSize) is refused with INVALID_ARGUMENT")
+            }
+        }
+
+        // An open image's history and pixels, and every catalog, must be
+        // untouched by the renders.
+        let image = try session.newImage(width: 48, height: 32)
+        defer { try? session.closeImage(image) }
+        let undoBefore = try session.undoInfo(image)
+        let pixelsBefore = try session.copyPixels(image, merged: true).pixels
+        _ = try session.resourceThumbnail(fgBg, maxSize: 64, foreground: .red, background: .blue)
+        if liveHandle != 0 { _ = try session.resourceThumbnail(liveHandle, maxSize: 64) }
+        check(try session.undoInfo(image) == undoBefore,
+              "resource thumbnails add no undo step to an open image")
+        check(try session.copyPixels(image, merged: true).pixels == pixelsBefore,
+              "resource thumbnails do not mutate an open image's pixels")
+        check(try EngineSession.ResourceKind.allCases.map { try session.resources($0) } == catalogBefore,
+              "resource thumbnails leave every resource catalog unchanged")
     }
 }
 
