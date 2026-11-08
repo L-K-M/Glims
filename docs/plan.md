@@ -756,3 +756,17 @@ and substantial parts of `design.md`, still need implementation and checks.
 | 2026-11-05 | GIMP_3_2_x | GIMP_3_0_8 | +15 / 1 | none | not timed; one edit round | `interface-diff.py` (all 3, before compiling), then the compiler | Reverse minor-release drill; environment: `mypaint-brushes1` port, typelib repair |
 | 2026-11-05 | GIMP_3_2_8 (adapter with plug-in procedures) | master `32c1ddaa2d` | +5 / 1 | none | minutes | the compiler; `interface-diff.py` did not compare struct members then, and does now | `GimpProgressInterface.get_window_id` renamed `get_window_handle` (ed668b3e2d); 3.0.8 and 3.2.0 needed nothing |
 | 2026-11-05 | master `32c1ddaa2d` | master `5374deeec1` | 0 / 0 | none | none (matrix run) | no break; `interface-diff.py` reports only the known rename | First run of `scripts/engine-matrix.sh` |
+
+### Vector-layer load compatibility (2026-11-08)
+
+The path-fill/vector slice exposed GIMP 3.2.0's XCF loader replacing an
+explicit vector-layer name with its path name during conversion. The new
+name-preservation assertion reproduced this after save/reopen. A scoped
+adapter hook now observes native layer-container insertion while loading,
+before the core refresh can rename the converted layer. It also covers
+nested groups and imported layers; existing destination layers retain
+their naming policy. Hooks disconnect on success and failure. The guard
+is compiled only for 3.2.0; later engines restore the saved name themselves.
+No upstream source, file metadata, dirty state or undo history changes.
+Pinned and cross-version checks plus independent review are recorded in
+the PR before merge. Frontend path controls remain a separate slice.

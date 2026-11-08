@@ -53,6 +53,7 @@ import_file_layers (GlimsEngine  *engine,
   GError            *gerror = NULL;
   GlimsStatus        ready;
   int32_t            n;
+  GlimsVectorLoadGuard *vector_guard;
 
   if (count)
     *count = 0;
@@ -102,6 +103,7 @@ import_file_layers (GlimsEngine  *engine,
 
   /* Non-XCF formats load through a plug-in, which nests a main loop. */
   engine->busy++;
+  vector_guard = glims_vector_load_guard_begin (engine, open->image);
 #if GIMP_CHECK_VERSION (3, 2, 0)
   new_layers = file_open_layers (engine->gimp, gimp_get_user_context (engine->gimp),
                                  NULL, open->image, FALSE, as_link, file,
@@ -117,6 +119,7 @@ import_file_layers (GlimsEngine  *engine,
 
   if (! new_layers)
     {
+      glims_vector_load_guard_end (vector_guard);
       if (status == GIMP_PDB_CANCEL)
         {
           g_clear_error (&gerror);
@@ -133,6 +136,7 @@ import_file_layers (GlimsEngine  *engine,
                          gimp_image_get_width (open->image),
                          gimp_image_get_height (open->image),
                          undo_desc);
+  glims_vector_load_guard_end (vector_guard);
 
   n = 0;
   for (iter = new_layers; iter; iter = iter->next)

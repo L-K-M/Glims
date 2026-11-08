@@ -1186,7 +1186,8 @@ test_path_vector_layer (const char *work)
       CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && layer_count (image) == 1 &&
              api->image_redo (engine, image) == GLIMS_STATUS_OK && layer_count (image) == 2 &&
              api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK &&
-             count == 2 && rows[0].kind == GLIMS_LAYER_VECTOR && undo_depth (image) == before,
+             count == 2 && rows[0].kind == GLIMS_LAYER_VECTOR &&
+             strcmp (rows[0].name, "Vector") == 0 && undo_depth (image) == before,
              "undo removes the vector layer, redo restores it as VECTOR");
 
       /* XCF keeps it structured: the layer reports VECTOR after reopen
@@ -1203,6 +1204,14 @@ test_path_vector_layer (const char *work)
              (render_pixel (reopened, 50, 50, px), px[0] > 200 && px[1] > 200) &&
              (render_pixel (reopened, 10, 10, px), px[0] > 200 && px[1] < 60),
              "an XCF round trip keeps the vector layer VECTOR with the path's shape and rendered pixels");
+      CHECK (strcmp (rows[0].name, "Vector") == 0,
+             "XCF reopen preserves the explicit vector layer name (%s)", rows[0].name);
+      {
+        GlimsImageInfo loaded_info;
+        CHECK (api->image_info (engine, reopened, &loaded_info) == GLIMS_STATUS_OK &&
+               ! loaded_info.dirty && undo_depth (reopened) == 0,
+               "preserving the loaded name adds no dirty state or undo history");
+      }
       if (reopened)
         api->image_close (engine, reopened);
       reopened = 0;
@@ -1214,6 +1223,50 @@ test_path_vector_layer (const char *work)
              (render_pixel (image, 50, 50, px), px[0] > 200 && px[1] > 200),
              "editing the path moves the layer's rendered shape (25,25 now red %d,%d; 50,50 still filled %d,%d)",
              px[0], px[1], px[0], px[1]);
+      CHECK (api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK &&
+             count == 2 && strcmp (rows[0].name, "Vector") == 0,
+             "editing the path preserves the explicit vector layer name (%s)", rows[0].name);
+
+      /* Nested containers and Open as Layers use the same native loader,
+       * then copy and insert the loaded items into a different image. */
+      {
+        GlimsImageID destination = 0;
+        GlimsItemID group = 0, destination_group = 0, imported[4];
+        GlimsLayerInfo imported_rows[8];
+        int32_t imported_count = 0, imported_row_count = 0;
+        int named_vectors = 0;
+
+        CHECK (api->create_group (engine, image, 0, 0, "Source group", &group, NULL) == GLIMS_STATUS_OK &&
+               api->reparent_layer (engine, image, vector, group, 0, NULL) == GLIMS_STATUS_OK &&
+               api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+               api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK &&
+               api->image_layers (engine, reopened, rows, 4, &count) == GLIMS_STATUS_OK && count == 3 &&
+               rows[0].kind == GLIMS_LAYER_GROUP && rows[1].kind == GLIMS_LAYER_VECTOR &&
+               strcmp (rows[1].name, "Vector") == 0,
+               "XCF reopen preserves a named vector inside a group");
+        if (reopened)
+          api->image_close (engine, reopened);
+        reopened = 0;
+
+        api->image_new (engine, 200, 120, &destination, NULL);
+        CHECK (api->create_group (engine, destination, 0, 0, "Destination group", &destination_group, NULL)
+                 == GLIMS_STATUS_OK,
+               "the import destination has an existing selected group");
+        before = undo_depth (destination);
+        CHECK (api->image_open_layers (engine, destination, xcf, imported, 4, &imported_count, NULL)
+                 == GLIMS_STATUS_OK && imported_count == 2 && undo_depth (destination) == before + 1 &&
+               api->image_layers (engine, destination, imported_rows, 8, &imported_row_count) == GLIMS_STATUS_OK,
+               "nested vector import is one undo step inside the existing destination group");
+        for (int32_t i = 0; i < imported_row_count && i < 8; i++)
+          if (imported_rows[i].kind == GLIMS_LAYER_VECTOR &&
+              strcmp (imported_rows[i].name, "Vector") == 0 && imported_rows[i].parent != 0)
+            named_vectors++;
+        CHECK (named_vectors == 1, "Open as Layers preserves the nested vector's explicit name");
+        CHECK (api->image_undo (engine, destination) == GLIMS_STATUS_OK && layer_count (destination) == 2 &&
+               api->image_redo (engine, destination) == GLIMS_STATUS_OK && layer_count (destination) == 5,
+               "undo and redo remove and restore the imported vector group");
+        api->image_close (engine, destination);
+      }
     }
 
   api->image_close (engine, image);
