@@ -10,7 +10,7 @@ are the main inputs. The active editor-completion work and its remaining
 features are tracked in [`completion.md`](completion.md). The phase 1 spike
 is not the finished editor. File safety and clipboard editing, groups and
 masks, channels and Quick Mask, history/snapshots, recovery, native filter
-forms, printing, metadata, help and image placement have since been
+forms, printing, layer properties, help and image placement have since been
 implemented in reviewed slices. Remaining design and final integration
 checks stay explicit in that ledger.
 

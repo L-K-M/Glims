@@ -28,7 +28,7 @@ behavior, not every adjacent feature in `design.md`.
       listing/reorder/edit APIs are present; their Layers controls are pending.
 - [x] Open as Layers and native link-layer Place, including failure recovery,
       undo and source refresh. Link layers require an engine with that feature.
-- [x] Save a Copy, Revert, native Print/Page Setup, metadata and editor preferences.
+- [x] Save a Copy, Revert, native Print/Page Setup, layer properties and editor preferences.
 - [x] Retina Actual Pixels and display-density changes.
 - [x] Searchable native help content.
 - [x] A self-contained bundle passes native and interface checks with the
@@ -51,7 +51,9 @@ behavior, not every adjacent feature in `design.md`.
       and initial fit that avoids palettes.
 - [ ] Paste Into/floating selection controls, Stroke Selection and resource
       creation from selections.
-- [ ] Complete menu/keyboard coverage and shortcut customization.
+- [ ] Image metadata editing, Fill dialog, remaining Image Adjust commands,
+      layer-boundary/selection-edge/proof view toggles, complete menu and
+      keyboard coverage and shortcut customization.
 - [ ] Recorder and semantic command replay.
 - [ ] Full accessibility/focus, appearance and English-copy audit.
 - [ ] Public distribution checks from `plan.md`: corresponding sources,
@@ -216,3 +218,7 @@ denied. The later existing-effect backend passed 662 native checks on
 revisions and checks, not a claim that the final combined editor is done.
 The implementation PRs and their verification comments retain the exact
 heads, review findings and remaining manual gaps.
+
+Revert verification: 495 interface checks passed on each engine before
+integration; the placement-integrated head passed 248 unit tests and 538
+pinned-engine interface checks. Manual confirmation-sheet checks remain.
