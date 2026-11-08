@@ -124,6 +124,7 @@ enum EngineSmokeTest {
             try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
             try exercisePlugInCommands(session, documents: documents)
             try exerciseNativeFilterForms(session, work: work, documents: documents)
+            try exerciseFilterStackInterface(session, work: work, documents: documents)
             try measurePluginStalls(session, work: work)
         } catch {
             check(false, "unexpected engine error: \(error)")
@@ -4282,6 +4283,442 @@ enum EngineSmokeTest {
         check((try? session.filterProperty(cleanFilter ?? 0, "value")) == nil,
               "the closed image's filter session is gone")
         documents.items.removeAll { $0 === cleanDocument }
+        controller.window?.orderOut(nil)
+    }
+
+    /// A drop's minimum interface, so the Layers palette's drop
+    /// validation and acceptance can be driven without AppKit's
+    /// dragging machinery: the type name is the outline's own layer-id
+    /// pasteboard contract.
+    private final class LayerDragInfo: NSObject, NSDraggingInfo {
+        var draggingDestinationWindow: NSWindow? { nil }
+        var draggingSourceOperationMask: NSDragOperation { .move }
+        var draggingLocation: NSPoint { .zero }
+        var draggedImageLocation: NSPoint { .zero }
+        var draggedImage: NSImage? { nil }
+        let draggingPasteboard = NSPasteboard()
+        var draggingSource: Any? { nil }
+        var draggingSequenceNumber: Int { 0 }
+        var draggingFormation: NSDraggingFormation = .default
+        var animatesToDestination = false
+        var numberOfValidItemsForDrop = 1
+        var draggingItems: [NSDraggingItem] = []
+        var springLoadingHighlight: NSSpringLoadingHighlight = .none
+        func slideDraggedImage(to screenPoint: NSPoint) {}
+        func namesPromisedToBeDroppedAtDestination(_ promisedDropLocation: URL) -> [URL] { [] }
+        func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions,
+                                    for view: NSView?, classes classArray: [AnyClass],
+                                    searchOptions: [NSPasteboard.ReadingOptionKey: Any],
+                                    using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
+        func resetSpringLoading() {}
+    }
+
+    /// The committed-effect rows of the Layers palette end to end:
+    /// real child rows top-first, the eye's pixel change, Properties
+    /// with its one-step undo, stack reorder, Remove, the generic form
+    /// editing the committed effect seeded with its values, the
+    /// preview-cancel and commit-undo semantics of that session, a begin
+    /// queued behind pending input draining a close, and a group holding
+    /// an effect while layer drops translate past its effect prefix.
+    private static func exerciseFilterStackInterface(_ session: EngineSession, work: URL,
+                                                     documents: DocumentList) throws {
+        NativeFilterCatalog.shared.load(using: session)
+        let image = try session.newImage(width: 32, height: 32)
+        let document = try ImageDocument(session: session, image: image, name: "Filter Stack")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        func wait() {
+            let deadline = Date().addingTimeInterval(10)
+            while document.pendingWork > 0 && Date() < deadline { spin(0.02) }
+            spin()
+        }
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+        guard let layer = document.activeLayer else { throw NoWindow() }
+
+        // A stroke so blur and invert have real edges to work on.
+        document.beginStroke(at: .init(x: 4, y: 16, pressure: 1))
+        document.continueStroke([.init(x: 28, y: 16, pressure: 1, timeMilliseconds: 40)])
+        document.endStroke()
+        settle()
+
+        // Three committed effects, bottom to top: a solid red overlay,
+        // an invert, and a blur. Overlay under invert is noncommutative:
+        // invert(overlay) is cyan, overlay(invert) is red.
+        let first = try session.beginFilter(image: image, drawable: layer, operation: "gegl:color-overlay")
+        try session.setFilterProperty(first, "value", to: .color(NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)))
+        try session.commitFilter(first)
+        let second = try session.beginFilter(image: image, drawable: layer, operation: "gegl:value-invert")
+        try session.commitFilter(second)
+        let third = try session.beginFilter(image: image, drawable: layer, operation: "gegl:gaussian-blur")
+        try session.setFilterProperty(third, "std-dev-x", to: .number(8))
+        try session.setFilterProperty(third, "std-dev-y", to: .number(8))
+        try session.commitFilter(third)
+        settle()
+        try document.reload()
+
+        guard let stack = document.layerEffects[layer], stack.count == 3 else {
+            check(false, "the document caches the three committed effects")
+            controller.window?.orderOut(nil)
+            return
+        }
+        check(stack.map(\.operation) == ["gegl:gaussian-blur", "gegl:value-invert", "gegl:color-overlay"],
+              "the document caches the committed effects top-first")
+        let cyan = pixel(session, image, x: 16, y: 4)
+        check((cyan?[0] ?? 255) < 60 && (cyan?[1] ?? 0) > 200,
+              "blur over invert over overlay renders cyan (\(cyan ?? []))")
+
+        let palette = LayersPaletteController()
+        _ = palette.view
+        palette.retarget(to: document)
+        guard let outline = descendant(of: palette.view, as: NSOutlineView.self) else {
+            check(false, "the layer palette has an outline")
+            controller.window?.orderOut(nil)
+            return
+        }
+        func layerNode() -> LayerTree.Node? {
+            (0..<outline.numberOfRows).compactMap { outline.item(atRow: $0) as? LayerTree.Node }
+                .first { $0.id == layer }
+        }
+        guard let node = layerNode() else {
+            check(false, "the outline shows the filtered layer")
+            controller.window?.orderOut(nil)
+            return
+        }
+        outline.expandItem(node)
+        let rowItems = (0..<outline.numberOfRows).compactMap { outline.item(atRow: $0) as? AnyObject }
+        let effectRows = rowItems.compactMap { $0 as? EffectItem }
+        check(rowItems.count == 4
+                && effectRows.count == 3
+                && rowItems[0] === node
+                && effectRows[0].effect.id == stack[0].id
+                && effectRows[1].effect.id == stack[1].id
+                && effectRows[2].effect.id == stack[2].id,
+              "the layer's committed effects are its child rows, top-first")
+        check(palette.outlineView(outline, pasteboardWriterForItem: effectRows[0]) == nil,
+              "an effect row offers no layer drag")
+
+        // A selected effect row picks its parent as the paint target and
+        // gives the palette menu a Filter submenu with its commands.
+        func selectEffectRow(_ index: Int) -> EffectItem? {
+            guard index < outline.numberOfRows,
+                  let item = outline.item(atRow: index) as? EffectItem else { return nil }
+            outline.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            spin()
+            return item
+        }
+        func paletteFilterItem() -> NSMenuItem? {
+            palette.paletteMenu?.items.first { $0.title.hasPrefix("Filter:") }
+        }
+
+        guard selectEffectRow(2) != nil else {
+            check(false, "the invert's effect row selects")
+            controller.window?.orderOut(nil)
+            return
+        }
+        check(document.activeLayer == layer, "selecting the effect row keeps its parent the paint target")
+        guard let invertMenu = paletteFilterItem() else {
+            check(false, "the palette menu offers the selected effect's commands")
+            controller.window?.orderOut(nil)
+            return
+        }
+        if let item = invertMenu.submenu?.items.first(where: { $0.title == "Move to Bottom" }) {
+            check(palette.validateMenuItem(item), "Move to Bottom is offered on the middle effect")
+            _ = NSApp.sendAction(item.action!, to: item.target, from: item)
+            settle()
+            try document.reload()
+            check(document.layerEffects[layer]?.last?.operation == "gegl:value-invert",
+                  "Move to Bottom reorders the effect stack")
+            let reordered = pixel(session, image, x: 16, y: 4)
+            check((reordered?[0] ?? 0) > 200 && (reordered?[1] ?? 255) < 60,
+                  "reordering the noncommutative pair changes real pixels (red \(reordered ?? []))")
+            document.undo()
+            settle()
+            try document.reload()
+            check(document.layerEffects[layer]?.map(\.operation)
+                    == ["gegl:gaussian-blur", "gegl:value-invert", "gegl:color-overlay"],
+                  "one undo restores the effect order")
+        } else {
+            check(false, "the effect submenu offers Move to Bottom")
+        }
+        palette.retarget(to: document)
+
+        // The eye toggles independent of selection: the overlay's row
+        // switch hides it and the pixels follow, twice.
+        func effectRow(_ operation: String) -> EffectRowView? {
+            let rows = (0..<outline.numberOfRows)
+            for row in rows {
+                guard let item = outline.item(atRow: row) as? EffectItem,
+                      item.effect.operation == operation else { continue }
+                return outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? EffectRowView
+            }
+            return nil
+        }
+        if let overlayRow = effectRow("gegl:color-overlay") {
+            overlayRow.eye.performClick(nil)
+            settle()
+            try document.reload()
+            let hidden = pixel(session, image, x: 16, y: 4)
+            check(hidden != cyan && document.layerEffects[layer]?[2].isEnabled == false,
+                  "the eye hides the overlay and real pixels change (\(hidden ?? []))")
+            palette.retarget(to: document)
+            if let again = effectRow("gegl:color-overlay") {
+                again.eye.performClick(nil)
+                settle()
+                try document.reload()
+                check(document.layerEffects[layer]?[2].isEnabled == true
+                        && pixel(session, image, x: 16, y: 4) == cyan,
+                      "the eye restores the overlay")
+                again.eye.performClick(nil)
+                settle()
+                try document.reload()
+                check(document.layerEffects[layer]?[2].isEnabled == false,
+                      "the eye toggles back off for the parameter checks below")
+            } else {
+                check(false, "the overlay's row is still there after a reload")
+            }
+        } else {
+            check(false, "the overlay's effect row shows an eye")
+        }
+
+        // Properties: name and opacity in one sheet, one undo step back.
+        palette.retarget(to: document)
+        if let blur = document.layerEffects[layer]?.first {
+            let undoBeforeProperties = document.undoInfo.undoCount
+            let window = try XCTUnwrapWindow(controller)
+            EffectPropertiesForm.present(item: EffectItem(document: document, drawable: layer, effect: blur),
+                                         in: document, on: window)
+            guard let sheet = window.attachedSheet else {
+                check(false, "Properties opens a sheet on the document window")
+                controller.window?.orderOut(nil)
+                return
+            }
+            func allTextFields(in view: NSView) -> [NSTextField] {
+                view.subviews.flatMap { ($0 as? NSTextField).map { [$0] } ?? allTextFields(in: $0) }
+            }
+            let fields = sheet.contentView.map { allTextFields(in: $0) } ?? []
+            let nameField = fields.first { $0.accessibilityLabel() == "Effect name" }
+            let opacityField = fields.first { $0.accessibilityLabel() == "Filter opacity, percent" }
+            check(nameField != nil && opacityField != nil, "the properties sheet edits name and opacity")
+            nameField?.stringValue = "Soften"
+            opacityField?.stringValue = "70"
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue)
+            settle()
+            try document.reload()
+            let renamed = document.layerEffects[layer]?.first
+            check(renamed?.name == "Soften" && renamed?.opacity == 0.7
+                    && document.undoInfo.undoCount == undoBeforeProperties + 1,
+                  "Properties applies name and opacity as one undo step")
+            document.undo()
+            settle()
+            try document.reload()
+            check(document.layerEffects[layer]?.first?.opacity == 1,
+                  "one undo restores the effect's properties")
+        } else {
+            check(false, "the blur effect is still cached")
+        }
+
+        // The catalog must be warm before the row's Edit Parameters can
+        // resolve the operation.
+        let catalogDeadline = Date().addingTimeInterval(10)
+        while NativeFilterCatalog.shared.operation(named: "gegl:gaussian-blur") == nil
+                && Date() < catalogDeadline { spin(0.02) }
+
+        // Selecting the blur's row and choosing Edit Parameters opens
+        // the generic form on the committed effect, seeded with its
+        // current value; a preview write moves pixels, cancel restores.
+        palette.retarget(to: document)
+        guard selectEffectRow(1) != nil, let blurMenu = paletteFilterItem() else {
+            check(false, "the palette menu offers the selected blur's commands")
+            controller.window?.orderOut(nil)
+            return
+        }
+        guard let edit = blurMenu.submenu?.items.first(where: { $0.title == "Edit Parameters…" }) else {
+            check(false, "the effect submenu offers Edit Parameters")
+            controller.window?.orderOut(nil)
+            return
+        }
+        check(palette.validateMenuItem(edit), "Edit Parameters is offered on a supported operation")
+        let beforePreview = pixel(session, image, x: 16, y: 16)
+        let undoBeforeEdit = document.undoInfo.undoCount
+        _ = NSApp.sendAction(edit.action!, to: edit.target, from: edit)
+        let openDeadline = Date().addingTimeInterval(10)
+        while controller.previewPanel == nil && Date() < openDeadline { spin(0.02) }
+        guard let panel = controller.previewPanel as? NativeFilterPanel, let filter = panel.filter else {
+            check(false, "Edit Parameters opens the generic form on the committed effect")
+            controller.window?.orderOut(nil)
+            return
+        }
+        check(document.filterPreviewIsOpen, "the effect edit marks the preview open")
+        check((try? session.filterProperty(filter, "std-dev-x")) == .number(8),
+              "the form is seeded with the committed effect's value")
+        panel.setProperty("std-dev-x", .number(2))
+        panel.setProperty("std-dev-y", .number(2))
+        wait()
+        let previewed = pixel(session, image, x: 16, y: 16)
+        check(previewed != beforePreview, "the preview write changes real pixels (\(previewed ?? []))")
+        panel.cancel()
+        wait()
+        check(controller.previewPanel == nil && !document.filterPreviewIsOpen,
+              "cancel closes the effect's form")
+        check(pixel(session, image, x: 16, y: 16) == beforePreview,
+              "cancel restores the pixels the preview moved")
+        check(document.undoInfo.undoCount == undoBeforeEdit
+                && document.layerEffects[layer]?.map(\.id) == stack.map(\.id),
+              "cancel preserves the effect ids, order and history")
+
+        // The same edit committed: one undo step, same id and stack
+        // position, real pixels, and Undo/Redo replay both.
+        _ = NSApp.sendAction(edit.action!, to: edit.target, from: edit)
+        let reopenDeadline = Date().addingTimeInterval(10)
+        while controller.previewPanel == nil && Date() < reopenDeadline { spin(0.02) }
+        guard let again = controller.previewPanel as? NativeFilterPanel, let againFilter = again.filter else {
+            check(false, "Edit Parameters reopens on the committed effect")
+            controller.window?.orderOut(nil)
+            return
+        }
+        again.setProperty("std-dev-x", .number(2))
+        again.setProperty("std-dev-y", .number(2))
+        wait()
+        let committedPixels = pixel(session, image, x: 16, y: 16)
+        again.commit()
+        let applyDeadline = Date().addingTimeInterval(10)
+        while controller.previewPanel != nil && Date() < applyDeadline { spin(0.02) }
+        wait()
+        try document.reload()
+        check(document.undoInfo.undoCount == undoBeforeEdit + 1
+                && document.layerEffects[layer]?.first?.id == stack[0].id,
+              "the committed edit is one undo step on the same effect id")
+        check(pixel(session, image, x: 16, y: 16) == committedPixels,
+              "commit keeps the previewed pixels")
+        document.undo()
+        settle()
+        try document.reload()
+        check(pixel(session, image, x: 16, y: 16) == beforePreview
+                && document.layerEffects[layer]?.map(\.id) == stack.map(\.id),
+              "Undo restores the pre-edit pixels and keeps the stack")
+        document.redo()
+        settle()
+        try document.reload()
+        check(pixel(session, image, x: 16, y: 16) == committedPixels
+                && document.layerEffects[layer]?.first?.id == stack[0].id,
+              "Redo replays the parameter edit on the same effect")
+
+        // Remove from the selected row's menu, undone as one step.
+        palette.retarget(to: document)
+        guard selectEffectRow(3) != nil else {
+            check(false, "the overlay's effect row selects for Remove")
+            controller.window?.orderOut(nil)
+            return
+        }
+        if let remove = paletteFilterItem()?.submenu?.items.first(where: { $0.title == "Remove" }),
+           palette.validateMenuItem(remove) {
+            _ = NSApp.sendAction(remove.action!, to: remove.target, from: remove)
+            settle()
+            try document.reload()
+            check(document.layerEffects[layer]?.map(\.id) == [stack[0].id, stack[1].id],
+                  "Remove drops only the selected effect row's effect")
+            document.undo()
+            settle()
+            try document.reload()
+            check(document.layerEffects[layer]?.map(\.id) == stack.map(\.id),
+                  "one undo restores the removed effect")
+        } else {
+            check(false, "the selected effect's submenu offers Remove")
+        }
+
+        // A group can carry an effect too, and its effect prefix refuses
+        // drops while the layer index after it still takes them. The
+        // drag source is made first: a layer created with the group
+        // active would land inside it.
+        document.selectLayer(layer)
+        settle()
+        document.layerCommand(.new)
+        settle()
+        controller.newLayerGroup(nil)
+        settle()
+        guard let dropped = document.layers.first(where: { $0.kind == .pixel
+                    && $0.parent == 0 && $0.id != layer })?.id,
+              let group = document.layers.first(where: { $0.kind == .group }) else {
+            check(false, "a new layer and group wait for the drag test")
+            controller.window?.orderOut(nil)
+            return
+        }
+        document.moveLayer(layer, toParent: group.id, atIndex: 0)
+        settle()
+        let groupFilter = try session.beginFilter(image: image, drawable: group.id,
+                                                  operation: "gegl:value-invert")
+        try session.commitFilter(groupFilter)
+        settle()
+        try document.reload()
+        check(document.layerEffects[group.id]?.count == 1,
+              "a group holds a committed effect non-destructively")
+        palette.retarget(to: document)
+        guard let groupNode = (0..<outline.numberOfRows)
+                .compactMap({ outline.item(atRow: $0) as? LayerTree.Node })
+                .first(where: { $0.id == group.id }) else {
+            check(false, "the outline shows the filtered group")
+            controller.window?.orderOut(nil)
+            return
+        }
+        outline.expandItem(groupNode)
+        let drag = LayerDragInfo()
+        drag.draggingPasteboard.setString("\(dropped)", forType: NSPasteboard.PasteboardType("ch.lkmc.Glims.layerID"))
+        check(palette.outlineView(outline, validateDrop: drag, proposedItem: groupNode,
+                                  proposedChildIndex: 0) == [],
+              "a drop inside the group's effect prefix is refused")
+        check(palette.outlineView(outline, validateDrop: drag, proposedItem: groupNode,
+                                  proposedChildIndex: 1) == .move,
+              "a drop past the prefix maps to the group's first layer slot")
+        check(palette.outlineView(outline, acceptDrop: drag, item: groupNode, childIndex: 1),
+              "the drop reparents the layer")
+        settle()
+        check(document.layers.first(where: { $0.id == dropped })?.parent == group.id,
+              "the dropped layer lands inside the group below its effects")
+
+        // A begin queued behind pending input drains a close like any
+        // other counted job: the image takes the begun session with it.
+        let pendingImage = try session.newImage(width: 16, height: 16)
+        let pendingNative = work.appendingPathComponent("effect-pending.xcf")
+        try session.save(pendingImage, to: pendingNative.path)
+        let pendingDocument = try ImageDocument(session: session, image: pendingImage,
+                                                name: "Pending Effect", openedFrom: pendingNative)
+        documents.items.append(pendingDocument)
+        let pendingController = DocumentWindowController(document: pendingDocument)
+        pendingController.showWindow(nil)
+        let pendingLayer = try session.beginFilter(image: pendingImage,
+                                                   drawable: pendingDocument.activeLayer ?? 0,
+                                                   operation: "gegl:gaussian-blur")
+        try session.commitFilter(pendingLayer)
+        try pendingDocument.reload()
+        guard let pendingDrawable = pendingDocument.layerEffects.keys.first,
+              let pendingEffect = pendingDocument.layerEffects[pendingDrawable]?.first else {
+            check(false, "the pending document caches its committed effect")
+            controller.window?.orderOut(nil)
+            return
+        }
+        let gate = DispatchSemaphore(value: 0)
+        pendingDocument.inputQueue.async { gate.wait() }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.8) { gate.signal() }
+        let beginStart = DispatchTime.now()
+        pendingController.editEffectParameters(pendingEffect.id, on: pendingDrawable,
+                                               operationName: "gegl:gaussian-blur")
+        check(milliseconds(since: beginStart) < 500,
+              "an effect edit queued behind pending input returns promptly")
+        var pendingClosed: Bool?
+        pendingController.requestClose { pendingClosed = $0 }
+        let pendingDeadline = Date().addingTimeInterval(10)
+        while pendingClosed == nil && Date() < pendingDeadline { spin(0.02) }
+        check(pendingClosed == true, "closing drains the queued effect-edit begin")
+        let destroyDeadline = Date().addingTimeInterval(10)
+        while (try? session.info(pendingImage)) != nil && Date() < destroyDeadline { spin(0.02) }
+        check((try? session.info(pendingImage)) == nil,
+              "the image is destroyed and the effect session goes with it")
+        documents.items.removeAll { $0 === pendingDocument }
+
         controller.window?.orderOut(nil)
     }
 

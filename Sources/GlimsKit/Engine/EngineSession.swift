@@ -1183,6 +1183,21 @@ final class EngineSession: @unchecked Sendable {
         try check(api.effect_command(engine, image, drawable, effect, command.rawValue, &error), error)
     }
 
+    /// Opens a live session editing committed effect `effect` of
+    /// `drawable` (filter_edit_begin): property reads see its current
+    /// parameters, writes preview new ones through its own mask at its
+    /// stack position. `commitFilter` writes them back into the same
+    /// effect — id, order, name, enabled and opacity kept — as one undo
+    /// step; `abortFilter` restores it untouched. Returns a filter
+    /// session id, not an effect id; a stale, foreign, removed or
+    /// preview effect id is NOT_FOUND.
+    func beginEditingEffect(_ effect: Int32, on drawable: Int32, image: Int32) throws -> Int32 {
+        var filter: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.filter_edit_begin(engine, image, drawable, effect, &filter, &error), error)
+        return filter
+    }
+
     // MARK: Channels and components
 
     struct Components: OptionSet, Equatable {

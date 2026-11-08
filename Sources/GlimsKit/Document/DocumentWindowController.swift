@@ -256,15 +256,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// `filterPreviewIsOpen` marks the wait so edits, file writes and
     /// other filters refuse before a session exists; Escape, close or a
     /// stale request unwinds the begun session instead of showing it.
-    private func startFilterPreview(title: String, operation: String,
-                                    properties: [EngineSession.FilterProperty] = [],
-                                    buildPanel: @escaping @MainActor (Int32, [String: EngineSession.FilterValue]) -> FilterPreviewPanel?) {
+    private func startPreview(title: String,
+                              begin: (@escaping @MainActor (Result<ImageDocument.FilterPreviewStart, Error>) -> Void) -> Void,
+                              buildPanel: @escaping @MainActor (Int32, [String: EngineSession.FilterValue]) -> FilterPreviewPanel?) {
         previewRequest += 1
         let request = previewRequest
         previewStartIsPending = true
         imageDocument.filterPreviewIsOpen = true
         statusBar.message = "\(title)…"
-        imageDocument.beginFilterPreview(operation: operation, properties: properties) {
+        begin {
             [weak self, imageDocument] result in
             guard let self, self.previewStartIsPending, self.previewRequest == request else {
                 // Stale: cancelled, closed or superseded after the begin
@@ -295,6 +295,62 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 }
                 self.previewPanel = panel
                 panel.showWindow(nil)
+            }
+        }
+    }
+
+    private func startFilterPreview(title: String, operation: String,
+                                    properties: [EngineSession.FilterProperty] = [],
+                                    buildPanel: @escaping @MainActor (Int32, [String: EngineSession.FilterValue]) -> FilterPreviewPanel?) {
+        startPreview(title: title, begin: { [imageDocument] completion in
+            imageDocument.beginFilterPreview(operation: operation, properties: properties,
+                                             completion: completion)
+        }, buildPanel: buildPanel)
+    }
+
+    /// A begin on a committed effect's own edit session; the shared
+    /// start is identical from there.
+    private func startEffectPreview(title: String, effect: Int32, drawable: Int32,
+                                    properties: [EngineSession.FilterProperty],
+                                    buildPanel: @escaping @MainActor (Int32, [String: EngineSession.FilterValue]) -> FilterPreviewPanel?) {
+        startPreview(title: title, begin: { [imageDocument] completion in
+            imageDocument.beginEffectPreview(effect: effect, on: drawable, properties: properties,
+                                             completion: completion)
+        }, buildPanel: buildPanel)
+    }
+
+    /// The Layers palette's Edit Parameters on a committed effect: the
+    /// generic form drives a live edit session on the effect's own
+    /// stack position — the same nonmodal preview lifecycle a new
+    /// filter takes. `effect` and `drawable` name the row explicitly;
+    /// the begin job re-validates them behind pending input.
+    func editEffectParameters(_ effect: Int32, on drawable: Int32, operationName: String) {
+        guard !previewBusy, !imageDocument.isClosing, !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
+              !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
+        guard let operation = NativeFilterCatalog.shared.operation(named: operationName),
+              operation.support == .supported else {
+            statusBar.message = "This filter's parameters cannot be edited here yet."
+            return
+        }
+        endPendingEdits()
+        statusBar.message = "\(operation.title)…"
+        NativeFilterCatalog.shared.properties(for: operation, using: imageDocument.session) { [weak self] properties in
+            guard let self, !self.imageDocument.isClosing else { return }
+            guard let properties else {
+                self.statusBar.message = "\(operation.title) is not available."
+                NSSound.beep()
+                return
+            }
+            // The gates can have changed while the catalog answered.
+            guard !self.previewBusy, !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
+                  !self.imageDocument.isSavingForClose, !self.imageDocument.isTransferringClipboard else {
+                self.statusBar.message = "Apply or cancel the current filter first."
+                return
+            }
+            self.startEffectPreview(title: operation.title, effect: effect, drawable: drawable,
+                                    properties: properties) { [imageDocument] filter, values in
+                NativeFilterPanel(document: imageDocument, operation: operation,
+                                  properties: properties, filter: filter, initialValues: values)
             }
         }
     }
