@@ -804,6 +804,14 @@ open_image_free (gpointer data)
         g_signal_handler_disconnect (open->image, open->mask_changed_handler);
       if (open->size_changed_handler)
         g_signal_handler_disconnect (open->image, open->size_changed_handler);
+      if (open->channels_changed_handler)
+        g_signal_handler_disconnect (open->image, open->channels_changed_handler);
+      if (open->component_active_handler)
+        g_signal_handler_disconnect (open->image, open->component_active_handler);
+      if (open->component_visible_handler)
+        g_signal_handler_disconnect (open->image, open->component_visible_handler);
+      if (open->quick_mask_changed_handler)
+        g_signal_handler_disconnect (open->image, open->quick_mask_changed_handler);
 
       g_object_unref (open->image);
     }
@@ -1046,6 +1054,22 @@ MARSHAL (layer_mask_to_selection, return glims_layer_mask_to_selection (e, a->im
 MARSHAL (drawable_thumbnail, return glims_drawable_thumbnail (e, a->image, a->item, a->width,
                                                               a->pixels, a->n, a->count,
                                                               (int32_t *) a->in_out);)
+MARSHAL (image_components, return glims_image_components (e, a->image, a->out);)
+MARSHAL (image_set_components, {
+  const uint32_t *masks = a->in;
+  return glims_image_set_components (e, a->image, masks[0], masks[1], masks[2], masks[3],
+                                     a->error); })
+MARSHAL (image_channels, return glims_image_channels (e, a->image, a->out, a->capacity, a->count);)
+MARSHAL (channel_from_selection, return glims_channel_from_selection (e, a->image, a->string,
+                                                                      a->out, a->error);)
+MARSHAL (channel_change, return glims_channel_change (e, a->image, a->item, a->in, a->error);)
+MARSHAL (channel_command, return glims_channel_command (e, a->image, a->item, (uint32_t) a->width,
+                                                        a->out, a->error);)
+MARSHAL (channel_to_selection, return glims_channel_to_selection (e, a->image, a->item,
+                                                                  (uint32_t) a->width, a->error);)
+MARSHAL (image_quick_mask, return glims_image_quick_mask (e, a->image, a->out);)
+MARSHAL (image_set_quick_mask, return glims_image_set_quick_mask (e, a->image, a->width != 0,
+                                                                  a->error);)
 
 /* A path's geometry takes more arguments than GlimsArgs holds. */
 typedef struct
@@ -1658,6 +1682,78 @@ api_drawable_thumbnail (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable
   return glims_engine_call (e, drawable_thumbnail_on_engine, &a);
 }
 
+static GlimsStatus
+api_image_components (GlimsEngine *e, GlimsImageID image, GlimsComponentState *state)
+{
+  GlimsArgs a = { .image = image, .out = state };
+  return glims_engine_call (e, image_components_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_set_components (GlimsEngine *e, GlimsImageID image, uint32_t active_mask,
+                          uint32_t active_values, uint32_t visible_mask, uint32_t visible_values,
+                          char **error)
+{
+  const uint32_t masks[4] = { active_mask, active_values, visible_mask, visible_values };
+  GlimsArgs a = { .image = image, .in = masks, .error = error };
+  return glims_engine_call (e, image_set_components_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_channels (GlimsEngine *e, GlimsImageID image, GlimsChannelInfo *channels,
+                    int32_t capacity, int32_t *count)
+{
+  GlimsArgs a = { .image = image, .out = channels, .capacity = capacity, .count = count };
+  return glims_engine_call (e, image_channels_on_engine, &a);
+}
+
+static GlimsStatus
+api_channel_from_selection (GlimsEngine *e, GlimsImageID image, const char *name,
+                            GlimsItemID *result, char **error)
+{
+  GlimsArgs a = { .image = image, .string = name, .out = result, .error = error };
+  return glims_engine_call (e, channel_from_selection_on_engine, &a);
+}
+
+static GlimsStatus
+api_channel_change (GlimsEngine *e, GlimsImageID image, GlimsItemID channel,
+                    const GlimsChannelChange *change, char **error)
+{
+  GlimsArgs a = { .image = image, .item = channel, .in = change, .error = error };
+  return glims_engine_call (e, channel_change_on_engine, &a);
+}
+
+static GlimsStatus
+api_channel_command (GlimsEngine *e, GlimsImageID image, GlimsItemID channel, uint32_t command,
+                     GlimsItemID *result, char **error)
+{
+  GlimsArgs a = { .image = image, .item = channel, .width = (int32_t) command, .out = result,
+                  .error = error };
+  return glims_engine_call (e, channel_command_on_engine, &a);
+}
+
+static GlimsStatus
+api_channel_to_selection (GlimsEngine *e, GlimsImageID image, GlimsItemID channel,
+                          uint32_t operation, char **error)
+{
+  GlimsArgs a = { .image = image, .item = channel, .width = (int32_t) operation, .error = error };
+  return glims_engine_call (e, channel_to_selection_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_quick_mask (GlimsEngine *e, GlimsImageID image, GlimsQuickMaskState *state)
+{
+  GlimsArgs a = { .image = image, .out = state };
+  return glims_engine_call (e, image_quick_mask_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_set_quick_mask (GlimsEngine *e, GlimsImageID image, bool enabled, char **error)
+{
+  GlimsArgs a = { .image = image, .width = enabled, .error = error };
+  return glims_engine_call (e, image_set_quick_mask_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1738,6 +1834,15 @@ static const GlimsEngineAPI api_v1 = {
   .layer_mask_apply = api_layer_mask_apply,
   .layer_mask_to_selection = api_layer_mask_to_selection,
   .drawable_thumbnail = api_drawable_thumbnail,
+  .image_components = api_image_components,
+  .image_set_components = api_image_set_components,
+  .image_channels = api_image_channels,
+  .channel_from_selection = api_channel_from_selection,
+  .channel_change = api_channel_change,
+  .channel_command = api_channel_command,
+  .channel_to_selection = api_channel_to_selection,
+  .image_quick_mask = api_image_quick_mask,
+  .image_set_quick_mask = api_image_set_quick_mask,
 };
 
 __attribute__ ((visibility ("default")))
