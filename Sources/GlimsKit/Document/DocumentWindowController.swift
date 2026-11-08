@@ -19,6 +19,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// nil while none is open. Two documents keep independent sheets
     /// through their own controllers — no global binding or singleton.
     private(set) var guidesSheet: GuidesSheetController?
+    /// Image ▸ Mode ▸ Indexed…'s sheet, retained by this window for its
+    /// lifetime and capturing this window's document at open, so Apply and
+    /// the rasterization consent act on that document, never on the front
+    /// one. nil while none is open.
+    private(set) var indexedSheet: IndexedSheetController?
     /// View ▸ Show Guides' cached per-window state, defaulting to on.
     private(set) var guidesViewState = GuideViewState()
     /// Image ▸ Configure Grid…'s sheet, retained by this window for its
@@ -86,6 +91,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // existing handlers — the sheets never install their own callback.
             self?.guidesSheet?.showError(message)
             self?.gridSheet?.showError(message)
+            self?.indexedSheet?.showError(message)
+
         }
         // Palette picks and structural or lock changes first commit any
         // field/text edit and end an active stroke; each command also
@@ -228,6 +235,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         previewPanel?.window?.endEditing(for: nil)
         guidesSheet?.commitFieldEdit()
         gridSheet?.commitFieldEdit()
+        indexedSheet?.commitFieldEdit()
+
         for paletteWindow in PaletteEditScope.windowsEditing(imageDocument) {
             paletteWindow.endEditing(for: nil)
         }
@@ -269,6 +278,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // Fan out to the guides and grid sheets through this existing hook.
         guidesSheet?.documentStateDidChange()
         gridSheet?.documentStateDidChange()
+        indexedSheet?.documentStateDidChange()
+
     }
 
     // MARK: Menu commands
@@ -682,6 +693,36 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    /// Image ▸ Mode ▸ Indexed…: opens this document's conversion policy
+    /// sheet. The sheet is owned by this window controller and captures
+    /// this document at open, so a retarget cannot redirect the
+    /// conversion; it reads only cached state, so opening it never makes
+    /// a native call.
+    @objc func convertImageToIndexed(_ sender: Any?) {
+        guard let window, !imageDocument.isClosing, window.attachedSheet == nil,
+              indexedSheet == nil else { return }
+        // Cached eligibility: an already indexed image is a no-op, and a
+        // wrong precision or a grouped stack is refused with its reason —
+        // precision is never auto-converted and groups never auto-flattened.
+        let info = imageDocument.colorInfo
+        let eligibility = IndexedFormLogic.nativeEligibility(
+            mode: info.mode, component: info.component, trc: info.trc,
+            hasGroup: imageDocument.layers.contains { $0.kind == .group })
+        if info.mode == .indexed { return }
+        guard eligibility.allowed else {
+            imageDocument.onError?(eligibility.reason ?? "This image cannot be converted to indexed.")
+            return
+        }
+        endPendingEdits()
+        let sheet = IndexedSheetController(document: imageDocument, hostWindow: window)
+        indexedSheet = sheet
+        window.beginSheet(sheet.panel) { [weak self, weak sheet] _ in
+            guard let self, let sheet, self.indexedSheet === sheet else { return }
+            sheet.invalidate()
+            self.indexedSheet = nil
+        }
+    }
+
     /// Image ▸ Precision…: a sheet of component and transfer curve
     /// popups seeded from the cached color state.
     @objc func imagePrecision(_ sender: Any?) {
@@ -1003,6 +1044,20 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // they are the image's state, not a menu gap.
             menuItem.state = imageDocument.colorInfo.mode.rawValue == UInt32(menuItem.tag) ? .on : .off
             return !editingBlocked && !previewBusy
+        case #selector(convertImageToIndexed(_:)):
+            // The checkmark and the gates read the cached color state and
+            // layer list, never the engine: an already indexed image is
+            // checked and disabled (the document no-ops too), and the
+            // native eligibility — u8 non-linear precision and no layer
+            // groups — is explained in the tooltip when it fails, since
+            // precision is never auto-converted and groups never flattened.
+            let info = imageDocument.colorInfo
+            let eligibility = IndexedFormLogic.nativeEligibility(
+                mode: info.mode, component: info.component, trc: info.trc,
+                hasGroup: imageDocument.layers.contains { $0.kind == .group })
+            menuItem.state = info.mode == .indexed ? .on : .off
+            menuItem.toolTip = eligibility.reason
+            return eligibility.allowed && !editingBlocked && !previewBusy
         case #selector(imagePrecision(_:)):
             // Indexed precision is fixed at u8 non-linear: the item
             // stays listed but disabled, and says why in the tool tip.
@@ -1597,6 +1652,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         closeStarted = true
         guidesSheet?.invalidate()
         gridSheet?.invalidate()
+        indexedSheet?.invalidate()
+
         previewPanel?.cancel()
         cancelPendingPreview()
         canvas.stopRendering { [self] in

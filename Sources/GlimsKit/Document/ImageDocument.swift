@@ -1085,6 +1085,33 @@ final class ImageDocument {
         }
     }
 
+    /// Image ▸ Mode ▸ Indexed…: the whole image's color model to indexed
+    /// with the sheet's palette and dither settings, as exactly one undo
+    /// step through `convertToIndexed`. Same admission as the other color
+    /// conversions: counted engine-wide exclusive work, so accepted input
+    /// in every document drains first and close/Quit wait, with the same
+    /// refusal reporting (busy, closing) and no-op rule (an already indexed
+    /// image changes nothing and pushes no undo). The first attempt always
+    /// carries the caller's `preserveEditable` settings; only an explicit
+    /// consent retries with `allowRasterize`.
+    func convertToIndexed(settings: EngineSession.IndexedSettings,
+                          completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
+              !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
+        guard colorInfo.mode != .indexed else { return completion(.success(())) }
+        endPendingUserEdits()
+        enqueueExclusive(label: "Converting to indexed", rejected: {
+            completion(.failure(DocumentError.busy))
+        }) { [session, image] in
+            let result = Result { try session.convertToIndexed(image, settings: settings) }
+            DispatchQueue.main.async {
+                if !self.isClosing { try? self.reload() }
+                completion(result)
+            }
+        }
+    }
+
     // MARK: Color profile
 
     /// Image ▸ Color Profile ▸ Assign…: embed the ICC profile at `path`
