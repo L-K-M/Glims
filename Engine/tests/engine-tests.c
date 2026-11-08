@@ -195,6 +195,14 @@ red_at (GlimsImageID image, int32_t x, int32_t y)
   return pixel[0];
 }
 
+/* The RGBA pixel at (x, y) of the composite, rendered at scale 1. */
+static void
+render_pixel (GlimsImageID image, int32_t x, int32_t y, uint8_t out[4])
+{
+  if (api->image_render (engine, image, 1.0, (GlimsRect) { x, y, 1, 1 }, out, 4) != GLIMS_STATUS_OK)
+    memset (out, 0, 4);
+}
+
 /* For a failed check after a stroke: the stroke's status and the pixel
  * read again after a pause, which tells a stroke that did not apply from a
  * render that was stale (both seen intermittently, not yet explained). */
@@ -855,6 +863,353 @@ test_paths (const char *work)
 
   if (reopened)
     api->image_close (engine, reopened);
+  api->image_close (engine, image);
+}
+
+/* Filling a path onto a drawable, the core's gimp_item_fill: a closed
+ * rectangle and a closed cubic subpath filled with a known color, inside
+ * and outside pixels, opacity, selection clipping, mask and channel
+ * targets, locks, undo/redo, refusals with no side effects, and BUSY
+ * while a stroke or a filter session is open. */
+static void
+test_path_fill (const char *work)
+{
+  GlimsImageID          image = 0, other = 0;
+  GlimsItemID           path = 0, empty = 0, layer, layer2 = 0, group = 0, mask = 0, channel = 0;
+  GlimsSubpath          subpaths[2] = { { .count = 4, .closed = true }, { .count = 4, .closed = true } };
+  GlimsPathPoint        points[8];
+  GlimsPathFillSettings fill = { .struct_size = sizeof fill, .color = { 1, 0, 0, 1 },
+                                 .opacity = 1, .antialias = false };
+  GlimsFillSettings     white = { .struct_size = sizeof white, .mode = GLIMS_FILL_SELECTION,
+                                  .color = { 1, 1, 1, 1 }, .opacity = 1 };
+  GlimsRect             bounds;
+  GlimsSelectOptions    sel = { .struct_size = sizeof sel, .operation = GLIMS_SELECT_REPLACE };
+  bool                  empty_sel = true;
+  int32_t               before;
+  uint8_t               px[4];
+  GlimsStrokeID         stroke = 0;
+  GlimsFilterID         filter = 0;
+  GlimsBrushSettings    brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+  GlimsStrokePoint      point = { 5, 5, 1.0, 0.0, 0.0, 0 };
+  GlimsStatus           status;
+  char                 *error = NULL;
+
+  (void) work;
+
+  /* A closed rectangle 20,20 ... 80,80 and a closed cubic blob around
+   * (140,60) with radius 30 (handles at 0.55 * r for a circle). */
+  points[0] = corner (20, 20);
+  points[1] = corner (80, 20);
+  points[2] = corner (80, 80);
+  points[3] = corner (20, 80);
+  points[4] = (GlimsPathPoint) { { 123.4, 30 }, { 140, 30 }, { 156.6, 30 } };
+  points[5] = (GlimsPathPoint) { { 170, 43.4 }, { 170, 60 }, { 170, 76.6 } };
+  points[6] = (GlimsPathPoint) { { 156.6, 90 }, { 140, 90 }, { 123.4, 90 } };
+  points[7] = (GlimsPathPoint) { { 110, 76.6 }, { 110, 60 }, { 110, 43.4 } };
+
+  api->image_new (engine, 200, 120, &image, NULL);
+  layer = first_layer (image);
+
+  CHECK (api->path_set (engine, image, 0, "Area", subpaths, 2, points, 8, &path, &error)
+           == GLIMS_STATUS_OK && path != 0,
+         "the rectangle-and-cubic path is added%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  before = undo_depth (image);
+  CHECK (api->path_fill (engine, image, path, layer, &fill, &error) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "filling the path is one undo step%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  render_pixel (image, 50, 50, px);
+  CHECK (px[0] == 255 && px[1] == 0 && px[3] == 255,
+         "the rectangle's interior is filled red (%d,%d,%d,%d)", px[0], px[1], px[2], px[3]);
+  render_pixel (image, 140, 60, px);
+  CHECK (px[0] == 255 && px[1] == 0,
+         "the closed cubic's interior is filled red (%d,%d,%d,%d)", px[0], px[1], px[2], px[3]);
+  render_pixel (image, 10, 10, px);
+  CHECK (px[0] == 255 && px[1] == 255,
+         "outside the path the white background is untouched (%d,%d,%d,%d)", px[0], px[1], px[2], px[3]);
+  render_pixel (image, 95, 60, px);
+  CHECK (px[0] == 255 && px[1] == 255,
+         "between the two subpaths stays white (%d,%d,%d,%d)", px[0], px[1], px[2], px[3]);
+
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         (render_pixel (image, 50, 50, px), px[1] == 255) &&
+         api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         (render_pixel (image, 50, 50, px), px[0] == 255 && px[1] == 0),
+         "undo empties the fill again, redo brings it back");
+
+  /* Half opacity blends with what is underneath. */
+  fill.opacity = 0.5;
+  before = undo_depth (image);
+  CHECK (api->path_fill (engine, image, path, layer, &fill, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "filling at half opacity is one undo step");
+  render_pixel (image, 50, 50, px);
+  CHECK (px[0] == 255 && px[1] > 128 && px[1] < 250,
+         "half opacity blends the red over white (green %d, between full and none)", px[1]);
+  fill.opacity = 1;
+  api->image_undo (engine, image);
+
+  /* The fill stays inside the selection, and the selection survives. */
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 0, 0 }, { 40, 120 } }, 2, &sel) == GLIMS_STATUS_OK,
+         "a left strip 0,0 40x120 is selected");
+  before = undo_depth (image);
+  CHECK (api->path_fill (engine, image, path, layer, &fill, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         (render_pixel (image, 30, 50, px), px[0] == 255 && px[1] == 0) &&
+         (render_pixel (image, 50, 50, px), px[1] == 255) &&
+         api->selection_bounds (engine, image, &empty_sel, &bounds) == GLIMS_STATUS_OK && ! empty_sel &&
+         rect_equals (bounds, 0, 0, 40, 120),
+         "the fill stays inside the selection and the selection is preserved (%d,%d %dx%d)",
+         bounds.x, bounds.y, bounds.width, bounds.height);
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+
+  /* A layer mask as the explicit target: filling it moves the mask, and
+   * the mask to the selection, to the path's bounds. */
+  CHECK (api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer2, NULL) == GLIMS_STATUS_OK &&
+         api->fill (engine, image, (GlimsPoint) { 0, 0 }, &white, NULL) == GLIMS_STATUS_OK &&
+         api->layer_mask_add (engine, image, layer2, GLIMS_MASK_BLACK, false, &mask, &error) == GLIMS_STATUS_OK &&
+         mask != 0,
+         "a second layer with a black mask is ready%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  fill.color = (GlimsColor) { 1, 1, 1, 1 };
+  before = undo_depth (image);
+  CHECK (api->path_fill (engine, image, path, mask, &fill, &error) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "filling the path onto the mask is one undo step%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->layer_mask_to_selection (engine, image, layer2, GLIMS_SELECT_REPLACE, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty_sel, &bounds) == GLIMS_STATUS_OK && ! empty_sel &&
+         abs (bounds.x - 20) <= 1 && abs (bounds.y - 20) <= 1 &&
+         abs (bounds.x + bounds.width - 170) <= 1 && abs (bounds.y + bounds.height - 90) <= 1,
+         "the filled mask selects the path's bounds (%d,%d %dx%d)",
+         bounds.x, bounds.y, bounds.width, bounds.height);
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  fill.color = (GlimsColor) { 1, 0, 0, 1 };
+
+  /* A saved channel as the explicit target. */
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 0, 0 }, { 30, 30 } }, 2, &sel) == GLIMS_STATUS_OK &&
+         api->channel_from_selection (engine, image, "sel", &channel, NULL) == GLIMS_STATUS_OK && channel != 0 &&
+         api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL) == GLIMS_STATUS_OK,
+         "a channel is saved from a small selection");
+  fill.color = (GlimsColor) { 1, 1, 1, 1 };
+  before = undo_depth (image);
+  CHECK (api->path_fill (engine, image, path, channel, &fill, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->channel_to_selection (engine, image, channel, GLIMS_SELECT_REPLACE, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty_sel, &bounds) == GLIMS_STATUS_OK && ! empty_sel &&
+         abs (bounds.x - 20) <= 1 && abs (bounds.y - 20) <= 1 &&
+         abs (bounds.x + bounds.width - 170) <= 1 && abs (bounds.y + bounds.height - 90) <= 1,
+         "filling the path onto the channel is one undo step and the channel selects the path's bounds (%d,%d %dx%d)",
+         bounds.x, bounds.y, bounds.width, bounds.height);
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  api->channel_command (engine, image, channel, GLIMS_CHANNEL_DELETE, NULL, NULL);
+  fill.color = (GlimsColor) { 1, 0, 0, 1 };
+
+  /* A pixel-locked target is refused, inherited locks included. */
+  CHECK (api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL) == GLIMS_STATUS_OK,
+         "the layer's pixels are locked");
+  before = undo_depth (image);
+  status = api->path_fill (engine, image, path, layer, &fill, &error);
+  CHECK (status == GLIMS_STATUS_LOCKED && error && undo_depth (image) == before &&
+         (render_pixel (image, 140, 60, px), px[0] == 255 && px[1] == 0),
+         "filling a locked layer is LOCKED and changes nothing (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, 0, NULL);
+
+  /* Refusals: unknown and foreign ids, bad settings, a group target and
+   * an empty path — each with no undo step and no other side effect. */
+  api->image_new (engine, 64, 64, &other, NULL);
+  before = undo_depth (image);
+  CHECK (api->path_fill (engine, image, 9999, layer, &fill, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->path_fill (engine, image, layer, layer, &fill, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->path_fill (engine, image, path, 9999, &fill, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->path_fill (engine, image, path, first_layer (other), &fill, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->path_fill (engine, 9999, path, layer, &fill, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         undo_depth (image) == before,
+         "unknown image, path and drawable ids, and a foreign drawable, are NOT_FOUND with no undo");
+  api->image_close (engine, other);
+
+  fill.opacity = 2.0;
+  CHECK (api->path_fill (engine, image, path, layer, &fill, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before,
+         "an opacity above 1 is refused");
+  fill.opacity = NAN;
+  CHECK (api->path_fill (engine, image, path, layer, &fill, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a non-finite opacity is refused");
+  fill.opacity = 1.0;
+  fill.color.red = NAN;
+  CHECK (api->path_fill (engine, image, path, layer, &fill, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a non-finite color is refused");
+  fill.color.red = 1.0;
+  CHECK (api->path_fill (engine, image, path, layer, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->path_fill (engine, image, path, layer,
+                         &(GlimsPathFillSettings) { .struct_size = 4 }, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before,
+         "NULL or short settings are refused with no undo");
+
+  CHECK (api->create_group (engine, image, 0, -1, "G", &group, NULL) == GLIMS_STATUS_OK && group != 0,
+         "a group is created");
+  status = api->path_fill (engine, image, path, group, &fill, &error);
+  CHECK (status == GLIMS_STATUS_FAILED && error && undo_depth (image) == before + 1,
+         "filling onto a group is refused and adds no undo (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->layer_command (engine, image, group, GLIMS_LAYER_DELETE, NULL, NULL);
+
+  CHECK (api->path_set (engine, image, 0, "Empty", NULL, 0, NULL, 0, &empty, NULL) == GLIMS_STATUS_OK &&
+         empty != 0,
+         "an empty path is added");
+  before = undo_depth (image);
+  status = api->path_fill (engine, image, empty, layer, &fill, &error);
+  CHECK (status == GLIMS_STATUS_FAILED && error && undo_depth (image) == before,
+         "filling an empty path fails clearly with no undo step (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->path_delete (engine, image, empty);
+
+  /* BUSY while a stroke or a filter session is open. */
+  CHECK (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK &&
+         api->path_fill (engine, image, path, layer, &fill, NULL) == GLIMS_STATUS_BUSY &&
+         api->stroke_end (engine, stroke) == GLIMS_STATUS_OK,
+         "filling during an open stroke is BUSY");
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, &error) == GLIMS_STATUS_OK &&
+         api->path_fill (engine, image, path, layer, &fill, NULL) == GLIMS_STATUS_BUSY &&
+         api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+         "filling during an open filter session is BUSY%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+
+  api->image_close (engine, image);
+}
+
+static int
+supports_vector_layers (void)
+{
+  int major = 0, minor = 0;
+  sscanf (api->engine_version (engine), "%d.%d", &major, &minor);
+  return major > 3 || (major == 3 && minor >= 2);
+}
+
+/* A genuine vector layer from a path, the core's gimp_vector_layer_new:
+ * native kind, rendered pixels, the path's lifetime with the layer, one
+ * undo step, an XCF round trip as structured content, refusals, and on
+ * engines without vector layers UNSUPPORTED with no undo. */
+static void
+test_path_vector_layer (const char *work)
+{
+  GlimsImageID      image = 0, reopened = 0;
+  GlimsItemID       path = 0, vector = 0, v = 0, layer;
+  GlimsSubpath      square[1] = { { .count = 4, .closed = true } };
+  GlimsPathPoint    points[4] = { corner (20, 20), corner (80, 20), corner (80, 80), corner (20, 80) };
+  GlimsPathPoint    moved[4]  = { corner (30, 30), corner (90, 30), corner (90, 90), corner (30, 90) };
+  GlimsLayerInfo    rows[4];
+  GlimsPathInfo     prows[2];
+  GlimsSubpath      rsub[2];
+  GlimsPathPoint    rpts[8];
+  GlimsFillSettings red_bg = { .struct_size = sizeof red_bg, .mode = GLIMS_FILL_SELECTION,
+                               .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  int32_t           count = 0, pcount = 0, subcount = 0, ptcount = 0, before;
+  uint8_t           px[4];
+  GlimsStrokeID     stroke = 0;
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+  GlimsStrokePoint  point = { 5, 5, 1.0, 0.0, 0.0, 0 };
+  GlimsStatus       status;
+  char              xcf[1024], *error = NULL;
+  int               vectors = supports_vector_layers ();
+
+  api->image_new (engine, 200, 120, &image, NULL);
+  layer = first_layer (image);
+  /* A red background, so the vector layer's default white fill shows. */
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &red_bg, NULL);
+  CHECK (api->path_set (engine, image, 0, "Shape", square, 1, points, 4, &path, &error) == GLIMS_STATUS_OK &&
+         path != 0,
+         "the square path is added%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  before = undo_depth (image);
+  CHECK (api->path_to_vector_layer (engine, image, 9999, NULL, &v, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->path_to_vector_layer (engine, image, path, "", &v, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         v == 0 && undo_depth (image) == before,
+         "an unknown path is NOT_FOUND and an empty name INVALID_ARGUMENT, no undo");
+
+  CHECK (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK &&
+         api->path_to_vector_layer (engine, image, path, NULL, &v, NULL) == GLIMS_STATUS_BUSY &&
+         api->stroke_end (engine, stroke) == GLIMS_STATUS_OK,
+         "making a vector layer during an open stroke is BUSY");
+
+  before = undo_depth (image);
+  status = api->path_to_vector_layer (engine, image, path, "Vector", &vector, &error);
+  if (! vectors)
+    {
+      CHECK (status == GLIMS_STATUS_UNSUPPORTED && error && vector == 0 && undo_depth (image) == before &&
+             layer_count (image) == 1,
+             "this engine has no vector layers: UNSUPPORTED, no undo, no layer (%s)",
+             error ? error : "");
+      api->free_string (error);
+    }
+  else
+    {
+      api->free_string (error);
+      CHECK (status == GLIMS_STATUS_OK && vector > 0 && undo_depth (image) == before + 1,
+             "a vector layer is made from the path as one undo step");
+      CHECK (api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK && count == 2 &&
+             rows[0].id == vector && rows[0].kind == GLIMS_LAYER_VECTOR && rows[0].selected &&
+             strcmp (rows[0].name, "Vector") == 0,
+             "the new layer reports VECTOR, sits on top, is selected and named (kind %u, %s)",
+             rows[0].kind, rows[0].name);
+      render_pixel (image, 50, 50, px);
+      CHECK (px[0] > 200 && px[1] > 200 && px[2] > 200,
+             "the layer renders its fill inside the path (%d,%d,%d,%d)", px[0], px[1], px[2], px[3]);
+      render_pixel (image, 10, 10, px);
+      CHECK (px[0] > 200 && px[1] < 60,
+             "outside the path the red background shows through (%d,%d,%d,%d)", px[0], px[1], px[2], px[3]);
+      CHECK (api->paths (engine, image, prows, 2, &pcount) == GLIMS_STATUS_OK && pcount == 1 &&
+             prows[0].id == path,
+             "the path stays in the image's path list with the same id");
+
+      before = undo_depth (image);
+      CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && layer_count (image) == 1 &&
+             api->image_redo (engine, image) == GLIMS_STATUS_OK && layer_count (image) == 2 &&
+             api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK &&
+             count == 2 && rows[0].kind == GLIMS_LAYER_VECTOR && undo_depth (image) == before,
+             "undo removes the vector layer, redo restores it as VECTOR");
+
+      /* XCF keeps it structured: the layer reports VECTOR after reopen
+       * and the path geometry travels with the image. */
+      snprintf (xcf, sizeof xcf, "%s/vector.xcf", work);
+      CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+             api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK &&
+             api->image_layers (engine, reopened, rows, 4, &count) == GLIMS_STATUS_OK && count == 2 &&
+             rows[0].kind == GLIMS_LAYER_VECTOR &&
+             api->paths (engine, reopened, prows, 2, &pcount) == GLIMS_STATUS_OK && pcount == 1 &&
+             api->path_get (engine, reopened, prows[0].id, rsub, 2, &subcount, rpts, 8, &ptcount)
+               == GLIMS_STATUS_OK &&
+             subcount == 1 && ptcount == 4 && rsub[0].closed && rpts[2].anchor.x == 80 && rpts[2].anchor.y == 80 &&
+             (render_pixel (reopened, 50, 50, px), px[0] > 200 && px[1] > 200) &&
+             (render_pixel (reopened, 10, 10, px), px[0] > 200 && px[1] < 60),
+             "an XCF round trip keeps the vector layer VECTOR with the path's shape and rendered pixels");
+      if (reopened)
+        api->image_close (engine, reopened);
+      reopened = 0;
+
+      /* As the core behaves while the image is open, the layer and the
+       * path share one object: editing the path re-renders the layer. */
+      CHECK (api->path_set (engine, image, path, NULL, square, 1, moved, 4, NULL, NULL) == GLIMS_STATUS_OK &&
+             (render_pixel (image, 25, 25, px), px[0] > 200 && px[1] < 60) &&
+             (render_pixel (image, 50, 50, px), px[0] > 200 && px[1] > 200),
+             "editing the path moves the layer's rendered shape (25,25 now red %d,%d; 50,50 still filled %d,%d)",
+             px[0], px[1], px[0], px[1]);
+    }
+
   api->image_close (engine, image);
 }
 
@@ -5182,6 +5537,8 @@ main (int argc, char **argv)
   test_place (argv[3], argv[2]);
   test_text_layers (argv[2]);
   test_paths (argv[2]);
+  test_path_fill (argv[2]);
+  test_path_vector_layer (argv[2]);
   test_deleted_items ();
   test_groups_and_text_units (argv[3]);
   test_layer_structure ();

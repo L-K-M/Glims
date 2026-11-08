@@ -707,6 +707,27 @@ and substantial parts of `design.md`, still need implementation and checks.
   its existing path. The initial GitHub build also exposed a Swift
   6.2 tuple-conversion error in path hit testing; its distance now
   explicitly uses Double, matching the stored distance type.
+- 2026-11-08: two more additive path facade calls, engine side only, on
+  `feat/path-fill-vector`. `path_fill` fills a path onto an explicit
+  drawable (layer, mask or channel; 0 = the selected drawable) through
+  the core's `gimp_item_fill`/`GimpFillOptions` — the same call GIMP's
+  Fill Path actions make (`app/actions/items-commands.c`) — with a new
+  facade-owned `GlimsPathFillSettings` (color, opacity, antialias; no
+  fill rule or pattern), one undo step, selection and mask honored by
+  the core, pixel locks (group-inherited) refused up front, unusable
+  paths failed before any undo group opens. `path_to_vector_layer`
+  makes a genuine vector layer via `gimp_vector_layer_new` +
+  `gimp_image_add_layer`, as Paths > New Vector Layer does
+  (`app/actions/paths-commands.c`), one undo step, the layer selected;
+  before GIMP 3.2 it reports UNSUPPORTED without mutating. Ownership as
+  the core keeps it: the layer's options reference the same path object
+  while the image is open (`g_value_dup_object` in
+  `app/path/gimpvectorlayeroptions.c`), so editing the path re-renders
+  the layer; XCF stores the path once in the image's path list and the
+  layer by tattoo (`PROP_VECTOR_LAYER` in `app/xcf/xcf-save.c`,
+  re-associated in `app/xcf/xcf-load.c`), so the layer survives save
+  and reopen as structured content. Conformance tests cover both; the
+  four-engine run is left to the root checkout.
 
 ## Open decisions
 

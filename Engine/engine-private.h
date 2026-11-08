@@ -257,6 +257,11 @@ GlimsStatus glims_path_to_selection(GlimsEngine *e, GlimsImageID image, GlimsIte
 GlimsStatus glims_path_stroke      (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
                                     GlimsItemID layer, const GlimsLineSettings *settings,
                                     char **error);
+GlimsStatus glims_path_fill        (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
+                                    GlimsItemID drawable, const GlimsPathFillSettings *settings,
+                                    char **error);
+GlimsStatus glims_path_to_vector_layer (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
+                                        const char *name, GlimsItemID *layer, char **error);
 
 /* edit.c */
 GlimsStatus glims_fill             (GlimsEngine *e, GlimsImageID image, GlimsPoint point,

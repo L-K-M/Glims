@@ -1,8 +1,9 @@
 /*
  * Paths: listing an image's paths, reading and replacing their Bézier
- * subpaths, renaming, showing, selecting and deleting them, and turning a
- * path into a selection or a drawn line, each change one undo step. Runs
- * on the engine thread.
+ * subpaths, renaming, showing, selecting and deleting them, turning a
+ * path into a selection, filling it onto a drawable or drawing it as a
+ * line, and on engines that have them turning it into a vector layer;
+ * each change one undo step. Runs on the engine thread.
  *
  * GIMP's path tool and Paths dialog do the same with the same engine
  * functions (app/tools/gimppathtool.c, app/display/gimptoolpath.c;
@@ -10,7 +11,19 @@
  * control points). Glims sends a whole path per edit: a subpath is a list
  * of anchors, each with the handle before and after it, which is how GIMP
  * stores a Bézier stroke (control, anchor, control per anchor).
+ *
+ * Filling goes through the core's own gimp_item_fill with GimpFillOptions
+ * (app/core/gimpitem.c, app/path/gimppath.c gimp_path_fill,
+ * app/core/gimpdrawable-fill.c), as the Fill Path menu actions do
+ * (app/actions/items-commands.c); vector layers come from
+ * gimp_vector_layer_new (app/path/gimpvectorlayer.c), as Paths > New
+ * Vector Layer does (app/actions/paths-commands.c
+ * path_to_vector_layer_cmd_callback).
  */
+/* Before engine-private.h: with cairo.h already included, core-types.h
+ * types GimpBezierDesc as cairo_path_t, so its num_data is readable. */
+#include <cairo.h>
+
 #include "engine-private.h"
 
 #include <math.h>
@@ -21,7 +34,9 @@
 
 #include "core/gimp.h"
 #include "core/gimpcontext.h"
+#include "core/gimpdrawable.h"
 #include "core/gimpfilloptions.h"
+#include "core/gimpgrouplayer.h"
 #include "core/gimpimage.h"
 #include "core/gimpimage-undo.h"
 #include "core/gimpimage-undo-push.h"
@@ -35,6 +50,7 @@
 #include "path/gimpbezierstroke.h"
 #include "path/gimppath.h"
 #include "path/gimpstroke.h"
+#include "path/gimpvectorlayer.h"
 #else
 #include "vectors/gimpanchor.h"
 #include "vectors/gimpbezierstroke.h"
@@ -558,4 +574,238 @@ glims_path_stroke (GlimsEngine             *engine,
   gimp_image_flush (image);
 
   return GLIMS_STATUS_OK;
+}
+
+/* ---- Filling a path, and vector layers ---------------------------------- */
+
+/* The open image behind `id`, ready for an edit: not busy with a plug-in,
+ * an open stroke or a filter session. */
+static GlimsOpenImage *
+editable_open_image (GlimsEngine  *engine,
+                     GlimsImageID  id,
+                     GlimsStatus  *status,
+                     char        **error)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+
+  *status = GLIMS_STATUS_OK;
+  if (! open)
+    *status = GLIMS_STATUS_NOT_FOUND;
+  else if (engine->busy > 0)
+    *status = GLIMS_STATUS_BUSY;
+  else
+    *status = glims_edit_ready (engine, open, error);
+
+  return *status == GLIMS_STATUS_OK ? open : NULL;
+}
+
+/* The drawable `id` of `open`, or with 0 the image's selected drawable
+ * (the layer's mask while mask editing is on, or a selected channel), as
+ * GIMP's own fill actions take it. Groups have no pixels to fill and
+ * locked drawables are refused before anything changes. */
+static GimpDrawable *
+fill_target (GlimsOpenImage *open,
+             GlimsItemID     id,
+             GlimsStatus    *status,
+             char          **error)
+{
+  GimpDrawable *drawable;
+
+  if (id == 0)
+    {
+      GList *selected = gimp_image_get_selected_drawables (open->image);
+
+      drawable = selected ? selected->data : NULL;
+      g_list_free (selected);
+      if (! drawable)
+        {
+          *status = glims_fail (error, NULL, "Select a layer first.");
+          return NULL;
+        }
+    }
+  else
+    {
+      drawable = glims_lookup_drawable (open, id);
+      if (! drawable)
+        {
+          *status = GLIMS_STATUS_NOT_FOUND;
+          return NULL;
+        }
+    }
+
+  if (GIMP_IS_GROUP_LAYER (drawable))
+    {
+      *status = glims_fail (error, NULL, "A path cannot be filled onto a layer group.");
+      return NULL;
+    }
+
+  *status = glims_check_item_locks (GIMP_ITEM (drawable), GLIMS_LOCK_PIXELS, error);
+  if (*status != GLIMS_STATUS_OK)
+    return NULL;
+
+  return drawable;
+}
+
+GlimsStatus
+glims_path_fill (GlimsEngine                 *engine,
+                 GlimsImageID                 id,
+                 GlimsItemID                  path_id,
+                 GlimsItemID                  drawable_id,
+                 const GlimsPathFillSettings *settings,
+                 char                       **error)
+{
+  GlimsStatus       status;
+  GlimsOpenImage   *open = editable_open_image (engine, id, &status, error);
+  GimpImage        *image;
+  GimpPath         *path;
+  GimpDrawable     *drawable;
+  GimpContext      *context;
+  GimpFillOptions  *options;
+  GeglColor        *color;
+  GList            *drawables;
+  GError           *gerror = NULL;
+  gboolean          done;
+  const GlimsColor *c;
+
+  if (! open)
+    return status;
+  if (! settings || settings->struct_size < sizeof (GlimsPathFillSettings))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  c = &settings->color;
+  if (! isfinite (settings->opacity) || settings->opacity < 0.0 || settings->opacity > 1.0 ||
+      ! isfinite (c->red) || ! isfinite (c->green) || ! isfinite (c->blue) || ! isfinite (c->alpha))
+    {
+      glims_fail (error, NULL, "The fill settings are not valid.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  image = open->image;
+  path  = find_path (image, path_id);
+  if (! path)
+    return GLIMS_STATUS_NOT_FOUND;
+
+  drawable = fill_target (open, drawable_id, &status, error);
+  if (! drawable)
+    return status;
+
+  /* The core refuses a path without fillable geometry only after opening
+   * its undo group (gimp_path_fill, then gimp_drawable_fill_path); check
+   * the same conditions here, so a failed fill leaves no undo step. */
+  {
+    const GimpBezierDesc *bezier = gimp_path_get_bezier (path);
+
+    if (! gimp_path_stroke_get_next (path, NULL) || ! bezier || bezier->num_data <= 4)
+      return glims_fail (error, NULL, "Not enough points to fill");
+  }
+
+  /* The user's settings with the color pinned, as edit.c's fills do; the
+   * shared user context itself is never touched. */
+  context = gimp_context_new (engine->gimp, "Glims path fill", gimp_get_user_context (engine->gimp));
+  color   = gegl_color_new (NULL);
+  gegl_color_set_rgba_with_space (color, CLAMP (c->red, 0.0, 1.0), CLAMP (c->green, 0.0, 1.0),
+                                  CLAMP (c->blue, 0.0, 1.0), CLAMP (c->alpha, 0.0, 1.0), NULL);
+  gimp_context_set_foreground (context, color);
+  g_object_unref (color);
+
+  options = gimp_fill_options_new (engine->gimp, NULL, FALSE);
+  gimp_context_set_opacity (GIMP_CONTEXT (options), settings->opacity);
+  gimp_context_set_paint_mode (GIMP_CONTEXT (options), GIMP_LAYER_MODE_NORMAL);
+  gimp_fill_options_set_antialias (options, settings->antialias);
+
+  if (! gimp_fill_options_set_by_fill_type (options, context, GIMP_FILL_FOREGROUND, &gerror))
+    {
+      g_object_unref (options);
+      g_object_unref (context);
+      return glims_fail (error, gerror, "The fill could not be set up.");
+    }
+
+  /* One undo group ("Fill Path") around the core fill, as GIMP's own
+   * Fill commands do (app/actions/items-commands.c items_fill_callback).
+   * The core clips to the selection and applies the drawable's mask,
+   * active components and pixel locks (gimp_drawable_fill_scan_convert,
+   * gimp_drawable_real_apply_buffer). */
+  drawables = g_list_prepend (NULL, drawable);
+  done = gimp_item_fill (GIMP_ITEM (path), drawables, options, TRUE, NULL, &gerror);
+  g_list_free (drawables);
+  g_object_unref (options);
+  g_object_unref (context);
+
+  if (! done)
+    return glims_fail (error, gerror, "The path could not be filled.");
+
+  gimp_image_flush (image);
+
+  return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_path_to_vector_layer (GlimsEngine  *engine,
+                            GlimsImageID  id,
+                            GlimsItemID   path_id,
+                            const char   *name,
+                            GlimsItemID  *layer,
+                            char        **error)
+{
+  GlimsStatus     status;
+  GlimsOpenImage *open = editable_open_image (engine, id, &status, error);
+  GimpPath       *path;
+
+  if (layer)
+    *layer = 0;
+  if (! open)
+    return status;
+  if (name && (! *name || ! g_utf8_validate (name, -1, NULL)))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  path = find_path (open->image, path_id);
+  if (! path)
+    return GLIMS_STATUS_NOT_FOUND;
+
+#if GIMP_CHECK_VERSION (3, 2, 0)
+  {
+    GimpContext     *context;
+    GimpVectorLayer *vector;
+
+    /* A temporary context inheriting the user's settings; the shared
+     * user context is never touched. The vector options pull their fill
+     * and stroke colors from it (gimp_vector_layer_options_new). */
+    context = gimp_context_new (engine->gimp, "Glims vector layer",
+                                gimp_get_user_context (engine->gimp));
+    vector  = gimp_vector_layer_new (open->image, path, context);
+    g_object_unref (context);
+
+    if (! vector)
+      return glims_fail (error, NULL, "The vector layer could not be created.");
+    /* Named before it is added, so the add stays the only undo step. */
+    if (name)
+      gimp_object_set_name (GIMP_OBJECT (vector), name);
+
+    /* Above the selected layer, selected and rendered, one undo step, as
+     * Paths > New Vector Layer does (app/actions/paths-commands.c
+     * path_to_vector_layer_cmd_callback); gimp_image_add_layer also adds
+     * the vector layer's path to the image when it is not attached yet
+     * and refreshes the layer. The layer's options hold a reference to
+     * the same path object, not a clone. */
+    if (! gimp_image_add_layer (open->image, GIMP_LAYER (vector), GIMP_IMAGE_ACTIVE_PARENT, -1, TRUE))
+      {
+        g_object_unref (vector);
+        return glims_fail (error, NULL, "The vector layer could not be added.");
+      }
+
+    gimp_vector_layer_refresh (vector);
+    gimp_image_flush (open->image);
+
+    if (layer)
+      *layer = gimp_item_get_id (GIMP_ITEM (vector));
+
+    return GLIMS_STATUS_OK;
+  }
+#else
+  /* Vector layers arrived in GIMP 3.2; on an older engine this must not
+   * degrade to a raster copy, as link layers do not (Engine/place.c). */
+  if (error)
+    *error = strdup ("This engine has no vector layers; they arrived in GIMP 3.2.");
+  return GLIMS_STATUS_UNSUPPORTED;
+#endif
 }
