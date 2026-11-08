@@ -528,6 +528,18 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         if let item = sender as? NSMenuItem { item.state = rulerViewState.menuState }
     }
 
+    @objc func toggleLayerBoundary(_ sender: Any?) {
+        guard !imageDocument.isClosing else { return }
+        canvas.showsLayerBoundary.toggle()
+        (sender as? NSMenuItem)?.state = canvas.showsLayerBoundary ? .on : .off
+    }
+
+    @objc func toggleSelectionEdges(_ sender: Any?) {
+        guard !imageDocument.isClosing else { return }
+        canvas.showsSelectionEdges.toggle()
+        (sender as? NSMenuItem)?.state = canvas.showsSelectionEdges ? .on : .off
+    }
+
     /// A catalog item in a Filter category: opens its generic form.
     @objc func runNativeFilter(_ sender: Any?) {
         guard let command = (sender as? NSMenuItem)?.representedObject as? NativeFilterCommand else { return }
@@ -1068,6 +1080,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                                      engineIsBusy: EngineActivity.shared.isBusy)
             menuItem.state = rulerCheck.state
             return rulerCheck.enabled
+
+        case #selector(toggleLayerBoundary(_:)):
+            menuItem.state = canvas.showsLayerBoundary ? .on : .off
+            return !imageDocument.isClosing
+        case #selector(toggleSelectionEdges(_:)):
+            menuItem.state = canvas.showsSelectionEdges ? .on : .off
+            return !imageDocument.isClosing
         case #selector(assignColorProfile(_:)):
             // Assignment is allowed on every mode, indexed included:
             // it embeds a compatible profile without converting pixels.
