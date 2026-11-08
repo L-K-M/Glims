@@ -2925,6 +2925,16 @@ No production renderer change was needed. This verifies the in-gamut sRGB
 path; physical monitor calibration, wide-gamut/HDR output, proof profiles,
 proof intents and gamut warnings remain unverified or unimplemented.
 
+
+Ruler review reproduced a major/minor classification defect at large
+scrolled coordinates: a magnitude-relative tolerance eventually exceeded
+the distance between ticks. At image coordinate 1,000,000 and 3,200% zoom,
+the actual planner mislabeled all 26 visible ticks as major. Classification
+now uses exact divisibility of the integral tick index. The independent
+six-position oracle passes, as do all 421 unit tests and 47 focused pinned
+interface checks. The four-engine focused and 1,067 full integration checks
+above preceded this pure planner correction.
+
 Grid controls integration passes 417 unit tests, all 38 focused checks on
 all four engines and 1,030 full pinned interface checks. A controlled
 probe of the actual planner reproduced an infinite loop when a Double
@@ -2966,6 +2976,7 @@ interface checks. The four-engine focused and 1,067 full integration checks
 above preceded this pure planner correction.
 
 
+
 Grid integration validation passes 1,380 / 1,269 / 1,380 / 1,380 native
 checks on GIMP 3.2.8 / 3.0.8 / 3.2.0 / master. The initial failures were
 fixture errors: the color oracle required double precision although
@@ -3001,6 +3012,7 @@ coordinates are checked for finite, native-integer range before conversion.
 The 3.2.0 suite still logs two startup GLib filename assertions before the
 checks, as recorded in its log; it reports zero failed checks. Swift document
 queue execution and user-facing Stroke Selection controls remain to verify.
+
 
 
 
@@ -3128,6 +3140,9 @@ an installed font, capture baselines after the setup stroke and preceding
 Anchor, and expect native To Layer to reveal the full payload after
 removing the selection clip. That appearance uses an independent known
 RGBA-cell oracle rather than assuming the clipped preview stays identical.
+
+
+
 
 
 
