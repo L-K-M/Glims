@@ -1770,3 +1770,13 @@ built-in FG-to-BG midpoint even when the colors change mid-drag (capture
 at the press). Runtime/desktop verification of these scenarios is owned by
 the root harness; here only `swift build` and `swift build --build-tests`
 were run.
+
+Guides controls integration validation: 399 unit tests pass. The actual
+Guides sheet and canvas-overlay scenario passes 28 checks on each of
+GIMP 3.2.8, 3.0.8, 3.2.0 and master. The complete interface suite passes
+963 checks on the pinned engine, including all three resource choosers
+and the native guide cache checks. The first unit run caught an incorrect
+expected sorted row index in its fixture; correcting that expectation
+required no production-code change. The active-field-edit and overlay
+bitmap scenarios both ran successfully. Rulers, grid, snapping and direct
+canvas guide dragging remain separate work.
