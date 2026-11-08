@@ -23,9 +23,10 @@ enum SelectionContour {
     ///
     /// One walk per unused edge, following unused edges out of each vertex
     /// (a hash map keyed by the exact integral pixel-corner coordinates),
-    /// so the whole join is O(n) with no per-edge scan. A walk ends when it
-    /// returns to its start vertex (a closed contour, the loop break) or
-    /// when the current vertex has no unused edge left (an open chain).
+    /// so the whole join is O(n) with no per-edge scan. Returning to any
+    /// vertex on the current chain completes a contour there; removing
+    /// that loop keeps diagonally touching regions as separate contours
+    /// even when the input's edge directions differ.
     static func contours(from segments: [EngineSession.Segment]) -> [Contour] {
         var adjacency: [Vertex: [(edge: Int, other: Vertex)]] = [:]
         var endpoints: [(Vertex, Vertex)] = []
@@ -49,26 +50,34 @@ enum SelectionContour {
             var current = endpoints[start].1
             if degree(first) != 1, degree(current) == 1 { swap(&first, &current) }
             var previous = first
-            var points = [first.point, current.point]
+            var points = [first, current]
+            var positions = [first: 0, current: 1]
             while current != first,
                   let next = nextEdge(at: current, arrivingFrom: previous, adjacency: adjacency, used: used) {
                 used[next.edge] = true
                 previous = current
                 current = next.other
-                points.append(current.point)
+                if let loopStart = positions[current] {
+                    result.append(Contour(points: points[loopStart...].map(\.point), isClosed: true))
+                    for vertex in points[(loopStart + 1)...] { positions.removeValue(forKey: vertex) }
+                    points.removeSubrange((loopStart + 1)...)
+                    if loopStart == 0 { break }
+                } else {
+                    positions[current] = points.count
+                    points.append(current)
+                }
             }
-            let closed = current == first
-            if closed { points.removeLast() } // the walk returned to its start
-            result.append(Contour(points: points, isClosed: closed))
+            if points.count > 1 {
+                result.append(Contour(points: points.map(\.point), isClosed: false))
+            }
         }
         return result
     }
 
     /// The unused edge to follow out of `vertex`, arriving from `previous`.
     /// At a branch (a diagonal touch, where four edges share one corner)
-    /// take the sharpest left turn, so the contour stays around one
-    /// region instead of crossing itself at the shared corner. Every edge
-    /// is still used exactly once either way.
+    /// prefer the sharpest left turn. Loop extraction above separates
+    /// touching contours regardless of which direction the walk started.
     private static func nextEdge(at vertex: Vertex, arrivingFrom previous: Vertex,
                                  adjacency: [Vertex: [(edge: Int, other: Vertex)]],
                                  used: [Bool]) -> (edge: Int, other: Vertex)? {

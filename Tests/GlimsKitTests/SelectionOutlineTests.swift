@@ -212,6 +212,24 @@ final class SelectionOutlineTests: XCTestCase {
         XCTAssertEqual(edgeCounts(of: contours), edgeCounts(input))
     }
 
+    func testDiagonalTouchWithClockwiseStartKeepsSeparateContours() {
+        let input = [segment(0, 1, 1, 1), segment(1, 1, 1, 0), segment(1, 0, 0, 0), segment(0, 0, 0, 1)]
+            + rectangle(1, 1, 2, 2)
+        // Rotate the starting edge and reverse every subset of directions:
+        // a shared corner must not turn the two regions into a figure eight.
+        for offset in input.indices {
+            for directions in 0..<16 {
+                let reordered = Array(input[offset...] + input[..<offset]).enumerated().map { index, edge in
+                    directions & (1 << (index % 4)) == 0 ? edge : EngineSession.Segment(from: edge.to, to: edge.from)
+                }
+                let contours = SelectionContour.contours(from: reordered)
+                XCTAssertEqual(contours.count, 2, "offset \(offset), directions \(directions)")
+                XCTAssertTrue(contours.allSatisfy { $0.isClosed && $0.points.count == 4 })
+                XCTAssertEqual(edgeCounts(of: contours), edgeCounts(input))
+            }
+        }
+    }
+
     /// The builder only reads its input.
     func testInputSegmentsAreNotMutated() {
         let input = scrambled(rectangle(2, 2, 9, 7) + stairStep(origin: 12, steps: 5))
