@@ -144,7 +144,8 @@ enum FloatingControlsLogic {
 
     /// The cached pixel-lock reason for anchoring into the floating
     /// selection's target: the layer itself, or the layer owning a mask
-    /// target. Channel targets hold no pixel locks.
+    /// target. Channel locks are revalidated by the engine; this cache has
+    /// no channel-lock state.
     private static func targetPixelLockReason(_ state: EngineSession.FloatingState,
                                               maskStates: [Int32: EngineSession.MaskState],
                                               locks: [Int32: EngineSession.LayerLockState]) -> String? {
