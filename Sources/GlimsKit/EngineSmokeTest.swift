@@ -6596,12 +6596,22 @@ enum EngineSmokeTest {
 
         // The catalog read and the identity both belong off the main thread.
         let identity: EngineSession.ResourceIdentity = try DispatchQueue.global(qos: .userInitiated).sync {
-            let rows = try session.resources(.pattern)
-            guard let first = rows.first else {
-                throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
-                                                 message: "The engine lists no pattern.")
+            for row in try session.resources(.pattern) {
+                let thumbnail = try session.resourceThumbnail(row.id, maxSize: 512)
+                let bytes = [UInt8](thumbnail.pixels)
+                // The internal clipboard pattern may be entirely white.
+                // Pick a fixture that visibly differs in the tested region.
+                for y in 0..<64 {
+                    for x in 0..<96 {
+                        let offset = ((y % thumbnail.height) * thumbnail.width + (x % thumbnail.width)) * 4
+                        if bytes[offset + 3] > 0 && bytes[offset..<offset + 3].contains(where: { $0 < 250 }) {
+                            return try session.resourceIdentifiers(row.id)
+                        }
+                    }
+                }
             }
-            return try session.resourceIdentifiers(first.id)
+            throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                             message: "The engine lists no visible pattern fixture.")
         }
         check(!identity.name.isEmpty, "a stock pattern reports a usable identity")
 
