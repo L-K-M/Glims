@@ -229,6 +229,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (floating controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "float-selected-pixels" {
+                try exerciseFloatSelectedPixels(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (float selected pixels)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-multiselection-controls" {
                 try exerciseLayerMultiselectionControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (layer-multiselection-controls)" : "FAILED: \(failures) failure(s)")
@@ -279,6 +284,7 @@ enum EngineSmokeTest {
             try exercisePixelRulers(session, work: work, documents: documents)
             try exerciseGuideDragging(session, work: work, documents: documents)
             try exerciseFloatingControls(session, work: work, documents: documents)
+            try exerciseFloatSelectedPixels(session, work: work, documents: documents)
             try exerciseLayerMultiselectionControls(session, work: work, documents: documents)
 
             try exerciseStrokeSelectionControls(session, work: work, documents: documents)

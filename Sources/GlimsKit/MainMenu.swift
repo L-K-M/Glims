@@ -178,6 +178,11 @@ enum MainMenu {
             item("From Layer Transparency", #selector(DocumentWindowController.selectFromAlpha(_:))),
             item("From Path", #selector(DocumentWindowController.selectFromPath(_:))),
             .separator(),
+            // No shortcuts: Float works on whatever selection and target
+            // are current, so the items stay plain menu entries.
+            item("Float Selected Pixels", #selector(DocumentWindowController.floatSelectedPixels(_:))),
+            item("Float a Copy", #selector(DocumentWindowController.floatACopy(_:))),
+            .separator(),
             item("Save Selection as Channel…", #selector(DocumentWindowController.saveSelectionAsChannel(_:))),
             item("Quick Mask", #selector(DocumentWindowController.toggleQuickMask(_:))),
         ])
