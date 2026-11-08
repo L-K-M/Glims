@@ -1290,6 +1290,111 @@ final class EngineSession: @unchecked Sendable {
         try check(api.image_set_quick_mask(engine, image, enabled, &error), error)
     }
 
+    // MARK: Color state and conversions
+
+    /// The image's color model, as `colorInfo` reports it and
+    /// `convertMode` takes (GlimsColorMode). Conversion to `.indexed`
+    /// is not implemented yet — palette and dither policy are a later
+    /// slice — but an indexed image's info still reports `.indexed`.
+    enum ColorMode: UInt32 {
+        case unknown = 0, rgb = 1, grayscale = 2, indexed = 3
+
+        /// The model's name in the window title and menus.
+        var title: String {
+            switch self {
+            case .rgb: return "RGB"
+            case .grayscale: return "Grayscale"
+            case .indexed: return "Indexed"
+            case .unknown: return "Unknown"
+            }
+        }
+    }
+
+    /// The component type of the image's precision (GlimsColorComponent).
+    enum ColorComponent: UInt32 {
+        case unknown = 0, u8 = 1, u16, u32, half, float, double
+
+        /// The choices the Precision form offers, in display order —
+        /// 8/16/32-bit integer, then 16/32/64-bit float.
+        static let conversionChoices: [ColorComponent] = [.u8, .u16, .u32, .half, .float, .double]
+
+        var title: String {
+            switch self {
+            case .u8: return "8-bit integer"
+            case .u16: return "16-bit integer"
+            case .u32: return "32-bit integer"
+            case .half: return "16-bit float"
+            case .float: return "32-bit float"
+            case .double: return "64-bit float"
+            case .unknown: return "Unknown"
+            }
+        }
+    }
+
+    /// The transfer curve of the image's precision (GlimsColorTRC).
+    enum ColorTRC: UInt32 {
+        case unknown = 0, linear = 1, nonlinear, perceptual
+
+        /// The choices the Precision form offers, in display order.
+        static let conversionChoices: [ColorTRC] = [.linear, .nonlinear, .perceptual]
+
+        var title: String {
+            switch self {
+            case .linear: return "Linear"
+            case .nonlinear: return "Non-linear"
+            case .perceptual: return "Perceptual"
+            case .unknown: return "Unknown"
+            }
+        }
+    }
+
+    /// The image's color state (GlimsColorInfo): `component` and `trc`
+    /// together are the precision `ImageInfo.precision` reports as a nick.
+    struct ColorInfo: Equatable {
+        let mode: ColorMode
+        let component: ColorComponent
+        let trc: ColorTRC
+        /// The effective profile's label — the image's own when it has
+        /// one, the engine's builtin fallback otherwise; "" when none.
+        let profileLabel: String
+        /// Whether an ICC profile travels with the image and its files.
+        let hasEmbeddedProfile: Bool
+    }
+
+    /// The image's color model, precision and effective profile
+    /// (image_color_info). A read; always allowed, also while a stroke,
+    /// a preview or a plug-in holds the image.
+    func colorInfo(_ image: Int32) throws -> ColorInfo {
+        var info = GlimsColorInfo()
+        try check(api.image_color_info(engine, image, &info), nil)
+        return ColorInfo(mode: ColorMode(rawValue: info.mode) ?? .unknown,
+                         component: ColorComponent(rawValue: info.component) ?? .unknown,
+                         trc: ColorTRC(rawValue: info.trc) ?? .unknown,
+                         profileLabel: Self.string(info.profile_label),
+                         hasEmbeddedProfile: info.profile_embedded)
+    }
+
+    /// Image ▸ Mode ▸ …: the whole image's color model as one undo
+    /// step (image_convert_mode). A no-op changes nothing and pushes no
+    /// undo; converting to `.indexed` is UNSUPPORTED for now; BUSY while
+    /// a stroke, a preview or a plug-in holds the image.
+    func convertMode(_ image: Int32, to mode: ColorMode) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_convert_mode(engine, image, mode.rawValue, &error), error)
+    }
+
+    /// Image ▸ Precision…: the image's component type and transfer
+    /// curve as one undo step with no dithering
+    /// (image_convert_precision). Every component/TRC pair is valid on
+    /// RGB and grayscale images; an indexed image accepts only u8
+    /// non-linear and answers anything else UNSUPPORTED. Same no-op
+    /// and busy rules as `convertMode`.
+    func convertPrecision(_ image: Int32, component: ColorComponent, trc: ColorTRC) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_convert_precision(engine, image, component.rawValue, trc.rawValue, &error),
+                  error)
+    }
+
     // MARK: Text
 
     /// The font names text settings take, sorted.

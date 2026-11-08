@@ -215,3 +215,41 @@ load and the link layer's save/reload/reread; it was added but not run —
 engine smoke stays with the desktop pass against the private adapters.
 `swift build` and `swift test` (229 tests, including new menu-placement
 and version-parsing cases) pass headless.
+2026-11-08: the Image menu's color controls are wired on the existing
+facade. `EngineSession` gains typed `ColorInfo`/`ColorMode`/
+`ColorComponent`/`ColorTRC` and wrappers for `image_color_info`,
+`image_convert_mode` and `image_convert_precision` — facade values only,
+unknowns map to `.unknown`, and the precision nick `ImageInfo.precision`
+reports is preserved. `ImageDocument` caches the color info with the rest
+of its state, and `handle` no longer reloads synchronously on layers/
+channels/undo/size events: the refreshes coalesce into one pending run
+through `EngineActivity.whenIdle` while an exclusive activity is busy —
+a large conversion emits events before its worker returns, and a main-
+thread reload would have waited on it — while selection and size
+callbacks survive and a closing document is skipped. Projection redraws
+stay asynchronous. The window title now shows the image's real mode
+(RGB, Grayscale, Indexed, or Unknown) instead of hard-coded RGB, after
+undo/redo and reopen alike. Image ▸ Mode ▸ RGB / Grayscale check the
+cached mode live in validation — no engine call there — and run the
+conversion through counted exclusive admission, so accepted input in
+every document drains first and close/Quit wait; Image ▸ Precision…
+opens a sheet with component (8/16/32 integer, 16/32/64 float) and
+transfer-curve (linear/non-linear/perceptual) popups seeded from the
+cache, with a disabled Unknown row when the state cannot be named, and
+Image ▸ Image Information… shows mode, precision, the effective profile
+label and embedded-vs-builtin honestly. Converting to the current mode
+or seeded precision queues nothing and pushes no undo; indexed precision
+stays fixed at u8 non-linear (the Precision item stays listed but
+disabled and says why) and no Indexed menu entry exists — palette and
+dither policy are a later slice. Refusals (closing, clipboard transfer,
+save-for-close, plug-in, active preview, a busy gate) report busy or the
+facade's own actionable message, and a failed conversion leaves the
+image usable. Unit tests cover non-RGB titles, menu structure and tags,
+choice lists, seeding and unknowns, the indexed restriction and the
+information rows; `exerciseColorConversions` in the engine smoke covers
+fresh state, RGB↔grayscale with pixel verification, form seeding/cancel/
+no-op/pick, undo/redo, XCF roundtrip, file identity, preview refusal,
+cross-document drain, close during a conversion and deferred event
+refresh — it compiles here and the desktop pass runs it. `swift build`
+and `swift build --build-tests` pass; `swift test`, the smoke run and
+interactive QA were not run in this worktree.
