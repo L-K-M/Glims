@@ -10,6 +10,7 @@ extension DocumentWindowController {
     @objc func cut(_ sender: Any?) { copyImage(.cutLayer) }
     @objc func paste(_ sender: Any?) { pasteImage(.centered) }
     @objc func pasteInPlace(_ sender: Any?) { pasteImage(.originalPosition) }
+    @objc func pasteInto(_ sender: Any?) { pasteIntoImage(from: .general) }
 
     /// Queue the whole copy/cut transaction with pointer input. A cut only
     /// clears pixels after the system clipboard accepted their encoded copy;
@@ -68,6 +69,39 @@ extension DocumentWindowController {
         }
     }
 
+    /// Edit ▸ Paste Into: the clipboard's pixels become a floating
+    /// selection clipped to the current selection. The document, the
+    /// explicit target drawable and the payload are captured here, at
+    /// command time — the queued work never falls back to the front
+    /// document or a layer-0 target — and the payload decodes on the
+    /// input queue like an ordinary Paste's.
+    func pasteIntoImage(from pasteboard: NSPasteboard = .general) {
+        guard !PlugInCommands.isRunning, !imageDocument.isClosing else { return }
+        canvas.tools.finishTextEditing()
+        if imageDocument.strokeIsActive { imageDocument.endStroke() }
+        let payload: ClipboardImage.Payload
+        do { payload = try ClipboardImage.readPayload(from: pasteboard) } catch {
+            statusBar.message = error.localizedDescription
+            return
+        }
+        let readiness = imageDocument.pasteIntoReadiness
+        guard let target = readiness.drawable else {
+            statusBar.message = readiness.reason ?? "Select a layer, mask or channel to paste into."
+            NSSound.beep()
+            return
+        }
+        statusBar.message = "Pasting into the selection…"
+        imageDocument.pasteIntoPixels(payload, target: target) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.statusBar.message = "Pasted into the selection"
+            case .failure(let error):
+                self.statusBar.message = error.localizedDescription
+            }
+        }
+    }
+
     @objc func clearPixels(_ sender: Any?) {
         guard !PlugInCommands.isRunning, !imageDocument.isClosing else { return }
         canvas.tools.finishTextEditing()
@@ -81,8 +115,16 @@ extension DocumentWindowController {
               !imageDocument.isTransferringClipboard, !imageDocument.isSavingForClose else { return false }
         switch action {
         case #selector(paste(_:)), #selector(pasteInPlace(_:)):
+            // An ordinary Paste would implicitly anchor an active
+            // floating selection, so it waits for a resolution; without
+            // one its behavior is unchanged.
+            return !imageDocument.filterPreviewIsOpen
+                && !imageDocument.floatingState.isActive
+                && NSPasteboard.general.availableType(from: [.png, .tiff]) != nil
+        case #selector(pasteInto(_:)):
             return !imageDocument.filterPreviewIsOpen
                 && NSPasteboard.general.availableType(from: [.png, .tiff]) != nil
+                && imageDocument.pasteIntoReadiness.allowed
         case #selector(cut(_:)):
             // A cut clears pixels; the preview owns its drawable meanwhile.
             return !imageDocument.filterPreviewIsOpen && imageDocument.activeDrawable != nil
