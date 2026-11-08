@@ -1035,6 +1035,43 @@ position. Real control actions now verify 50-percent fill pixels and saved
 channel isolation. Vector styling and multi-anchor editing remain later
 work; initial vector creation uses the native context's defaults.
 
+### ICC assignment and conversion (2026-11-08)
+
+Two additive native facade calls assign/discard an ICC profile or convert
+pixels to a selected profile with a facade-owned rendering intent and explicit
+black-point compensation. NULL selects the model/precision's builtin profile;
+assignment discards embedded and hidden profiles. File paths are absolute,
+nonempty UTF-8 and loaded on the engine thread. The core validates model
+compatibility before opening its own undo group. Active strokes and previews
+refuse the call, equal-profile operations add no history, and every owned
+profile is released after the operation. No upstream edits or GTK calls.
+
+The first pinned conformance run passes 841 checks, including changed midtone
+interpretation on assignment (128/64 to 188/137), appearance preservation on
+conversion, undo/redo, XCF round trip, RGB/gray compatibility, invalid files and
+busy refusals. Fixtures are original deterministic LittleCMS profiles generated
+by `scripts/make-icc-fixtures.py`. Final native runs pass 843 checks on
+3.2.8/3.2.0/master and 810 on 3.0.8, plus Swift build and 305 unit tests.
+Independent Beam review found no important issues. Its BPC observation was
+verified: RGB/gray forwards the flag to the full native color transform;
+indexed palette conversion ignores intent/BPC. A new regression reproduced
+that unsupported conversion succeeding. The facade now refuses indexed
+conversion before changing the palette profile, while compatible profile
+assignment remains supported. Convert indexed images to RGB first. Swift
+controls and display/proof transforms remain separate work.
+
+Structured-layer safety: a new regression reproduced ordinary profile
+conversion silently rasterizing editable text. The normal entry point now
+returns REQUIRES_RASTERIZE without mutation when conversion would affect
+editable text, vector or linked layers; equal-profile no-ops remain safe.
+The separate image_convert_profile_rasterizing entry point records explicit
+caller consent and keeps the native conversion/rasterization in one undo
+step. Pinned checks verify text content and all three editable layer kinds
+return on undo. Those checks also exposed the layer list reporting native
+link/vector classes after rasterization; it now reports current editability,
+consistent with text layers. Full cross-engine rechecks and UI consent
+coverage follow before merge.
+
 ### Clear color and mutation readiness (2026-11-08)
 
 Three regressions reproduced on the previous implementation: an opaque RGB
@@ -1081,3 +1118,25 @@ states. Swift adds `PatternFillSettings` and `EngineSession.fillPattern`
 plus a queued `ImageDocument.fillPattern(_:at:_:)` that resolves the
 persisted `ResourceIdentity` on the input queue; EngineSmoke exercises
 that path. No chooser UI and no gradient work yet.
+
+Final ICC/native compatibility validation: 894 conformance checks pass on
+3.2.8, 3.2.0 and master; 834 pass on 3.0.8. The added older-engine fixture
+now creates a valid path before expecting UNSUPPORTED; its earlier invented
+path id correctly returned NOT_FOUND and was a test error.
+
+New save/reopen and Open as Layers regressions reproduced three 3.2.0
+loader defects: a freed rasterization flag, overwriting edited rasterized
+vector pixels, and imported vector paths retaining a dead loading image.
+The exact-version load guard retains source metadata, restores verified
+modified buffers at native load completion before copying, and converts
+imported paths in place into their destination, as later native releases
+do. One undo/redo preserves imported pixels; resaving retains editable
+geometry and raster edits. No upstream source is changed. The image-lifetime
+criticals are gone; two existing startup g_file_test(NULL) diagnostics remain.
+
+After integration with the merged ICC/vector loader fixes, resource previews
+pass 941 native checks on 3.2.8, 3.2.0 and master, and 881 on 3.0.8. The
+Swift build, 308 unit tests, complete pinned interface smoke and older-table
+ABI refusal regression pass. Native preview and Swift ownership reviews
+found no important issues. Native context colors remain opaque; resource
+alpha is preserved in the straight-alpha output.

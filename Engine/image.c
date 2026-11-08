@@ -299,9 +299,11 @@ layer_kind (GimpLayer *layer)
     return GLIMS_LAYER_TEXT;
 #if GIMP_CHECK_VERSION (3, 2, 0)
   /* Link and vector layers arrived in GIMP 3.2. */
-  if (GIMP_IS_LINK_LAYER (layer))
+  /* A rasterized instance retains its native class and source metadata,
+   * but its current content is pixels, like a modified text layer. */
+  if (gimp_item_is_link_layer (item))
     return GLIMS_LAYER_LINK;
-  if (GIMP_IS_VECTOR_LAYER (layer))
+  if (gimp_item_is_vector_layer (item))
     return GLIMS_LAYER_VECTOR;
 #endif
   if (GIMP_IS_GROUP_LAYER (layer))
