@@ -5111,6 +5111,11 @@ test_resources (void)
                                           &bad_internal, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
                ! bad_name && ! bad_collection && ! bad_internal,
                "a resource id just above the native id range is refused");
+        if (filled > 0)
+          CHECK (api->resource_identifiers (engine, (UINT64_C(1) << 32) | rows[0].id,
+                                            &bad_name, &bad_collection, &bad_internal, NULL) ==
+                 GLIMS_STATUS_INVALID_ARGUMENT && ! bad_name && ! bad_collection && ! bad_internal,
+                 "high resource-id bits cannot narrow to a live resource handle");
         bad_name = bad_collection = "reset";
         bad_internal = true;
         CHECK (api->resource_identifiers (engine, 0x7FFFFFFFull, &bad_name, &bad_collection,
