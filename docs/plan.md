@@ -749,10 +749,13 @@ at startup. The `--engine-smoke-test` gains a bounded catalog scenario
 after the existing checks: counts and rows for all three kinds, one
 identity/resolve round trip per kind, a wrong identity and a high-bit
 handle; `ResourceIdentityTests` covers the persisted nil-versus-empty
-distinction and the kind tags. Checked here: `swift build` and the
-test target compiled (`swift build --build-tests`); the smoke
-scenario, the unit tests and the engine conformance runs are not run
-here (the desktop and the native runtime belong to the root session).
+distinction and the kind tags. Root validation passes 308 unit tests and
+696 interface checks on 3.2.8/3.2.0/master, 685 on 3.0.8. The two
+embedded-NUL identity checks first failed because CString truncation
+resolved another identity. The wrapper now rejects the text before C.
+After merging Fill, the source-discovered pinned engine passes 708
+interface checks and all 308 unit tests. Independent Mistral Large 4
+review found no important issue. Preview and chooser UI remain separate.
 
 ## Later, before any public release
 
