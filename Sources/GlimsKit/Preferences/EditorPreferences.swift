@@ -35,10 +35,20 @@ final class EditorPreferences {
         var title: String { self == .fit ? "Fit Image" : "Actual Pixels" }
     }
 
+    /// How often open, changed images are copied into the private
+    /// recovery store, in minutes.
+    enum RecoveryInterval: Int, CaseIterable {
+        case oneMinute = 1, twoMinutes = 2, fiveMinutes = 5, tenMinutes = 10
+        var seconds: TimeInterval { TimeInterval(rawValue) * 60 }
+        var title: String { rawValue == 1 ? "1 minute" : "\(rawValue) minutes" }
+    }
+
     private enum Key {
         static let appearance = "editor.appearance"
         static let surround = "editor.canvasSurround"
         static let initialView = "editor.initialView"
+        static let recoveryCopies = "editor.recoveryCopies"
+        static let recoveryInterval = "editor.recoveryInterval"
     }
 
     private let defaults: UserDefaults
@@ -82,8 +92,31 @@ final class EditorPreferences {
         }
     }
 
+    /// Periodic private recovery copies of open, changed images; on by
+    /// default so a crash keeps the last copied state.
+    var recoveryCopiesEnabled: Bool {
+        get { (defaults.object(forKey: Key.recoveryCopies) as? Bool) ?? true }
+        set {
+            guard newValue != recoveryCopiesEnabled else { return }
+            defaults.set(newValue, forKey: Key.recoveryCopies)
+            notify()
+        }
+    }
+
+    var recoveryInterval: RecoveryInterval {
+        get { RecoveryInterval(rawValue: defaults.integer(forKey: Key.recoveryInterval)) ?? .twoMinutes }
+        set {
+            guard newValue != recoveryInterval else { return }
+            defaults.set(newValue.rawValue, forKey: Key.recoveryInterval)
+            notify()
+        }
+    }
+
     func reset() {
-        for key in [Key.appearance, Key.surround, Key.initialView] { defaults.removeObject(forKey: key) }
+        for key in [Key.appearance, Key.surround, Key.initialView,
+                    Key.recoveryCopies, Key.recoveryInterval] {
+            defaults.removeObject(forKey: key)
+        }
         notify()
     }
 

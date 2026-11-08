@@ -92,6 +92,8 @@ enum EngineSmokeTest {
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseFileAdmission(session, work: work, documents: documents)
+            try exerciseRecovery(session, work: work, documents: documents)
+            try exerciseRecoveryInterface(session, work: work, documents: documents)
             try exerciseClipboard(session, documents: documents)
             try exercisePreviewLifetimes(session, work: work, documents: documents)
             try exerciseDisplayDensity(session, documents: documents)
@@ -200,6 +202,360 @@ enum EngineSmokeTest {
         while (!finished || b.pendingWork > 0 || b.filterPreviewIsOpen) && Date() < deadline { spin(0.01) }
         check(finished && writeError == nil && !b.filterPreviewIsOpen && controller.previewPanel == nil,
               "preview cancellation in another document waits safely for the file operation")
+    }
+
+    /// A recovery pass writes a real native copy through the same
+    /// engine-wide admission as the interface, then commits it into the
+    /// private store — without touching the document's file identity,
+    /// dirty state or undo history. Closing the document while a write
+    /// is counted as its work removes the record, so no recovery copy
+    /// survives a successful close.
+    private static func exerciseRecovery(_ session: EngineSession, work: URL,
+                                         documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Recovery")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        let window = try XCTUnwrapWindow(controller)
+
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin() }
+        }
+        func paint(_ x: Double) {
+            document.beginStroke(at: .init(x: x, y: 20, pressure: 1))
+            document.endStroke()
+            document.inputQueue.sync {}
+            spin()
+        }
+
+        let native = work.appendingPathComponent("recovery-source.xcf")
+        var saved = false
+        document.save(to: native) { error in
+            if error == nil { document.noteSaved(to: native); saved = true }
+        }
+        wait { saved && document.pendingWork == 0 }
+        check(saved && document.fileState.nativeURL == native && !document.hasUnsavedChanges,
+              "the document saves natively before recovery begins")
+
+        let store = RecoveryStore(base: work.appendingPathComponent("recovery-store"))
+        try store.prepare()
+        var tickFire: (@MainActor () -> Void)?
+        let scheduler = RecoveryScheduler(store: store) { _, fire in tickFire = fire; return {} }
+        controller.onClose = { closed in scheduler.untrack(closed.imageDocument) }
+        scheduler.track(document, isReady: { [weak controller] in
+            controller?.isReadyForRecoveryCopy ?? false
+        })
+        scheduler.start()
+
+        let previousTool = ToolState.shared.current
+        ToolState.shared.select(.rectangleSelect)
+        func pointer(_ type: NSEvent.EventType, _ point: CGPoint) -> NSEvent? {
+            NSEvent.mouseEvent(with: type,
+                location: controller.canvas.convert(CGPoint(x: point.x * controller.canvas.scale,
+                                                             y: point.y * controller.canvas.scale), to: nil),
+                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+        }
+        if let down = pointer(.leftMouseDown, CGPoint(x: 8, y: 8)),
+           let dragged = pointer(.leftMouseDragged, CGPoint(x: 40, y: 40)),
+           let up = pointer(.leftMouseUp, CGPoint(x: 40, y: 40)) {
+            controller.canvas.mouseDown(with: down)
+            controller.canvas.mouseDragged(with: dragged)
+            check(!controller.isReadyForRecoveryCopy,
+                  "recovery waits for an accepted selection gesture to finish")
+            controller.canvas.mouseUp(with: up)
+            document.inputQueue.sync {}
+            spin()
+            check(controller.isReadyForRecoveryCopy,
+                  "a finished selection gesture permits recovery again")
+            document.select(.none)
+            document.inputQueue.sync {}
+            spin()
+            ToolState.shared.select(.crop)
+            controller.canvas.mouseDown(with: down)
+            controller.canvas.mouseDragged(with: dragged)
+            controller.canvas.mouseUp(with: up)
+            check(!controller.isReadyForRecoveryCopy,
+                  "recovery waits for a crop preview awaiting Return")
+            if let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                    characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                    isARepeat: false, keyCode: 53) {
+                _ = controller.canvas.tools.keyDown(with: escape)
+            }
+            check(controller.isReadyForRecoveryCopy,
+                  "cancelling a crop preview permits recovery again")
+        } else {
+            check(false, "the recovery gesture readiness check receives pointer events")
+        }
+        ToolState.shared.select(previousTool)
+
+        paint(20)
+        let revision = document.history?.revision
+        let undoSteps = document.undoInfo.undoCount
+        check(document.hasUnsavedChanges && revision != nil, "a new edit makes the document dirty")
+
+        let second = try ImageDocument(session: session, image: session.newImage(width: 32, height: 32), name: "Recovery 2")
+        documents.items.append(second)
+        let secondController = DocumentWindowController(document: second)
+        scheduler.track(second, isReady: { [weak secondController] in
+            secondController?.isReadyForRecoveryCopy ?? false
+        })
+        second.beginStroke(at: .init(x: 12, y: 12, pressure: 1))
+        second.endStroke()
+        second.inputQueue.sync {}
+        spin()
+        defer {
+            scheduler.untrack(second)
+            secondController.window?.orderOut(nil)
+            documents.items.removeAll { $0 === second }
+            second.closeImageWhenDrained()
+        }
+
+        tickFire?()
+        wait { store.record(for: document.recoveryID) != nil && scheduler.copying == nil
+                && document.pendingWork == 0 && second.pendingWork == 0 }
+        check(store.record(for: second.recoveryID) != nil,
+              "one recovery pass copies both dirty documents through real engine admission")
+        let record = store.record(for: document.recoveryID)
+        check(record?.documentID == document.recoveryID && record?.nativeURL == native
+                && record?.importedSourceURL == nil && record?.revision == revision
+                && record?.name == "recovery-source.xcf",
+              "a recovery pass commits a manifest naming the native file and revision")
+        let copy = store.copyURL(for: document.recoveryID)
+        if let copyImage = try? session.openImage(path: copy.path) {
+            check((pixel(session, copyImage, x: 20, y: 20)?[0] ?? 255) < 128,
+                  "the recovery copy holds the painted pixels")
+            try session.closeImage(copyImage)
+        } else {
+            check(false, "the recovery copy reopens as an XCF")
+        }
+        let copyMode = (try? FileManager.default.attributesOfItem(atPath: copy.path)[.posixPermissions]) as? Int
+        check(copyMode == 0o600, "the committed recovery copy is private")
+        check(document.fileState.nativeURL == native && document.hasUnsavedChanges
+                && document.undoInfo.undoCount == undoSteps && document.history?.revision == revision,
+              "the recovery copy preserves file identity, dirty state and undo history")
+
+        let firstDate = record?.date
+        tickFire?()
+        wait { scheduler.copying == nil && document.pendingWork == 0 }
+        check(store.record(for: document.recoveryID)?.date == firstDate,
+              "an unchanged revision is not copied again")
+
+        // A close asked for while the write is counted as document work
+        // finishes only after it; the store then holds no record.
+        paint(40)
+        document.inputQueue.async { usleep(400_000) }
+        tickFire?()
+        check(document.pendingWork > 0, "the recovery write counts as document work")
+        var closed: Bool?
+        controller.requestClose { closed = $0 }
+        let deadline = Date().addingTimeInterval(10)
+        while closed == nil && Date() < deadline {
+            spin(0.02)
+            if let sheet = window.attachedSheet {
+                NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+            }
+        }
+        check(closed == true, "a close asked for during the recovery write finishes after it")
+        check(store.record(for: document.recoveryID) == nil && !store.copyExists(for: document.recoveryID),
+              "a successful close removes the document's recovery record")
+        check((try? session.info(image)) == nil, "the closed image is destroyed")
+        documents.items.removeAll { $0 === document }
+        scheduler.stop()
+    }
+
+    /// The recovery interface end to end: a dead run's real committed
+    /// records are listed by the panel, a selected one opens as an
+    /// unsaved recovered document through counted engine admission, the
+    /// prior record stays until that document explicitly closes, and a
+    /// recovery finishing during Quit is cleaned up instead of opened.
+    private static func exerciseRecoveryInterface(_ session: EngineSession, work: URL,
+                                                  documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin() }
+        }
+
+        // A document with real pixels saved natively: the "crashed" run's
+        // copies are committed through the store's own atomic path.
+        let sourceImage = try session.newImage(width: 64, height: 64)
+        let source = try ImageDocument(session: session, image: sourceImage, name: "Crash Source")
+        documents.items.append(source)
+        source.beginStroke(at: .init(x: 16, y: 16, pressure: 1))
+        source.endStroke()
+        source.inputQueue.sync {}
+        spin()
+        let native = work.appendingPathComponent("original.xcf")
+        try session.save(sourceImage, to: native.path)
+        source.noteSaved(to: native)
+        let nativeBytes = try Data(contentsOf: native)
+        let sourceLayers = source.layers.count
+        defer {
+            documents.items.removeAll { $0 === source }
+            source.closeImageWhenDrained()
+        }
+
+        let storeBase = work.appendingPathComponent("recovery-ui-store")
+        let priorStore = RecoveryStore(base: storeBase, runID: UUID(), ownerPID: Int32.max - 1234,
+                                       processIsAlive: { _ in false })
+        try priorStore.prepare()
+        func commitPrior(_ id: UUID, _ name: String, imported: URL? = nil,
+                         native nativeURL: URL? = nil, revision: UInt64 = 1) throws {
+            let temp = priorStore.temporaryCopyURL(for: id)
+            try session.saveCopy(sourceImage, to: temp.path)
+            _ = try priorStore.commitCopy(at: temp, for: id, metadata: .init(
+                name: name, nativeURL: nativeURL, importedSourceURL: imported, revision: revision))
+        }
+        let firstID = UUID(), otherID = UUID(), quitID = UUID(), badID = UUID()
+        try commitPrior(firstID, "original.xcf", native: native, revision: 7)
+        let ghost = work.appendingPathComponent("ghost.png")
+        try Data("png".utf8).write(to: ghost)
+        try commitPrior(otherID, "other.xcf", imported: ghost, revision: 2)
+        try commitPrior(quitID, "quit.xcf")
+        let badTemp = priorStore.temporaryCopyURL(for: badID)
+        try Data("not an xcf".utf8).write(to: badTemp)
+        _ = try priorStore.commitCopy(at: badTemp, for: badID, metadata: .init(
+            name: "bad.xcf", nativeURL: nil, importedSourceURL: nil, revision: 1))
+
+        // A foreign run whose owner is this live process is never offered.
+        let liveRunID = UUID()
+        let liveDir = storeBase.appendingPathComponent(liveRunID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: liveDir, withIntermediateDirectories: true)
+        try JSONEncoder().encode(RecoveryStore.Run(runID: liveRunID,
+                                                 pid: ProcessInfo.processInfo.processIdentifier,
+                                                 started: Date()))
+            .write(to: liveDir.appendingPathComponent(RecoveryStore.runFilename))
+        try Data("live".utf8).write(to: liveDir.appendingPathComponent("\(UUID().uuidString).xcf"))
+
+        let store = RecoveryStore(base: storeBase, runID: UUID(),
+                                  processIsAlive: { $0 == ProcessInfo.processInfo.processIdentifier })
+        try store.prepare()
+        let app = AppController()
+        app.recoveryStore = store
+        let found = store.discoverRecoverableDocuments()
+        check(found.count == 4 && !found.contains { $0.runID == liveRunID },
+              "dead runs' committed records are discoverable; live runs' are not")
+        guard let candidate = found.first(where: { $0.documentID == firstID }) else { return }
+
+        app.recoverDocuments(nil)
+        let panel = app.recoveryPanel
+        check(panel != nil && panel?.window?.canBecomeMain == false && panel?.records.count == 4,
+              "the recovery panel lists prior records without taking main")
+
+        // A repeated click while the recovery is counted cannot
+        // duplicate it.
+        app.recover([candidate], using: session)
+        check(!app.inFlightRecoveries.isEmpty, "the recovery is counted in flight")
+        app.recover([candidate], using: session)
+        wait { app.inFlightRecoveries.isEmpty }
+        let recovered = app.documents.last?.imageDocument
+        if let recovered { documents.items.append(recovered) }
+        check(app.documents.count == 1 && recovered?.name == "original.xcf recovered",
+              "the record opens once as 'name recovered'")
+        check(recovered?.hasUnsavedChanges == true && recovered?.fileState.nativeURL == nil
+                && recovered?.fileState.importedSourceURL == nil
+                && recovered?.fileState.saveRoute == .askForFile,
+              "the recovered document is unsaved with no file identity, so Save asks a destination")
+        check(recovered?.undoInfo.undoCount == 0,
+              "the recovered image carries fresh undo")
+        if let image = recovered?.image {
+            check((pixel(session, image, x: 16, y: 16)?[0] ?? 255) < 128
+                    && recovered?.layers.count == sourceLayers,
+                  "the recovered document holds the same pixels and layers")
+        }
+        check((try? Data(contentsOf: native)) == nativeBytes,
+              "the original file is never opened or overwritten")
+        check(!NSDocumentController.shared.recentDocumentURLs.contains {
+            $0.path.hasPrefix(storeBase.path)
+        }, "recovery copies are never marked recent")
+        check(store.discoverRecoverableDocuments().contains { $0.documentID == firstID },
+              "a recovered record is kept while its document is open")
+
+        app.recover([candidate], using: session)
+        wait { app.inFlightRecoveries.isEmpty }
+        check(app.documents.count == 1,
+              "recovering an already-open record brings its window forward")
+        app.discardSelected([candidate])
+        check(store.discoverRecoverableDocuments().contains { $0.documentID == firstID }
+                && app.lastRecoveryFailure != nil,
+              "a record open as a recovered document refuses discard visibly")
+
+        // Only an explicit close (Save or Don't Save) retires the prior
+        // record and deletes its copy.
+        let recoveredController = app.documents.last
+        var recoveredClosed: Bool?
+        recoveredController?.requestClose { recoveredClosed = $0 }
+        let closeDeadline = Date().addingTimeInterval(10)
+        while recoveredClosed == nil && Date() < closeDeadline {
+            spin(0.02)
+            if let sheet = recoveredController?.window?.attachedSheet {
+                NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+            }
+        }
+        wait { app.documents.isEmpty }
+        check(recoveredClosed == true
+                && !store.discoverRecoverableDocuments().contains { $0.documentID == firstID }
+                && !FileManager.default.fileExists(atPath: candidate.copyURL.path),
+              "an explicit close retires the prior record and deletes its copy")
+        if let recovered { documents.items.removeAll { $0 === recovered } }
+        recovered?.longQueue.sync {}
+        PaletteCenter.shared.closeAll()
+
+        // A failed open keeps the record and reports it; a stale row and
+        // a live run refuse without deleting anything.
+        guard let bad = store.discoverRecoverableDocuments().first(where: { $0.documentID == badID }) else { return }
+        app.recover([bad], using: session)
+        wait { app.inFlightRecoveries.isEmpty }
+        check(app.documents.isEmpty && app.lastRecoveryFailure?.contains("bad.xcf") == true,
+              "a failed recovery shows an error and opens nothing")
+        check(store.discoverRecoverableDocuments().contains { $0.documentID == badID },
+              "a failed recovery keeps the record available")
+
+        guard let other = store.discoverRecoverableDocuments().first(where: { $0.documentID == otherID }),
+              let quitCandidate = store.discoverRecoverableDocuments().first(where: { $0.documentID == quitID })
+        else { return }
+        var stale = quitCandidate
+        stale.name = "changed.xcf"
+        app.recover([stale], using: session)
+        wait { app.inFlightRecoveries.isEmpty }
+        check(app.documents.isEmpty && app.lastRecoveryFailure?.contains("no longer available") == true,
+              "a stale record refuses visibly instead of opening")
+        check(store.discoverRecoverableDocuments().contains { $0.documentID == quitID },
+              "a refused record stays on disk")
+
+        app.discardSelected([other])
+        check(!store.discoverRecoverableDocuments().contains { $0.documentID == otherID }
+                && !FileManager.default.fileExists(atPath: other.copyURL.path),
+              "Discard deletes the prior record and its copy")
+        check((try? String(contentsOf: ghost, encoding: .utf8)) == "png",
+              "an informational source URL is never a deletion target")
+
+        let liveCandidate = RecoveryStore.RecoveredDocument(
+            runID: liveRunID, documentID: UUID(), name: "live.xcf",
+            nativeURL: nil, importedSourceURL: nil,
+            copyURL: liveDir.appendingPathComponent("planted.xcf"),
+            date: Date(), revision: 1)
+        app.discardSelected([liveCandidate])
+        check(app.lastRecoveryFailure != nil && FileManager.default.fileExists(atPath: liveDir.path),
+              "a live run's folder is never deleted")
+
+        // Quit ordering: an in-flight recovery holds Quit; a recovery
+        // that finishes during Quit is closed again, not opened, and its
+        // record survives for the next launch.
+        check(app.applicationShouldTerminate(NSApp) == .terminateNow,
+              "with nothing open and nothing in flight, Quit proceeds")
+        app.recover([quitCandidate], using: session)
+        check(app.applicationShouldTerminate(NSApp) == .terminateLater,
+              "an in-flight recovery holds Quit")
+        wait { app.inFlightRecoveries.isEmpty }
+        wait { app.applicationShouldTerminate(NSApp) == .terminateNow }
+        check(app.documents.isEmpty,
+              "a recovery finished during Quit is cleaned up, not opened")
+        check(store.discoverRecoverableDocuments().contains { $0.documentID == quitID },
+              "the record survives a recovery interrupted by Quit")
     }
 
     /// Saving/closing must use the same asynchronous queues and sheets as
