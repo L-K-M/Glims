@@ -24,6 +24,7 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
     private var loadInFlight = false
     /// Guards the single whenIdle re-pump of the thumbnail queue.
     private var thumbnailPumpScheduled = false
+    private var updatingTable = false
 
     let view: NSView
     private let searchField = NSSearchField()
@@ -217,7 +218,7 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
         guard model.deliverThumbnails(generation: generation, rendered: rendered, failed: failed) else { return }
         // Rows without a preview yet stay placeholders; reloading re-enters
         // viewFor, which re-requests them (deduplicated by the queue).
-        table.reloadData()
+        reloadTable(scrollToSelection: false)
         pumpThumbnails()
     }
 
@@ -225,15 +226,22 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
 
     private var visibleRows: [PatternRow] { model.rows(matching: model.query) }
 
-    private func refresh() {
+    private func reloadTable(scrollToSelection: Bool) {
+        let selection = model.selection
+        updatingTable = true
+        defer { updatingTable = false }
         table.reloadData()
-        if let selection = model.selection,
+        if let selection,
            let row = visibleRows.firstIndex(where: { $0.id == selection }) {
             table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            table.scrollRowToVisible(row)
+            if scrollToSelection { table.scrollRowToVisible(row) }
         } else {
             table.deselectAll(nil)
         }
+    }
+
+    private func refresh() {
+        reloadTable(scrollToSelection: true)
         switch model.state {
         case .loading:
             statusLabel.stringValue = "Loading patterns…"
@@ -317,8 +325,12 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
+        guard !updatingTable else { return }
         let row = table.selectedRow
-        model.select(visibleRows.indices.contains(row) ? visibleRows[row].id : nil)
+        // Filtering or refreshing can hide the highlighted row. That is
+        // not a new resource choice; retain the explicit pending identity.
+        guard visibleRows.indices.contains(row) else { return }
+        model.select(visibleRows[row].id)
     }
 
     // MARK: Search

@@ -98,6 +98,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "pattern-chooser" {
+                try exercisePatternChooser(session, documents: documents)
+                print(failures == 0 ? "PASSED (pattern chooser)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "pattern-fill" {
                 try exercisePatternFill(session, documents: documents)
                 print(failures == 0 ? "PASSED (pattern-fill)" : "FAILED: \(failures) failure(s)")
@@ -145,6 +150,7 @@ enum EngineSmokeTest {
             try exerciseResourceCatalog(session)
             try exerciseResourceThumbnails(session)
             try exercisePatternFill(session, documents: documents)
+            try exercisePatternChooser(session, documents: documents)
         } catch {
             check(false, "unexpected engine error: \(error)")
         }
@@ -6664,100 +6670,134 @@ enum EngineSmokeTest {
     /// another pattern. Not wired into `run()` yet: this is the compiled
     /// companion to the picker's UI, exercised like the other scenarios
     /// once the sheet flow is part of the smoke drive.
-    private static func exercisePatternChooserModel(_ session: EngineSession,
-                                                    documents: DocumentList) throws {
+    private static func exercisePatternChooser(_ session: EngineSession,
+                                                documents: DocumentList) throws {
+        let originalChoice = PatternFillStore.shared.identity
+        PatternFillStore.shared.set(nil)
+        defer { PatternFillStore.shared.set(originalChoice) }
         let image = try session.newImage(width: 96, height: 64)
-        let document = try ImageDocument(session: session, image: image, name: "Pattern Chooser")
+        let document = try ImageDocument(session: session, image: image, name: "Pattern chooser")
         documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
         func settle() {
             document.inputQueue.sync {}
-            spin()
+            wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
             spin()
         }
-
-        // The catalog enumeration and the fresh resolution of the
-        // persisted identity belong off the main thread, exactly as the
-        // picker's EngineActivity work does.
-        struct Load {
-            let rows: [PatternRow]
-            let resolved: EngineSession.ResourceID?
+        func views<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
+            guard let root else { return [] }
+            return (root as? T).map { [$0] } ?? root.subviews.flatMap { views($0, as: type) }
         }
-        func loadCatalog(resolving persisted: EngineSession.ResourceIdentity?) throws -> Load {
-            try DispatchQueue.global(qos: .userInitiated).sync {
-                var rows: [PatternRow] = []
-                for entry in try session.resources(.pattern) {
-                    rows.append(PatternRow(id: entry.id, name: entry.displayName,
-                                           identity: try session.resourceIdentifiers(entry.id)))
-                }
-                var resolved: EngineSession.ResourceID?
-                if let persisted {
-                    resolved = try? session.resolveResource(persisted, kind: .pattern)
-                }
-                return Load(rows: rows, resolved: resolved)
+        func finish(_ response: NSApplication.ModalResponse) {
+            if let sheet = controller.window?.attachedSheet {
+                controller.window?.endSheet(sheet, returnCode: response)
             }
+            spin(0.1)
         }
-
-        let first = try loadCatalog(resolving: nil)
-        check(!first.rows.isEmpty, "the engine lists at least one pattern for the picker")
-
-        let model = PatternChooserModel(currentIdentity: nil)
-        check(model.deliver(generation: model.generation, rows: first.rows,
-                            resolvedCurrent: nil, error: nil),
-              "the chooser model accepts the full catalog")
-        check(model.rows(matching: "").count == first.rows.count,
-              "the picker keeps every catalog row, uncapped")
-        check(model.pendingIdentity() == nil,
-              "with nothing picked, the fill is refused rather than defaulted")
-
-        // A search pick commits the row's persistent identity.
-        let needle = String(first.rows[0].name.prefix(1))
-        let matches = model.rows(matching: needle)
-        check(matches.contains { $0.id == first.rows[0].id },
-              "search finds the first catalog row by its first letter")
-        model.select(first.rows[0].id)
-        guard let chosen = model.pendingIdentity() else {
-            check(false, "a picked row yields its persistent identity")
-            return
+        defer {
+            finish(.alertSecondButtonReturn)
+            controller.window?.close()
+            documents.items.removeAll { $0 === document }
+            var closed = false
+            document.closeImageWhenDrained { closed = true }
+            wait { closed }
+            check(closed && (try? session.info(image)) == nil,
+                  "the pattern chooser image closes before engine shutdown")
         }
-        check(chosen == first.rows[0].identity, "the committed value is the row's ResourceIdentity")
-
-        // Persisting and reopening resolves the same identity fresh.
-        let reopened = try loadCatalog(resolving: chosen)
-        check(reopened.resolved == first.rows[0].id,
-              "the persisted identity resolves to the same pattern on reopen")
-        let restored = PatternChooserModel(currentIdentity: chosen)
-        restored.deliver(generation: restored.generation, rows: reopened.rows,
-                         resolvedCurrent: reopened.resolved, error: nil)
-        check(restored.pendingIdentity() == chosen,
-              "a still-live persisted pattern is preselected and committable")
-
-        // The queued document fill lands the chosen pattern as one undo step.
+        func open() -> (NSTableView, PatternFillPicker)? {
+            controller.fill(nil)
+            guard let sheet = controller.window?.attachedSheet,
+                  let choice = views(sheet.contentView, as: NSPopUpButton.self).first,
+                  choice.numberOfItems == 6 && choice.itemTitle(at: 5) == "Pattern" else {
+                check(false, "Fill offers Pattern after its five original sources")
+                return nil
+            }
+            choice.selectItem(at: 5)
+            if let action = choice.action { NSApp.sendAction(action, to: choice.target, from: choice) }
+            guard let table = views(sheet.contentView, as: NSTableView.self).first,
+                  let picker = table.dataSource as? PatternFillPicker else {
+                check(false, "Pattern shows its embedded resource table")
+                return nil
+            }
+            wait { table.numberOfRows > 0 && !EngineActivity.shared.isBusy }
+            return (table, picker)
+        }
+        let before = try session.copyPixels(image, merged: true).pixels
         let undoBefore = document.undoInfo.undoCount
-        let pixelsBefore = try session.copyPixels(image, merged: true).pixels
-        document.fillPattern(chosen, at: .zero, EngineSession.PatternFillSettings())
+        guard let (initialTable, initialPicker) = open() else { return }
+        let catalogCount = try DispatchQueue.global(qos: .userInitiated).sync {
+            try session.resources(.pattern).count
+        }
+        check(!initialTable.isHiddenOrHasHiddenAncestor && initialTable.numberOfRows == catalogCount
+                && catalogCount > PatternThumbnailQueue.batchSize,
+              "the visible Fill sheet lists the entire native pattern catalog")
+        let firstCell = initialTable.view(atColumn: 0, row: 0, makeIfNecessary: true) as? NSTableCellView
+        wait { firstCell?.imageView?.image != nil && !EngineActivity.shared.isBusy }
+        check(firstCell?.textField?.stringValue.isEmpty == false && firstCell?.imageView?.image != nil,
+              "actual pattern cells display names and native previews")
+        finish(.alertSecondButtonReturn)
         settle()
-        check(document.undoInfo.undoCount == undoBefore + 1,
-              "the chosen pattern fill is one undo step")
-        check(try session.copyPixels(image, merged: true).pixels != pixelsBefore,
-              "the chosen pattern fill changed the layer's pixels")
+        check(initialPicker.isClosed && document.undoInfo.undoCount == undoBefore
+                && PatternFillStore.shared.identity == nil && errors.isEmpty,
+              "cancelling the pattern sheet invalidates its picker without editing or persisting")
+
+        PatternFillStore.shared.set(initialPicker.model.rows.first?.identity)
+        guard let (table, picker) = open(), let last = picker.model.rows.last else { return }
+        let search = views(controller.window?.attachedSheet?.contentView, as: NSSearchField.self).first
+        search?.stringValue = last.name
+        if let search { picker.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search)) }
+        guard let row = picker.model.rows(matching: last.name).firstIndex(where: { $0.id == last.id }) else {
+            return check(false, "search can find a pattern beyond the first preview batch")
+        }
+        table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        picker.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification, object: table))
+        wait { picker.model.thumbnail(last.id) != nil && !EngineActivity.shared.isBusy }
+        check(picker.model.pendingIdentity() == last.identity && table.numberOfRows < catalogCount,
+              "search selects a real pattern beyond the first preview batch")
+        search?.stringValue = "Glims-no-matching-pattern"
+        if let search { picker.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search)) }
+        spin(0.1)
+        check(table.numberOfRows == 0 && picker.model.pendingIdentity() == last.identity,
+              "filtering the chosen pattern out preserves that explicit choice for Fill")
+        views(controller.window?.attachedSheet?.contentView, as: NSTextField.self)
+            .first { $0.accessibilityLabel() == "Fill opacity, percent" }?.stringValue = "50"
+        finish(.alertFirstButtonReturn)
+        settle()
+        let after = try session.copyPixels(image, merged: true).pixels
+        check(errors.isEmpty && after != before && document.undoInfo.undoCount == undoBefore + 1
+                && PatternFillStore.shared.identity == last.identity,
+              "the sheet fills with its chosen pattern and opacity as one persisted undoable edit")
         document.undo()
         settle()
+        check(try session.copyPixels(image, merged: true).pixels == before,
+              "undo restores the pixels before the sheet's pattern fill")
 
-        // A removed pattern: persisted identity resolves NOT_FOUND, the
-        // model reports it missing and pendingIdentity refuses.
-        let gone = EngineSession.ResourceIdentity(name: "glims-no-such-pattern",
-                                                  collection: "no-such-collection",
-                                                  isInternal: false)
-        let missingLoad = try loadCatalog(resolving: gone)
-        check(missingLoad.resolved == nil, "a bogus identity does not resolve")
-        let missingModel = PatternChooserModel(currentIdentity: gone)
-        missingModel.deliver(generation: missingModel.generation, rows: missingLoad.rows,
-                             resolvedCurrent: missingLoad.resolved, error: nil)
-        check(missingModel.missingIdentity == gone,
-              "a missing persisted pattern is reported, not substituted")
-        check(missingModel.pendingIdentity() == nil,
-              "a missing pattern refuses the fill; no default is applied")
+        guard let (restoredTable, restored) = open() else { return }
+        check(restoredTable.selectedRow >= 0 && restored.model.pendingIdentity() == last.identity,
+              "reopening the sheet restores the persisted pattern selection")
+        finish(.alertSecondButtonReturn)
+        settle()
+        let missing = EngineSession.ResourceIdentity(name: "Glims missing pattern", collection: nil, isInternal: false)
+        PatternFillStore.shared.set(missing)
+        guard let (_, missingPicker) = open() else { return }
+        check(missingPicker.model.missingIdentity == missing,
+              "the sheet reports a removed persisted pattern without substituting another")
+        let errorCount = errors.count
+        finish(.alertFirstButtonReturn)
+        settle()
+        let afterMissing = try session.copyPixels(image, merged: true).pixels
+        check(errors.count == errorCount + 1 && afterMissing == before
+                && document.undoInfo.undoCount == undoBefore,
+              "Fill with a missing pattern reports refusal and changes no pixels or undo")
     }
+
 }
 
 @MainActor
