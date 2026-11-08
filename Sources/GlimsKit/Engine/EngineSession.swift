@@ -662,16 +662,7 @@ final class EngineSession: @unchecked Sendable {
     /// id — and returns the stroke session `continueStroke`/`endStroke`
     /// take.
     func beginStroke(image: Int32, drawable: Int32, brush: Brush, first: StrokePoint) throws -> Int32 {
-        var settings = GlimsBrushSettings(struct_size: UInt32(MemoryLayout<GlimsBrushSettings>.size),
-                                          size: brush.size, opacity: brush.opacity,
-                                          red: brush.red, green: brush.green, blue: brush.blue,
-                                          pressure_size: brush.pressureSize,
-                                          tool: brush.tool.rawValue,
-                                          hardness: brush.hardness ?? -1, rate: brush.rate ?? -1,
-                                          flow: brush.flow ?? -1, exposure: brush.exposure ?? -1,
-                                          tones: brush.tones.rawValue, anti_erase: brush.antiErase,
-                                          source_drawable: brush.source?.drawable ?? 0,
-                                          source_x: brush.source?.x ?? 0, source_y: brush.source?.y ?? 0)
+        var settings = Self.nativeBrush(brush)
         var point = Self.point(first)
         var stroke: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
@@ -981,6 +972,165 @@ final class EngineSession: @unchecked Sendable {
         return segments.prefix(Int(min(count, filled))).map {
             Segment(from: CGPoint(x: Int($0.x1), y: Int($0.y1)), to: CGPoint(x: Int($0.x2), y: Int($0.y2)))
         }
+    }
+
+    /// Strokes the selection's boundary on `drawable` — an attached layer
+    /// of the image (nil: the selected layer) — with `brush`'s tool and
+    /// settings, as exactly one undo step (selection_stroke). The native
+    /// core suspends the selection for the stroke, so the line straddles
+    /// the boundary and paints both sides of it; the selection itself is
+    /// never modified. `brush.resource` is resolved to a live handle
+    /// here, on the engine worker this call runs on — never a session id
+    /// is stored — and a nil resource keeps the established convention of
+    /// `beginStroke`: the stroke inherits the user context's current
+    /// brush. An empty selection, a non-layer target (group, mask,
+    /// channel), a locked target, bad settings or a stale/malformed
+    /// brush handle fail without changing pixels or history; BUSY while
+    /// a stroke, a filter session or a plug-in holds the image.
+    func strokeSelection(image: Int32, drawable: Int32? = nil, brush: Brush) throws {
+        var settings = Self.nativeBrush(brush)
+        var error: UnsafeMutablePointer<CChar>?
+        let resource: ResourceID
+        if let identity = brush.resource {
+            resource = try resolveResource(identity, kind: .brush)
+        } else {
+            resource = 0
+        }
+        try check(api.selection_stroke(engine, image, drawable ?? 0, resource, &settings, &error), error)
+    }
+
+    // MARK: Floating selections (Paste Into)
+
+    /// What a floating selection is attached to (GlimsFloatingTargetKind).
+    enum FloatingTargetKind: UInt32 {
+        case layer = 1, layerMask = 2, channel = 3
+    }
+
+    /// The image's floating-selection state (image_floating_selection):
+    /// the floating layer's id and the drawable it is attached to, both
+    /// zero when no floating selection is active.
+    struct FloatingState: Equatable {
+        /// The floating layer's id; 0 when none is active.
+        let floating: Int32
+        /// The drawable the floating layer is attached to; 0 when none.
+        let target: Int32
+        /// What the target is; nil when no floating selection is active.
+        let targetKind: FloatingTargetKind?
+        var isActive: Bool { floating != 0 }
+    }
+
+    /// How `floatingCommand(_:image:expected:)` resolves a floating
+    /// selection (GlimsFloatingCommand); each case is one undo step.
+    enum FloatingCommand: UInt32 {
+        /// Merge the floating layer into its attached target.
+        case anchor = 1
+        /// Detach it as an independent layer; refused for mask/channel targets.
+        case toLayer = 2
+        /// Remove it without merging.
+        case discard = 3
+    }
+
+    /// The image's floating selection, as a plain read (allowed at any
+    /// time, also while the image is busy): `.isActive` false with zero
+    /// ids when none exists. Throws NOT_FOUND for an unknown image and
+    /// INVALID_ARGUMENT if the engine reports an unknown target kind.
+    func floatingSelection(_ image: Int32) throws -> FloatingState {
+        var state = GlimsFloatingState()
+        state.struct_size = UInt32(MemoryLayout<GlimsFloatingState>.size)
+        try check(api.image_floating_selection(engine, image, &state), nil)
+        let kind: FloatingTargetKind?
+        if state.active {
+            guard let parsed = FloatingTargetKind(rawValue: state.target_kind) else {
+                throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                                  message: "The engine returned an unknown floating target kind.")
+            }
+            kind = parsed
+        } else {
+            kind = nil
+        }
+        return FloatingState(floating: state.floating, target: state.target, targetKind: kind)
+    }
+
+    /// Pastes `pixels` into the existing selection of `image`, attached
+    /// to `target` (0: the image's selected drawable), as a floating
+    /// selection — exactly one undo step, returned as the floating
+    /// layer's id. The preview is clipped to the selection; the target's
+    /// own pixels stay unchanged until `floatingCommand` resolves it,
+    /// and the selection itself is never modified. Unlike
+    /// `pastePixels`, this never creates an independent new layer.
+    /// Throws FAILED when a floating selection already exists (it must
+    /// be resolved first, never silently anchored), when there is no
+    /// selection or it does not intersect the target, or for a group,
+    /// locked or otherwise invalid target; REQUIRES_RASTERIZE for a
+    /// genuine editable text/link/vector layer target; NOT_FOUND for an
+    /// unknown image or a stale/foreign target id; INVALID_ARGUMENT for
+    /// malformed pixels; BUSY while a stroke, filter session or plug-in
+    /// holds the image.
+    @discardableResult
+    func pasteInto(_ image: Int32, target: Int32 = 0, pixels: ClipboardImage) throws -> Int32 {
+        guard pixels.pixels.count == (try ClipboardImage.byteCount(width: pixels.width, height: pixels.height)) else {
+            throw ClipboardImage.TransferError.invalidImage
+        }
+        let bounds = GlimsRect(x: Int32(pixels.origin.x.rounded()), y: Int32(pixels.origin.y.rounded()),
+                               width: Int32(pixels.width), height: Int32(pixels.height))
+        var floating: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try pixels.pixels.withUnsafeBytes { bytes in
+            try check(api.image_paste_into(engine, image, target, bounds,
+                                           bytes.bindMemory(to: UInt8.self).baseAddress,
+                                           bytes.count, &floating, &error), error)
+        }
+        return floating
+    }
+
+    /// Resolves the floating selection `expected` names in `image` with
+    /// `command`, one undo step. `expected` must be the id of the
+    /// floating selection that is actually active — 0 throws
+    /// INVALID_ARGUMENT and a stale/foreign id NOT_FOUND; neither falls
+    /// back to the active floating selection. Returns the layer id for
+    /// `.toLayer`, nil for `.anchor`/`.discard`. Throws FAILED with the
+    /// engine's reason for `.toLayer` on a mask/channel-attached floating
+    /// selection, NOT_FOUND when no floating selection exists, BUSY
+    /// while a stroke, filter session or plug-in holds the image.
+    @discardableResult
+    func floatingCommand(_ command: FloatingCommand, image: Int32, expected: Int32) throws -> Int32? {
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.floating_command(engine, image, expected, command.rawValue, &result, &error), error)
+        return result == 0 ? nil : result
+    }
+
+    /// How `floatSelection(_:image:target:mode:)` takes the selected
+    /// pixels off their target (GlimsFloatMode): `.move` cuts them out of
+    /// it, `.copy` leaves the target untouched.
+    enum FloatMode: UInt32 {
+        /// Cut the selection out of the target; it keeps a transparent hole.
+        case move = 1
+        /// Copy the selection; the target's pixels stay as they are.
+        case copy = 2
+    }
+
+    /// Floats the current selection of `image` into a floating selection
+    /// attached to `target` (0: the image's selected drawable, which must
+    /// be exactly one), as exactly one undo step, and returns the floating
+    /// layer's id. The selection is cleared by the float; `move` leaves a
+    /// transparent hole in the target where the selection was, `copy`
+    /// does not. The floating layer lands on the selection's bounds and
+    /// `moveLayer` moves it from there; resolve it with `floatingCommand`.
+    /// Throws FAILED when a floating selection already exists, when there
+    /// is no selection or it does not intersect the target, or for the
+    /// selection mask itself, a group target or a core failure;
+    /// NOT_FOUND for an unknown image or a stale/foreign target id;
+    /// INVALID_ARGUMENT for an unknown mode; LOCKED for `.move` on a
+    /// content- or alpha-locked target (`.copy` is non-destructive);
+    /// REQUIRES_RASTERIZE for a genuine editable text/link/vector target;
+    /// BUSY while a stroke, filter session or plug-in holds the image.
+    @discardableResult
+    func floatSelection(_ image: Int32, target: Int32 = 0, mode: FloatMode) throws -> Int32 {
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.selection_float(engine, image, target, mode.rawValue, &result, &error), error)
+        return result
     }
 
     private static func corners(_ rect: CGRect) -> [GlimsPoint] {
@@ -2609,6 +2759,21 @@ final class EngineSession: @unchecked Sendable {
     private static func point(_ point: StrokePoint) -> GlimsStrokePoint {
         GlimsStrokePoint(x: point.x, y: point.y, pressure: point.pressure,
                          xtilt: point.xTilt, ytilt: point.yTilt, time_ms: point.timeMilliseconds)
+    }
+
+    /// A Brush's captured settings as the facade's GlimsBrushSettings:
+    /// nil option numbers become -1 (the engine's default for that tool).
+    private static func nativeBrush(_ brush: Brush) -> GlimsBrushSettings {
+        GlimsBrushSettings(struct_size: UInt32(MemoryLayout<GlimsBrushSettings>.size),
+                           size: brush.size, opacity: brush.opacity,
+                           red: brush.red, green: brush.green, blue: brush.blue,
+                           pressure_size: brush.pressureSize,
+                           tool: brush.tool.rawValue,
+                           hardness: brush.hardness ?? -1, rate: brush.rate ?? -1,
+                           flow: brush.flow ?? -1, exposure: brush.exposure ?? -1,
+                           tones: brush.tones.rawValue, anti_erase: brush.antiErase,
+                           source_drawable: brush.source?.drawable ?? 0,
+                           source_x: brush.source?.x ?? 0, source_y: brush.source?.y ?? 0)
     }
 
     private static func layer(_ row: GlimsLayerInfo) -> Layer {
