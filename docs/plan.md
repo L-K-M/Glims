@@ -1446,6 +1446,58 @@ the invalid-width case had its stroke disabled. Correcting the fixture
 makes invalid input, busy-engine and removed-target checks pass. Follow-up
 independent review found no important issues.
 
+
+Brush chooser verification and fixes: a native AppKit row regression first
+failed because fresh table cells had no text field or image view. The cells
+now render names and previews, and the test passes. The full catalog is
+searchable without a 512-row truncation; native thumbnails load lazily in
+batches of 32, with failed attempts cached for the generation.
+
+A focused real-panel regression reproduced Reset and choosing Default
+leaving a stale Missing label. Both now pass: presentation data is tied to
+the exact persistent identity, Default clears it, and an unchanged missing
+choice preserves its warning. A late preview cannot describe a different
+choice. All 326 unit tests pass. Two new lazy-queue test fixtures initially
+omitted the required begin/complete lifecycle; correcting those fixtures
+preserved the queue's no-overlap contract. GLIMS_SMOKE_CASE=brush-chooser
+selects this bounded interface scenario; ordinary engine smoke still runs
+all scenarios. Full interface/matrix and on-screen chooser checks follow.
+
+The real-panel browse scenario confirms lazy thumbnails preserve the scroll
+position. It then reproduced a missing Tool Options preview after choosing a
+rendered brush. Presentation revisions now notify the palette when preview
+data changes even if the identity stays the same; that regression passes.
+Preview images retain their native aspect ratio. The focused scenario also
+drains its close work before stopping the native engine.
+
+Follow-up shutdown review found that isBusy does not cover unlabelled
+image-close work on the activity queue. The focused scenario now awaits
+closeImageWhenDrained's completion in its own cleanup and confirms the image
+is gone before engine shutdown; the completed callback regression passes.
+The thumbnail-batch fixture excludes the Default row when counting brushes.
+
+### Fill pattern source (2026-11-08)
+
+Interface slice on `feat/pattern-chooser`, frontend only: Edit ▸ Fill…
+appends Pattern (index 5) to the fill source popup and embeds a
+searchable one-column list of the engine's FULL pattern catalog —
+`resources(.pattern)` plus `resource_identifiers` read off the main
+thread through the exclusive `EngineActivity` gate — with lazy 32 px
+`resourceThumbnail` renders in bounded batches as rows appear. The
+picker is owned by the sheet's sync object for exactly the sheet's
+lifetime; cancel or close invalidates its generation so late deliveries
+are dropped, and it opens no child panel or nested sheet. Only the
+persistent `ResourceIdentity` is committed (`PatternFillStore`,
+UserDefaults JSON) and `ImageDocument.fillPattern` re-resolves it on the
+input queue at execution, so a removed pattern is reported missing and
+refused — no default substitution. Existing fill choices 0-4 and their
+behavior are unchanged. Pure `PatternChooserModel`/`PatternThumbnailQueue`/
+`PatternFillStore` unit checks cover search, selection, missing-identity,
+generation drops, queue batching and persistence. The initial model-only
+scenario was replaced by actual sheet checks, wired into the smoke run.
+Those checks cover names/previews, full search, fill pixels and undo,
+persisted selection, source toggling, missing-resource refusal and cleanup.
+
 ### Selected-resource gradients (2026-11-08)
 
 Engine and session slices of the resource gradient backend on
