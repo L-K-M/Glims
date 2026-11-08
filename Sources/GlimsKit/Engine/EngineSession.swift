@@ -2751,7 +2751,102 @@ final class EngineSession: @unchecked Sendable {
         try check(api.image_set_grid(engine, image, &request, &error), error)
     }
 
+    // MARK: Image metadata
+
+    /// An image-metadata domain (GlimsMetadataDomain). Facade-owned
+    /// values; the native domain prefixes never cross the boundary.
+    enum MetadataDomain: UInt32, CaseIterable {
+        case exif = 1, iptc, xmp
+    }
+
+    /// What `editMetadata(_:tag:values:image:)` does to one tag
+    /// (GlimsMetadataEdit): `set` replaces the tag's whole value list,
+    /// `remove` erases it.
+    enum MetadataEdit: UInt32 {
+        case set = 1, remove
+    }
+
+    /// The tag names present on the image's metadata in `domain`
+    /// (image_metadata_tags), in the engine's own order. A plain read:
+    /// allowed at any time, also while a stroke, a filter session or a
+    /// plug-in holds the image; it never creates metadata. An image with
+    /// no metadata in that domain returns an empty array — the facade's
+    /// honest empty owned vector, not nil.
+    func metadataTags(_ image: Int32, domain: MetadataDomain) throws -> [String] {
+        var result: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+        var count: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_metadata_tags(engine, image, domain.rawValue, &result, &count, &error), error)
+        defer { api.free_metadata_strings(result) }
+        return Self.stringVector(result, count: count)
+    }
+
+    /// The value list of the single `tag` (image_metadata_values), in
+    /// native order with duplicates kept — never flattened. A plain read
+    /// with the same rules as `metadataTags`. A registered tag that is
+    /// absent returns an empty array; an unregistered tag throws
+    /// NOT_FOUND. Language-alternative (Xmp LangAlt) tags report their
+    /// alternative texts without the xml:lang qualifiers.
+    func metadataValues(_ image: Int32, tag: String) throws -> [String] {
+        var result: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+        var count: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_metadata_values(engine, image, tag, &result, &count, &error), error)
+        defer { api.free_metadata_strings(result) }
+        return Self.stringVector(result, count: count)
+    }
+
+    /// Sets or removes ONE metadata `tag` (image_metadata_edit); there is
+    /// no wildcard or group form. `set` replaces the tag's whole value
+    /// list and requires at least one value — an empty array is refused,
+    /// use `.remove` to erase; `remove` takes no values (pass []).
+    /// A success is exactly one undo step; setting the values the tag
+    /// already holds, or removing an absent tag, is a no-op with no undo.
+    /// BUSY while a stroke, a filter session or a plug-in holds the
+    /// image; every refusal leaves the image, its metadata and its
+    /// history untouched. UNSUPPORTED for normalization-rewritten tags
+    /// (the engine rewrites them from the image's own state on every
+    /// metadata change), XMP language alternatives and new XMP
+    /// Bag/Seq/Alt containers.
+    func editMetadata(_ image: Int32, tag: String, _ operation: MetadataEdit, values: [String] = []) throws {
+        // The facade takes a NULL-terminated-agnostic `const char *const *`:
+        // marshal the Swift strings as C strings for the duration of the
+        // synchronous call only; nothing is retained by the engine.
+        let cValues: [UnsafePointer<CChar>?] = values.map { string in
+            UnsafePointer<CChar>?(strdup(string))
+        }
+        defer { cValues.forEach { pointer in
+            if let pointer { free(UnsafeMutablePointer(mutating: pointer)) }
+        } }
+        var error: UnsafeMutablePointer<CChar>?
+        try cValues.withUnsafeBufferPointer { buffer in
+            // An empty list passes a NULL vector, not an empty buffer:
+            // REMOVE requires NULL with count 0, SET refuses count 0.
+            let base = buffer.isEmpty ? nil : buffer.baseAddress
+            try check(api.image_metadata_edit(engine, image, tag, operation.rawValue,
+                                             base, Int32(buffer.count), &error), error)
+        }
+    }
+
     // MARK: Helpers
+
+    /// Decodes one of the facade's owned NULL-terminated string vectors
+    /// (`count` entries plus terminator) into a Swift array. The vector
+    /// stays owned by the caller and is released with
+    /// `free_metadata_strings`; nil decodes as empty.
+    static func stringVector(_ vector: UnsafePointer<UnsafeMutablePointer<CChar>?>?,
+                             count: Int32) -> [String] {
+        guard let vector, count > 0 else { return [] }
+        var strings: [String] = []
+        strings.reserveCapacity(Int(count))
+        var entry = vector
+        for _ in 0..<count {
+            guard let cString = entry.pointee else { break }
+            strings.append(String(cString: cString))
+            entry += 1
+        }
+        return strings
+    }
 
     private func check(_ status: GlimsStatus, _ error: UnsafeMutablePointer<CChar>?) throws {
         let message = Self.takeString(error, api: api)

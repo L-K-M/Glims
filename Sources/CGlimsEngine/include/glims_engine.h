@@ -1057,6 +1057,21 @@ typedef enum GlimsFloatMode {
   GLIMS_FLOAT_COPY = 2
 } GlimsFloatMode;
 
+/* An image-metadata domain (EXIF, IPTC or XMP), as image_metadata_tags
+ * takes it. Facade-owned values; the native domain prefixes never cross
+ * this boundary. */
+typedef enum GlimsMetadataDomain {
+  GLIMS_METADATA_EXIF = 1,  /* tags named "Exif.…" */
+  GLIMS_METADATA_IPTC = 2,  /* tags named "Iptc.…" */
+  GLIMS_METADATA_XMP  = 3   /* tags named "Xmp.…" */
+} GlimsMetadataDomain;
+
+/* What image_metadata_edit does to one tag. Facade-owned values. */
+typedef enum GlimsMetadataEdit {
+  GLIMS_METADATA_SET    = 1,  /* replace the tag's whole value list */
+  GLIMS_METADATA_REMOVE = 2   /* erase the tag */
+} GlimsMetadataEdit;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -2195,6 +2210,90 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*image_selected_layers)(GlimsEngine *engine, GlimsImageID image,
                                         GlimsItemID *ids, int32_t capacity,
                                         int32_t *count);
+
+  /* Image metadata (EXIF/IPTC/XMP), slots 124-127. All tags are named by
+   * their native dotted string ("Exif.Photo.DateTimeOriginal",
+   * "Iptc.Application2.Keywords", "Xmp.xmp.CreatorTool", …); only
+   * Glims-owned enums and UTF-8 strings cross this boundary, never the
+   * engine's enums, structs or XML.
+   *
+   * The three reads are plain reads of the borrowed image metadata:
+   * allowed at any time, also while a stroke, a filter session or a
+   * plug-in holds the image, and they never create metadata or mutate
+   * the image or its history. The two string-vector results are OWNED by
+   * the caller: a NULL-terminated array of `count` NUL-terminated UTF-8
+   * strings (never truncated), released with free_metadata_strings.
+   * An image with no metadata, or no tag of the asked domain, yields an
+   * honest EMPTY owned vector: a valid array whose first entry is NULL
+   * with `count` 0 — never a NULL `result` on success. On every failure
+   * `result` is set to NULL and `count` to 0.
+   *
+   * INVALID_ARGUMENT for a missing `result`/`count`, an unknown `domain`,
+   * or a `tag` that is NULL, empty, not valid UTF-8 or carries no
+   * "Exif."/"Iptc."/"Xmp." prefix; NOT_FOUND for an unknown image, and for
+   * a well-formed but unregistered `tag` (the native registry decides);
+   * FAILED with the native message when the native read itself fails. */
+  /* The tag names present on the image's metadata in `domain` (a
+   * GlimsMetadataDomain), in the engine's own order (slot 124). */
+  GlimsStatus  (*image_metadata_tags)   (GlimsEngine *engine, GlimsImageID image,
+                                          uint32_t domain, char ***result,
+                                          int32_t *count, char **error);
+  /* The value list of the single `tag` (slot 125): `count` strings, in
+   * the native order, duplicates included — the vector is never
+   * flattened or deduplicated. A registered tag that is absent yields
+   * the empty owned vector. Language-alternative (Xmp LangAlt) tags
+   * report their alternative texts; the xml:lang qualifiers are not
+   * part of the returned strings. */
+  GlimsStatus  (*image_metadata_values) (GlimsEngine *engine, GlimsImageID image,
+                                          const char *tag, char ***result,
+                                          int32_t *count, char **error);
+  /* Sets or removes ONE `tag` (slot 126); there is no wildcard or group
+   * form, so no accidental bulk edit. `operation` is a GlimsMetadataEdit.
+   *
+   * Mutation rules: the whole request is validated and applied on a
+   * PRIVATE duplicate of the image's metadata (a new empty metadata when
+   * the image has none); the original is only replaced through the
+   * native single setter after the edit succeeded and actually changes
+   * the tag, so a success is exactly ONE native undo step and every
+   * refusal leaves the image, its metadata and its history untouched.
+   * BUSY while a stroke, a filter preview or a plug-in holds the image
+   * (checked before any mutation).
+   *
+   * SET replaces the tag's whole value list with `values` (count >= 1,
+   * each a non-NULL valid UTF-8 string; count 0 is INVALID_ARGUMENT — an
+   * empty set is not a value, use REMOVE to erase). Setting the values
+   * the tag already holds, in the same order, is a no-op that succeeds
+   * with zero undo. A tag that holds a single value natively (every
+   * Exif tag, non-repeatable Iptc, XmpText) refuses count > 1 with
+   * INVALID_ARGUMENT rather than silently keeping only the last value;
+   * multi-value tags (repeatable Iptc, Xmp Bag/Seq/Alt) keep every entry
+   * in order, duplicates included. XMP language alternatives (LangAlt)
+   * and NEW Xmp container tags (Bag/Seq/Alt absent from the image) are
+   * UNSUPPORTED: a plain string vector cannot carry xml:lang qualifiers
+   * or choose a container type faithfully. Tags the native setter
+   * rewrites from the image's own state on every metadata change
+   * (Exif.Image.ImageWidth/ImageLength, Exif.Photo.PixelXDimension/
+   * PixelYDimension, Exif.Image.BitsPerSample, Exif.Image.XResolution/
+   * YResolution/ResolutionUnit, Exif.Photo.ColorSpace, Xmp.exif.ColorSpace,
+   * Exif.Iop.InteroperabilityIndex, Exif.Nikon3.ColorSpace,
+   * Exif.Canon.ColorSpace) are UNSUPPORTED for both operations, so no
+   * requested value can be overridden by that normalization.
+   * REMOVE takes no values (`values` NULL, `count` 0, else
+   * INVALID_ARGUMENT) and erases the tag; removing a tag the image does
+   * not hold is a no-op with zero undo. Unknown tags are NOT_FOUND with
+   * the native registry's message; a native set/clear failure is FAILED
+   * with the native error, applied only to the private copy. Metadata
+   * not targeted — other tags, arrays and language alternatives — is
+   * preserved by the native duplicate, and unknown-to-us metadata stays
+   * opaque in the core object rather than being reconstructed. */
+  GlimsStatus  (*image_metadata_edit)   (GlimsEngine *engine, GlimsImageID image,
+                                          const char *tag, uint32_t operation,
+                                          const char *const *values, int32_t count,
+                                          char **error);
+  /* Releases a string vector returned by image_metadata_tags or
+   * image_metadata_values (slot 127); NULL is allowed. Never use
+   * free_string on these. */
+  void         (*free_metadata_strings) (char **strings);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
