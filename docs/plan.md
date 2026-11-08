@@ -1232,3 +1232,9 @@ rendered brush. Presentation revisions now notify the palette when preview
 data changes even if the identity stays the same; that regression passes.
 Preview images retain their native aspect ratio. The focused scenario also
 drains its close work before stopping the native engine.
+
+Follow-up shutdown review found that isBusy does not cover unlabelled
+image-close work on the activity queue. The focused scenario now awaits
+closeImageWhenDrained's completion in its own cleanup and confirms the image
+is gone before engine shutdown; the completed callback regression passes.
+The thumbnail-batch fixture excludes the Default row when counting brushes.

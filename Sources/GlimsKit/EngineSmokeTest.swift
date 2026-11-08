@@ -100,9 +100,6 @@ enum EngineSmokeTest {
         do {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brush-chooser" {
                 try exerciseBrushChooserPresentation(session, documents: documents)
-                let drainDeadline = Date().addingTimeInterval(10)
-                while EngineActivity.shared.isBusy && Date() < drainDeadline { spin(0.01) }
-                check(!EngineActivity.shared.isBusy, "focused chooser cleanup drains before stopping the engine")
                 print(failures == 0 ? "PASSED (brush chooser)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
@@ -6385,7 +6382,12 @@ enum EngineSmokeTest {
             state.select(previousTool)
             defaults.removePersistentDomain(forName: suite)
             documents.items.removeAll { $0 === document }
-            document.closeImageWhenDrained()
+            var closed = false
+            document.closeImageWhenDrained { closed = true }
+            let deadline = Date().addingTimeInterval(10)
+            while !closed && Date() < deadline { spin(0.01) }
+            check(closed && (try? session.info(image)) == nil,
+                  "chooser image-close completion arrives before stopping the engine")
         }
         func views<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
             guard let root else { return [] }
@@ -6430,8 +6432,8 @@ enum EngineSmokeTest {
         BrushChooser.shared.open(document: document, tool: .paintbrush)
         panel = NSApp.windows.first { $0.title == "Brush Brush" && $0.isVisible }
         let browse = views(panel?.contentView, as: NSTableView.self).first
-        wait { (browse?.numberOfRows ?? 0) > 32 && !EngineActivity.shared.isBusy }
-        if let browse, browse.numberOfRows > 32 {
+        wait { (browse?.numberOfRows ?? 0) > BrushThumbnailQueue.batchSize + 1 && !EngineActivity.shared.isBusy }
+        if let browse, browse.numberOfRows > BrushThumbnailQueue.batchSize + 1 {
             let last = browse.numberOfRows - 1
             browse.scrollRowToVisible(last)
             panel?.displayIfNeeded()
