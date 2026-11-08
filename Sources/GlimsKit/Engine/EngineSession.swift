@@ -1137,6 +1137,82 @@ final class EngineSession: @unchecked Sendable {
                        intent: .defaultIntent)
     }
 
+    // MARK: Committed effects
+
+    struct Effect: Equatable {
+        let id: Int32
+        let name: String
+        let operation: String
+        let isEnabled: Bool
+        let opacity: Double
+    }
+
+    struct EffectChange: Equatable {
+        /// An empty name restores the operation's default title.
+        var name: String?
+        var isEnabled: Bool?
+        var opacity: Double?
+    }
+
+    enum EffectCommand: UInt32 {
+        case remove = 1, merge, raise, lower, toTop, toBottom
+    }
+
+    /// Top first, in the order displayed beneath the drawable. Live
+    /// preview sessions are separate from these committed effect ids.
+    func effects(on drawable: Int32, image: Int32) throws -> [Effect] {
+        var count: Int32 = 0
+        try check(api.drawable_effects(engine, image, drawable, nil, 0, &count), nil)
+        var rows = [GlimsEffectInfo](repeating: GlimsEffectInfo(), count: Int(count))
+        var filled: Int32 = 0
+        try rows.withUnsafeMutableBufferPointer { buffer in
+            try check(api.drawable_effects(engine, image, drawable, buffer.baseAddress, count, &filled), nil)
+        }
+        return rows.prefix(Int(min(count, filled))).map {
+            Effect(id: $0.id, name: Self.string($0.name), operation: Self.string($0.operation),
+                   isEnabled: $0.enabled, opacity: $0.opacity)
+        }
+    }
+
+    func changeEffect(_ effect: Int32, on drawable: Int32, image: Int32, _ change: EffectChange) throws {
+        var settings = GlimsEffectChange()
+        settings.struct_size = UInt32(MemoryLayout<GlimsEffectChange>.size)
+        if let name = change.name {
+            settings.properties |= GLIMS_EFFECT_NAME.rawValue
+            Self.copy(name, into: &settings.name)
+        }
+        if let enabled = change.isEnabled {
+            settings.properties |= GLIMS_EFFECT_ENABLED.rawValue
+            settings.enabled = enabled
+        }
+        if let opacity = change.opacity {
+            settings.properties |= GLIMS_EFFECT_OPACITY.rawValue
+            settings.opacity = opacity
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.effect_change(engine, image, drawable, effect, &settings, &error), error)
+    }
+
+    func effectCommand(_ command: EffectCommand, effect: Int32, on drawable: Int32, image: Int32) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.effect_command(engine, image, drawable, effect, command.rawValue, &error), error)
+    }
+
+    /// Opens a live session editing committed effect `effect` of
+    /// `drawable` (filter_edit_begin): property reads see its current
+    /// parameters, writes preview new ones through its own mask at its
+    /// stack position. `commitFilter` writes them back into the same
+    /// effect — id, order, name, enabled and opacity kept — as one undo
+    /// step; `abortFilter` restores it untouched. Returns a filter
+    /// session id, not an effect id; a stale, foreign, removed or
+    /// preview effect id is NOT_FOUND.
+    func beginEditingEffect(_ effect: Int32, on drawable: Int32, image: Int32) throws -> Int32 {
+        var filter: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.filter_edit_begin(engine, image, drawable, effect, &filter, &error), error)
+        return filter
+    }
+
     // MARK: Channels and components
 
     struct Components: OptionSet, Equatable {
