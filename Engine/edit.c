@@ -38,6 +38,7 @@
 #include "core/gimplayer-new.h"
 #include "core/gimppickable.h"
 #include "core/gimppickable-auto-shrink.h"
+#include "core/gimppattern.h"
 
 #include "config/gimpcoreconfig.h"
 
@@ -221,6 +222,114 @@ glims_fill (GlimsEngine             *engine,
   return GLIMS_STATUS_OK;
 }
 
+/* Filling with a pattern: the same two native calls as glims_fill, with
+ * the fill options set to the pattern type and the pattern pinned on a
+ * private per-call context. */
+GlimsStatus
+glims_fill_pattern (GlimsEngine                    *engine,
+                    GlimsImageID                   id,
+                    GlimsResourceID                pattern_id,
+                    GlimsPoint                     seed,
+                    const GlimsPatternFillSettings *settings,
+                    char                         **error)
+{
+  GlimsOpenImage  *open;
+  GimpImage       *image;
+  GimpPattern     *pattern;
+  GimpDrawable    *drawable;
+  GimpContext     *context;
+  GimpFillOptions *options;
+  GlimsStatus      status;
+  GError          *gerror = NULL;
+
+  open = glims_lookup_image (engine, id);
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+  /* Refuse before anything is validated further or mutated: an active
+   * stroke, filter preview or plug-in call leaves pixels and history
+   * alone. */
+  status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  image = open->image;
+
+  if (! settings || settings->struct_size < sizeof (GlimsPatternFillSettings) ||
+      (settings->mode != GLIMS_FILL_SIMILAR_COLORS && settings->mode != GLIMS_FILL_SELECTION) ||
+      ! isfinite (seed.x) || ! isfinite (seed.y) ||
+      ! isfinite (settings->opacity) || settings->opacity < 0.0 || settings->opacity > 1.0 ||
+      ! isfinite (settings->threshold) || settings->threshold < 0.0 || settings->threshold > 1.0)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  /* The handle is re-resolved against this engine's own pattern factory
+   * on every call; the full UInt64 is range-checked inside before any
+   * native narrowing. */
+  status = glims_lookup_pattern (engine, pattern_id, &pattern);
+  if (status != GLIMS_STATUS_OK)
+    {
+      if (status == GLIMS_STATUS_INVALID_ARGUMENT && error)
+        *error = strdup ("This handle cannot name a resource.");
+      return status;
+    }
+
+  drawable = paintable_drawable (image, &status, error);
+  if (! drawable)
+    return status;
+
+  /* A private context carrying the pattern for this call only. The
+   * PATTERN property is marked defined BEFORE the pattern is set:
+   * gimp_context_set_pattern walks up to the first context that defines
+   * the property, and with the bit clear that could be the shared user
+   * context, which one fill must never change. */
+  context = gimp_context_new (engine->gimp, "Glims pattern fill", gimp_get_user_context (engine->gimp));
+  gimp_context_define_property (context, GIMP_CONTEXT_PROP_PATTERN, TRUE);
+  gimp_context_set_pattern (context, pattern);
+
+  options = gimp_fill_options_new (engine->gimp, NULL, FALSE);
+  gimp_context_set_opacity (GIMP_CONTEXT (options), settings->opacity);
+  gimp_context_set_paint_mode (GIMP_CONTEXT (options), GIMP_LAYER_MODE_NORMAL);
+  gimp_fill_options_set_antialias (options, settings->antialias);
+
+  if (! gimp_fill_options_set_by_fill_type (options, context, GIMP_FILL_PATTERN, &gerror))
+    {
+      g_object_unref (options);
+      g_object_unref (context);
+      return glims_fail (error, gerror, "The pattern fill could not be set up.");
+    }
+
+  if (settings->mode == GLIMS_FILL_SELECTION)
+    {
+      gimp_drawable_edit_fill (drawable, options, NULL);
+    }
+  else
+    {
+      gdouble x = seed.x;
+      gdouble y = seed.y;
+
+      /* The seed is in the drawable's coordinates unless the composite
+       * image is sampled, as in glims_fill and GIMP's bucket fill tool.
+       * A mask shares its layer's offset. */
+      if (! settings->sample_merged)
+        {
+          gint offset_x, offset_y;
+
+          gimp_item_get_offset (GIMP_ITEM (drawable), &offset_x, &offset_y);
+          x -= offset_x;
+          y -= offset_y;
+        }
+
+      gimp_drawable_bucket_fill (drawable, options, TRUE,
+                                 GIMP_SELECT_CRITERION_COMPOSITE,
+                                 settings->threshold,
+                                 settings->sample_merged, FALSE, x, y);
+    }
+
+  g_object_unref (options);
+  g_object_unref (context);
+  gimp_image_flush (image);
+
+  return GLIMS_STATUS_OK;
+}
+
 GlimsStatus
 glims_gradient (GlimsEngine                 *engine,
                 GlimsImageID                 id,
@@ -275,6 +384,140 @@ glims_gradient (GlimsEngine                 *engine,
 
   g_object_unref (context);
   gimp_image_flush (image);
+
+  return GLIMS_STATUS_OK;
+}
+
+/* A gradient endpoint color: every component finite and inside 0 ... 1
+ * and the alpha exactly 1 — the engine's FG/BG context is opaque, so a
+ * caller's alpha can never reach the pixels and a value below 1 is
+ * refused instead of silently ignored (transparent stop types, such as
+ * FG-to-transparent, come from the resource itself). */
+static gboolean
+gradient_color_usable (const GlimsColor *color)
+{
+  gdouble rgb[3] = { color->red, color->green, color->blue };
+  gint    i;
+
+  if (color->alpha != 1.0)
+    return FALSE;
+  for (i = 0; i < 3; i++)
+    if (! isfinite (rgb[i]) || rgb[i] < 0.0 || rgb[i] > 1.0)
+      return FALSE;
+
+  return TRUE;
+}
+
+GlimsStatus
+glims_gradient_resource (GlimsEngine                           *engine,
+                         GlimsImageID                           id,
+                         GlimsResourceID                        resource_id,
+                         GlimsPoint                             from,
+                         GlimsPoint                             to,
+                         const GlimsResourceGradientSettings   *settings,
+                         char                                 **error)
+{
+  GlimsOpenImage              *open = glims_lookup_image (engine, id);
+  GimpDrawable                *drawable;
+  GimpGradient                *gradient;
+  GimpContext                 *context;
+  GimpGradientType             shape;
+  GimpGradientBlendColorSpace  blend_space;
+  GlimsStatus                  status;
+  gint                         offset_x, offset_y;
+
+  /* Everything that can refuse runs before the mutation: argument
+   * validation, the handle's admission, the readiness gate and the
+   * paintable drawable with its locks. gimp_drawable_gradient returns
+   * void, so nothing invalid may reach it. */
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+  if (! settings || settings->struct_size < sizeof (GlimsResourceGradientSettings))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  switch (settings->shape)
+    {
+    case GLIMS_GRADIENT_LINEAR:   shape = GIMP_GRADIENT_LINEAR;   break;
+    case GLIMS_GRADIENT_BILINEAR: shape = GIMP_GRADIENT_BILINEAR; break;
+    case GLIMS_GRADIENT_RADIAL:   shape = GIMP_GRADIENT_RADIAL;   break;
+    default:                      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  switch (settings->blend_space)
+    {
+    case GLIMS_GRADIENT_BLEND_RGB_PERCEPTUAL: blend_space = GIMP_GRADIENT_BLEND_RGB_PERCEPTUAL; break;
+    case GLIMS_GRADIENT_BLEND_RGB_LINEAR:     blend_space = GIMP_GRADIENT_BLEND_RGB_LINEAR;     break;
+    case GLIMS_GRADIENT_BLEND_CIE_LAB:        blend_space = GIMP_GRADIENT_BLEND_CIE_LAB;        break;
+    default:                                  return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  if (! isfinite (from.x) || ! isfinite (from.y) ||
+      ! isfinite (to.x)   || ! isfinite (to.y)   ||
+      (from.x == to.x && from.y == to.y))
+    {
+      glims_fail (error, NULL, "A gradient needs two distinct, finite endpoints.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  if (! gradient_color_usable (&settings->foreground) ||
+      ! gradient_color_usable (&settings->background))
+    {
+      glims_fail (error, NULL, "The gradient colors need finite components inside 0...1 "
+                               "and alpha 1: the engine's gradient colors are opaque.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  if (! isfinite (settings->opacity) || settings->opacity < 0.0 || settings->opacity > 1.0)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  status = glims_lookup_gradient (engine, resource_id, &gradient);
+  if (status == GLIMS_STATUS_INVALID_ARGUMENT)
+    {
+      if (error)
+        *error = strdup ("This handle cannot name a resource.");
+      return status;
+    }
+  if (status != GLIMS_STATUS_OK)
+    return status;
+
+  status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+
+  drawable = paintable_drawable (open->image, &status, error);
+  if (! drawable)
+    return status;
+
+  /* The native gradient sampler's RGB_LINEAR case falls through and
+   * overwrites linear endpoint components with encoded sRGB in every
+   * supported engine. Its later readback also differs between tags.
+   * Refuse instead of presenting those pixels as linear-light blending. */
+  if (settings->blend_space == GLIMS_GRADIENT_BLEND_RGB_LINEAR)
+    {
+      glims_fail (error, NULL, "This engine cannot render resource gradients in linear-light RGB. "
+                               "Choose perceptual RGB or Lab blending.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+
+  /* A per-call context with the endpoint colors defined and set before
+   * the draw: FG/BG stop types in the resource read these, nothing
+   * shared (the user context) is read or changed, and the resource's
+   * own segments are never mutated. The colors are explicit sRGB. */
+  context = command_context (engine->gimp, &settings->foreground, &settings->background);
+  gimp_item_get_offset (GIMP_ITEM (drawable), &offset_x, &offset_y);
+
+  gimp_drawable_gradient (drawable, context, gradient,
+                          GEGL_DISTANCE_METRIC_EUCLIDEAN,
+                          GIMP_LAYER_MODE_NORMAL, shape,
+                          settings->opacity,
+                          0.0,                                   /* offset */
+                          GIMP_REPEAT_NONE, settings->reverse,
+                          blend_space,
+                          FALSE, 3, 0.2,                         /* supersampling off */
+                          TRUE,                                  /* dither */
+                          from.x - offset_x, from.y - offset_y,
+                          to.x - offset_x, to.y - offset_y,
+                          NULL);
+
+  g_object_unref (context);
+  gimp_image_flush (open->image);
 
   return GLIMS_STATUS_OK;
 }

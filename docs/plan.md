@@ -1258,6 +1258,42 @@ sRGB color setter. All four native runs pass: 830 checks on GIMP 3.2.8,
 undo/redo, the RGB sample and both busy refusals. Independent source
 review found no important issues.
 
+### Pattern fill backend (2026-11-08)
+
+`fill_pattern` is the facade's one additive footer API: it fills the
+selected drawable (active layer, editing mask or selected channel, the
+same target `fill` uses) with a pattern handle, through
+`gimp_drawable_edit_fill` for Selection/full drawable and
+`gimp_drawable_bucket_fill` for SimilarColors, exactly as `glims_fill`
+does for solid color. `GlimsPatternFillSettings` carries struct_size,
+mode, opacity, threshold, sample_merged and antialias — no color fields.
+The pattern handle is revalidated on every call by a narrow
+`lookup_pattern` in resource.c on top of the generic resource admission
+(full UInt64 range check before any native narrowing, kind table,
+membership in this engine's own factory container); a brush or gradient
+handle is NOT_FOUND, a malformed or high-bit one INVALID_ARGUMENT. The
+pattern lives on a private per-call context whose PATTERN property bit is
+defined before the pattern is set, so the shared user context is never
+touched; options and context are released on every path. Inputs are
+validated (finite seed, mode, opacity/threshold in 0...1 — refused, not
+clamped) and `glims_edit_ready` gates the mutation, so an active stroke,
+filter preview or plug-in refuses BUSY with no pixel or undo change. An
+alpha lock alone does not refuse, matching the painting policy; a pixel
+lock does (LOCKED). One native undo step per fill. Observed native
+behavior: opacity 0 succeeds, records the undo step and changes no
+pixels; Select None means no selection, so the whole drawable is filled, while a selection disjoint
+from the drawable succeeds as a no-op with no undo step and no pixel change. An alpha lock is not a
+refusal: the engine enforces it through the drawable's active components, so on an opaque layer the
+fill changes color but not alpha.
+Conformance compares the fill against a `resource_thumbnail` of a stock
+opaque pattern at its native size below 512, tiled across the image, and
+covers selection clipping, layer offset, SimilarColors, undo/redo,
+mask/channel routing, locks, invalid handles/settings and the three BUSY
+states. Swift adds `PatternFillSettings` and `EngineSession.fillPattern`
+plus a queued `ImageDocument.fillPattern(_:at:_:)` that resolves the
+persisted `ResourceIdentity` on the input queue; EngineSmoke exercises
+that path. No chooser UI and no gradient work yet.
+
 Final ICC/native compatibility validation: 894 conformance checks pass on
 3.2.8, 3.2.0 and master; 834 pass on 3.0.8. The added older-engine fixture
 now creates a valid path before expecting UNSUPPORTED; its earlier invented
@@ -1300,3 +1336,65 @@ fixture errors: window construction replaced the test error callback, and
 the invalid-width case had its stroke disabled. Correcting the fixture
 makes invalid input, busy-engine and removed-target checks pass. Follow-up
 independent review found no important issues.
+
+### Selected-resource gradients (2026-11-08)
+
+Engine and session slices of the resource gradient backend on
+`feat/resource-gradients`, one additive footer slot appended after
+the vector style calls: `gradient_resource(engine, image, gradient, from,
+to, settings, error)`. API version 1 and every existing layout and
+signature are unchanged; `gradient()` still draws only the built-in
+FG-to-BG RGB ramp. `GlimsResourceGradientSettings` carries
+`struct_size`, a `GlimsGradientShape`, opaque `foreground`/`background`
+`GlimsColor`s, `opacity`, `reverse` and a facade-owned
+`GlimsGradientBlendSpace` (RGB perceptual, RGB linear, CIE Lab) mapped
+to the named `GIMP_GRADIENT_BLEND_*` constants inside the adapter; no
+native enum value crosses the facade. The full `GlimsResourceID`
+passes through a typed `GlimsGradientResourceArgs` marshal, and
+`glims_lookup_gradient` in `resource.c` admits the handle through the
+existing fresh range/kind/current-engine-factory checks before the
+native id narrows — a wrong-kind handle is NOT_FOUND, never a fallback.
+
+`gimp_drawable_gradient` returns void, so the adapter validates
+everything before the mutation: the settings struct, known enums,
+finite noncoincident endpoints, finite 0 ... 1 color components with
+alpha exactly 1 (the engine's FG/BG context is opaque; transparency
+comes from the resource's own stop types), a finite 0 ... 1 opacity,
+the handle's admission, `glims_edit_ready` (stroke, filter preview and
+plug-in BUSY) and the shared paintable-drawable check with its pixel
+locks — alpha-locked layers are not blanket-rejected. The call shares
+the existing routing: the selected layer, its mask while mask editing
+is on, or a selected channel; the selection clips; endpoints are image
+coordinates shifted by the drawable's offset; one "Gradient" undo step.
+A per-call `GimpContext` pins explicit sRGB FG/BG colors before the
+draw — nothing shared is read or changed and the resource's segments
+are never mutated. Native edge cases are documented, not papered over:
+a selection disjoint from the drawable draws nothing and pushes no
+undo (`gimp_item_mask_intersect` fails and the native function returns
+early), while opacity 0 still renders and pushes an undo step.
+
+Session side: `EngineSession.GradientBlendSpace`,
+`ResourceGradientSettings` and a checked `gradient(image:resource:from:to:settings:)`
+wrapper over the slot, plus `ImageDocument.gradientResource(_:from:to:settings:)`
+which takes a persistent `ResourceIdentity`, resolves it inside the
+queued paint-target job and captures settings and endpoints by value —
+no synchronous native call on the main thread, no persisted handles.
+
+Facade-only conformance adds `test_resource_gradient`: the dynamic
+builtin resolved by its `gimp-gradient-fg-bg-rgb` internal identity,
+black-to-white endpoint/midpoint oracles derived from the native
+blending rules (perceptual ~128 and Lab ~119 at the pixel
+center t = 0.505), reverse, a second stock gradient rendering different
+stops, opacity, selection clipping, the layer-offset coordinate space,
+mask and channel routing, pixel/alpha locks, invalid/stale/high-bit/
+wrong-kind handles, every settings refusal, group targets, and BUSY
+under an open stroke and a filter preview with unchanged pixels and
+history.
+
+Linear-light resource blending is explicitly UNSUPPORTED on the supported
+engines: their gradient sampler overwrites linear endpoint components
+through switch fallthrough, and later readback differs between tags.
+A version-adjusted midpoint oracle would have accepted incorrect output;
+the regression instead requires refusal with pixels and undo unchanged.
+Perceptual RGB and Lab rendering remain available. No upstream source was
+modified.

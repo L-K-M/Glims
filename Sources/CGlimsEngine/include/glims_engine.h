@@ -263,6 +263,18 @@ typedef struct GlimsFillSettings {
   bool       antialias;
 } GlimsFillSettings;
 
+/* How fill_pattern paints: the pattern `pattern` tiled from the drawable's
+ * origin, instead of a solid color. It carries no color fields of its
+ * own. */
+typedef struct GlimsPatternFillSettings {
+  uint32_t struct_size;    /* sizeof (GlimsPatternFillSettings) */
+  uint32_t mode;           /* GlimsFillMode */
+  double   opacity;        /* 0 ... 1 */
+  double   threshold;      /* similar colors: 0 ... 1 */
+  bool     sample_merged;  /* similar colors: compare the composite image */
+  bool     antialias;
+} GlimsPatternFillSettings;
+
 typedef enum GlimsGradientShape {
   GLIMS_GRADIENT_LINEAR   = 0,
   GLIMS_GRADIENT_BILINEAR = 1,
@@ -275,6 +287,31 @@ typedef struct GlimsGradientSettings {
   GlimsColor from, to;
   double     opacity;        /* 0 ... 1 */
 } GlimsGradientSettings;
+
+/* The color space a selected-resource gradient blends its stops in.
+ * These are the facade's own values for the engine's gradient blend
+ * color spaces; the native enum never crosses this boundary. */
+typedef enum GlimsGradientBlendSpace {
+  GLIMS_GRADIENT_BLEND_RGB_PERCEPTUAL = 0,  /* sRGB-encoded components */
+  GLIMS_GRADIENT_BLEND_RGB_LINEAR     = 1,  /* reserved; currently UNSUPPORTED */
+  GLIMS_GRADIENT_BLEND_CIE_LAB        = 2   /* CIE L*a*b* */
+} GlimsGradientBlendSpace;
+
+/* A gradient drawn with a selected gradient resource: `foreground` and
+ * `background` feed the resource's foreground/background stop types,
+ * like the FG and BG wells do for the engine's own tools. Both are
+ * opaque: their alpha must be exactly 1 and is rejected otherwise, since
+ * the engine's FG/BG context is opaque and transparent stop types (such
+ * as FG-to-transparent) are the resource's own business. */
+typedef struct GlimsResourceGradientSettings {
+  uint32_t   struct_size;    /* sizeof (GlimsResourceGradientSettings) */
+  uint32_t   shape;          /* GlimsGradientShape */
+  GlimsColor foreground;     /* sRGB 0 ... 1, alpha exactly 1 */
+  GlimsColor background;     /* sRGB 0 ... 1, alpha exactly 1 */
+  double     opacity;        /* 0 ... 1, finite */
+  bool       reverse;        /* the resource's stops run end to start */
+  uint32_t   blend_space;    /* GlimsGradientBlendSpace */
+} GlimsResourceGradientSettings;
 
 typedef enum GlimsLayerCommand {
   GLIMS_LAYER_NEW        = 1,  /* transparent, image-sized, above the layer */
@@ -1555,6 +1592,71 @@ typedef struct GlimsEngineAPI {
                                                     const GlimsBrushSettings *settings,
                                                     const GlimsStrokePoint *first,
                                                     GlimsStrokeID *stroke, char **error);
+
+  /* Fills the selected drawable (the active layer, its mask while mask
+   * editing is on, or a selected channel — the same target `fill` uses)
+   * with the pattern `pattern`, tiled from the drawable's origin, as one
+   * undo step ("Fill with Pattern" / "Bucket Fill"). GLIMS_FILL_SELECTION
+   * fills the selection, or the whole drawable without one, through the
+   * engine's own edit fill; GLIMS_FILL_SIMILAR_COLORS fills the area of
+   * similar color around `seed` through its bucket fill, with the seed
+   * in image coordinates (translated internally when sampling one drawable). The fill stays inside
+   * the selection, honors the drawable's mask, active components and
+   * pixel locks (LOCKED, also when a group around it holds them; an
+   * alpha lock alone does not refuse, as with painting), and blends at
+   * `opacity` exactly as a solid fill does. The pattern is used as the
+   * engine holds it — no hidden default-pattern fallback: a handle that
+   * does not resolve to a live pattern of this engine is refused.
+   *
+   * `pattern` is revalidated on every call: 0, a value above the native
+   * id range or one with high bits set is INVALID_ARGUMENT (it can never
+   * name a resource), a well-shaped but stale or foreign handle, or one
+   * that names a brush or gradient instead of a pattern, is NOT_FOUND.
+   * INVALID_ARGUMENT for NULL or short settings, an unknown `mode`, a
+   * non-finite `seed`, or an `opacity`/`threshold` outside 0 ... 1 (they
+   * are refused, not clamped); NOT_FOUND for an unknown image; BUSY while
+   * a stroke, a filter session or a plug-in holds the image, with no
+   * pixel or undo change. With no selection the whole drawable is
+   * filled, as `fill` does; a selection that does not intersect the
+   * drawable is a no-op that succeeds without an undo step. `opacity` 0
+   * succeeds, changes no pixels and still records the undo step, as the
+   * engine's own fill does. The shared user context is never changed:
+   * the pattern lives on a private per-call context. */
+  GlimsStatus  (*fill_pattern)         (GlimsEngine *engine, GlimsImageID image,
+                                        GlimsResourceID pattern, GlimsPoint seed,
+                                        const GlimsPatternFillSettings *settings,
+                                        char **error);
+
+
+  /* Draws a gradient with the gradient resource `gradient` names, from
+   * `from` to `to` in image pixels, as one undo step, on the selected
+   * drawable (the selected layer, its mask while mask editing is on, or
+   * a selected channel), clipped by the selection. Unlike gradient(),
+   * which always paints the built-in foreground-to-background ramp, the
+   * stops come from the resource; there is no fallback when the handle
+   * does not resolve. `settings` is required and validated as a whole:
+   * struct_size, a known shape and blend space, finite endpoints that
+   * are not the same point, finite 0 ... 1 color components with alpha
+   * exactly 1, and a finite 0 ... 1 opacity. A per-call context carries
+   * the colors: no user or global context is read or changed and the
+   * resource itself is never mutated. The engine renders one "Gradient"
+   * undo step when it draws. Two native edge cases are inherited
+   * verbatim: a selection disjoint from the drawable draws nothing and
+   * pushes no undo (the engine returns early), while an opacity of 0
+   * still runs the full render and pushes an undo step with no visible
+   * change. INVALID_ARGUMENT for missing or invalid settings, endpoints
+   * or colors, or a `gradient` of 0 or outside the issued handle
+   * range; NOT_FOUND for a stale or foreign handle or one that is not a
+   * gradient; BUSY while a plug-in, stroke or filter session holds the
+   * image; LOCKED for protected pixels; UNSUPPORTED for RGB_LINEAR:
+   * supported native engines cannot blend those stops correctly in
+   * linear light (RGB_PERCEPTUAL and CIE_LAB remain available). FAILED
+   * with `error` for a drawable that cannot be painted (a group, or no selection). */
+  GlimsStatus  (*gradient_resource)     (GlimsEngine *engine, GlimsImageID image,
+                                        GlimsResourceID gradient,
+                                        GlimsPoint from, GlimsPoint to,
+                                        const GlimsResourceGradientSettings *settings,
+                                        char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
