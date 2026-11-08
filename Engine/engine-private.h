@@ -440,6 +440,16 @@ GlimsStatus glims_image_grid     (GlimsEngine *e, GlimsImageID image, GlimsGrid 
 GlimsStatus glims_image_set_grid (GlimsEngine *e, GlimsImageID image,
                                   const GlimsGrid *grid, char **error);
 
+/* metadata.c */
+GlimsStatus glims_image_metadata_tags   (GlimsEngine *e, GlimsImageID image, uint32_t domain,
+                                         char ***result, int32_t *count, char **error);
+GlimsStatus glims_image_metadata_values (GlimsEngine *e, GlimsImageID image, const char *tag,
+                                         char ***result, int32_t *count, char **error);
+GlimsStatus glims_image_metadata_edit   (GlimsEngine *e, GlimsImageID image, const char *tag,
+                                         uint32_t operation, const char *const *values,
+                                         int32_t count, char **error);
+void        glims_free_metadata_strings (char **strings);
+
 /* layer-source.c */
 GlimsStatus glims_layer_source_info (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                      GlimsLayerSourceInfo *out, char **error);
