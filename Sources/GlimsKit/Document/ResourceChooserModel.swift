@@ -2,17 +2,17 @@ import CGlimsEngine
 import CoreGraphics
 import Foundation
 
-/// One row of the Fill sheet's pattern list: the engine's display name,
+/// One row of a resource chooser's catalog list: the engine's display name,
 /// the session-local handle (in memory only, never persisted) and the
 /// persistent identity a pick commits.
-struct PatternRow: Equatable {
+struct ResourceRow: Equatable {
     let id: EngineSession.ResourceID
     let name: String
     let identity: EngineSession.ResourceIdentity
 }
 
-/// The state of the pattern list's catalog load.
-enum PatternChooserState: Equatable {
+/// The state of a resource chooser's catalog load.
+enum ResourceChooserState: Equatable {
     case loading
     /// The exclusive engine gate was held by another activity; the load
     /// has not run. The picker shows this and retries once when idle.
@@ -21,33 +21,37 @@ enum PatternChooserState: Equatable {
     case error(String)
 }
 
-/// The pure, UI-free model of the Fill sheet's embedded pattern list: the
-/// FULL loaded catalog (every pattern, never truncated), its lazily
-/// rendered thumbnails, the search filter and the pending selection.
-/// Applying commits only a persistent `ResourceIdentity`; the fill
-/// resolves it fresh on the engine worker at execution, and a removed
-/// pattern is reported, never silently substituted.
+/// The pure, UI-free model of a resource chooser (brush, pattern or
+/// gradient): the FULL loaded catalog (every resource, never truncated),
+/// its lazily rendered thumbnails, the search filter and the pending
+/// selection. Applying commits only a persistent `ResourceIdentity`; the
+/// consumer resolves it fresh on the engine worker at execution, and a
+/// removed resource is reported, never silently substituted.
 ///
-/// `generation` invalidates in-flight native results: closing the sheet
+/// `generation` invalidates in-flight native results: closing the picker
 /// (or the document going away) bumps it, and a late delivery whose
 /// generation no longer matches is dropped without touching any view.
-final class PatternChooserModel {
-    /// The identity persisted when the sheet opened (nil = none chosen yet).
+final class ResourceChooserModel {
+    /// The resource kind this chooser lists (`resources(_:)`,
+    /// `resolveResource(_:kind:)`); the load runs with exactly this kind.
+    let kind: EngineSession.ResourceKind
+    /// The identity persisted when the chooser opened (nil = none chosen
+    /// yet, or the chooser's own default).
     let currentIdentity: EngineSession.ResourceIdentity?
 
     /// The lazy thumbnail pipeline; driven by the picker with bounded
     /// native batches. Invalidated together with `generation`.
-    let thumbnailQueue = PatternThumbnailQueue()
+    let thumbnailQueue = ResourceThumbnailQueue()
 
-    private(set) var state: PatternChooserState = .loading
-    private(set) var rows: [PatternRow] = []
+    private(set) var state: ResourceChooserState = .loading
+    private(set) var rows: [ResourceRow] = []
     private(set) var thumbnails: [EngineSession.ResourceID: CGImage] = [:]
     /// The highlighted row; `none` before any pick and while the choice
     /// resolves outside the loaded rows.
     private(set) var selection: EngineSession.ResourceID?
     /// Set only when native resolution returned NOT_FOUND: shown visibly,
-    /// never silently replaced by another pattern (the fill is refused
-    /// until the user picks a live one).
+    /// never silently replaced by another resource (the consumer is
+    /// refused until the user picks a live one).
     private(set) var missingIdentity: EngineSession.ResourceIdentity?
     /// Set when resolving the current identity failed with anything other
     /// than NOT_FOUND (busy, engine error): reported distinctly, never as
@@ -59,7 +63,8 @@ final class PatternChooserModel {
     private(set) var query = ""
     private(set) var generation = 0
 
-    init(currentIdentity: EngineSession.ResourceIdentity?) {
+    init(kind: EngineSession.ResourceKind = .pattern, currentIdentity: EngineSession.ResourceIdentity?) {
+        self.kind = kind
         self.currentIdentity = currentIdentity
     }
 
@@ -70,14 +75,14 @@ final class PatternChooserModel {
         thumbnailQueue.invalidate()
     }
 
-    func setLoading(_ state: PatternChooserState) {
+    func setLoading(_ state: ResourceChooserState) {
         self.state = state
     }
 
-    /// Replaces the loaded catalog with the FULL list of engine patterns.
-    /// Returns false — changing nothing — when `generation` is stale, i.e.
-    /// the sheet closed after the load started, so late native results
-    /// are dropped.
+    /// Replaces the loaded catalog with the FULL list of engine resources of
+    /// `kind`. Returns false — changing nothing — when `generation` is
+    /// stale, i.e. the chooser closed after the load started, so late
+    /// native results are dropped.
     ///
     /// `resolvedCurrent`/`resolutionError` describe how the engine
     /// resolved the persisted identity: a non-nil `resolvedCurrent` is
@@ -86,7 +91,7 @@ final class PatternChooserModel {
     /// distinctly otherwise. A nil `resolvedCurrent` with a nil
     /// `resolutionError` is the plain NOT_FOUND form.
     @discardableResult
-    func deliver(generation: Int, rows: [PatternRow],
+    func deliver(generation: Int, rows: [ResourceRow],
                  resolvedCurrent: EngineSession.ResourceID?,
                  resolutionError: EngineSession.EngineError? = nil,
                  error: String?) -> Bool {
@@ -113,7 +118,7 @@ final class PatternChooserModel {
                 self.resolutionError = resolutionError.message
                 selection = nil
             } else {
-                // NOT_FOUND: the pattern is really gone — show it and let
+                // NOT_FOUND: the resource is really gone — show it and let
                 // the user pick another; nothing is substituted.
                 resolvedCurrentID = nil
                 missingIdentity = currentIdentity
@@ -131,7 +136,7 @@ final class PatternChooserModel {
 
     /// Merges one lazy thumbnail batch into the cache. Returns false —
     /// changing nothing — on a stale generation or when the catalog is
-    /// not ready, so results arriving after the sheet closed are dropped.
+    /// not ready, so results arriving after the chooser closed are dropped.
     @discardableResult
     func deliverThumbnails(generation: Int, rendered: [EngineSession.ResourceID: CGImage],
                            failed: [EngineSession.ResourceID: String]) -> Bool {
@@ -145,7 +150,7 @@ final class PatternChooserModel {
     /// In-memory search over the FULL loaded catalog: case-insensitive
     /// substring on the display name; an empty query returns every row.
     /// The catalog is never truncated, so every match is reported.
-    func rows(matching query: String) -> [PatternRow] {
+    func rows(matching query: String) -> [ResourceRow] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return rows }
         return rows.filter { $0.name.lowercased().contains(needle) }
@@ -159,10 +164,10 @@ final class PatternChooserModel {
         selection = id
     }
 
-    /// The identity a fill would commit right now: the selected row's
+    /// The identity a consumer would commit right now: the selected row's
     /// identity, or — with no row highlighted — the persisted identity
     /// only when it still resolves. A missing or unresolved choice
-    /// returns nil: the fill is refused, never substituted.
+    /// returns nil: the consumer is refused, never substituted.
     func pendingIdentity() -> EngineSession.ResourceIdentity? {
         if let selection, let row = rows.first(where: { $0.id == selection }) {
             return row.identity
@@ -176,14 +181,14 @@ final class PatternChooserModel {
     }
 }
 
-/// The pattern list's lazy thumbnail pipeline. Pure bookkeeping — it
+/// The resource chooser's lazy thumbnail pipeline. Pure bookkeeping — it
 /// never touches the engine or AppKit: which catalog rows still need a
 /// native render, which batch is in flight, and which attempts finished.
 /// Both succeeded and failed attempts are cached for the current
 /// generation, so a single bad thumbnail is never retried and never
 /// disturbs the rest of the catalog. The picker drives the queue with
 /// small bounded native batches through the global engine gate.
-final class PatternThumbnailQueue {
+final class ResourceThumbnailQueue {
     enum Status: Equatable {
         case pending
         case inFlight
@@ -215,7 +220,7 @@ final class PatternThumbnailQueue {
         status.removeAll()
     }
 
-    /// Closing the sheet invalidates everything; a late native batch is
+    /// Closing the chooser invalidates everything; a late native batch is
     /// dropped by the generation check in `complete`.
     func invalidate() {
         generation += 1
@@ -225,7 +230,7 @@ final class PatternThumbnailQueue {
 
     /// Enqueues ids never requested this generation; duplicates (already
     /// pending, in flight, rendered or failed) are ignored. `priority`
-    /// ids (the resolved current pattern) jump to the front of the queue.
+    /// ids (the resolved current resource) jump to the front of the queue.
     /// Returns how many ids were newly enqueued.
     @discardableResult
     func request(_ ids: [EngineSession.ResourceID], priority: Bool = false) -> Int {
@@ -261,7 +266,7 @@ final class PatternThumbnailQueue {
     }
 
     /// Records one native batch's outcome. Returns false — changing
-    /// nothing — when `generation` is stale (the sheet closed meanwhile).
+    /// nothing — when `generation` is stale (the chooser closed meanwhile).
     /// Rendered and failed ids are cached; neither is ever requested
     /// again this generation.
     @discardableResult
@@ -281,3 +286,35 @@ final class PatternThumbnailQueue {
         return false
     }
 }
+
+// MARK: Resource-kind labels
+
+extension EngineSession.ResourceKind {
+    /// Singular noun, for activity labels ("Loading patterns").
+    var singular: String {
+        switch self {
+        case .brush: return "brush"
+        case .pattern: return "pattern"
+        case .gradient: return "gradient"
+        }
+    }
+
+    /// Plural noun, for activity labels and status lines.
+    var catalogNoun: String {
+        switch self {
+        case .brush: return "brushes"
+        case .pattern: return "patterns"
+        case .gradient: return "gradients"
+        }
+    }
+}
+
+// MARK: Pattern compatibility aliases
+
+/// The Fill sheet's pattern picker used these names before the model was
+/// parameterized by resource kind; they keep that code (and its tests)
+/// compiling unchanged.
+typealias PatternRow = ResourceRow
+typealias PatternChooserState = ResourceChooserState
+typealias PatternChooserModel = ResourceChooserModel
+typealias PatternThumbnailQueue = ResourceThumbnailQueue
