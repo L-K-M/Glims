@@ -36,6 +36,7 @@
 #include "core/gimpitem.h"
 #include "core/gimplayer.h"
 #include "core/gimplayer-new.h"
+#include "core/gimppattern.h"
 
 #include "config/gimpcoreconfig.h"
 
@@ -209,6 +210,114 @@ glims_fill (GlimsEngine             *engine,
       gimp_drawable_bucket_fill (drawable, options, TRUE,
                                  GIMP_SELECT_CRITERION_COMPOSITE,
                                  CLAMP (settings->threshold, 0.0, 1.0),
+                                 settings->sample_merged, FALSE, x, y);
+    }
+
+  g_object_unref (options);
+  g_object_unref (context);
+  gimp_image_flush (image);
+
+  return GLIMS_STATUS_OK;
+}
+
+/* Filling with a pattern: the same two native calls as glims_fill, with
+ * the fill options set to the pattern type and the pattern pinned on a
+ * private per-call context. */
+GlimsStatus
+glims_fill_pattern (GlimsEngine                    *engine,
+                    GlimsImageID                   id,
+                    GlimsResourceID                pattern_id,
+                    GlimsPoint                     seed,
+                    const GlimsPatternFillSettings *settings,
+                    char                         **error)
+{
+  GlimsOpenImage  *open;
+  GimpImage       *image;
+  GimpPattern     *pattern;
+  GimpDrawable    *drawable;
+  GimpContext     *context;
+  GimpFillOptions *options;
+  GlimsStatus      status;
+  GError          *gerror = NULL;
+
+  open = glims_lookup_image (engine, id);
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+  /* Refuse before anything is validated further or mutated: an active
+   * stroke, filter preview or plug-in call leaves pixels and history
+   * alone. */
+  status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  image = open->image;
+
+  if (! settings || settings->struct_size < sizeof (GlimsPatternFillSettings) ||
+      (settings->mode != GLIMS_FILL_SIMILAR_COLORS && settings->mode != GLIMS_FILL_SELECTION) ||
+      ! isfinite (seed.x) || ! isfinite (seed.y) ||
+      ! isfinite (settings->opacity) || settings->opacity < 0.0 || settings->opacity > 1.0 ||
+      ! isfinite (settings->threshold) || settings->threshold < 0.0 || settings->threshold > 1.0)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  /* The handle is re-resolved against this engine's own pattern factory
+   * on every call; the full UInt64 is range-checked inside before any
+   * native narrowing. */
+  status = glims_lookup_pattern (engine, pattern_id, &pattern);
+  if (status != GLIMS_STATUS_OK)
+    {
+      if (status == GLIMS_STATUS_INVALID_ARGUMENT && error)
+        *error = strdup ("This handle cannot name a resource.");
+      return status;
+    }
+
+  drawable = paintable_drawable (image, &status, error);
+  if (! drawable)
+    return status;
+
+  /* A private context carrying the pattern for this call only. The
+   * PATTERN property is marked defined BEFORE the pattern is set:
+   * gimp_context_set_pattern walks up to the first context that defines
+   * the property, and with the bit clear that could be the shared user
+   * context, which one fill must never change. */
+  context = gimp_context_new (engine->gimp, "Glims pattern fill", gimp_get_user_context (engine->gimp));
+  gimp_context_define_property (context, GIMP_CONTEXT_PROP_PATTERN, TRUE);
+  gimp_context_set_pattern (context, pattern);
+
+  options = gimp_fill_options_new (engine->gimp, NULL, FALSE);
+  gimp_context_set_opacity (GIMP_CONTEXT (options), settings->opacity);
+  gimp_context_set_paint_mode (GIMP_CONTEXT (options), GIMP_LAYER_MODE_NORMAL);
+  gimp_fill_options_set_antialias (options, settings->antialias);
+
+  if (! gimp_fill_options_set_by_fill_type (options, context, GIMP_FILL_PATTERN, &gerror))
+    {
+      g_object_unref (options);
+      g_object_unref (context);
+      return glims_fail (error, gerror, "The pattern fill could not be set up.");
+    }
+
+  if (settings->mode == GLIMS_FILL_SELECTION)
+    {
+      gimp_drawable_edit_fill (drawable, options, NULL);
+    }
+  else
+    {
+      gdouble x = seed.x;
+      gdouble y = seed.y;
+
+      /* The seed is in the drawable's coordinates unless the composite
+       * image is sampled, as in glims_fill and GIMP's bucket fill tool.
+       * A mask shares its layer's offset. */
+      if (! settings->sample_merged)
+        {
+          gint offset_x, offset_y;
+
+          gimp_item_get_offset (GIMP_ITEM (drawable), &offset_x, &offset_y);
+          x -= offset_x;
+          y -= offset_y;
+        }
+
+      gimp_drawable_bucket_fill (drawable, options, TRUE,
+                                 GIMP_SELECT_CRITERION_COMPOSITE,
+                                 settings->threshold,
                                  settings->sample_merged, FALSE, x, y);
     }
 

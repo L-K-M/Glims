@@ -130,6 +130,13 @@ GlimsStatus glims_image_redo       (GlimsEngine *e, GlimsImageID id);
 GlimsStatus glims_stroke_begin     (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                     const GlimsBrushSettings *brush, const GlimsStrokePoint *first,
                                     GlimsStrokeID *out, char **error);
+/* As glims_stroke_begin, but the stroke paints with the brush the
+ * `brush` resource handle names; resolved only here, at begin. */
+GlimsStatus glims_stroke_begin_with_brush_resource (GlimsEngine *e, GlimsImageID image,
+                                                    GlimsItemID layer, GlimsResourceID brush,
+                                                    const GlimsBrushSettings *settings,
+                                                    const GlimsStrokePoint *first,
+                                                    GlimsStrokeID *out, char **error);
 GlimsStatus glims_stroke_continue  (GlimsEngine *e, GlimsStrokeID id,
                                     const GlimsStrokePoint *points, size_t count);
 GlimsStatus glims_stroke_end       (GlimsEngine *e, GlimsStrokeID id);
@@ -276,6 +283,9 @@ GlimsStatus glims_vector_layer_style_set (GlimsEngine *e, GlimsImageID image, Gl
 /* edit.c */
 GlimsStatus glims_fill             (GlimsEngine *e, GlimsImageID image, GlimsPoint point,
                                     const GlimsFillSettings *settings, char **error);
+GlimsStatus glims_fill_pattern     (GlimsEngine *e, GlimsImageID image, GlimsResourceID pattern,
+                                    GlimsPoint seed, const GlimsPatternFillSettings *settings,
+                                    char **error);
 GlimsStatus glims_gradient         (GlimsEngine *e, GlimsImageID image, GlimsPoint from, GlimsPoint to,
                                     const GlimsGradientSettings *settings, char **error);
 GlimsStatus glims_gradient_resource (GlimsEngine *e, GlimsImageID image, GlimsResourceID gradient,
@@ -367,5 +377,15 @@ GlimsStatus glims_resource_thumbnail   (GlimsEngine *e, GlimsResourceID id, int3
                                         const GlimsColor *foreground,
                                         const GlimsColor *background,
                                         GlimsPixelBuffer *out, char **error);
+/* Resolves a facade handle to a live GimpBrush of this engine's own brush
+ * factory, reusing lookup_resource()'s id validation: INVALID_ARGUMENT
+ * for 0, out-of-native-range or non-brush handles, NOT_FOUND for stale
+ * handles or brushes absent from the current factory. */
+GlimsStatus glims_lookup_brush         (GlimsEngine *e, GlimsResourceID id, GimpBrush **out);
+
+/* The live pattern a facade handle names, for fill_pattern: the generic
+ * resource admission plus the pattern kind. Borrowed reference; the
+ * caller never mutates or releases it. */
+GlimsStatus glims_lookup_pattern       (GlimsEngine *e, GlimsResourceID id, GimpPattern **out);
 
 #endif /* GLIMS_ENGINE_PRIVATE_H */

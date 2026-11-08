@@ -601,6 +601,20 @@ final class ImageDocument {
         }
     }
 
+    /// Fills the paint target with the pattern `identity` names, as one
+    /// undo step. The identity is resolved to a live engine handle inside
+    /// the queued work, so the resolve runs on the input queue, never the
+    /// main thread; a persisted identity that no longer resolves fails
+    /// the command like any other engine error.
+    func fillPattern(_ identity: EngineSession.ResourceIdentity, at point: CGPoint,
+                     _ settings: EngineSession.PatternFillSettings) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        runOnPaintTarget { session, image in
+            let pattern = try session.resolveResource(identity, kind: .pattern)
+            try session.fillPattern(image: image, pattern: pattern, seed: point, settings)
+        }
+    }
+
     /// Draws a gradient with the selected gradient resource `identity`
     /// names, one undo step on the paint target. The persistent identity
     /// — never a session handle — is resolved to a live resource inside

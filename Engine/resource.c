@@ -134,6 +134,58 @@ lookup_resource (GlimsEngine *engine, GlimsResourceID id, GimpData **out)
   return GLIMS_STATUS_OK;
 }
 
+/* The narrowly typed lookup the paint path needs. It reuses
+ * lookup_resource(), which already refuses 0 and out-of-native-range
+ * handles before the native id table (INVALID_ARGUMENT) and stale,
+ * foreign or out-of-factory handles (NOT_FOUND), so the id is never
+ * truncated unsafely here; a live resource of another kind is a
+ * wrong-kind argument for a brush. */
+GlimsStatus
+glims_lookup_brush (GlimsEngine *engine, GlimsResourceID id, GimpBrush **out)
+{
+  GimpData   *data;
+  GlimsStatus status;
+
+  if (! out)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  *out = NULL;
+
+  status = lookup_resource (engine, id, &data);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+
+  if (! GIMP_IS_BRUSH (data))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  *out = GIMP_BRUSH (data);
+  return GLIMS_STATUS_OK;
+}
+
+/* The narrow pattern lookup fill_pattern uses: the generic admission
+ * above (id range before any native narrowing, kind table, membership in
+ * this engine's own factory container) plus the pattern kind itself, so
+ * a brush or gradient handle is NOT_FOUND here. The returned pattern is
+ * borrowed from the factory; the caller passes it to a private context
+ * and never mutates or releases it. */
+GlimsStatus
+glims_lookup_pattern (GlimsEngine *engine, GlimsResourceID id, GimpPattern **out)
+{
+  GimpData   *data;
+  GlimsStatus status;
+
+  *out = NULL;
+
+  status = lookup_resource (engine, id, &data);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+
+  if (kind_of_data (data) != GLIMS_RESOURCE_PATTERN)
+    return GLIMS_STATUS_NOT_FOUND;
+
+  *out = GIMP_PATTERN (data);
+  return GLIMS_STATUS_OK;
+}
+
 /* The gradient a facade handle names, admitted through the same
  * range/kind/current-engine-factory checks as lookup_resource() and
  * then required to be a gradient: a validly shaped brush or pattern id

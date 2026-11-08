@@ -41,6 +41,20 @@ final class EngineSession: @unchecked Sendable {
         case similarColors = 1, selection
     }
 
+    /// How a pattern fill paints (GlimsPatternFillSettings): the pattern
+    /// tiled from the drawable's origin instead of a solid color. It has
+    /// no color fields of its own; the pattern comes from the resource
+    /// handle the call carries.
+    struct PatternFillSettings: Equatable {
+        var mode: FillMode = .selection
+        /// 0 ... 1; refused outside the range, not clamped.
+        var opacity: Double = 1
+        /// Similar colors: 0 ... 1; refused outside the range.
+        var threshold: Double = 15.0 / 255.0
+        var sampleMerged = false
+        var antialias = true
+    }
+
     enum GradientShape: UInt32 {
         case linear = 0, bilinear, radial
     }
@@ -269,6 +283,11 @@ final class EngineSession: @unchecked Sendable {
         var tones: Tones = .midtones
         var antiErase = false
         var source: Source?
+        /// Persist the selected brush's identity, never a session-local
+        /// handle. The stroke resolves it on the engine worker so a stale
+        /// or removed resource fails explicitly instead of painting with
+        /// a different brush after an engine restart.
+        var resource: ResourceIdentity?
     }
 
     // MARK: Selection types
@@ -621,7 +640,13 @@ final class EngineSession: @unchecked Sendable {
         var point = Self.point(first)
         var stroke: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
-        try check(api.stroke_begin(engine, image, drawable, &settings, &point, &stroke, &error), error)
+        if let identity = brush.resource {
+            let resource = try resolveResource(identity, kind: .brush)
+            try check(api.stroke_begin_with_brush_resource(engine, image, drawable, resource,
+                                                          &settings, &point, &stroke, &error), error)
+        } else {
+            try check(api.stroke_begin(engine, image, drawable, &settings, &point, &stroke, &error), error)
+        }
         return stroke
     }
 
@@ -944,6 +969,25 @@ final class EngineSession: @unchecked Sendable {
                                          threshold: threshold, sample_merged: sampleMerged, antialias: true)
         var error: UnsafeMutablePointer<CChar>?
         try check(api.fill(engine, image, GlimsPoint(x: point.x, y: point.y), &settings, &error), error)
+    }
+
+    /// Fills the selected drawable (the active layer, its mask while mask
+    /// editing is on, or a selected channel) with the pattern `pattern`,
+    /// tiled from the drawable's origin, as one undo step. `pattern` is a
+    /// live handle from `resources(_:)`/`resolveResource(_:kind:)`; a
+    /// stale, foreign or non-pattern handle throws NOT_FOUND, and a
+    /// malformed one (0, high bits, above the native id range)
+    /// INVALID_ARGUMENT. `seed` is in image pixels and only matters for
+    /// `.similarColors`. Runs synchronously on the engine thread, so call
+    /// it off the main thread like the other edits.
+    func fillPattern(image: Int32, pattern: ResourceID, seed: CGPoint,
+                     _ settings: PatternFillSettings) throws {
+        var native = GlimsPatternFillSettings(struct_size: UInt32(MemoryLayout<GlimsPatternFillSettings>.size),
+                                             mode: settings.mode.rawValue, opacity: settings.opacity,
+                                             threshold: settings.threshold, sample_merged: settings.sampleMerged,
+                                             antialias: settings.antialias)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.fill_pattern(engine, image, pattern, GlimsPoint(x: seed.x, y: seed.y), &native, &error), error)
     }
 
     func gradient(image: Int32, from: CGPoint, to: CGPoint, shape: GradientShape,

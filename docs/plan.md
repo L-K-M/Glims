@@ -856,6 +856,73 @@ pixels and every catalog unchanged after the calls. Verified here with
 warnings); the root owns the engine lock and the desktop, so the
 smoke-test scenario's runtime execution is pending root validation,
 after the root's ICC integration to keep the append-only ABI order.
+### Stroke with a selected brush resource (2026-11-08)
+
+Engine side only, on `feat/brush-resource-strokes`: one additive facade
+slot appended after the table's end, `stroke_begin_with_brush_resource`,
+API version 1 unchanged, no existing struct layout or signature touched
+(no padding repurposed). It takes the opaque `GlimsResourceID` brush plus
+the existing `GlimsBrushSettings` and `GlimsStrokePoint`, and the stroke
+runs through the same `stroke_continue`/`stroke_end`. `stroke_begin` is
+unchanged in behavior, including the inherited default brush resource.
+
+Implementation, all native C:
+
+- `Engine/resource.c` keeps its id validation private but now exposes one
+  narrowly typed internal helper, `glims_lookup_brush()`
+  (`Engine/engine-private.h`), which reuses `lookup_resource()` — so a
+  zero handle or one outside the native gint id range is still refused
+  with INVALID_ARGUMENT before the native id table, and a stale handle or
+  a brush absent from the current engine's own brush factory still
+  reports NOT_FOUND — and then requires `GIMP_IS_BRUSH`, so a live handle
+  of another resource kind is INVALID_ARGUMENT. No duplicated
+  ID-truncation validation anywhere.
+- `Engine/paint.c` splits the old `glims_stroke_begin` body into a static
+  `stroke_begin_common()` taking an optional `GimpBrush *`; all existing
+  guards (image/drawable lookup, settings validation, busy, group
+  refusal, lock checks, clone/heal source, paint-info lookup, undo
+  grouping, start/paint/flush sequence) are untouched, and every refused
+  call now also sets `*out = 0` and mutates no image or history.
+  `make_options()` gained the optional brush: when given, it defines
+  `GIMP_CONTEXT_PROP_BRUSH` locally on the stroke's own paint-options
+  context BEFORE `gimp_context_set_brush()` — an undefined property would
+  make the setter walk up to the parent, which is the shared user context
+  and must never be mutated — so the local definition both pins the brush
+  and shields the stroke from later parent/caller changes; the context
+  then holds the brush strongly (`g_set_object`) for the whole stroke.
+  The shared user context and factory resources are never written, and
+  painting stays GIMP's own paint core (`gimp_brush_core_start` reads the
+  brush from the options' context), so native colored-brush semantics are
+  preserved with no bitmap reimplementation.
+- The brush is resolved exactly once, at begin, on the engine thread.
+- `Engine/engine.c` marshals the entry with a dedicated
+  `GlimsStrokeResourceArgs` whose `brush` field is a typed
+  `GlimsResourceID` (`uint64_t`); the id never travels in an int32-width
+  field of `GlimsArgs`.
+- `Engine/tests/engine-tests.c` gains `test_stroke_brush_resource()`:
+  stock file-backed parametric brushes "Hardness 025" and "Block 01"
+  (not pipes or the clipboard brush) with `pressure_size=false`; the
+  selected brush paints its band and undo restores the exact pixels as
+  one undo step; the two distinct brushes paint differently at the same
+  place; an open resource stroke keeps its brush across an interleaved
+  legacy stroke on another image, and legacy default strokes before and
+  after all resource strokes paint identically (the inherited brush
+  context is unchanged); refusals cover zero, high-bit
+  (`1<<40`, all-ones, `0x80000000`, `(1<<32)|id`), wrong-kind (a pattern
+  handle), stale/unissued `0x7FFFFFFF`, unknown image, missing
+  point/settings/output, non-positive size, pixel LOCKED and plug-in
+  BUSY, each resetting the out stroke to 0 with no undo or pixel change;
+  the brushes' persistent identities are unchanged and still resolve to
+  the same handles.
+
+Compile status (private root, `GLIMS_ADAPTER_ROOT=$PWD/.build/engine-adapters`,
+no `--check`/`--test`, shared `_engine/.lock` was free each time):
+`scripts/build-adapter.sh GIMP_3_2_8`, `GIMP_3_2_0`, `GIMP_3_0_8` and
+`master` all compiled and linked `libglimsengine.dylib` (exports only
+`glims_engine_get_api`) plus the `glims-engine-tests` runner; the only
+warning is the pre-existing `clipboard.c` declaration-after-statement.
+Runtime conformance (`--test`), engine startup, Swift builds and app
+smoke tests were NOT run here: root runtime validation is pending.
 
 ## Later, before any public release
 
@@ -1165,6 +1232,42 @@ sRGB color setter. All four native runs pass: 830 checks on GIMP 3.2.8,
 3.2.0 and master, and 797 on 3.0.8, including selection clipping,
 undo/redo, the RGB sample and both busy refusals. Independent source
 review found no important issues.
+
+### Pattern fill backend (2026-11-08)
+
+`fill_pattern` is the facade's one additive footer API: it fills the
+selected drawable (active layer, editing mask or selected channel, the
+same target `fill` uses) with a pattern handle, through
+`gimp_drawable_edit_fill` for Selection/full drawable and
+`gimp_drawable_bucket_fill` for SimilarColors, exactly as `glims_fill`
+does for solid color. `GlimsPatternFillSettings` carries struct_size,
+mode, opacity, threshold, sample_merged and antialias — no color fields.
+The pattern handle is revalidated on every call by a narrow
+`lookup_pattern` in resource.c on top of the generic resource admission
+(full UInt64 range check before any native narrowing, kind table,
+membership in this engine's own factory container); a brush or gradient
+handle is NOT_FOUND, a malformed or high-bit one INVALID_ARGUMENT. The
+pattern lives on a private per-call context whose PATTERN property bit is
+defined before the pattern is set, so the shared user context is never
+touched; options and context are released on every path. Inputs are
+validated (finite seed, mode, opacity/threshold in 0...1 — refused, not
+clamped) and `glims_edit_ready` gates the mutation, so an active stroke,
+filter preview or plug-in refuses BUSY with no pixel or undo change. An
+alpha lock alone does not refuse, matching the painting policy; a pixel
+lock does (LOCKED). One native undo step per fill. Observed native
+behavior: opacity 0 succeeds, records the undo step and changes no
+pixels; Select None means no selection, so the whole drawable is filled, while a selection disjoint
+from the drawable succeeds as a no-op with no undo step and no pixel change. An alpha lock is not a
+refusal: the engine enforces it through the drawable's active components, so on an opaque layer the
+fill changes color but not alpha.
+Conformance compares the fill against a `resource_thumbnail` of a stock
+opaque pattern at its native size below 512, tiled across the image, and
+covers selection clipping, layer offset, SimilarColors, undo/redo,
+mask/channel routing, locks, invalid handles/settings and the three BUSY
+states. Swift adds `PatternFillSettings` and `EngineSession.fillPattern`
+plus a queued `ImageDocument.fillPattern(_:at:_:)` that resolves the
+persisted `ResourceIdentity` on the input queue; EngineSmoke exercises
+that path. No chooser UI and no gradient work yet.
 
 Final ICC/native compatibility validation: 894 conformance checks pass on
 3.2.8, 3.2.0 and master; 834 pass on 3.0.8. The added older-engine fixture

@@ -263,6 +263,18 @@ typedef struct GlimsFillSettings {
   bool       antialias;
 } GlimsFillSettings;
 
+/* How fill_pattern paints: the pattern `pattern` tiled from the drawable's
+ * origin, instead of a solid color. It carries no color fields of its
+ * own. */
+typedef struct GlimsPatternFillSettings {
+  uint32_t struct_size;    /* sizeof (GlimsPatternFillSettings) */
+  uint32_t mode;           /* GlimsFillMode */
+  double   opacity;        /* 0 ... 1 */
+  double   threshold;      /* similar colors: 0 ... 1 */
+  bool     sample_merged;  /* similar colors: compare the composite image */
+  bool     antialias;
+} GlimsPatternFillSettings;
+
 typedef enum GlimsGradientShape {
   GLIMS_GRADIENT_LINEAR   = 0,
   GLIMS_GRADIENT_BILINEAR = 1,
@@ -1552,6 +1564,61 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*vector_layer_style_set)  (GlimsEngine *engine, GlimsImageID image,
                                            GlimsItemID layer, const GlimsVectorStyleChange *change,
                                            char **error);
+
+  /* A paint stroke that paints with one specific brush: the resource
+   * `brush` names, a handle from resources() of GLIMS_RESOURCE_BRUSH.
+   * Otherwise exactly stroke_begin(): the same stroke_continue and
+   * stroke_end drive it, one undo step per stroke, the same readiness,
+   * lock and busy rules, and a refused call sets `stroke` to 0 and
+   * changes no image or history. The brush is resolved only here, at
+   * begin: INVALID_ARGUMENT for a zero handle, one outside the native
+   * id range or one that names another resource kind, NOT_FOUND for a
+   * stale handle or a brush this engine's brush factory no longer
+   * holds. The stroke's own paint options define the brush property
+   * locally and hold the selected brush for the whole stroke, so later
+   * changes to the caller's settings or to the shared user context
+   * never retarget it, and neither the user context nor any factory
+   * resource is mutated. Painting stays the engine's own paint core,
+   * so colored brushes keep their native semantics. */
+  GlimsStatus  (*stroke_begin_with_brush_resource) (GlimsEngine *engine, GlimsImageID image,
+                                                    GlimsItemID layer, GlimsResourceID brush,
+                                                    const GlimsBrushSettings *settings,
+                                                    const GlimsStrokePoint *first,
+                                                    GlimsStrokeID *stroke, char **error);
+
+  /* Fills the selected drawable (the active layer, its mask while mask
+   * editing is on, or a selected channel — the same target `fill` uses)
+   * with the pattern `pattern`, tiled from the drawable's origin, as one
+   * undo step ("Fill with Pattern" / "Bucket Fill"). GLIMS_FILL_SELECTION
+   * fills the selection, or the whole drawable without one, through the
+   * engine's own edit fill; GLIMS_FILL_SIMILAR_COLORS fills the area of
+   * similar color around `seed` through its bucket fill, with the seed
+   * in image coordinates (translated internally when sampling one drawable). The fill stays inside
+   * the selection, honors the drawable's mask, active components and
+   * pixel locks (LOCKED, also when a group around it holds them; an
+   * alpha lock alone does not refuse, as with painting), and blends at
+   * `opacity` exactly as a solid fill does. The pattern is used as the
+   * engine holds it — no hidden default-pattern fallback: a handle that
+   * does not resolve to a live pattern of this engine is refused.
+   *
+   * `pattern` is revalidated on every call: 0, a value above the native
+   * id range or one with high bits set is INVALID_ARGUMENT (it can never
+   * name a resource), a well-shaped but stale or foreign handle, or one
+   * that names a brush or gradient instead of a pattern, is NOT_FOUND.
+   * INVALID_ARGUMENT for NULL or short settings, an unknown `mode`, a
+   * non-finite `seed`, or an `opacity`/`threshold` outside 0 ... 1 (they
+   * are refused, not clamped); NOT_FOUND for an unknown image; BUSY while
+   * a stroke, a filter session or a plug-in holds the image, with no
+   * pixel or undo change. With no selection the whole drawable is
+   * filled, as `fill` does; a selection that does not intersect the
+   * drawable is a no-op that succeeds without an undo step. `opacity` 0
+   * succeeds, changes no pixels and still records the undo step, as the
+   * engine's own fill does. The shared user context is never changed:
+   * the pattern lives on a private per-call context. */
+  GlimsStatus  (*fill_pattern)         (GlimsEngine *engine, GlimsImageID image,
+                                        GlimsResourceID pattern, GlimsPoint seed,
+                                        const GlimsPatternFillSettings *settings,
+                                        char **error);
 
 
   /* Draws a gradient with the gradient resource `gradient` names, from

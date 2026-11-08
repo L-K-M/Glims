@@ -954,6 +954,7 @@ typedef struct
   void             *in_out;
   double            number2;
   uint64_t          revision;
+  GlimsResourceID   resource;   /* full 64-bit handle; never narrowed */
   size_t            n;
   char            **error;
 } GlimsArgs;
@@ -997,6 +998,9 @@ MARSHAL (selection_outline, return glims_selection_outline (e, a->image, a->out,
 MARSHAL (fill, {
   const GlimsPoint *point = a->in;
   return glims_fill (e, a->image, *point, a->in2, a->error); })
+MARSHAL (fill_pattern, {
+  const GlimsPoint *seed = a->in;
+  return glims_fill_pattern (e, a->image, a->resource, *seed, a->in2, a->error); })
 MARSHAL (gradient, {
   const GlimsPoint *points = a->in;
   return glims_gradient (e, a->image, points[0], points[1], a->in2, a->error); })
@@ -1180,6 +1184,29 @@ resource_resolve_on_engine (GlimsEngine *e, gpointer data)
                                  a->out_id, a->error);
 }
 
+/* stroke_begin_with_brush_resource carries a full 64-bit resource handle,
+ * so it gets its own args struct with a typed uint64_t field; the id never
+ * travels in one of GlimsArgs' 32-bit fields. */
+typedef struct
+{
+  GlimsImageID              image;
+  GlimsItemID               item;
+  GlimsResourceID           brush;
+  const GlimsBrushSettings *brush_settings;
+  const GlimsStrokePoint   *first;
+  GlimsStrokeID            *out;
+  char                    **error;
+} GlimsStrokeResourceArgs;
+
+static GlimsStatus
+stroke_begin_with_brush_resource_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsStrokeResourceArgs *a = data;
+
+  return glims_stroke_begin_with_brush_resource (e, a->image, a->item, a->brush,
+                                                 a->brush_settings, a->first, a->out, a->error);
+}
+
 static GlimsStatus
 resource_thumbnail_on_engine (GlimsEngine *e, gpointer data)
 {
@@ -1326,6 +1353,18 @@ api_stroke_end (GlimsEngine *e, GlimsStrokeID stroke)
 }
 
 static GlimsStatus
+api_stroke_begin_with_brush_resource (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                      GlimsResourceID brush, const GlimsBrushSettings *settings,
+                                      const GlimsStrokePoint *first, GlimsStrokeID *stroke,
+                                      char **error)
+{
+  GlimsStrokeResourceArgs a = { .image = image, .item = layer, .brush = brush,
+                                .brush_settings = settings, .first = first,
+                                .out = stroke, .error = error };
+  return glims_engine_call (e, stroke_begin_with_brush_resource_on_engine, &a);
+}
+
+static GlimsStatus
 api_filter_begin (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
                   const char *operation, GlimsFilterID *filter, char **error)
 {
@@ -1420,6 +1459,14 @@ api_fill (GlimsEngine *e, GlimsImageID image, GlimsPoint point, const GlimsFillS
 {
   GlimsArgs a = { .image = image, .in = &point, .in2 = settings, .error = error };
   return glims_engine_call (e, fill_on_engine, &a);
+}
+
+static GlimsStatus
+api_fill_pattern (GlimsEngine *e, GlimsImageID image, GlimsResourceID pattern, GlimsPoint seed,
+                  const GlimsPatternFillSettings *settings, char **error)
+{
+  GlimsArgs a = { .image = image, .resource = pattern, .in = &seed, .in2 = settings, .error = error };
+  return glims_engine_call (e, fill_pattern_on_engine, &a);
 }
 
 static GlimsStatus
@@ -2144,6 +2191,10 @@ static const GlimsEngineAPI api_v1 = {
   .resource_thumbnail = api_resource_thumbnail,
   .vector_layer_style_get = api_vector_layer_style_get,
   .vector_layer_style_set = api_vector_layer_style_set,
+  .stroke_begin_with_brush_resource = api_stroke_begin_with_brush_resource,
+
+  .fill_pattern = api_fill_pattern,
+
 
   .gradient_resource = api_gradient_resource,
 };
