@@ -79,6 +79,14 @@ final class EngineCanvasView: NSView {
     var showsLayerBoundary = false {
         didSet { needsDisplay = true }
     }
+    /// View ▸ Snap To's cached per-window state, every entry OFF by
+    /// default. Pure view state: flipping an entry changes only what the
+    /// Move tool snaps to and what the canvas draws during a move — never
+    /// image pixels, the dirty flag, history, selection, export or print —
+    /// and just redraws.
+    var snapTo = SnapToViewState() {
+        didSet { needsDisplay = true }
+    }
     var showsSelectionEdges = true {
         didSet {
             needsDisplay = true
