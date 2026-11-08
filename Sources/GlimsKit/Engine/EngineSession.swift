@@ -49,7 +49,10 @@ final class EngineSession: @unchecked Sendable {
     /// (GlimsGradientBlendSpace). Facade-owned values; the engine's enum
     /// never crosses the boundary.
     enum GradientBlendSpace: UInt32 {
-        case rgbPerceptual = 0, rgbLinear, cieLab
+        case rgbPerceptual = 0
+        /// Reserved: native engines currently report UNSUPPORTED.
+        case rgbLinear
+        case cieLab
     }
 
     /// A gradient drawn with a selected gradient resource: the stops

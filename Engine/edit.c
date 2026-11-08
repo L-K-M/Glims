@@ -374,6 +374,17 @@ glims_gradient_resource (GlimsEngine                           *engine,
   if (! drawable)
     return status;
 
+  /* The native gradient sampler's RGB_LINEAR case falls through and
+   * overwrites linear endpoint components with encoded sRGB in every
+   * supported engine. Its later readback also differs between tags.
+   * Refuse instead of presenting those pixels as linear-light blending. */
+  if (settings->blend_space == GLIMS_GRADIENT_BLEND_RGB_LINEAR)
+    {
+      glims_fail (error, NULL, "This engine cannot render resource gradients in linear-light RGB. "
+                               "Choose perceptual RGB or Lab blending.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+
   /* A per-call context with the endpoint colors defined and set before
    * the draw: FG/BG stop types in the resource read these, nothing
    * shared (the user context) is read or changed, and the resource's

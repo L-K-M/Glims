@@ -281,7 +281,7 @@ typedef struct GlimsGradientSettings {
  * color spaces; the native enum never crosses this boundary. */
 typedef enum GlimsGradientBlendSpace {
   GLIMS_GRADIENT_BLEND_RGB_PERCEPTUAL = 0,  /* sRGB-encoded components */
-  GLIMS_GRADIENT_BLEND_RGB_LINEAR     = 1,  /* linear-light RGB */
+  GLIMS_GRADIENT_BLEND_RGB_LINEAR     = 1,  /* reserved; currently UNSUPPORTED */
   GLIMS_GRADIENT_BLEND_CIE_LAB        = 2   /* CIE L*a*b* */
 } GlimsGradientBlendSpace;
 
@@ -1475,8 +1475,10 @@ typedef struct GlimsEngineAPI {
    * or colors, or a `gradient` of 0 or outside the issued handle
    * range; NOT_FOUND for a stale or foreign handle or one that is not a
    * gradient; BUSY while a plug-in, stroke or filter session holds the
-   * image; LOCKED for protected pixels; FAILED with `error` for a
-   * drawable that cannot be painted (a group, or no selection). */
+   * image; LOCKED for protected pixels; UNSUPPORTED for RGB_LINEAR:
+   * supported native engines cannot blend those stops correctly in
+   * linear light (RGB_PERCEPTUAL and CIE_LAB remain available). FAILED
+   * with `error` for a drawable that cannot be painted (a group, or no selection). */
   GlimsStatus  (*gradient_resource)     (GlimsEngine *engine, GlimsImageID image,
                                         GlimsResourceID gradient,
                                         GlimsPoint from, GlimsPoint to,

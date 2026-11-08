@@ -1151,10 +1151,18 @@ no synchronous native call on the main thread, no persisted handles.
 Facade-only conformance adds `test_resource_gradient`: the dynamic
 builtin resolved by its `gimp-gradient-fg-bg-rgb` internal identity,
 black-to-white endpoint/midpoint oracles derived from the native
-blending rules (perceptual ~128, linear ~188, Lab ~119 at the pixel
+blending rules (perceptual ~128 and Lab ~119 at the pixel
 center t = 0.505), reverse, a second stock gradient rendering different
 stops, opacity, selection clipping, the layer-offset coordinate space,
 mask and channel routing, pixel/alpha locks, invalid/stale/high-bit/
 wrong-kind handles, every settings refusal, group targets, and BUSY
 under an open stroke and a filter preview with unchanged pixels and
 history.
+
+Linear-light resource blending is explicitly UNSUPPORTED on the supported
+engines: their gradient sampler overwrites linear endpoint components
+through switch fallthrough, and later readback differs between tags.
+A version-adjusted midpoint oracle would have accepted incorrect output;
+the regression instead requires refusal with pixels and undo unchanged.
+Perceptual RGB and Lab rendering remain available. No upstream source was
+modified.

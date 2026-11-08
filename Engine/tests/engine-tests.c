@@ -6087,35 +6087,18 @@ test_resource_gradient (void)
          "undo and redo restore and redraw the resource gradient");
   api->image_undo (engine, image);
 
-  /* The same resource in the linear blend space, with a version-true
-   * oracle. gimpgradient.c's LINEAR read case falls through into the
-   * PERCEPTUAL one in all four trees, so the endpoints interpolate in
-   * the encoded components. What differs is the operation's readback
-   * (gimpoperationgradient.c): 3.0.8 and 3.2.0 always read the blended
-   * color as R'G'B'A, so the 0.5 stored as linear comes out near sRGB
-   * 188, while 3.2.8 and master read RGBA for the linear space and the
-   * two conversions cancel, landing at the perceptual ~128. */
+  /* A known native fallthrough prevents correct linear-light blending.
+   * Refuse the advertised mode without touching pixels or undo. */
   g.blend_space = GLIMS_GRADIENT_BLEND_RGB_LINEAR;
-  {
-    int major = 0, minor = 0, patch = 0, lo, hi;
-
-    sscanf (api->engine_version (engine), "%d.%d.%d", &major, &minor, &patch);
-    if (major > 3 || (major == 3 && (minor > 2 || (minor == 2 && patch >= 8))))
-      {
-        lo = 115; hi = 142; /* linear readback cancels to perceptual */
-      }
-    else
-      {
-        lo = 170; hi = 205; /* 0.5 linear read as R'G'B' ~ sRGB 188 */
-      }
-    CHECK (api->gradient_resource (engine, image, fg_bg,
-                                   (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
-                                   &g, NULL) == GLIMS_STATUS_OK &&
-           (render_pixel (image, 50, 40, px), px[0] >= lo && px[0] <= hi),
-           "the linear midpoint follows the engine's own readback (%d, %d...%d)",
-           px[0], lo, hi);
-  }
-  api->image_undo (engine, image);
+  before = undo_depth (image);
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, &error) == GLIMS_STATUS_UNSUPPORTED && error != NULL &&
+         undo_depth (image) == before &&
+         (render_pixel (image, 50, 40, px), px[0] == 255 && px[1] == 255 && px[2] == 255),
+         "unsupported linear-light blending leaves pixels and undo untouched");
+  api->free_string (error);
+  error = NULL;
 
   /* CIE Lab: L* 50 lands around sRGB 119, darker than perceptual 128
    * and far below the linear midpoint. */
