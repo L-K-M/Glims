@@ -1023,7 +1023,7 @@ test_layer_restore_source (const char *work)
   GlimsItemID          layer = 0, other_layer = 0, group = 0, text = 0;
   GlimsItemID          path = 0, vector = 0, link = 0, painted = 0, reloaded = 0, gone = 0, foreign = 0;
   GlimsLayerInfo       row = { 0 };
-  GlimsLayerSourceInfo info;
+  GlimsLayerSourceInfo info = { .struct_size = sizeof info };
   GlimsTextSettings    settings = { .struct_size = sizeof settings, .size = 24,
                                      .color = { 0, 0, 0, 1 }, .justify = GLIMS_JUSTIFY_LEFT,
                                      .antialias = true };

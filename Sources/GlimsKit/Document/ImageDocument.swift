@@ -716,10 +716,9 @@ final class ImageDocument {
             guard !isChannelTargetActive else { return refuseChannelTransform() }
             run { session, image in _ = try session.layerCommand(command, image: image) }
         case .restoreSource:
-            // The root owns the global confirmed-restore dispatch; until
-            // it exists, the ordinary command refuses instead of letting
-            // native file I/O (a link restore can reload its file) run
-            // through the input queue.
+            // Restoration can reload a linked file and must use the
+            // confirmed engine-wide exclusive route. Ordinary input
+            // dispatch refuses it rather than starting file I/O here.
             onError?("Use the confirmed restore command.")
             NSSound.beep()
         }

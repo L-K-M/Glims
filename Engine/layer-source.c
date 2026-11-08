@@ -240,7 +240,7 @@ glims_layer_rasterize (GimpImage  *image,
 /* Restores a link layer whose monitor stopped while the generic
  * rasterizable flag stayed FALSE — painted-over pixels or an indexed
  * conversion freeze the monitor (gimp_link_layer_set_buffer calls
- * gimp_link_freeze), and gimp_item_is_link_layer reports !monitored, so
+ * gimp_link_freeze), and gimp_item_is_link_layer then reports FALSE, so
  * the layer is pixel-behaving without the flag. gimp_rasterizable_restore
  * would hit its is_rasterized guard and do nothing, so the restore is
  * assembled here from public core calls, as one undo group:

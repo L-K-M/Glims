@@ -1917,3 +1917,11 @@ exact retained render, monitoring resumed, no error). The adapter and
 these tests were NOT compiled or run in this slice — only
 `swift build --build-tests` (the facade header compiles through
 CGlimsEngine). Root compiles the C matrix.
+
+Root validation: the native restore suite passes 1,314 / 1,170 / 1,314 /
+1,314 checks on GIMP 3.2.8 / 3.0.8 / 3.2.0 / master. The first run's
+retained-source assertions used an uninitialized size-versioned output
+struct. Initializing `struct_size` fixes those tests; the independent
+pixel-restoration and exact undo assertions already passed. No runtime
+restore behavior required a change. User-facing confirmed dispatch and
+its interface checks follow separately.
