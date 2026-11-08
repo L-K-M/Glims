@@ -1104,3 +1104,57 @@ Swift build, 308 unit tests, complete pinned interface smoke and older-table
 ABI refusal regression pass. Native preview and Swift ownership reviews
 found no important issues. Native context colors remain opaque; resource
 alpha is preserved in the straight-alpha output.
+
+### Selected-resource gradients (2026-11-08)
+
+Engine and session slices of the resource gradient backend on
+`feat/resource-gradients`, one additive footer slot appended after
+`resource_thumbnail`: `gradient_resource(engine, image, gradient, from,
+to, settings, error)`. API version 1 and every existing layout and
+signature are unchanged; `gradient()` still draws only the built-in
+FG-to-BG RGB ramp. `GlimsResourceGradientSettings` carries
+`struct_size`, a `GlimsGradientShape`, opaque `foreground`/`background`
+`GlimsColor`s, `opacity`, `reverse` and a facade-owned
+`GlimsGradientBlendSpace` (RGB perceptual, RGB linear, CIE Lab) mapped
+to the named `GIMP_GRADIENT_BLEND_*` constants inside the adapter; no
+native enum value crosses the facade. The full `GlimsResourceID`
+passes through a typed `GlimsGradientResourceArgs` marshal, and
+`glims_lookup_gradient` in `resource.c` admits the handle through the
+existing fresh range/kind/current-engine-factory checks before the
+native id narrows — a wrong-kind handle is NOT_FOUND, never a fallback.
+
+`gimp_drawable_gradient` returns void, so the adapter validates
+everything before the mutation: the settings struct, known enums,
+finite noncoincident endpoints, finite 0 ... 1 color components with
+alpha exactly 1 (the engine's FG/BG context is opaque; transparency
+comes from the resource's own stop types), a finite 0 ... 1 opacity,
+the handle's admission, `glims_edit_ready` (stroke, filter preview and
+plug-in BUSY) and the shared paintable-drawable check with its pixel
+locks — alpha-locked layers are not blanket-rejected. The call shares
+the existing routing: the selected layer, its mask while mask editing
+is on, or a selected channel; the selection clips; endpoints are image
+coordinates shifted by the drawable's offset; one "Gradient" undo step.
+A per-call `GimpContext` pins explicit sRGB FG/BG colors before the
+draw — nothing shared is read or changed and the resource's segments
+are never mutated. Native edge cases are documented, not papered over:
+a selection disjoint from the drawable draws nothing and pushes no
+undo (`gimp_item_mask_intersect` fails and the native function returns
+early), while opacity 0 still renders and pushes an undo step.
+
+Session side: `EngineSession.GradientBlendSpace`,
+`ResourceGradientSettings` and a checked `gradient(image:resource:from:to:settings:)`
+wrapper over the slot, plus `ImageDocument.gradientResource(_:from:to:settings:)`
+which takes a persistent `ResourceIdentity`, resolves it inside the
+queued paint-target job and captures settings and endpoints by value —
+no synchronous native call on the main thread, no persisted handles.
+
+Facade-only conformance adds `test_resource_gradient`: the dynamic
+builtin resolved by its `gimp-gradient-fg-bg-rgb` internal identity,
+black-to-white endpoint/midpoint oracles derived from the native
+blending rules (perceptual ~128, linear ~188, Lab ~119 at the pixel
+center t = 0.505), reverse, a second stock gradient rendering different
+stops, opacity, selection clipping, the layer-offset coordinate space,
+mask and channel routing, pixel/alpha locks, invalid/stale/high-bit/
+wrong-kind handles, every settings refusal, group targets, and BUSY
+under an open stroke and a filter preview with unchanged pixels and
+history.

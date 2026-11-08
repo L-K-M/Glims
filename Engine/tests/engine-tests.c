@@ -5992,6 +5992,426 @@ test_resource_thumbnails (void)
     }
 }
 
+/* Selected-resource gradients: the builtin FG to BG (RGB) resolved by
+ * its stable internal collection, drawn through every blend space, plus
+ * a second stock gradient, reverse, opacity, selection clipping, the
+ * layer-offset coordinate space, mask and channel routing, locks,
+ * handle and settings refusals, and BUSY while a stroke or a filter
+ * session is open.
+ *
+ * The midpoint oracles come from the native blending rules, not from
+ * observed output: at factor 0.5 a black-to-white ramp is sRGB 0.5
+ * (~128) blended in the encoded components (perceptual), sRGB ~188 for
+ * a linear-light blend (0.5 linear encodes near 0.735), and ~119 for a
+ * CIE Lab blend (L* 50). The factor at a pixel is taken at the pixel's
+ * center: drawing (0, y) -> (100, y) puts the pixel column 50 at t =
+ * 0.505, so tolerances stay wide and only ordering and ranges assert. */
+static void
+test_resource_gradient (void)
+{
+  GlimsImageID                     image = 0;
+  GlimsItemID                      layer, mask = 0, channel = 0, group = 0;
+  GlimsResourceID                  fg_bg = 0, stock = 0, brush_id = 0;
+  GlimsResourceInfo                rows[16];
+  GlimsSelectOptions               sel = { .struct_size = sizeof sel,
+                                           .operation = GLIMS_SELECT_REPLACE };
+  GlimsResourceGradientSettings    g = { .struct_size = sizeof g,
+                                         .shape = GLIMS_GRADIENT_LINEAR,
+                                         .foreground = { 0, 0, 0, 1 },
+                                         .background = { 1, 1, 1, 1 },
+                                         .opacity = 1,
+                                         .blend_space = GLIMS_GRADIENT_BLEND_RGB_PERCEPTUAL };
+  GlimsBrushSettings               brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+  GlimsStrokePoint                 point = { 5, 5, 1.0, 0.0, 0.0, 0 };
+  GlimsStrokeID                    stroke = 0;
+  GlimsFilterID                    filter = 0;
+  GlimsRect                        bounds;
+  GlimsStatus                      status;
+  bool                             empty_sel = true;
+  int32_t                          count = 0, before, i;
+  uint8_t                          px[4], prev[4];
+  uint8_t                         *ramp = NULL, *other = NULL;
+  int32_t                          rw = 0, rh = 0;
+  char                            *error = NULL;
+
+  /* The dynamic builtin resolves by identity; the display name is
+   * localized and never the key. A second stock gradient (not FG/BG)
+   * and one brush handle supply the wrong-kind and differing-resource
+   * checks. */
+  CHECK (api->resource_resolve (engine, GLIMS_RESOURCE_GRADIENT, "FG to BG",
+                                "gimp-gradient-fg-bg-rgb", true, &fg_bg, NULL) == GLIMS_STATUS_OK &&
+         fg_bg != 0,
+         "the FG to BG (RGB) resource resolves by its internal identity");
+  CHECK (api->resources (engine, GLIMS_RESOURCE_GRADIENT, rows,
+                         (int32_t) (sizeof rows / sizeof rows[0]), &count) == GLIMS_STATUS_OK &&
+         count > 0,
+         "stock gradients are listed for the second-resource check (%d)", count);
+  for (i = 0; i < count && i < 16; i++)
+    if (rows[i].id != fg_bg && ! stock)
+      stock = rows[i].id;
+  CHECK (stock != 0 && stock != fg_bg, "a second stock gradient is listed (%llu)",
+         (unsigned long long) stock);
+  CHECK (api->resources (engine, GLIMS_RESOURCE_BRUSH, rows,
+                         (int32_t) (sizeof rows / sizeof rows[0]), &count) == GLIMS_STATUS_OK &&
+         count > 0 && (brush_id = rows[0].id) != 0,
+         "a brush handle supplies the wrong-kind check");
+
+  api->image_new (engine, 100, 80, &image, NULL);
+  layer = first_layer (image);
+
+  /* Perceptual black -> white, left to right. Pixel centers put column
+   * 50 at t = 0.505, inside the perceptual midpoint tolerance. */
+  before = undo_depth (image);
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, &error) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "a selected-resource gradient draws as one undo step%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  render_pixel (image, 3, 40, px);
+  CHECK (px[0] < 60, "the ramp starts near black (%d)", px[0]);
+  render_pixel (image, 97, 40, px);
+  CHECK (px[0] > 200, "the ramp ends near white (%d)", px[0]);
+  render_pixel (image, 50, 40, px);
+  CHECK (px[0] >= 115 && px[0] <= 142,
+         "the perceptual midpoint is near sRGB 128 (%d)", px[0]);
+
+  ramp = render_all (image, &rw, &rh);
+
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         (render_pixel (image, 50, 40, px), px[0] == 255) &&
+         api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         (render_pixel (image, 50, 40, px), px[0] >= 115 && px[0] <= 142),
+         "undo and redo restore and redraw the resource gradient");
+  api->image_undo (engine, image);
+
+  /* The same resource in the linear blend space, with a version-true
+   * oracle. gimpgradient.c's LINEAR read case falls through into the
+   * PERCEPTUAL one in all four trees, so the endpoints interpolate in
+   * the encoded components. What differs is the operation's readback
+   * (gimpoperationgradient.c): 3.0.8 and 3.2.0 always read the blended
+   * color as R'G'B'A, so the 0.5 stored as linear comes out near sRGB
+   * 188, while 3.2.8 and master read RGBA for the linear space and the
+   * two conversions cancel, landing at the perceptual ~128. */
+  g.blend_space = GLIMS_GRADIENT_BLEND_RGB_LINEAR;
+  {
+    int major = 0, minor = 0, patch = 0, lo, hi;
+
+    sscanf (api->engine_version (engine), "%d.%d.%d", &major, &minor, &patch);
+    if (major > 3 || (major == 3 && (minor > 2 || (minor == 2 && patch >= 8))))
+      {
+        lo = 115; hi = 142; /* linear readback cancels to perceptual */
+      }
+    else
+      {
+        lo = 170; hi = 205; /* 0.5 linear read as R'G'B' ~ sRGB 188 */
+      }
+    CHECK (api->gradient_resource (engine, image, fg_bg,
+                                   (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                   &g, NULL) == GLIMS_STATUS_OK &&
+           (render_pixel (image, 50, 40, px), px[0] >= lo && px[0] <= hi),
+           "the linear midpoint follows the engine's own readback (%d, %d...%d)",
+           px[0], lo, hi);
+  }
+  api->image_undo (engine, image);
+
+  /* CIE Lab: L* 50 lands around sRGB 119, darker than perceptual 128
+   * and far below the linear midpoint. */
+  g.blend_space = GLIMS_GRADIENT_BLEND_CIE_LAB;
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_OK &&
+         (render_pixel (image, 50, 40, px), px[0] >= 105 && px[0] <= 135),
+         "the Lab midpoint is near sRGB 119 (%d)", px[0]);
+  api->image_undo (engine, image);
+  g.blend_space = GLIMS_GRADIENT_BLEND_RGB_PERCEPTUAL;
+
+  /* Reverse flips the ramp without swapping the endpoints. */
+  g.reverse = true;
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_OK &&
+         (render_pixel (image, 3, 40, px), px[0] > 200) &&
+         (render_pixel (image, 97, 40, px), px[0] < 60),
+         "reverse runs the resource's stops end to start (%d, %d)",
+         red_at (image, 3, 40), px[0]);
+  api->image_undo (engine, image);
+  g.reverse = false;
+
+  /* A second stock resource paints different stops: no fallback to
+   * FG/BG when the handle names something else. Another grayscale
+   * FG/BG sibling could render identically, so the first listed
+   * gradient whose render differs from both the saved FG/BG ramp and
+   * the white baseline is the witness. */
+  other = render_all (image, &rw, &rh); /* all-white baseline */
+  CHECK (api->resources (engine, GLIMS_RESOURCE_GRADIENT, rows,
+                         (int32_t) (sizeof rows / sizeof rows[0]), &count) == GLIMS_STATUS_OK,
+         "the gradients list again (%d)", count);
+  stock = 0;
+  for (i = 0; i < count && i < 16; i++)
+    {
+      int32_t  w = 0, h = 0;
+      uint8_t *drawn;
+
+      if (rows[i].id == fg_bg)
+        continue;
+      CHECK (api->gradient_resource (engine, image, rows[i].id,
+                                     (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                     &g, NULL) == GLIMS_STATUS_OK,
+             "stock gradient %s draws", rows[i].name);
+      drawn = render_all (image, &w, &h);
+      api->image_undo (engine, image);
+      if (drawn && ramp && other && w == rw && h == rh &&
+          memcmp (drawn, ramp, (size_t) w * h * 4) != 0 &&
+          memcmp (drawn, other, (size_t) w * h * 4) != 0)
+        {
+          stock = rows[i].id;
+          free (drawn);
+          break;
+        }
+      free (drawn);
+    }
+  CHECK (stock != 0, "a second stock gradient renders its own stops (%llu)",
+         (unsigned long long) stock);
+  free (other);
+  other = NULL;
+
+  /* Opacity 0.5 blends the ramp halfway onto the white layer. */
+  g.opacity = 0.5;
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_OK &&
+         (render_pixel (image, 50, 40, px), px[0] > 160 && px[0] < 240),
+         "half opacity blends the midpoint toward white (%d)", px[0]);
+  api->image_undo (engine, image);
+  g.opacity = 1.0;
+
+  /* The selection clips the draw and survives it. */
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 0, 0 }, { 40, 80 } }, 2, &sel) == GLIMS_STATUS_OK,
+         "a left strip is selected");
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_OK &&
+         (render_pixel (image, 20, 40, px), px[0] < 220) &&
+         (render_pixel (image, 70, 40, px), px[0] == 255) &&
+         api->selection_bounds (engine, image, &empty_sel, &bounds) == GLIMS_STATUS_OK &&
+         ! empty_sel && rect_equals (bounds, 0, 0, 40, 80),
+         "the gradient stays inside the selection and the selection is preserved");
+  api->image_undo (engine, image); /* the gradient; the strip survives */
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+
+  /* Endpoints are image coordinates: the moved layer's pixels shift
+   * with it, and image area outside the layer is untouched. */
+  CHECK (api->layer_move (engine, image, layer, 10, 0) == GLIMS_STATUS_OK,
+         "the layer moves 10 px right");
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_OK &&
+         (render_pixel (image, 15, 40, px), px[0] < 150) &&
+         (render_pixel (image, 5, 40, px), px[3] == 0),
+         "image coordinates hit the offset layer, not the canvas edge (x15 %d, x5 alpha %d)",
+         red_at (image, 15, 40), px[3]);
+  api->image_undo (engine, image);
+  CHECK (api->layer_move (engine, image, layer, -10, 0) == GLIMS_STATUS_OK,
+         "the layer moves back");
+
+  /* Mask editing routes the same call onto the mask: white to black
+   * fades the layer out toward the right (a shaded mask still covers
+   * the canvas, so the composite's falloff is the oracle). */
+  g.foreground = (GlimsColor) { 1, 1, 1, 1 };
+  g.background = (GlimsColor) { 0, 0, 0, 1 };
+  CHECK (api->layer_mask_add (engine, image, layer, GLIMS_MASK_WHITE, false, &mask, NULL) == GLIMS_STATUS_OK &&
+         mask != 0 &&
+         api->layer_mask_set (engine, image, layer, GLIMS_MASK_EDITING, GLIMS_MASK_EDITING, NULL) == GLIMS_STATUS_OK,
+         "a white mask is added and edited");
+  before = undo_depth (image);
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         red_at (image, 10, 40) > 150 && red_at (image, 90, 40) < 80,
+         "the resource gradient shades the mask it edits (%d left, %d right)",
+         red_at (image, 10, 40), red_at (image, 90, 40));
+  api->image_undo (engine, image);  /* the mask gradient */
+  api->layer_mask_set (engine, image, layer, GLIMS_MASK_EDITING, 0, NULL);
+
+  /* A selected channel is the edit target too: the ramp adds coverage. */
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 0, 0 }, { 20, 80 } }, 2, &sel) == GLIMS_STATUS_OK &&
+         api->channel_from_selection (engine, image, "grad", &channel, NULL) == GLIMS_STATUS_OK &&
+         channel != 0 &&
+         api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL) == GLIMS_STATUS_OK &&
+         api->channel_command (engine, image, channel, GLIMS_CHANNEL_SELECT, NULL, NULL) == GLIMS_STATUS_OK,
+         "a saved channel becomes the edit target");
+  before = undo_depth (image);
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->channel_to_selection (engine, image, channel, GLIMS_SELECT_REPLACE, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty_sel, &bounds) == GLIMS_STATUS_OK &&
+         ! empty_sel && bounds.x == 0 && bounds.width > 20,
+         "the channel gradient extends its coverage as one undo step (%d,%d %dx%d)",
+         bounds.x, bounds.y, bounds.width, bounds.height);
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  api->image_undo (engine, image);
+  api->channel_command (engine, image, 0, GLIMS_CHANNEL_SELECT, NULL, NULL);
+  api->channel_command (engine, image, channel, GLIMS_CHANNEL_DELETE, NULL, NULL);
+  g.foreground = (GlimsColor) { 0, 0, 0, 1 };
+  g.background = (GlimsColor) { 1, 1, 1, 1 };
+
+  /* Locks: pixel-locked pixels refuse LOCKED with no undo; an alpha
+   * lock alone does not refuse an opaque ramp. */
+  CHECK (api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL) == GLIMS_STATUS_OK,
+         "the layer's pixels are locked");
+  before = undo_depth (image);
+  render_pixel (image, 50, 40, prev);
+  status = api->gradient_resource (engine, image, fg_bg,
+                                   (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                   &g, &error);
+  CHECK (status == GLIMS_STATUS_LOCKED && error && undo_depth (image) == before &&
+         (render_pixel (image, 50, 40, px), memcmp (prev, px, sizeof px) == 0),
+         "a pixel-locked layer refuses LOCKED with no undo (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, 0, NULL);
+  CHECK (api->set_layer_locks (engine, image, layer, GLIMS_LOCK_ALPHA, GLIMS_LOCK_ALPHA, NULL) == GLIMS_STATUS_OK &&
+         api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_OK &&
+         red_at (image, 50, 40) < 240,
+         "an alpha-locked layer still accepts an opaque gradient");
+  api->set_layer_locks (engine, image, layer, GLIMS_LOCK_ALPHA, 0, NULL);
+  api->image_undo (engine, image);
+
+  /* Handle refusals: 0 and out-of-range are INVALID_ARGUMENT; in-range
+   * but stale, recycled-high-bit, and wrong-kind handles are NOT_FOUND.
+   * None mutates pixels or history. */
+  before = undo_depth (image);
+  render_pixel (image, 50, 40, prev);
+  CHECK (api->gradient_resource (engine, image, 0,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->gradient_resource (engine, image, 0xFFFFFFFFFFFFFFFFull,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->gradient_resource (engine, image, 0x80000000ull,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->gradient_resource (engine, image, (UINT64_C(1) << 32) | fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "resource handles outside the issued range are refused");
+  CHECK (api->gradient_resource (engine, image, 0x7FFFFFFFull,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->gradient_resource (engine, image, brush_id,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a stale or wrong-kind handle is NOT_FOUND with no fallback");
+  CHECK (undo_depth (image) == before &&
+         (render_pixel (image, 50, 40, px), memcmp (prev, px, sizeof px) == 0),
+         "the refused handles changed no pixels and no history");
+
+  /* Settings refusals, each with no undo step. */
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &(GlimsResourceGradientSettings) { .struct_size = 4 },
+                                 NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "NULL or short settings are refused");
+  g.shape = 9;
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown shape is refused");
+  g.shape = GLIMS_GRADIENT_LINEAR;
+  g.blend_space = 9;
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown blend space is refused");
+  g.blend_space = GLIMS_GRADIENT_BLEND_RGB_PERCEPTUAL;
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 40, 40 }, (GlimsPoint) { 40, 40 },
+                                 &g, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { NAN, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "coincident and non-finite endpoints are refused");
+  g.opacity = NAN;
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a non-finite opacity is refused");
+  g.opacity = 1.5;
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an opacity above 1 is refused");
+  g.opacity = 1.0;
+  g.foreground.alpha = 0.5;
+  status = api->gradient_resource (engine, image, fg_bg,
+                                   (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                   &g, &error);
+  CHECK (status == GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "a translucent endpoint color is refused, not ignored (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  g.foreground = (GlimsColor) { 0, 0, 0, 1 };
+  g.foreground.red = NAN;
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a non-finite endpoint color is refused");
+  g.foreground.red = 0;
+  CHECK (undo_depth (image) == before, "the refused settings pushed no undo");
+
+  /* A group as the paint target is a clear failure, not a draw. */
+  CHECK (api->create_group (engine, image, 0, 0, "G", &group, NULL) == GLIMS_STATUS_OK && group != 0,
+         "a group is created");
+  status = api->gradient_resource (engine, image, fg_bg,
+                                   (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                   &g, &error);
+  CHECK (status == GLIMS_STATUS_FAILED && error,
+         "drawing onto a group target fails clearly (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->layer_select (engine, image, layer);
+  api->layer_command (engine, image, group, GLIMS_LAYER_DELETE, NULL, NULL);
+
+  /* BUSY while a stroke or a filter session is open, with the pixels
+   * and history untouched and the sessions left running. */
+  CHECK (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK,
+         "a stroke begins for the busy check");
+  before = undo_depth (image);
+  render_pixel (image, 50, 40, prev);
+  CHECK (api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_BUSY &&
+         undo_depth (image) == before &&
+         (render_pixel (image, 50, 40, px), memcmp (prev, px, sizeof px) == 0),
+         "drawing during an open stroke is BUSY with no change");
+  CHECK (api->stroke_end (engine, stroke) == GLIMS_STATUS_OK, "the stroke still ends");
+  api->image_undo (engine, image); /* the stroke itself */
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, &error) == GLIMS_STATUS_OK &&
+         api->gradient_resource (engine, image, fg_bg,
+                                 (GlimsPoint) { 0, 40 }, (GlimsPoint) { 100, 40 },
+                                 &g, NULL) == GLIMS_STATUS_BUSY &&
+         api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+         "drawing during an open filter session is BUSY%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  free (ramp);
+  api->image_close (engine, image);
+}
+
 static void
 test_procedures (void)
 {
@@ -6797,6 +7217,7 @@ main (int argc, char **argv)
   test_qmask_name_fixture (argv[3]);
   test_resources ();
   test_resource_thumbnails ();
+  test_resource_gradient ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 

@@ -272,6 +272,9 @@ GlimsStatus glims_fill             (GlimsEngine *e, GlimsImageID image, GlimsPoi
                                     const GlimsFillSettings *settings, char **error);
 GlimsStatus glims_gradient         (GlimsEngine *e, GlimsImageID image, GlimsPoint from, GlimsPoint to,
                                     const GlimsGradientSettings *settings, char **error);
+GlimsStatus glims_gradient_resource (GlimsEngine *e, GlimsImageID image, GlimsResourceID gradient,
+                                    GlimsPoint from, GlimsPoint to,
+                                    const GlimsResourceGradientSettings *settings, char **error);
 GlimsStatus glims_layer_select     (GlimsEngine *e, GlimsImageID image, GlimsItemID layer);
 GlimsStatus glims_layer_command    (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                     uint32_t command, GlimsItemID *result, char **error);
@@ -343,6 +346,8 @@ GlimsStatus glims_image_convert_profile_rasterizing (GlimsEngine *e, GlimsImageI
                                                      bool black_point_compensation, char **error);
 
 /* resource.c */
+GlimsStatus glims_lookup_gradient      (GlimsEngine *e, GlimsResourceID id,
+                                        GimpGradient **out);
 GlimsStatus glims_resources            (GlimsEngine *e, uint32_t kind,
                                         GlimsResourceInfo *rows, int32_t capacity,
                                         int32_t *count);

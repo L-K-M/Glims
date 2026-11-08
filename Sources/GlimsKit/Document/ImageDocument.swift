@@ -601,6 +601,23 @@ final class ImageDocument {
         }
     }
 
+    /// Draws a gradient with the selected gradient resource `identity`
+    /// names, one undo step on the paint target. The persistent identity
+    /// — never a session handle — is resolved to a live resource inside
+    /// the queued engine job, so a gradient chosen before a restart, or
+    /// one whose file was moved, reports NOT_FOUND on the engine queue
+    /// rather than binding a stale handle here. Settings and endpoints
+    /// are captured by value; no native call runs on the main thread.
+    func gradientResource(_ identity: EngineSession.ResourceIdentity,
+                          from: CGPoint, to: CGPoint,
+                          settings: EngineSession.ResourceGradientSettings) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        runOnPaintTarget { session, image in
+            let handle = try session.resolveResource(identity, kind: .gradient)
+            try session.gradient(image: image, resource: handle, from: from, to: to, settings: settings)
+        }
+    }
+
     /// The menu commands act on the layer the engine selects when they
     /// run — layer 0, the adapter's "selected layer at execution" — so a
     /// creation or pick queued ahead of them is what they hit, not the

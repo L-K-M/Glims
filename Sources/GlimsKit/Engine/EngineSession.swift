@@ -45,6 +45,28 @@ final class EngineSession: @unchecked Sendable {
         case linear = 0, bilinear, radial
     }
 
+    /// The color space a selected-resource gradient blends its stops in
+    /// (GlimsGradientBlendSpace). Facade-owned values; the engine's enum
+    /// never crosses the boundary.
+    enum GradientBlendSpace: UInt32 {
+        case rgbPerceptual = 0, rgbLinear, cieLab
+    }
+
+    /// A gradient drawn with a selected gradient resource: the stops
+    /// come from the resource, with `foreground`/`background` feeding
+    /// its foreground/background stop types. Both colors are opaque —
+    /// the engine's FG/BG context has no alpha, so a translucent color
+    /// is refused rather than silently flattened; transparent stop
+    /// types (such as FG-to-transparent) belong to the resource itself.
+    struct ResourceGradientSettings: Equatable {
+        var shape = GradientShape.linear
+        var foreground = NSColor.black
+        var background = NSColor.white
+        var opacity: Double = 1
+        var reverse = false
+        var blendSpace = GradientBlendSpace.rgbPerceptual
+    }
+
     enum Transform: UInt32 {
         case rotate90 = 1, rotate180, rotate270, flipHorizontal, flipVertical
     }
@@ -929,6 +951,28 @@ final class EngineSession: @unchecked Sendable {
         var error: UnsafeMutablePointer<CChar>?
         try check(api.gradient(engine, image, GlimsPoint(x: from.x, y: from.y), GlimsPoint(x: to.x, y: to.y),
                                &settings, &error), error)
+    }
+
+    /// Draws a gradient with the gradient resource `gradient` names, on
+    /// the selected drawable, one undo step. Unlike `gradient(image:from:to:shape:fromColor:toColor:)`,
+    /// which always paints the built-in foreground-to-background ramp,
+    /// the stops come from the resource — there is no fallback when the
+    /// handle does not resolve. `gradient` is a session handle from
+    /// `resources(_:)` or `resolveResource(_:kind:)`; throw NOT_FOUND's
+    /// caller for anything else. The resource is never mutated.
+    func gradient(image: Int32, resource gradient: ResourceID, from: CGPoint, to: CGPoint,
+                  settings: ResourceGradientSettings) throws {
+        var values = GlimsResourceGradientSettings(
+            struct_size: UInt32(MemoryLayout<GlimsResourceGradientSettings>.size),
+            shape: settings.shape.rawValue,
+            foreground: Self.color(settings.foreground),
+            background: Self.color(settings.background),
+            opacity: settings.opacity, reverse: settings.reverse,
+            blend_space: settings.blendSpace.rawValue)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.gradient_resource(engine, image, gradient,
+                                        GlimsPoint(x: from.x, y: from.y), GlimsPoint(x: to.x, y: to.y),
+                                        &values, &error), error)
     }
 
     func selectLayer(_ layer: Int32, image: Int32) throws {

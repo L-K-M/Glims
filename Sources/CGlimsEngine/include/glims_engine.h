@@ -276,6 +276,31 @@ typedef struct GlimsGradientSettings {
   double     opacity;        /* 0 ... 1 */
 } GlimsGradientSettings;
 
+/* The color space a selected-resource gradient blends its stops in.
+ * These are the facade's own values for the engine's gradient blend
+ * color spaces; the native enum never crosses this boundary. */
+typedef enum GlimsGradientBlendSpace {
+  GLIMS_GRADIENT_BLEND_RGB_PERCEPTUAL = 0,  /* sRGB-encoded components */
+  GLIMS_GRADIENT_BLEND_RGB_LINEAR     = 1,  /* linear-light RGB */
+  GLIMS_GRADIENT_BLEND_CIE_LAB        = 2   /* CIE L*a*b* */
+} GlimsGradientBlendSpace;
+
+/* A gradient drawn with a selected gradient resource: `foreground` and
+ * `background` feed the resource's foreground/background stop types,
+ * like the FG and BG wells do for the engine's own tools. Both are
+ * opaque: their alpha must be exactly 1 and is rejected otherwise, since
+ * the engine's FG/BG context is opaque and transparent stop types (such
+ * as FG-to-transparent) are the resource's own business. */
+typedef struct GlimsResourceGradientSettings {
+  uint32_t   struct_size;    /* sizeof (GlimsResourceGradientSettings) */
+  uint32_t   shape;          /* GlimsGradientShape */
+  GlimsColor foreground;     /* sRGB 0 ... 1, alpha exactly 1 */
+  GlimsColor background;     /* sRGB 0 ... 1, alpha exactly 1 */
+  double     opacity;        /* 0 ... 1, finite */
+  bool       reverse;        /* the resource's stops run end to start */
+  uint32_t   blend_space;    /* GlimsGradientBlendSpace */
+} GlimsResourceGradientSettings;
+
 typedef enum GlimsLayerCommand {
   GLIMS_LAYER_NEW        = 1,  /* transparent, image-sized, above the layer */
   GLIMS_LAYER_DUPLICATE  = 2,
@@ -1429,6 +1454,34 @@ typedef struct GlimsEngineAPI {
                                         const GlimsColor *foreground,
                                         const GlimsColor *background,
                                         GlimsPixelBuffer *out, char **error);
+
+  /* Draws a gradient with the gradient resource `gradient` names, from
+   * `from` to `to` in image pixels, as one undo step, on the selected
+   * drawable (the selected layer, its mask while mask editing is on, or
+   * a selected channel), clipped by the selection. Unlike gradient(),
+   * which always paints the built-in foreground-to-background ramp, the
+   * stops come from the resource; there is no fallback when the handle
+   * does not resolve. `settings` is required and validated as a whole:
+   * struct_size, a known shape and blend space, finite endpoints that
+   * are not the same point, finite 0 ... 1 color components with alpha
+   * exactly 1, and a finite 0 ... 1 opacity. A per-call context carries
+   * the colors: no user or global context is read or changed and the
+   * resource itself is never mutated. The engine renders one "Gradient"
+   * undo step when it draws. Two native edge cases are inherited
+   * verbatim: a selection disjoint from the drawable draws nothing and
+   * pushes no undo (the engine returns early), while an opacity of 0
+   * still runs the full render and pushes an undo step with no visible
+   * change. INVALID_ARGUMENT for missing or invalid settings, endpoints
+   * or colors, or a `gradient` of 0 or outside the issued handle
+   * range; NOT_FOUND for a stale or foreign handle or one that is not a
+   * gradient; BUSY while a plug-in, stroke or filter session holds the
+   * image; LOCKED for protected pixels; FAILED with `error` for a
+   * drawable that cannot be painted (a group, or no selection). */
+  GlimsStatus  (*gradient_resource)     (GlimsEngine *engine, GlimsImageID image,
+                                        GlimsResourceID gradient,
+                                        GlimsPoint from, GlimsPoint to,
+                                        const GlimsResourceGradientSettings *settings,
+                                        char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
