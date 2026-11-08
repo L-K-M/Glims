@@ -770,3 +770,20 @@ is compiled only for 3.2.0; later engines restore the saved name themselves.
 No upstream source, file metadata, dirty state or undo history changes.
 Pinned and cross-version checks plus independent review are recorded in
 the PR before merge. Frontend path controls remain a separate slice.
+
+### Color Fill sheet (2026-11-08)
+
+Edit > Fill opens a native sheet for foreground, background, white, black
+or a custom color and opacity. It fills the selection, or the active
+layer, mask or channel without one, through the existing counted target
+queue. A sheet keeps its document and its own control bindings; cancelling
+or refusing a busy/closed target produces no edit. Native lock failures
+reach the caller. The custom color well releases its own panel interaction
+without hiding an already open panel or another active well.
+
+The original draft's shared binding target failed a two-document native
+regression. Per-sheet retention passes that regression and ten isolated
+pinned-engine checks, including pixels, selection clipping, undo, custom
+color and busy/native refusals. Review found no important issues. Added
+background and invalid-input checks and the integrated four-engine pass
+are pending. Pattern fill and resource selection are a separate slice.
