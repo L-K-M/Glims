@@ -2145,6 +2145,14 @@ MARSHAL (image_select_layers, return glims_image_select_layers (e, a->image,
 MARSHAL (image_selected_layers, return glims_image_selected_layers (e, a->image,
                                                                     (GlimsItemID *) a->out,
                                                                     a->capacity, a->count);)
+MARSHAL (image_metadata_tags, return glims_image_metadata_tags (e, a->image, (uint32_t) a->width,
+                                                                 (char ***) a->out, a->count, a->error);)
+MARSHAL (image_metadata_values, return glims_image_metadata_values (e, a->image, a->string,
+                                                                    (char ***) a->out, a->count, a->error);)
+MARSHAL (image_metadata_edit, return glims_image_metadata_edit (e, a->image, a->string,
+                                                                (uint32_t) a->width,
+                                                                (const char *const *) a->in,
+                                                                a->capacity, a->error);)
 
 static GlimsStatus
 api_image_guides (GlimsEngine *e, GlimsImageID image, GlimsGuideInfo *rows,
@@ -2266,6 +2274,41 @@ api_image_selected_layers (GlimsEngine *e, GlimsImageID image, GlimsItemID *ids,
 {
   GlimsArgs a = { .image = image, .out = ids, .capacity = capacity, .count = count };
   return glims_engine_call (e, image_selected_layers_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_metadata_tags (GlimsEngine *e, GlimsImageID image, uint32_t domain,
+                         char ***result, int32_t *count, char **error)
+{
+  GlimsArgs a = { .image = image, .width = (int32_t) domain, .out = result,
+                  .count = count, .error = error };
+  return glims_engine_call (e, image_metadata_tags_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_metadata_values (GlimsEngine *e, GlimsImageID image, const char *tag,
+                           char ***result, int32_t *count, char **error)
+{
+  GlimsArgs a = { .image = image, .string = tag, .out = result,
+                  .count = count, .error = error };
+  return glims_engine_call (e, image_metadata_values_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_metadata_edit (GlimsEngine *e, GlimsImageID image, const char *tag,
+                         uint32_t operation, const char *const *values,
+                         int32_t count, char **error)
+{
+  GlimsArgs a = { .image = image, .string = tag, .width = (int32_t) operation,
+                  .in = values, .capacity = count, .error = error };
+  return glims_engine_call (e, image_metadata_edit_on_engine, &a);
+}
+
+/* No engine state is involved: free directly, like free_string. */
+static void
+api_free_metadata_strings (char **strings)
+{
+  glims_free_metadata_strings (strings);
 }
 
 static const GlimsEngineAPI api_v1 = {
@@ -2397,6 +2440,10 @@ static const GlimsEngineAPI api_v1 = {
   .selection_float   = api_selection_float,
   .image_select_layers = api_image_select_layers,
   .image_selected_layers = api_image_selected_layers,
+  .image_metadata_tags = api_image_metadata_tags,
+  .image_metadata_values = api_image_metadata_values,
+  .image_metadata_edit = api_image_metadata_edit,
+  .free_metadata_strings = api_free_metadata_strings,
 };
 
 __attribute__ ((visibility ("default")))
