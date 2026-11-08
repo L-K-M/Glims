@@ -23,6 +23,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private var workspace: WorkspaceWindowController?
     private var newImagePanel: NewImagePanel?
     private var preferencesWindow: PreferencesWindowController?
+    private var helpWindow: HelpWindowController?
     private var pendingOpenURLs: [URL] = []
     private var openingURLs: Set<URL> = []
     private var pendingFileOperations = 0
@@ -137,6 +138,29 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         if preferencesWindow == nil { preferencesWindow = PreferencesWindowController() }
         preferencesWindow?.showWindow(nil)
         preferencesWindow?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Help > Glims Help: the bundled manual in its own window. The panel
+    /// never becomes main, so the front document stays the target.
+    @objc func showGlimsHelp(_ sender: Any?) {
+        showHelp(section: nil)
+    }
+
+    /// Help > Keyboard & Mouse Reference: the manual's key tables.
+    @objc func showKeyboardReference(_ sender: Any?) {
+        showHelp(section: HelpManual.keyboardReferenceTitle)
+    }
+
+    /// Help > Engine Manual: the engine's official documentation in the
+    /// user's web browser. The only external link in Glims, opened solely
+    /// on this explicit request.
+    @objc func openEngineManual(_ sender: Any?) {
+        NSWorkspace.shared.open(HelpManual.engineManualURL)
+    }
+
+    private func showHelp(section: String?) {
+        if helpWindow == nil { helpWindow = HelpWindowController() }
+        helpWindow?.show(section: section)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

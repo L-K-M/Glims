@@ -21,6 +21,7 @@ enum SmokeTest {
         check(controller.window?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .aqua,
               "the window is not in the light Aqua appearance")
         check(controller.canvas.frame.height > 0, "canvas has no height")
+        check(HelpManual.load() != nil, "the bundled manual did not load")
         check(controller.statusBar.frame.height > 0, "status bar has no height")
         check(controller.canvas.frame.minY >= controller.statusBar.frame.maxY
               || controller.canvas.frame.maxY <= controller.statusBar.frame.minY,
