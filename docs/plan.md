@@ -972,6 +972,35 @@ after the root's ICC integration to keep the append-only ABI order.
   this branch: the adapter compiles against all four engine sets with a
   private `GLIMS_ADAPTER_ROOT`; the runtime conformance run is left to
   the root checkout.
+- 2026-11-08: the frontend Vector Style sheet, on this worktree branch
+  (`feat/vector-style-controls`). `EngineSession` gained typed
+  `vectorLayerStyle` / `changeVectorLayerStyle` wrappers over the facade's
+  `GlimsVectorStyle` / `GlimsVectorStyleChange`, with own cap/join enums
+  and a `VectorStyleProperty` bitmask — stable facade values only, no GIMP
+  types. `ImageDocument.changeVectorLayerStyle` queues the apply as
+  counted input off the main thread behind accepted edits, treats an
+  empty `properties` as a no-op that queues nothing, refuses a layer no
+  longer cached as a genuine vector layer with targetChanged, and reports
+  busy/closed and the engine's LOCKED/UNSUPPORTED answers; it never
+  rasterizes. The new `VectorStyleForm` sheet (Layer ▸ Vector Style…,
+  gated in menu validation on the cached layer kind plus the 3.2
+  capability, old engines unsupported with no raster fallback) captures
+  document, layer id and the read style per sheet — no shared state, no
+  retarget. The style read runs off the main thread through the global
+  EngineActivity after accepted input drains, with close/window/target
+  guards; a native pattern style or a pre-3.2 engine reports UNSUPPORTED
+  and the sheet closes with the reason. Controls are fill
+  enable/color/antialias and stroke enable/color/antialias/width/cap/join/
+  miter — no opacity, paint mode, dashes or pattern claims; validation
+  mirrors the facade's exact finite/range flags and never reads a
+  disabled section's fields; the color panel is cleaned up only for the
+  sheet's own activation. Pure unit tests cover the parser, the guards,
+  change building and the facade values; compiled engine smoke cases cover
+  cancel, no-op, invalid input, real fill+stroke pixels, one undo step,
+  XCF round trip, busy-after-open and a captured target deleted mid-sheet.
+  Checked on this branch: `swift build` and `swift build --build-tests`
+  compile only — no test or smoke run, no adapter rebuild, no library
+  change (the root checkout runs the tests and the four-engine matrix).
 
 ## Open decisions
 

@@ -136,6 +136,7 @@ enum MainMenu {
             .separator(),
             mask,
             item("Layer Properties…", #selector(DocumentWindowController.layerProperties(_:))),
+            item("Vector Style…", #selector(DocumentWindowController.vectorStyle(_:))),
             arrange,
             lock,
             submenu("Transform", [
