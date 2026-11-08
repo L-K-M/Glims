@@ -20,6 +20,28 @@ final class SnapToControlsTests: XCTestCase {
         EngineSession.Guide(id: id, orientation: orientation, position: position)
     }
 
+    func testFractionalMovePreviewUsesCommittedPixelsAndClearsFalseMatch() {
+        let bounds = CGRect(x: 0, y: 0, width: 10, height: 10)
+        let match = CanvasSnapPlanner.AxisMatch(anchor: .leading, target: .grid,
+                                                sourceCoordinate: 2.2, targetCoordinate: 2.5)
+        let preview = SnapTargetCache.pixelMove(bounds: bounds,
+            proposed: bounds.offsetBy(dx: 2.5, dy: -2.5),
+            plan: .init(dx: 0.3, dy: 0, x: match, y: nil))
+        XCTAssertEqual(preview.rect.origin, CGPoint(x: 3, y: -3))
+        XCTAssertNil(preview.plan.x, "a whole-pixel move cannot align this anchor at 2.5")
+    }
+
+    func testIntegralMoveKeepsAccurateSnapIndicator() {
+        let bounds = CGRect(x: 10, y: 20, width: 9, height: 11)
+        let match = CanvasSnapPlanner.AxisMatch(anchor: .center, target: .grid,
+                                                sourceCoordinate: 16.7, targetCoordinate: 17.5)
+        let preview = SnapTargetCache.pixelMove(bounds: bounds,
+            proposed: bounds.offsetBy(dx: 3, dy: 0.2),
+            plan: .init(dx: 0.8, dy: 0, x: match, y: nil))
+        XCTAssertEqual(preview.rect.origin, CGPoint(x: 13, y: 20))
+        XCTAssertEqual(preview.plan.x, match, "a half-pixel center can align with integral translation")
+    }
+
     // MARK: Defaults: every entry OFF
 
     func testDefaultsAreAllOff() {

@@ -411,8 +411,10 @@ final class CanvasToolController {
                 layers: gesture.document.layers, moving: gesture.layer),
             config: CanvasSnapPlanner.Config(targets: canvas.snapTo.targets),
             canvasScale: canvas.scale)
-        gesture.plan = plan
-        gesture.proposed = raw.offsetBy(dx: plan.dx, dy: plan.dy)
+        let preview = SnapTargetCache.pixelMove(bounds: gesture.bounds,
+            proposed: raw.offsetBy(dx: plan.dx, dy: plan.dy), plan: plan)
+        gesture.plan = preview.plan
+        gesture.proposed = preview.rect
         moveSnap = gesture
     }
 

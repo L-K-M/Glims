@@ -328,6 +328,37 @@ extension EngineSmokeTest {
         a.zoom(to: 100)
         layout()
 
+        // Fractional display-grid lines cannot always be reached by
+        // integral native layer offsets. The displayed rectangle must
+        // still equal the committed rectangle, without a release jump.
+        let savedGrid = docA.grid
+        var fractionalGrid = savedGrid
+        fractionalGrid.spacingX = 2.5
+        fractionalGrid.spacingY = 2.5
+        try session.setGrid(fractionalGrid, image: imageA)
+        try docA.reload()
+        canvasA.snapTo = SnapToViewState(grid: true)
+        if let fractionalBase = movingBounds(),
+           let down = mouse(.leftMouseDown, windowPoint(ofImagePoint: fractionalBase.origin, canvasA), windowA),
+           let drag = mouse(.leftMouseDragged, windowPoint(ofImagePoint:
+                CGPoint(x: fractionalBase.minX + 2.2, y: fractionalBase.minY + 0.2), canvasA), windowA),
+           let up = mouse(.leftMouseUp, drag.locationInWindow, windowA) {
+            canvasA.mouseDown(with: down)
+            canvasA.mouseDragged(with: drag)
+            let preview = canvasA.tools.moveSnap?.proposed
+            check(preview.map { ($0.minX - fractionalBase.minX).rounded() == $0.minX - fractionalBase.minX
+                && ($0.minY - fractionalBase.minY).rounded() == $0.minY - fractionalBase.minY } == true,
+                "fractional-grid move previews only representable pixel offsets")
+            canvasA.mouseUp(with: up)
+            settle(docA)
+            check(movingBounds() == preview, "fractional-grid release retains the exact displayed rectangle")
+            if movingBounds() != fractionalBase { docA.undo(); settle(docA) }
+        } else { check(false, "fractional-grid events and captured bounds exist") }
+        try session.setGrid(savedGrid, image: imageA)
+        try docA.reload()
+        canvasA.snapTo = SnapToViewState()
+        undoA = docA.undoInfo.undoCount
+
         // MARK: Layer Bounds entry snaps to another layer's edge
 
         a.toggleSnapToLayerBounds(layerItem)

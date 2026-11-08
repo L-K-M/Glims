@@ -98,3 +98,13 @@ The export fixture compared encoded PNG bytes, which can differ in metadata;
 it now reopens both exports and compares decoded pixels and dimensions. All
 14 pure controls tests and the focused pinned snapping scenario pass. Current
 parent, four-engine and full workflow validation follow.
+
+Pixel-offset review follow-up: the Move preview now rounds the total
+translation exactly as the native layer-offset command does. An indicator
+is cleared on an axis when the selected fractional target cannot be
+represented by that integer translation; exact half-pixel center matches
+remain visible when the total translation is integral. A different feasible
+candidate is not searched after dropping an infeasible nearest match.
+Two pure regressions first failed three assertions, then all 16 controls
+tests passed. The updated native event-path scenario remains pending.
+Independent source review found no important issues in this correction.

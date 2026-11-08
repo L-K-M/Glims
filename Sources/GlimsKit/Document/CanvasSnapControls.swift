@@ -122,6 +122,23 @@ enum SnapTargetCache {
             otherLayerRects: otherLayerRects(layers: layers, moving: moving))
     }
 
+    /// The Move overlay must use the same integral translation as native layer offsets.
+    static func pixelMove(bounds: CGRect, proposed: CGRect,
+                          plan: CanvasSnapPlanner.Result) -> (rect: CGRect, plan: CanvasSnapPlanner.Result) {
+        let dx = proposed.minX - bounds.minX
+        let dy = proposed.minY - bounds.minY
+        let pixelDX = dx.rounded(), pixelDY = dy.rounded()
+        let exactX = abs(pixelDX - dx) < 1e-9
+        let exactY = abs(pixelDY - dy) < 1e-9
+        // Fractional grid lines or centers need not be representable by
+        // integral layer offsets. Never advertise alignment that the
+        // committed pixels cannot retain.
+        let visiblePlan = CanvasSnapPlanner.Result(
+            dx: exactX ? plan.dx : 0, dy: exactY ? plan.dy : 0,
+            x: exactX ? plan.x : nil, y: exactY ? plan.y : nil)
+        return (bounds.offsetBy(dx: pixelDX, dy: pixelDY), visiblePlan)
+    }
+
     /// A rect usable as a snap candidate: finite with positive size.
     private static func isUsable(_ rect: CGRect) -> Bool {
         rect.origin.x.isFinite && rect.origin.y.isFinite
