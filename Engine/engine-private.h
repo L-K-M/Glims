@@ -109,6 +109,10 @@ GlimsStatus      glims_edit_ready        (GlimsEngine *engine, GlimsOpenImage *o
 /* image.c */
 GlimsStatus glims_image_new        (GlimsEngine *e, int32_t w, int32_t h, GlimsImageID *out, char **error);
 GlimsStatus glims_image_open       (GlimsEngine *e, const char *path, GlimsImageID *out, char **error);
+/* Scoped compatibility guard for native 3.2.0 vector loading. */
+typedef struct GlimsVectorLoadGuard GlimsVectorLoadGuard;
+GlimsVectorLoadGuard *glims_vector_load_guard_begin (GlimsEngine *e, GimpImage *destination);
+void glims_vector_load_guard_end (GlimsVectorLoadGuard *guard);
 GlimsStatus glims_image_close      (GlimsEngine *e, GlimsImageID id);
 GlimsStatus glims_image_info       (GlimsEngine *e, GlimsImageID id, GlimsImageInfo *info);
 GlimsStatus glims_image_render     (GlimsEngine *e, GlimsImageID id, double scale, GlimsRect area,
