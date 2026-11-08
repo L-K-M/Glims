@@ -11,7 +11,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     let canvas: EngineCanvasView
     private let preferences: EditorPreferences
     let statusBar = StatusBarView(frame: .zero)
-    private let scrollView = NSScrollView()
+    /// The scroll view hosting the canvas and its native ruler slots;
+    /// readable for the smoke test's native-slot checks.
+    let scrollView = NSScrollView()
     private lazy var engineUndoManager = EngineUndoManager(document: imageDocument)
     /// The open filter preview, generic or dedicated; one at a time.
     private(set) var previewPanel: FilterPreviewPanel?
@@ -21,6 +23,18 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private(set) var guidesSheet: GuidesSheetController?
     /// View ▸ Show Guides' cached per-window state, defaulting to on.
     private(set) var guidesViewState = GuideViewState()
+    /// View ▸ Show Rulers' cached per-window state, defaulting to on. Kept
+    /// separate from the guides state — the two toggles never couple.
+    private(set) var rulerViewState = RulerViewState()
+    /// The pixel rulers in the scroll view's native ruler slots. They read
+    /// the canvas geometry through a weak reference at draw time, so no
+    /// global ruler controller exists.
+    let horizontalRuler = PixelRulerView(scrollView: nil, orientation: .horizontalRuler)
+    let verticalRuler = PixelRulerView(scrollView: nil, orientation: .verticalRuler)
+    /// Whether the ruler geometry observers are currently registered.
+    /// They are removed when the window closes (and in deinit), so a
+    /// closing window leaves no observation behind.
+    private(set) var rulerObserversActive = false
     /// Bumped by every filter start and every cancellation, so a begin
     /// that lands late can tell it is stale and abort its session.
     private var previewRequest = 0
@@ -68,6 +82,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         window.representedURL = imageDocument.fileState.nativeURL
 
         layOutContent(in: window)
+        observeRulerGeometry()
         NotificationCenter.default.addObserver(self, selector: #selector(applyPreferences),
                                                name: EditorPreferences.didChange, object: self.preferences)
         applyPreferences()
@@ -145,6 +160,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         NotificationCenter.default.addObserver(self, selector: #selector(viewportChanged),
                                                name: NSView.boundsDidChangeNotification,
                                                object: scrollView.contentView)
+        // The pixel rulers live in the scroll view's native ruler slots; the
+        // scroll view itself relayouts and redraws them on content-bounds
+        // changes (scroll, ruler toggles), so AppKit keeps the scroll
+        // layout and the accessibility semantics.
+        horizontalRuler.canvas = canvas
+        verticalRuler.canvas = canvas
+        scrollView.hasHorizontalRuler = true
+        scrollView.hasVerticalRuler = true
+        scrollView.horizontalRulerView = horizontalRuler
+        scrollView.verticalRulerView = verticalRuler
+        scrollView.rulersVisible = rulerViewState.showsRulers
 
         let content = NSView()
         for view in [scrollView, statusBar] as [NSView] {
@@ -167,6 +193,44 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     @objc private func viewportChanged() {
         canvas.setNeedsRender()
+        // Scrolling moves the rulers with the content; the scroll view also
+        // relayouts its native ruler slots here.
+        invalidateRulers()
+    }
+
+    /// Watches the geometry the rulers depend on besides the scroll offset:
+    /// the canvas frame (zoom and image extent changes resize it) and the
+    /// window's backing scale. Registered like the window's other
+    /// notifications and removed when the window closes, so a closed window
+    /// observes nothing.
+    private func observeRulerGeometry() {
+        NotificationCenter.default.addObserver(self, selector: #selector(canvasFrameChanged),
+                                               name: NSView.frameDidChangeNotification, object: canvas)
+        NotificationCenter.default.addObserver(self, selector: #selector(windowBackingChanged(_:)),
+                                               name: NSWindow.didChangeBackingPropertiesNotification, object: nil)
+        rulerObserversActive = true
+    }
+
+    @objc private func canvasFrameChanged() { invalidateRulers() }
+
+    @objc private func windowBackingChanged(_ note: Notification) {
+        guard let window = note.object as? NSWindow, window === self.window else { return }
+        invalidateRulers()
+    }
+
+    private func removeRulerObservers() {
+        guard rulerObserversActive else { return }
+        NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: canvas)
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeBackingPropertiesNotification, object: nil)
+        rulerObserversActive = false
+    }
+
+    /// Redraws both rulers from the live canvas geometry. Display-only.
+    private func invalidateRulers() {
+        horizontalRuler.invalidateHashMarks()
+        verticalRuler.invalidateHashMarks()
+        horizontalRuler.needsDisplay = true
+        verticalRuler.needsDisplay = true
     }
 
     /// The image-space point at the viewport's center; a revert
@@ -258,6 +322,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // the cached guide list arrives with it too (reloadGuides fires
         // this same callback), so the canvas redraws the guide overlay.
         canvas.needsDisplay = true
+        // Image-size changes arrive with the state too; the rulers track
+        // the new extent on the next draw.
+        invalidateRulers()
         // Fan out to the guides sheet through this existing hook.
         guidesSheet?.documentStateDidChange()
     }
@@ -439,6 +506,19 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         canvas.showsGuides = guidesViewState.showsGuides
         canvas.needsDisplay = true
         if let item = sender as? NSMenuItem { item.state = guidesViewState.menuState }
+    }
+
+    /// View ▸ Show Rulers: flips this window's cached flag and the scroll
+    /// view's native ruler slots, which relayout the viewport around them.
+    /// Pure view state — no engine call, no pixel, file, dirty, history,
+    /// selection, export or print change — and it never waits for the
+    /// engine, so the toggle works while the engine is busy.
+    @objc func toggleShowRulers(_ sender: Any?) {
+        guard !imageDocument.isClosing else { return }
+        rulerViewState.toggle()
+        scrollView.rulersVisible = rulerViewState.showsRulers
+        invalidateRulers()
+        if let item = sender as? NSMenuItem { item.state = rulerViewState.menuState }
     }
 
     /// A catalog item in a Filter category: opens its generic form.
@@ -972,6 +1052,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // wherever navigation is.
             menuItem.state = guidesViewState.menuState
             return !imageDocument.isClosing
+        case #selector(toggleShowRulers(_:)):
+            // Same contract as Show Guides, spelled out in RulerMenuLogic:
+            // the checkmark reads the window's cached flag and an engine-
+            // busy gate never applies to this display-only toggle.
+            let rulerCheck = RulerMenuLogic.validate(showsRulers: rulerViewState.showsRulers,
+                                                     isClosing: imageDocument.isClosing,
+                                                     engineIsBusy: EngineActivity.shared.isBusy)
+            menuItem.state = rulerCheck.state
+            return rulerCheck.enabled
         case #selector(assignColorProfile(_:)):
             // Assignment is allowed on every mode, indexed included:
             // it embeds a compatible profile without converting pixels.
@@ -1525,8 +1614,20 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         PaletteCenter.shared.frontDocumentDidChange()
     }
 
+    deinit {
+        // deinit is nonisolated, so the removal is inlined here rather than
+        // routed through the main-actor-isolated helper; safe even if the
+        // window never went through windowWillClose.
+        if rulerObserversActive {
+            NotificationCenter.default.removeObserver(self)
+        }
+    }
+
     func windowWillClose(_ notification: Notification) {
         closeStarted = true
+        // A closing window leaves no ruler observation behind; the ruler
+        // views themselves go away with the scroll view's view hierarchy.
+        removeRulerObservers()
         guidesSheet?.invalidate()
         previewPanel?.cancel()
         cancelPendingPreview()

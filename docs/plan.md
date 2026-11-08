@@ -1059,6 +1059,64 @@ row/edit preservation and overlay geometry; the GLIMS_SMOKE_CASE=
 guides-controls scenario is wired but NOT run — root owns the runtime
 matrix against the native-guides libraries.
 
+### Pixel rulers (2026-11-08)
+
+View > Show Rulers (default on) puts app-specific pixel rulers in the
+scroll view's native ruler slots: `DocumentWindowController` assigns two
+`PixelRulerView`s (an `NSRulerView` subclass) to
+`scrollView.horizontalRulerView`/`verticalRulerView` with
+`hasHorizontalRuler`/`hasVerticalRuler`, so AppKit keeps the scroll
+layout (toggling relayouts the viewport around the ruler thickness) and
+the rulers' accessibility semantics. The toggle state is a cached
+per-window `RulerViewState` (default on), separate from
+`guidesViewState`; the menu checkmark reads the cache via
+`RulerMenuLogic.validate`, which deliberately takes `engineIsBusy` and
+ignores it, so the item stays enabled and the toggle works while the
+engine is busy. Drawing is display-only: `PixelRulerView` reads the
+canvas's live geometry (weak `canvas` reference, cached image size) and
+maps image pixels through `NSView.convert(_:from:)` from the canvas —
+never assuming a vertical direction — so scroll, zoom, backing scale,
+image extent and flips come out right; no facade call, pixel, file,
+dirty, history, selection, export or print path is touched (printing
+draws an immutable PrintSnapshot, not the scroll view). Ruler
+invalidation rides the existing content-bounds notification (scroll and
+ruler toggles), plus canvas frame changes (zoom, image extent) and the
+window's backing-properties notification; the selector observers are
+removed in `windowWillClose` and in `deinit` (`rulerObserversActive`
+tracks them), and the ruler holds the canvas weakly, so closing a window
+leaves no observation or dangling geometry source behind. There is no
+global ruler controller.
+
+Ticks and labels come from a pure bounded planner, `PixelRulerPlan`: it
+validates all inputs finite (nil for non-finite inputs, non-positive
+scale, negative extent or an inverted range), clamps the visible range
+to the image extent `0...extent` (an off-image range or zero extent is
+the deliberate empty-plan fallback), picks the major spacing as the
+smallest whole 1/2/5 * 10^n reaching ~50 view points (whole pixels, so
+labels are whole image pixels), plans minor ticks at major/5 only when
+they land at least 4 view points apart, and caps the output at 512
+ticks with a progress guard, so extreme zoom, nonzero origins and
+damaged huge sizes terminate with a finite, sorted, bounded plan.
+`PixelRulerGeometry.deviceAligned` snaps strokes to the half-device-
+pixel grid (at most half a device pixel) without changing the ticks'
+image coordinates. Guides keep working independently; their state and
+overlay are untouched.
+
+Compile-checked here: `swift build` and `swift build --build-tests`
+both pass. Unit tests (`PixelRulerTests`) cover the planner against
+independent oracles (brute-force nice spacing, CanvasGeometry zoom/
+backing point scale, explicit range arithmetic) across nonzero origins,
+zoom and backing, clamping, cap/finiteness at extremes, damaged inputs,
+label semantics, device alignment, and the per-window default plus the
+busy-independent menu-validation contract. The smoke scenario
+`GLIMS_SMOKE_CASE=pixel-rulers` (`exercisePixelRulers`, also in the
+default engine-smoke run) is wired but NOT run here — it drives the
+real ruler slots and menu action (on/off viewport and checkmark changes,
+independent two-window state, busy-independent toggling, scroll/zoom
+tick movement and a ruler view bitmap against the geometry oracle,
+pixel/dirty/history/selection isolation, observer removal on close);
+root owns the runtime matrix against the native libraries.
+
 ## Later, before any public release
 
 - Developer ID signing and notarization for the app, GTK3, Python and every
