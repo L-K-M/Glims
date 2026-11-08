@@ -2497,6 +2497,69 @@ final class EngineSession: @unchecked Sendable {
         try check(api.guide_remove(engine, image, guide, &error), error)
     }
 
+    // MARK: Grid
+
+    /// How the image's display grid renders its lines (GlimsGridStyle).
+    /// Facade-owned values; the engine's enum never crosses the boundary.
+    enum GridStyle: UInt32, CaseIterable {
+        case dots = 1, intersections, onOffDash, doubleDash, solid
+    }
+
+    /// The image's display grid (GlimsGrid). Spacings and offsets are in
+    /// the grid's own (unexposed) unit — the engine's default on a fresh
+    /// image — bounded by the native properties: spacings finite and
+    /// > 0 up to the native maximum, offsets inside the native signed
+    /// range. The colors are non-linear sRGB, alpha included.
+    struct Grid: Equatable {
+        var style: GridStyle = .solid
+        var spacingX: Double = 10
+        var spacingY: Double = 10
+        var offsetX: Double = 0
+        var offsetY: Double = 0
+        var foreground = NSColor.black
+        var background = NSColor.white
+    }
+
+    /// The image's display grid, read as the current engine state
+    /// (image_grid). A plain read: allowed at any time, also while a
+    /// stroke, a filter session or a plug-in holds the image; mutates
+    /// nothing.
+    func grid(_ image: Int32) throws -> Grid {
+        var out = GlimsGrid()
+        out.struct_size = UInt32(MemoryLayout<GlimsGrid>.size)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_grid(engine, image, &out, &error), error)
+        guard let style = GridStyle(rawValue: out.style) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The engine returned a grid with an unknown style.")
+        }
+        return Grid(style: style, spacingX: out.spacing_x, spacingY: out.spacing_y,
+                    offsetX: out.offset_x, offsetY: out.offset_y,
+                    foreground: Self.nsColor(out.foreground),
+                    background: Self.nsColor(out.background))
+    }
+
+    /// Applies `grid` to the image (image_set_grid) as exactly one undo
+    /// step; an identical grid is a no-op with no undo. All inputs are
+    /// validated by the adapter before any mutation: INVALID_ARGUMENT
+    /// for an unknown style, a non-finite/zero/negative/over-maximum
+    /// spacing, an out-of-range offset or an invalid color; BUSY while
+    /// a stroke, a filter session or a plug-in holds the image. Grid
+    /// changes are metadata: pixels and the selection are never touched.
+    func setGrid(_ grid: Grid, image: Int32) throws {
+        var request = GlimsGrid()
+        request.struct_size = UInt32(MemoryLayout<GlimsGrid>.size)
+        request.style = grid.style.rawValue
+        request.spacing_x = grid.spacingX
+        request.spacing_y = grid.spacingY
+        request.offset_x = grid.offsetX
+        request.offset_y = grid.offsetY
+        request.foreground = try Self.color(grid.foreground)
+        request.background = try Self.color(grid.background)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_set_grid(engine, image, &request, &error), error)
+    }
+
     // MARK: Helpers
 
     private func check(_ status: GlimsStatus, _ error: UnsafeMutablePointer<CChar>?) throws {

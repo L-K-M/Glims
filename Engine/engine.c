@@ -26,6 +26,7 @@
 
 #include "core/gimp.h"
 #include "core/gimp-user-install.h"
+#include "core/gimpgrid.h"
 #include "core/gimpimage.h"
 #include "core/gimpprojection.h"
 
@@ -534,6 +535,15 @@ check_engine_interface (Gimp    *gimp,
   check_signal (problems, GIMP_TYPE_IMAGE, "guide-added", 1);
   check_signal (problems, GIMP_TYPE_IMAGE, "guide-removed", 1);
   check_signal (problems, GIMP_TYPE_IMAGE, "guide-moved", 1);
+  check_property (problems, GIMP_TYPE_GRID, "style", GIMP_TYPE_GRID_STYLE);
+  check_property (problems, GIMP_TYPE_GRID, "fgcolor", GEGL_TYPE_COLOR);
+  check_property (problems, GIMP_TYPE_GRID, "bgcolor", GEGL_TYPE_COLOR);
+  check_property (problems, GIMP_TYPE_GRID, "xspacing", G_TYPE_DOUBLE);
+  check_property (problems, GIMP_TYPE_GRID, "yspacing", G_TYPE_DOUBLE);
+  check_property (problems, GIMP_TYPE_GRID, "spacing-unit", GIMP_TYPE_UNIT);
+  check_property (problems, GIMP_TYPE_GRID, "xoffset", G_TYPE_DOUBLE);
+  check_property (problems, GIMP_TYPE_GRID, "yoffset", G_TYPE_DOUBLE);
+  check_property (problems, GIMP_TYPE_GRID, "offset-unit", GIMP_TYPE_UNIT);
   check_property (problems, GIMP_TYPE_PAINT_OPTIONS, "brush-size", G_TYPE_DOUBLE);
   check_property (problems, GIMP_TYPE_PAINT_CORE, "undo-desc", G_TYPE_STRING);
   check_property (problems, G_OBJECT_TYPE (gimp->edit_config), "prev-language", G_TYPE_STRING);
@@ -2087,6 +2097,8 @@ MARSHAL (guide_remove, return glims_guide_remove (e, a->image, a->width, a->erro
 MARSHAL (layer_source_info, return glims_layer_source_info (e, a->image, a->item, a->out, a->error);)
 MARSHAL (image_convert_indexed, return glims_image_convert_indexed (e, a->image, a->in,
                                                                     a->in2, a->capacity, a->error);)
+MARSHAL (image_grid, return glims_image_grid (e, a->image, a->out, a->error);)
+MARSHAL (image_set_grid, return glims_image_set_grid (e, a->image, a->in, a->error);)
 
 static GlimsStatus
 api_image_guides (GlimsEngine *e, GlimsImageID image, GlimsGuideInfo *rows,
@@ -2127,6 +2139,20 @@ api_image_convert_indexed (GlimsEngine *e, GlimsImageID image,
   GlimsArgs a = { .image = image, .in = settings, .in2 = colors,
                   .capacity = color_count, .error = error };
   return glims_engine_call (e, image_convert_indexed_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_grid (GlimsEngine *e, GlimsImageID image, GlimsGrid *out, char **error)
+{
+  GlimsArgs a = { .image = image, .out = out, .error = error };
+  return glims_engine_call (e, image_grid_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_set_grid (GlimsEngine *e, GlimsImageID image, const GlimsGrid *grid, char **error)
+{
+  GlimsArgs a = { .image = image, .in = grid, .error = error };
+  return glims_engine_call (e, image_set_grid_on_engine, &a);
 }
 
 static GlimsStatus
@@ -2259,6 +2285,8 @@ static const GlimsEngineAPI api_v1 = {
   .guide_remove    = api_guide_remove,
   .layer_source_info = api_layer_source_info,
   .image_convert_indexed = api_image_convert_indexed,
+  .image_grid        = api_image_grid,
+  .image_set_grid    = api_image_set_grid,
 };
 
 __attribute__ ((visibility ("default")))
