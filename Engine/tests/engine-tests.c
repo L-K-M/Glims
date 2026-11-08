@@ -4132,6 +4132,138 @@ test_color_state (const char *fixtures, const char *work)
   free (after_pixels);
 }
 
+static int
+profile_pixel (GlimsImageID image, int32_t x, int32_t y, uint8_t out[4])
+{
+  memset (out, 0, 4);
+  return api->image_render (engine, image, 1.0, (GlimsRect) { x, y, 1, 1 }, out, 4) == GLIMS_STATUS_OK;
+}
+
+static void
+test_color_profiles (const char *fixtures, const char *work)
+{
+  char rgb[1024], gray[1024], xcf[1024], missing[1024];
+  GlimsImageID image = 0, reopened = 0;
+  GlimsColorInfo info;
+  GlimsFilterID preview = 0;
+  GlimsStrokeID stroke = 0;
+  GlimsItemID layer = 0;
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 3);
+  GlimsStrokePoint point = { 1, 1, 1, 0, 0, 0 };
+  GlimsFillSettings fill = { .struct_size = sizeof fill, .mode = GLIMS_FILL_SELECTION,
+                              .color = { .5, .25, .75, 1 }, .opacity = 1 };
+  uint8_t before[4], assigned[4], pixel[4];
+  int depth, i, matches;
+  char *error = NULL;
+  GlimsStatus status;
+
+  snprintf (rgb, sizeof rgb, "%s/linear-rgb.icc", fixtures);
+  snprintf (gray, sizeof gray, "%s/gray.icc", fixtures);
+  snprintf (xcf, sizeof xcf, "%s/icc-profile.xcf", work);
+  snprintf (missing, sizeof missing, "%s/missing-profile.icc", work);
+  CHECK (api->image_new (engine, 8, 8, &image, NULL) == GLIMS_STATUS_OK &&
+         api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL) == GLIMS_STATUS_OK &&
+         profile_pixel (image, 4, 4, before), "the ICC fixture has known midtone pixels");
+  depth = undo_depth (image);
+  CHECK (api->image_assign_profile (engine, image, NULL, NULL) == GLIMS_STATUS_OK &&
+         api->image_convert_profile (engine, image, NULL, GLIMS_PROFILE_RELATIVE_COLORIMETRIC,
+                                      true, NULL) == GLIMS_STATUS_OK && undo_depth (image) == depth,
+         "discarding or converting an already builtin profile adds no undo");
+  CHECK (api->image_assign_profile (engine, image, "", NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_assign_profile (engine, image, "relative.icc", NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_assign_profile (engine, image, "/bad\xff.icc", NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_convert_profile (engine, image, rgb, 0, true, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_convert_profile (engine, image, rgb, UINT32_MAX, true, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == depth, "invalid ICC paths and facade intents refuse before mutation");
+  status = api->image_assign_profile (engine, image, missing, &error);
+  CHECK (status == GLIMS_STATUS_FAILED && error && *error && undo_depth (image) == depth,
+         "a missing ICC file returns an error without an undo step");
+  api->free_string (error); error = NULL;
+  CHECK (api->image_assign_profile (engine, image, gray, NULL) == GLIMS_STATUS_FAILED &&
+         api->image_convert_profile (engine, image, gray, GLIMS_PROFILE_PERCEPTUAL, true, NULL) == GLIMS_STATUS_FAILED &&
+         undo_depth (image) == depth && profile_pixel (image, 4, 4, pixel) && !memcmp (pixel, before, 4),
+         "a gray profile is refused for RGB without changing pixels or history");
+
+  status = api->image_assign_profile (engine, image, rgb, &error);
+  CHECK (status == GLIMS_STATUS_OK && api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.profile_embedded && !strcmp (info.profile_label, "Glims Linear RGB Fixture") &&
+         undo_depth (image) == depth + 1,
+         "assignment embeds the selected ICC profile as one undo step (%d: %s)", status, error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (profile_pixel (image, 4, 4, assigned) && assigned[0] > before[0] + 30 &&
+         assigned[1] > before[1] + 30,
+         "assigning a linear profile reinterprets unchanged component values (%u,%u -> %u,%u)",
+         before[0], before[1], assigned[0], assigned[1]);
+  CHECK (api->image_assign_profile (engine, image, rgb, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 1, "assigning an equal profile is a no-op");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK && !info.profile_embedded &&
+         profile_pixel (image, 4, 4, pixel) && !memcmp (pixel, before, 4),
+         "undo assignment restores the profile and its original appearance");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         profile_pixel (image, 4, 4, pixel) && !memcmp (pixel, assigned, 4),
+         "redo assignment restores the custom interpretation");
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, reopened, &info) == GLIMS_STATUS_OK &&
+         info.profile_embedded && !strcmp (info.profile_label, "Glims Linear RGB Fixture") &&
+         profile_pixel (reopened, 4, 4, pixel) && !memcmp (pixel, assigned, 4),
+         "the assigned profile and appearance survive XCF save and reopen");
+  if (reopened) api->image_close (engine, reopened);
+
+  depth = undo_depth (image);
+  status = api->image_convert_profile (engine, image, NULL, GLIMS_PROFILE_RELATIVE_COLORIMETRIC,
+                                       true, &error);
+  matches = profile_pixel (image, 4, 4, pixel);
+  for (i = 0; i < 4; i++) matches = matches && abs ((int)pixel[i] - assigned[i]) <= 2;
+  CHECK (status == GLIMS_STATUS_OK && matches && undo_depth (image) == depth + 1 &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK && !info.profile_embedded,
+         "conversion to builtin sRGB preserves appearance as one undo step (%d; %u,%u,%u -> %u,%u,%u; %s)",
+         status, assigned[0], assigned[1], assigned[2], pixel[0], pixel[1], pixel[2], error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK && info.profile_embedded &&
+         !strcmp (info.profile_label, "Glims Linear RGB Fixture"),
+         "undo profile conversion restores the embedded source profile");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK && !info.profile_embedded,
+         "redo profile conversion restores the builtin destination");
+  depth = undo_depth (image);
+  CHECK (api->image_assign_profile (engine, image, rgb, NULL) == GLIMS_STATUS_OK &&
+         api->image_assign_profile (engine, image, NULL, NULL) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK && !info.profile_embedded &&
+         undo_depth (image) == depth + 2,
+         "discarding an assigned profile is a separate undoable interpretation change");
+
+  layer = first_layer (image);
+  CHECK (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK &&
+         api->image_assign_profile (engine, image, rgb, NULL) == GLIMS_STATUS_BUSY &&
+         api->image_convert_profile (engine, image, rgb, GLIMS_PROFILE_SATURATION, false, NULL) == GLIMS_STATUS_BUSY,
+         "profile assignment and conversion refuse an active stroke");
+  if (stroke) api->stroke_end (engine, stroke);
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &preview, NULL) == GLIMS_STATUS_OK &&
+         api->image_assign_profile (engine, image, rgb, NULL) == GLIMS_STATUS_BUSY &&
+         api->image_convert_profile (engine, image, rgb, GLIMS_PROFILE_ABSOLUTE_COLORIMETRIC, false, NULL) == GLIMS_STATUS_BUSY,
+         "profile assignment and conversion refuse a live filter preview");
+  if (preview) api->filter_abort (engine, preview);
+  CHECK (api->image_convert_mode (engine, image, GLIMS_COLOR_MODE_GRAYSCALE, NULL) == GLIMS_STATUS_OK &&
+         api->image_assign_profile (engine, image, gray, NULL) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK && info.profile_embedded &&
+         !strcmp (info.profile_label, "Glims Gray Fixture"),
+         "a grayscale image accepts its compatible gray ICC profile");
+  depth = undo_depth (image);
+  CHECK (api->image_assign_profile (engine, image, rgb, NULL) == GLIMS_STATUS_FAILED &&
+         api->image_convert_profile (engine, image, rgb, GLIMS_PROFILE_PERCEPTUAL, true, NULL) == GLIMS_STATUS_FAILED &&
+         undo_depth (image) == depth,
+         "a grayscale image refuses an RGB destination before adding history");
+  CHECK (api->image_convert_profile (engine, image, NULL, GLIMS_PROFILE_PERCEPTUAL, true, NULL) == GLIMS_STATUS_OK,
+         "a gray profile converts back to the builtin gray profile");
+  api->image_close (engine, image);
+  CHECK (api->image_assign_profile (engine, image, rgb, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->image_convert_profile (engine, image, rgb, GLIMS_PROFILE_PERCEPTUAL, true, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "closed images refuse ICC assignment and conversion");
+}
+
 /* ---- Tests ------------------------------------------------------------- */
 
 static void
@@ -5909,6 +6041,7 @@ main (int argc, char **argv)
   test_filter_edit_history_gate ();
   test_filter_edit (argv[2]);
   test_color_state (argv[3], argv[2]);
+  test_color_profiles (argv[3], argv[2]);
   test_qmask_name_fixture (argv[3]);
   test_resources ();
   test_procedures ();
