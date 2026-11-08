@@ -1094,6 +1094,10 @@ MARSHAL (path_fill, return glims_path_fill (e, a->image, a->item, (GlimsItemID) 
                                             a->error);)
 MARSHAL (path_to_vector_layer, return glims_path_to_vector_layer (e, a->image, a->item, a->string,
                                                                   a->out, a->error);)
+MARSHAL (vector_layer_style_get, return glims_vector_layer_style_get (e, a->image, a->item,
+                                                                      (GlimsVectorStyle *) a->in_out, a->error);)
+MARSHAL (vector_layer_style_set, return glims_vector_layer_style_set (e, a->image, a->item,
+                                                                      a->in, a->error);)
 
 /* A path's geometry takes more arguments than GlimsArgs holds. */
 typedef struct
@@ -1870,6 +1874,22 @@ api_path_to_vector_layer (GlimsEngine *e, GlimsImageID image, GlimsItemID path, 
   return glims_engine_call (e, path_to_vector_layer_on_engine, &a);
 }
 
+static GlimsStatus
+api_vector_layer_style_get (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                            GlimsVectorStyle *style, char **error)
+{
+  GlimsArgs a = { .image = image, .item = layer, .in_out = style, .error = error };
+  return glims_engine_call (e, vector_layer_style_get_on_engine, &a);
+}
+
+static GlimsStatus
+api_vector_layer_style_set (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                            const GlimsVectorStyleChange *change, char **error)
+{
+  GlimsArgs a = { .image = image, .item = layer, .in = change, .error = error };
+  return glims_engine_call (e, vector_layer_style_set_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1970,6 +1990,8 @@ static const GlimsEngineAPI api_v1 = {
   .image_convert_precision = api_image_convert_precision,
   .path_fill = api_path_fill,
   .path_to_vector_layer = api_path_to_vector_layer,
+  .vector_layer_style_get = api_vector_layer_style_get,
+  .vector_layer_style_set = api_vector_layer_style_set,
 };
 
 __attribute__ ((visibility ("default")))

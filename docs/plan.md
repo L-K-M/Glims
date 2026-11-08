@@ -760,6 +760,37 @@ and substantial parts of `design.md`, still need implementation and checks.
   rebuild, no library relink, no test or smoke run (the root checkout
   serializes desktop tests). Pending: the runtime run of the new smoke
   cases and `swift test` on all four engines in the root checkout.
+- 2026-11-08: two more additive facade calls, engine side only, on
+  `feat/vector-layer-style`. `vector_layer_style_get` /
+  `vector_layer_style_set` read and change a genuine vector layer's
+  native style (GIMP 3.2+; pre-3.2 UNSUPPORTED, nothing mutated) through
+  the layer's own `GimpVectorLayerOptions` — new facade-owned
+  `GlimsVectorStyle` / `GlimsVectorStyleChange` with own cap/join enums
+  and a `properties` bitmask, `struct_size` guards, no raw GIMP types.
+  First slice is solid paint only: enable flags, explicit RGBA fill and
+  stroke colors, antialias, and stroke width plus cap/join/miter — exactly
+  the fields XCF persists in `PROP_VECTOR_LAYER`; opacity, paint mode,
+  unit, dash offset, feather and method are not persisted and are not
+  exposed. A native pattern fill or stroke reports UNSUPPORTED on read
+  and write, never converted (the setter never writes `custom-style`).
+  The setter validates everything before mutating (busy/edit-ready
+  first, then struct and finite RGBA / width / miter / enum guards),
+  treats an all-equal change as a no-op with no undo, and otherwise
+  applies the flagged fields as exactly one native undo group — manual
+  `gimp_image_undo_group_start` + freeze notify + whole-options
+  `gimp_image_undo_push_vector_layer(…, NULL)` snapshot + thaw +
+  `gimp_image_undo_group_end` + refresh + flush, the same sequence as
+  3.2.8+'s `gimp_vector_layer_set`, with `GIMP_UNDO_GROUP_VECTOR` where
+  it exists and `GIMP_UNDO_GROUP_DRAWABLE_MOD` on 3.2.0. Pixel and
+  group-inherited locks refuse with LOCKED; the layer's name, auto-rename
+  policy and path association are untouched. The getter is a borrowed
+  read (no refs taken). Conformance tests cover pixels changed, getter
+  round trip, one undo/redo, no-op/invalid/locked no-history, name and
+  path association with a live path edit, XCF save/reopen of style and
+  name inside a group, and pre-3.2 UNSUPPORTED/unmutated. Checked on
+  this branch: the adapter compiles against all four engine sets with a
+  private `GLIMS_ADAPTER_ROOT`; the runtime conformance run is left to
+  the root checkout.
 
 ## Open decisions
 
