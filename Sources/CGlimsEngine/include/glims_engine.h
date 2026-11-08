@@ -2136,6 +2136,65 @@ typedef struct GlimsEngineAPI {
    * every path. */
   GlimsStatus  (*selection_float) (GlimsEngine *engine, GlimsImageID image, GlimsItemID target,
                                    uint32_t mode, GlimsItemID *result, char **error);
+
+  /* Selects exactly `layers` — an ordered array of `count` layer ids of
+   * `image` — as the image's whole selected-layer list (slot 122), the
+   * multi-layer counterpart of layer_select, through the engine's own
+   * gimp_image_set_selected_layers. Layer groups are layers and may be
+   * listed. The selection is transient: it pushes no undo step, marks
+   * the image not dirty, and changes no pixels, no selection mask and no
+   * mask pixel data. A change sends LAYERS_CHANGED (the engine's
+   * "selected-layers-changed" signal, as layer_select's does); a request
+   * identical to the current selection is a no-op with no event. The
+   * engine keeps the caller's order verbatim — the first id is the
+   * active layer plug-ins, fills and gradients act on — and the adapter
+   * verifies the postcondition (the exact list, in order) after the call
+   * and reports FAILED if the engine silently did not apply it.
+   *
+   * `count` 0 (with `layers` NULL) clears the selection — the engine
+   * permits an empty selection — except while a floating selection is
+   * active. Everything is validated before any mutation, so every
+   * refusal leaves the current selection untouched: INVALID_ARGUMENT
+   * for a NULL `layers` with `count` > 0, for the id 0 (it names no
+   * layer), for a repeated id, or for an id that names a mask, channel
+   * or path of the image (those are drawables/items, not layers);
+   * NOT_FOUND for an unknown image, or an id that is stale, foreign
+   * (another image) or detached. While a floating selection is active
+   * the engine's setter silently ignores every request except the
+   * identical [floating] list — this call refuses those explicitly with
+   * FAILED (never anchoring the floating selection) and accepts the
+   * identical [floating] list, which is a no-op. Readiness is
+   * layer_select's: NOT_FOUND for an unknown image, and no BUSY gate —
+   * the selection may change while a stroke, a filter session or a
+   * plug-in holds the image. Note on the native call's list ownership:
+   * gimp_image_set_selected_layers copies the passed list, so the
+   * adapter frees its own list exactly once after the call.
+   *
+   * One genuine native side effect to know about: when the selection
+   * actually changes to more than one layer, the engine clears the
+   * edit-mask flag (GlimsMaskState.editing) of every selected layer that
+   * has a mask — "we cannot edit masks with multiple selected layers",
+   * exactly as the engine's own layer dock does. That flag is transient
+   * edit state, not mask data: mask pixels, and the mask's enabled and
+   * showing flags, are never touched, and no undo or dirty follows. */
+  GlimsStatus  (*image_select_layers) (GlimsEngine *engine, GlimsImageID image,
+                                       const GlimsItemID *layers, size_t count,
+                                       char **error);
+
+  /* Reads the image's selected layer ids, in the engine's own order —
+   * the order image_select_layers last set, first id (the active layer)
+   * first (slot 123), from gimp_image_get_selected_layers, whose
+   * returned list is BORROWED and never freed by the adapter (the
+   * owned-list variant, gimp_image_get_selected_drawables, is not used
+   * here). Fills up to `capacity` ids; `count` receives the total.
+   * `ids` may be NULL with `capacity` 0 to only count. A plain read,
+   * allowed at any time — also while a stroke, a filter session or a
+   * plug-in holds the image; it mutates nothing. NOT_FOUND for an
+   * unknown image; INVALID_ARGUMENT for a missing `count` or a
+   * negative `capacity`. */
+  GlimsStatus  (*image_selected_layers)(GlimsEngine *engine, GlimsImageID image,
+                                        GlimsItemID *ids, int32_t capacity,
+                                        int32_t *count);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
