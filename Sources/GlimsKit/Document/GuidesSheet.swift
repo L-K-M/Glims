@@ -196,7 +196,11 @@ final class GuidesSheetController: NSObject, NSTableViewDataSource, NSTableViewD
         rows = GuidesSheetLogic.sortedGuides(document.guides)
         tableView.reloadData()
         if let previous, let row = GuidesSheetLogic.index(ofGuide: previous, in: rows) {
+            selectedGuideID = previous
             tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            // Selecting the same row need not notify the delegate. Undo
+            // can change its position while leaving its identity intact.
+            synchronizeInputs(with: rows[row])
         } else {
             selectedGuideID = nil
             tableView.deselectAll(nil)
@@ -238,6 +242,13 @@ final class GuidesSheetController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private var positionFieldIsEditing: Bool {
         positionField.currentEditor() != nil
+    }
+
+    private func synchronizeInputs(with guide: EngineSession.Guide) {
+        selectOrientation(guide.orientation)
+        if GuidesSheetLogic.shouldRewritePositionField(isEditing: positionFieldIsEditing) {
+            positionField.stringValue = String(guide.position)
+        }
     }
 
     private func updateControlStates() {
@@ -347,11 +358,7 @@ final class GuidesSheetController: NSObject, NSTableViewDataSource, NSTableViewD
         }
         let guide = rows[row]
         selectedGuideID = guide.id
-        selectOrientation(guide.orientation)
-        // Never overwrite an active field edit with the row's position.
-        if GuidesSheetLogic.shouldRewritePositionField(isEditing: positionFieldIsEditing) {
-            positionField.stringValue = String(guide.position)
-        }
+        synchronizeInputs(with: guide)
         updateControlStates()
     }
 }

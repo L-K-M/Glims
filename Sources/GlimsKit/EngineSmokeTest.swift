@@ -7899,6 +7899,18 @@ enum EngineSmokeTest {
         check(table(sheetA)?.selectedRow == 0,
               "the selected row survives the asynchronous reload by guide identity")
 
+        sheetA?.endEditing(for: nil)
+        docA.undo()
+        wait { docA.pendingWork == 0 && docA.guides.first?.position == 10 }
+        spin(0.1)
+        check(editableField(sheetA, "Guide position in pixels")?.stringValue == "10",
+              "undo refreshes the selected guide's idle position field")
+        docA.redo()
+        wait { docA.pendingWork == 0 && docA.guides.first?.position == 20 }
+        spin(0.1)
+        check(editableField(sheetA, "Guide position in pixels")?.stringValue == "20",
+              "redo refreshes the selected guide's idle position field")
+
         // Out-of-range and non-integer input: refused visibly, no mutation.
         editableField(sheetA, "Guide position in pixels")?.stringValue = "999"
         let undoBeforeInvalid = docA.undoInfo.undoCount
