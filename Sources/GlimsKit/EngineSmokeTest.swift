@@ -98,6 +98,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "native-guides" {
+                try exerciseGuideCache(session, documents: documents)
+                print(failures == 0 ? "PASSED (native guides)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brush-chooser" {
                 try exerciseBrushChooserPresentation(session, documents: documents)
                 print(failures == 0 ? "PASSED (brush chooser)" : "FAILED: \(failures) failure(s)")
@@ -164,6 +169,7 @@ enum EngineSmokeTest {
             try exerciseFilterStackInterface(session, work: work, documents: documents)
             try measurePluginStalls(session, work: work)
             try exerciseResourceCatalog(session)
+            try exerciseGuideCache(session, documents: documents)
             try exerciseResourceGradient(session, documents: documents)
             try exerciseResourceThumbnails(session)
             try exerciseSelectedBrushStrokes(session, documents: documents)
@@ -7719,6 +7725,81 @@ enum EngineSmokeTest {
         wait { document.pendingWork == 0 }
         check(try session.copyPixels(image, merged: true).pixels == blank,
               "undo restores the pixels before chooser-selected painting")
+    }
+
+    private static func exerciseGuideCache(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 96, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Guide cache")
+        documents.items.append(document)
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func settle() {
+            document.inputQueue.sync {}
+            wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+            spin()
+        }
+        defer {
+            documents.items.removeAll { $0 === document }
+            var closed = false
+            document.closeImageWhenDrained { closed = true }
+            wait { closed }
+            check(closed && (try? session.info(image)) == nil,
+                  "the guide-cache image closes before engine shutdown")
+        }
+        let pixels = try session.copyPixels(image, merged: true).pixels
+        let before = document.undoInfo.undoCount
+        check(document.guides.isEmpty, "a new document caches an empty guide list")
+        document.addGuide(.horizontal, at: 12)
+        settle()
+        guard let guide = document.guides.first else {
+            return check(false, "the queued add refreshes the guide cache")
+        }
+        check(guide.orientation == .horizontal && guide.position == 12
+                && document.undoInfo.undoCount == before + 1 && errors.isEmpty,
+              "queued guide creation refreshes orientation and position with one undo")
+        document.moveGuide(guide, to: 24)
+        settle()
+        check(document.guides.first?.position == 24 && document.undoInfo.undoCount == before + 2,
+              "queued guide movement refreshes the cache with one undo")
+        document.removeGuide(guide.id)
+        settle()
+        check(document.guides.isEmpty && document.undoInfo.undoCount == before + 3,
+              "queued guide removal refreshes the cache with one undo")
+        document.undo()
+        settle()
+        check(document.guides.count == 1 && document.guides.first?.position == 24,
+              "undo restores a removed guide in the document cache")
+        let afterGuides = try session.copyPixels(image, merged: true).pixels
+        check(afterGuides == pixels, "guide commands and undo leave image pixels unchanged")
+
+        let ready = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        let accepted = EngineActivity.shared.perform(label: "Guide cache refresh", work: {
+            _ = try? session.putGuide(.init(id: 0, orientation: .vertical, position: 20), image: image)
+            _ = try? session.putGuide(.init(id: 0, orientation: .horizontal, position: 40), image: image)
+            ready.signal()
+            release.wait()
+        }, completion: {})
+        var started = false
+        let deadline = Date().addingTimeInterval(10)
+        while !started && Date() < deadline {
+            started = ready.wait(timeout: .now()) == .success
+            if !started { spin(0.01) }
+        }
+        spin()
+        check(accepted && started && document.guides.count == 1,
+              "guide events defer cached native reads while exclusive work is busy")
+        let errorCount = errors.count
+        document.addGuide(.vertical, at: 30)
+        check(errors.count == errorCount + 1 && document.pendingWork == 0,
+              "a guide command reports a busy admission without queueing")
+        release.signal()
+        wait { !EngineActivity.shared.isBusy && document.guides.count == 3 }
+        check(document.guides.count == 3,
+              "deferred guide events refresh the full cache after exclusive work")
     }
 
 }
