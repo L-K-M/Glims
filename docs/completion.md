@@ -41,19 +41,21 @@ behavior, not every adjacent feature in `design.md`.
 
 ## Remaining implementation and final verification
 
-- [ ] Layer multi-selection and saved sets, fit/trim, and consistent
-      rasterize/revert policy for structured layers.
+- [x] Layer to Image Size and Trim Layer to Content, with pixel-only policy.
+- [ ] Layer multi-selection, saved sets and consistent rasterize/revert
+      controls for structured layers.
 - [ ] Adjustment layers/groups, remaining custom filter forms and filter inputs.
-- [ ] Path fill, vector layers and multi-anchor editing.
-- [ ] Brush, pattern and gradient resource choosers and presets.
-  - [ ] Brush chooser in Tool Options (2026-11-08, `feat/brush-chooser`):
-    one chooser, per-tool persistent `ResourceIdentity` selection, owned
-    NSPanel with search and 32 px thumbnails; pattern/gradient choosers,
-    presets and resource management remain. See `plan.md`.
-- [ ] Indexed conversion policy, display color management and soft proofing
-      (profile assignment/conversion landed on `feat/color-profile-controls`).
-- [ ] Rulers, guides, grid, snapping, view rotation, trackpad/modifier behavior
-      and initial fit that avoids palettes.
+- [x] Path fill, vector layers and vector style controls.
+- [ ] Multi-anchor path editing.
+- [x] Searchable brush, pattern and gradient resource choosers, with
+      thumbnails, retained identities and captured gesture settings.
+- [ ] Tool presets and resource creation/management.
+- [x] Color profile assignment and conversion with explicit rasterization consent.
+- [ ] Indexed conversion policy, display color management and soft proofing.
+- [x] Native guides with undo/XCF persistence, per-document management
+      sheets and a per-window Show Guides overlay toggle.
+- [ ] Rulers, grid, snapping, canvas guide dragging, view rotation,
+      trackpad/modifier behavior and initial fit that avoids palettes.
 - [ ] Paste Into/floating selection controls, Stroke Selection and resource
       creation from selections.
 - [ ] Image metadata editing, remaining Image Adjust commands,
