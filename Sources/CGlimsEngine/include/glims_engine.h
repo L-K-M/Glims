@@ -979,6 +979,37 @@ typedef struct GlimsGuideInfo {
                               * 0 ... image width (vertical) */
 } GlimsGuideInfo;
 
+/* How the image's display grid renders its lines. Facade-owned values
+ * mapped to the engine's named GimpGridStyle constants inside the
+ * adapter; the native enum value never crosses this boundary. */
+typedef enum GlimsGridStyle {
+  GLIMS_GRID_DOTS          = 1,  /* dots at the intersections */
+  GLIMS_GRID_INTERSECTIONS = 2,  /* crosshairs at the intersections */
+  GLIMS_GRID_ON_OFF_DASH   = 3,  /* single dashed lines */
+  GLIMS_GRID_DOUBLE_DASH   = 4,  /* double dashed lines (bgcolor shows) */
+  GLIMS_GRID_SOLID         = 5   /* solid lines */
+} GlimsGridStyle;
+
+/* The image's display grid, as image_grid reports it and image_set_grid
+ * applies. Size-versioned: the caller sets `struct_size` to
+ * sizeof (GlimsGrid) before a call and the adapter refuses a smaller
+ * one. Spacings and offsets are in the grid's own (unexposed) unit —
+ * the engine's default on a fresh image — as the native "xspacing",
+ * "yspacing", "xoffset" and "yoffset" properties hold them; the
+ * native bounds apply: spacings must be finite and > 0 up to the
+ * native maximum, offsets finite inside the native signed range.
+ * The colors are non-linear sRGB, 0 ... 1, alpha included. */
+typedef struct GlimsGrid {
+  uint32_t   struct_size;   /* sizeof (GlimsGrid) */
+  uint32_t   style;         /* GlimsGridStyle */
+  double     spacing_x;     /* > 0, <= the native "xspacing" maximum */
+  double     spacing_y;     /* > 0, <= the native "yspacing" maximum */
+  double     offset_x;      /* inside the native "xoffset" signed range */
+  double     offset_y;      /* inside the native "yoffset" signed range */
+  GlimsColor foreground;    /* sRGB 0 ... 1, alpha included */
+  GlimsColor background;    /* sRGB 0 ... 1, alpha included; double-dash only */
+} GlimsGrid;
+
 /* One row of the resources() list, in the engine's own order. */
 typedef struct GlimsResourceInfo {
   GlimsResourceID id;
@@ -986,6 +1017,35 @@ typedef struct GlimsResourceInfo {
   char            name[256]; /* display label, UTF-8, truncated at a
                               * character boundary */
 } GlimsResourceInfo;
+
+/* What a floating selection (a Paste Into result before it resolves) is
+ * attached to. Facade-owned values mapped to the engine's own classes
+ * inside the adapter; the native classes never cross this boundary. */
+typedef enum GlimsFloatingTargetKind {
+  GLIMS_FLOATING_TARGET_LAYER      = 1,  /* a layer (a plain pixel layer or an already rasterized text/link/vector instance) */
+  GLIMS_FLOATING_TARGET_LAYER_MASK = 2,  /* a layer's mask */
+  GLIMS_FLOATING_TARGET_CHANNEL    = 3   /* a saved channel (or the Quick Mask's channel) */
+} GlimsFloatingTargetKind;
+
+/* The image's floating-selection state, as image_floating_selection
+ * reports it. Size-versioned: the caller sets `struct_size` to
+ * sizeof (GlimsFloatingState) before a call and the adapter refuses a
+ * smaller one. */
+typedef struct GlimsFloatingState {
+  uint32_t     struct_size;   /* sizeof (GlimsFloatingState) */
+  bool         active;       /* a floating selection exists */
+  GlimsItemID  floating;     /* the floating layer's id; 0 when !active */
+  GlimsItemID  target;       /* the drawable it is attached to; 0 when !active */
+  uint32_t     target_kind;  /* GlimsFloatingTargetKind; 0 when !active */
+} GlimsFloatingState;
+
+/* How floating_command resolves a floating selection. Facade-owned
+ * values; the native verbs are mapped inside the adapter only. */
+typedef enum GlimsFloatingCommand {
+  GLIMS_FLOATING_ANCHOR   = 1,  /* merge the floating layer into its target */
+  GLIMS_FLOATING_TO_LAYER = 2,  /* detach it as an independent layer */
+  GLIMS_FLOATING_DISCARD  = 3   /* remove it without merging */
+} GlimsFloatingCommand;
 
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
@@ -1878,6 +1938,154 @@ typedef struct GlimsEngineAPI {
                                          const GlimsIndexedSettings *settings,
                                          const GlimsColor *colors, int32_t color_count,
                                          char **error);
+
+  /* The image's display grid (a GlimsGrid), as a plain read of the
+   * current engine state: allowed at any time, also while a stroke,
+   * a filter session or a plug-in holds the image, and it mutates
+   * nothing. `out` is validated by its struct_size before it is
+   * written: INVALID_ARGUMENT for a missing `out` or one whose
+   * struct_size is too small; NOT_FOUND for an unknown image — stale
+   * or closed. The colors come back as non-linear sRGB with alpha. */
+  GlimsStatus  (*image_grid)     (GlimsEngine *engine, GlimsImageID image,
+                                  GlimsGrid *out, char **error);
+
+  /* Applies `grid` to the image through the core's
+   * gimp_image_set_grid(image, grid, TRUE): a changed grid is exactly
+   * one native undo step ("Grid") and an identical grid is a no-op
+   * that pushes no undo. The engine's own unexposed grid properties
+   * (the spacing and offset units) are retained. Everything is
+   * validated before any mutation, so the native property clamps can
+   * neither hide invalid input nor leave a partial change:
+   * INVALID_ARGUMENT for a missing `grid`, a short struct, an unknown
+   * `style`, a non-finite spacing/offset, a spacing that is zero,
+   * negative or beyond the native property maximum, an offset outside
+   * the native signed range, or a non-finite or out-of-range color
+   * component (alpha included); NOT_FOUND for an unknown image; BUSY
+   * while a stroke, a filter session or a plug-in holds the image.
+   * Refusals change no pixels, push no undo and leave the dirty state
+   * alone; grid changes are metadata and never touch the image's
+   * pixels or its selection. The applied change is followed by the
+   * usual UNDO_CHANGED event — no new event kind. */
+  GlimsStatus  (*image_set_grid) (GlimsEngine *engine, GlimsImageID image,
+                                  const GlimsGrid *grid, char **error);
+
+  /* Strokes the image's selection boundary on `drawable` with a paint
+   * tool, through the native core path: gimp_item_stroke() on the
+   * image's mask, whose GimpSelection stroke vfunc suspends the
+   * selection for the call and resumes it after. The stroke therefore
+   * straddles the boundary — pixels on both sides of it change — and
+   * the selection mask itself is never modified; the pixels change as
+   * exactly one undo step ("Stroke Selection", pushed by
+   * gimp_item_stroke with push_undo TRUE). The stroke is painted with
+   * the brush settings' tool via the stroke options' paint method
+   * (GIMP_STROKE_PAINT_METHOD), on a temporary context that inherits
+   * the user context; neither the shared user context nor any factory
+   * resource is mutated.
+   *
+   * `drawable` follows path_stroke's admission exactly: 0 is the
+   * image's selected layer; an explicit id must be an attached layer
+   * of this image. A layer group, a layer mask or a channel id is
+   * refused with FAILED, never silently replaced by another drawable.
+   * `brush` is a full-width resource handle: 0 keeps the established
+   * convention of stroke_begin — the stroke inherits the user
+   * context's current brush; a non-zero handle is resolved strictly
+   * through the resource admission (INVALID_ARGUMENT for an
+   * out-of-native-range handle or one of another resource kind,
+   * NOT_FOUND for a stale handle no longer in the engine's brush
+   * factory) and a failed resolve never falls back to a default
+   * brush. `settings` is a GlimsBrushSettings, validated in full
+   * before any mutation.
+   *
+   * Everything is validated before any mutation, so refusals change
+   * no pixels and push no undo: INVALID_ARGUMENT for a missing or
+   * short `settings`, an unknown `tool`, a non-finite or
+   * non-positive `size`, a non-finite `opacity` or color component,
+   * and for the malformed `brush` handles above; NOT_FOUND for an
+   * unknown image or a stale brush handle; FAILED with `error` for an
+   * empty selection ("There is no selection to stroke.", checked
+   * before the native undo group opens), for a target that is no
+   * layer of the image, a group, or a core-reported failure; BUSY
+   * while a stroke, a filter session or a plug-in holds the image
+   * (glims_edit_ready); LOCKED when the target's effective pixel
+   * lock refuses the stroke — plus the alpha lock for the eraser on
+   * a layer with alpha, as stroke_begin does. The selection is left
+   * unchanged in every case, success included; the usual
+   * UNDO_CHANGED event follows a successful stroke — no new event
+   * kind. */
+  GlimsStatus  (*selection_stroke) (GlimsEngine *engine, GlimsImageID image,
+                                    GlimsItemID drawable, GlimsResourceID brush,
+                                    const GlimsBrushSettings *settings, char **error);
+
+  /* The image's floating-selection state (a GlimsFloatingState): a plain
+   * read of the current engine state, allowed at any time, also while a
+   * stroke, a filter session or a plug-in holds the image; it mutates
+   * nothing. `out` is validated by its struct_size before it is written:
+   * INVALID_ARGUMENT for a missing `out` or one whose struct_size is too
+   * small; NOT_FOUND for an unknown image — stale or closed. With no
+   * floating selection, `out` reports active=false and zero ids. */
+  GlimsStatus  (*image_floating_selection) (GlimsEngine *engine, GlimsImageID image,
+                                             GlimsFloatingState *out);
+
+  /* Pastes the caller's straight-alpha 8-bit sRGB RGBA `pixels` INTO the
+   * existing selection of `image`, attached to `target`, through the
+   * engine's own gimp_edit_paste with GIMP_PASTE_TYPE_FLOATING_INTO: the
+   * result is a floating selection — one layer, exactly one undo step
+   * ("Paste") — whose preview is clipped to the selection while the
+   * target's own pixels stay unchanged until a floating_command resolves
+   * it. The selection itself is never modified or cleared. `target` 0
+   * means the image's selected drawable (the same accessor the engine's
+   * own Paste uses); an explicit id must name an attached layer, layer
+   * mask or saved channel of this image. `result` (may be NULL) receives
+   * the floating layer's id. `pixels` is only read during this
+   * synchronous call.
+   *
+   * Everything is validated before any native call, so every refusal
+   * changes no pixels, pushes no undo and leaves the floating state
+   * alone: INVALID_ARGUMENT for missing pixels, a `byte_count` that is
+   * not exactly bounds.width * bounds.height * 4, non-positive or
+   * over-maximum dimensions, or an out-of-range `bounds` offset;
+   * NOT_FOUND for an unknown image, or a `target` id that is stale,
+   * foreign, detached or names no drawable of the image; FAILED with
+   * `error` when a floating selection already exists (the engine's
+   * attach would silently anchor it inside the "Paste" undo group —
+   * refused instead), when there is no selection or it does not
+   * intersect the target, when the target is a layer group, the
+   * selection mask itself or not a channel of the image's channel list,
+   * or when the core paste fails; LOCKED when the target's — or an
+   * ancestor group's — pixels are locked (the engine would silently
+   * downgrade to a new layer, which this call never does); and
+   * REQUIRES_RASTERIZE for a genuine editable text, link or vector layer
+   * target — an actionable refusal asking for explicit rasterize consent
+   * (GLIMS_LAYER_RASTERIZE); plain pixel layers and already rasterized
+   * instances are accepted. BUSY while a stroke, a filter session or a
+   * plug-in holds the image. The pixels are copied into a private
+   * per-call buffer (nothing of the caller's is retained, no color
+   * profile is attached) and the returned layer list is released. The
+   * floating layer is placed centered on the target's bounds intersected
+   * with the selection, exactly as the engine's own Paste Into does. */
+  GlimsStatus  (*image_paste_into) (GlimsEngine *engine, GlimsImageID image, GlimsItemID target,
+                                    GlimsRect bounds, const uint8_t *pixels, size_t byte_count,
+                                    GlimsItemID *result, char **error);
+
+  /* Resolves the image's floating selection with `command` (a
+   * GlimsFloatingCommand), each exactly one native undo step: ANCHOR
+   * merges the floating layer into its attached target ("Anchor Floating
+   * Selection"), TO_LAYER detaches it as an independent layer ("Floating
+   * Selection to Layer"; `result` receives its id, the same as
+   * `expected`) and DISCARD removes it without merging ("Remove Floating
+   * Selection"). `expected` must name the floating selection that is
+   * actually active in `image`, as image_floating_selection reports it:
+   * 0 is INVALID_ARGUMENT and a stale, foreign or otherwise non-matching
+   * id is NOT_FOUND — neither ever falls back to whichever floating
+   * selection happens to be active. NOT_FOUND also when the image has no
+   * floating selection at all, or is unknown; INVALID_ARGUMENT for an
+   * unknown `command`; FAILED with `error` for TO_LAYER on a floating
+   * selection attached to a layer mask or channel (the engine refuses
+   * those) — with no mutation. BUSY while a stroke, a filter session or
+   * a plug-in holds the image. Refusals change no pixels, push no undo
+   * and leave the floating selection active. */
+  GlimsStatus  (*floating_command) (GlimsEngine *engine, GlimsImageID image, GlimsItemID expected,
+                                    uint32_t command, GlimsItemID *result, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

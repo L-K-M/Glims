@@ -140,6 +140,11 @@ final class ImageDocument {
     /// selection — so the cache refreshes with `reload` and on the
     /// deferred guides-changed refresh.
     private(set) var guides: [EngineSession.Guide] = []
+    /// The image's display grid, read with the rest of the state. A
+    /// grid change is one undo step and metadata — it never touches
+    /// pixels or the selection — so the cache refreshes with `reload`,
+    /// which the undo-changed event schedules; no dedicated event.
+    private(set) var grid = EngineSession.Grid()
     /// The image's paths, top first.
     private(set) var paths: [EngineSession.PathInfo] = []
     /// The path the Path tool edits and the Paths palette's commands use.
@@ -246,6 +251,7 @@ final class ImageDocument {
         quickMaskState = try session.quickMask(image)
         colorInfo = try session.colorInfo(image)
         guides = try session.guides(image)
+        grid = try session.grid(image)
         mirrorChannelIntents()
         if let pick = pendingTargetPick {
             channels = channels.map { row in
@@ -609,6 +615,49 @@ final class ImageDocument {
         run { session, image in try session.select(command, image: image, radius: radius) }
     }
 
+    /// Strokes the selection's boundary on the active layer with `brush`,
+    /// as one undo step ordered behind every already accepted input: the
+    /// job counts as queued input on the input queue, off the main
+    /// thread. `brush`'s settings and its selected brush's
+    /// `ResourceIdentity` — never a session handle — and the target
+    /// drawable are captured by value here and resolved on the worker, so
+    /// no synchronous native call runs on the main thread and a stale or
+    /// removed resource fails explicitly. The engine suspends the
+    /// selection for the stroke, so the line straddles the boundary and
+    /// the selection itself is unchanged; an empty selection fails
+    /// actionably with no mutation. Like path strokes, the target is a
+    /// layer only — a mask or channel target is refused rather than
+    /// silently painting the layer's pixels, as is a layer group.
+    func strokeSelection(_ brush: EngineSession.Brush = EngineSession.Brush()) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        guard !isChannelTargetActive else { return refuseChannelTransform() }
+        guard !isMaskTargetActive else {
+            onError?("A selection cannot be stroked onto a mask; select the layer first.")
+            NSSound.beep()
+            return
+        }
+        guard !refuseWhileTargetPending() else { return }
+        guard let drawable = activeDrawable else {
+            onError?(DocumentError.targetChanged.localizedDescription)
+            NSSound.beep()
+            return
+        }
+        if drawable == activeLayer,
+           layers.first(where: { $0.id == drawable })?.kind == .group {
+            onError?("A selection cannot be stroked onto a layer group; select a layer.")
+            NSSound.beep()
+            return
+        }
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            do {
+                try self.requirePaintTarget()
+                try session.strokeSelection(image: image, drawable: drawable, brush: brush)
+            } catch {
+                self.report(error)
+            }
+        }
+    }
+
     // MARK: Guides
 
     /// Adds a guide at `position` (image pixels on `orientation`'s
@@ -640,6 +689,18 @@ final class ImageDocument {
     func removeGuide(_ guide: Int32) {
         guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.removeGuide(guide, image: image) }
+    }
+
+    // MARK: Grid
+
+    /// Applies `grid` to the image as one undo step; an identical grid
+    /// is a no-op with no undo. Grid changes are metadata: pixels and
+    /// the selection are never touched, and pixel locks do not refuse
+    /// them. The cached `grid` refreshes through `reload` on the
+    /// undo-changed event this step emits.
+    func setGrid(_ grid: EngineSession.Grid) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        run { session, image in try session.setGrid(grid, image: image) }
     }
 
     // MARK: Editing
