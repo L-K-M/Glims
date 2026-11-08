@@ -137,6 +137,15 @@ GlimsStatus glims_filter_commit    (GlimsEngine *e, GlimsFilterID id, char **err
 GlimsStatus glims_filter_abort     (GlimsEngine *e, GlimsFilterID id);
 void        glims_filters_free     (gpointer filter);
 
+/* effects.c */
+GlimsStatus glims_drawable_effects (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
+                                    GlimsEffectInfo *rows, int32_t capacity, int32_t *count);
+GlimsStatus glims_effect_change    (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
+                                    GlimsEffectID effect, const GlimsEffectChange *change,
+                                    char **error);
+GlimsStatus glims_effect_command   (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
+                                    GlimsEffectID effect, uint32_t command, char **error);
+
 /* filter-properties.c */
 gboolean glims_filter_operation_allowed (const gchar *operation);
 GlimsStatus glims_filter_operations (GlimsEngine *e, GlimsOperationInfo *rows,

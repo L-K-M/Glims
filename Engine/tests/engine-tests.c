@@ -2346,6 +2346,416 @@ test_drawable_filters (const char *work)
   api->image_close (engine, image);
 }
 
+/* The committed effects on a drawable — the filters test_drawable_filters
+ * leaves non-destructive — listed, edited and reordered through
+ * drawable_effects, effect_change and effect_command. Two effects that do
+ * not commute (an invert and a brightness lift) make every stack change
+ * visible in rendered pixels: inverting then lifting is not lifting then
+ * inverting. Each mutation is one undo step, undo and redo restore both
+ * the pixels and the stack, and the state survives an XCF round trip. */
+static void
+test_drawable_effects (const char *work)
+{
+  GlimsImageID        image = 0, reopened = 0, other = 0;
+  GlimsItemID         layer = 0, layer2 = 0, mask = 0, group = 0, text = 0, foreign = 0;
+  GlimsFilterID       session = 0;
+  GlimsStrokeID       stroke = 0;
+  GlimsEffectID       invert_id = 0, bright_id = 0, foreign_fx = 0;
+  GlimsEffectInfo     rows[4];
+  GlimsEffectChange   change;
+  GlimsFillSettings   red = { .struct_size = sizeof red, .mode = GLIMS_FILL_SELECTION,
+                              .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  GlimsBrushSettings  brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 6.0);
+  GlimsStrokePoint    point = { 4, 4, 1.0, 0.0, 0.0, 0 };
+  GlimsTextSettings   tset = { .struct_size = sizeof tset, .size = 12,
+                               .color = { 0, 0, 0, 1 }, .justify = GLIMS_JUSTIFY_LEFT,
+                               .antialias = true };
+  int32_t             count = 0, before;
+  uint8_t             pixel[4];
+  char                xcf[1024];
+  char               *error = NULL;
+
+  api->image_new (engine, 32, 24, &image, NULL);
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer, NULL);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &red, NULL);
+
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 0,
+         "a fresh layer has no effects");
+  CHECK (api->drawable_effects (engine, image, layer, NULL, 0, &count) == GLIMS_STATUS_OK &&
+         count == 0,
+         "a count-only call works");
+  CHECK (api->drawable_effects (engine, image, layer, rows, -1, &count) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->drawable_effects (engine, image, layer, NULL, 2, &count) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->drawable_effects (engine, image, layer, rows, 2, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->drawable_effects (engine, image, 9999, rows, 2, &count) == GLIMS_STATUS_NOT_FOUND &&
+         api->drawable_effects (engine, 9999, layer, rows, 2, &count) == GLIMS_STATUS_NOT_FOUND,
+         "bad arguments and ids refuse");
+
+  /* A live preview is on the stack but is not a committed effect. */
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &session, NULL) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 0,
+         "an open preview does not list as an effect");
+  api->filter_abort (engine, session);
+  session = 0;
+
+  /* Invert commits non-destructively; a brighter lift stacks on top of it.
+   * The list reads top first, so the newer effect leads. */
+  before = undo_depth (image);
+  CHECK (api->filter_begin (engine, image, layer, "gegl:invert-linear", &session, NULL) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "the invert commits as one undo step");
+  session = 0;
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && rows[0].id > 0 &&
+         strcmp (rows[0].name, "Invert") == 0 &&
+         strcmp (rows[0].operation, "gegl:invert-linear") == 0 &&
+         rows[0].enabled && rows[0].opacity == 1.0,
+         "the effect reads its id, name, operation, state and opacity (\"%s\" %s)",
+         rows[0].name, rows[0].operation);
+  invert_id = rows[0].id;
+
+  CHECK (api->filter_begin (engine, image, layer, "gegl:brightness-contrast", &session, NULL) == GLIMS_STATUS_OK &&
+         api->filter_set_double (engine, session, "brightness", 0.2) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK,
+         "a brighter second effect commits");
+  session = 0;
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id != invert_id && rows[1].id == invert_id &&
+         strcmp (rows[0].operation, "gegl:brightness-contrast") == 0 &&
+         rows[1].enabled && rows[1].opacity == 1.0,
+         "the newer effect tops the list (%s over %s)", rows[0].operation, rows[1].operation);
+  bright_id = rows[0].id;
+  CHECK (api->drawable_effects (engine, image, layer, rows, 1, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id == bright_id,
+         "a short buffer truncates rows but keeps the full count");
+
+  /* Bottom first: invert the red layer to cyan, then lift it — a pale
+   * cyan. Raising the invert lifts first, then inverts — a dark cyan. */
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 100 && pixel[0] < 150 && pixel[1] > 225 && pixel[2] > 225,
+         "invert-then-lift renders a pale cyan (%d,%d,%d)", pixel[0], pixel[1], pixel[2]);
+
+  before = undo_depth (image);
+  CHECK (api->effect_command (engine, image, layer, invert_id, GLIMS_EFFECT_RAISE, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         rows[0].id == invert_id && rows[1].id == bright_id,
+         "raising the invert swaps the stack in one undo step");
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 30 && pixel[1] > 200 && pixel[1] < 245 && pixel[2] > 200 && pixel[2] < 245,
+         "lift-then-invert renders a dark cyan (%d,%d,%d)", pixel[0], pixel[1], pixel[2]);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         rows[0].id == bright_id && rows[1].id == invert_id &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 100 && pixel[0] < 150 && pixel[1] > 225,
+         "undo restores both the order and the pixels");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         rows[0].id == invert_id &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 30 && pixel[1] > 200 && pixel[1] < 245,
+         "redo applies the raise again");
+
+  /* Moves that are already satisfied are free of charge. */
+  before = undo_depth (image);
+  CHECK (api->effect_command (engine, image, layer, invert_id, GLIMS_EFFECT_TO_TOP, NULL) == GLIMS_STATUS_OK &&
+         api->effect_command (engine, image, layer, bright_id, GLIMS_EFFECT_LOWER, NULL) == GLIMS_STATUS_OK &&
+         api->effect_command (engine, image, layer, bright_id, GLIMS_EFFECT_TO_BOTTOM, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "already-satisfied moves leave no undo step");
+  CHECK (api->effect_command (engine, image, layer, invert_id, GLIMS_EFFECT_TO_BOTTOM, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         rows[0].id == bright_id && rows[1].id == invert_id,
+         "a real move still costs one step");
+  api->image_undo (engine, image);   /* invert back on top */
+
+  /* Disabling the bottom lift leaves the invert alone: pure cyan. */
+  change = (GlimsEffectChange) { .struct_size = sizeof change,
+                                 .properties = GLIMS_EFFECT_ENABLED,
+                                 .enabled = false };
+  before = undo_depth (image);
+  CHECK (api->effect_change (engine, image, layer, bright_id, &change, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         ! rows[1].enabled,
+         "disabling the lift is one undo step");
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 30 && pixel[1] > 225 && pixel[2] > 225,
+         "the disabled lift drops out of the render (%d,%d,%d)", pixel[0], pixel[1], pixel[2]);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         rows[1].enabled &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[1] > 200 && pixel[1] < 245,
+         "undo re-enables it and restores the pixels");
+  api->image_redo (engine, image);
+  api->image_undo (engine, image);   /* land back on both enabled */
+
+  /* Half-opacity invert over the lifted red lands on middle gray; a
+   * rename rides in the same undo step. */
+  change = (GlimsEffectChange) { .struct_size = sizeof change,
+                                 .properties = GLIMS_EFFECT_NAME | GLIMS_EFFECT_OPACITY,
+                                 .opacity = 0.5 };
+  strcpy (change.name, "Half Invert");
+  before = undo_depth (image);
+  CHECK (api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         strcmp (rows[0].name, "Half Invert") == 0 && rows[0].opacity == 0.5,
+         "rename and opacity share one undo step");
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 160 && pixel[0] < 215 &&
+         abs (pixel[0] - pixel[1]) < 15 && abs (pixel[1] - pixel[2]) < 15,
+         "the half-strength invert renders a middle gray (%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2]);
+
+  snprintf (xcf, sizeof xcf, "%s/effects.xcf", work);
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK,
+         "the effects save and reopen");
+  if (reopened)
+    {
+      GlimsLayerInfo rrow;
+
+      CHECK (api->image_layers (engine, reopened, &rrow, 1, &count) == GLIMS_STATUS_OK &&
+             api->drawable_effects (engine, reopened, rrow.id, rows, 4, &count) == GLIMS_STATUS_OK &&
+             count == 2 &&
+             strcmp (rows[0].name, "Half Invert") == 0 && rows[0].enabled &&
+             rows[0].opacity == 0.5 && strcmp (rows[0].operation, "gegl:invert-linear") == 0 &&
+             strcmp (rows[1].operation, "gegl:brightness-contrast") == 0 &&
+             rows[1].enabled && rows[1].opacity == 1.0,
+             "the XCF round trip keeps the stack's order and state (%d)", count);
+      api->image_close (engine, reopened);
+      reopened = 0;
+    }
+
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         strcmp (rows[0].name, "Invert") == 0 && rows[0].opacity == 1.0 &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 30 && pixel[1] > 200 && pixel[1] < 245,
+         "undo restores the default name, full strength and the pixels");
+  api->image_redo (engine, image);
+  api->image_undo (engine, image);
+
+  /* A change that asks for the current state costs nothing. */
+  change = (GlimsEffectChange) { .struct_size = sizeof change,
+                                 .properties = GLIMS_EFFECT_ENABLED | GLIMS_EFFECT_OPACITY,
+                                 .enabled = true, .opacity = 1.0 };
+  before = undo_depth (image);
+  CHECK (api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "restating the current state adds no undo step");
+  change = (GlimsEffectChange) { .struct_size = sizeof change,
+                                 .properties = GLIMS_EFFECT_OPACITY,
+                                 .opacity = NAN };
+  CHECK (api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before,
+         "a non-finite opacity refuses without a step");
+  change.opacity = 1.5;
+  CHECK (api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an out-of-range opacity refuses");
+  change = (GlimsEffectChange) { .struct_size = 4, .properties = GLIMS_EFFECT_ENABLED };
+  CHECK (api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->effect_change (engine, image, layer, invert_id, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a bad change struct refuses");
+  change = (GlimsEffectChange) { .struct_size = sizeof change, .properties = 1 << 6 };
+  CHECK (api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "unknown property bits refuse");
+  CHECK (api->effect_command (engine, image, layer, invert_id, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->effect_command (engine, image, layer, invert_id, 99, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "unknown commands refuse");
+  CHECK (undo_depth (image) == before, "refusals leave history alone");
+
+  /* Removing the bottom effect leaves the invert on the plain red: cyan.
+   * Undo brings the same effect back in the same place. */
+  before = undo_depth (image);
+  CHECK (api->effect_command (engine, image, layer, bright_id, GLIMS_EFFECT_REMOVE, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && rows[0].id == invert_id,
+         "removing the lift is one undo step");
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 30 && pixel[1] > 225 && pixel[2] > 225,
+         "the invert alone renders cyan (%d,%d,%d)", pixel[0], pixel[1], pixel[2]);
+  change = (GlimsEffectChange) { .struct_size = sizeof change,
+                                 .properties = GLIMS_EFFECT_ENABLED,
+                                 .enabled = false };
+  CHECK (api->effect_change (engine, image, layer, bright_id, &change, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->effect_command (engine, image, layer, bright_id, GLIMS_EFFECT_RAISE, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "the removed effect's id is dead even while undo holds it");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id == invert_id && rows[1].id == bright_id &&
+         rows[1].enabled && rows[1].opacity == 1.0 &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 30 && pixel[1] > 200 && pixel[1] < 245,
+         "undo restores the effect with its id, state and place");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK && count == 1,
+         "redo removes it again");
+  api->image_undo (engine, image);
+
+  /* Merging the bottom effect bakes it into the pixels: the composite
+   * stays identical because it was applied first anyway, the stack keeps
+   * the invert, and undo restores both pixels and the whole stack. */
+  before = undo_depth (image);
+  CHECK (api->effect_command (engine, image, layer, bright_id, GLIMS_EFFECT_MERGE, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && rows[0].id == invert_id,
+         "merging the bottom effect is one undo step");
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 30 && pixel[1] > 200 && pixel[1] < 245 && pixel[2] > 200 && pixel[2] < 245,
+         "the merged composite is unchanged (%d,%d,%d)", pixel[0], pixel[1], pixel[2]);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id == invert_id && rows[1].id == bright_id &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 30 && pixel[1] > 200 && pixel[1] < 245,
+         "undo restores the pixels and the stack");
+  api->image_redo (engine, image);
+
+  /* Merging the last effect empties the stack; undo brings it back. */
+  CHECK (api->effect_command (engine, image, layer, invert_id, GLIMS_EFFECT_MERGE, NULL) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 0,
+         "merging the last effect empties the stack");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && rows[0].id == invert_id,
+         "undo restores the merged effect");
+  api->image_undo (engine, image);   /* unmerge the lift too */
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id == invert_id && rows[1].id == bright_id,
+         "both effects are back");
+
+  /* Wrong drawables, foreign effects and stale ids all refuse. */
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer2, NULL);
+  api->layer_mask_add (engine, image, layer, GLIMS_MASK_WHITE, true, &mask, NULL);
+  CHECK (api->drawable_effects (engine, image, mask, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 0,
+         "a layer mask lists no committed effects");
+  CHECK (api->drawable_effects (engine, image, layer2, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 0,
+         "the untouched layer lists none");
+  change = (GlimsEffectChange) { .struct_size = sizeof change,
+                                 .properties = GLIMS_EFFECT_ENABLED,
+                                 .enabled = false };
+  CHECK (api->effect_change (engine, image, layer2, invert_id, &change, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->effect_change (engine, image, mask, invert_id, &change, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->effect_change (engine, image, layer, 9999, &change, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->effect_command (engine, image, layer2, invert_id, GLIMS_EFFECT_RAISE, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->effect_command (engine, image, layer, 9999, GLIMS_EFFECT_REMOVE, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "foreign drawables and unknown effect ids refuse");
+  api->image_new (engine, 8, 8, &other, NULL);
+  foreign = first_layer (other);
+  api->filter_begin (engine, other, foreign, "gegl:invert-linear", &session, NULL);
+  api->filter_commit (engine, session, NULL);
+  session = 0;
+  CHECK (api->drawable_effects (engine, other, foreign, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1,
+         "the other image keeps its own effect");
+  foreign_fx = rows[0].id;
+  CHECK (api->effect_command (engine, image, layer, foreign_fx, GLIMS_EFFECT_REMOVE, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->effect_change (engine, image, layer, foreign_fx, &change, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->effect_command (engine, image, foreign, invert_id, GLIMS_EFFECT_RAISE, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "another image's effect and drawable refuse here");
+  api->image_close (engine, other);
+  other = 0;
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id == invert_id && rows[1].id == bright_id,
+         "the refusals changed nothing");
+
+  /* Writes block while a stroke or a filter preview owns the image; the
+   * read stays available. */
+  CHECK (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK &&
+         api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_BUSY &&
+         api->effect_command (engine, image, layer, invert_id, GLIMS_EFFECT_RAISE, NULL) == GLIMS_STATUS_BUSY &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2,
+         "effect writes report BUSY during a stroke while the list still reads");
+  api->stroke_end (engine, stroke);
+  stroke = 0;
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &session, NULL) == GLIMS_STATUS_OK &&
+         api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_BUSY &&
+         api->effect_command (engine, image, layer, invert_id, GLIMS_EFFECT_RAISE, NULL) == GLIMS_STATUS_BUSY &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id == invert_id,
+         "effect writes report BUSY during a preview while the list still reads");
+  api->filter_abort (engine, session);
+  session = 0;
+
+  /* A pixel lock protects merge but not metadata edits. */
+  CHECK (api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL) == GLIMS_STATUS_OK &&
+         api->effect_command (engine, image, layer, bright_id, GLIMS_EFFECT_MERGE, NULL) == GLIMS_STATUS_LOCKED &&
+         api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_OK &&
+         api->effect_command (engine, image, layer, invert_id, GLIMS_EFFECT_LOWER, NULL) == GLIMS_STATUS_OK &&
+         api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, 0, NULL) == GLIMS_STATUS_OK,
+         "a pixel lock refuses merge while edits and moves still work");
+  api->image_undo (engine, image);   /* the lower */
+  api->image_undo (engine, image);   /* the enable-change */
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id == invert_id && rows[1].enabled,
+         "the lock test leaves the stack as it was");
+
+  /* Groups and text hold structured content: merge refuses it while
+   * remove and reorder stay legal metadata work. */
+  api->create_group (engine, image, 0, 0, "Group", &group, NULL);
+  CHECK (api->filter_begin (engine, image, group, "gegl:invert-linear", &session, NULL) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, group, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1,
+         "a group layer takes an effect");
+  session = 0;
+  before = undo_depth (image);
+  CHECK (api->effect_command (engine, image, group, rows[0].id, GLIMS_EFFECT_MERGE, &error) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before &&
+         api->drawable_effects (engine, image, group, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1,
+         "merge refuses a group's structured pixels%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->effect_command (engine, image, group, rows[0].id, GLIMS_EFFECT_REMOVE, NULL) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, group, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 0,
+         "removing a group's effect is allowed");
+
+  strcpy (tset.font, "Sans-serif");
+  if (api->text_layer_new (engine, image, "Hi", &tset, (GlimsPoint) { 2, 2 }, &text, NULL) == GLIMS_STATUS_OK &&
+      api->filter_begin (engine, image, text, "gegl:invert-linear", &session, NULL) == GLIMS_STATUS_OK &&
+      api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK)
+    {
+      session = 0;
+      before = undo_depth (image);
+      CHECK (api->drawable_effects (engine, image, text, rows, 4, &count) == GLIMS_STATUS_OK &&
+             count == 1 && rows[0].enabled,
+             "the text layer lists its committed effect");
+      CHECK (api->effect_command (engine, image, text, rows[0].id, GLIMS_EFFECT_MERGE, &error) == GLIMS_STATUS_INVALID_ARGUMENT,
+             "merge refuses a text layer's editable content%s%s",
+             error ? ": " : "", error ? error : "");
+      CHECK (undo_depth (image) == before &&
+             api->drawable_effects (engine, image, text, rows, 4, &count) == GLIMS_STATUS_OK &&
+             count == 1 && rows[0].enabled,
+             "the refused merge changed nothing");
+      api->free_string (error);
+      error = NULL;
+      api->layer_command (engine, image, text, GLIMS_LAYER_DELETE, NULL, NULL);
+    }
+  else
+    {
+      CHECK (false, "a text layer with a committed effect is required here");
+    }
+
+  api->image_close (engine, image);
+}
+
 /* The qmask-name.xcf fixture (fixtures/README.md): written by GIMP 3.0.8
  * while its Quick Mask was on. The engine finds the mask's channel by
  * the reserved name "Qmask" — any channel added to or renamed to it
@@ -3691,6 +4101,7 @@ main (int argc, char **argv)
   test_matrix_transform ();
   test_channels (argv[2]);
   test_drawable_filters (argv[2]);
+  test_drawable_effects (argv[2]);
   test_qmask_name_fixture (argv[3]);
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
