@@ -2132,6 +2132,11 @@ MARSHAL (image_convert_indexed, return glims_image_convert_indexed (e, a->image,
                                                                     a->in2, a->capacity, a->error);)
 MARSHAL (image_grid, return glims_image_grid (e, a->image, a->out, a->error);)
 MARSHAL (image_set_grid, return glims_image_set_grid (e, a->image, a->in, a->error);)
+MARSHAL (image_floating_selection, return glims_image_floating_selection (e, a->image, a->out);)
+MARSHAL (image_paste_into, return glims_image_paste_into (e, a->image, a->item, a->area,
+                                                          a->pixels, a->n, a->out, a->error);)
+MARSHAL (floating_command, return glims_floating_command (e, a->image, a->item, (uint32_t) a->width,
+                                                          a->out, a->error);)
 
 static GlimsStatus
 api_image_guides (GlimsEngine *e, GlimsImageID image, GlimsGuideInfo *rows,
@@ -2205,6 +2210,30 @@ api_gradient_resource (GlimsEngine *e, GlimsImageID image, GlimsResourceID gradi
   GlimsGradientResourceArgs a = { .image = image, .gradient = gradient, .from = from, .to = to,
                                   .settings = settings, .error = error };
   return glims_engine_call (e, gradient_resource_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_floating_selection (GlimsEngine *e, GlimsImageID image, GlimsFloatingState *out)
+{
+  GlimsArgs a = { .image = image, .out = out };
+  return glims_engine_call (e, image_floating_selection_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_paste_into (GlimsEngine *e, GlimsImageID image, GlimsItemID target, GlimsRect bounds,
+                      const uint8_t *pixels, size_t byte_count, GlimsItemID *result, char **error)
+{
+  GlimsArgs a = { .image = image, .item = target, .area = bounds, .pixels = pixels,
+                  .n = byte_count, .out = result, .error = error };
+  return glims_engine_call (e, image_paste_into_on_engine, &a);
+}
+
+static GlimsStatus
+api_floating_command (GlimsEngine *e, GlimsImageID image, GlimsItemID expected, uint32_t command,
+                      GlimsItemID *result, char **error)
+{
+  GlimsArgs a = { .image = image, .item = expected, .width = command, .out = result, .error = error };
+  return glims_engine_call (e, floating_command_on_engine, &a);
 }
 
 static const GlimsEngineAPI api_v1 = {
@@ -2330,6 +2359,9 @@ static const GlimsEngineAPI api_v1 = {
   .image_grid        = api_image_grid,
   .image_set_grid    = api_image_set_grid,
   .selection_stroke  = api_selection_stroke,
+  .image_floating_selection = api_image_floating_selection,
+  .image_paste_into  = api_image_paste_into,
+  .floating_command  = api_floating_command,
 };
 
 __attribute__ ((visibility ("default")))

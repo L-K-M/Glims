@@ -184,6 +184,22 @@ glims_layer_source_info (GlimsEngine           *engine,
   return GLIMS_STATUS_OK;
 }
 
+uint32_t
+glims_layer_editable_source_kind (GimpLayer *layer)
+{
+  uint32_t kind = source_kind_of (layer);
+
+  switch (kind)
+    {
+    case GLIMS_LAYER_TEXT:
+    case GLIMS_LAYER_LINK:
+    case GLIMS_LAYER_VECTOR:
+      return source_is_editable (layer, kind) ? kind : 0;
+    default:
+      return 0;
+    }
+}
+
 /* Rasterizes `layer` of `image` as one native undo step when it is a
  * genuine editable text, link or vector layer; an already rasterized
  * instance is a no-op without history. The caller has checked the

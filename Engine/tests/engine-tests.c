@@ -10614,6 +10614,549 @@ test_selection_stroke (void)
   api->image_close (engine, image);
 }
 
+/* Paste Into / floating selections: the state read, the admission
+ * refusals, pixel/selection/target oracles, the one-undo resolution
+ * verbs with explicit expected ids, and the XCF round trip — through the
+ * facade only. */
+static void
+test_floating_selection (const char *work)
+{
+  GlimsImageID       image = 0, other = 0, reopened = 0;
+  GlimsItemID        layer, layer2 = 0, group = 0, mask = 0, channel = 0, text = 0;
+  GlimsItemID        floating = 0, floating2 = 0, pasted = 0, result = 0;
+  GlimsFloatingState state;
+  GlimsSelectOptions sel = { .struct_size = sizeof sel, .operation = GLIMS_SELECT_REPLACE, .antialias = false };
+  GlimsTextSettings  tset = { .struct_size = sizeof tset, .size = 24, .color = { 0, 0, 0, 1 },
+                              .justify = GLIMS_JUSTIFY_LEFT, .antialias = true };
+  GlimsRect          bounds, sel_before = { 0 };
+  bool               empty = true;
+  int32_t            before, w = 0, h = 0, count = 0, i, found;
+  uint8_t            pattern[8 * 8 * 4];
+  uint8_t           *shot = NULL, *floating_shot = NULL, *now = NULL;
+  uint8_t            px[4];
+  GlimsLayerInfo     rows[8];
+  GlimsStrokeID      stroke = 0;
+  GlimsFilterID      filter = 0;
+  GlimsStrokePoint   point = { 2, 2, 1.0, 0.0, 0.0, 0 };
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PENCIL, 4.0);
+  char               xcf[1024], *error = NULL, *fonts = NULL;
+  GlimsStatus        status;
+  const GlimsRect    payload = { 0, 0, 8, 8 };
+
+  /* A known 8x8 pattern: index i gets (i*4, 255-i*4, 100) with alpha 0
+   * for even i (fully transparent) and 255 for odd i. */
+  for (i = 0; i < 64; i++)
+    {
+      pattern[i * 4]     = (uint8_t) (i * 4);
+      pattern[i * 4 + 1] = (uint8_t) (255 - i * 4);
+      pattern[i * 4 + 2] = 100;
+      pattern[i * 4 + 3] = (i % 2 == 0) ? 0 : 255;
+    }
+
+  api->image_new (engine, 32, 32, &image, NULL);
+  api->image_new (engine, 16, 16, &other, NULL);
+  layer = first_layer (image);
+  CHECK (layer != 0, "the floating-selection test image has a layer");
+  shot = render_all (image, &w, &h);
+  CHECK (shot != NULL, "the fresh image renders");
+
+  /* The read's own validation and its empty answer. */
+  state.struct_size = sizeof state;
+  CHECK (api->image_floating_selection (engine, 9999, &state) == GLIMS_STATUS_NOT_FOUND,
+         "the floating read reports an unknown image");
+  CHECK (api->image_floating_selection (engine, image, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_floating_selection (engine, image,
+                                        &(GlimsFloatingState) { .struct_size = 4 }) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a missing or short out struct is INVALID_ARGUMENT");
+  CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK &&
+         ! state.active && state.floating == 0 && state.target == 0 && state.target_kind == 0 &&
+         state.struct_size == sizeof state,
+         "no floating selection reports inactive with zero ids");
+
+  /* Admission refusals, all before any mutation. */
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  before = undo_depth (image);
+  floating = 77;
+  status = api->image_paste_into (engine, image, layer, payload, pattern, sizeof pattern, &floating, &error);
+  CHECK (status == GLIMS_STATUS_FAILED && error && floating == 0 && undo_depth (image) == before,
+         "paste into with no selection fails with an error, a reset result and no undo (%s)",
+         error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_paste_into (engine, image, layer, payload, NULL, sizeof pattern, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_paste_into (engine, image, layer, payload, pattern, sizeof pattern - 1, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_paste_into (engine, image, layer, (GlimsRect) { 0, 0, 0, 8 }, pattern, sizeof pattern, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_paste_into (engine, image, layer, (GlimsRect) { 0, 0, INT32_MAX, INT32_MAX }, pattern, sizeof pattern, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_paste_into (engine, image, layer, (GlimsRect) { INT32_MAX, 0, 8, 8 }, pattern, sizeof pattern, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "NULL pixels, a wrong byte count, zero/oversized dimensions and an out-of-range offset are INVALID_ARGUMENT");
+  CHECK (api->image_paste_into (engine, 9999, layer, payload, pattern, sizeof pattern, NULL, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->image_paste_into (engine, image, 9999, payload, pattern, sizeof pattern, NULL, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->image_paste_into (engine, image, first_layer (other), payload, pattern, sizeof pattern, NULL, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an unknown image and stale or foreign target ids are NOT_FOUND");
+
+  /* A selection disjoint from the target is refused. */
+  CHECK (api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer2, NULL) == GLIMS_STATUS_OK && layer2 != 0,
+         "a second layer exists");
+  api->layer_move (engine, image, layer2, 16, 16);
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 0, 0 }, { 4, 4 } }, 2, &sel);
+  before = undo_depth (image);
+  status = api->image_paste_into (engine, image, layer2, payload, pattern, sizeof pattern, NULL, &error);
+  CHECK (status == GLIMS_STATUS_FAILED && error && undo_depth (image) == before,
+         "a selection disjoint from the target is refused, no undo (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->layer_move (engine, image, layer2, -16, -16);
+  api->layer_select (engine, image, layer);
+
+  /* A group target is refused — never a silent downgrade to a new layer. */
+  CHECK (api->create_group (engine, image, 0, 0, "G", &group, NULL) == GLIMS_STATUS_OK && group != 0,
+         "a group exists");
+  before = undo_depth (image);
+  status = api->image_paste_into (engine, image, group, payload, pattern, sizeof pattern, NULL, &error);
+  CHECK (status == GLIMS_STATUS_FAILED && error && undo_depth (image) == before,
+         "a layer group target is refused, no undo (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* A content-locked target is LOCKED. */
+  api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL);
+  before = undo_depth (image);
+  status = api->image_paste_into (engine, image, layer, payload, pattern, sizeof pattern, NULL, &error);
+  CHECK (status == GLIMS_STATUS_LOCKED && error && undo_depth (image) == before,
+         "a pixel-locked target is LOCKED, no undo (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, 0, NULL);
+
+  CHECK (api->fonts (engine, &fonts) == GLIMS_STATUS_OK && fonts && *fonts,
+         "the floating fixture lists an installed font");
+  if (! fonts || ! *fonts)
+    {
+      api->free_string (fonts);
+      free (shot);
+      api->image_close (engine, image);
+      api->image_close (engine, other);
+      return;
+    }
+  if (strstr (fonts, "Sans-serif\n") == fonts || strstr (fonts, "\nSans-serif\n"))
+    strcpy (tset.font, "Sans-serif");
+  else
+    {
+      char *newline = strchr (fonts, '\n');
+      snprintf (tset.font, sizeof tset.font, "%.*s",
+                (int) (newline ? newline - fonts : (ptrdiff_t) strlen (fonts)), fonts);
+    }
+  api->free_string (fonts);
+  fonts = NULL;
+
+  /* A genuine editable text layer target asks for rasterize consent; the
+   * rasterized instance is then accepted. */
+  CHECK (api->text_layer_new (engine, image, "Hi", &tset, (GlimsPoint) { 2, 2 }, &text, &error) == GLIMS_STATUS_OK && text != 0,
+         "a text layer exists%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  before = undo_depth (image);
+  status = api->image_paste_into (engine, image, text, payload, pattern, sizeof pattern, NULL, &error);
+  CHECK (status == GLIMS_STATUS_REQUIRES_RASTERIZE && error && undo_depth (image) == before,
+         "an editable text layer target is REQUIRES_RASTERIZE, no undo (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && ! state.active,
+         "the rasterize refusal left no floating selection");
+  api->layer_command (engine, image, text, GLIMS_LAYER_RASTERIZE, NULL, NULL);
+  before = undo_depth (image);
+  status = api->image_paste_into (engine, image, text, payload, pattern, sizeof pattern, &floating, &error);
+  CHECK (status == GLIMS_STATUS_OK && floating != 0 && undo_depth (image) == before + 1,
+         "an already rasterized text layer accepts the paste into%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && state.active &&
+         state.floating == floating && state.target == text &&
+         state.target_kind == GLIMS_FLOATING_TARGET_LAYER,
+         "the floating state reports the rasterized text layer as a layer target");
+  before = undo_depth (image);
+  CHECK (api->floating_command (engine, image, floating, GLIMS_FLOATING_DISCARD, &result, NULL) == GLIMS_STATUS_OK &&
+         result == 0 && undo_depth (image) == before + 1,
+         "discard resolves it in one undo step");
+  api->layer_command (engine, image, text, GLIMS_LAYER_DELETE, NULL, NULL);
+
+  /* BUSY while a stroke or a filter session holds the image. */
+  CHECK (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK &&
+         api->image_paste_into (engine, image, layer, payload, pattern, sizeof pattern, NULL, NULL) == GLIMS_STATUS_BUSY &&
+         api->floating_command (engine, image, layer, GLIMS_FLOATING_ANCHOR, NULL, NULL) == GLIMS_STATUS_BUSY &&
+         api->stroke_end (engine, stroke) == GLIMS_STATUS_OK,
+         "paste into and floating commands are BUSY during an open stroke");
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK &&
+         api->image_paste_into (engine, image, layer, payload, pattern, sizeof pattern, NULL, NULL) == GLIMS_STATUS_BUSY &&
+         api->floating_command (engine, image, layer, GLIMS_FLOATING_ANCHOR, NULL, NULL) == GLIMS_STATUS_BUSY &&
+         api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+         "paste into and floating commands are BUSY during an open filter session");
+
+  /* floating_command's own validation. */
+  CHECK (api->floating_command (engine, 9999, layer, GLIMS_FLOATING_ANCHOR, NULL, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "floating command reports an unknown image");
+  CHECK (api->floating_command (engine, image, layer, 99, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown command is INVALID_ARGUMENT");
+  before = undo_depth (image);
+  CHECK (api->floating_command (engine, image, 0, GLIMS_FLOATING_ANCHOR, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->floating_command (engine, image, layer, GLIMS_FLOATING_ANCHOR, NULL, &error) == GLIMS_STATUS_NOT_FOUND &&
+         undo_depth (image) == before,
+         "expected 0 is INVALID_ARGUMENT and with no floating selection a named id is NOT_FOUND, no undo (%s)",
+         error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* The real Paste Into on the 32x32 image: selection (4,4)-(8,8), an
+   * 8x8 payload centered on it at (2,2). */
+  api->layer_select (engine, image, layer);
+  /* The BUSY probe deliberately painted a dot. Capture the actual
+   * pre-paste composite after setup instead of assuming the fresh image. */
+  free (shot);
+  shot = render_all (image, &w, &h);
+  CHECK (shot != NULL, "the pre-paste composite is captured after the setup stroke");
+
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 4, 4 }, { 8, 8 } }, 2, &sel) == GLIMS_STATUS_OK,
+         "the 4x4 selection at (4,4) is set");
+  api->selection_bounds (engine, image, &empty, &sel_before);
+  CHECK (! empty && rect_equals (sel_before, 4, 4, 4, 4), "the selection bounds are (4,4,4,4)");
+  before = undo_depth (image);
+  status = api->image_paste_into (engine, image, layer, payload, pattern, sizeof pattern, &floating, &error);
+  CHECK (status == GLIMS_STATUS_OK && floating != 0 && undo_depth (image) == before + 1,
+         "paste into the selection is exactly one undo step%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && state.active &&
+         state.floating == floating && state.target == layer &&
+         state.target_kind == GLIMS_FLOATING_TARGET_LAYER,
+         "the floating state names the floating layer, the layer target and kind layer");
+
+  /* The floating layer's own row, found by its exact id: centered on
+   * selection∩target, i.e. at (2,2) with the 8x8 payload. */
+  CHECK (api->image_layers (engine, image, rows, 8, &count) == GLIMS_STATUS_OK && count <= 8,
+         "the layer list is read (%d rows)", count);
+  found = 0;
+  for (i = 0; i < count; i++)
+    if (rows[i].id == floating)
+      found = i + 1;
+  CHECK (found && rect_equals (rows[found - 1].bounds, 2, 2, 8, 8),
+         "the floating layer row is found by id at bounds (2,2,8,8)");
+
+  /* The preview: the pattern shows only inside selection∩floating
+   * bounds; a transparent payload pixel and everything outside the
+   * selection show the untouched target. */
+  floating_shot = render_all (image, &w, &h);
+  render_pixel (image, 5, 5, px);   /* payload index 27: opaque (108,147,100) */
+  CHECK (memcmp (px, (uint8_t[]) { 108, 147, 100, 255 }, 4) == 0,
+         "the pasted opaque pixel shows inside the selection (%u,%u,%u,%u)", px[0], px[1], px[2], px[3]);
+  render_pixel (image, 3, 3, px);   /* inside the floating bounds, outside the selection */
+  CHECK (memcmp (px, pixel_at (shot, w, 3, 3), 4) == 0,
+         "the preview is clipped to the selection (%u,%u,%u,%u)", px[0], px[1], px[2], px[3]);
+  render_pixel (image, 6, 6, px);   /* payload index 36: fully transparent */
+  CHECK (memcmp (px, pixel_at (shot, w, 6, 6), 4) == 0,
+         "a fully transparent pasted pixel shows the target through (%u,%u,%u,%u)", px[0], px[1], px[2], px[3]);
+  render_pixel (image, 20, 20, px); /* far outside both */
+  CHECK (memcmp (px, pixel_at (shot, w, 20, 20), 4) == 0, "the far outside is untouched");
+  CHECK (floating_shot && shot && memcmp (floating_shot, shot, (size_t) w * h * 4) != 0,
+         "the floating preview differs from the plain target");
+  CHECK (api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, sel_before.x, sel_before.y, sel_before.width, sel_before.height),
+         "paste into does not modify or clear the selection");
+
+  /* A second paste while one floats is refused before any native call;
+   * the active floating selection is untouched. */
+  before = undo_depth (image);
+  status = api->image_paste_into (engine, image, layer, payload, pattern, sizeof pattern, &floating2, &error);
+  CHECK (status == GLIMS_STATUS_FAILED && error && floating2 == 0 && undo_depth (image) == before,
+         "paste into with an existing floating selection is refused, no undo (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && state.active &&
+         state.floating == floating,
+         "the pre-existing floating selection is still the active one");
+  now = render_all (image, &w, &h);
+  CHECK (now && floating_shot && memcmp (now, floating_shot, (size_t) w * h * 4) == 0,
+         "the refusal changed no pixels");
+  free (now);
+
+  /* Undo removes the floating selection and restores the exact pixels;
+   * redo brings both back. */
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK, "undo of the paste runs");
+  CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && ! state.active,
+         "undo removes the floating selection");
+  now = render_all (image, &w, &h);
+  CHECK (now && shot && memcmp (now, shot, (size_t) w * h * 4) == 0,
+         "undo restores the exact pre-paste composite (the target was never modified)");
+  free (now);
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK, "redo runs");
+  CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && state.active &&
+         state.floating == floating && state.target == layer,
+         "redo restores the floating selection with the same ids");
+  now = render_all (image, &w, &h);
+  CHECK (now && floating_shot && memcmp (now, floating_shot, (size_t) w * h * 4) == 0,
+         "redo restores the exact floating composite");
+  free (now);
+
+  /* A target can become locked after the paste. Anchor must recheck
+   * the write target instead of silently committing into locked pixels. */
+  CHECK (api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL) == GLIMS_STATUS_OK,
+         "the floating target can be pixel-locked after pasting");
+  before = undo_depth (image);
+  status = api->floating_command (engine, image, floating, GLIMS_FLOATING_ANCHOR, NULL, &error);
+  CHECK (status == GLIMS_STATUS_LOCKED && error && undo_depth (image) == before &&
+         api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && state.active,
+         "anchoring rechecks a target locked after paste, with no mutation (%d; %s)", status, error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  if (status == GLIMS_STATUS_OK)
+    api->image_undo (engine, image); /* recover only the deliberately failing red implementation */
+  CHECK (api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, 0, NULL) == GLIMS_STATUS_OK,
+         "the anchor fixture unlocks its target");
+
+  /* Anchor: one undo step, the composite keeps the pasted pixels (now in
+   * the target), the floating state ends. */
+  before = undo_depth (image);
+  result = 77;
+  status = api->floating_command (engine, image, floating, GLIMS_FLOATING_ANCHOR, &result, &error);
+  CHECK (status == GLIMS_STATUS_OK && result == 0 && undo_depth (image) == before + 1,
+         "anchor is exactly one undo step%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && ! state.active,
+         "anchor ends the floating selection");
+  now = render_all (image, &w, &h);
+  CHECK (now && floating_shot && memcmp (now, floating_shot, (size_t) w * h * 4) == 0,
+         "anchor keeps the exact composite (the target now holds the pixels)");
+  free (now);
+
+  /* expected-id discipline on a resolved (now stale) id. */
+  before = undo_depth (image);
+  CHECK (api->floating_command (engine, image, 0, GLIMS_FLOATING_ANCHOR, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->floating_command (engine, image, 9999, GLIMS_FLOATING_ANCHOR, NULL, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->floating_command (engine, image, first_layer (other), GLIMS_FLOATING_ANCHOR, NULL, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->floating_command (engine, image, floating, 99, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->floating_command (engine, image, floating, GLIMS_FLOATING_ANCHOR, NULL, &error) == GLIMS_STATUS_NOT_FOUND &&
+         undo_depth (image) == before,
+         "zero is INVALID_ARGUMENT; stale, foreign and unknown-command calls are refused with no undo (%s)",
+         error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* Undo/redo of the anchor return to and leave the floating state. */
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK, "undo of the anchor runs");
+  CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && state.active &&
+         state.floating == floating && state.target == layer,
+         "undo of the anchor restores the floating selection with the same id");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK, "redo of the anchor runs");
+  CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && ! state.active,
+         "redo of the anchor merges again");
+
+  /* The preceding Anchor was committed and redone; that is the target
+   * a new floating paste must preserve when discarded. */
+  free (shot);
+  shot = render_all (image, &w, &h);
+  CHECK (shot != NULL, "the discard baseline includes the previously committed anchor");
+
+  /* Discard on a fresh paste: the target's pixels come back exactly. */
+  before = undo_depth (image);
+  status = api->image_paste_into (engine, image, layer, payload, pattern, sizeof pattern, &floating2, &error);
+  CHECK (status == GLIMS_STATUS_OK && floating2 != 0 && floating2 != floating && undo_depth (image) == before + 1,
+         "a fresh paste into after the anchor works, one undo%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  before = undo_depth (image);
+  status = api->floating_command (engine, image, floating, GLIMS_FLOATING_DISCARD, NULL, NULL);
+  CHECK (status == GLIMS_STATUS_NOT_FOUND && undo_depth (image) == before,
+         "the stale previous floating id never falls back to the active one");
+  status = api->floating_command (engine, image, floating2, GLIMS_FLOATING_DISCARD, &result, &error);
+  CHECK (status == GLIMS_STATUS_OK && result == 0 && undo_depth (image) == before + 1,
+         "discard is one undo step%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && ! state.active,
+         "discard ends the floating selection");
+  now = render_all (image, &w, &h);
+  CHECK (now && shot && memcmp (now, shot, (size_t) w * h * 4) == 0,
+         "discard restores the exact pre-paste pixels — the target was never modified while floating");
+  free (now);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         (api->image_floating_selection (engine, image, &state), state.active && state.floating == floating2),
+         "undo of the discard brings the floating selection back");
+  api->image_redo (engine, image);
+
+  /* To-layer: one undo step, the same layer id becomes an independent
+   * layer, the composite is unchanged. */
+  before = undo_depth (image);
+  status = api->image_paste_into (engine, image, layer, payload, pattern, sizeof pattern, &floating, &error);
+  CHECK (status == GLIMS_STATUS_OK && floating != 0 && undo_depth (image) == before + 1,
+         "paste into for the to-layer check, one undo%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  floating_shot = render_all (image, &w, &h);
+  before = undo_depth (image);
+  CHECK (api->floating_command (engine, image, 0, GLIMS_FLOATING_TO_LAYER, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->floating_command (engine, image, 9999, GLIMS_FLOATING_TO_LAYER, NULL, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->floating_command (engine, image, floating2, GLIMS_FLOATING_TO_LAYER, NULL, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         undo_depth (image) == before,
+         "to-layer refuses zero, unknown and stale expected ids without falling back, no undo");
+  status = api->floating_command (engine, image, floating, GLIMS_FLOATING_TO_LAYER, &result, &error);
+  CHECK (status == GLIMS_STATUS_OK && result == floating && undo_depth (image) == before + 1,
+         "to-layer is one undo step and keeps the layer id%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && ! state.active,
+         "to-layer ends the floating selection");
+  CHECK (api->image_layers (engine, image, rows, 8, &count) == GLIMS_STATUS_OK && count <= 8, "layers read");
+  found = 0;
+  for (i = 0; i < count; i++)
+    if (rows[i].id == floating)
+      found = 1;
+  CHECK (found, "the to-layer result is an ordinary layer row with the exact id %d", floating);
+  now = render_all (image, &w, &h);
+  /* Native to-layer detaches the selection clip and reveals the full
+   * payload. Overlay known opaque cells at (2,2); transparent cells
+   * retain the actual pre-paste background. */
+  {
+    size_t bytes = (size_t) w * h * 4;
+    uint8_t *expected = malloc (bytes);
+    if (expected && shot)
+      {
+        memcpy (expected, shot, bytes);
+        for (i = 0; i < 64; i++)
+          if (pattern[i * 4 + 3] == 255)
+            memcpy (expected + ((size_t) (2 + i / 8) * w + 2 + i % 8) * 4, pattern + i * 4, 4);
+      }
+    CHECK (now && expected && shot && memcmp (now, expected, bytes) == 0,
+           "to-layer reveals the full un-clipped payload over the untouched target");
+    free (expected);
+  }
+  free (now);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         (api->image_floating_selection (engine, image, &state), state.active && state.floating == floating),
+         "undo of to-layer returns to the floating state");
+  CHECK (api->floating_command (engine, image, floating, GLIMS_FLOATING_DISCARD, NULL, NULL) == GLIMS_STATUS_OK,
+         "discard ends the to-layer test's floating selection");
+
+  /* Mask target: attaches with kind layer-mask; to-layer refuses. */
+  CHECK (api->layer_mask_add (engine, image, layer, GLIMS_MASK_WHITE, false, &mask, &error) == GLIMS_STATUS_OK && mask != 0,
+         "a layer mask exists%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  before = undo_depth (image);
+  status = api->image_paste_into (engine, image, mask, payload, pattern, sizeof pattern, &floating, &error);
+  CHECK (status == GLIMS_STATUS_OK && floating != 0 && undo_depth (image) == before + 1,
+         "paste into a layer mask works, one undo%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && state.active &&
+         state.target == mask && state.target_kind == GLIMS_FLOATING_TARGET_LAYER_MASK,
+         "the floating state reports the mask target with kind layer-mask");
+  before = undo_depth (image);
+  status = api->floating_command (engine, image, floating, GLIMS_FLOATING_TO_LAYER, NULL, &error);
+  CHECK (status == GLIMS_STATUS_FAILED && error && undo_depth (image) == before,
+         "to-layer on a mask-attached floating selection fails actionably, no mutation (%s)",
+         error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && state.active &&
+         state.floating == floating && state.target == mask,
+         "the refused to-layer left the mask-attached floating selection active");
+  status = api->floating_command (engine, image, floating, GLIMS_FLOATING_ANCHOR, NULL, &error);
+  CHECK (status == GLIMS_STATUS_OK, "anchor resolves the mask-attached floating selection%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* Channel target: attaches with kind channel; to-layer refuses. */
+  CHECK (api->channel_from_selection (engine, image, "chan", &channel, &error) == GLIMS_STATUS_OK && channel != 0,
+         "a saved channel exists%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->layer_select (engine, image, layer);
+  before = undo_depth (image);
+  status = api->image_paste_into (engine, image, channel, payload, pattern, sizeof pattern, &floating, &error);
+  CHECK (status == GLIMS_STATUS_OK && floating != 0 && undo_depth (image) == before + 1,
+         "paste into a saved channel works, one undo%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && state.active &&
+         state.target == channel && state.target_kind == GLIMS_FLOATING_TARGET_CHANNEL,
+         "the floating state reports the channel target with kind channel");
+  before = undo_depth (image);
+  status = api->floating_command (engine, image, floating, GLIMS_FLOATING_TO_LAYER, NULL, &error);
+  CHECK (status == GLIMS_STATUS_FAILED && error && undo_depth (image) == before,
+         "to-layer on a channel-attached floating selection fails actionably, no mutation (%s)",
+         error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->floating_command (engine, image, floating, GLIMS_FLOATING_DISCARD, NULL, NULL) == GLIMS_STATUS_OK,
+         "discard resolves the channel-attached floating selection");
+
+  /* XCF round trip: the attachment survives by kind and target identity,
+   * not by the runtime id, and composites identically. */
+  before = undo_depth (image);
+  status = api->image_paste_into (engine, image, layer, payload, pattern, sizeof pattern, &floating, &error);
+  CHECK (status == GLIMS_STATUS_OK && floating != 0 && undo_depth (image) == before + 1,
+         "paste into for the XCF round trip, one undo%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  floating_shot = render_all (image, &w, &h);
+  snprintf (xcf, sizeof xcf, "%s/floating.xcf", work);
+  CHECK (api->image_save (engine, image, xcf, &error) == GLIMS_STATUS_OK && file_size (xcf) > 0,
+         "save with a floating selection%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->image_close (engine, image);
+  CHECK (api->image_open (engine, xcf, &reopened, &error) == GLIMS_STATUS_OK, "reopen the XCF%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_floating_selection (engine, reopened, &state) == GLIMS_STATUS_OK && state.active &&
+         state.floating != 0 && state.target != 0 &&
+         state.target_kind == GLIMS_FLOATING_TARGET_LAYER,
+         "the reopened XCF still has a floating selection attached to a layer");
+  CHECK (api->image_layers (engine, reopened, rows, 8, &count) == GLIMS_STATUS_OK && count <= 8, "reopened layers read");
+  found = 0;
+  for (i = 0; i < count; i++)
+    if (rows[i].id == state.target)
+      found = i + 1;
+  CHECK (found && strcmp (rows[found - 1].name, "Background") == 0 &&
+         rows[found - 1].kind == GLIMS_LAYER_PIXEL,
+         "the reopened attachment names the background layer by identity, not by the old runtime id");
+  now = render_all (reopened, &w, &h);
+  CHECK (now && floating_shot && memcmp (now, floating_shot, (size_t) w * h * 4) == 0,
+         "the reopened floating selection composites identically");
+  free (now);
+  CHECK (api->floating_command (engine, reopened, state.floating, GLIMS_FLOATING_ANCHOR, NULL, NULL) == GLIMS_STATUS_OK,
+         "anchor works on the reloaded floating selection");
+  CHECK (api->image_floating_selection (engine, reopened, &state) == GLIMS_STATUS_OK && ! state.active,
+         "the reloaded floating selection is resolved");
+  api->image_close (engine, reopened);
+
+  /* Normal Paste regression: with a selection present and nothing
+   * floating, image_paste_pixels still creates an independent new layer
+   * and leaves the selection alone. */
+  CHECK (api->select_shape (engine, other, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 2, 2 }, { 6, 6 } }, 2, &sel) == GLIMS_STATUS_OK,
+         "a selection on the second image");
+  api->selection_bounds (engine, other, &empty, &sel_before);
+  before = undo_depth (other);
+  status = api->image_paste_pixels (engine, other, (GlimsRect) { 0, 0, 8, 8 }, pattern, sizeof pattern, &pasted, &error);
+  CHECK (status == GLIMS_STATUS_OK && pasted != 0 && layer_count (other) == 2 && undo_depth (other) == before + 1,
+         "normal paste still creates an independent new layer with a selection present%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_floating_selection (engine, other, &state) == GLIMS_STATUS_OK && ! state.active,
+         "normal paste creates no floating selection");
+  CHECK (api->selection_bounds (engine, other, &empty, &bounds) == GLIMS_STATUS_OK && ! empty &&
+         rect_equals (bounds, sel_before.x, sel_before.y, sel_before.width, sel_before.height),
+         "normal paste leaves the selection unchanged");
+
+  free (floating_shot);
+  free (shot);
+  api->image_close (engine, other);
+}
+
 static void
 test_procedures (void)
 {
@@ -11448,6 +11991,7 @@ main (int argc, char **argv)
   test_guides (argv[2]);
   test_grid (argv[2]);
   test_selection_stroke ();
+  test_floating_selection (argv[2]);
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 
