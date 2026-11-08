@@ -63,7 +63,7 @@ outside the four known modifiers (or negative) are rejected.
 | ⌘M, ⌥⌘M | Minimize / Minimize All |
 | ⌘Q, ⇧⌘Q, ⌃⌘Q | Quit / Log Out / Lock Screen |
 | ⌘Space, ⌥⌘Space | Spotlight / Spotlight search field |
-| ⌘`, ⇧⌘` | Move focus to next / previous window |
+| ⌘\`, ⇧⌘\` | Move focus to next / previous window |
 | ⇧⌘3, ⇧⌘4, ⇧⌘5 | Screenshot / selection / options |
 
 ## Store
@@ -79,7 +79,7 @@ UserDefaults key, storing one schema-1 JSON document as `Data`:
 
 - Mutations (`assign`, `disable`, `reset`, `resetAll`) re-read the stored
   bytes, apply the change, validate the prospective set against the catalog
-  (when given) and write the single encoded document back only if everything
+  and write the single encoded document back only if everything
   passes — a failed mutation leaves the stored bytes untouched. `resetAll`
   reads strictly before removing the key, so a corrupt document throws and is
   retained.
@@ -173,3 +173,16 @@ collection, ids, canonical bases, snapshots, reserved owners, aliases,
 conflicts, persist-first ordering, corrupt stores, the single panel and
 panel-driven assign/disable/reset. Not covered here: the engine smoke run
 (needs a built engine) and any interactive GUI run.
+
+### Controls acceptance
+
+All 621 unit tests pass, including the three new factory-snapshot regressions
+that first reproduced four failed assertions. Original snapshots now follow
+each menu item's lifetime, preserving reset and corrupt-store recovery across
+recollection and replacement managers. The independent source fix review
+found no important issue. The real-controls smoke passes 41 checks, including
+AppKit dispatch of Command-K and Command-Shift-K to separate safe targets.
+The Shift event retains Shift in charactersIgnoringModifiers, matching
+[Apple's event contract](https://developer.apple.com/documentation/appkit/nsevent/charactersignoringmodifiers).
+No Quit, Hide, Minimize or Open dialog was invoked. Full integrated app smoke
+and exact-head CI remain pending.

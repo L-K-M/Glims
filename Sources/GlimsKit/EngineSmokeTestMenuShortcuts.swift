@@ -97,6 +97,29 @@ extension EngineSmokeTest {
         check(String(data: store.storedData!, encoding: .utf8)?.contains("\"key\":\"k\"") == true,
               "the model stores the lower-case letter form")
 
+        // Exercise AppKit key matching itself with safe, local targets.
+        // No document, Open dialog, Hide or Quit action is dispatched.
+        let dispatchProbe = ShortcutDispatchProbe()
+        let originalNewTarget = item("newDocument:#0")?.target
+        let originalOpenTarget = item("openDocument:#0")?.target
+        item("newDocument:#0")?.target = dispatchProbe
+        item("openDocument:#0")?.target = dispatchProbe
+        func keyEvent(_ shifted: Bool) -> NSEvent? {
+            NSEvent.keyEvent(with: .keyDown, location: .zero,
+                             modifierFlags: shifted ? [.command, .shift] : [.command],
+                             timestamp: 0, windowNumber: 0, context: nil,
+                             characters: shifted ? "K" : "k", charactersIgnoringModifiers: shifted ? "K" : "k",
+                             isARepeat: false, keyCode: 40)
+        }
+        let plainHandled = keyEvent(false).map { menu.performKeyEquivalent(with: $0) } ?? false
+        check(plainHandled && dispatchProbe.newCount == 1 && dispatchProbe.openCount == 0,
+              "AppKit dispatches assigned Command-K to its own command")
+        let shiftedHandled = keyEvent(true).map { menu.performKeyEquivalent(with: $0) } ?? false
+        check(shiftedHandled && dispatchProbe.newCount == 1 && dispatchProbe.openCount == 1,
+              "AppKit distinguishes assigned Command-Shift-K from Command-K")
+        item("newDocument:#0")?.target = originalNewTarget
+        item("openDocument:#0")?.target = originalOpenTarget
+
         // Conflict: ⌘N is Save's… actually New's assigned key now; assigning
         // ⌘K to another command must fail visibly and keep the stored bytes.
         let bytesBeforeConflict = store.storedData
@@ -183,4 +206,12 @@ extension EngineSmokeTest {
                   "\(id) still holds its factory key equivalent (never Quit/Hide/Minimize was invoked)")
         }
     }
+}
+
+@MainActor
+private final class ShortcutDispatchProbe: NSObject {
+    private(set) var newCount = 0
+    private(set) var openCount = 0
+    @objc func newDocument(_ sender: Any?) { newCount += 1 }
+    @objc func openDocument(_ sender: Any?) { openCount += 1 }
 }

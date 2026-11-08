@@ -1,4 +1,5 @@
 import AppKit
+import ObjectiveC
 
 /// The AppKit seam between the pure shortcut model
 /// (`KeyboardShortcutModel.swift`) and the real menu bar.
@@ -15,7 +16,7 @@ import AppKit
 /// serialized — so an unoverridden item is restored exactly ("S" + Command,
 /// an unmodified DEL, ...).
 ///
-/// Pure menu-object code: no window, no event capture, no global state.
+/// Menu-object code: no window, no event capture, no global menu mutation.
 /// `MainMenu.make()` never calls into the store or this bridge.
 @MainActor
 enum MenuShortcutBridge {
@@ -43,6 +44,27 @@ enum MenuShortcutBridge {
     struct FactorySnapshot {
         let keyEquivalent: String
         let modifierMask: NSEvent.ModifierFlags
+    }
+
+    // The snapshot belongs to the item, so recollecting an installed menu
+    // or attaching a replacement manager cannot adopt an applied override
+    // as the factory key. Associated storage follows the item's lifetime.
+    private final class FactoryStorage: NSObject {
+        let snapshot: FactorySnapshot
+        init(_ item: NSMenuItem) {
+            snapshot = FactorySnapshot(keyEquivalent: item.keyEquivalent,
+                                       modifierMask: item.keyEquivalentModifierMask)
+        }
+    }
+    private static var factoryStorageKey: UInt8 = 0
+
+    private static func factorySnapshot(for item: NSMenuItem) -> FactorySnapshot {
+        if let storage = objc_getAssociatedObject(item, &factoryStorageKey) as? FactoryStorage {
+            return storage.snapshot
+        }
+        let storage = FactoryStorage(item)
+        objc_setAssociatedObject(item, &factoryStorageKey, storage, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        return storage.snapshot
     }
 
     /// The collected built-in menu commands plus any factory conflicts.
@@ -95,10 +117,9 @@ enum MenuShortcutBridge {
                 guard let action = item.action,
                       item.identifier == builtinIdentifier,
                       item.tag != PlugInMenus.generatedTag else { continue }
-                let snapshot = FactorySnapshot(keyEquivalent: item.keyEquivalent,
-                                               modifierMask: item.keyEquivalentModifierMask)
-                let base = canonicalBase(keyEquivalent: item.keyEquivalent,
-                                         mask: item.keyEquivalentModifierMask)
+                let snapshot = factorySnapshot(for: item)
+                let base = canonicalBase(keyEquivalent: snapshot.keyEquivalent,
+                                         mask: snapshot.modifierMask)
                 records.append(Record(item: item,
                                       id: commandID(action: action, tag: item.tag),
                                       path: path + [item.title],

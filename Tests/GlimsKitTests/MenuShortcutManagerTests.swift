@@ -207,6 +207,41 @@ final class MenuShortcutManagerTests: XCTestCase {
         }
     }
 
+    func testReloadKeepsOriginalFactoryKeys() throws {
+        try withDefaults { defaults in
+            let (manager, _) = makeManager(defaults)
+            try manager.assign(shortcut("k", [.command]), to: "newDocument:#0")
+            manager.reload()
+            XCTAssertEqual(record("newDocument:#0", in: manager)?.base, shortcut("n", [.command]))
+            try manager.reset("newDocument:#0")
+            XCTAssertEqual(item("newDocument:#0", in: manager)?.keyEquivalent, "n")
+        }
+    }
+
+    func testAnotherManagerOnSameMenuKeepsOriginalFactoryKeys() throws {
+        try withDefaults { defaults in
+            let (manager, menu) = makeManager(defaults)
+            try manager.assign(shortcut("k", [.command]), to: "newDocument:#0")
+            let another = MenuShortcutManager(store: manager.store, menu: menu)
+            another.attach()
+            try another.resetAll()
+            XCTAssertEqual(item("newDocument:#0", in: another)?.keyEquivalent, "n")
+        }
+    }
+
+    func testCorruptReloadRestoresOriginalFactoryKeys() throws {
+        try withDefaults { defaults in
+            let (manager, _) = makeManager(defaults)
+            try manager.assign(shortcut("k", [.command]), to: "newDocument:#0")
+            let corrupt = Data("invalid".utf8)
+            defaults.set(corrupt, forKey: KeyboardShortcutOverrideStore.overridesKey)
+            manager.reload()
+            XCTAssertNotNil(manager.loadError)
+            XCTAssertEqual(item("newDocument:#0", in: manager)?.keyEquivalent, "n")
+            XCTAssertEqual(manager.store.storedData, corrupt)
+        }
+    }
+
     func testConflictIsVisibleAndKeepsStoredBytesAndMenu() throws {
         try withDefaults { defaults in
             let (manager, _) = makeManager(defaults)
