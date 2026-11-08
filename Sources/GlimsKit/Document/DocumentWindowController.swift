@@ -19,6 +19,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// nil while none is open. Two documents keep independent sheets
     /// through their own controllers — no global binding or singleton.
     private(set) var guidesSheet: GuidesSheetController?
+    /// Edit ▸ Stroke Selection…'s sheet, retained by this window for its
+    /// lifetime the same way; nil while none is open.
+    private(set) var strokeSelectionSheet: StrokeSelectionSheetController?
     /// View ▸ Show Guides' cached per-window state, defaulting to on.
     private(set) var guidesViewState = GuideViewState()
     /// Bumped by every filter start and every cancellation, so a begin
@@ -79,6 +82,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // Fan out to the guides sheet as well, alongside the existing
             // handlers — the sheet never installs its own callback.
             self?.guidesSheet?.showError(message)
+            self?.strokeSelectionSheet?.showError(message)
         }
         // Palette picks and structural or lock changes first commit any
         // field/text edit and end an active stroke; each command also
@@ -220,6 +224,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         window?.endEditing(for: nil)
         previewPanel?.window?.endEditing(for: nil)
         guidesSheet?.commitFieldEdit()
+        strokeSelectionSheet?.commitFieldEdit()
         for paletteWindow in PaletteEditScope.windowsEditing(imageDocument) {
             paletteWindow.endEditing(for: nil)
         }
@@ -260,6 +265,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         canvas.needsDisplay = true
         // Fan out to the guides sheet through this existing hook.
         guidesSheet?.documentStateDidChange()
+        strokeSelectionSheet?.documentStateDidChange()
     }
 
     // MARK: Menu commands
@@ -855,6 +861,31 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         FillForm.present(in: imageDocument, on: window)
     }
 
+    /// Edit ▸ Stroke Selection…: opens this document's stroke-selection
+    /// sheet. The sheet is owned by this window controller and captures
+    /// the current brush settings by value at open, so two documents keep
+    /// independent sheets and no global ToolState changes. The open gate
+    /// reads only the cached document state — busy, preview, closing,
+    /// empty selection, mask/channel/group target, locks and editable
+    /// structured sources refuse with a reason, never a native call on
+    /// the main thread.
+    @objc func strokeSelection(_ sender: Any?) {
+        guard let window, !imageDocument.isClosing, window.attachedSheet == nil,
+              strokeSelectionSheet == nil else { return }
+        if let reason = imageDocument.strokeSelectionRefusal {
+            imageDocument.onError?(reason)
+            NSSound.beep()
+            return
+        }
+        let sheet = StrokeSelectionSheetController(document: imageDocument, hostWindow: window)
+        strokeSelectionSheet = sheet
+        window.beginSheet(sheet.panel) { [weak self, weak sheet] _ in
+            guard let self, let sheet, self.strokeSelectionSheet === sheet else { return }
+            sheet.invalidate()
+            self.strokeSelectionSheet = nil
+        }
+    }
+
     /// Edit ▸ Fill Path: fills the active path's area on the current paint
     /// target using the Path tool's foreground color and fill settings.
     @objc func fillPath(_ sender: Any?) {
@@ -903,6 +934,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return imageDocument.activePath != nil && !editingBlocked
         case #selector(fill(_:)):
             return !editingBlocked && !previewBusy && imageDocument.activeDrawable != nil
+        case #selector(strokeSelection(_:)):
+            // The gate reads only cached state — no native call while a
+            // menu validates; the reason becomes the item's tool tip.
+            if let reason = imageDocument.strokeSelectionRefusal {
+                menuItem.toolTip = reason
+                return false
+            }
+            menuItem.toolTip = nil
+            return !editingBlocked && !previewBusy
         case #selector(toVectorLayer(_:)):
             // Vector layers arrived in GIMP 3.2; older engines report
             // UNSUPPORTED when the command runs, so the item stays listed.
@@ -1546,6 +1586,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     func windowWillClose(_ notification: Notification) {
         closeStarted = true
         guidesSheet?.invalidate()
+        strokeSelectionSheet?.invalidate()
         previewPanel?.cancel()
         cancelPendingPreview()
         canvas.stopRendering { [self] in
