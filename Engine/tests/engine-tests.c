@@ -8988,6 +8988,309 @@ test_guides (const char *work)
          "a closed image refuses guide calls");
 }
 
+/* Grid geometry remains double precision. GeglColor's RGBA-with-space
+ * accessors store float components, so color comparisons allow float
+ * rounding (well below a single 8-bit channel step). */
+static int
+grid_color_near (const GlimsColor *a, const GlimsColor *b)
+{
+  return fabs (a->red - b->red)         <= 1e-7 &&
+         fabs (a->green - b->green)     <= 1e-7 &&
+         fabs (a->blue - b->blue)       <= 1e-7 &&
+         fabs (a->alpha - b->alpha)     <= 1e-7;
+}
+
+static int
+grid_near (const GlimsGrid *a, const GlimsGrid *b)
+{
+  return a->style == b->style &&
+         fabs (a->spacing_x - b->spacing_x) <= 1e-9 &&
+         fabs (a->spacing_y - b->spacing_y) <= 1e-9 &&
+         fabs (a->offset_x - b->offset_x)   <= 1e-9 &&
+         fabs (a->offset_y - b->offset_y)   <= 1e-9 &&
+         grid_color_near (&a->foreground, &b->foreground) &&
+         grid_color_near (&a->background, &b->background);
+}
+
+static GlimsGrid
+grid_read (GlimsImageID image)
+{
+  GlimsGrid grid = { .struct_size = sizeof grid };
+
+  if (api->image_grid (engine, image, &grid, NULL) != GLIMS_STATUS_OK)
+    memset (&grid, 0, sizeof grid);
+  return grid;
+}
+
+static int
+image_dirty (GlimsImageID image)
+{
+  GlimsImageInfo info;
+
+  return api->image_info (engine, image, &info) == GLIMS_STATUS_OK ? info.dirty : -1;
+}
+
+/* The image grid (image_grid/image_set_grid): per-style and
+ * numeric/color readback, alpha, pixels/selection/dirty preservation,
+ * exactly one undo per change, the identical no-op, every refusal,
+ * BUSY under a stroke and a filter preview, XCF persistence and
+ * stale-image refusals. */
+static void
+test_grid (const char *work)
+{
+  GlimsImageID       image = 0, reopened = 0;
+  GlimsItemID        layer;
+  GlimsGrid          grid, read, want, saved;
+  GlimsStatus        status;
+  int32_t            before, i;
+  int                dirty_before;
+  bool               empty = true;
+  GlimsRect          bounds, before_bounds;
+  uint8_t           *pixels_before = NULL, *pixels_after = NULL;
+  int32_t            pw = 0, ph = 0, aw = 0, ah = 0;
+  char               path[1100];
+  char              *error = NULL;
+  GlimsStrokeID      stroke = 0;
+  GlimsFilterID      filter = 0;
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+  GlimsStrokePoint   first = { 5, 5, 1.0, 0.0, 0.0, 0 };
+  static const uint32_t styles[5] = {
+    GLIMS_GRID_DOTS, GLIMS_GRID_INTERSECTIONS, GLIMS_GRID_ON_OFF_DASH,
+    GLIMS_GRID_DOUBLE_DASH, GLIMS_GRID_SOLID
+  };
+
+  api->image_new (engine, 100, 80, &image, NULL);
+  layer = first_layer (image);
+
+  /* A new image reads the engine's own grid defaults (gimpgrid.c
+   * class_init: solid, black on white, spacing 10, offsets 0). */
+  CHECK (api->image_grid (engine, image, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a missing out is refused");
+  grid = (GlimsGrid) { .struct_size = sizeof (GlimsGrid) - 8 };
+  CHECK (api->image_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a short struct is refused");
+  CHECK (api->image_grid (engine, 9999, &grid, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->image_set_grid (engine, 9999, &grid, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an unknown image is NOT_FOUND for both slots");
+  read = grid_read (image);
+  CHECK (read.style == GLIMS_GRID_SOLID &&
+         fabs (read.spacing_x - 10.0) <= 1e-9 && fabs (read.spacing_y - 10.0) <= 1e-9 &&
+         fabs (read.offset_x) <= 1e-9 && fabs (read.offset_y) <= 1e-9 &&
+         grid_color_near (&read.foreground, &(GlimsColor) { 0, 0, 0, 1 }) &&
+         grid_color_near (&read.background, &(GlimsColor) { 1, 1, 1, 1 }),
+         "a new image reads the native default grid (solid black/white, 10, 10, 0, 0)");
+
+  /* Every style applies and reads back, each as exactly one undo. */
+  before = undo_depth (image);
+  for (i = 0; i < 5; i++)
+    {
+      want = (GlimsGrid) { .struct_size = sizeof (GlimsGrid),
+                           .style = styles[i],
+                           .spacing_x = 12.5, .spacing_y = 7.25,
+                           .offset_x = -3.0, .offset_y = 4.5,
+                           .foreground = { 0.2, 0.4, 0.6, 0.5 },
+                           .background = { 0.9, 0.1, 0.0, 0.25 } };
+      status = api->image_set_grid (engine, image, &want, &error);
+      CHECK (status == GLIMS_STATUS_OK && undo_depth (image) == before + i + 1,
+             "style %u applies as exactly one undo%s%s", styles[i],
+             error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      read = grid_read (image);
+      CHECK (grid_near (&read, &want),
+             "style %u reads back with its numbers, colors and alpha (fg %.9g/%.9g/%.9g/%.9g)",
+             styles[i], read.foreground.red, read.foreground.green,
+             read.foreground.blue, read.foreground.alpha);
+    }
+
+  /* Undo and redo walk the grid changes one step at a time. */
+  want = (GlimsGrid) { .struct_size = sizeof (GlimsGrid),
+                       .style = styles[3],
+                       .spacing_x = 12.5, .spacing_y = 7.25,
+                       .offset_x = -3.0, .offset_y = 4.5,
+                       .foreground = { 0.2, 0.4, 0.6, 0.5 },
+                       .background = { 0.9, 0.1, 0.0, 0.25 } };
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK,
+         "undo walks back one grid step");
+  read = grid_read (image);
+  CHECK (grid_near (&read, &want),
+         "undo restores the previous grid, not the last one");
+  want.style = styles[4];
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK, "redo walks forward");
+  read = grid_read (image);
+  CHECK (grid_near (&read, &want), "redo reapplies the grid change");
+
+  /* An identical grid is a no-op that pushes no undo. */
+  before = undo_depth (image);
+  CHECK (api->image_set_grid (engine, image, &read, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "setting the identical grid is a no-op with no undo");
+
+  /* Grid changes are metadata: pixels, selection and dirty state. */
+  paint_line (image, layer, 10, 90, 40);
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 20, 20 }, { 50, 50 } }, 2,
+                            NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &before_bounds) == GLIMS_STATUS_OK && ! empty,
+         "a selection exists for the metadata check");
+  pixels_before = render_all (image, &pw, &ph);
+  dirty_before = image_dirty (image);
+  want = read;
+  want.style = GLIMS_GRID_DOUBLE_DASH;
+  want.spacing_x = 33.0;
+  want.foreground = (GlimsColor) { 1, 0, 0, 1 };
+  CHECK (api->image_set_grid (engine, image, &want, NULL) == GLIMS_STATUS_OK,
+         "a grid change applies over a painted selection");
+  pixels_after = render_all (image, &aw, &ah);
+  CHECK (pixels_before && pixels_after && pw == aw && ph == ah &&
+         memcmp (pixels_before, pixels_after, (size_t) pw * ph * 4) == 0,
+         "a grid change leaves the pixels identical");
+  CHECK (api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         rect_equals (bounds, before_bounds.x, before_bounds.y,
+                      before_bounds.width, before_bounds.height),
+         "a grid change leaves the selection identical");
+  free (pixels_before);
+  free (pixels_after);
+  pixels_before = pixels_after = NULL;
+
+  /* Every refusal: invalid argument, no mutation of history, dirty
+   * state or pixels. */
+  before = undo_depth (image);
+  pixels_before = render_all (image, &pw, &ph);
+  CHECK (api->image_set_grid (engine, image, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a missing grid struct is refused");
+  grid = read;
+  grid.struct_size = sizeof (GlimsGrid) - 1;
+  CHECK (api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a short struct is refused");
+  grid = read;
+  grid.style = 0;
+  CHECK (api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         (grid.style = 6, api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT) &&
+         (grid.style = 99, api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT),
+         "unknown styles are refused");
+  grid = read;
+  grid.spacing_x = 0.0;
+  CHECK (api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         (grid.spacing_x = -1.0, api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT) &&
+         (grid.spacing_x = NAN, api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT) &&
+         (grid.spacing_x = INFINITY, api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT) &&
+         (grid.spacing_x = 524289.0, api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT),
+         "zero, negative, non-finite and over-maximum spacings are refused");
+  grid = read;
+  grid.spacing_y = 0.0;
+  CHECK (api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         (grid.spacing_y = -2.5, api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT) &&
+         (grid.spacing_y = NAN, api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT),
+         "the vertical spacing is validated too");
+  grid = read;
+  grid.offset_x = 524289.0;
+  CHECK (api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         (grid.offset_x = -524289.0, api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT) &&
+         (grid.offset_x = NAN, api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT),
+         "offsets outside the native signed range are refused");
+  grid = read;
+  grid.offset_y = INFINITY;
+  CHECK (api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         (grid.offset_y = -INFINITY, api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT),
+         "non-finite offsets are refused");
+  grid = read;
+  grid.foreground.red = -0.1;
+  CHECK (api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         (grid.foreground.red = 1.1, api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT) &&
+         (grid.foreground.red = NAN, api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT),
+         "out-of-range foreground components are refused");
+  grid = read;
+  grid.foreground.alpha = 1.5;
+  CHECK (api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         (grid.foreground.alpha = -0.5, api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT) &&
+         (grid.foreground.alpha = NAN, api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT),
+         "an invalid alpha is refused, not clamped");
+  grid = read;
+  grid.background = (GlimsColor) { 0.5, 0.5, 2.0, 1.0 };
+  CHECK (api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an out-of-range background component is refused");
+  pixels_after = render_all (image, &aw, &ah);
+  CHECK (undo_depth (image) == before && image_dirty (image) == dirty_before &&
+         pixels_before && pixels_after && pw == aw && ph == ah &&
+         memcmp (pixels_before, pixels_after, (size_t) pw * ph * 4) == 0,
+         "every refusal leaves history, dirty state and pixels unchanged");
+  free (pixels_before);
+  free (pixels_after);
+  pixels_before = pixels_after = NULL;
+  read = grid_read (image);
+  CHECK (grid_near (&read, &want),
+         "the grid still holds the last valid value after the refusals");
+
+  /* Boundary values at the native range edges are accepted. */
+  grid = read;
+  grid.spacing_x = 524288.0;
+  grid.offset_x = -524288.0;
+  grid.offset_y = 524288.0;
+  CHECK (api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_OK,
+         "the native range edges (524288, -524288) are accepted");
+  read = grid_read (image);
+  CHECK (grid_near (&read, &grid), "the range-edge grid reads back");
+  api->image_undo (engine, image);
+
+  /* BUSY under an open stroke and an open filter preview; reads work. */
+  CHECK (api->stroke_begin (engine, image, layer, &brush, &first, &stroke,
+                            &error) == GLIMS_STATUS_OK, "a stroke opens%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  before = undo_depth (image);
+  grid = read;
+  grid.style = GLIMS_GRID_DOTS;
+  CHECK (api->image_set_grid (engine, image, &grid, &error) == GLIMS_STATUS_BUSY && error &&
+         undo_depth (image) == before,
+         "image_set_grid during a stroke is BUSY with no undo (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_grid (engine, image, &grid, NULL) == GLIMS_STATUS_OK,
+         "image_grid still reads during a stroke");
+  CHECK (api->stroke_end (engine, stroke) == GLIMS_STATUS_OK &&
+         api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_OK,
+         "grid changes work again after the stroke ends");
+  api->image_undo (engine, image);
+  grid.spacing_x += 1.0; /* A real change: identical settings are a no-op. */
+  status = api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, &error);
+  CHECK (status == GLIMS_STATUS_OK &&
+         api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_BUSY,
+         "image_set_grid during a filter preview is BUSY%s%s",
+         error ? ": " : "", error ? error : "");
+  if (status == GLIMS_STATUS_OK)
+    CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+           "the grid busy fixture always closes its filter preview");
+  api->free_string (error);
+  error = NULL;
+
+  /* XCF round trip: the requested config persists. */
+  saved = grid_read (image);
+  snprintf (path, sizeof path, "%s/grid.xcf", work);
+  CHECK (api->image_save (engine, image, path, &error) == GLIMS_STATUS_OK,
+         "the image saves%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_open (engine, path, &reopened, &error) == GLIMS_STATUS_OK,
+         "the saved image reopens%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  read = grid_read (reopened);
+  CHECK (grid_near (&read, &saved),
+         "the grid round-trips through XCF (style %u, spacing %.2f/%.2f, offset %.2f/%.2f)",
+         read.style, read.spacing_x, read.spacing_y, read.offset_x, read.offset_y);
+  CHECK (grid_color_near (&read.foreground, &saved.foreground) &&
+         grid_color_near (&read.background, &saved.background),
+         "the grid colors round-trip through XCF, alpha included");
+  api->image_close (engine, reopened);
+
+  api->image_close (engine, image);
+  CHECK (api->image_grid (engine, image, &grid, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a closed image refuses grid calls");
+}
+
 static void
 test_procedures (void)
 {
@@ -9805,6 +10108,7 @@ main (int argc, char **argv)
 
   test_resource_gradient ();
   test_guides (argv[2]);
+  test_grid (argv[2]);
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 
