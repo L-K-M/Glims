@@ -1780,3 +1780,23 @@ expected sorted row index in its fixture; correcting that expectation
 required no production-code change. The active-field-edit and overlay
 bitmap scenarios both ran successfully. Rulers, grid, snapping and direct
 canvas guide dragging remain separate work.
+
+### Canvas overlay visibility (2026-11-08)
+
+View now offers Show Layer Boundary (off by default) and Show Selection
+Edges (on by default). Both are cached on each canvas and work while
+engine work is busy. The layer boundary draws the cached active layer's
+bounds in image coordinates through the same zoom/backing scale as
+other overlays. Hidden selection edges stop the marching-ants timer;
+showing them restores the unchanged cached contour. These switches never
+change engine pixels, selection, file state or history; printing and
+export use the engine projection rather than canvas drawing.
+
+The focused `canvas-overlays` interface scenario checks menu defaults and
+wiring, bitmap changes/restoration, independent canvas settings,
+unchanged engine pixels/selection/dirty state/history, busy availability
+and drained image cleanup. All 399 unit tests pass, and the focused scenario passes ten checks on
+each of GIMP 3.2.8, 3.0.8, 3.2.0 and master. The full pinned-engine
+interface suite passes 973 checks. An independent Command Code Glyph
+review found no important issues; its minor test-geometry suggestions
+are deferred.
