@@ -1383,7 +1383,9 @@ typedef struct GlimsEngineAPI {
    * NULL path chooses the image model/precision's builtin profile. The own
    * GlimsProfileIntent mapping and explicit black-point compensation apply
    * only to this conversion. Same path/compatibility, undo and busy rules as
-   * assignment; converting to an equal effective profile is a no-op. */
+   * assignment; converting to an equal effective profile is a no-op.
+   * Indexed images report UNSUPPORTED: their native palette conversion
+   * ignores intent/BPC. Convert to RGB first. Assignment remains supported. */
   GlimsStatus (*image_convert_profile) (GlimsEngine *engine, GlimsImageID image,
                                         const char *path, uint32_t intent,
                                         bool black_point_compensation,

@@ -882,5 +882,12 @@ The first pinned conformance run passes 841 checks, including changed midtone
 interpretation on assignment (128/64 to 188/137), appearance preservation on
 conversion, undo/redo, XCF round trip, RGB/gray compatibility, invalid files and
 busy refusals. Fixtures are original deterministic LittleCMS profiles generated
-by `scripts/make-icc-fixtures.py`. Cross-engine runs and independent review are
-pending. Swift controls and display/proof transforms remain separate work.
+by `scripts/make-icc-fixtures.py`. Final native runs pass 843 checks on
+3.2.8/3.2.0/master and 810 on 3.0.8, plus Swift build and 305 unit tests.
+Independent Beam review found no important issues. Its BPC observation was
+verified: RGB/gray forwards the flag to the full native color transform;
+indexed palette conversion ignores intent/BPC. A new regression reproduced
+that unsupported conversion succeeding. The facade now refuses indexed
+conversion before changing the palette profile, while compatible profile
+assignment remains supported. Convert indexed images to RGB first. Swift
+controls and display/proof transforms remain separate work.

@@ -4142,8 +4142,8 @@ profile_pixel (GlimsImageID image, int32_t x, int32_t y, uint8_t out[4])
 static void
 test_color_profiles (const char *fixtures, const char *work)
 {
-  char rgb[1024], gray[1024], xcf[1024], missing[1024];
-  GlimsImageID image = 0, reopened = 0;
+  char rgb[1024], gray[1024], xcf[1024], missing[1024], indexed_png[1024];
+  GlimsImageID image = 0, reopened = 0, indexed = 0;
   GlimsColorInfo info;
   GlimsFilterID preview = 0;
   GlimsStrokeID stroke = 0;
@@ -4161,6 +4161,7 @@ test_color_profiles (const char *fixtures, const char *work)
   snprintf (gray, sizeof gray, "%s/gray.icc", fixtures);
   snprintf (xcf, sizeof xcf, "%s/icc-profile.xcf", work);
   snprintf (missing, sizeof missing, "%s/missing-profile.icc", work);
+  snprintf (indexed_png, sizeof indexed_png, "%s/indexed.png", fixtures);
   CHECK (api->image_new (engine, 8, 8, &image, NULL) == GLIMS_STATUS_OK &&
          api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL) == GLIMS_STATUS_OK &&
          profile_pixel (image, 4, 4, before), "the ICC fixture has known midtone pixels");
@@ -4258,6 +4259,17 @@ test_color_profiles (const char *fixtures, const char *work)
          "a grayscale image refuses an RGB destination before adding history");
   CHECK (api->image_convert_profile (engine, image, NULL, GLIMS_PROFILE_PERCEPTUAL, true, NULL) == GLIMS_STATUS_OK,
          "a gray profile converts back to the builtin gray profile");
+  CHECK (api->image_open (engine, indexed_png, &indexed, NULL) == GLIMS_STATUS_OK &&
+         api->image_assign_profile (engine, indexed, rgb, NULL) == GLIMS_STATUS_OK,
+         "an indexed image can assign a compatible RGB profile without conversion");
+  depth = undo_depth (indexed);
+  CHECK (api->image_convert_profile (engine, indexed, NULL, GLIMS_PROFILE_PERCEPTUAL, true, &error)
+           == GLIMS_STATUS_UNSUPPORTED && error && *error && undo_depth (indexed) == depth &&
+         api->image_color_info (engine, indexed, &info) == GLIMS_STATUS_OK && info.profile_embedded &&
+         !strcmp (info.profile_label, "Glims Linear RGB Fixture"),
+         "indexed profile conversion refuses unsupported intent and BPC without changing the palette profile");
+  api->free_string (error); error = NULL;
+  if (indexed) api->image_close (engine, indexed);
   api->image_close (engine, image);
   CHECK (api->image_assign_profile (engine, image, rgb, NULL) == GLIMS_STATUS_NOT_FOUND &&
          api->image_convert_profile (engine, image, rgb, GLIMS_PROFILE_PERCEPTUAL, true, NULL) == GLIMS_STATUS_NOT_FOUND,
