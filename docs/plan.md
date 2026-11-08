@@ -1059,6 +1059,64 @@ row/edit preservation and overlay geometry; the GLIMS_SMOKE_CASE=
 guides-controls scenario is wired but NOT run — root owns the runtime
 matrix against the native-guides libraries.
 
+### Pixel rulers (2026-11-08)
+
+View > Show Rulers (default on) puts app-specific pixel rulers in the
+scroll view's native ruler slots: `DocumentWindowController` assigns two
+`PixelRulerView`s (an `NSRulerView` subclass) to
+`scrollView.horizontalRulerView`/`verticalRulerView` with
+`hasHorizontalRuler`/`hasVerticalRuler`, so AppKit keeps the scroll
+layout (toggling relayouts the viewport around the ruler thickness) and
+the rulers' accessibility semantics. The toggle state is a cached
+per-window `RulerViewState` (default on), separate from
+`guidesViewState`; the menu checkmark reads the cache via
+`RulerMenuLogic.validate`, which deliberately takes `engineIsBusy` and
+ignores it, so the item stays enabled and the toggle works while the
+engine is busy. Drawing is display-only: `PixelRulerView` reads the
+canvas's live geometry (weak `canvas` reference, cached image size) and
+maps image pixels through `NSView.convert(_:from:)` from the canvas —
+never assuming a vertical direction — so scroll, zoom, backing scale,
+image extent and flips come out right; no facade call, pixel, file,
+dirty, history, selection, export or print path is touched (printing
+draws an immutable PrintSnapshot, not the scroll view). Ruler
+invalidation rides the existing content-bounds notification (scroll and
+ruler toggles), plus canvas frame changes (zoom, image extent) and the
+window's backing-properties notification; the selector observers are
+removed in `windowWillClose` and in `deinit` (`rulerObserversActive`
+tracks them), and the ruler holds the canvas weakly, so closing a window
+leaves no observation or dangling geometry source behind. There is no
+global ruler controller.
+
+Ticks and labels come from a pure bounded planner, `PixelRulerPlan`: it
+validates all inputs finite (nil for non-finite inputs, non-positive
+scale, negative extent or an inverted range), clamps the visible range
+to the image extent `0...extent` (an off-image range or zero extent is
+the deliberate empty-plan fallback), picks the major spacing as the
+smallest whole 1/2/5 * 10^n reaching ~50 view points (whole pixels, so
+labels are whole image pixels), plans minor ticks at major/5 only when
+they land at least 4 view points apart, and caps the output at 512
+ticks with a progress guard, so extreme zoom, nonzero origins and
+damaged huge sizes terminate with a finite, sorted, bounded plan.
+`PixelRulerGeometry.deviceAligned` snaps strokes to the half-device-
+pixel grid (at most half a device pixel) without changing the ticks'
+image coordinates. Guides keep working independently; their state and
+overlay are untouched.
+
+Compile-checked here: `swift build` and `swift build --build-tests`
+both pass. Unit tests (`PixelRulerTests`) cover the planner against
+independent oracles (brute-force nice spacing, CanvasGeometry zoom/
+backing point scale, explicit range arithmetic) across nonzero origins,
+zoom and backing, clamping, cap/finiteness at extremes, damaged inputs,
+label semantics, device alignment, and the per-window default plus the
+busy-independent menu-validation contract. The smoke scenario
+`GLIMS_SMOKE_CASE=pixel-rulers` (`exercisePixelRulers`, also in the
+default engine-smoke run) is wired but NOT run here — it drives the
+real ruler slots and menu action (on/off viewport and checkmark changes,
+independent two-window state, busy-independent toggling, scroll/zoom
+tick movement and a ruler view bitmap against the geometry oracle,
+pixel/dirty/history/selection isolation, observer removal on close);
+root owns the runtime matrix against the native libraries.
+
 ### Path tool multi-anchor selection (2026-11-08)
 
 Scope: `Sources/GlimsKit/Tools/VectorPath.swift`,
@@ -2205,6 +2263,23 @@ now pass. The compiled `layer-source` interface scenario additionally
 checks queued document cache refresh and busy admission; its runtime
 execution and the unit suite are pending the shared desktop.
 
+Ruler runtime validation caught overlapping native ruler/clip rectangles:
+this AppKit build left the viewport full-sized even with zero content
+insets. CanvasScrollView now reserves only rectangles that actually
+overlap, leaving traditional native tiling alone, and preserves the
+scrolled position across repeated tiling. The focused checks pass on all
+four engines, including real scrolling and rectangle separation.
+Independent reviews of the original rulers and the layout fix found no
+important issues. All 417 unit tests pass.
+
+The first full run exposed a stale synthetic text click: after layout
+changed, its old window coordinates mapped to image (4,-17), outside the
+saved text at (4,4). Recomputing a click inside the current text bounds
+reopens that exact layer; deleting its content then saves correctly. The
+focused file-safety scenario passes. Unknown smoke selectors now fail
+explicitly rather than silently running the full suite. The integrated
+full run is repeated after adopting the Guides field fix.
+
 ### Retained-source restore (2026-11-08)
 
 Backend slice on `feat/layer-source-restore`, engine plus a typed Swift
@@ -2343,6 +2418,7 @@ rather than assuming a Python marker or a fixed delay proves completion.
 Independent review of the lifetime change found no important issues.
 Swift targets compile; application-side retry runtime remains part of
 subsequent interface integration.
+
 
 ### Native indexed conversion (2026-11-08)
 
@@ -2487,6 +2563,14 @@ pinned engine (30 focused checks). Before this fix, the source-cache
 integration passed 399 unit tests, all-four-engine guide checks and 971
 full pinned interface checks. Follow-up review and matrix are running.
 
+The combined rulers/Guides-field revision passes all 417 unit tests and
+1,021 full pinned-engine interface checks. The focused rulers scenario
+passes 47 checks on each of the four supported engines.
+
+Pinned CI uses Swift 6.2 and requires explicit CGFloat-to-Double tuple
+conversion in the ruler axis mapping; the newer local compiler had
+accepted it implicitly. The conversions are now explicit.
+
 ### Indexed conversion controls (2026-11-08)
 
 UI slice on `feat/indexed-controls`, Swift only — no C/header/dependency
@@ -2574,6 +2658,7 @@ Root reviewed form state, explicit consent, captured settings/document,
 validation, exclusive work and close handling. The separate independent
 UI review failed without findings and provides no approval.
 
+
 Integrated with the merged Guides/source cache: all 402 unit tests,
 focused anchor checks on all four engines and 1,000 full pinned interface
 checks pass. The synthetic Escape key now also carries the correct ESC
@@ -2629,6 +2714,17 @@ coordinates are checked for finite, native-integer range before conversion.
 The 3.2.0 suite still logs two startup GLib filename assertions before the
 checks, as recorded in its log; it reports zero failed checks. Swift document
 queue execution and user-facing Stroke Selection controls remain to verify.
+
+Ruler review reproduced a major/minor classification defect at large
+scrolled coordinates: a magnitude-relative tolerance eventually exceeded
+the distance between ticks. At image coordinate 1,000,000 and 3,200% zoom,
+the actual planner mislabeled all 26 visible ticks as major. Classification
+now uses exact divisibility of the integral tick index. The independent
+six-position oracle passes, as do all 421 unit tests and 47 focused pinned
+interface checks. The four-engine focused and 1,067 full integration checks
+above preceded this pure planner correction.
+
+
 
 After integrating Indexed, one native conformance run failed during the
 linked-file rewrite fixture and later crashed after cascading failures.
