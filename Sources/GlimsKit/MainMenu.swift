@@ -173,6 +173,7 @@ enum MainMenu {
             item("Tools", #selector(AppController.showTools(_:))),
             item("Tool Options", #selector(AppController.showToolOptions(_:))),
             item("Layers", #selector(AppController.showLayers(_:))),
+            item("Channels", #selector(AppController.showChannels(_:))),
             item("Paths", #selector(AppController.showPaths(_:))),
             item("History", #selector(AppController.showHistory(_:))),
             item("Hide Palettes", #selector(AppController.togglePaletteVisibility(_:))),

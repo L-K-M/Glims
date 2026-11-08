@@ -555,6 +555,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         layersPalette.isPresented ? layersPalette.bringToFront() : layersPalette.showPanel()
     }
 
+    @objc func showChannels(_ sender: Any?) {
+        channelsPalette.isPresented ? channelsPalette.bringToFront() : channelsPalette.showPanel()
+    }
+
     @objc func showPaths(_ sender: Any?) {
         pathsPalette.isPresented ? pathsPalette.bringToFront() : pathsPalette.showPanel()
     }
@@ -811,7 +815,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             return session != nil && !PlugInCommands.isRunning && !terminationRequested
         case #selector(recoverDocuments(_:)):
             return session != nil && !terminationRequested
-        case #selector(showLayers(_:)), #selector(showPaths(_:)), #selector(showHistory(_:)),
+        case #selector(showLayers(_:)), #selector(showChannels(_:)), #selector(showPaths(_:)), #selector(showHistory(_:)),
              #selector(showTools(_:)), #selector(showToolOptions(_:)):
             return session != nil
         case #selector(togglePaletteVisibility(_:)):
