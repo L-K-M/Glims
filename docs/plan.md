@@ -1744,3 +1744,81 @@ built-in FG-to-BG midpoint even when the colors change mid-drag (capture
 at the press). Runtime/desktop verification of these scenarios is owned by
 the root harness; here only `swift build` and `swift build --build-tests`
 were run.
+
+### Layer source-info and explicit rasterize (2026-11-08)
+
+Backend slice on `feat/layer-source-policy`, engine plus typed Swift
+wrappers, no UI. One facade footer slot appended after `guide_remove`
+(unchanged ABI otherwise): `layer_source_info(engine, image, layer, out,
+error)` fills a size-versioned `GlimsLayerSourceInfo` — `source_kind`
+(the layer's own class mapped to the existing `GlimsLayerKind`, so a
+rasterized text/link/vector instance keeps TEXT/LINK/VECTOR while
+`GlimsLayerInfo.kind` already reports PIXEL), `is_rasterized` (the
+class's current editable predicate is off: the text layer's "modified"
+flag, an unmonitored link, a rasterized vector — computed as class plus
+negated predicate exactly as `gimp_item_is_rasterized` does in
+app/core/gimpitem.c, never the generic rasterizable flag alone, so an
+unmonitored link counts even when that flag stays false), and
+`has_source` (a retained `GimpText`, an associated path via
+`gimp_vector_layer_get_path`, or a `GimpLink` via
+`gimp_link_layer_get_link`, which outlives the monitor). Pixel and group
+layers report PIXEL/GROUP with both flags false. The read is always
+allowed, validates `out` by `struct_size`, and reports NOT_FOUND for
+stale, foreign or closed image/layer identities (`layer` 0 resolves the
+selected layer).
+
+`GLIMS_LAYER_RASTERIZE = 12` on `layer_command`: readiness first
+(stroke/filter/plug-in BUSY via `glims_edit_ready`), then inherited
+PIXELS|POSITION locks (`glims_check_item_locks`), then the kind
+decision. A genuine editable text/link/vector becomes pixel-behaving in
+one native undo step keeping its source, pixels, bounds and selection;
+an already-rasterized instance (retained source or not) is a no-op
+without history; ordinary pixels and groups get UNSUPPORTED with an
+actionable message; an explicit stale/foreign layer id gets NOT_FOUND.
+On GIMP 3.2+ the mutation is `gimp_rasterizable_rasterize(…, TRUE)`
+(app/core/gimprasterizable.c): one "Rasterize …" undo group around the
+rasterizable undo record — text and vector `set_rasterized` handlers
+only act on restore, so `GimpText` and the path association stay, and a
+link is frozen (`gimp_link_freeze`) keeping the `GimpLink` while the
+monitor stops. On GIMP 3.0.8 (text only) it reproduces the native
+modified-undo path verbatim — `gimp_image_undo_group_start`
+(GIMP_UNDO_GROUP_DRAWABLE_MOD),
+`gimp_image_undo_push_text_layer_modified`, `"modified"=TRUE`,
+`gimp_image_undo_group_end` — exactly as `gimp_text_layer_set_buffer`
+records it (app/text/gimptextlayer.c), preserving the `GimpText`;
+`gimp_text_layer_discard` is deliberately never used. Undo restores the
+editable predicate natively on both paths; a repeated command while the
+predicate stays off pushes nothing.
+
+The own source-kind state is deliberately distinct from the UI kind:
+`glims_layer_kind`/image_layers keep reporting PIXEL for rasterized
+instances (their content is pixels); `source_kind` reports the class.
+
+Swift: `EngineSession.LayerCommand.rasterize = 12`,
+`EngineSession.LayerSource` + `layerSource(_:image:)` decoding the
+facade kind by value (an unknown kind throws instead of mapping), and
+`ImageDocument` caches `layerSources` per layer id in the same reload
+pass that reads locks/masks/effects (refreshed by the
+undo/layers-changed → `.state` refresh) and routes `.rasterize` through
+the same guarded path as fit/trim. No chooser, prompt, restore or
+indexed conversion — root owns restore/consent policy.
+
+Tests: `test_layer_source` in `Engine/tests/engine-tests.c` covers the
+read's kind/state on every class, the retained source after pixel
+painting, rasterize + undo + redo, pixel-identical render and unchanged
+selection/bounds, repeat no-op history, own and inherited locks,
+invalid/foreign/closed ids, BUSY during a stroke and a filter preview,
+and an XCF round trip for rasterized text (plus vector/link paths on
+GIMP 3.2+). The adapter and these tests were NOT compiled or run in
+this slice — only `swift build --build-tests` (the facade header
+compiles through CGlimsEngine).
+
+Root native validation passes 1,251 / 1,146 / 1,251 / 1,251 checks on
+GIMP 3.2.8 / 3.0.8 / 3.2.0 / master. The first run exposed four test
+assertions that assumed a nested or newly inserted layer was the tree's
+first row. Resolving the exact layer id corrects those fixtures; the
+production implementation required no change. All retained-source,
+undo/redo, unchanged pixels/selection/bounds, XCF, lock and busy assertions
+now pass. The compiled `layer-source` interface scenario additionally
+checks queued document cache refresh and busy admission; its runtime
+execution and the unit suite are pending the shared desktop.

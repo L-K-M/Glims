@@ -98,6 +98,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-source" {
+                try exerciseLayerSourceCache(session, documents: documents)
+                print(failures == 0 ? "PASSED (layer source)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "native-guides" {
                 try exerciseGuideCache(session, documents: documents)
                 print(failures == 0 ? "PASSED (native guides)" : "FAILED: \(failures) failure(s)")
@@ -175,6 +180,7 @@ enum EngineSmokeTest {
             try measurePluginStalls(session, work: work)
             try exerciseResourceCatalog(session)
             try exerciseGuideCache(session, documents: documents)
+            try exerciseLayerSourceCache(session, documents: documents)
             try exerciseResourceGradient(session, documents: documents)
             try exerciseResourceThumbnails(session)
             try exerciseSelectedBrushStrokes(session, documents: documents)
@@ -7742,6 +7748,63 @@ enum EngineSmokeTest {
         wait { document.pendingWork == 0 }
         check(try session.copyPixels(image, merged: true).pixels == blank,
               "undo restores the pixels before chooser-selected painting")
+    }
+
+    private static func exerciseLayerSourceCache(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 96, height: 64)
+        let text = try session.addTextLayer(image: image, text: "Source", settings: .init(), at: CGPoint(x: 4, y: 4))
+        try session.selectLayer(text, image: image)
+        let document = try ImageDocument(session: session, image: image, name: "Layer source cache")
+        documents.items.append(document)
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        func settle() {
+            document.inputQueue.sync {}
+            let deadline = Date().addingTimeInterval(10)
+            while (document.pendingWork > 0 || EngineActivity.shared.isBusy) && Date() < deadline { spin(0.01) }
+            spin()
+        }
+        defer {
+            documents.items.removeAll { $0 === document }
+            var closed = false
+            document.closeImageWhenDrained { closed = true }
+            let deadline = Date().addingTimeInterval(10)
+            while !closed && Date() < deadline { spin(0.01) }
+            check(closed && (try? session.info(image)) == nil, "the source cache image closes before shutdown")
+        }
+        let source = EngineSession.LayerSource(kind: .text, isRasterized: false, hasSource: true)
+        check(document.layerSources[text] == source && document.activeLayer == text,
+              "document reload caches the selected text layer's retained-source state")
+        let pixels = try session.copyPixels(image, merged: true).pixels
+        let undo = document.undoInfo.undoCount
+        document.layerCommand(.rasterize)
+        settle()
+        let raster = EngineSession.LayerSource(kind: .text, isRasterized: true, hasSource: true)
+        check(errors.isEmpty && document.layerSources[text] == raster
+                && document.layers.first(where: { $0.id == text })?.kind == .pixel,
+              "queued Rasterize refreshes source and current content kinds independently")
+        check(try document.undoInfo.undoCount == undo + 1
+                && session.copyPixels(image, merged: true).pixels == pixels,
+              "queued Rasterize keeps pixels identical and adds one undo step")
+        document.layerCommand(.rasterize)
+        settle()
+        check(document.undoInfo.undoCount == undo + 1 && document.layerSources[text] == raster,
+              "repeating queued Rasterize is a no-op with the source retained")
+        document.undo()
+        settle()
+        check(document.layerSources[text] == source
+                && document.layers.first(where: { $0.id == text })?.kind == .text,
+              "undo refreshes the editable text state in the document cache")
+        document.redo()
+        settle()
+        check(document.layerSources[text] == raster && errors.isEmpty,
+              "redo refreshes the rasterized retained-source state")
+        let baseline = errors.count
+        let accepted = EngineActivity.shared.perform(label: "Source busy check", work: {}, completion: {})
+        document.layerCommand(.rasterize)
+        check(accepted && errors.count == baseline + 1 && document.pendingWork == 0,
+              "busy admission refuses Rasterize before queueing input")
+        settle()
     }
 
     private static func exerciseGuideCache(_ session: EngineSession, documents: DocumentList) throws {
