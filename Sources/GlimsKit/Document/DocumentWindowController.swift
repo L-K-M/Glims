@@ -1895,6 +1895,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     func windowWillClose(_ notification: Notification) {
         closeStarted = true
+        // A closing window cancels any in-progress guide drag: the ghost is
+        // cleared and no guide action is committed; late events afterwards
+        // are ignored by the gesture's captured window/document identity.
+        canvas.guideDrag.cancel()
         // A closing window leaves no ruler observation behind; the ruler
         // views themselves go away with the scroll view's view hierarchy.
         removeRulerObservers()

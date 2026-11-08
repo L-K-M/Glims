@@ -55,10 +55,51 @@ final class PixelRulerView: NSRulerView {
         measurementUnits = .points
         originOffset = 0
         setAccessibilityLabel(orientation == .horizontalRuler ? "Horizontal ruler" : "Vertical ruler")
+        setAccessibilityHelp(orientation == .horizontalRuler
+            ? "Drag down into the image to create a horizontal guide at that position. Press Escape while dragging to cancel."
+            : "Drag right into the image to create a vertical guide at that position. Press Escape while dragging to cancel.")
     }
 
     @available(*, unavailable)
     required init(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    /// The guide a drag from this ruler creates: the matching orientation
+    /// (the horizontal ruler yields horizontal guides).
+    var guideOrientation: EngineSession.GuideOrientation {
+        orientation == .horizontalRuler ? .horizontal : .vertical
+    }
+
+    // MARK: Guide dragging
+
+    /// The ruler takes the keyboard while a guide drag runs, so Escape can
+    /// cancel it.
+    override var acceptsFirstResponder: Bool { true }
+
+    /// A press on the ruler begins a new-guide drag into the canvas — only
+    /// while the rulers are visible and the document can take metadata
+    /// edits; every other press is left to the default handling. The
+    /// gesture itself lives on the canvas (per window), view-only until
+    /// the release commits it.
+    override func mouseDown(with event: NSEvent) {
+        guard let canvas, !isHidden, let scrollView, scrollView.rulersVisible else { return }
+        window?.makeFirstResponder(self)
+        _ = canvas.guideDrag.beginFromRuler(orientation: guideOrientation, event: event, ruler: self)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        _ = canvas?.guideDrag.mouseDragged(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if let canvas, canvas.guideDrag.mouseUp(with: event) {
+            window?.makeFirstResponder(canvas)
+        }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if canvas?.guideDrag.keyDown(with: event) == true { return }
+        super.keyDown(with: event)
+    }
 
     /// The image's extent along this ruler's axis, in pixels, from the
     /// document's cached info — no engine call.
