@@ -46,8 +46,8 @@ behavior, not every adjacent feature in `design.md`.
 - [ ] Adjustment layers/groups, remaining custom filter forms and filter inputs.
 - [ ] Path fill, vector layers and multi-anchor editing.
 - [ ] Brush, pattern and gradient resource choosers and presets.
-- [ ] Indexed conversion policy, profile assignment/conversion, display color
-      management and soft proofing.
+- [ ] Indexed conversion policy, display color management and soft proofing
+      (profile assignment/conversion landed on `feat/color-profile-controls`).
 - [ ] Rulers, guides, grid, snapping, view rotation, trackpad/modifier behavior
       and initial fit that avoids palettes.
 - [ ] Paste Into/floating selection controls, Stroke Selection and resource
@@ -328,6 +328,32 @@ observed failing in the draft and passes after per-sheet retention. The
 Paths-integrated build passes 305 unit tests and 689/678/689/689 interface
 checks. On screen, half-opacity Fill works and cancelling the Custom
 color well closes the panel it opened. Pattern fill remains resource work.
+
+2026-11-08 profile controls (branch `feat/color-profile-controls`, ICC
+backend `79a26c5`): Image ▸ Color Profile ▸ Assign…/Convert… open one
+native form seeded from the cached color state — built-in profile or an
+ICC file chosen with an open panel (.icc/.icm, full path), plus the four
+facade rendering intents and black-point compensation on Convert. The
+sheet reads no engine state and no file on the main thread; Apply
+captures the document, finishes field edits, revalidates busy/closed and
+runs through the same counted engine-wide exclusive admission as the
+mode and precision conversions, so close/Quit wait, refusals report and
+file identity is preserved. Assign explains reinterpretation, Convert
+explains appearance preservation. Convert is disabled in the menu and
+refused by the document guard on indexed images (the native palette
+conversion ignores intent/BPC); Assign stays allowed there for a
+compatible RGB profile. `EngineSession` gained the typed
+`ProfileIntent` (facade values 1–4) and the `assignProfile`/
+`convertProfile` wrappers over the appended facade slots; no C changes.
+Pure unit tests cover the menu entries, source/intent choices, ICC path
+validation, the indexed guard, the cached profile summary and the
+Codable captured settings; `exerciseColorProfiles` in the engine smoke
+covers typed assign/convert on the generated fixtures, form
+seed/Cancel/Apply/error, undo, XCF round trip and per-sheet document
+capture. Only `swift build` and `swift build --build-tests` were run in
+this worktree; `swift test`, the smoke run and on-screen QA were not (the
+default engine has no ICC support). Proof/display transforms and indexed
+conversion remain separate slices.
 
 2026-11-08 Pattern fill source: Edit > Fill gains Pattern (index 5), an
 embedded searchable list of the engine's full pattern catalog with lazy
