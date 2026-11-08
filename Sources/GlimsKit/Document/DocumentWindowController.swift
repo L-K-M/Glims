@@ -797,6 +797,21 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         imageDocument.toVectorLayer(path)
     }
 
+    /// Layer ▸ Vector Style…: the native fill/stroke sheet of the selected
+    /// genuine vector layer. The gate reads the cached layer kind and the
+    /// engine version only; the sheet itself reads the style off the main
+    /// thread through the global engine activity.
+    @objc func vectorStyle(_ sender: Any?) {
+        guard let window, let id = imageDocument.activeLayer,
+              imageDocument.layers.first(where: { $0.id == id })?.kind == .vector else { return }
+        if imageDocument.supportsVectorLayers == false {
+            imageDocument.onError?("This engine cannot edit vector layer styles; they arrived in GIMP 3.2.")
+            return
+        }
+        endPendingEdits()
+        VectorStyleForm.present(in: imageDocument, layer: id, on: window)
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
             || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || EngineActivity.shared.isBusy || window?.attachedSheet != nil
@@ -820,6 +835,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // UNSUPPORTED when the command runs, so the item stays listed.
             menuItem.toolTip = PathsPaletteController.Command.toVectorLayer.toolTip
             return imageDocument.activePath != nil && !editingBlocked
+                && imageDocument.supportsVectorLayers != false
+        case #selector(vectorStyle(_:)):
+            // A genuine vector layer only, from the cached layer list, and
+            // an engine known to have native vector styles (GIMP 3.2+); an
+            // unknown version stays enabled and the facade's own
+            // UNSUPPORTED reports the rest at read time. The getter never
+            // runs while a menu validates. No raster fallback: a non-vector
+            // layer never gets the item.
+            return activeLayerInfo?.kind == .vector && !editingBlocked && !previewBusy
                 && imageDocument.supportsVectorLayers != false
         case #selector(newLayerGroup(_:)):
             return !editingBlocked && !previewBusy
