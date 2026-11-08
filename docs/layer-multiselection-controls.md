@@ -155,3 +155,15 @@ images drain before `session.stop()`.
   with the built engine. The smoke's runtime assertions (oracle orders,
   mask-pixel equality, refusal messages) are unverified until then.
 - No native adapter build/link, no conformance suite, no GUI run.
+
+Root acceptance reproduced Paste Into operating on only the primary layer
+under a multi-selection. Both cached admission and direct queued entry now
+require one layer; the clipboard menu follows the same rule. Lock toggles
+also refuse the multi-selection regardless of which selected row supplied
+the ID. Flatten remains available because it explicitly affects the whole
+image, independently of layer selection.
+
+The first post-floating fixture assumed Core reselects the attachment after
+Discard. It now explicitly selects the base row before extending it. All 11
+pure policy tests and the focused pinned UI scenario pass after the fixes.
+Current-parent four-engine and full workflow checks remain pending.

@@ -216,6 +216,27 @@ extension EngineSmokeTest {
         // MARK: "Choose one layer" gates under the multi-selection
 
         errorsA.removeAll()
+        var multiSelectOptions = EngineSession.SelectOptions()
+        multiSelectOptions.antialias = false
+        documentA.select(.rectangle(CGRect(x: 10, y: 10, width: 8, height: 8)), options: multiSelectOptions)
+        settle(documentA)
+        let multiBoard = NSPasteboard.withUniqueName()
+        defer { multiBoard.releaseGlobally() }
+        try ClipboardImage(width: 8, height: 8,
+                           pixels: Data(repeating: 255, count: 8 * 8 * 4), origin: .zero).write(to: multiBoard)
+        let multiPayload = try ClipboardImage.readPayload(from: multiBoard)
+        check(!documentA.pasteIntoReadiness.allowed && documentA.pasteIntoReadiness.reason?.contains("Choose one layer") == true,
+              "Paste Into refuses a multi-selection with a cached choose-one reason")
+        var multiPasteResult: Result<Void, Error>?
+        documentA.pasteIntoPixels(multiPayload, target: l2) { multiPasteResult = $0 }
+        settle(documentA)
+        let unexpectedFloating = (try? session.floatingSelection(imageA))?.isActive == true
+        let pasteRefused: Bool
+        if case .failure(let error)? = multiPasteResult {
+            pasteRefused = error.localizedDescription.contains("Choose one layer")
+        } else { pasteRefused = false }
+        check(pasteRefused && !unexpectedFloating, "Paste Into never edits only the primary of a multi-selection")
+        if unexpectedFloating { return } // Stop dependent checks on a wrongly changed target.
         let layersBeforeGates = documentA.layers
         let undoBeforeGates = documentA.undoInfo.undoCount
         let pixelsBeforeGates = try session.copyPixels(imageA, merged: true).pixels
@@ -381,9 +402,13 @@ extension EngineSmokeTest {
         documentA.resolveFloatingSelection(.discard) { _ in }
         settle(documentA)
         check((try? session.floatingSelection(imageA))?.isActive == false, "Discard resolves the floating selection")
+        // Core may choose a neighboring layer after Discard; establish
+        // the base row explicitly before extending the UI selection.
+        outline.selectRowIndexes(IndexSet(integer: row(of: l2)), byExtendingSelection: false)
+        settle(documentA)
         outline.selectRowIndexes(IndexSet(integer: row(of: l1)), byExtendingSelection: true)
         settle(documentA)
-        check(oracle(imageA) == [l1, l2], "multi-selection works again after the floating selection resolved")
+        check(oracle(imageA) == [l1, l2], "multi-selection works again after the floating selection resolved (native \(oracle(imageA)), cached \(documentA.selectedLayerIDs), outline \(outline.selectedRowIndexes), rows l1=\(row(of: l1)) l2=\(row(of: l2)), errors \(errorsA))")
 
         // MARK: Stale row refusal: refresh, never a cleared native selection
 

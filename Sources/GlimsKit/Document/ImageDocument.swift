@@ -1144,7 +1144,7 @@ final class ImageDocument {
     /// reported (an inherited lock is left alone — toggles act on the
     /// item's own bits).
     func toggleLocks(_ item: Int32, _ lock: EngineSession.LayerLocks) {
-        guard !refuseSingleLayerCommand("Lock \(lock.name)", on: item) else { return }
+        guard !refuseSingleLayerCommand("Lock \(lock.name)") else { return }
         setLayerLocks(item, lock, to: !(layerLocks[item]?.local.contains(lock) ?? false))
     }
 
@@ -2152,7 +2152,10 @@ final class ImageDocument {
     /// refusal reason. Menu validation and the controller's capture read
     /// this; no engine call happens here.
     var pasteIntoReadiness: FloatingControlsLogic.PasteIntoTarget {
-        FloatingControlsLogic.pasteIntoTarget(activeDrawable, state: floatingState, layers: layers,
+        if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Paste Into") {
+            return .init(drawable: nil, reason: reason)
+        }
+        return FloatingControlsLogic.pasteIntoTarget(activeDrawable, state: floatingState, layers: layers,
                                               maskStates: maskStates, channels: channels, sources: layerSources,
                                               locks: layerLocks, acceptsEdits: acceptsEdits,
                                               pendingTarget: !pendingTargetCommands.isEmpty)
@@ -2177,6 +2180,9 @@ final class ImageDocument {
     func pasteIntoPixels(_ payload: ClipboardImage.Payload, target: Int32,
                          completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Paste Into") {
+            return completion(.failure(DocumentError.multipleLayersSelected(reason)))
+        }
         guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
         guard !refuseWhileTargetPending() else { return completion(.failure(DocumentError.busy)) }
         let readiness = FloatingControlsLogic.pasteIntoTarget(target, state: floatingState, layers: layers,

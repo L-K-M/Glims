@@ -35,11 +35,11 @@ final class LayerSelectionPolicyTests: XCTestCase {
 
     // MARK: Command gating
 
-    func testOnlyNewLayerIsNotGated() {
+    func testSingleLayerCommandsAreGated() {
         XCTAssertFalse(LayerSelectionPolicy.gates(.new),
                        "New Layer creates and selects a fresh row, which is safe under a multi-selection")
         for command: EngineSession.LayerCommand in [
-            .duplicate, .delete, .raise, .lower, .toTop, .toBottom, .mergeDown, .flatten,
+            .duplicate, .delete, .raise, .lower, .toTop, .toBottom, .mergeDown,
             .fitToImage, .trimToContent, .rasterize, .restoreSource,
         ] {
             XCTAssertTrue(LayerSelectionPolicy.gates(command),
@@ -94,4 +94,8 @@ final class LayerSelectionPolicyTests: XCTestCase {
         let resolved = LayerSelectionPolicy.resolveSelection(previous: [2], rowIDs: [2, 2])
         XCTAssertEqual(resolved, [2])
     }
+    func testFlattenIsAnImageWideCommand() {
+        XCTAssertFalse(LayerSelectionPolicy.gates(.flatten), "Flatten Image intentionally acts on the whole image")
+    }
+
 }

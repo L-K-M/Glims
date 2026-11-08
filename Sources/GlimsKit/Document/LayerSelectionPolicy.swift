@@ -25,10 +25,10 @@ enum LayerSelectionPolicy {
     }
 
     /// Whether `command` is a single-layer command that a multi-selection
-    /// gates. `.new` is not: it creates a fresh row the engine selects,
-    /// which is safe under a multi-selection.
+    /// gates. `.new` creates a fresh selected row; `.flatten` explicitly
+    /// affects the whole image, independently of the layer selection.
     static func gates(_ command: EngineSession.LayerCommand) -> Bool {
-        command != .new
+        command != .new && command != .flatten
     }
 
     /// The menu title a gated layer command refuses with.
