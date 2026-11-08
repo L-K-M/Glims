@@ -670,6 +670,23 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     /// first, and their expansion is meant to survive, so a group stops
     /// counting as expanded only when nothing collapsing contains it.
     private var collapsingIDs = Set<Int32>()
+    private var suppressingCollapseSelection = false
+    private var collapseSelectionGeneration = 0
+
+    private func restoreVisibleSelection() {
+        guard !reloading, let document else { return }
+        var items: [Any] = []
+        if let selected = selectedEffect, let node = snapshot.tree.nodesByID[selected.drawable],
+           let effect = snapshot.effects(of: node).first(where: { $0.effect.id == selected.effect }) {
+            items = [effect]
+        } else {
+            items = document.selectedLayerIDs.compactMap { snapshot.tree.nodesByID[$0] }
+        }
+        let rows = items.map { outline.row(forItem: $0) }.filter { $0 >= 0 }
+        reloading = true
+        defer { reloading = false }
+        outline.selectRowIndexes(IndexSet(rows), byExtendingSelection: false)
+    }
 
     func outlineViewItemDidExpand(_ notification: Notification) {
         guard let node = notification.userInfo?["NSObject"] as? LayerTree.Node else { return }
@@ -680,6 +697,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         for child in node.children where expandedGroupIDs.contains(child.id) {
             outline.expandItem(child)
         }
+        restoreVisibleSelection()
     }
 
     func outlineView(_ outlineView: NSOutlineView, shouldCollapseItem item: Any) -> Bool {
@@ -689,6 +707,8 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             if collapsingIDs.contains(parent.id) { return true }
             ancestor = parent.parent
         }
+        suppressingCollapseSelection = true
+        collapseSelectionGeneration += 1
         expandedGroupIDs.remove(node.id)
         collapsingIDs.insert(node.id)
         return true
@@ -697,6 +717,16 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     func outlineViewItemDidCollapse(_ notification: Notification) {
         guard let node = notification.userInfo?["NSObject"] as? LayerTree.Node else { return }
         collapsingIDs.remove(node.id)
+        guard collapsingIDs.isEmpty else { return }
+        let generation = collapseSelectionGeneration
+        // Selection notifications can follow didCollapse in the same
+        // AppKit operation. Keep suppression through that whole turn.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.collapsingIDs.isEmpty,
+                  self.collapseSelectionGeneration == generation else { return }
+            self.suppressingCollapseSelection = false
+            self.restoreVisibleSelection()
+        }
     }
 
     // MARK: PaletteEditScope
@@ -926,7 +956,10 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     /// re-applies the native selection — the native selection is never
     /// cleared as a side effect.
     func outlineViewSelectionDidChange(_ notification: Notification) {
-        guard !reloading, let document else { return }
+        // AppKit adjusts visible selected rows while a group collapses.
+        // It is not a layer pick; rebuilding rows here also invalidates
+        // the item objects the outline is still collapsing.
+        guard !reloading, !suppressingCollapseSelection, collapsingIDs.isEmpty, let document else { return }
         let rows = outline.selectedRowIndexes
         // A single effect-row pick keeps its existing meaning: the
         // parent layer becomes the paint home and the effect stays

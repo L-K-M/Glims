@@ -1,5 +1,88 @@
 import AppKit
 
+/// One Move-tool drag with snapping, captured at the press. The whole
+/// gesture is local: `proposed` is the view-only preview rect (image
+/// coordinates) and `plan` the planner's result whose matched lines the
+/// canvas draws as indicators. No engine call happens per drag event; the
+/// single commit runs on the release. `cancelled` marks a drag that must
+/// not commit (Escape, tool change, close, or a validity failure), keeping
+/// the gesture non-nil so a late release is refused rather than retargeted.
+@MainActor
+final class MoveSnapGesture {
+    /// The window and document captured at the press: later events are
+    /// honored only while the canvas still lives in that window with that
+    /// document, so another window or a global front change cannot
+    /// redirect the drag.
+    let window: NSWindow
+    let document: ImageDocument
+    /// The active layer's id and its bounds at the press.
+    let layer: Int32
+    let bounds: CGRect
+    /// The snapped preview rect, in image coordinates.
+    var proposed: CGRect
+    /// The latest plan; `Result.none` when nothing matched or the drag
+    /// was cancelled.
+    var plan: CanvasSnapPlanner.Result
+    var cancelled = false
+
+    init(window: NSWindow, document: ImageDocument, layer: Int32, bounds: CGRect) {
+        self.window = window
+        self.document = document
+        self.layer = layer
+        self.bounds = bounds
+        self.proposed = bounds
+        self.plan = .none
+    }
+}
+
+/// One Move-tool drag on an EXISTING floating selection, captured at the
+/// press — even when this window's Snap To state is fully off. The
+/// gesture keeps the floating selection's identity: the expected
+/// `EngineSession.FloatingState` (floating id + attachment target +
+/// target kind) and the floating layer's bounds, plus the window and
+/// document, all captured at the press. The whole gesture is local:
+/// `proposed` is the view-only preview rect (image coordinates, already
+/// a whole-pixel translation of `bounds`) and `plan` the planner's
+/// result when snapping is on. No engine call happens per drag event;
+/// the single commit runs on the release through the captured
+/// floating-move command. `cancelled` marks a drag that must not commit
+/// (Escape, tool change, close, or a validity failure), keeping the
+/// gesture non-nil so a late release is refused rather than retargeted
+/// to an ordinary/raw move.
+@MainActor
+final class FloatingMoveGesture {
+    /// The window and document captured at the press: later events are
+    /// honored only while the canvas still lives in that window with that
+    /// document, so another window or a global front change cannot
+    /// redirect the drag.
+    let window: NSWindow
+    let document: ImageDocument
+    /// The floating-selection state expected at the press: the floating
+    /// layer's id, its attachment target and the target's kind.
+    let expected: EngineSession.FloatingState
+    /// The floating layer's bounds at the press.
+    let bounds: CGRect
+    /// The snapped (or plain whole-pixel) preview rect, in image
+    /// coordinates.
+    var proposed: CGRect
+    /// The latest plan; `Result.none` when nothing matched, snapping is
+    /// off, or the drag was cancelled.
+    var plan: CanvasSnapPlanner.Result
+    var cancelled = false
+
+    init(window: NSWindow, document: ImageDocument, expected: EngineSession.FloatingState, bounds: CGRect) {
+        self.window = window
+        self.document = document
+        self.expected = expected
+        self.bounds = bounds
+        self.proposed = bounds
+        self.plan = .none
+    }
+
+    /// The floating layer's id the gesture would move.
+    var floating: Int32 { expected.floating }
+}
+
 /// What the current tool does with pointer and key events on a document's
 /// canvas, and what it draws over the image while it works (the selection
 /// rubber band or lasso path). The canvas owns one and forwards its events.
@@ -28,6 +111,21 @@ final class CanvasToolController {
     /// The Transform tool's pending transform, waiting for Return.
     private(set) var transformSession: LayerTransformSession?
     private var transformDrag: LayerTransformSession.Drag?
+    /// The Move tool's snapping drag, captured at the press when this
+    /// window's Snap To state enables any target; nil when snapping is off
+    /// (the legacy raw move) or no layer could be captured.
+    private(set) var moveSnap: MoveSnapGesture?
+    /// Distinguishes snapping off from a refused capture. A refused press
+    /// must never fall back to moving whichever layer is active later.
+    private var moveSnapWasRequested = false
+    /// The Move tool's drag on an existing floating selection, captured
+    /// at the press even when snapping is off; nil when no floating
+    /// selection was active or the capture was invalid.
+    private(set) var floatingMove: FloatingMoveGesture?
+    /// Distinguishes "no floating selection at the press" from "a
+    /// floating press whose capture was invalid or was cancelled": the
+    /// latter must never fall through to an ordinary/raw layer move.
+    private var floatingMoveWasRequested = false
     /// How near a handle a press grabs it, in view points.
     private static let handleReach: Double = 6
     /// The Text tool's editor while text is being typed.
@@ -66,8 +164,12 @@ final class CanvasToolController {
                 self.finishTextEditing()
             }
             // A tool change cancels this window's in-progress guide drag
-            // (ghost cleared, no native guide action).
+            // (ghost cleared, no native guide action) and any Move snap
+            // or floating move (preview cleared, the release then commits
+            // nothing).
             self.canvas.guideDrag.cancel()
+            self.cancelMoveSnap()
+            self.cancelFloatingMove()
             self.canvas.needsDisplay = true
         }
     }
@@ -153,10 +255,24 @@ final class CanvasToolController {
             dragStart = point
             dragCurrent = point
             // An actual guide hit under the pointer takes the gesture;
-            // the ordinary layer move must not start then.
+            // the ordinary layer move must not start then. The guide hit
+            // keeps first priority: a press on a guide never becomes a
+            // snapping layer move or a floating move.
             if canvas.guideDrag.beginMoveOfGuide(at: event) {
                 dragTool = nil
                 return
+            }
+            if document.floatingState.isActive {
+                // An existing floating selection owns the Move gesture:
+                // capture its expected state, window, document and bounds
+                // at the press even when snapping is off. An invalid
+                // capture still consumes the gesture, so the release can
+                // never fall through to an ordinary/raw move.
+                beginFloatingMove()
+            } else {
+                floatingMove = nil
+                floatingMoveWasRequested = false
+                beginMoveSnap()
             }
         case .gradient, .crop:
             dragStart = point
@@ -185,8 +301,16 @@ final class CanvasToolController {
             return
         }
         switch tool {
-        case .rectangleSelect, .ellipseSelect, .move, .gradient, .crop:
+        case .rectangleSelect, .ellipseSelect, .gradient, .crop:
             dragCurrent = point
+            canvas.needsDisplay = true
+        case .move:
+            dragCurrent = point
+            if floatingMove != nil {
+                updateFloatingMove(to: point)
+            } else {
+                updateMoveSnap(to: point)
+            }
             canvas.needsDisplay = true
         case .lasso:
             if let last = lassoPoints.last, hypot(point.x - last.x, point.y - last.y) >= 1 {
@@ -221,6 +345,10 @@ final class CanvasToolController {
             lassoPoints = []
             handOrigin = nil
             gradientCapture = nil
+            moveSnap = nil
+            moveSnapWasRequested = false
+            floatingMove = nil
+            floatingMoveWasRequested = false
             canvas.needsDisplay = true
         }
         // An intentional release of a guide drag commits exactly one
@@ -246,6 +374,39 @@ final class CanvasToolController {
             }
         case .move:
             guard let start = dragStart else { return }
+            if let gesture = floatingMove {
+                // A floating drag commits exactly once, on this release,
+                // through the captured floating-move command — one native
+                // undo step — and only while the capture is still current.
+                // A cancelled or stale gesture commits nothing at all.
+                guard let delta = FloatingControlsLogic.commitDelta(cancelled: gesture.cancelled,
+                        stillValid: floatingMoveStillValid(gesture),
+                        bounds: gesture.bounds, proposed: gesture.proposed) else {
+                    onStatus?("The floating selection changed, so the move was not applied.")
+                    return
+                }
+                document.moveFloatingSelection(by: delta, completion: { _ in })
+                return
+            }
+            // A refused floating capture (or a cancelled one) never falls
+            // through to an ordinary/raw layer move.
+            guard !floatingMoveWasRequested else { return }
+            if let gesture = moveSnap {
+                // A snapping drag commits exactly once, on this release,
+                // through the existing counted move — one undo step — and
+                // only while the capture is still current. Pending work, a
+                // target change or changed captured bounds refuse the
+                // commit: no stale geometry is applied, no retarget.
+                guard !gesture.cancelled, moveSnapStillValid(gesture) else {
+                    onStatus?("The layer changed, so the move was not applied.")
+                    return
+                }
+                let delta = CGSize(width: (gesture.proposed.minX - gesture.bounds.minX).rounded(),
+                                   height: (gesture.proposed.minY - gesture.bounds.minY).rounded())
+                document.moveActiveLayer(by: delta)
+                return
+            }
+            guard !moveSnapWasRequested else { return }
             document.moveActiveLayer(by: CGSize(width: (end.x - start.x).rounded(), height: (end.y - start.y).rounded()))
         case .gradient:
             guard let start = dragStart, hypot(end.x - start.x, end.y - start.y) >= 1,
@@ -284,6 +445,170 @@ final class CanvasToolController {
         default:
             break
         }
+    }
+
+    // MARK: Move snapping
+
+    /// Captures the active layer's id and bounds at a Move press, when
+    /// this window's Snap To state enables any target. With every entry
+    /// off (or no capturable layer) no gesture is captured and the move
+    /// keeps the legacy raw behavior.
+    private func beginMoveSnap() {
+        moveSnap = nil
+        moveSnapWasRequested = !canvas.snapTo.isEmpty
+        guard moveSnapWasRequested, let window = canvas.window,
+              !document.isClosing, document.acceptsEdits,
+              let layer = document.activeLayer,
+              let captured = document.layers.first(where: { $0.id == layer }),
+              Self.isUsableRect(captured.bounds) else { return }
+        moveSnap = MoveSnapGesture(window: window, document: document, layer: layer, bounds: captured.bounds)
+    }
+
+    /// Whether `gesture` still describes its layer as the document has it,
+    /// reading cached state only — no native call. Pending work, a pending
+    /// target command, a changed active layer or mask/channel target, moved
+    /// captured bounds, a closing document or a detached window all fail.
+    private func moveSnapStillValid(_ gesture: MoveSnapGesture) -> Bool {
+        let doc = gesture.document
+        guard let window = canvas.window, window === gesture.window,
+              canvas.document === doc, !doc.isClosing,
+              doc.pendingWork == 0, !doc.targetCommandIsPending,
+              doc.activeLayer == gesture.layer,
+              !doc.isMaskTargetActive, !doc.isChannelTargetActive,
+              let layer = doc.layers.first(where: { $0.id == gesture.layer }),
+              layer.bounds == gesture.bounds else { return false }
+        return true
+    }
+
+    /// Re-plans the drag's snap from cached geometry only: the proposed
+    /// rect is the captured bounds plus the raw drag delta, the planner
+    /// corrects it, and the corrected rect becomes the local preview. A
+    /// validity failure cancels the gesture (the release then commits
+    /// nothing) instead of planning on stale geometry.
+    private func updateMoveSnap(to point: CGPoint) {
+        guard var gesture = moveSnap, !gesture.cancelled, let start = dragStart else { return }
+        guard moveSnapStillValid(gesture) else {
+            gesture.cancelled = true
+            gesture.plan = .none
+            moveSnap = gesture
+            return
+        }
+        let raw = gesture.bounds.offsetBy(dx: point.x - start.x, dy: point.y - start.y)
+        let plan = CanvasSnapPlanner.plan(
+            input: SnapTargetCache.plannerInput(
+                movingRect: raw,
+                imageSize: CGSize(width: Double(gesture.document.info.width),
+                                  height: Double(gesture.document.info.height)),
+                guides: gesture.document.guides, grid: gesture.document.grid,
+                layers: gesture.document.layers, moving: gesture.layer),
+            config: CanvasSnapPlanner.Config(targets: canvas.snapTo.targets),
+            canvasScale: canvas.scale)
+        let preview = SnapTargetCache.pixelMove(bounds: gesture.bounds,
+            proposed: raw.offsetBy(dx: plan.dx, dy: plan.dy), plan: plan)
+        gesture.plan = preview.plan
+        gesture.proposed = preview.rect
+        moveSnap = gesture
+    }
+
+    /// Cancels the in-progress snap without any mutation: the preview and
+    /// indicators clear and the release commits nothing. Safe with no
+    /// gesture; called on Escape, tool change and window close.
+    func cancelMoveSnap() {
+        guard let gesture = moveSnap, !gesture.cancelled else { return }
+        gesture.cancelled = true
+        gesture.plan = .none
+        canvas.needsDisplay = true
+    }
+
+    // MARK: Floating-selection move
+
+    /// Captures the active floating selection's expected state and bounds
+    /// at a Move press, even when every Snap To entry is off. The capture
+    /// always consumes the gesture (`floatingMoveWasRequested`): with an
+    /// unusable window, document, state or bounds no gesture is stored
+    /// and the release refuses instead of falling back to a raw move.
+    private func beginFloatingMove() {
+        floatingMove = nil
+        floatingMoveWasRequested = true
+        let expected = document.floatingState
+        guard let window = canvas.window, !document.isClosing, document.acceptsEdits,
+              expected.isActive,
+              let row = document.layers.first(where: { $0.id == expected.floating }),
+              FloatingControlsLogic.usableMoveBounds(row.bounds) else { return }
+        floatingMove = FloatingMoveGesture(window: window, document: document,
+                                           expected: expected, bounds: row.bounds)
+    }
+
+    /// Whether `gesture` still describes the same unresolved floating
+    /// selection as the document has it, reading cached state only — no
+    /// native call. Pending work, a pending target command, a changed
+    /// cached floating state (id, attachment or kind), moved captured
+    /// bounds, a closing document or a detached window all fail.
+    private func floatingMoveStillValid(_ gesture: FloatingMoveGesture) -> Bool {
+        let doc = gesture.document
+        guard let window = canvas.window, window === gesture.window,
+              canvas.document === doc, !doc.isClosing,
+              doc.pendingWork == 0, !doc.targetCommandIsPending,
+              doc.floatingState == gesture.expected,
+              let row = doc.layers.first(where: { $0.id == gesture.expected.floating }),
+              row.bounds == gesture.bounds else { return false }
+        return true
+    }
+
+    /// Re-plans the floating drag from cached geometry only: the proposed
+    /// rect is the captured bounds plus the raw drag delta, the planner
+    /// corrects it when any Snap To entry is on (the floating layer's own
+    /// family stays excluded from the candidates), and the corrected rect
+    /// — always a whole-pixel translation of the captured bounds —
+    /// becomes the local view-only preview. A validity failure cancels
+    /// the gesture (the release then commits nothing).
+    private func updateFloatingMove(to point: CGPoint) {
+        guard var gesture = floatingMove, !gesture.cancelled, let start = dragStart else { return }
+        guard floatingMoveStillValid(gesture) else {
+            gesture.cancelled = true
+            gesture.plan = .none
+            floatingMove = gesture
+            return
+        }
+        let raw = gesture.bounds.offsetBy(dx: point.x - start.x, dy: point.y - start.y)
+        let plan: CanvasSnapPlanner.Result
+        if canvas.snapTo.isEmpty {
+            plan = .none
+        } else {
+            plan = CanvasSnapPlanner.plan(
+                input: SnapTargetCache.plannerInput(
+                    movingRect: raw,
+                    imageSize: CGSize(width: Double(gesture.document.info.width),
+                                      height: Double(gesture.document.info.height)),
+                    guides: gesture.document.guides, grid: gesture.document.grid,
+                    layers: gesture.document.layers, moving: gesture.expected.floating),
+                config: CanvasSnapPlanner.Config(targets: canvas.snapTo.targets),
+                canvasScale: canvas.scale)
+        }
+        let preview = SnapTargetCache.pixelMove(bounds: gesture.bounds,
+            proposed: plan == .none ? raw : raw.offsetBy(dx: plan.dx, dy: plan.dy), plan: plan)
+        gesture.plan = preview.plan
+        gesture.proposed = preview.rect
+        floatingMove = gesture
+    }
+
+    /// Cancels the in-progress floating move without any mutation: the
+    /// preview and indicators clear and the release commits nothing.
+    /// Safe with no gesture; called on Escape, tool change and window
+    /// close.
+    func cancelFloatingMove() {
+        guard let gesture = floatingMove, !gesture.cancelled else { return }
+        gesture.cancelled = true
+        gesture.plan = .none
+        canvas.needsDisplay = true
+    }
+
+    /// A rect usable as the captured move geometry.
+    private static func isUsableRect(_ rect: CGRect) -> Bool {
+        rect.origin.x.isFinite && rect.origin.y.isFinite
+            && rect.size.width.isFinite && rect.size.height.isFinite
+            && rect.maxX.isFinite && rect.maxY.isFinite
+            && rect.size.width > 0 && rect.size.height > 0
     }
 
     /// Shift adds, Option subtracts, both intersect, when the drag starts
@@ -343,6 +668,14 @@ final class CanvasToolController {
             cancelTransform(message: "Transform cancelled.")
             return true
         }
+        if (moveSnap != nil || floatingMove != nil), keyCode == Self.escapeKey {
+            // Escape cancels the snapping or floating move: preview and
+            // indicators clear and the release commits nothing.
+            cancelMoveSnap()
+            cancelFloatingMove()
+            onStatus?("Move cancelled.")
+            return true
+        }
         // Only while the canvas has focus: a text field keeps Tab for itself.
         if keyCode == Self.tabKey {
             AppController.togglePalettes(keepingTools: event.modifierFlags.contains(.shift))
@@ -364,8 +697,17 @@ final class CanvasToolController {
             return true
         }
         if let arrow = CanvasKeyboardPolicy.Arrow(keyCode: keyCode) {
-            document.moveActiveLayer(by: CanvasKeyboardPolicy.nudge(arrow,
-                                                                   shift: event.modifierFlags.contains(.shift)))
+            let delta = CanvasKeyboardPolicy.nudge(arrow, shift: event.modifierFlags.contains(.shift))
+            if document.floatingState.isActive {
+                // Arrow nudges move the unresolved floating selection
+                // through the explicit captured-floating command — with
+                // the same fresh-state validation on the worker — never
+                // through the ordinary layer move (which refuses
+                // floating) and never an implicit anchor.
+                document.moveFloatingSelection(by: delta, completion: { _ in })
+            } else {
+                document.moveActiveLayer(by: delta)
+            }
             return true
         }
 
@@ -460,12 +802,27 @@ final class CanvasToolController {
             path.move(to: NSPoint(x: start.x * scale, y: start.y * scale))
             path.line(to: NSPoint(x: end.x * scale, y: end.y * scale))
         case .move?:
-            // The selected layer's outline, following the pointer.
-            guard let start = dragStart, let end = dragCurrent,
-                  let layer = document.layers.first(where: { $0.id == document.activeLayer }) else { return }
-            let bounds = layer.bounds.offsetBy(dx: end.x - start.x, dy: end.y - start.y)
+            // The moved drawable's outline, following the pointer — the
+            // floating selection's captured bounds at the (snapped or
+            // plain whole-pixel) preview position while a floating drag is
+            // active, the selected layer's bounds while a snapping drag
+            // is active.
+            let bounds: CGRect
+            if let gesture = floatingMove {
+                guard !gesture.cancelled else { return }
+                bounds = gesture.proposed
+            } else if let gesture = moveSnap {
+                guard !gesture.cancelled else { return }
+                bounds = gesture.proposed
+            } else {
+                guard !moveSnapWasRequested, !floatingMoveWasRequested,
+                      let start = dragStart, let end = dragCurrent,
+                      let layer = document.layers.first(where: { $0.id == document.activeLayer }) else { return }
+                bounds = layer.bounds.offsetBy(dx: end.x - start.x, dy: end.y - start.y)
+            }
             path = NSBezierPath(rect: NSRect(x: bounds.minX * scale, y: bounds.minY * scale,
                                              width: bounds.width * scale, height: bounds.height * scale))
+            drawSnapIndicators(scale: scale)
         default:
             drawPendingCrop(scale: scale)
             drawTransform(scale: scale)
@@ -473,6 +830,51 @@ final class CanvasToolController {
             return
         }
         EngineCanvasView.strokeMarchingAnts(path, phase: 0)
+    }
+
+    /// The matched snap lines of an active snapping move: one line per
+    /// axis match, at the planner's `targetCoordinate`, spanning the
+    /// displayed image, clipped to it. View-only — drawn over the cached
+    /// tiles, never into them, and invisible to export and print.
+    private func drawSnapIndicators(scale: Double) {
+        // The active move gesture's plan — a floating drag's or an
+        // ordinary snapping drag's, whichever is in progress.
+        let activePlan: CanvasSnapPlanner.Result?
+        if let gesture = floatingMove, !gesture.cancelled {
+            activePlan = gesture.plan
+        } else if let gesture = moveSnap, !gesture.cancelled {
+            activePlan = gesture.plan
+        } else {
+            activePlan = nil
+        }
+        guard let plan = activePlan, plan.x != nil || plan.y != nil else { return }
+        let imageSize = CGSize(width: Double(document.info.width), height: Double(document.info.height))
+        // The displayed image's rect in view points, through the canvas's
+        // own point scale so zoom, scroll and backing agree with the tiles.
+        let imageRect = CGRect(x: 0, y: 0, width: imageSize.width * scale, height: imageSize.height * scale)
+        let accent = NSColor(calibratedRed: 1, green: 0.25, blue: 0.6, alpha: 1)
+        let matches: [(isXAxis: Bool, match: CanvasSnapPlanner.AxisMatch)] = [
+            (true, plan.x), (false, plan.y),
+        ].compactMap { axis, match in match.map { (axis, $0) } }
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: imageRect).addClip()
+        for (isXAxis, match) in matches {
+            let path = NSBezierPath()
+            if isXAxis {
+                path.move(to: CGPoint(x: match.targetCoordinate * scale, y: imageRect.minY))
+                path.line(to: CGPoint(x: match.targetCoordinate * scale, y: imageRect.maxY))
+            } else {
+                path.move(to: CGPoint(x: imageRect.minX, y: match.targetCoordinate * scale))
+                path.line(to: CGPoint(x: imageRect.maxX, y: match.targetCoordinate * scale))
+            }
+            path.lineWidth = 3
+            NSColor.white.setStroke()
+            path.stroke()
+            path.lineWidth = 1
+            accent.setStroke()
+            path.stroke()
+        }
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     // MARK: Text tool

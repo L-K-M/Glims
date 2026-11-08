@@ -162,8 +162,8 @@ final class ImageDocument {
     var onUserCommand: (() -> Void)?
     /// The selection outline in image pixels, for marching ants.
     private(set) var selectionOutline: [EngineSession.Segment] = []
-    /// Nonzero native coverage, including soft selections below the
-    /// marching-ants threshold. Outline visibility is a separate fact.
+    /// Native nonzero coverage also includes selections below the
+    /// display outline's 50% threshold.
     private(set) var selectionBounds: CGRect?
     /// The image's ordinary guides, read with the rest of the state.
     /// Guide changes are metadata — they never touch pixels or the
@@ -1161,8 +1161,10 @@ final class ImageDocument {
     /// Moves the active drawable. While its mask is the edit target the
     /// engine has no mask move — the mask's offset is part of the layer
     /// — so the gesture refuses rather than silently moving the layer.
-    /// Moving the floating selection's pixels is not implemented yet, so
-    /// it is gated with the resolve-first reason like a target switch.
+    /// An active floating selection stays gated with the resolve-first
+    /// reason here: its pixels move only through the specific captured
+    /// `moveFloatingSelection(by:completion:)`, never through this
+    /// ordinary-layer path.
     func moveActiveLayer(by offset: CGSize) {
         guard let layer = activeLayer, offset != .zero,
               !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
@@ -2226,6 +2228,86 @@ final class ImageDocument {
         }, completion: completion)
     }
 
+    /// Moves the pixels of the active floating selection by `offset`, as
+    /// one counted, serial input command behind every accepted edit —
+    /// one native undo step when it lands (a same-position move follows
+    /// the engine's own no-op semantics). The expected floating state
+    /// (floating id, attachment target, target kind) is captured here
+    /// from the cache and re-read FRESH on the worker immediately before
+    /// the move: if the floating selection changed or resolved meanwhile
+    /// — a Detach turns the same id into an ordinary layer — the move is
+    /// refused with no mutation and no undo, visibly through `onError`
+    /// and the completion. The attachment and the unresolved floating
+    /// state are preserved; the move never anchors, and native move
+    /// readiness/position locks stay authoritative. Unlike an ordinary
+    /// layer move this is not a target command: the floating layer stays
+    /// the paint target, so the pending-target gate only refuses edits
+    /// accepted while another command's target is still unknown.
+    func moveFloatingSelection(by offset: CGSize,
+                               completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count,
+                                                     action: "Move Floating Selection") {
+            return completion(.failure(DocumentError.multipleLayersSelected(reason)))
+        }
+        guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
+        guard !refuseWhileTargetPending() else { return completion(.failure(DocumentError.busy)) }
+        let expected = floatingState
+        let readiness = FloatingControlsLogic.floatingMoveReadiness(expected,
+            acceptsEdits: acceptsEdits, pendingTarget: !pendingTargetCommands.isEmpty)
+        guard readiness.allowed else {
+            return completion(.failure(FloatingError.refused(readiness.reason
+                ?? "The floating selection cannot be moved now.")))
+        }
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        pendingWork += 1 // Include the deferred cache/completion stage in close drain.
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let result = Result<Void, Error> {
+                // Fresh read on the worker, immediately before the move:
+                // the captured id must still be the active floating
+                // selection with the same attachment — never a detached
+                // ordinary layer reusing the id.
+                let fresh = try session.floatingSelection(image)
+                guard FloatingControlsLogic.floatingStateStillMatches(expected: expected, fresh: fresh) else {
+                    throw FloatingError.refused("The floating selection changed before the move, so nothing was moved.")
+                }
+                try session.moveLayer(expected.floating, image: image, by: offset)
+            }
+            // Moving changes bounds, dirty/history and the floating cache;
+            // collect those reads on the worker rather than blocking AppKit.
+            let refresh: Result<(EngineSession.ImageInfo, [EngineSession.Layer], EngineSession.UndoInfo,
+                                 EngineSession.History, EngineSession.FloatingState), Error>?
+            if case .success = result {
+                refresh = Result { (try session.info(image), try session.layers(image), try session.undoInfo(image),
+                                    try session.history(image), try session.floatingSelection(image)) }
+            } else { refresh = nil }
+            DispatchQueue.main.async {
+                EngineActivity.shared.whenIdle {
+                    defer { self.jobDidFinish(input: false) }
+                    if !self.isClosing {
+                        if case .success(let state)? = refresh {
+                            self.stateVersion += 1
+                            self.procedureSensitivity = nil
+                            self.info = state.0
+                            self.fileState.syncDirty(state.0.isDirty)
+                            self.layers = state.1
+                            self.undoInfo = state.2
+                            self.history = state.3
+                            self.floatingState = state.4
+                            self.onStateChange?()
+                        } else if case .failure(let error)? = refresh {
+                            self.onError?(String(describing: error))
+                        }
+                        if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                    }
+                    completion(result)
+                }
+            }
+        }
+    }
+
     /// The Select ▸ Float … action title for `mode`, used in the
     /// multi-selection refusal.
     private static func floatActionTitle(_ mode: EngineSession.FloatMode) -> String {
@@ -2407,7 +2489,13 @@ final class ImageDocument {
                     _ = try session.placeLink(image: image, path: url.path)
                     return .placedLink
                 }
-                _ = try session.openLayers(image: image, path: url.path)
+                let imported = try session.openLayers(image: image, path: url.path)
+                // Importing a stack is not a user multi-selection. Keep
+                // its primary immediately editable while the exclusive
+                // load still owns the target; no later UI pick can race it.
+                if let primary = imported.first {
+                    try session.selectLayers([primary], image: image)
+                }
                 return .openedLayers
             }
             if case .success = result {

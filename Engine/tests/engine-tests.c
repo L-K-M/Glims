@@ -1737,6 +1737,55 @@ install_slow_load_plug_in (const char *user_dir)
     }
 }
 
+/* ---- Metadata preservation fixtures (.gmeta loader + oracle) -----------
+ *
+ * The glims-metadata-loader Python plug-in (Engine/tests/metadata-loader.py,
+ * copied from TESTS_DIR/../metadata-loader.py) is installed under
+ * <user_dir>/plug-ins before the engine starts, like the slow-load fixture,
+ * so the engine's plug-in scan finds it at start. It registers a loader for
+ * the made-up ".gmeta" extension that creates the image and seeds the
+ * ORIGINAL metadata through a raw XCF metadata parasite (never through
+ * the serializing wrappers, which cap Xmp.photoshop.DocumentAncestors),
+ * plus a plug-in-glims-meta-oracle image
+ * procedure that dumps the serialized metadata XML for qualifier-level
+ * assertions. The mode file <work>/gmeta-mode selects "qualified" or
+ * "ancestors"; the plug-in finds the work directory through GLIMS_GMETA_DIR.
+ * Returns 1 when the file was installed, 0 otherwise. */
+static int
+install_metadata_loader_plug_in (const char *user_dir, const char *tests_dir)
+{
+  char   source[1100], path[1100];
+  FILE  *in, *out;
+  int    ok = 1;
+
+  snprintf (source, sizeof source, "%s/../metadata-loader.py", tests_dir);
+  mkdir (user_dir, 0755);
+  snprintf (path, sizeof path, "%s/plug-ins", user_dir);
+  mkdir (path, 0755);
+  snprintf (path, sizeof path, "%s/plug-ins/glims-metadata-loader", user_dir);
+  mkdir (path, 0755);
+  snprintf (path, sizeof path, "%s/plug-ins/glims-metadata-loader/glims-metadata-loader.py", user_dir);
+  in  = fopen (source, "r");
+  out = fopen (path, "w");
+  if (in && out)
+    {
+      char   buffer[4096];
+      size_t n;
+
+      while ((n = fread (buffer, 1, sizeof buffer, in)) > 0)
+        if (fwrite (buffer, 1, n, out) != n)
+          ok = 0;
+    }
+  else
+    ok = 0;
+  if (in)
+    fclose (in);
+  if (out)
+    fclose (out);
+  chmod (path, 0755);
+  return ok;
+}
+
 static void
 slow_load_marker (const char *work, const char *name, char *out, size_t size)
 {
@@ -10322,6 +10371,761 @@ test_grid (const char *work)
          "a closed image refuses grid calls");
 }
 
+/* Image metadata (slots 124-127): honest empty reads on a metadata-less
+ * image, EXIF/IPTC/XMP set/remove with exact undo accounting, multivalue
+ * order and duplicates, single-value refusal, empty-set vs REMOVE,
+ * unsupported LangAlt/new-container/protected tags, unknown
+ * domains/tags/UTF-8, BUSY under a stroke and a filter preview with reads
+ * still allowed, exact undo/redo restoration, unrelated-tag survival,
+ * rejection atomicity and XCF round trip. */
+static char **
+metadata_tags (GlimsImageID image, uint32_t domain, int32_t *count)
+{
+  char **result = NULL;
+
+  *count = -1;
+  if (api->image_metadata_tags (engine, image, domain, &result, count, NULL) != GLIMS_STATUS_OK)
+    return NULL;
+  return result;   /* caller releases with api->free_metadata_strings */
+}
+
+static char **
+metadata_values (GlimsImageID image, const char *tag, int32_t *count)
+{
+  char **result = NULL;
+
+  *count = -1;
+  if (api->image_metadata_values (engine, image, tag, &result, count, NULL) != GLIMS_STATUS_OK)
+    return NULL;
+  return result;
+}
+
+static int
+vector_has (char **vector, const char *string)
+{
+  int i;
+
+  if (! vector)
+    return 0;
+  for (i = 0; vector[i]; i++)
+    if (! strcmp (vector[i], string))
+      return 1;
+  return 0;
+}
+
+static int
+values_equal (char **vector, int32_t count, const char *const *want, int32_t want_count)
+{
+  int32_t i;
+
+  if (! vector || count != want_count)
+    return 0;
+  for (i = 0; i < count; i++)
+    if (! vector[i] || strcmp (vector[i], want[i]))
+      return 0;
+  return vector[count] == NULL;
+}
+
+static void
+test_image_metadata (const char *work)
+{
+  GlimsImageID       image = 0, reopened = 0;
+  GlimsItemID        layer;
+  GlimsStrokeID      stroke = 0;
+  GlimsFilterID      filter = 0;
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+  GlimsStrokePoint   first = { 5, 5, 1.0, 0.0, 0.0, 0 };
+  char              *error = NULL;
+  char             **vec, **vals;
+  int32_t            count, vcount, before;
+  char               path[1100];
+  static const char *const artist[1]  = { "Alice" };
+  static const char *const desc[1]    = { "a test image" };
+  static const char *const kw[5]      = { "one", "two", "one", "UNREQUESTED", NULL };
+  static const char *const two[2]     = { "x", "y" };
+  static const char *const tool[1]    = { "Glims test" };
+  static const char *const nine[1]    = { "999" };
+
+  api->image_new (engine, 64, 48, &image, NULL);
+  layer = first_layer (image);
+
+  /* Reads on an image with no metadata: honest empty OWNED vectors,
+   * and the reads create nothing (all three domains stay empty). */
+  vec = metadata_tags (image, GLIMS_METADATA_EXIF, &count);
+  CHECK (vec != NULL && count >= 0 && vec[count] == NULL,
+         "a fresh image lists its actual default EXIF tags as an owned terminated vector");
+  api->free_metadata_strings (vec);
+  vec = metadata_tags (image, GLIMS_METADATA_IPTC, &count);
+  CHECK (vec != NULL && count == 0 && vec[0] == NULL,
+         "a fresh image lists zero IPTC tags as an owned empty vector");
+  api->free_metadata_strings (vec);
+  vec = metadata_tags (image, GLIMS_METADATA_XMP, &count);
+  CHECK (vec != NULL && count == 0 && vec[0] == NULL,
+         "a fresh image lists zero XMP tags as an owned empty vector");
+  api->free_metadata_strings (vec);
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (vals != NULL && vcount == 0 && vals[0] == NULL,
+         "an absent tag reads as an owned empty vector, not an error");
+  api->free_metadata_strings (vals);
+
+  /* Validation: domains, outputs, tag shape, unknown image/tag. */
+  vec = (char **) 0x1;
+  count = 7;
+  CHECK (api->image_metadata_tags (engine, image, 0, &vec, &count, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         vec == NULL && count == 0,
+         "an unknown domain is INVALID_ARGUMENT and resets the outputs");
+  CHECK (api->image_metadata_tags (engine, image, 4, &vec, &count, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "domain 4 is refused");
+  CHECK (api->image_metadata_tags (engine, image, GLIMS_METADATA_EXIF, NULL, &count, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a missing result pointer is refused");
+  CHECK (api->image_metadata_tags (engine, image, GLIMS_METADATA_EXIF, &vec, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a missing count pointer is refused");
+  CHECK (api->image_metadata_tags (engine, 9999, GLIMS_METADATA_EXIF, &vec, &count, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an unknown image is NOT_FOUND for the tag list");
+  CHECK (api->image_metadata_values (engine, image, NULL, &vec, &count, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_metadata_values (engine, image, "", &vec, &count, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_metadata_values (engine, image, "Exif.\xff", &vec, &count, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_metadata_values (engine, image, "Foo.Bar", &vec, &count, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "NULL, empty, non-UTF-8 and prefix-less tags are INVALID_ARGUMENT");
+  CHECK (api->image_metadata_values (engine, 9999, "Exif.Image.Artist", &vec, &count, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an unknown image is NOT_FOUND for values");
+  CHECK (api->image_metadata_values (engine, image, "Exif.Bogus.Tag", &vec, &count, &error) == GLIMS_STATUS_NOT_FOUND &&
+         vec == NULL && count == 0 && error != NULL,
+         "a well-formed but unregistered tag is NOT_FOUND with an actionable message%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* SET one EXIF tag: exactly one undo, reads back in all three slots. */
+  before = undo_depth (image);
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_SET, artist, 1, &error) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "SET of one EXIF tag succeeds as exactly one undo%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (values_equal (vals, vcount, artist, 1), "the EXIF tag reads back its value");
+  api->free_metadata_strings (vals);
+  vec = metadata_tags (image, GLIMS_METADATA_EXIF, &count);
+  CHECK (vec != NULL && vector_has (vec, "Exif.Image.Artist"),
+         "the EXIF tag list contains the new tag");
+  api->free_metadata_strings (vec);
+
+  /* Identical SET: a no-op with zero undo. */
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_SET, artist, 1, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "SET of the identical value is a no-op with no undo");
+
+  /* A second tag: one more undo, the unrelated tag is preserved. */
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.ImageDescription", GLIMS_METADATA_SET, desc, 1, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 2,
+         "SET of a second EXIF tag is one more undo");
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (values_equal (vals, vcount, artist, 1),
+         "the unrelated EXIF tag survives the second edit");
+  api->free_metadata_strings (vals);
+
+  /* Multivalue: a repeatable IPTC tag keeps order and duplicates. */
+  CHECK (api->image_metadata_edit (engine, image, "Iptc.Application2.Keywords", GLIMS_METADATA_SET, kw, 3, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 3,
+         "SET of three values on a repeatable IPTC tag is one undo");
+  vals = metadata_values (image, "Iptc.Application2.Keywords", &vcount);
+  CHECK (values_equal (vals, vcount, kw, 3),
+         "the IPTC multivalue reads back in order, duplicates kept (not flattened)");
+  api->free_metadata_strings (vals);
+
+  /* EXIF tags are single-value natively: two values refused, no undo. */
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_SET, two, 2, &error) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before + 3,
+         "a second value on a single-value EXIF tag is refused with no undo%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (values_equal (vals, vcount, artist, 1),
+         "the refused multi-value edit left the tag unchanged (rejection atomicity)");
+  api->free_metadata_strings (vals);
+
+  /* Empty SET is not a value; REMOVE takes no values. */
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_SET, NULL, 0, &error) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an empty SET is refused — REMOVE erases instead%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_REMOVE, artist, 1, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "REMOVE with a value list is refused");
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", 99, artist, 1, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown operation is refused");
+  CHECK (api->image_metadata_edit (engine, 9999, "Exif.Image.Artist", GLIMS_METADATA_SET, artist, 1, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an unknown image is NOT_FOUND for edits");
+
+  /* XMP: a text tag sets and reads back; LangAlt and a new container
+   * refuse UNSUPPORTED; two values on an XmpText refuse. */
+  CHECK (api->image_metadata_edit (engine, image, "Xmp.xmp.CreatorTool", GLIMS_METADATA_SET, tool, 1, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 4,
+         "SET of an XMP text tag is one undo");
+  vals = metadata_values (image, "Xmp.xmp.CreatorTool", &vcount);
+  CHECK (values_equal (vals, vcount, tool, 1), "the XMP tag reads back");
+  api->free_metadata_strings (vals);
+  vec = metadata_tags (image, GLIMS_METADATA_XMP, &count);
+  CHECK (vec != NULL && vector_has (vec, "Xmp.xmp.CreatorTool"),
+         "the XMP tag list contains the new tag");
+  api->free_metadata_strings (vec);
+  CHECK (api->image_metadata_edit (engine, image, "Xmp.dc.title", GLIMS_METADATA_SET, tool, 1, &error) == GLIMS_STATUS_UNSUPPORTED &&
+         undo_depth (image) == before + 4,
+         "a LangAlt (language-alternative) tag refuses SET as UNSUPPORTED with no undo%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_metadata_edit (engine, image, "Xmp.dc.subject", GLIMS_METADATA_SET, kw, 2, NULL) == GLIMS_STATUS_UNSUPPORTED &&
+         undo_depth (image) == before + 4,
+         "a new XmpBag container tag refuses SET as UNSUPPORTED (no faithful container choice)");
+  CHECK (api->image_metadata_edit (engine, image, "Xmp.xmp.CreatorTool", GLIMS_METADATA_SET, kw, 2, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before + 4,
+         "two values on an XmpText tag are refused");
+
+  /* Tags the native setter rewrites from the image state are refused. */
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.ImageWidth", GLIMS_METADATA_SET, nine, 1, &error) == GLIMS_STATUS_UNSUPPORTED &&
+         undo_depth (image) == before + 4,
+         "a normalization-rewritten tag refuses SET as UNSUPPORTED with no undo%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.XResolution", GLIMS_METADATA_REMOVE, NULL, 0, NULL) == GLIMS_STATUS_UNSUPPORTED,
+         "a normalization-rewritten tag refuses REMOVE too");
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Bogus.Tag", GLIMS_METADATA_SET, artist, 1, &error) == GLIMS_STATUS_NOT_FOUND &&
+         undo_depth (image) == before + 4,
+         "an unregistered tag refuses edits as NOT_FOUND with no undo");
+  api->free_string (error);
+  error = NULL;
+
+  /* REMOVE: one undo, then the tag is honestly absent; removing again
+   * is a no-op; unrelated tags survive. */
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_REMOVE, NULL, 0, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 5,
+         "REMOVE of a present tag is exactly one undo");
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (vals != NULL && vcount == 0 && vals[0] == NULL,
+         "a removed tag reads as an owned empty vector");
+  api->free_metadata_strings (vals);
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_REMOVE, NULL, 0, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 5,
+         "removing an absent tag is a no-op with zero undo");
+  vals = metadata_values (image, "Exif.Image.ImageDescription", &vcount);
+  CHECK (values_equal (vals, vcount, desc, 1),
+         "the unrelated EXIF tag survives the removal");
+  api->free_metadata_strings (vals);
+  vals = metadata_values (image, "Iptc.Application2.Keywords", &vcount);
+  CHECK (values_equal (vals, vcount, kw, 3),
+         "the IPTC multivalue survives the EXIF removal");
+  api->free_metadata_strings (vals);
+
+  /* Undo/redo restore the exact metadata. */
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK, "undo runs");
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (values_equal (vals, vcount, artist, 1),
+         "undo restores the removed tag's exact value");
+  api->free_metadata_strings (vals);
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK, "redo runs");
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (vals != NULL && vcount == 0,
+         "redo restores the removal exactly");
+  api->free_metadata_strings (vals);
+
+  /* BUSY gates: a stroke and a filter preview refuse edits before any
+   * mutation, while the reads stay allowed. */
+  if (api->stroke_begin (engine, image, layer, &brush, &first, &stroke, NULL) == GLIMS_STATUS_OK)
+    {
+      CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_SET, artist, 1, NULL) == GLIMS_STATUS_BUSY &&
+             undo_depth (image) == before + 5,
+             "edit is BUSY during a stroke, with no undo");
+      vals = metadata_values (image, "Exif.Image.ImageDescription", &vcount);
+      CHECK (values_equal (vals, vcount, desc, 1),
+             "value reads stay allowed during a stroke");
+      api->free_metadata_strings (vals);
+      vec = metadata_tags (image, GLIMS_METADATA_IPTC, &count);
+      CHECK (vec != NULL && count == 1 && vector_has (vec, "Iptc.Application2.Keywords"),
+             "tag listing stays allowed during a stroke");
+      api->free_metadata_strings (vec);
+      CHECK (api->stroke_end (engine, stroke) == GLIMS_STATUS_OK, "the busy-check stroke ends");
+    }
+  else
+    CHECK (0, "the stroke for the busy check began");
+  if (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK)
+    {
+      int32_t before_preview = undo_depth (image);
+      CHECK (api->image_metadata_edit (engine, image, "Iptc.Application2.Keywords", GLIMS_METADATA_REMOVE, NULL, 0, NULL) == GLIMS_STATUS_BUSY &&
+             undo_depth (image) == before_preview,
+             "edit is BUSY during a filter preview, with no undo");
+      CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+             "the busy-check filter preview aborts");
+    }
+  else
+    CHECK (0, "the filter for the busy check began");
+
+  /* XCF round trip: tags, multivalues and order survive. */
+  snprintf (path, sizeof path, "%s/metadata.xcf", work);
+  CHECK (api->image_save (engine, image, path, &error) == GLIMS_STATUS_OK,
+         "the image saves%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_open (engine, path, &reopened, &error) == GLIMS_STATUS_OK,
+         "the saved image reopens%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  vec = metadata_tags (reopened, GLIMS_METADATA_EXIF, &count);
+  CHECK (vec != NULL && vector_has (vec, "Exif.Image.ImageDescription"),
+         "EXIF tags round-trip through XCF");
+  api->free_metadata_strings (vec);
+  vals = metadata_values (reopened, "Iptc.Application2.Keywords", &vcount);
+  CHECK (values_equal (vals, vcount, kw, 3),
+         "IPTC multivalues round-trip through XCF in order, duplicates kept");
+  api->free_metadata_strings (vals);
+  vals = metadata_values (reopened, "Xmp.xmp.CreatorTool", &vcount);
+  CHECK (values_equal (vals, vcount, tool, 1),
+         "the XMP tag round-trips through XCF");
+  api->free_metadata_strings (vals);
+  before = undo_depth (reopened);
+  CHECK (api->image_metadata_edit (engine, reopened, "Exif.Image.Artist", GLIMS_METADATA_SET, artist, 1, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (reopened) == before + 1,
+         "an edit on the reopened image works as one undo");
+  api->image_close (engine, reopened);
+
+  api->free_metadata_strings (NULL);
+  CHECK (1, "free_metadata_strings(NULL) is a no-op");
+
+  api->image_close (engine, image);
+  CHECK (api->image_metadata_tags (engine, image, GLIMS_METADATA_EXIF, &vec, &count, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a closed image refuses tag reads");
+  CHECK (api->image_metadata_values (engine, image, "Exif.Image.Artist", &vec, &count, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a closed image refuses value reads");
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_SET, artist, 1, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a closed image refuses edits");
+
+  /* Repeatable text is an ordered value vector, including empty members.
+   * A native representation limit may refuse it, never report success
+   * after silently dropping entries. Each case uses isolated image state. */
+  {
+    GlimsImageID target = 0;
+    const char *const seed_values[] = { "retained" };
+    const char *const requested[] = { "line1\nline2", "dup", "dup", "" };
+    const char *const supported[] = { "line1\nline2", "dup", "dup" };
+    const char *const single[] = { "only" };
+    const char *const empty_value[] = { "" };
+    int32_t baseline;
+    GlimsStatus written;
+    char *write_error = NULL;
+    char **readback;
+    int32_t read_count = 0;
+
+    CHECK (api->image_new (engine, 8, 8, &target, NULL) == GLIMS_STATUS_OK,
+           "the repeated-value fixture image opens");
+    CHECK (api->image_metadata_edit (engine, target, "Iptc.Application2.Keywords",
+                                      GLIMS_METADATA_SET, seed_values, 1, NULL) == GLIMS_STATUS_OK,
+           "the repeated-value fixture starts with one retained keyword");
+    baseline = undo_depth (target);
+    written = api->image_metadata_edit (engine, target, "Iptc.Application2.Keywords",
+                                        GLIMS_METADATA_SET, requested, 4, &write_error);
+    readback = metadata_values (target, "Iptc.Application2.Keywords", &read_count);
+    CHECK ((written == GLIMS_STATUS_OK && values_equal (readback, read_count, requested, 4)) ||
+           (written == GLIMS_STATUS_UNSUPPORTED && undo_depth (target) == baseline &&
+            values_equal (readback, read_count, seed_values, 1)),
+           "an empty repeated member is preserved exactly or refused atomically (status %d, count %d)%s%s",
+           written, read_count, write_error ? ": " : "", write_error ? write_error : "");
+    api->free_metadata_strings (readback);
+    api->free_string (write_error);
+    write_error = NULL;
+    api->image_close (engine, target);
+
+    CHECK (api->image_new (engine, 8, 8, &target, NULL) == GLIMS_STATUS_OK,
+           "the supported-vector fixture image opens");
+    baseline = undo_depth (target);
+    written = api->image_metadata_edit (engine, target, "Iptc.Application2.Keywords",
+                                        GLIMS_METADATA_SET, supported, 3, NULL);
+    readback = metadata_values (target, "Iptc.Application2.Keywords", &read_count);
+    CHECK (written == GLIMS_STATUS_OK && undo_depth (target) == baseline + 1 &&
+           values_equal (readback, read_count, supported, 3),
+           "nonempty repeated values retain newlines, duplicates and order as one undo");
+    api->free_metadata_strings (readback);
+    baseline = undo_depth (target);
+    written = api->image_metadata_edit (engine, target, "Iptc.Application2.Keywords",
+                                        GLIMS_METADATA_SET, single, 1, NULL);
+    readback = metadata_values (target, "Iptc.Application2.Keywords", &read_count);
+    CHECK (written == GLIMS_STATUS_OK && undo_depth (target) == baseline + 1 &&
+           values_equal (readback, read_count, single, 1),
+           "setting one repeated value replaces the whole previous vector (count %d)", read_count);
+    api->free_metadata_strings (readback);
+    baseline = undo_depth (target);
+    written = api->image_metadata_edit (engine, target, "Iptc.Application2.Keywords",
+                                        GLIMS_METADATA_SET, empty_value, 1, &write_error);
+    readback = metadata_values (target, "Iptc.Application2.Keywords", &read_count);
+    CHECK ((written == GLIMS_STATUS_OK && values_equal (readback, read_count, empty_value, 1)) ||
+           (written == GLIMS_STATUS_UNSUPPORTED && undo_depth (target) == baseline &&
+            values_equal (readback, read_count, single, 1)),
+           "one empty text value is preserved or refused without changing the old value (status %d, count %d)",
+           written, read_count);
+    api->free_metadata_strings (readback);
+    api->free_string (write_error);
+    api->image_close (engine, target);
+  }
+}
+
+/* ---- Metadata preservation fixtures (.gmeta loader + oracle) -----------
+ * The test-only loader seeds a raw XCF metadata parasite, bypassing the
+ * native serializer's ancestor cap. Its MIME type is unset so automatic
+ * metadata import cannot overwrite the original metadata after loading.
+ * The small-fixture oracle uses public metadata serialization, which
+ * preserves the language qualifiers. Never invoke it on the ancestors
+ * image: facade value reads establish all 1001 original entries directly.
+ */
+
+/* Reads a whole file into an owned NUL-terminated buffer; NULL if absent. */
+static char *
+read_text_file (const char *path)
+{
+  FILE  *file = fopen (path, "rb");
+  char  *buffer;
+  long   size;
+
+  if (! file)
+    return NULL;
+  if (fseek (file, 0, SEEK_END) != 0 || (size = ftell (file)) < 0)
+    {
+      fclose (file);
+      return NULL;
+    }
+  rewind (file);
+  buffer = malloc ((size_t) size + 1);
+  if (! buffer)
+    {
+      fclose (file);
+      return NULL;
+    }
+  if (size > 0 && fread (buffer, 1, (size_t) size, file) != (size_t) size)
+    {
+      free (buffer);
+      fclose (file);
+      return NULL;
+    }
+  buffer[size] = '\0';
+  fclose (file);
+  return buffer;
+}
+
+static int
+write_text_file (const char *path, const char *text)
+{
+  FILE *file = fopen (path, "w");
+
+  if (! file)
+    return 0;
+  fputs (text, file);
+  fclose (file);
+  return 1;
+}
+
+static int
+vector_contains_substring (char **vector, const char *needle)
+{
+  int i;
+
+  if (! vector)
+    return 0;
+  for (i = 0; vector[i]; i++)
+    if (strstr (vector[i], needle))
+      return 1;
+  return 0;
+}
+
+/* Every line must appear, each after the previous one's match. */
+static int
+text_has_lines_in_order (const char *text, const char *const *lines, int32_t n)
+{
+  const char *p = text;
+  int32_t     i;
+
+  if (! text)
+    return 0;
+  for (i = 0; i < n; i++)
+    {
+      p = strstr (p, lines[i]);
+      if (! p)
+        return 0;
+      p += strlen (lines[i]);
+    }
+  return 1;
+}
+
+/* Runs the fixture-only oracle plug-in on `image` through the facade
+ * procedure_run (the facade fills run-mode/image/drawables; the run is
+ * synchronous, so no waiting is involved) and reads the serialized-metadata
+ * file it wrote under work. Returns an owned string, or NULL. */
+static char *
+metadata_oracle (GlimsImageID image, const char *work, char **error)
+{
+  char  path[1100];
+  char *text;
+
+  if (api->procedure_run (engine, image, "plug-in-glims-meta-oracle",
+                          GLIMS_RUN_WITH_LAST_VALUES, error) != GLIMS_STATUS_OK)
+    return NULL;
+  snprintf (path, sizeof path, "%s/gmeta-oracle.xml", work);
+  text = read_text_file (path);
+  if (! text && error)
+    {
+      const char *message = "the oracle plug-in wrote no output file";
+      *error = malloc (strlen (message) + 1);
+      if (*error)
+        strcpy (*error, message);
+    }
+  return text;
+}
+
+/* The 1001 seeded DocumentAncestors must read back exactly, in order, as a
+ * terminated vector — the facade read never serializes, so no cap applies. */
+static int
+ancestors_exact (char **vals, int32_t vcount)
+{
+  int32_t i;
+
+  if (! vals || vcount != 1001 || vals[1001] != NULL)
+    return 0;
+  for (i = 0; i < 1001; i++)
+    {
+      char want[32];
+
+      snprintf (want, sizeof want, "ancestor-%04d", i);
+      if (! vals[i] || strcmp (vals[i], want))
+        return 0;
+    }
+  return 1;
+}
+
+static void
+test_metadata_preservation_fixtures (const char *work)
+{
+  char               mode_path[1100], qualified[1100], ancestors[1100], xcf[1100];
+  char              *error = NULL;
+  char              *oracle;
+  char             **vals;
+  int32_t            vcount, before;
+  GlimsImageID       image = 0, reopened = 0, aimage = 0;
+  GlimsStatus        status;
+  static const char *const artist_original[1] = { "Original Artist" };
+  static const char *const artist_edited[1]   = { "Edited Artist" };
+  static const char *const subject[3]         = { "alpha", "beta", "gamma" };
+  static const char *const creator[2]         = { "creator-one", "creator-two" };
+  static const char *const iptc[2]            = { "iptc-one", "iptc-two" };
+  static const char *const ancestor_artist[1] = { "Ancestor Artist" };
+  static const char *const ancestor_edited[1] = { "Changed Artist" };
+  /* The exact serialized-XML lines the oracle must contain for the
+   * qualified fixture (g_markup_escape_text escapes & < > ' "): the two
+   * LangAlt alternatives carry their lang qualifiers, the containers carry
+   * one <tag> line per value, in order. */
+  static const char *const title_lines[2] = {
+    "<tag name=\"Xmp.dc.title\">lang=&quot;x-default&quot; Default title &amp; &lt;demo&gt;</tag>",
+    "<tag name=\"Xmp.dc.title\">lang=&quot;fr-FR&quot; Titre français — café</tag>"
+  };
+  static const char *const bag_lines[3] = {
+    "<tag name=\"Xmp.dc.subject\">alpha</tag>",
+    "<tag name=\"Xmp.dc.subject\">beta</tag>",
+    "<tag name=\"Xmp.dc.subject\">gamma</tag>"
+  };
+  static const char *const seq_lines[2] = {
+    "<tag name=\"Xmp.dc.creator\">creator-one</tag>",
+    "<tag name=\"Xmp.dc.creator\">creator-two</tag>"
+  };
+
+  snprintf (mode_path, sizeof mode_path, "%s/gmeta-mode", work);
+  snprintf (qualified, sizeof qualified, "%s/fixture-qualified.gmeta", work);
+  snprintf (ancestors, sizeof ancestors, "%s/fixture-ancestors.gmeta", work);
+  snprintf (xcf, sizeof xcf, "%s/metadata-preservation.xcf", work);
+
+  /* The .gmeta inputs exist; their content is irrelevant, the loader reads
+   * the mode file. */
+  CHECK (write_text_file (qualified, "glims metadata fixture\n") &&
+         write_text_file (ancestors, "glims metadata fixture\n"),
+         "the .gmeta fixture files are written");
+
+  /* ---- qualified mode: LangAlt + XmpBag + XmpSeq + EXIF/IPTC seeded --- */
+  CHECK (write_text_file (mode_path, "qualified\n"), "the mode file selects 'qualified'");
+  status = api->image_open (engine, qualified, &image, &error);
+  CHECK (status == GLIMS_STATUS_OK && image != 0,
+         "the qualified .gmeta loads through the fixture loader (status %d)%s%s",
+         status, error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  if (! image)
+    return;
+
+  vals = metadata_values (image, "Xmp.dc.title", &vcount);
+  CHECK (vals != NULL && vcount == 2 && vals[2] == NULL &&
+         vector_contains_substring (vals, "Default title & <demo>") &&
+         vector_contains_substring (vals, "Titre français — café"),
+         "the seeded LangAlt reads back as two alternatives holding both texts (count %d)", vcount);
+  api->free_metadata_strings (vals);
+  vals = metadata_values (image, "Xmp.dc.subject", &vcount);
+  CHECK (values_equal (vals, vcount, subject, 3), "the seeded XmpBag reads back in order");
+  api->free_metadata_strings (vals);
+  vals = metadata_values (image, "Xmp.dc.creator", &vcount);
+  CHECK (values_equal (vals, vcount, creator, 2), "the seeded XmpSeq reads back in order");
+  api->free_metadata_strings (vals);
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (values_equal (vals, vcount, artist_original, 1), "the seeded EXIF Artist reads back");
+  api->free_metadata_strings (vals);
+  vals = metadata_values (image, "Iptc.Application2.Keywords", &vcount);
+  CHECK (values_equal (vals, vcount, iptc, 2), "the seeded IPTC keywords read back in order");
+  api->free_metadata_strings (vals);
+
+  oracle = metadata_oracle (image, work, &error);
+  CHECK (oracle != NULL,
+         "the oracle plug-in dumped the serialized metadata%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (oracle != NULL &&
+         text_has_lines_in_order (oracle, title_lines, 2) &&
+         text_has_lines_in_order (oracle, bag_lines, 3) &&
+         text_has_lines_in_order (oracle, seq_lines, 2) &&
+         strstr (oracle, "<tag name=\"Exif.Image.Artist\">Original Artist</tag>") != NULL,
+         "the seeded oracle XML carries both lang qualifiers and all container values in order");
+  free (oracle);
+
+  /* An unrelated Artist edit must preserve everything else, qualifiers
+   * included. */
+  before = undo_depth (image);
+  status = api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_SET, artist_edited, 1, &error);
+  CHECK (status == GLIMS_STATUS_OK && undo_depth (image) == before + 1,
+         "the unrelated Artist edit succeeds as one undo (status %d)%s%s",
+         status, error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (values_equal (vals, vcount, artist_edited, 1), "the Artist edit took effect");
+  api->free_metadata_strings (vals);
+  vals = metadata_values (image, "Xmp.dc.subject", &vcount);
+  CHECK (values_equal (vals, vcount, subject, 3), "the XmpBag values survive the unrelated edit");
+  api->free_metadata_strings (vals);
+  vals = metadata_values (image, "Xmp.dc.creator", &vcount);
+  CHECK (values_equal (vals, vcount, creator, 2), "the XmpSeq values survive the unrelated edit");
+  api->free_metadata_strings (vals);
+  vals = metadata_values (image, "Xmp.dc.title", &vcount);
+  CHECK (vals != NULL && vcount == 2 &&
+         vector_contains_substring (vals, "Default title & <demo>") &&
+         vector_contains_substring (vals, "Titre français — café"),
+         "the LangAlt texts survive the unrelated edit");
+  api->free_metadata_strings (vals);
+  oracle = metadata_oracle (image, work, NULL);
+  CHECK (oracle != NULL &&
+         text_has_lines_in_order (oracle, title_lines, 2) &&
+         text_has_lines_in_order (oracle, bag_lines, 3) &&
+         text_has_lines_in_order (oracle, seq_lines, 2) &&
+         strstr (oracle, "<tag name=\"Exif.Image.Artist\">Edited Artist</tag>") != NULL,
+         "after the edit the oracle XML keeps both lang qualifiers and the containers, with the new Artist");
+  free (oracle);
+
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == before,
+         "undo returns to the seed depth");
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (values_equal (vals, vcount, artist_original, 1), "undo restores the original Artist");
+  api->free_metadata_strings (vals);
+  oracle = metadata_oracle (image, work, NULL);
+  CHECK (oracle != NULL && text_has_lines_in_order (oracle, title_lines, 2) &&
+         text_has_lines_in_order (oracle, bag_lines, 3) &&
+         text_has_lines_in_order (oracle, seq_lines, 2),
+         "after undo the oracle XML still carries both lang qualifiers and the containers");
+  free (oracle);
+
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == before + 1,
+         "redo reapplies the edit");
+  oracle = metadata_oracle (image, work, NULL);
+  CHECK (oracle != NULL && text_has_lines_in_order (oracle, title_lines, 2) &&
+         text_has_lines_in_order (oracle, bag_lines, 3) &&
+         text_has_lines_in_order (oracle, seq_lines, 2),
+         "after redo the oracle XML still carries the qualifiers and containers");
+  free (oracle);
+
+  /* XCF save/reopen of the edited image. */
+  CHECK (api->image_save (engine, image, xcf, &error) == GLIMS_STATUS_OK,
+         "the qualified image saves to XCF%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_close (engine, image) == GLIMS_STATUS_OK, "the qualified image closes");
+  image = 0;
+  status = api->image_open (engine, xcf, &reopened, &error);
+  CHECK (status == GLIMS_STATUS_OK && reopened != 0,
+         "the saved XCF reopens (status %d)%s%s", status, error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  if (reopened)
+    {
+      vals = metadata_values (reopened, "Xmp.dc.title", &vcount);
+      CHECK (vals != NULL && vcount == 2 &&
+             vector_contains_substring (vals, "Default title & <demo>") &&
+             vector_contains_substring (vals, "Titre français — café"),
+             "the LangAlt texts round-trip through XCF");
+      api->free_metadata_strings (vals);
+      vals = metadata_values (reopened, "Xmp.dc.subject", &vcount);
+      CHECK (values_equal (vals, vcount, subject, 3), "the XmpBag round-trips through XCF in order");
+      api->free_metadata_strings (vals);
+      vals = metadata_values (reopened, "Xmp.dc.creator", &vcount);
+      CHECK (values_equal (vals, vcount, creator, 2), "the XmpSeq round-trips through XCF in order");
+      api->free_metadata_strings (vals);
+      oracle = metadata_oracle (reopened, work, NULL);
+      CHECK (oracle != NULL &&
+             text_has_lines_in_order (oracle, title_lines, 2) &&
+             strstr (oracle, "<tag name=\"Exif.Image.Artist\">Edited Artist</tag>") != NULL,
+             "after XCF save/reopen the oracle XML keeps both lang qualifiers and the edited Artist");
+      free (oracle);
+      CHECK (api->image_close (engine, reopened) == GLIMS_STATUS_OK, "the reopened image closes");
+      reopened = 0;
+    }
+
+  /* ---- ancestors mode: exactly 1001 DocumentAncestors, then refusal --- */
+  CHECK (write_text_file (mode_path, "ancestors\n"), "the mode file selects 'ancestors'");
+  status = api->image_open (engine, ancestors, &aimage, &error);
+  CHECK (status == GLIMS_STATUS_OK && aimage != 0,
+         "the ancestors .gmeta loads through the fixture loader (status %d)%s%s",
+         status, error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  if (! aimage)
+    return;
+
+  /* The original must really hold 1001 values BEFORE any write attempt:
+   * the facade read does not serialize, so the native 1000-value serialize
+   * cap cannot truncate it here. */
+  vals = metadata_values (aimage, "Xmp.photoshop.DocumentAncestors", &vcount);
+  CHECK (ancestors_exact (vals, vcount),
+         "the facade reader returns all 1001 seeded ancestors, exact and in order, before any edit (count %d)", vcount);
+  api->free_metadata_strings (vals);
+
+  before = undo_depth (aimage);
+  status = api->image_metadata_edit (engine, aimage, "Exif.Image.Artist", GLIMS_METADATA_SET, ancestor_edited, 1, &error);
+  CHECK (status == GLIMS_STATUS_UNSUPPORTED && error != NULL,
+         "an unrelated Artist edit on the 1001-ancestor image is UNSUPPORTED (status %d)%s%s",
+         status, error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (undo_depth (aimage) == before, "the refusal pushed no undo");
+
+  vals = metadata_values (aimage, "Xmp.photoshop.DocumentAncestors", &vcount);
+  CHECK (ancestors_exact (vals, vcount),
+         "all 1001 original ancestor values are still intact after the refusal (count %d)", vcount);
+  api->free_metadata_strings (vals);
+  vals = metadata_values (aimage, "Exif.Image.Artist", &vcount);
+  CHECK (values_equal (vals, vcount, ancestor_artist, 1), "the unrelated Artist is unchanged after the refusal");
+  api->free_metadata_strings (vals);
+  vals = metadata_values (aimage, "Iptc.Application2.Keywords", &vcount);
+  CHECK (vals != NULL && vcount == 1 && vector_has (vals, "ancestor-keyword"),
+         "the unrelated IPTC tag is unchanged after the refusal");
+  api->free_metadata_strings (vals);
+
+  CHECK (api->image_close (engine, aimage) == GLIMS_STATUS_OK, "the ancestors image closes");
+}
+
 /* Stroking the selection's boundary on a layer: the native
  * gimp_item_stroke on the image's mask with the selection suspended, so
  * the stroke straddles the boundary (both sides painted) and the
@@ -12503,8 +13307,28 @@ test_place (const char *fixtures, const char *work)
       CHECK (tries < 100, "the monitored link layer rereads the rewritten source (%d00 ms)", tries);
 
       /* And a fresh open rereads it too: the stored buffer never wins. */
-      CHECK (api->image_open (engine, placed_xcf, &again, NULL) == GLIMS_STATUS_OK && again > 0,
-             "the saved link reopens again");
+      {
+        char *open_error = NULL;
+        GlimsStatus open_status;
+        int busy_attempts = 0;
+        /* Multiple live links reload this source independently. One blue
+         * composite does not mean every monitored reload has released the
+         * engine. BUSY is the documented admission response, not a failed
+         * file read: wait for it, but preserve every other failure. */
+        do
+          {
+            api->free_string (open_error);
+            open_error = NULL;
+            open_status = api->image_open (engine, placed_xcf, &again, &open_error);
+            if (open_status != GLIMS_STATUS_BUSY) break;
+            usleep (100 * 1000);
+          }
+        while (++busy_attempts < 100);
+        CHECK (open_status == GLIMS_STATUS_OK && again > 0,
+               "the saved link reopens again (status %d, image %d, error %s)",
+               open_status, again, open_error ? open_error : "none");
+        api->free_string (open_error);
+      }
       tries = 0;
       while (tries < 100)
         {
@@ -12594,6 +13418,13 @@ main (int argc, char **argv)
   setenv ("GLIMS_SLOWLOAD_DIR", argv[2], 1);
   slow_load_release (argv[2]);
 
+  /* The .gmeta metadata fixture must be in place before the engine scans
+   * its plug-in path at start, like the slow-load fixture; the plug-in
+   * finds the work directory through GLIMS_GMETA_DIR. */
+  CHECK (install_metadata_loader_plug_in (user_dir, argv[3]) == 1,
+         "the metadata fixture loader (metadata-loader.py) is installed under the test user's plug-ins");
+  setenv ("GLIMS_GMETA_DIR", argv[2], 1);
+
   config.struct_size     = sizeof config;
   config.user_directory  = user_dir;
   config.cache_directory = cache_dir;
@@ -12674,6 +13505,8 @@ main (int argc, char **argv)
   test_resource_gradient ();
   test_guides (argv[2]);
   test_grid (argv[2]);
+  test_image_metadata (argv[2]);
+  test_metadata_preservation_fixtures (argv[2]);
   test_selection_stroke ();
   test_floating_selection (argv[2]);
   test_selection_float ();

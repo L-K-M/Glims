@@ -100,6 +100,7 @@ void             glims_emit              (GlimsEngine *engine, GlimsEventKind ki
                                           const gchar *text);
 void             glims_emit_progress     (GlimsEngine *engine, gboolean active,
                                           gdouble value, const gchar *text);
+/* Consumes gerror. Transfer a caller-owned variable with g_steal_pointer. */
 GlimsStatus      glims_fail              (char **error, GError *gerror, const gchar *fallback);
 GlimsOpenImage * glims_lookup_image      (GlimsEngine *engine, GlimsImageID id);
 GlimsStatus      glims_adopt_image       (GlimsEngine *engine, GimpImage *image, GlimsImageID *id);
@@ -439,6 +440,16 @@ GlimsStatus glims_guide_remove (GlimsEngine *e, GlimsImageID image,
 GlimsStatus glims_image_grid     (GlimsEngine *e, GlimsImageID image, GlimsGrid *out, char **error);
 GlimsStatus glims_image_set_grid (GlimsEngine *e, GlimsImageID image,
                                   const GlimsGrid *grid, char **error);
+
+/* metadata.c */
+GlimsStatus glims_image_metadata_tags   (GlimsEngine *e, GlimsImageID image, uint32_t domain,
+                                         char ***result, int32_t *count, char **error);
+GlimsStatus glims_image_metadata_values (GlimsEngine *e, GlimsImageID image, const char *tag,
+                                         char ***result, int32_t *count, char **error);
+GlimsStatus glims_image_metadata_edit   (GlimsEngine *e, GlimsImageID image, const char *tag,
+                                         uint32_t operation, const char *const *values,
+                                         int32_t count, char **error);
+void        glims_free_metadata_strings (char **strings);
 
 /* layer-source.c */
 GlimsStatus glims_layer_source_info (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,

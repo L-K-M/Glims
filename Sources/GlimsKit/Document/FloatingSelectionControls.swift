@@ -65,6 +65,66 @@ enum FloatingControlsLogic {
         state.isActive ? resolveFirstReason : nil
     }
 
+    /// Whether moving the active floating selection's pixels may be
+    /// queued now, from cached state only — the same gates the pointer
+    /// and keyboard paths check before capturing. Moving never resolves
+    /// the floating selection, so the resolve-first gate does not apply
+    /// here; the document's ordinary move guard still refuses floating
+    /// for `moveActiveLayer`.
+    static func floatingMoveReadiness(_ state: EngineSession.FloatingState,
+                                      acceptsEdits: Bool, pendingTarget: Bool) -> Readiness {
+        if !acceptsEdits {
+            return .refused("Wait for the current image operation to finish.")
+        }
+        if pendingTarget {
+            return .refused("The paint target is changing; wait for it to settle.")
+        }
+        guard state.isActive else {
+            return .refused("There is no floating selection in this image.")
+        }
+        return .allowed()
+    }
+
+    /// The worker-side identity check for a captured floating move: the
+    /// state read fresh immediately before the move must still be exactly
+    /// the captured `expected` state — same floating id, same attachment
+    /// target, same target kind. A Detach (New Layer) that turned the id
+    /// into an ordinary layer reports no active floating selection at
+    /// all, so the same id is never moved after it stopped floating.
+    static func floatingStateStillMatches(expected: EngineSession.FloatingState,
+                                          fresh: EngineSession.FloatingState) -> Bool {
+        expected == fresh
+    }
+
+    /// The whole-image-pixel translation a captured move commits: the
+    /// preview rect's offset from the captured bounds, rounded to whole
+    /// pixels — the same delta the local preview showed.
+    static func wholePixelDelta(bounds: CGRect, proposed: CGRect) -> CGSize {
+        CGSize(width: (proposed.minX - bounds.minX).rounded(),
+               height: (proposed.minY - bounds.minY).rounded())
+    }
+
+    /// The release decision for a captured floating move: nil when the
+    /// gesture was cancelled (Escape, tool change, window close) or its
+    /// capture is no longer valid — the release then commits nothing at
+    /// all and never falls through to an ordinary/raw move; otherwise
+    /// exactly one whole-pixel delta of the captured floating id.
+    static func commitDelta(cancelled: Bool, stillValid: Bool,
+                            bounds: CGRect, proposed: CGRect) -> CGSize? {
+        guard !cancelled, stillValid else { return nil }
+        return wholePixelDelta(bounds: bounds, proposed: proposed)
+    }
+
+    /// A rect usable as the captured floating-move geometry: finite with
+    /// strictly positive size. An unusable capture refuses the gesture
+    /// instead of planning or committing on bad bounds.
+    static func usableMoveBounds(_ rect: CGRect) -> Bool {
+        rect.origin.x.isFinite && rect.origin.y.isFinite
+            && rect.size.width.isFinite && rect.size.height.isFinite
+            && rect.maxX.isFinite && rect.maxY.isFinite
+            && rect.size.width > 0 && rect.size.height > 0
+    }
+
     /// Whether `drawable` — the paint target captured for Paste Into —
     /// is a valid explicit attachment target, from cached state. The id
     /// is never 0: no layer-0 / front-document fallback reaches the
