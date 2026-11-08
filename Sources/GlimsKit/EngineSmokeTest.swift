@@ -177,6 +177,11 @@ enum EngineSmokeTest {
                 return failures == 0 ? 0 : 1
             }
 
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "plugin-responsiveness" {
+                try measurePluginStalls(session, work: work)
+                print(failures == 0 ? "PASSED (plugin responsiveness)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "history-isolation" {
                 try exercisePendingEditScope(session, documents: documents)
                 try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
@@ -7161,7 +7166,11 @@ enum EngineSmokeTest {
             maxLateness = max(maxLateness, Double(now.uptimeNanoseconds - lastTick.uptimeNanoseconds) / 1e6 - interval * 1000)
             let begin = DispatchTime.now()
             _ = try? session.render(image, scale: 1, area: CGRect(x: 0, y: 0, width: 64, height: 64))
-            maxRenderCall = max(maxRenderCall, milliseconds(since: begin))
+            let renderMilliseconds = milliseconds(since: begin)
+            if renderMilliseconds >= maximumMainThreadStallMilliseconds {
+                print("     slow render RPC sample \(ticks): \(String(format: "%.1f", renderMilliseconds)) ms")
+            }
+            maxRenderCall = max(maxRenderCall, renderMilliseconds)
             ticks += 1
             lastTick = DispatchTime.now()
         }
