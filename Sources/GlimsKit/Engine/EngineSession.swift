@@ -1773,6 +1773,126 @@ final class EngineSession: @unchecked Sendable {
         api.procedure_cancel(engine) == GLIMS_STATUS_OK
     }
 
+    // MARK: Resources
+
+    /// The kind of a brush, pattern or gradient (GlimsResourceKind).
+    /// Facade-owned values; the engine's own enum never crosses the boundary.
+    enum ResourceKind: UInt32, CaseIterable {
+        case brush = 1, pattern = 2, gradient = 3
+    }
+
+    /// A handle to one brush, pattern or gradient (GlimsResourceID):
+    /// opaque, and local to the current engine session. A number can be
+    /// reused after a restart. Persisted selections store
+    /// `ResourceIdentity`, never these ids.
+    typealias ResourceID = UInt64
+
+    /// One row of the resource catalog (GlimsResourceInfo): the display
+    /// name and handle of one brush, pattern or gradient; nothing rendered.
+    struct Resource: Equatable {
+        let id: ResourceID
+        let kind: ResourceKind
+        let displayName: String
+    }
+
+    /// The persistent identity of a resource: the triplet to store and
+    /// later feed to `resolveResource(_:kind:)`. A nil `collection` is a
+    /// value of its own, not an empty collection: Codable keeps the NULL
+    /// and empty values apart so a persisted selection restores exactly
+    /// what was stored.
+    struct ResourceIdentity: Equatable, Codable {
+        let name: String
+        let collection: String?
+        let isInternal: Bool
+    }
+
+    /// The engine's resources of `kind`, in the engine's own order (sort
+    /// in the interface as you like): names and handles only, nothing
+    /// rendered. The catalog can list hundreds of rows, so call this when
+    /// a chooser opens, never eagerly on the main thread or at startup.
+    func resources(_ kind: ResourceKind) throws -> [Resource] {
+        var count: Int32 = 0
+        try check(api.resources(engine, kind.rawValue, nil, 0, &count), nil)
+        var rows = [GlimsResourceInfo](repeating: GlimsResourceInfo(), count: Int(count))
+        var filled: Int32 = 0
+        while true {
+            let capacity = Int32(rows.count)
+            filled = 0
+            try rows.withUnsafeMutableBufferPointer { buffer in
+                try check(api.resources(engine, kind.rawValue, buffer.baseAddress, capacity, &filled), nil)
+            }
+            // The second count is the total again: one above the buffer
+            // means the catalog grew between the calls, so retry at the
+            // reported size instead of returning a short list.
+            guard filled > capacity else { break }
+            rows = [GlimsResourceInfo](repeating: GlimsResourceInfo(), count: Int(filled))
+        }
+        return try rows.prefix(Int(max(filled, 0))).map { row in
+            Resource(id: row.id, kind: try Self.resourceKind(row.kind), displayName: Self.string(row.name))
+        }
+    }
+
+    /// The persistent identity of the resource `id` names: the triplet to
+    /// store and later feed to `resolveResource(_:kind:)`. A nil
+    /// `collection` is a value of its own, not an empty collection: pass
+    /// back exactly what was received. The identity survives restarting
+    /// the engine; nothing else is promised, since moving or renaming the
+    /// underlying file changes it.
+    func resourceIdentifiers(_ id: ResourceID) throws -> ResourceIdentity {
+        var name: UnsafeMutablePointer<CChar>?
+        var collection: UnsafeMutablePointer<CChar>?
+        var isInternal = false
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.resource_identifiers(engine, id, &name, &collection, &isInternal, &error)
+        // Own the returned strings until this call finishes, including
+        // any error path that supplied them.
+        defer {
+            api.free_string(name)
+            api.free_string(collection)
+        }
+        try check(status, error)
+        guard let rawName = name else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine reported no resource identity.")
+        }
+        return ResourceIdentity(name: String(cString: rawName),
+                                collection: collection.map { String(cString: $0) },
+                                isInternal: isInternal)
+    }
+
+    /// The handle of the resource of `kind` that `identity` names, as
+    /// `resourceIdentifiers(_:)` reported it. The match is exactly the
+    /// engine's own: `collection` (nil and "" are distinct) and
+    /// `isInternal` must agree, and for non-internal resources the name
+    /// too. An internal resource's name is not compared (its display name
+    /// is localized), and there is no name-only fallback for the rest.
+    /// Throws NOT_FOUND when no resource of `kind` carries the identity.
+    func resolveResource(_ identity: ResourceIdentity, kind: ResourceKind) throws -> ResourceID {
+        guard !identity.name.utf8.contains(0), identity.collection?.utf8.contains(0) != true else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The resource identity contains invalid text.")
+        }
+        var handle: ResourceID = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try withOptionalCString(identity.name) { name in
+            try withOptionalCString(identity.collection) { collection in
+                try check(api.resource_resolve(engine, kind.rawValue, name, collection,
+                                               identity.isInternal, &handle, &error), error)
+            }
+        }
+        return handle
+    }
+
+    /// The facade kind of an engine row; unknown kind values never reach
+    /// the interface.
+    private static func resourceKind(_ raw: UInt32) throws -> ResourceKind {
+        guard let kind = ResourceKind(rawValue: raw) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The engine returned an unknown resource kind.")
+        }
+        return kind
+    }
+
     // MARK: Helpers
 
     private func check(_ status: GlimsStatus, _ error: UnsafeMutablePointer<CChar>?) throws {

@@ -42,7 +42,7 @@ load_profile (const char *path, GimpColorProfile **out, char **error)
     return GLIMS_STATUS_OK;
   if (! *path || ! g_utf8_validate (path, -1, NULL) || ! g_path_is_absolute (path))
     {
-      if (error) *error = g_strdup ("Choose a color profile file using its full path.");
+      if (error) *error = strdup ("Choose a color profile file using its full path.");
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
   file = g_file_new_for_path (path);
@@ -99,6 +99,15 @@ glims_image_convert_profile (GlimsEngine *engine, GlimsImageID id,
   if (! profile_intent (intent_value, &intent)) return GLIMS_STATUS_INVALID_ARGUMENT;
   status = glims_edit_ready (engine, open, error);
   if (status != GLIMS_STATUS_OK) return status;
+  /* The native indexed-colormap path uses babl restriction and ignores
+   * rendering intent and black-point compensation. Do not claim those
+   * requested conversion settings were applied. RGB/gray use the full
+   * native color transform; convert an indexed image to RGB first. */
+  if (gimp_image_get_base_type (open->image) == GIMP_INDEXED)
+    {
+      if (error) *error = strdup ("Convert the indexed image to RGB before converting its color profile.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
   status = load_profile (path, &profile, error);
   if (status != GLIMS_STATUS_OK) return status;
   if (! profile)
@@ -106,7 +115,7 @@ glims_image_convert_profile (GlimsEngine *engine, GlimsImageID id,
       profile = gimp_image_get_builtin_color_profile (open->image);
       if (! profile)
         {
-          if (error) *error = g_strdup ("This image has no builtin color profile to convert to.");
+          if (error) *error = strdup ("This image has no builtin color profile to convert to.");
           return GLIMS_STATUS_UNSUPPORTED;
         }
       g_object_ref (profile);
