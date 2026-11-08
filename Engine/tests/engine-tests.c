@@ -8979,17 +8979,16 @@ test_guides (const char *work)
          "a closed image refuses guide calls");
 }
 
-/* Grid comparison: doubles and color components round-trip through
- * non-linear sRGB exactly, but compare with a small epsilon so a future
- * engine's color space conversion is caught as a value change, not a
- * crash. */
+/* Grid geometry remains double precision. GeglColor's RGBA-with-space
+ * accessors store float components, so color comparisons allow float
+ * rounding (well below a single 8-bit channel step). */
 static int
 grid_color_near (const GlimsColor *a, const GlimsColor *b)
 {
-  return fabs (a->red - b->red)         <= 1e-9 &&
-         fabs (a->green - b->green)     <= 1e-9 &&
-         fabs (a->blue - b->blue)       <= 1e-9 &&
-         fabs (a->alpha - b->alpha)     <= 1e-9;
+  return fabs (a->red - b->red)         <= 1e-7 &&
+         fabs (a->green - b->green)     <= 1e-7 &&
+         fabs (a->blue - b->blue)       <= 1e-7 &&
+         fabs (a->alpha - b->alpha)     <= 1e-7;
 }
 
 static int
@@ -9090,7 +9089,9 @@ test_grid (const char *work)
       error = NULL;
       read = grid_read (image);
       CHECK (grid_near (&read, &want),
-             "style %u reads back with its numbers, colors and alpha", styles[i]);
+             "style %u reads back with its numbers, colors and alpha (fg %.9g/%.9g/%.9g/%.9g)",
+             styles[i], read.foreground.red, read.foreground.green,
+             read.foreground.blue, read.foreground.alpha);
     }
 
   /* Undo and redo walk the grid changes one step at a time. */
@@ -9243,11 +9244,15 @@ test_grid (const char *work)
          api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_OK,
          "grid changes work again after the stroke ends");
   api->image_undo (engine, image);
-  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, &error) == GLIMS_STATUS_OK &&
-         api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_BUSY &&
-         api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+  grid.spacing_x += 1.0; /* A real change: identical settings are a no-op. */
+  status = api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, &error);
+  CHECK (status == GLIMS_STATUS_OK &&
+         api->image_set_grid (engine, image, &grid, NULL) == GLIMS_STATUS_BUSY,
          "image_set_grid during a filter preview is BUSY%s%s",
          error ? ": " : "", error ? error : "");
+  if (status == GLIMS_STATUS_OK)
+    CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+           "the grid busy fixture always closes its filter preview");
   api->free_string (error);
   error = NULL;
 

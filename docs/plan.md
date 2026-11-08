@@ -2145,3 +2145,15 @@ history/dirty state on reads and profile-assignment Undo/Redo appearance.
 No production renderer change was needed. This verifies the in-gamut sRGB
 path; physical monitor calibration, wide-gamut/HDR output, proof profiles,
 proof intents and gamut warnings remain unverified or unimplemented.
+
+Grid integration validation passes 1,380 / 1,269 / 1,380 / 1,380 native
+checks on GIMP 3.2.8 / 3.0.8 / 3.2.0 / master. The initial failures were
+fixture errors: the color oracle required double precision although
+GEGL's RGBA-with-space accessors store floats, and the preview busy probe
+submitted an identical no-op and short-circuited its cleanup. Color
+comparisons now allow float rounding; the busy probe requests a genuine
+change and always closes its preview. No production grid code changed.
+Independent review found no important issue. Nondefault unit retention
+is verified from clone semantics in the sources; it is not directly
+covered by the facade-only XCF fixture. Swift/cache runtime follows with
+the configuration interface.
