@@ -1003,6 +1003,452 @@ test_layer_source (const char *work)
   api->image_close (engine, image);
 }
 
+/* RESTORE_SOURCE: the inverse of RASTERIZE for retained sources. Exact
+ * oracles: edited pixels -> source restoration -> UNDO brings back the
+ * exact edited pixels and the retained raster state -> REDO restores the
+ * source again; an already editable instance is a no-op without history;
+ * selection, bounds, item id, source kind and mask attachment survive;
+ * refusals happen before any mutation; own and inherited locks refuse;
+ * the text path runs on every engine (3.0's modified-flag restore
+ * included), the vector and link paths on GIMP 3.2+ — including the
+ * painted link whose generic rasterizable flag stayed FALSE (the monitor
+ * stopped) and the link policies for a changed or a missing file: the
+ * file is reloaded when readable, on a read failure the retained source
+ * buffer is kept and monitoring resumes; a missing file is not an
+ * error. */
+static void
+test_layer_restore_source (const char *work)
+{
+  GlimsImageID         image = 0, other = 0, link_image = 0, saved = 0;
+  GlimsItemID          layer = 0, other_layer = 0, group = 0, text = 0;
+  GlimsItemID          path = 0, vector = 0, link = 0, painted = 0, reloaded = 0, gone = 0, foreign = 0;
+  GlimsLayerInfo       row = { 0 };
+  GlimsLayerSourceInfo info;
+  GlimsTextSettings    settings = { .struct_size = sizeof settings, .size = 24,
+                                     .color = { 0, 0, 0, 1 }, .justify = GLIMS_JUSTIFY_LEFT,
+                                     .antialias = true };
+  GlimsSubpath         square[1] = { { .count = 4, .closed = true } };
+  GlimsPathPoint       points[4] = { corner (20, 20), corner (80, 20), corner (80, 80), corner (20, 80) };
+  GlimsBrushSettings   brush = brush_for (GLIMS_PAINT_PENCIL, 8);
+  GlimsStrokePoint     point = { .x = 30, .y = 30, .pressure = 1.0 };
+  GlimsStrokeID        stroke = 0;
+  GlimsFilterID        filter = 0;
+  GlimsRect            bounds_before = { 0 }, link_bounds = { 0 }, sel_before = { 0 };
+  bool                 sel_empty = true;
+  GlimsFillSettings    red  = { .struct_size = sizeof red,  .mode = GLIMS_FILL_SELECTION,
+                                .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  GlimsFillSettings    blue = { .struct_size = sizeof blue, .mode = GLIMS_FILL_SELECTION,
+                                .color = { 0, 0, 1, 1 }, .opacity = 1 };
+  int32_t              before, w = 0, h = 0, w2 = 0, h2 = 0;
+  char                *fonts = NULL, *error = NULL, *newline, png[1024], png2[1024], png3[1024];
+  uint8_t             *shot = NULL, *edited = NULL, *after = NULL;
+  int                  vectors, links;
+
+  vectors = supports_vector_layers ();
+  links   = supports_link_layers ();
+
+  CHECK (api->fonts (engine, &fonts) == GLIMS_STATUS_OK && fonts && *fonts,
+         "the engine lists fonts for the restore tests");
+  if (! fonts || ! *fonts)
+    {
+      api->free_string (fonts);
+      return;
+    }
+  if (strstr (fonts, "Sans-serif\n") == fonts || strstr (fonts, "\nSans-serif\n"))
+    strcpy (settings.font, "Sans-serif");
+  else
+    {
+      newline = strchr (fonts, '\n');
+      snprintf (settings.font, sizeof settings.font, "%.*s",
+                (int) (newline ? newline - fonts : (ptrdiff_t) strlen (fonts)), fonts);
+    }
+  api->free_string (fonts);
+
+  api->image_new (engine, 200, 120, &image, NULL);
+  layer = first_layer (image);
+  api->image_new (engine, 60, 40, &other, NULL);
+  other_layer = first_layer (other);
+  api->create_group (engine, image, 0, 0, "Group", &group, NULL);
+
+  /* Refusals come before any mutation. */
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_RESTORE_SOURCE, NULL, &error)
+           == GLIMS_STATUS_UNSUPPORTED && error &&
+         api->layer_command (engine, image, group, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL)
+           == GLIMS_STATUS_UNSUPPORTED &&
+         api->layer_command (engine, image, 4242, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL)
+           == GLIMS_STATUS_NOT_FOUND &&
+         api->layer_command (engine, image, other_layer, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL)
+           == GLIMS_STATUS_NOT_FOUND &&
+         api->layer_command (engine, 4242, layer, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL)
+           == GLIMS_STATUS_NOT_FOUND &&
+         undo_depth (image) == before,
+         "pixels and groups are UNSUPPORTED, stale/foreign/unknown ids NOT_FOUND (%s)",
+         error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* A genuine text layer: an already editable instance is a no-op. */
+  CHECK (api->text_layer_new (engine, image, "Hi", &settings, (GlimsPoint) { 10, 10 },
+                            &text, NULL) == GLIMS_STATUS_OK && text != 0,
+         "the text layer for the restore tests exists");
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before &&
+         api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
+         info.source_kind == GLIMS_LAYER_TEXT && ! info.is_rasterized && info.has_source,
+         "restore on an already editable text is a no-op without history");
+
+  /* Rasterize explicitly (the genuine rasterizable flag goes TRUE on
+   * 3.2+, the modified flag on 3.0), paint over the pixels, then restore:
+   * edited pixels -> source restoration -> undo -> edited pixels and the
+   * retained raster state -> redo -> source again. */
+  api->layer_select (engine, image, text);
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 0, 0 }, { 150, 90 } }, 2, NULL);
+  api->selection_bounds (engine, image, &sel_empty, &sel_before);
+  CHECK (source_test_row (image, text, &row), "the text restore row resolves by identity");
+  bounds_before = row.bounds;
+  shot = render_all (image, &w, &h);
+
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "the explicit rasterize before the restore is one undo step");
+  CHECK (api->layer_mask_add (engine, image, text, GLIMS_MASK_WHITE, false, NULL, NULL) == GLIMS_STATUS_OK,
+         "a mask attaches to the rasterized text");
+  CHECK (stroke_line (image, text, &brush, 12, 14, 60, 14, &error) == GLIMS_STATUS_OK,
+         "painting over the rasterized text edits its pixels%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  edited = render_all (image, &w2, &h2);
+  CHECK (shot && edited && w == w2 && h == h2 &&
+         memcmp (shot, edited, (size_t) w * h * 4) != 0,
+         "the paint changed the composite");
+  CHECK (api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
+         info.source_kind == GLIMS_LAYER_TEXT && info.is_rasterized && info.has_source,
+         "the painted text keeps its TEXT source kind and retained text");
+
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "restore is one undo step");
+  CHECK (api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
+         info.source_kind == GLIMS_LAYER_TEXT && ! info.is_rasterized && info.has_source &&
+         source_test_row (image, text, &row) && row.id == text && row.kind == GLIMS_LAYER_TEXT &&
+         row.has_mask &&
+         rect_equals (row.bounds, bounds_before.x, bounds_before.y,
+                      bounds_before.width, bounds_before.height),
+         "restore returns the editable text: same id, TEXT source kind, mask and bounds kept");
+  after = render_all (image, &w2, &h2);
+  CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
+         "the composite is pixel-identical to the source render after the restore");
+  free (after);
+  after = NULL;
+  {
+    bool      empty = false;
+    GlimsRect sel   = { 0 };
+
+    CHECK (api->selection_bounds (engine, image, &empty, &sel) == GLIMS_STATUS_OK &&
+           empty == sel_empty && rect_equals (sel, sel_before.x, sel_before.y,
+                                              sel_before.width, sel_before.height),
+           "the selection is unchanged by the restore");
+  }
+
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
+         info.source_kind == GLIMS_LAYER_TEXT && info.is_rasterized && info.has_source &&
+         source_test_row (image, text, &row) && row.kind == GLIMS_LAYER_PIXEL,
+         "undo returns the retained raster state");
+  after = render_all (image, &w2, &h2);
+  CHECK (edited && after && w == w2 && h == h2 && memcmp (edited, after, (size_t) w * h * 4) == 0,
+         "undo brings back the exact edited pixels");
+  free (after);
+  after = NULL;
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->layer_source_info (engine, image, text, &info, NULL) == GLIMS_STATUS_OK &&
+         ! info.is_rasterized && info.has_source &&
+         source_test_row (image, text, &row) && row.kind == GLIMS_LAYER_TEXT,
+         "redo restores the source again");
+  after = render_all (image, &w2, &h2);
+  CHECK (shot && after && w == w2 && h == h2 && memcmp (shot, after, (size_t) w * h * 4) == 0,
+         "redo re-renders the source pixel-identically");
+  free (after);
+  free (shot);
+  free (edited);
+  shot = edited = after = NULL;
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+
+  /* Locks refuse before mutation; a group's inherited lock counts. */
+  api->set_layer_locks (engine, image, text, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION,
+                        GLIMS_LOCK_PIXELS, NULL);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_LOCKED,
+         "a pixel lock refuses restore");
+  api->set_layer_locks (engine, image, text, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION,
+                        GLIMS_LOCK_POSITION, NULL);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_LOCKED,
+         "a position lock refuses restore");
+  api->set_layer_locks (engine, image, text, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, 0, NULL);
+  api->reparent_layer (engine, image, text, group, 0, NULL);
+  api->set_layer_locks (engine, image, group, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL);
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_LOCKED &&
+         undo_depth (image) == before,
+         "an inherited group pixel lock refuses restore without an undo step");
+  api->set_layer_locks (engine, image, group, GLIMS_LOCK_PIXELS, 0, NULL);
+  api->reparent_layer (engine, image, text, 0, 0, NULL);
+
+  /* An open stroke or filter session makes the command BUSY. */
+  if (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK)
+    {
+      CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_BUSY,
+             "restore is BUSY during a stroke");
+      api->stroke_end (engine, stroke);
+    }
+  else
+    CHECK (0, "the stroke for the restore busy check began");
+  if (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK)
+    {
+      CHECK (api->layer_command (engine, image, text, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_BUSY,
+             "restore is BUSY during a filter preview");
+      api->filter_abort (engine, filter);
+    }
+  else
+    CHECK (0, "the filter session for the restore busy check opened");
+
+  if (vectors)
+    {
+      /* A genuine vector layer: same contract through the path source
+       * (the genuine rasterizable flag is TRUE after rasterize). */
+      CHECK (api->path_set (engine, image, 0, "Shape", square, 1, points, 4, &path, NULL) == GLIMS_STATUS_OK &&
+             api->path_to_vector_layer (engine, image, path, "Vector", &vector, NULL) == GLIMS_STATUS_OK,
+             "the vector layer for the restore tests exists");
+      before = undo_depth (image);
+      CHECK (api->layer_command (engine, image, vector, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (image) == before,
+             "restore on an editable vector is a no-op without history");
+      shot = render_all (image, &w, &h);
+      before = undo_depth (image);
+      CHECK (api->layer_command (engine, image, vector, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (image) == before + 1,
+             "the vector rasterizes in one undo step");
+      CHECK (stroke_line (image, vector, &brush, 25, 25, 75, 75, &error) == GLIMS_STATUS_OK,
+             "painting over the rasterized vector edits its pixels%s%s",
+             error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      edited = render_all (image, &w2, &h2);
+      CHECK (shot && edited && memcmp (shot, edited, (size_t) w * h * 4) != 0,
+             "the paint changed the vector's composite");
+      before = undo_depth (image);
+      CHECK (api->layer_command (engine, image, vector, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (image) == before + 1 &&
+             api->layer_source_info (engine, image, vector, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_VECTOR && ! info.is_rasterized && info.has_source &&
+             source_test_row (image, vector, &row) && row.kind == GLIMS_LAYER_VECTOR,
+             "restore regenerates the vector from its path in one undo step");
+      after = render_all (image, &w2, &h2);
+      CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
+             "the vector's composite is pixel-identical to the source render");
+      free (after);
+      after = NULL;
+      CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+             api->layer_source_info (engine, image, vector, &info, NULL) == GLIMS_STATUS_OK &&
+             info.is_rasterized && source_test_row (image, vector, &row) && row.kind == GLIMS_LAYER_PIXEL,
+             "undo returns the rasterized vector");
+      after = render_all (image, &w2, &h2);
+      CHECK (edited && after && memcmp (edited, after, (size_t) w * h * 4) == 0,
+             "undo brings back the exact edited vector pixels");
+      free (after);
+      after = NULL;
+      CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+             ! (api->layer_source_info (engine, image, vector, &info, NULL) == GLIMS_STATUS_OK &&
+                info.is_rasterized),
+             "redo restores the vector source again");
+      free (shot);
+      free (edited);
+      shot = edited = NULL;
+    }
+
+  if (links)
+    {
+      /* Link layers on their own image, so the composite is just the
+       * background and the link. Three source PNGs: one for the
+       * explicit-rasterize restore, one whose file is rewritten before
+       * the restore (reload policy), one whose file is deleted before
+       * the restore (retained-buffer policy). */
+      snprintf (png, sizeof png, "%s/restore-link.png", work);
+      snprintf (png2, sizeof png2, "%s/restore-link-reload.png", work);
+      snprintf (png3, sizeof png3, "%s/restore-link-gone.png", work);
+      CHECK (api->image_new (engine, 40, 30, &saved, NULL) == GLIMS_STATUS_OK &&
+             api->fill (engine, saved, (GlimsPoint) { 0, 0 }, &red, NULL) == GLIMS_STATUS_OK &&
+             api->image_export (engine, saved, png, NULL) == GLIMS_STATUS_OK &&
+             api->image_export (engine, saved, png2, NULL) == GLIMS_STATUS_OK &&
+             api->image_export (engine, saved, png3, NULL) == GLIMS_STATUS_OK &&
+             api->image_close (engine, saved) == GLIMS_STATUS_OK,
+             "the source PNGs for the link restore tests are exported");
+      saved = 0;
+      api->image_new (engine, 200, 120, &link_image, NULL);
+
+      /* Explicit rasterize puts the genuine flag TRUE: restore goes
+       * through gimp_rasterizable_restore and remonitors. */
+      CHECK (api->image_place_link (engine, link_image, png, &link, NULL) == GLIMS_STATUS_OK && link != 0,
+             "the link for the explicit-rasterize restore exists");
+      shot = render_all (link_image, &w, &h);
+      before = undo_depth (link_image);
+      CHECK (api->layer_command (engine, link_image, link, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (link_image) == before + 1 &&
+             api->layer_source_info (engine, link_image, link, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_LINK && info.is_rasterized && info.has_source,
+             "the link rasterizes with its link retained");
+      before = undo_depth (link_image);
+      CHECK (api->layer_command (engine, link_image, link, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (link_image) == before + 1 &&
+             api->layer_source_info (engine, link_image, link, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_LINK && ! info.is_rasterized && info.has_source &&
+             source_test_row (link_image, link, &row) && row.kind == GLIMS_LAYER_LINK,
+             "restore after the explicit rasterize remonitors the link in one undo step");
+      after = render_all (link_image, &w2, &h2);
+      CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
+             "the remonitored link re-renders pixel-identically");
+      free (after);
+      after = NULL;
+      CHECK (api->image_undo (engine, link_image) == GLIMS_STATUS_OK &&
+             api->layer_source_info (engine, link_image, link, &info, NULL) == GLIMS_STATUS_OK &&
+             info.is_rasterized,
+             "undo rasterizes the link again");
+      api->image_redo (engine, link_image);
+      free (shot);
+      shot = NULL;
+
+      /* A painted link: pixel edits stop the monitor while the generic
+       * rasterizable flag stays FALSE — the manual restore path. */
+      CHECK (api->image_place_link (engine, link_image, png, &painted, NULL) == GLIMS_STATUS_OK && painted != 0,
+             "the painted link exists");
+      CHECK (source_test_row (link_image, painted, &row), "the painted link row resolves by identity");
+      link_bounds = row.bounds;
+      shot = render_all (link_image, &w, &h);
+      CHECK (stroke_line (link_image, painted, &brush,
+                          link_bounds.x + 2, link_bounds.y + 2,
+                          link_bounds.x + link_bounds.width - 2, link_bounds.y + link_bounds.height - 2,
+                          &error) == GLIMS_STATUS_OK,
+             "painting over the link layer edits its pixels%s%s",
+             error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      edited = render_all (link_image, &w2, &h2);
+      CHECK (shot && edited && memcmp (shot, edited, (size_t) w * h * 4) != 0,
+             "the paint changed the link's composite");
+      CHECK (api->layer_source_info (engine, link_image, painted, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_LINK && info.is_rasterized && info.has_source &&
+             source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_PIXEL,
+             "the painted link is pixel-behaving (monitor stopped) with its link retained");
+      before = undo_depth (link_image);
+      CHECK (api->layer_command (engine, link_image, painted, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (link_image) == before + 1 &&
+             api->layer_source_info (engine, link_image, painted, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_LINK && ! info.is_rasterized && info.has_source &&
+             source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_LINK,
+             "restore of the painted link (flag FALSE) regenerates the source in one undo step");
+      after = render_all (link_image, &w2, &h2);
+      CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
+             "the painted pixels are discarded and the retained source renders again");
+      free (after);
+      after = NULL;
+      CHECK (api->image_undo (engine, link_image) == GLIMS_STATUS_OK &&
+             api->layer_source_info (engine, link_image, painted, &info, NULL) == GLIMS_STATUS_OK &&
+             info.is_rasterized && source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_PIXEL,
+             "undo stops the monitor again (retained raster state)");
+      after = render_all (link_image, &w2, &h2);
+      CHECK (edited && after && memcmp (edited, after, (size_t) w * h * 4) == 0,
+             "undo restores the exact painted link pixels");
+      free (after);
+      after = NULL;
+      CHECK (api->image_redo (engine, link_image) == GLIMS_STATUS_OK &&
+             api->layer_source_info (engine, link_image, painted, &info, NULL) == GLIMS_STATUS_OK &&
+             ! info.is_rasterized && source_test_row (link_image, painted, &row) && row.kind == GLIMS_LAYER_LINK,
+             "redo restores the link source again");
+      after = render_all (link_image, &w2, &h2);
+      CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
+             "redo re-renders the source pixel-identically");
+      free (after);
+      free (shot);
+      free (edited);
+      shot = edited = after = NULL;
+
+      /* Reload policy: the file is rewritten between the paint and the
+       * restore — the restore reloads it. */
+      CHECK (api->image_place_link (engine, link_image, png2, &reloaded, NULL) == GLIMS_STATUS_OK && reloaded != 0,
+             "the reload-test link exists");
+      CHECK (source_test_row (link_image, reloaded, &row), "the reload link row resolves by identity");
+      link_bounds = row.bounds;
+      CHECK (stroke_line (link_image, reloaded, &brush,
+                          link_bounds.x + 2, link_bounds.y + 2,
+                          link_bounds.x + link_bounds.width - 2, link_bounds.y + link_bounds.height - 2,
+                          NULL) == GLIMS_STATUS_OK,
+             "the reload-test link is painted over");
+      CHECK (api->image_new (engine, 40, 30, &saved, NULL) == GLIMS_STATUS_OK &&
+             api->fill (engine, saved, (GlimsPoint) { 0, 0 }, &blue, NULL) == GLIMS_STATUS_OK &&
+             api->image_export (engine, saved, png2, NULL) == GLIMS_STATUS_OK &&
+             api->image_close (engine, saved) == GLIMS_STATUS_OK,
+             "the link file is rewritten in blue before the restore");
+      saved = 0;
+      CHECK (api->layer_command (engine, link_image, reloaded, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
+             api->layer_source_info (engine, link_image, reloaded, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_LINK && ! info.is_rasterized && info.has_source,
+             "restore succeeds while the file is readable again");
+      after = render_all (link_image, &w2, &h2);
+      CHECK (after && pixel_at (after, w2, link_bounds.x + link_bounds.width / 2,
+                                link_bounds.y + link_bounds.height / 2)[2] == 255 &&
+             pixel_at (after, w2, link_bounds.x + link_bounds.width / 2,
+                       link_bounds.y + link_bounds.height / 2)[0] == 0,
+             "the restore reloaded the changed file (blue, not the retained red)");
+      free (after);
+      after = NULL;
+
+      /* Retained-buffer policy: the file is deleted between the paint
+       * and the restore — the read fails, the retained source buffer is
+       * kept and monitoring resumes; a missing file is not an error. */
+      CHECK (api->image_place_link (engine, link_image, png3, &gone, NULL) == GLIMS_STATUS_OK && gone != 0,
+             "the missing-file link exists");
+      CHECK (source_test_row (link_image, gone, &row), "the missing-file link row resolves by identity");
+      link_bounds = row.bounds;
+      shot = render_all (link_image, &w, &h);
+      CHECK (stroke_line (link_image, gone, &brush,
+                          link_bounds.x + 2, link_bounds.y + 2,
+                          link_bounds.x + link_bounds.width - 2, link_bounds.y + link_bounds.height - 2,
+                          NULL) == GLIMS_STATUS_OK,
+             "the missing-file link is painted over");
+      CHECK (unlink (png3) == 0, "the link file is deleted before the restore");
+      before = undo_depth (link_image);
+      CHECK (api->layer_command (engine, link_image, gone, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (link_image) == before + 1 &&
+             api->layer_source_info (engine, link_image, gone, &info, NULL) == GLIMS_STATUS_OK &&
+             info.source_kind == GLIMS_LAYER_LINK && ! info.is_rasterized && info.has_source &&
+             source_test_row (link_image, gone, &row) && row.kind == GLIMS_LAYER_LINK,
+             "restore with a missing file keeps the retained buffer and resumes monitoring");
+      after = render_all (link_image, &w2, &h2);
+      CHECK (shot && after && memcmp (shot, after, (size_t) w * h * 4) == 0,
+             "the retained source buffer renders exactly as before the paint");
+      free (after);
+      free (shot);
+      shot = after = NULL;
+
+      api->image_close (engine, link_image);
+      link_image = 0;
+    }
+
+  /* A closed image's layer id is NOT_FOUND. */
+  foreign = other_layer;
+  api->image_close (engine, other);
+  CHECK (api->layer_command (engine, image, foreign, GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a closed image's layer id is NOT_FOUND for restore");
+  other = 0;
+
+  api->image_close (engine, image);
+}
+
 static void
 test_transforms (void)
 {
@@ -9175,6 +9621,7 @@ main (int argc, char **argv)
   test_editing ();
   test_layer_fit_trim ();
   test_layer_source (argv[2]);
+  test_layer_restore_source (argv[2]);
   test_clipboard ();
   test_clear_srgb_and_readiness (argv[3]);
   test_render_freshness ();

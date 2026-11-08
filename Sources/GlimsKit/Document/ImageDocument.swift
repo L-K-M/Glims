@@ -715,6 +715,13 @@ final class ImageDocument {
             guard !isMaskTargetActive else { return refuseMaskEdit() }
             guard !isChannelTargetActive else { return refuseChannelTransform() }
             run { session, image in _ = try session.layerCommand(command, image: image) }
+        case .restoreSource:
+            // The root owns the global confirmed-restore dispatch; until
+            // it exists, the ordinary command refuses instead of letting
+            // native file I/O (a link restore can reload its file) run
+            // through the input queue.
+            onError?("Use the confirmed restore command.")
+            NSSound.beep()
         }
     }
 
