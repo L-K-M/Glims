@@ -293,10 +293,11 @@ extension EngineSmokeTest {
         editableField(sheetA, "New tag name")?.stringValue = "Iptc.Application2.Credit"
         button(sheetA, "Add tag")?.performClick(nil)
         settle(docA)
+        let tagsBeforeNewApply = try session.metadataTags(imageA, domain: .iptc)
         check(metaSheetA.selectedTag == "Iptc.Application2.Credit"
                 && editorA.string.isEmpty && metaSheetA.numberOfRows(in: valuesTableA) == 1
                 && docA.undoInfo.undoCount == beforeNewTag
-                && !(try session.metadataTags(imageA, domain: .iptc)).contains("Iptc.Application2.Credit"),
+                && !tagsBeforeNewApply.contains("Iptc.Application2.Credit"),
               "Add Tag validates a registered name and starts an unapplied local draft without native changes")
         setEditor(metaSheetA, editorA, "Credit Line")
         button(sheetA, "Apply metadata values")?.performClick(nil)
