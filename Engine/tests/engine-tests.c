@@ -6656,6 +6656,519 @@ test_resource_thumbnails (void)
     }
 }
 
+/* Pattern fill (fill_pattern), through the facade only. The independent
+ * pixel oracle is a resource_thumbnail of a stock opaque pattern at its
+ * native size: a thumbnail requested at 512 comes back below 512 only
+ * at the pattern's own dimensions (the preview never up-scales), so the
+ * tile below is exact. The native preview and the native fill are two
+ * independent render paths; opaque patterns avoid any alpha or gamma
+ * ambiguity between them. */
+static int
+find_opaque_patterns (GlimsResourceID ids[2], GlimsPixelBuffer thumbs[2])
+{
+  GlimsResourceInfo *rows = NULL;
+  int32_t count = 0, i;
+  int     found = 0;
+
+  if (api->resources (engine, GLIMS_RESOURCE_PATTERN, NULL, 0, &count) != GLIMS_STATUS_OK || count < 1)
+    return 0;
+  rows = calloc ((size_t) count, sizeof *rows);
+  if (api->resources (engine, GLIMS_RESOURCE_PATTERN, rows, count, &count) != GLIMS_STATUS_OK)
+    count = 0;
+
+  for (i = 0; i < count && found < 2; i++)
+    {
+      GlimsPixelBuffer buf = { 0 };
+      int32_t          w, h;
+      int              j, opaque = 1, varied = 0;
+
+      if (api->resource_thumbnail (engine, rows[i].id, 512, NULL, NULL, &buf, NULL) != GLIMS_STATUS_OK ||
+          ! buf.pixels)
+        continue;
+      w = buf.bounds.width;
+      h = buf.bounds.height;
+      if (w < 4 || h < 4 || w >= 512 || h >= 512)
+        {
+          api->free_pixels (buf.pixels);
+          continue;
+        }
+      for (j = 0; j < w * h; j++)
+        {
+          if (buf.pixels[j * 4 + 3] != 255)
+            opaque = 0;
+          if (j > 0 && memcmp (&buf.pixels[j * 4], buf.pixels, 4) != 0)
+            varied = 1;
+        }
+      if (! opaque || ! varied || (found == 1 && ! buffer_differs (&thumbs[0], &buf)))
+        {
+          api->free_pixels (buf.pixels);
+          continue;
+        }
+      ids[found]   = rows[i].id;
+      thumbs[found] = buf;
+      found++;
+    }
+
+  free (rows);
+  return found;
+}
+
+/* The worst per-channel difference between the rendered `region` and
+ * the thumbnail tiled from the drawable origin (`origin_x`, `origin_y`):
+ * image pixel (x, y) must show thumbnail pixel ((x - origin_x) mod w,
+ * (y - origin_y) mod h). Two native paths meet here (preview vs. fill),
+ * so a small rounding difference is allowed. */
+static int
+tiled_region_diff (GlimsImageID image, GlimsRect region, int32_t origin_x, int32_t origin_y,
+                   const GlimsPixelBuffer *thumb, int *covered_out)
+{
+  uint8_t *pixels;
+  int32_t  tw = thumb->bounds.width, th = thumb->bounds.height;
+  int32_t  x, y;
+  int      worst = 0, covered = 0;
+
+  *covered_out = 0;
+  pixels = calloc ((size_t) region.width * region.height, 4);
+  if (! pixels)
+    return 256;
+  if (api->image_render (engine, image, 1.0, region, pixels, (size_t) region.width * 4) != GLIMS_STATUS_OK)
+    {
+      free (pixels);
+      return 256;
+    }
+
+  for (y = 0; y < region.height; y++)
+    for (x = 0; x < region.width; x++)
+      {
+        int px = (int) (((region.x + x - origin_x) % tw + tw) % tw);
+        int py = (int) (((region.y + y - origin_y) % th + th) % th);
+        const uint8_t *got  = pixels + ((size_t) y * region.width + x) * 4;
+        const uint8_t *want = thumb->pixels + ((size_t) py * tw + px) * 4;
+        int c, d;
+
+        covered++;
+        for (c = 0; c < 4; c++)
+          if ((d = abs ((int) got[c] - (int) want[c])) > worst)
+            worst = d;
+      }
+
+  free (pixels);
+  *covered_out = covered;
+  return worst;
+}
+
+static void
+test_pattern_fill (void)
+{
+  GlimsResourceID          patterns[2] = { 0, 0 };
+  GlimsPixelBuffer         thumbs[2]   = { { 0 }, { 0 } };
+  GlimsPatternFillSettings settings    = { .struct_size = sizeof settings, .mode = GLIMS_FILL_SELECTION,
+                                            .opacity = 1, .threshold = 0.1, .antialias = true };
+  GlimsImageID   image = 0, scratch = 0;
+  GlimsItemID    layer, layer2 = 0, mask = 0, channel = 0;
+  GlimsStrokeID  stroke = 0;
+  GlimsFilterID  filter = 0;
+  int32_t        pw, ph, W, H, before, worst, covered, w1, h1;
+  uint8_t        px[4] = { 0 };
+  uint8_t       *renderA = NULL, *renderB = NULL, *renderBefore = NULL;
+  char          *error = NULL;
+  int            found = find_opaque_patterns (patterns, thumbs);
+
+  CHECK (found == 2,
+         "two distinct stock opaque patterns render a thumbnail at native size below 512 (%d found)", found);
+  if (found != 2)
+    goto out;
+
+  pw = MAX (thumbs[0].bounds.width, thumbs[1].bounds.width);
+  ph = MAX (thumbs[0].bounds.height, thumbs[1].bounds.height);
+  W  = pw + 16;   /* one full tile plus overflow: the fill tiles across the image */
+  H  = ph + 16;
+
+  CHECK (api->image_new (engine, W, H, &image, NULL) == GLIMS_STATUS_OK, "pattern-fill image %dx%d", W, H);
+  layer  = first_layer (image);
+  before = undo_depth (image);
+
+  /* The tiled oracle: a full-layer Selection-mode fill with pattern A. */
+  CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &settings, &error) ==
+         GLIMS_STATUS_OK, "a selection-mode pattern fill runs%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (undo_depth (image) == before + 1, "the pattern fill is one undo step (%d -> %d)",
+         before, undo_depth (image));
+  worst = tiled_region_diff (image, (GlimsRect) { 0, 0, W, H }, 0, 0, &thumbs[0], &covered);
+  CHECK (covered == W * H && worst <= 2,
+         "every pixel matches the pattern thumbnail tiled from the origin (worst channel diff %d over %d px)",
+         worst, covered);
+  renderA = render_all (image, &w1, &h1);
+  {
+    int nonwhite = 0, j;
+    for (j = 0; j < w1 * h1; j++)
+      if (renderA[j * 4] != 255 || renderA[j * 4 + 1] != 255 || renderA[j * 4 + 2] != 255)
+        nonwhite++;
+    CHECK (nonwhite > 0, "the fill visibly changed the white layer (%d of %d pixels)", nonwhite, w1 * h1);
+  }
+
+  /* Undo and redo. */
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == before,
+         "undo removes the pattern fill as one step");
+  render_pixel (image, W / 2, H / 2, px);
+  CHECK (px[0] == 255 && px[1] == 255 && px[2] == 255 && px[3] == 255,
+         "after undo the layer is white again (%d,%d,%d,%d)", px[0], px[1], px[2], px[3]);
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK, "redo reapplies the fill");
+  worst = tiled_region_diff (image, (GlimsRect) { 0, 0, W, H }, 0, 0, &thumbs[0], &covered);
+  CHECK (worst <= 2, "after redo the tiling is back (worst %d)", worst);
+
+  /* The second pattern fills differently and matches its own thumbnail. */
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->fill_pattern (engine, image, patterns[1], (GlimsPoint) { 0, 0 }, &settings, NULL) ==
+         GLIMS_STATUS_OK, "filling with the second pattern runs");
+  renderB = render_all (image, &w1, &h1);
+  CHECK (renderA && renderB && count_differences (renderA, renderB, (size_t) w1 * h1 * 4) > 0,
+         "the two patterns fill visibly differently (%d px differ)",
+         renderA && renderB ? count_differences (renderA, renderB, (size_t) w1 * h1 * 4) : -1);
+  worst = tiled_region_diff (image, (GlimsRect) { 0, 0, W, H }, 0, 0, &thumbs[1], &covered);
+  CHECK (worst <= 2, "the second fill matches its own thumbnail tiled (worst %d)", worst);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK, "undo after the second fill");
+
+  /* Selection clipping: only the selected rectangle is filled. */
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 10, 10 }, { 40, 40 } }, 2, NULL) == GLIMS_STATUS_OK,
+         "a rectangle is selected");
+  before = undo_depth (image);
+  CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &settings, NULL) ==
+         GLIMS_STATUS_OK && undo_depth (image) == before + 1,
+         "a selection-clipped pattern fill runs as one undo step");
+  render_pixel (image, 20, 20, px);
+  CHECK (!(px[0] == 255 && px[1] == 255 && px[2] == 255), "inside the selection the pixel changed (%d,%d,%d)", px[0], px[1], px[2]);
+  render_pixel (image, 60, 50, px);
+  CHECK (px[0] == 255 && px[1] == 255 && px[2] == 255, "outside the selection the pixel stayed white (%d,%d,%d)", px[0], px[1], px[2]);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == before,
+         "undo removes the clipped fill");
+  CHECK (api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL) == GLIMS_STATUS_OK, "the selection is cleared");
+
+  /* SimilarColors: the bucket fill covers only the seeded region of
+   * similar color — a painted line stays, and the region beyond it
+   * keeps the background. */
+  paint_line (image, layer, 0, W, H / 2);
+  settings.mode = GLIMS_FILL_SIMILAR_COLORS;
+  settings.antialias = false;   /* keep the region mask's edge hard, away from the line */
+  before = undo_depth (image);
+  CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 2, 2 }, &settings, NULL) ==
+         GLIMS_STATUS_OK && undo_depth (image) == before + 1,
+         "a similar-colors pattern fill runs as one undo step");
+  render_pixel (image, W / 2, H / 2, px);
+  CHECK (px[0] < 64, "the painted line keeps its color inside the filled region (%d,%d,%d)", px[0], px[1], px[2]);
+  worst = tiled_region_diff (image, (GlimsRect) { 0, 0, W, H / 2 - 8 }, 0, 0, &thumbs[0], &covered);
+  CHECK (worst <= 2, "the seeded area matches the tiled thumbnail (worst %d over %d px)", worst, covered);
+  render_pixel (image, 2, H - 2, px);
+  CHECK (px[0] == 255 && px[1] == 255 && px[2] == 255,
+         "the region beyond the line is untouched (%d,%d,%d)", px[0], px[1], px[2]);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK, "undo removes the similar-colors fill");
+  settings.mode = GLIMS_FILL_SELECTION;
+  settings.antialias = true;
+
+  /* Layer offset: the pattern is tiled from the drawable's origin, so a
+   * moved layer shifts it; outside its bounds the background shows. */
+  CHECK (api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer2, NULL) == GLIMS_STATUS_OK && layer2 > 0,
+         "a transparent layer is added and selected");
+  CHECK (api->layer_move (engine, image, layer2, 12, 8) == GLIMS_STATUS_OK, "the layer moves by 12,8");
+  CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &settings, NULL) == GLIMS_STATUS_OK,
+         "filling the moved layer runs");
+  worst = tiled_region_diff (image, (GlimsRect) { 12, 8, W - 12, H - 8 }, 12, 8, &thumbs[0], &covered);
+  CHECK (covered == (W - 12) * (H - 8) && worst <= 2,
+         "the moved layer's pixels match the thumbnail tiled from its own origin (worst %d over %d px)",
+         worst, covered);
+  render_pixel (image, 5, 5, px);
+  CHECK (px[0] == 255 && px[1] == 255 && px[2] == 255,
+         "outside the moved layer's bounds the white background shows (%d,%d,%d)", px[0], px[1], px[2]);
+  api->image_undo (engine, image);
+
+  /* Alpha lock alone does not refuse, as with painting; the engine then
+   * enforces it through the drawable's active components: on an opaque
+   * layer the fill changes color but not alpha. A pixel lock refuses
+   * outright, without touching pixels or history. */
+  {
+    GlimsFillSettings solid = { .struct_size = sizeof solid, .mode = GLIMS_FILL_SELECTION,
+                                 .color = { 1, 0, 0, 1 }, .opacity = 1 };
+
+    CHECK (api->fill (engine, image, (GlimsPoint) { 0, 0 }, &solid, NULL) == GLIMS_STATUS_OK,
+           "the moved layer is filled solid red, so it is opaque");
+  }
+  CHECK (api->set_layer_locks (engine, image, layer2, GLIMS_LOCK_ALPHA, GLIMS_LOCK_ALPHA, NULL) ==
+         GLIMS_STATUS_OK, "the alpha lock is set");
+  renderBefore = render_all (image, &w1, &h1);
+  before = undo_depth (image);
+  CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &settings, NULL) ==
+         GLIMS_STATUS_OK && undo_depth (image) == before + 1,
+         "an alpha-locked layer still accepts a pattern fill (not blanket-rejected)");
+  {
+    uint8_t *after = render_all (image, &w1, &h1);
+    int changed = renderBefore && after ? count_differences (renderBefore, after, (size_t) w1 * h1 * 4) : -1;
+    int j, alpha_kept = 1;
+
+    if (after)
+      for (j = 0; j < w1 * h1; j++)
+        if (after[j * 4 + 3] != 255)
+          alpha_kept = 0;
+    CHECK (changed > 0 && alpha_kept,
+           "the alpha-locked fill changed the color but kept alpha opaque (%d px differ, alpha %s)",
+           changed, alpha_kept ? "255 everywhere" : "changed");
+    free (after);
+  }
+  api->image_undo (engine, image);
+  api->image_undo (engine, image);   /* the solid red fill too */
+  CHECK (api->set_layer_locks (engine, image, layer2, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL) ==
+         GLIMS_STATUS_OK, "the pixel lock is set");
+  before = undo_depth (image);
+  {
+    uint8_t *locked = render_all (image, &w1, &h1);
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &settings, NULL) ==
+           GLIMS_STATUS_LOCKED && undo_depth (image) == before,
+           "a pixel-locked target is refused with LOCKED and no undo step");
+    {
+      uint8_t *after = render_all (image, &w1, &h1);
+      CHECK (locked && after && count_differences (locked, after, (size_t) w1 * h1 * 4) == 0,
+             "the refused fill changed no pixels");
+      free (after);
+    }
+    free (locked);
+  }
+  api->set_layer_locks (engine, image, layer2, GLIMS_LOCK_PIXELS | GLIMS_LOCK_ALPHA, 0, NULL);
+
+  /* Mask routing: with mask editing on, the fill lands on the mask. */
+  CHECK (api->layer_mask_add (engine, image, layer2, GLIMS_MASK_WHITE, true, &mask, NULL) == GLIMS_STATUS_OK &&
+         mask != 0, "a white mask with editing on is added");
+  {
+    uint8_t thumbBefore[32 * 32 * 4], thumbAfter[32 * 32 * 4];
+    int32_t tw = 0, th = 0;
+
+    CHECK (api->drawable_thumbnail (engine, image, mask, 32, thumbBefore, sizeof thumbBefore, &tw, &th) ==
+           GLIMS_STATUS_OK, "the mask's thumbnail renders before the fill");
+    before = undo_depth (image);
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &settings, NULL) ==
+           GLIMS_STATUS_OK && undo_depth (image) == before + 1,
+           "a pattern fill on the editing mask runs as one undo step");
+    CHECK (api->drawable_thumbnail (engine, image, mask, 32, thumbAfter, sizeof thumbAfter, &tw, &th) ==
+           GLIMS_STATUS_OK && memcmp (thumbBefore, thumbAfter, sizeof thumbBefore) != 0,
+           "the mask's thumbnail changed with the pattern");
+    CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == before,
+           "undo restores the mask");
+    api->layer_mask_set (engine, image, layer2, GLIMS_MASK_EDITING, 0, NULL);
+  }
+
+  /* Channel routing: a selected channel is the fill target. */
+  CHECK (api->select_command (engine, image, GLIMS_SELECT_ALL, 0, NULL) == GLIMS_STATUS_OK &&
+         api->channel_from_selection (engine, image, "pat", &channel, NULL) == GLIMS_STATUS_OK && channel != 0,
+         "the selection is saved as a selected channel");
+  {
+    uint8_t thumbBefore[32 * 32 * 4], thumbAfter[32 * 32 * 4];
+    int32_t tw = 0, th = 0;
+
+    CHECK (api->drawable_thumbnail (engine, image, channel, 32, thumbBefore, sizeof thumbBefore, &tw, &th) ==
+           GLIMS_STATUS_OK, "the channel's thumbnail renders before the fill");
+    before = undo_depth (image);
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &settings, NULL) ==
+           GLIMS_STATUS_OK && undo_depth (image) == before + 1,
+           "a pattern fill on the selected channel runs as one undo step");
+    CHECK (api->drawable_thumbnail (engine, image, channel, 32, thumbAfter, sizeof thumbAfter, &tw, &th) ==
+           GLIMS_STATUS_OK && memcmp (thumbBefore, thumbAfter, sizeof thumbBefore) != 0,
+           "the channel's thumbnail changed with the pattern");
+    api->image_undo (engine, image);
+    api->channel_command (engine, image, 0, GLIMS_CHANNEL_SELECT, NULL, NULL);
+    api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  }
+
+  /* Invalid handles: range, high bits, stale, wrong kind. */
+  before = undo_depth (image);
+  {
+    GlimsResourceInfo row;
+    int32_t           n = 0;
+    GlimsResourceID   brush_id = 0, gradient_id = 0;
+
+    if (api->resources (engine, GLIMS_RESOURCE_BRUSH, &row, 1, &n) == GLIMS_STATUS_OK && n > 0)
+      brush_id = row.id;
+    if (api->resources (engine, GLIMS_RESOURCE_GRADIENT, &row, 1, &n) == GLIMS_STATUS_OK && n > 0)
+      gradient_id = row.id;
+
+    CHECK (api->fill_pattern (engine, image, 0, (GlimsPoint) { 0, 0 }, &settings, NULL) ==
+           GLIMS_STATUS_INVALID_ARGUMENT &&
+           api->fill_pattern (engine, image, UINT64_MAX, (GlimsPoint) { 0, 0 }, &settings, NULL) ==
+           GLIMS_STATUS_INVALID_ARGUMENT &&
+           api->fill_pattern (engine, image, (UINT64_C (1) << 32) | patterns[0], (GlimsPoint) { 0, 0 },
+                              &settings, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+           api->fill_pattern (engine, image, 0x80000000ull, (GlimsPoint) { 0, 0 }, &settings, NULL) ==
+           GLIMS_STATUS_INVALID_ARGUMENT,
+           "zero, all-high, high-bit and above-range handles are refused");
+    CHECK (api->fill_pattern (engine, image, 0x7FFFFFFFull, (GlimsPoint) { 0, 0 }, &settings, NULL) ==
+           GLIMS_STATUS_NOT_FOUND,
+           "a well-shaped but unissued handle reports NOT_FOUND");
+    CHECK ((! brush_id || api->fill_pattern (engine, image, brush_id, (GlimsPoint) { 0, 0 }, &settings, NULL) ==
+            GLIMS_STATUS_NOT_FOUND) &&
+           (! gradient_id || api->fill_pattern (engine, image, gradient_id, (GlimsPoint) { 0, 0 }, &settings, NULL) ==
+            GLIMS_STATUS_NOT_FOUND),
+           "a brush or gradient handle is NOT_FOUND, not a pattern");
+    CHECK (undo_depth (image) == before, "the refused handles changed no history");
+  }
+
+  /* Bad settings and seeds are refused, not clamped. */
+  {
+    GlimsPatternFillSettings bad;
+
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, NULL, NULL) ==
+           GLIMS_STATUS_INVALID_ARGUMENT, "NULL settings are refused");
+    bad = settings;
+    bad.struct_size = sizeof (GlimsPatternFillSettings) - 1;
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &bad, NULL) ==
+           GLIMS_STATUS_INVALID_ARGUMENT, "a short settings struct is refused");
+    bad = settings;
+    bad.mode = 0;
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &bad, NULL) ==
+           GLIMS_STATUS_INVALID_ARGUMENT, "an unknown mode is refused");
+    bad.mode = 3;
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &bad, NULL) ==
+           GLIMS_STATUS_INVALID_ARGUMENT, "mode 3 is refused");
+    bad = settings;
+    bad.opacity = NAN;
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &bad, NULL) ==
+           GLIMS_STATUS_INVALID_ARGUMENT, "a NaN opacity is refused");
+    bad.opacity = 1.5;
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &bad, NULL) ==
+           GLIMS_STATUS_INVALID_ARGUMENT, "opacity 1.5 is refused, not clamped");
+    bad.opacity = -0.1;
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &bad, NULL) ==
+           GLIMS_STATUS_INVALID_ARGUMENT, "a negative opacity is refused");
+    bad = settings;
+    bad.threshold = 2.0;
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &bad, NULL) ==
+           GLIMS_STATUS_INVALID_ARGUMENT, "threshold 2 is refused, not clamped");
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { NAN, 0 }, &settings, NULL) ==
+           GLIMS_STATUS_INVALID_ARGUMENT, "a NaN seed is refused");
+    CHECK (api->fill_pattern (engine, -1234, patterns[0], (GlimsPoint) { 0, 0 }, &settings, NULL) ==
+           GLIMS_STATUS_NOT_FOUND, "an unknown image reports NOT_FOUND");
+    CHECK (undo_depth (image) == before, "the bad settings changed no history");
+  }
+
+  /* BUSY: an active stroke, a filter preview and a running plug-in each
+   * refuse without pixel or history changes. */
+  {
+    GlimsBrushSettings  brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+    GlimsStrokePoint    point = { 4, 4, 1.0, 0.0, 0.0, 0 };
+
+    CHECK (api->stroke_begin (engine, image, layer2, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK,
+           "a stroke starts");
+    before = undo_depth (image);
+    render_pixel (image, W / 2, H / 2, px);
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &settings, NULL) ==
+           GLIMS_STATUS_BUSY && undo_depth (image) == before,
+           "an active stroke refuses the fill with BUSY and no history change");
+    {
+      uint8_t px2[4];
+      render_pixel (image, W / 2, H / 2, px2);
+      CHECK (memcmp (px, px2, 4) == 0, "the refused fill changed no pixels");
+    }
+    api->stroke_end (engine, stroke);
+    stroke = 0;
+
+    CHECK (api->filter_begin (engine, image, layer2, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK,
+           "a filter preview opens");
+    before = undo_depth (image);
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &settings, NULL) ==
+           GLIMS_STATUS_BUSY && undo_depth (image) == before,
+           "a live filter preview refuses the fill with BUSY and no history change");
+    api->filter_abort (engine, filter);
+    filter = 0;
+
+    CHECK (api->image_new (engine, 6000, 4000, &scratch, NULL) == GLIMS_STATUS_OK,
+           "a big image keeps a plug-in busy");
+    {
+      BackgroundRun run = { 0 };
+      pthread_t     thread;
+      GlimsStatus   status = GLIMS_STATUS_OK;
+
+      run.image = scratch;
+      run.name  = "plug-in-checkerboard";
+      atomic_store (&progress_active, false);
+      pthread_create (&thread, NULL, background_run, &run);
+      wait_for_progress (&run);
+      {
+        int was_running = ! atomic_load (&run.finished);
+
+        if (was_running)
+          {
+            before = undo_depth (image);
+            status = api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &settings, NULL);
+          }
+        pthread_join (thread, NULL);
+        CHECK (! was_running || (status == GLIMS_STATUS_BUSY && undo_depth (image) == before),
+               "while a plug-in runs, the fill reports BUSY with no history change (%d)", status);
+      }
+    }
+    api->image_close (engine, scratch);
+    scratch = 0;
+  }
+
+  /* Zero opacity and an empty selection, as the native fill behaves:
+   * opacity 0 succeeds and records the undo step but changes no pixels;
+   * an empty selection succeeds as a no-op with no undo step. */
+  {
+    settings.opacity = 0;
+    before = undo_depth (image);
+    render_pixel (image, W / 2, H / 2, px);
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &settings, &error) ==
+           GLIMS_STATUS_OK, "a zero-opacity fill succeeds%s%s", error ? ": " : "", error ? error : "");
+    api->free_string (error);
+    error = NULL;
+    CHECK (undo_depth (image) == before + 1,
+           "the native fill still records the undo step at opacity 0 (%d -> %d)", before, undo_depth (image));
+    {
+      uint8_t px2[4];
+      render_pixel (image, W / 2, H / 2, px2);
+      CHECK (memcmp (px, px2, 4) == 0, "opacity 0 changed no pixels");
+    }
+    api->image_undo (engine, image);
+    settings.opacity = 1;
+
+    /* Select None means no selection at all: the whole drawable is
+     * filled, as the fill contract says. The true no-op is a selection
+     * that does not intersect the drawable. */
+    before = undo_depth (image);
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &settings, NULL) ==
+           GLIMS_STATUS_OK && undo_depth (image) == before + 1,
+           "with no selection the whole drawable is filled as one undo step");
+    api->image_undo (engine, image);
+
+    CHECK (api->layer_move (engine, image, layer2, W + 8, H + 8) == GLIMS_STATUS_OK &&
+           api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                              (GlimsPoint[]) { { 0, 0 }, { 10, 10 } }, 2, NULL) == GLIMS_STATUS_OK,
+           "the target layer moves out of the canvas and a rectangle is selected");
+    before = undo_depth (image);
+    render_pixel (image, 5, 5, px);
+    CHECK (api->fill_pattern (engine, image, patterns[0], (GlimsPoint) { 0, 0 }, &settings, &error) ==
+           GLIMS_STATUS_OK && undo_depth (image) == before,
+           "a selection disjoint from the drawable is a no-op: OK with no undo step%s%s",
+           error ? ": " : "", error ? error : "");
+    api->free_string (error);
+    error = NULL;
+    {
+      uint8_t px2[4];
+      render_pixel (image, 5, 5, px2);
+      CHECK (memcmp (px, px2, 4) == 0, "the disjoint-selection fill changed no pixels");
+    }
+    api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+    api->layer_move (engine, image, layer2, -(W + 8), -(H + 8));
+  }
+
+  api->image_close (engine, image);
+
+out:
+  if (thumbs[0].pixels) api->free_pixels (thumbs[0].pixels);
+  if (thumbs[1].pixels) api->free_pixels (thumbs[1].pixels);
+  free (renderA);
+  free (renderB);
+  free (renderBefore);
+}
+
 static void
 test_procedures (void)
 {
@@ -7464,6 +7977,8 @@ main (int argc, char **argv)
   test_resources ();
   test_resource_thumbnails ();
   test_stroke_brush_resource ();
+
+  test_pattern_fill ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 

@@ -283,6 +283,9 @@ GlimsStatus glims_vector_layer_style_set (GlimsEngine *e, GlimsImageID image, Gl
 /* edit.c */
 GlimsStatus glims_fill             (GlimsEngine *e, GlimsImageID image, GlimsPoint point,
                                     const GlimsFillSettings *settings, char **error);
+GlimsStatus glims_fill_pattern     (GlimsEngine *e, GlimsImageID image, GlimsResourceID pattern,
+                                    GlimsPoint seed, const GlimsPatternFillSettings *settings,
+                                    char **error);
 GlimsStatus glims_gradient         (GlimsEngine *e, GlimsImageID image, GlimsPoint from, GlimsPoint to,
                                     const GlimsGradientSettings *settings, char **error);
 GlimsStatus glims_layer_select     (GlimsEngine *e, GlimsImageID image, GlimsItemID layer);
@@ -374,5 +377,10 @@ GlimsStatus glims_resource_thumbnail   (GlimsEngine *e, GlimsResourceID id, int3
  * for 0, out-of-native-range or non-brush handles, NOT_FOUND for stale
  * handles or brushes absent from the current factory. */
 GlimsStatus glims_lookup_brush         (GlimsEngine *e, GlimsResourceID id, GimpBrush **out);
+
+/* The live pattern a facade handle names, for fill_pattern: the generic
+ * resource admission plus the pattern kind. Borrowed reference; the
+ * caller never mutates or releases it. */
+GlimsStatus glims_lookup_pattern       (GlimsEngine *e, GlimsResourceID id, GimpPattern **out);
 
 #endif /* GLIMS_ENGINE_PRIVATE_H */
