@@ -942,6 +942,7 @@ test_path_fill (const char *work)
          "undo empties the fill again, redo brings it back");
 
   /* Half opacity blends with what is underneath. */
+  api->image_undo (engine, image); /* Back to white after the redo check. */
   fill.opacity = 0.5;
   before = undo_depth (image);
   CHECK (api->path_fill (engine, image, path, layer, &fill, NULL) == GLIMS_STATUS_OK &&
@@ -1005,9 +1006,9 @@ test_path_fill (const char *work)
          undo_depth (image) == before + 1 &&
          api->channel_to_selection (engine, image, channel, GLIMS_SELECT_REPLACE, NULL) == GLIMS_STATUS_OK &&
          api->selection_bounds (engine, image, &empty_sel, &bounds) == GLIMS_STATUS_OK && ! empty_sel &&
-         abs (bounds.x - 20) <= 1 && abs (bounds.y - 20) <= 1 &&
-         abs (bounds.x + bounds.width - 170) <= 1 && abs (bounds.y + bounds.height - 90) <= 1,
-         "filling the path onto the channel is one undo step and the channel selects the path's bounds (%d,%d %dx%d)",
+         bounds.x == 0 && bounds.y == 0 &&
+         abs (bounds.width - 170) <= 1 && abs (bounds.height - 90) <= 1,
+         "the channel fill keeps its original area and adds the path as one undo step (%d,%d %dx%d)",
          bounds.x, bounds.y, bounds.width, bounds.height);
   api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
   api->channel_command (engine, image, channel, GLIMS_CHANNEL_DELETE, NULL, NULL);
@@ -1017,10 +1018,15 @@ test_path_fill (const char *work)
   CHECK (api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL) == GLIMS_STATUS_OK,
          "the layer's pixels are locked");
   before = undo_depth (image);
-  status = api->path_fill (engine, image, path, layer, &fill, &error);
-  CHECK (status == GLIMS_STATUS_LOCKED && error && undo_depth (image) == before &&
-         (render_pixel (image, 140, 60, px), px[0] == 255 && px[1] == 0),
-         "filling a locked layer is LOCKED and changes nothing (%s)", error ? error : "");
+  {
+    uint8_t previous[4];
+
+    render_pixel (image, 140, 60, previous);
+    status = api->path_fill (engine, image, path, layer, &fill, &error);
+    CHECK (status == GLIMS_STATUS_LOCKED && error && undo_depth (image) == before &&
+           (render_pixel (image, 140, 60, px), memcmp (previous, px, sizeof px) == 0),
+           "filling a locked layer is LOCKED and changes nothing (%s)", error ? error : "");
+  }
   api->free_string (error);
   error = NULL;
   api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, 0, NULL);
@@ -1056,7 +1062,7 @@ test_path_fill (const char *work)
          undo_depth (image) == before,
          "NULL or short settings are refused with no undo");
 
-  CHECK (api->create_group (engine, image, 0, -1, "G", &group, NULL) == GLIMS_STATUS_OK && group != 0,
+  CHECK (api->create_group (engine, image, 0, 0, "G", &group, NULL) == GLIMS_STATUS_OK && group != 0,
          "a group is created");
   status = api->path_fill (engine, image, path, group, &fill, &error);
   CHECK (status == GLIMS_STATUS_FAILED && error && undo_depth (image) == before + 1,

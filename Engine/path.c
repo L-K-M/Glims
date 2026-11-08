@@ -46,6 +46,7 @@
 
 /* GIMP 3.2 moved app/vectors to app/path; the files kept their names. */
 #if GIMP_CHECK_VERSION (3, 2, 0)
+#include "core/gimprasterizable.h"
 #include "path/gimpanchor.h"
 #include "path/gimpbezierstroke.h"
 #include "path/gimppath.h"
@@ -777,9 +778,14 @@ glims_path_to_vector_layer (GlimsEngine  *engine,
 
     if (! vector)
       return glims_fail (error, NULL, "The vector layer could not be created.");
-    /* Named before it is added, so the add stays the only undo step. */
+    /* Name before adding, without another undo step. Refresh in 3.2.0
+     * otherwise replaces it with the path name; an explicit name opts
+     * out of the core's automatic rename policy on every engine. */
     if (name)
-      gimp_object_set_name (GIMP_OBJECT (vector), name);
+      {
+        gimp_rasterizable_set_auto_rename (GIMP_RASTERIZABLE (vector), FALSE);
+        gimp_object_set_name (GIMP_OBJECT (vector), name);
+      }
 
     /* Above the selected layer, selected and rendered, one undo step, as
      * Paths > New Vector Layer does (app/actions/paths-commands.c
