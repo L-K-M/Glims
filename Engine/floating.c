@@ -169,11 +169,11 @@ glims_image_paste_into (GlimsEngine  *engine,
         {
           if (error)
             *error = strdup ("The target is a genuine editable text, link or vector layer; "
-                             "rasterize it first (GLIMS_LAYER_RASTERIZE) — explicit consent is required.");
+                             "rasterize it before pasting into the selection.");
           return GLIMS_STATUS_REQUIRES_RASTERIZE;
         }
     }
-  else if (GIMP_IS_CHANNEL (target))
+  else if (GIMP_IS_CHANNEL (target) && ! GIMP_IS_LAYER_MASK (target))
     {
       /* Only channels of the image's channel list are valid targets:
        * saved channels and the Quick Mask's channel. The selection mask
@@ -181,7 +181,7 @@ glims_image_paste_into (GlimsEngine  *engine,
       if (gimp_item_get_container (GIMP_ITEM (target)) != gimp_image_get_channels (image))
         return glims_fail (error, NULL, "Only a saved channel of this image can be the paste target.");
     }
-  else
+  else if (! GIMP_IS_LAYER_MASK (target))
     return glims_fail (error, NULL, "The paste target must be a layer, a layer mask or a saved channel.");
 
   status = glims_check_item_locks (GIMP_ITEM (target), GLIMS_LOCK_PIXELS, error);
@@ -298,6 +298,16 @@ glims_floating_command (GlimsEngine  *engine,
   switch (command)
     {
     case GLIMS_FLOATING_ANCHOR:
+      /* Locks may have changed since the paste. Anchoring writes the
+       * attachment's pixels; the other resolution verbs do not. */
+      {
+        GimpDrawable *target = gimp_layer_get_floating_sel_drawable (fs);
+        if (! target)
+          return glims_fail (error, NULL, "The floating selection has no target to anchor into.");
+        status = glims_check_item_locks (GIMP_ITEM (target), GLIMS_LOCK_PIXELS, error);
+        if (status != GLIMS_STATUS_OK)
+          return status;
+      }
       /* One "Anchor Floating Selection" undo step, merged into the
        * attached target. */
       floating_sel_anchor (fs);

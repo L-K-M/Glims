@@ -9592,7 +9592,7 @@ test_floating_selection (const char *work)
   GlimsFilterID      filter = 0;
   GlimsStrokePoint   point = { 2, 2, 1.0, 0.0, 0.0, 0 };
   GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PENCIL, 4.0);
-  char               xcf[1024], *error = NULL;
+  char               xcf[1024], *error = NULL, *fonts = NULL;
   GlimsStatus        status;
   const GlimsRect    payload = { 0, 0, 8, 8 };
 
@@ -9681,6 +9681,27 @@ test_floating_selection (const char *work)
   error = NULL;
   api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, 0, NULL);
 
+  CHECK (api->fonts (engine, &fonts) == GLIMS_STATUS_OK && fonts && *fonts,
+         "the floating fixture lists an installed font");
+  if (! fonts || ! *fonts)
+    {
+      api->free_string (fonts);
+      free (shot);
+      api->image_close (engine, image);
+      api->image_close (engine, other);
+      return;
+    }
+  if (strstr (fonts, "Sans-serif\n") == fonts || strstr (fonts, "\nSans-serif\n"))
+    strcpy (tset.font, "Sans-serif");
+  else
+    {
+      char *newline = strchr (fonts, '\n');
+      snprintf (tset.font, sizeof tset.font, "%.*s",
+                (int) (newline ? newline - fonts : (ptrdiff_t) strlen (fonts)), fonts);
+    }
+  api->free_string (fonts);
+  fonts = NULL;
+
   /* A genuine editable text layer target asks for rasterize consent; the
    * rasterized instance is then accepted. */
   CHECK (api->text_layer_new (engine, image, "Hi", &tset, (GlimsPoint) { 2, 2 }, &text, &error) == GLIMS_STATUS_OK && text != 0,
@@ -9742,6 +9763,12 @@ test_floating_selection (const char *work)
   /* The real Paste Into on the 32x32 image: selection (4,4)-(8,8), an
    * 8x8 payload centered on it at (2,2). */
   api->layer_select (engine, image, layer);
+  /* The BUSY probe deliberately painted a dot. Capture the actual
+   * pre-paste composite after setup instead of assuming the fresh image. */
+  free (shot);
+  shot = render_all (image, &w, &h);
+  CHECK (shot != NULL, "the pre-paste composite is captured after the setup stroke");
+
   CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 4, 4 }, { 8, 8 } }, 2, &sel) == GLIMS_STATUS_OK,
          "the 4x4 selection at (4,4) is set");
   api->selection_bounds (engine, image, &empty, &sel_before);
@@ -9823,6 +9850,22 @@ test_floating_selection (const char *work)
          "redo restores the exact floating composite");
   free (now);
 
+  /* A target can become locked after the paste. Anchor must recheck
+   * the write target instead of silently committing into locked pixels. */
+  CHECK (api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL) == GLIMS_STATUS_OK,
+         "the floating target can be pixel-locked after pasting");
+  before = undo_depth (image);
+  status = api->floating_command (engine, image, floating, GLIMS_FLOATING_ANCHOR, NULL, &error);
+  CHECK (status == GLIMS_STATUS_LOCKED && error && undo_depth (image) == before &&
+         api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && state.active,
+         "anchoring rechecks a target locked after paste, with no mutation (%d; %s)", status, error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  if (status == GLIMS_STATUS_OK)
+    api->image_undo (engine, image); /* recover only the deliberately failing red implementation */
+  CHECK (api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, 0, NULL) == GLIMS_STATUS_OK,
+         "the anchor fixture unlocks its target");
+
   /* Anchor: one undo step, the composite keeps the pasted pixels (now in
    * the target), the floating state ends. */
   before = undo_depth (image);
@@ -9860,6 +9903,12 @@ test_floating_selection (const char *work)
   CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK, "redo of the anchor runs");
   CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && ! state.active,
          "redo of the anchor merges again");
+
+  /* The preceding Anchor was committed and redone; that is the target
+   * a new floating paste must preserve when discarded. */
+  free (shot);
+  shot = render_all (image, &w, &h);
+  CHECK (shot != NULL, "the discard baseline includes the previously committed anchor");
 
   /* Discard on a fresh paste: the target's pixels come back exactly. */
   before = undo_depth (image);
@@ -9917,8 +9966,23 @@ test_floating_selection (const char *work)
       found = 1;
   CHECK (found, "the to-layer result is an ordinary layer row with the exact id %d", floating);
   now = render_all (image, &w, &h);
-  CHECK (now && floating_shot && memcmp (now, floating_shot, (size_t) w * h * 4) == 0,
-         "to-layer leaves the composite identical");
+  /* Native to-layer detaches the selection clip and reveals the full
+   * payload. Overlay known opaque cells at (2,2); transparent cells
+   * retain the actual pre-paste background. */
+  {
+    size_t bytes = (size_t) w * h * 4;
+    uint8_t *expected = malloc (bytes);
+    if (expected && shot)
+      {
+        memcpy (expected, shot, bytes);
+        for (i = 0; i < 64; i++)
+          if (pattern[i * 4 + 3] == 255)
+            memcpy (expected + ((size_t) (2 + i / 8) * w + 2 + i % 8) * 4, pattern + i * 4, 4);
+      }
+    CHECK (now && expected && shot && memcmp (now, expected, bytes) == 0,
+           "to-layer reveals the full un-clipped payload over the untouched target");
+    free (expected);
+  }
   free (now);
   CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
          (api->image_floating_selection (engine, image, &state), state.active && state.floating == floating),

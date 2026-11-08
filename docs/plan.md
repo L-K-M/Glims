@@ -2442,3 +2442,14 @@ lock belongs to the root job): `build-adapter.sh --test` conformance
 compile/link, `swift test`, the app's `--engine-smoke-test`, the engine
 matrix, `scripts/test-conformance-abi.sh` and any on-screen check — no
 runtime behavior of the new slots was executed in this slice.
+
+Floating-selection runtime validation reproduced two production defects:
+layer masks took the saved-channel-only admission branch, and Anchor could
+write into a target locked after the paste. Mask admission now respects
+its native subtype and Anchor rechecks the current target pixel locks.
+The focused lock regression failed before the fix. All four native suites
+pass after both fixes. Initial fixture errors are also corrected: choose
+an installed font, capture baselines after the setup stroke and preceding
+Anchor, and expect native To Layer to reveal the full payload after
+removing the selection clip. That appearance uses an independent known
+RGBA-cell oracle rather than assuming the clipped preview stays identical.
