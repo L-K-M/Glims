@@ -324,7 +324,14 @@ typedef enum GlimsLayerCommand {
   GLIMS_LAYER_TO_TOP     = 6,
   GLIMS_LAYER_TO_BOTTOM  = 7,
   GLIMS_LAYER_MERGE_DOWN = 8,
-  GLIMS_LAYER_FLATTEN    = 9   /* the whole image into one layer */
+  GLIMS_LAYER_FLATTEN    = 9,  /* the whole image into one layer */
+  /* FIT resizes the layer to the image bounds keeping its content in
+   * place; TRIM crops it to its content. Both are for pixel layers
+   * (rasterized text/link/vector instances included): a group or a
+   * genuine editable layer reports UNSUPPORTED with a reason, and an
+   * already fitting, already tight or empty layer is a no-op. */
+  GLIMS_LAYER_FIT_TO_IMAGE     = 10,
+  GLIMS_LAYER_TRIM_TO_CONTENT  = 11
 } GlimsLayerCommand;
 
 /* Which fields of GlimsLayerChange apply. */

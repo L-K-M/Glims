@@ -36,6 +36,8 @@
 #include "core/gimpitem.h"
 #include "core/gimplayer.h"
 #include "core/gimplayer-new.h"
+#include "core/gimppickable.h"
+#include "core/gimppickable-auto-shrink.h"
 #include "core/gimppattern.h"
 
 #include "config/gimpcoreconfig.h"
@@ -565,7 +567,14 @@ glims_layer_command (GlimsEngine  *engine,
 
   layer = find_layer (image, layer_id);
   if (! layer && command != GLIMS_LAYER_NEW && command != GLIMS_LAYER_FLATTEN)
-    return glims_fail (error, NULL, "Select a layer first.");
+    {
+      /* The resize commands name their layer: an explicit id that is
+       * gone is NOT_FOUND, while layer 0 asks for a pick first. */
+      if (layer_id != 0 &&
+          (command == GLIMS_LAYER_FIT_TO_IMAGE || command == GLIMS_LAYER_TRIM_TO_CONTENT))
+        return GLIMS_STATUS_NOT_FOUND;
+      return glims_fail (error, NULL, "Select a layer first.");
+    }
 
   switch (command)
     {
@@ -627,6 +636,83 @@ glims_layer_command (GlimsEngine  *engine,
       created = gimp_image_flatten (image, gimp_get_user_context (engine->gimp), NULL, &gerror);
       if (! created)
         return glims_fail (error, gerror, "There are no visible layers to flatten.");
+      break;
+
+    case GLIMS_LAYER_FIT_TO_IMAGE:
+    case GLIMS_LAYER_TRIM_TO_CONTENT:
+      {
+        gint x, y, width, height;
+
+        status = glims_edit_ready (engine, glims_lookup_image (engine, id), error);
+        if (status != GLIMS_STATUS_OK) return status;
+        status = glims_check_item_locks (GIMP_ITEM (layer),
+                                         GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, error);
+        if (status != GLIMS_STATUS_OK) return status;
+
+        switch (glims_layer_kind (layer))
+          {
+          case GLIMS_LAYER_PIXEL:
+            /* Rasterized text, link and vector instances report PIXEL
+             * here too: their current content is pixels. */
+            break;
+          case GLIMS_LAYER_GROUP:
+            glims_fail (error, NULL,
+                        "A layer group cannot be resized this way; size the layers inside it.");
+            return GLIMS_STATUS_UNSUPPORTED;
+          default:
+            /* Resizing genuine text, link and vector layers re-renders
+             * their source into pixels. Refuse rather than rasterize
+             * silently. */
+            glims_fail (error, NULL,
+                        "Rasterize the text, link or vector layer before resizing it.");
+            return GLIMS_STATUS_UNSUPPORTED;
+          }
+
+        gimp_item_get_offset (GIMP_ITEM (layer), &x, &y);
+        width  = gimp_item_get_width (GIMP_ITEM (layer));
+        height = gimp_item_get_height (GIMP_ITEM (layer));
+
+        if (command == GLIMS_LAYER_FIT_TO_IMAGE)
+          {
+            /* Layer to Image Size (app/actions/layers-commands.c
+             * layers_resize_to_image_cmd_callback): the layer keeps its
+             * content's position and grows transparent around it —
+             * core/gimplayer.c gimp_layer_resize_to_image resizes to the
+             * image bounds passing the old offsets, so the result sits
+             * at 0,0. Its mask resizes with it (gimp_layer_resize). */
+            if (x == 0 && y == 0 &&
+                width == gimp_image_get_width (image) && height == gimp_image_get_height (image))
+              break; /* already exactly the image bounds: no undo */
+            gimp_layer_resize_to_image (layer, gimp_get_user_context (engine->gimp),
+                                        GIMP_FILL_TRANSPARENT);
+          }
+        else
+          {
+            gint content_x, content_y, content_width, content_height;
+
+            /* Crop to content (layers_crop_to_content_cmd_callback):
+             * the native transparent/uniform-background shrink. Only a
+             * SHRINK answer resizes; EMPTY and UNSHRINKABLE leave pixels,
+             * bounds and history untouched — a no-op without undo. */
+            switch (gimp_pickable_auto_shrink (GIMP_PICKABLE (layer), 0, 0,
+                                               width, height,
+                                               &content_x, &content_y,
+                                               &content_width, &content_height))
+              {
+              case GIMP_AUTO_SHRINK_SHRINK:
+                gimp_image_undo_group_start (image, GIMP_UNDO_GROUP_ITEM_RESIZE,
+                                             C_("undo-type", "Trim Layer to Content"));
+                gimp_item_resize (GIMP_ITEM (layer), gimp_get_user_context (engine->gimp),
+                                  GIMP_FILL_TRANSPARENT,
+                                  content_width, content_height, -content_x, -content_y);
+                gimp_image_undo_group_end (image);
+                break;
+              case GIMP_AUTO_SHRINK_EMPTY:
+              case GIMP_AUTO_SHRINK_UNSHRINKABLE:
+                break;
+              }
+          }
+      }
       break;
 
     default:

@@ -306,8 +306,10 @@ typedef struct
   GList          *selected;
 } LayerWalk;
 
-static GlimsLayerKind
-layer_kind (GimpLayer *layer)
+/* Shared with edit.c, whose resize commands decide from the kind
+ * whether a layer's content is pixels they may reshape. */
+GlimsLayerKind
+glims_layer_kind (GimpLayer *layer)
 {
   GimpItem *item = GIMP_ITEM (layer);
 
@@ -351,7 +353,7 @@ walk_layers (GimpContainer *container,
           row->id     = gimp_item_get_id (item);
           row->parent = parent;
           row->depth  = depth;
-          row->kind   = layer_kind (layer);
+          row->kind   = glims_layer_kind (layer);
           g_strlcpy (row->name, gimp_object_get_name (GIMP_OBJECT (layer)), sizeof (row->name));
           if (gimp_enum_get_value (GIMP_TYPE_LAYER_MODE, gimp_layer_get_mode (layer),
                                    NULL, &nick, NULL, NULL))

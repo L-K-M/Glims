@@ -146,6 +146,10 @@ final class EngineSession: @unchecked Sendable {
 
     enum LayerCommand: UInt32 {
         case new = 1, duplicate, delete, raise, lower, toTop, toBottom, mergeDown, flatten
+        /// Pixel layers only; the engine refuses groups and editable
+        /// text, link and vector layers (rasterized instances count as
+        /// pixels). Already fitting or already tight layers are a no-op.
+        case fitToImage = 10, trimToContent
     }
 
     /// Layer properties to change; nil fields stay as they are.
