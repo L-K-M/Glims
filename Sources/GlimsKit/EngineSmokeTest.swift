@@ -678,7 +678,7 @@ enum EngineSmokeTest {
                 && !document.colorInfo.hasEmbeddedProfile
                 && !document.colorInfo.profileLabel.isEmpty,
               "a fresh document caches RGB u8 non-linear state and the builtin profile")
-        check(controller.window?.title == "Color @ 100% (RGB, \(document.info.precision))",
+        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision))",
               "the title reports the cached mode and precision")
 
         // The Mode items check the cached mode — RGB here — and
@@ -705,7 +705,7 @@ enum EngineSmokeTest {
               "the reload reports the image grayscale")
         check(document.undoInfo.undoCount == undoBefore + 1, "the conversion is one undo step")
         check(document.hasUnsavedChanges, "the converted image is dirty")
-        check(controller.window?.title == "Color @ 100% (Grayscale, \(document.info.precision))",
+        check(controller.window?.title == "• Color @ 100% (Grayscale, \(document.info.precision))",
               "the title follows the conversion")
         _ = controller.validateMenuItem(modeRGB)
         _ = controller.validateMenuItem(modeGray)
@@ -763,6 +763,47 @@ enum EngineSmokeTest {
         check(document.undoInfo.undoCount == undoBefore && document.colorInfo.component == .u8,
               "OK on the seeded values is the no-op the facade promises")
 
+        // The sheet can stay open while another document takes the
+        // engine. Convert must report its refusal instead of vanishing.
+        let originalError = document.onError
+        var precisionError: String?
+        document.onError = { message in precisionError = message; originalError?(message) }
+        controller.imagePrecision(nil)
+        sheet = controller.window?.attachedSheet
+        let activityGate = DispatchSemaphore(value: 0)
+        let held = EngineActivity.shared.perform(label: "Other document work", work: {
+            activityGate.wait()
+        }, completion: {})
+        if let sheet {
+            controller.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+        }
+        spin(0.2)
+        check(held && precisionError != nil && document.colorInfo.component == .u8,
+              "Precision reports Convert refused while another document holds the engine")
+        activityGate.signal()
+        wait { !EngineActivity.shared.isBusy }
+
+        // A native refusal must also reach the form's caller when it
+        // was not already known by the frontend's cached edit gates.
+        precisionError = nil
+        do {
+            let preview = try session.beginFilter(image: image, drawable: document.activeDrawable ?? 0,
+                                                   operation: "gegl:gaussian-blur")
+            defer { try? session.abortFilter(preview) }
+            controller.imagePrecision(nil)
+            sheet = controller.window?.attachedSheet
+            if let sheet, let content = sheet.contentView,
+               let component = descendant(of: content, as: NSPopUpButton.self) {
+                component.selectItem(withTitle: EngineSession.ColorComponent.u16.title)
+                controller.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+            }
+            wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+            spin()
+            check(precisionError != nil && document.colorInfo.component == .u8,
+                  "Precision reports an engine-side conversion refusal without changing the image")
+        }
+        document.onError = originalError
+
         // Picking 16-bit float linear in the form runs one conversion.
         controller.imagePrecision(nil)
         sheet = controller.window?.attachedSheet
@@ -784,7 +825,7 @@ enum EngineSmokeTest {
         check(document.colorInfo.component == .half && document.colorInfo.trc == .linear,
               "the form's choice converts to 16-bit float linear")
         check(document.undoInfo.undoCount == undoBefore + 1, "the precision conversion is one undo step")
-        check(controller.window?.title == "Color @ 100% (RGB, \(document.info.precision))",
+        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision))",
               "the title shows the new precision")
 
         // Undo and redo carry the color state; the title follows both.
@@ -793,7 +834,7 @@ enum EngineSmokeTest {
         spin()
         check(document.colorInfo.component == .u8 && document.colorInfo.trc == .nonlinear,
               "undo restores the earlier precision")
-        check(controller.window?.title == "Color @ 100% (RGB, \(document.info.precision))",
+        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision))",
               "the title follows undo")
         document.redo()
         wait { document.pendingWork == 0 }
@@ -805,13 +846,17 @@ enum EngineSmokeTest {
         // file identity.
         let xcf = directory.appendingPathComponent("color.xcf")
         var saved = false
-        document.save(to: xcf) { saved = $0 == nil }
+        document.save(to: xcf) { error in
+            if error == nil { document.noteSaved(to: xcf) }
+            saved = error == nil
+        }
         wait { saved && document.pendingWork == 0 }
         check(saved && document.fileState.nativeURL == xcf, "the converted image saves")
+        let nativeName = document.name
         var modeAgain: Result<Void, Error>?
         document.convertMode(to: .grayscale) { modeAgain = $0 }
         wait { modeAgain != nil && document.pendingWork == 0 && !EngineActivity.shared.isBusy }
-        check(ok(modeAgain) && document.fileState.nativeURL == xcf && document.name == "Color",
+        check(ok(modeAgain) && document.fileState.nativeURL == xcf && document.name == nativeName,
               "the conversion keeps the file identity")
         let reopened = try session.openImage(path: xcf.path)
         let reopenedDocument = try ImageDocument(session: session, image: reopened, name: "Color")
@@ -872,24 +917,43 @@ enum EngineSmokeTest {
         wait { drained != nil && document.pendingWork == 0 && !EngineActivity.shared.isBusy }
         check(ok(drained) && document.colorInfo.mode == .rgb,
               "the conversion completes behind the other document's input")
-        check(pixel(session, otherImage, x: 8, y: 8) != nil,
+        check((pixel(session, otherImage, x: 8, y: 8)?[0] ?? 255) < 128,
               "the accepted stroke in the other document survived the drain")
 
-        // Engine events while the conversion holds the gate collect
-        // into one deferred refresh instead of stalling the main
-        // thread on the engine call.
-        document.inputQueue.async { usleep(300_000) }
-        var deferred: Result<Void, Error>?
-        document.convertMode(to: .grayscale) { deferred = $0 }
-        check(EngineActivity.shared.isBusy, "the conversion holds the exclusive gate")
+        // Use a raw facade conversion, without the document command's
+        // completion reload. Only the deferred events can refresh the
+        // cache; several event kinds must survive the same busy period.
+        let refreshGate = DispatchSemaphore(value: 0)
+        let rawConversionReady = DispatchSemaphore(value: 0)
+        var rawConversion: Result<Void, Error>?
+        let refreshActivity = EngineActivity.shared.perform(label: "Color event refresh", work: {
+            rawConversion = Result { try session.convertMode(image, to: .grayscale) }
+            rawConversionReady.signal()
+            refreshGate.wait()
+        }, completion: {})
+        wait { rawConversionReady.wait(timeout: .now()) == .success }
         let version = document.stateVersion
+        let oldSelectionChange = document.onSelectionChange
+        let oldSizeChange = document.onSizeChange
+        var selectionRefreshes = 0, sizeRefreshes = 0
+        document.onSelectionChange = { selectionRefreshes += 1; oldSelectionChange?() }
+        document.onSizeChange = { sizeRefreshes += 1; oldSizeChange?() }
         document.handle(.undoChanged(image: image))
-        check(document.stateVersion == version,
-              "an engine event defers its reload while the engine is busy")
-        wait { deferred != nil && document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        document.handle(.selectionChanged(image: image))
+        document.handle(.sizeChanged(image: image))
+        document.handle(.undoChanged(image: image))
+        spin(0.1)
+        check(refreshActivity && ok(rawConversion) && document.stateVersion == version
+                && document.colorInfo.mode == .rgb && selectionRefreshes == 0 && sizeRefreshes == 0,
+              "state, selection and size events defer every engine read while busy")
+        refreshGate.signal()
+        wait { !EngineActivity.shared.isBusy }
         spin()
-        check(document.stateVersion > version, "the deferred refresh runs after the activity")
+        check(document.stateVersion == version + 1 && selectionRefreshes == 1 && sizeRefreshes == 1,
+              "one deferred refresh preserves all event kinds without a command completion reload")
         check(document.colorInfo.mode == .grayscale, "the deferred refresh reads fresh state")
+        document.onSelectionChange = oldSelectionChange
+        document.onSizeChange = oldSizeChange
 
         // A close while the conversion is queued waits for it, then
         // destroys the image; the completion still lands.

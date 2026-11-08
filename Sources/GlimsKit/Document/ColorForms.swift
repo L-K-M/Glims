@@ -75,7 +75,13 @@ enum ColorForms {
         alert.addButton(withTitle: "Convert")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { response in
-            guard response == .alertFirstButtonReturn, document.acceptsEdits else { return }
+            guard response == .alertFirstButtonReturn else { return }
+            guard document.acceptsEdits else {
+                document.onError?(document.isClosing
+                    ? ImageDocument.DocumentError.closed.localizedDescription
+                    : ImageDocument.DocumentError.busy.localizedDescription)
+                return
+            }
             let componentIndex = component.indexOfSelectedItem - (componentContent.disabled != nil ? 1 : 0)
             let trcIndex = trc.indexOfSelectedItem - (trcContent.disabled != nil ? 1 : 0)
             guard EngineSession.ColorComponent.conversionChoices.indices.contains(componentIndex),
@@ -85,7 +91,9 @@ enum ColorForms {
             }
             document.convertPrecision(
                 component: EngineSession.ColorComponent.conversionChoices[componentIndex],
-                trc: EngineSession.ColorTRC.conversionChoices[trcIndex])
+                trc: EngineSession.ColorTRC.conversionChoices[trcIndex]) { result in
+                    if case .failure(let error) = result { document.onError?(error.localizedDescription) }
+                }
         }
     }
 
