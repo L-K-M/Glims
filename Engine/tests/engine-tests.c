@@ -11417,6 +11417,18 @@ test_selection_float (void)
   CHECK (memcmp (pixel, (uint8_t[]) { 104, 104, 64, 255 }, 4) == 0,
          "discard removes the moved FS content; (13,13) is the untouched original again");
 
+  /* Undo Discard, the move and the original MOVE extraction. COPY must
+   * start with the original pixels, not the deliberate cut hole left
+   * by the preceding destructive-discard scenario. */
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_undo (engine, image) == GLIMS_STATUS_OK,
+         "the COPY fixture restores the three preceding MOVE operations");
+  now = render_all (image, &w, &h);
+  CHECK (now && shot && memcmp (now, shot, (size_t) w * h * 4) == 0,
+         "COPY starts from the complete original pixel fixture");
+  free (now);
+
   /* COPY: the target keeps its pixels; to-layer detaches the FS. */
   api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 4, 4 }, { 12, 12 } }, 2, &sel);
   before = undo_depth (image);

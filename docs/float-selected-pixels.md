@@ -127,3 +127,13 @@ session wrapper is the only consumer-level entry point.
   multiple-selected case is defensive and untested at runtime.
 - A feathered selection floats with its soft mask as-is; no claim is made
   about reconstructing a feathered cut edge.
+
+## Runtime acceptance
+
+The native suites pass 1,719 / 1,505 / 1,719 / 1,719 checks on GIMP
+3.2.8 / 3.0.8 / 3.2.0 / master. The first pinned run's three failures
+were fixture errors: COPY and the following Anchor started from the
+intentional cut hole left by the preceding MOVE/Discard scenario. The
+fixture now undoes Discard, movement and MOVE creation, and independently
+compares the restored pixels before testing COPY. No production change
+was needed after that run. Document/UI integration remains pending.
