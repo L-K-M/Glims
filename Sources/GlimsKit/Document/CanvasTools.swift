@@ -470,9 +470,6 @@ final class CanvasToolController {
                 // Committing an emptied editor removes its text layer as
                 // one undoable edit. Saving must not resurrect old text.
                 guard document.layers.contains(where: { $0.id == layer }) else { return }
-                document.selectLayer(layer)
-                document.layerCommand(.delete)
-                return
             }
             document.updateText(layer, text: text, settings: nil)
         } else if !text.isEmpty {

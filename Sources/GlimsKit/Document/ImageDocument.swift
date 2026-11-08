@@ -416,30 +416,38 @@ final class ImageDocument {
         }
     }
 
+    /// The menu commands act on the layer the engine selects when they
+    /// run — layer 0, the adapter's "selected layer at execution" — so a
+    /// creation or pick queued ahead of them is what they hit, not the
+    /// id the interface last saw selected. Palette rows name their
+    /// layer explicitly instead.
     func layerCommand(_ command: EngineSession.LayerCommand) {
         guard !refuseWhileEditingUnavailable() else { return }
         endPendingUserEdits()
-        let layer = activeLayer ?? 0
         switch command {
         case .new, .duplicate, .delete, .mergeDown, .flatten:
             // The command's result becomes or replaces the paint target
             // once it lands; the engine selects it natively.
             enqueueTargetCommand { session, image in
-                _ = try session.layerCommand(command, image: image, layer: layer)
+                _ = try session.layerCommand(command, image: image)
             }
         case .raise, .lower, .toTop, .toBottom:
-            run { session, image in _ = try session.layerCommand(command, image: image, layer: layer) }
+            run { session, image in _ = try session.layerCommand(command, image: image) }
         }
     }
 
     /// Layer ▸ New Layer Group: inside the active group as its first
     /// child, else directly above the active layer in the same parent.
-    /// The engine selects the new group.
+    /// The engine selects the new group. Placement is read from the
+    /// layers as the queue leaves them — a creation or pick queued
+    /// ahead of this call moves the group's spot.
     func createGroup() {
         guard !refuseWhileEditingUnavailable() else { return }
         endPendingUserEdits()
-        let placement = LayerTree(layers: layers).newGroupPlacement(nearActive: activeLayer)
         enqueueTargetCommand { session, image in
+            let fresh = try session.layers(image)
+            let placement = LayerTree(layers: fresh)
+                .newGroupPlacement(nearActive: fresh.first(where: \.isSelected)?.id)
             _ = try session.createGroup(image: image, parent: placement.parent,
                                         index: Int32(placement.index))
         }
@@ -525,8 +533,16 @@ final class ImageDocument {
     }
 
     /// Changes a text layer's text, its look, or both, as one undo step.
+    /// Empty text removes the layer, like the text editor's commit —
+    /// a target-changing edit, so it queues as a target command.
     func updateText(_ layer: Int32, text: String?, settings: EngineSession.TextSettings?) {
         guard text != nil || settings != nil, !refuseWhileEditingUnavailable() else { return }
+        if text?.isEmpty == true {
+            enqueueTargetCommand { session, image in
+                _ = try session.layerCommand(.delete, image: image, layer: layer)
+            }
+            return
+        }
         run { session, image in
             try session.setTextLayer(image: image, layer: layer, text: text, settings: settings)
         }
@@ -776,14 +792,20 @@ final class ImageDocument {
 
     // MARK: Undo
 
+    /// Undo and redo replace the paint target like a delete does: the
+    /// engine selects whatever the moved state leaves, so they queue as
+    /// target commands and edits accepted meanwhile are refused instead
+    /// of landing on the drawable the move is about to leave behind.
     func undo() {
         guard !refuseWhileEditingUnavailable() else { return }
-        run { session, image in try session.undo(image) }
+        endPendingUserEdits()
+        enqueueTargetCommand { session, image in try session.undo(image) }
     }
 
     func redo() {
         guard !refuseWhileEditingUnavailable() else { return }
-        run { session, image in try session.redo(image) }
+        endPendingUserEdits()
+        enqueueTargetCommand { session, image in try session.redo(image) }
     }
 
     // MARK: History and snapshots
@@ -1182,9 +1204,24 @@ final class ImageDocument {
         pendingTargetCommands.insert(token)
         onStateChange?()
         enqueue(on: inputQueue, input: true) { [session, image] in
+            // While the command runs the target it replaces cannot be
+            // painted; a success leaves a fresh native selection the
+            // edits behind it may use, while a failure keeps the
+            // queue's prior answer rather than reopening a refused one.
+            let targetWasValid = self.paintTargetIsValid
+            self.paintTargetIsValid = false
             let result = Result { try work(session, image) }
+            self.paintTargetIsValid = targetWasValid
+            if case .success = result { self.paintTargetIsValid = true }
             DispatchQueue.main.async {
-                self.pendingTargetCommands.remove(token)
+                // The token still stands only if no pick took over the
+                // target while the command was queued — a pick owns the
+                // rejected state through its own completion then. A
+                // success ends a refused pick's rejection; a failure
+                // never reopens it.
+                if self.pendingTargetCommands.remove(token) != nil, case .success = result {
+                    self.rejectedTargetPick = false
+                }
                 if case .failure(let error) = result { self.onError?(String(describing: error)) }
                 try? self.reload()
                 completion?(result)
