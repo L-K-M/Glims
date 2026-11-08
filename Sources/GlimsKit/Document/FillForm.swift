@@ -121,8 +121,7 @@ private final class FillFormSync: NSObject {
     }
 
     @objc func fieldChanged(_ sender: NSTextField) {
-        guard let value = Double(sender.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)),
-              (0...100).contains(value) else { return }
-        slider?.doubleValue = value
+        guard let value = ChannelForms.opacityValue(sender.stringValue) else { return }
+        slider?.doubleValue = value * 100
     }
 }

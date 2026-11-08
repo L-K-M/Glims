@@ -659,9 +659,12 @@ enum EngineSmokeTest {
         first.onError = { errors.append($0) }
         second.onError = { errors.append($0) }
         let foreground = ToolState.shared.foreground
+        let background = ToolState.shared.background
         ToolState.shared.foreground = .red
+        ToolState.shared.background = .green
         defer {
             ToolState.shared.foreground = foreground
+            ToolState.shared.background = background
             for (controller, document) in [(a, first), (b, second)] {
                 if let sheet = controller.window?.attachedSheet { controller.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn) }
                 controller.window?.close()
@@ -726,6 +729,24 @@ enum EngineSmokeTest {
         let custom = pixel(session, second.image, x: 8, y: 8) ?? []
         check(custom.count == 4 && custom[0] < 20 && custom[2] > 240,
               "Custom Fill uses its chosen color across the whole layer without a selection (\(custom))")
+
+        b.fill(nil)
+        let backgroundSheet = b.window?.attachedSheet
+        views(backgroundSheet?.contentView, as: NSPopUpButton.self).first?.selectItem(at: 1)
+        finish(b, .alertFirstButtonReturn)
+        wait { second.pendingWork == 0 }
+        let green = pixel(session, second.image, x: 8, y: 8) ?? []
+        check(green.count == 4 && green[0] < 20 && green[1] > 240 && green[2] < 20,
+              "Background Fill uses the background color independently of the foreground")
+
+        a.fill(nil)
+        let invalidSheet = a.window?.attachedSheet
+        opacityField(invalidSheet)?.stringValue = "1e2"
+        let invalidErrorsBefore = errors.count, invalidUndoBefore = first.undoInfo.undoCount
+        finish(a, .alertFirstButtonReturn)
+        check(errors.count > invalidErrorsBefore && first.pendingWork == 0
+                && first.undoInfo.undoCount == invalidUndoBefore,
+              "Fill refuses a malformed opacity without editing or adding undo")
 
         a.fill(nil)
         let errorsBefore = errors.count
