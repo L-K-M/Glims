@@ -978,3 +978,29 @@ fixture. Conversion of newly typed text asked for rasterization; Cancel
 kept text editable, approval converted, and Undo restored the text layer
 and its embedded source profile. The test app quit with Don't Save and left
 no dialog. Cross-engine interface validation follows before merge.
+
+### Clear color and mutation readiness (2026-11-08)
+
+Three regressions reproduced on the previous implementation: an opaque RGB
+layer cleared with a midtone background produced 188/137/225 instead of
+sRGB 128/64/191, and Clear proceeded during a native filter preview or
+active stroke. Clear now uses the shared edit-ready guard and an explicit
+sRGB color setter. All four native runs pass: 830 checks on GIMP 3.2.8,
+3.2.0 and master, and 797 on 3.0.8, including selection clipping,
+undo/redo, the RGB sample and both busy refusals. Independent source
+review found no important issues.
+
+Final ICC/native compatibility validation: 894 conformance checks pass on
+3.2.8, 3.2.0 and master; 834 pass on 3.0.8. The added older-engine fixture
+now creates a valid path before expecting UNSUPPORTED; its earlier invented
+path id correctly returned NOT_FOUND and was a test error.
+
+New save/reopen and Open as Layers regressions reproduced three 3.2.0
+loader defects: a freed rasterization flag, overwriting edited rasterized
+vector pixels, and imported vector paths retaining a dead loading image.
+The exact-version load guard retains source metadata, restores verified
+modified buffers at native load completion before copying, and converts
+imported paths in place into their destination, as later native releases
+do. One undo/redo preserves imported pixels; resaving retains editable
+geometry and raster edits. No upstream source is changed. The image-lifetime
+criticals are gone; two existing startup g_file_test(NULL) diagnostics remain.

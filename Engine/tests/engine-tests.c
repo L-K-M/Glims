@@ -1272,6 +1272,254 @@ test_path_vector_layer (const char *work)
   api->image_close (engine, image);
 }
 
+/* An intentionally rasterized vector layer (its pixels were edited, so the
+ * XCF stores the rasterization flag together with the edited buffer) must
+ * reopen as PIXEL with those edited pixels, while a genuine vector layer in
+ * the same file stays VECTOR with its path, fill color and explicit name.
+ * GIMP 3.2.0 re-renders the converted layer when adding it, which overwrites
+ * the saved modified pixels; later engines duplicate and restore the saved
+ * buffer (xcf-load.c). */
+static void
+test_vector_rasterized_roundtrip (const char *work)
+{
+  GlimsImageID      image = 0, reopened = 0;
+  GlimsItemID       rpath = 0, gpath = 0, rasterized = 0, genuine = 0, genuine_path = 0;
+  GlimsSubpath      rsquare[1] = { { .count = 4, .closed = true } };
+  GlimsSubpath      gsquare[1] = { { .count = 4, .closed = true } };
+  GlimsPathPoint    rpoints[4] = { corner (20, 20), corner (80, 20), corner (80, 80), corner (20, 80) };
+  GlimsPathPoint    gpoints[4] = { corner (100, 20), corner (160, 20), corner (160, 80), corner (100, 80) };
+  GlimsLayerInfo    rows[4];
+  GlimsPathInfo     prows[2];
+  GlimsSubpath      rsub[2];
+  GlimsPathPoint    rpts[8];
+  GlimsFillSettings red_bg = { .struct_size = sizeof red_bg, .mode = GLIMS_FILL_SELECTION,
+                               .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  GlimsFillSettings green  = { .struct_size = sizeof green,  .mode = GLIMS_FILL_SELECTION,
+                               .color = { 0, 0.8, 0, 1 }, .opacity = 1 };
+  GlimsImageInfo    loaded_info;
+  int32_t           count = 0, pcount = 0, subcount = 0, ptcount = 0;
+  uint8_t           px[4];
+  char              xcf[1024];
+  int               vectors = supports_vector_layers ();
+
+  if (! vectors)
+    {
+      CHECK (api->image_new (engine, 40, 30, &image, NULL) == GLIMS_STATUS_OK &&
+             api->path_set (engine, image, 0, "Raster shape", rsquare, 1, rpoints, 4, &rpath, NULL) == GLIMS_STATUS_OK &&
+             api->path_to_vector_layer (engine, image, rpath, "x", NULL, NULL) == GLIMS_STATUS_UNSUPPORTED,
+             "engines without vector layers report UNSUPPORTED");
+      if (image)
+        api->image_close (engine, image);
+      return;
+    }
+
+  api->image_new (engine, 200, 120, &image, NULL);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &red_bg, NULL);
+  CHECK (api->path_set (engine, image, 0, "Raster shape", rsquare, 1, rpoints, 4, &rpath, NULL) == GLIMS_STATUS_OK &&
+         api->path_to_vector_layer (engine, image, rpath, "Rasterized", &rasterized, NULL) == GLIMS_STATUS_OK,
+         "the rasterized candidate is made as a vector layer named Rasterized");
+  /* Editing the vector's pixels rasterizes it: the layer turns PIXEL and
+   * the whole buffer takes the edited fill color. */
+  CHECK (api->fill (engine, image, (GlimsPoint) { 0, 0 }, &green, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK && count == 2 &&
+         rows[0].id == rasterized && rows[0].kind == GLIMS_LAYER_PIXEL &&
+         (render_pixel (image, 50, 50, px), px[1] > 150 && px[0] < 60),
+         "editing the vector layer rasterizes it to PIXEL with the edited green pixels (kind %u, %d,%d,%d)",
+         rows[0].kind, px[0], px[1], px[2]);
+
+  CHECK (api->path_set (engine, image, 0, "Genuine shape", gsquare, 1, gpoints, 4, &gpath, NULL) == GLIMS_STATUS_OK &&
+         api->path_to_vector_layer (engine, image, gpath, "Genuine", &genuine, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK && count == 3 &&
+         rows[0].id == genuine && rows[0].kind == GLIMS_LAYER_VECTOR && strcmp (rows[0].name, "Genuine") == 0,
+         "the genuine vector layer sits on top as VECTOR, named Genuine");
+
+  snprintf (xcf, sizeof xcf, "%s/vector-rasterized.xcf", work);
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, reopened, rows, 4, &count) == GLIMS_STATUS_OK && count == 3 &&
+         rows[0].kind == GLIMS_LAYER_VECTOR && strcmp (rows[0].name, "Genuine") == 0 &&
+         rows[1].kind == GLIMS_LAYER_PIXEL && strcmp (rows[1].name, "Rasterized") == 0,
+         "XCF reopen keeps the genuine layer VECTOR and the edited one PIXEL, both explicitly named (kinds %u/%u, %s/%s)",
+         rows[0].kind, rows[1].kind, rows[0].name, rows[1].name);
+  CHECK (api->paths (engine, reopened, prows, 2, &pcount) == GLIMS_STATUS_OK && pcount == 2,
+         "both paths travel with the reopened image (%d)", pcount);
+  for (int32_t i = 0; i < pcount; i++)
+    if (strcmp (prows[i].name, "Genuine shape") == 0)
+      genuine_path = prows[i].id;
+  CHECK (genuine_path != 0 &&
+         api->path_get (engine, reopened, genuine_path, rsub, 2, &subcount, rpts, 8, &ptcount) == GLIMS_STATUS_OK &&
+         subcount == 1 && ptcount == 4 && rsub[0].closed &&
+         rpts[2].anchor.x == 160 && rpts[2].anchor.y == 80,
+         "the genuine vector's path shape survives the round trip (%d points)", ptcount);
+  render_pixel (reopened, 120, 50, px);
+  CHECK (px[0] > 200 && px[1] > 200,
+         "the genuine vector's fill color still renders inside its path (%d,%d,%d,%d)",
+         px[0], px[1], px[2], px[3]);
+  render_pixel (reopened, 50, 50, px);
+  CHECK (px[1] > 150 && px[0] < 60,
+         "the rasterized layer reopens with its edited green pixels, not a fresh render (%d,%d,%d,%d)",
+         px[0], px[1], px[2], px[3]);
+  render_pixel (reopened, 10, 10, px);
+  CHECK (px[0] > 200 && px[1] < 60,
+         "outside both paths the red background shows through (%d,%d,%d,%d)", px[0], px[1], px[2], px[3]);
+  CHECK (api->image_info (engine, reopened, &loaded_info) == GLIMS_STATUS_OK &&
+         ! loaded_info.dirty && undo_depth (reopened) == 0,
+         "the rasterized round trip adds no dirty state or undo history");
+  if (reopened)
+    api->image_close (engine, reopened);
+  api->image_close (engine, image);
+}
+
+/* Open as Layers of the rasterized-vector XCF saved above. The native load
+ * must finish restoring the saved buffer of the rasterized layer (the
+ * image's "clean" signal from file_open_sanitize_image) BEFORE
+ * file_open_layers() duplicates the loaded layers into the destination
+ * with file_open_convert_items(); restoring only after gimp_image_add_layers
+ * is too late, the duplicate already carries the fresh render. The imported
+ * genuine vector keeps its path, fill and explicit name, the imported
+ * rasterized layer arrives as PIXEL with its edited green pixels, the
+ * destination's own layer and name are untouched, and the whole import is
+ * exactly one undo step with working undo/redo. */
+static void
+test_vector_rasterized_open_layers (const char *work)
+{
+  GlimsImageID      dest = 0, src = 0;
+  GlimsItemID       added[8] = { 0 }, base = 0, genuine_path = 0;
+  GlimsLayerInfo    rows[8];
+  GlimsPathInfo     prows[4];
+  GlimsSubpath      sub[2];
+  GlimsPathPoint    pts[8];
+  GlimsFillSettings blue = { .struct_size = sizeof blue, .mode = GLIMS_FILL_SELECTION,
+                             .color = { 0, 0, 1, 1 }, .opacity = 1 };
+  GlimsLayerChange  rename = { .struct_size = sizeof rename, .properties = GLIMS_LAYER_NAME,
+                               .name = "Base" };
+  int32_t           count = 0, n = 0, pcount = 0, subcount = 0, ptcount = 0, before;
+  uint8_t           px[4];
+  char              xcf[1024];
+  int               vectors = supports_vector_layers ();
+
+  snprintf (xcf, sizeof xcf, "%s/vector-rasterized.xcf", work);
+
+  if (! vectors)
+    {
+      /* No vector layers on this engine: the same import contract with a
+       * plain one-layer XCF. */
+      CHECK (api->image_new (engine, 60, 40, &src, NULL) == GLIMS_STATUS_OK &&
+             api->image_save (engine, src, xcf, NULL) == GLIMS_STATUS_OK,
+             "a plain XCF is saved for the import");
+      api->image_close (engine, src);
+      src = 0;
+      CHECK (api->image_new (engine, 60, 40, &dest, NULL) == GLIMS_STATUS_OK &&
+             (base = first_layer (dest)) != 0,
+             "a destination image exists");
+      before = undo_depth (dest);
+      CHECK (api->image_open_layers (engine, dest, xcf, added, 8, &n, NULL) == GLIMS_STATUS_OK && n == 1 &&
+             undo_depth (dest) == before + 1 && layer_count (dest) == 2,
+             "engines without vector layers: the plain import is one undo step (n=%d)", n);
+      CHECK (api->image_undo (engine, dest) == GLIMS_STATUS_OK && layer_count (dest) == 1 &&
+             api->image_redo (engine, dest) == GLIMS_STATUS_OK && layer_count (dest) == 2,
+             "undo and redo remove and restore the imported layer");
+      api->image_close (engine, dest);
+      return;
+    }
+
+  CHECK (api->image_new (engine, 200, 120, &dest, NULL) == GLIMS_STATUS_OK,
+         "a destination image of the file's size");
+  base = first_layer (dest);
+  CHECK (base != 0 && api->layer_change (engine, dest, base, &rename, NULL) == GLIMS_STATUS_OK &&
+         api->fill (engine, dest, (GlimsPoint) { 0, 0 }, &blue, NULL) == GLIMS_STATUS_OK &&
+         (render_pixel (dest, 10, 10, px), px[2] > 150 && px[0] < 60),
+         "the destination's own layer is renamed Base and filled blue (%d,%d,%d)",
+         px[0], px[1], px[2]);
+
+  before = undo_depth (dest);
+  CHECK (api->image_open_layers (engine, dest, xcf, added, 8, &n, NULL) == GLIMS_STATUS_OK && n == 3,
+         "Open as Layers imports the file's three layers (n=%d)", n);
+  CHECK (undo_depth (dest) == before + 1,
+         "the whole import is exactly one undo step (%d -> %d)", before, undo_depth (dest));
+  CHECK (api->image_layers (engine, dest, rows, 8, &count) == GLIMS_STATUS_OK && count == 4,
+         "the destination now has 4 layers (%d)", count);
+  if (count == 4)
+    {
+      CHECK (rows[0].kind == GLIMS_LAYER_VECTOR && strcmp (rows[0].name, "Genuine") == 0 &&
+             rows[1].kind == GLIMS_LAYER_PIXEL && strcmp (rows[1].name, "Rasterized") == 0 &&
+             rows[2].kind == GLIMS_LAYER_PIXEL && strcmp (rows[2].name, "vector-rasterized.xcf") != 0 &&
+             rows[3].id == base && strcmp (rows[3].name, "Base") == 0 &&
+             rows[0].id == added[0] && rows[1].id == added[1] && rows[2].id == added[2],
+             "imported genuine is VECTOR named Genuine, rasterized is PIXEL named Rasterized, "
+             "a multi-item import keeps the file names (not the basename) and the destination "
+             "keeps Base (kinds %u/%u/%u, names %s/%s/%s/%s)",
+             rows[0].kind, rows[1].kind, rows[2].kind,
+             rows[0].name, rows[1].name, rows[2].name, rows[3].name);
+    }
+
+  CHECK (api->paths (engine, dest, prows, 4, &pcount) == GLIMS_STATUS_OK && pcount == 2,
+         "the destination's paths are listed (%d)", pcount);
+  if (pcount == 2)
+    {
+      /* Native duplicates carry "… copy" names. Both paths must belong
+       * to the destination rather than the destroyed loading image. */
+      for (int32_t i = 0; i < pcount; i++)
+        if (strncmp (prows[i].name, "Genuine shape", 13) == 0)
+          genuine_path = prows[i].id;
+      CHECK (genuine_path != 0 &&
+             api->path_get (engine, dest, genuine_path, sub, 2, &subcount, pts, 8, &ptcount) == GLIMS_STATUS_OK &&
+             subcount == 1 && ptcount == 4 && sub[0].closed &&
+             pts[2].anchor.x == 160 && pts[2].anchor.y == 80,
+             "the imported genuine vector keeps its path geometry (%d points)", ptcount);
+    }
+
+  render_pixel (dest, 120, 50, px);
+  CHECK (px[0] > 200 && px[1] > 200,
+         "the imported genuine vector renders its fill inside the path (%d,%d,%d,%d)",
+         px[0], px[1], px[2], px[3]);
+  render_pixel (dest, 95, 50, px);
+  CHECK (px[0] > 200 && px[1] < 60,
+         "just left of the genuine path (x=100) the red background shows, pinning the geometry (%d,%d,%d,%d)",
+         px[0], px[1], px[2], px[3]);
+  render_pixel (dest, 170, 50, px);
+  CHECK (px[0] > 200 && px[1] < 60,
+         "just right of the genuine path (x=160) the red background shows (%d,%d,%d,%d)",
+         px[0], px[1], px[2], px[3]);
+  render_pixel (dest, 50, 50, px);
+  CHECK (px[1] > 150 && px[0] < 60,
+         "the imported rasterized layer keeps its edited green pixels, not a fresh render (%d,%d,%d,%d)",
+         px[0], px[1], px[2], px[3]);
+  render_pixel (dest, 10, 10, px);
+  CHECK (px[0] > 200 && px[1] < 60,
+         "outside both paths the imported red background shows (%d,%d,%d,%d)",
+         px[0], px[1], px[2], px[3]);
+
+  CHECK (api->image_undo (engine, dest) == GLIMS_STATUS_OK && layer_count (dest) == 1 &&
+         undo_depth (dest) == before,
+         "one undo removes the whole import (%d layers left)", layer_count (dest));
+  CHECK (api->image_layers (engine, dest, rows, 8, &count) == GLIMS_STATUS_OK && count == 1 &&
+         rows[0].id == base && strcmp (rows[0].name, "Base") == 0 &&
+         (render_pixel (dest, 10, 10, px), px[2] > 150 && px[0] < 60),
+         "after undo the destination's own blue Base layer is unchanged (%s, %d,%d,%d)",
+         rows[0].name, px[0], px[1], px[2]);
+  CHECK (api->image_redo (engine, dest) == GLIMS_STATUS_OK && layer_count (dest) == 4 &&
+         (render_pixel (dest, 50, 50, px), px[1] > 150 && px[0] < 60),
+         "redo restores the import with the edited green pixels again (%d,%d,%d)",
+         px[0], px[1], px[2]);
+
+  snprintf (xcf, sizeof xcf, "%s/imported-vectors-resaved.xcf", work);
+  CHECK (api->image_save (engine, dest, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &src, NULL) == GLIMS_STATUS_OK,
+         "the imported vector layers can be saved and reopened after their loading image is gone");
+  if (src)
+    {
+      CHECK (api->image_layers (engine, src, rows, 8, &count) == GLIMS_STATUS_OK && count == 4 &&
+             rows[0].kind == GLIMS_LAYER_VECTOR && rows[1].kind == GLIMS_LAYER_PIXEL &&
+             (render_pixel (src, 120, 50, px), px[0] > 200 && px[1] > 200) &&
+             (render_pixel (src, 50, 50, px), px[1] > 150 && px[0] < 60),
+             "resaving imported vectors preserves both editable geometry and raster edits");
+      api->image_close (engine, src);
+    }
+
+  api->image_close (engine, dest);
+}
+
 /* GIMP-made files the app must read and change as GIMP does: a layer
  * group's own blend mode, pass-through, and a text layer sized in points. */
 static void
@@ -5552,6 +5800,61 @@ test_procedures (void)
 }
 
 static void
+test_clear_srgb_and_readiness (const char *fixtures)
+{
+  GlimsImageID image = 0;
+  GlimsItemID layer;
+  GlimsFilterID filter = 0;
+  GlimsStrokeID stroke = 0;
+  GlimsColor midtone = { .5, .25, .75, 1 };
+  GlimsSelectOptions options = { .struct_size = sizeof options, .antialias = false };
+  GlimsPoint corners[] = { { 0, 0 }, { 1, 1 } };
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 1);
+  GlimsStrokePoint point = { 1, 0, 1, 0, 0, 0 };
+  uint8_t inside[4], outside[4];
+  int32_t depth;
+  char file[1024];
+
+  /* The generated RGB PNG has no alpha channel. Clear therefore uses
+   * the background color instead of making selected pixels transparent. */
+  snprintf (file, sizeof file, "%s/profiled.png", fixtures);
+  CHECK (api->image_open (engine, file, &image, NULL) == GLIMS_STATUS_OK,
+         "the opaque RGB Clear color fixture opens");
+  layer = first_layer (image);
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, corners, 2, &options) == GLIMS_STATUS_OK,
+         "Clear's fixture selects only the first RGB pixel");
+  depth = undo_depth (image);
+  CHECK (api->image_clear (engine, image, &midtone, NULL) == GLIMS_STATUS_OK && undo_depth (image) == depth + 1,
+         "Clear with a background color adds one undo step");
+  render_pixel (image, 0, 0, inside);
+  render_pixel (image, 1, 0, outside);
+  CHECK (abs ((int)inside[0] - 128) <= 1 && abs ((int)inside[1] - 64) <= 1 &&
+         abs ((int)inside[2] - 191) <= 1 && inside[3] == 255,
+         "Clear interprets its background as sRGB midtones (%u,%u,%u,%u)",
+         inside[0], inside[1], inside[2], inside[3]);
+  CHECK (outside[0] == 0 && outside[1] == 255 && outside[2] == 0 && outside[3] == 255,
+         "Clear preserves the RGB pixel outside the selection");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         (render_pixel (image, 0, 0, inside), inside[0] == 255 && inside[1] == 0 && inside[2] == 0) &&
+         api->image_redo (engine, image) == GLIMS_STATUS_OK,
+         "Clear's sRGB background change undoes and redoes");
+
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK,
+         "a native preview holds the Clear target");
+  depth = undo_depth (image);
+  CHECK (api->image_clear (engine, image, &midtone, NULL) == GLIMS_STATUS_BUSY && undo_depth (image) == depth,
+         "Clear refuses a native preview without adding history");
+  if (filter) api->filter_abort (engine, filter);
+  CHECK (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK,
+         "an active stroke holds the Clear target");
+  depth = undo_depth (image);
+  CHECK (api->image_clear (engine, image, &midtone, NULL) == GLIMS_STATUS_BUSY && undo_depth (image) == depth,
+         "Clear refuses an active stroke before editing");
+  if (stroke) api->stroke_end (engine, stroke);
+  api->image_close (engine, image);
+}
+
+static void
 test_clipboard (void)
 {
   GlimsImageID image = 0;
@@ -6131,6 +6434,8 @@ main (int argc, char **argv)
   test_paths (argv[2]);
   test_path_fill (argv[2]);
   test_path_vector_layer (argv[2]);
+  test_vector_rasterized_roundtrip (argv[2]);
+  test_vector_rasterized_open_layers (argv[2]);
   test_deleted_items ();
   test_groups_and_text_units (argv[3]);
   test_layer_structure ();
@@ -6141,6 +6446,7 @@ main (int argc, char **argv)
   test_selections ();
   test_editing ();
   test_clipboard ();
+  test_clear_srgb_and_readiness (argv[3]);
   test_render_freshness ();
   test_transforms ();
   test_matrix_transform ();
