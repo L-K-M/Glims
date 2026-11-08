@@ -132,6 +132,7 @@ enum EngineSmokeTest {
             try exerciseFilterStackInterface(session, work: work, documents: documents)
             try measurePluginStalls(session, work: work)
             try exerciseResourceCatalog(session)
+            try exerciseResourceThumbnails(session)
         } catch {
             check(false, "unexpected engine error: \(error)")
         }
@@ -6193,6 +6194,139 @@ enum EngineSmokeTest {
             }
         }
 
+    }
+
+    /// The bounded resource thumbnail scenario: stock brushes, patterns
+    /// and gradients render through the Swift wrapper, the built-in FG/BG
+    /// gradient proves fresh per-call rendering with explicit colors,
+    /// malformed and high-bit handles are refused, and no image, catalog
+    /// or global context changes. Renders only; no resource is applied.
+    private static func exerciseResourceThumbnails(_ session: EngineSession) throws {
+        let catalogBefore = try EngineSession.ResourceKind.allCases.map { try session.resources($0) }
+        var liveHandle: EngineSession.ResourceID = 0
+
+        for kind in EngineSession.ResourceKind.allCases {
+            let rows = try session.resources(kind)
+            guard let first = rows.first else {
+                check(false, "the engine lists at least one \(kind) to thumbnail")
+                continue
+            }
+            if liveHandle == 0 { liveHandle = first.id }
+
+            var contentSeen = false
+            var alphaSeen = false
+            for row in rows.prefix(3) {
+                let thumbnail = try session.resourceThumbnail(row.id, maxSize: 32)
+                check(thumbnail.width >= 1 && thumbnail.height >= 1
+                        && thumbnail.width <= 32 && thumbnail.height <= 32,
+                      "\(kind) '\(row.displayName)' thumbnail fits 32 x 32 at its own bounds (\(thumbnail.width) x \(thumbnail.height))")
+                check(thumbnail.pixels.count == thumbnail.width * thumbnail.height * 4,
+                      "\(kind) '\(row.displayName)' thumbnail buffer is exactly width * height * 4 straight RGBA bytes")
+                check(thumbnail.image.width == thumbnail.width && thumbnail.image.height == thumbnail.height
+                        && thumbnail.image.bytesPerRow == thumbnail.width * 4,
+                      "\(kind) '\(row.displayName)' CGImage keeps the buffer's dimensions and row stride")
+                check(argb(thumbnail.image, x: 0, y: 0) == Array(thumbnail.pixels.prefix(4)),
+                      "\(kind) '\(row.displayName)' CGImage reads back the buffer's first pixel as RGBA")
+                contentSeen = contentSeen || thumbnail.pixels.contains { $0 != 0 }
+                alphaSeen = alphaSeen || thumbnail.pixels.enumerated().contains { $0.offset % 4 == 3 && $0.element != 0 }
+            }
+            check(contentSeen && alphaSeen,
+                  "stock \(kind) thumbnails carry native content and alpha coverage")
+
+            if kind == .gradient {
+                let strip = try session.resourceThumbnail(first.id, maxSize: 15)
+                check(strip.width == 15 && strip.height == 7 && strip.pixels.count == 15 * 7 * 4,
+                      "a gradient thumbnail is exactly 15 x 7 at maxSize 15 (\(strip.width) x \(strip.height))")
+                let tiny = try session.resourceThumbnail(first.id, maxSize: 1)
+                check(tiny.width == 1 && tiny.height == 1 && tiny.pixels.count == 4,
+                      "a gradient thumbnail is exactly 1 x 1 (4 bytes) at maxSize 1")
+            }
+
+            check(try session.resources(kind) == rows,
+                  "\(kind) resource handles are stable across the thumbnail calls")
+            let identity = try session.resourceIdentifiers(first.id)
+            check(try session.resolveResource(identity, kind: kind) == first.id,
+                  "the \(kind) identity still resolves to its own handle after thumbnails")
+        }
+
+        // The built-in FG/BG gradient's identity is stable across engine
+        // sets; an internal resource's display name is localized and not
+        // compared, so resolve by its collection.
+        let fgBg = try session.resolveResource(
+            EngineSession.ResourceIdentity(name: "FG to BG", collection: "gimp-gradient-fg-bg-rgb", isInternal: true),
+            kind: .gradient)
+        check(fgBg != 0, "the built-in FG to BG (RGB) gradient resolves by its exact internal identity")
+
+        let midtone = NSColor(srgbRed: 0.5, green: 0.25, blue: 0.75, alpha: 1)
+        let mid = try session.resourceThumbnail(fgBg, maxSize: 16, foreground: midtone, background: midtone)
+        let firstPixel = Array(mid.pixels.prefix(4))
+        check(abs(Int(firstPixel[0]) - 128) <= 1 && abs(Int(firstPixel[1]) - 64) <= 1
+                && abs(Int(firstPixel[2]) - 191) <= 1 && firstPixel[3] == 255,
+              "explicit thumbnail colors land as sRGB RGBA in R,G,B,A order (\(firstPixel))")
+        check(argb(mid.image, x: 0, y: 0) == firstPixel,
+              "the thumbnail CGImage exposes the same straight-alpha bytes as the pixel buffer")
+
+        let redBlue = try session.resourceThumbnail(fgBg, maxSize: 32, foreground: .red, background: .blue)
+        check(redBlue.width == 32 && redBlue.height == 16
+                && redBlue.pixels.enumerated().allSatisfy { $0.offset % 4 != 3 || $0.element == 255 },
+              "an opaque FG/BG gradient thumbnail is exactly 32 x 16 with alpha 255")
+        let redBlueAgain = try session.resourceThumbnail(fgBg, maxSize: 32, foreground: .red, background: .blue)
+        check(redBlue.pixels == redBlueAgain.pixels,
+              "repeated same-color FG/BG gradient thumbnails agree byte for byte")
+        let redGreen = try session.resourceThumbnail(fgBg, maxSize: 32, foreground: .red, background: .green)
+        let yellowBlue = try session.resourceThumbnail(fgBg, maxSize: 32, foreground: .yellow, background: .blue)
+        check(redBlue.pixels != redGreen.pixels,
+              "changing only the background re-renders the gradient thumbnail fresh")
+        check(redBlue.pixels != yellowBlue.pixels,
+              "changing only the foreground re-renders the gradient thumbnail fresh")
+
+        let defaultBefore = try session.resourceThumbnail(fgBg, maxSize: 32)
+        check(defaultBefore.pixels != redBlue.pixels,
+              "the default black/white colors differ from explicit red/blue")
+        let defaultAfter = try session.resourceThumbnail(fgBg, maxSize: 32)
+        check(defaultBefore.pixels == defaultAfter.pixels,
+              "explicit-color calls leave the engine's default FG/BG untouched (no global context mutation)")
+
+        for bad in [EngineSession.ResourceID(0), .max, (UInt64(1) << 32) | fgBg, 0x8000_0000] {
+            do {
+                _ = try session.resourceThumbnail(bad, maxSize: 32)
+                check(false, "resource id \(bad) is refused")
+            } catch let error as EngineSession.EngineError {
+                check(error.status == Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                      "malformed/high-bit resource id \(bad) is refused without narrowing to a live handle")
+            }
+        }
+        do {
+            _ = try session.resourceThumbnail(0x7FFF_FFFF, maxSize: 32)
+            check(false, "an unissued well-shaped resource id reports NOT_FOUND")
+        } catch let error as EngineSession.EngineError {
+            check(error.status == Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
+                  "an unissued well-shaped resource id reports NOT_FOUND")
+        }
+        for badSize: Int32 in [0, -1, 513] {
+            do {
+                _ = try session.resourceThumbnail(fgBg, maxSize: badSize)
+                check(false, "maxSize \(badSize) is refused")
+            } catch let error as EngineSession.EngineError {
+                check(error.status == Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                      "maxSize \(badSize) is refused with INVALID_ARGUMENT")
+            }
+        }
+
+        // An open image's history and pixels, and every catalog, must be
+        // untouched by the renders.
+        let image = try session.newImage(width: 48, height: 32)
+        defer { try? session.closeImage(image) }
+        let undoBefore = try session.undoInfo(image)
+        let pixelsBefore = try session.copyPixels(image, merged: true).pixels
+        _ = try session.resourceThumbnail(fgBg, maxSize: 64, foreground: .red, background: .blue)
+        if liveHandle != 0 { _ = try session.resourceThumbnail(liveHandle, maxSize: 64) }
+        check(try session.undoInfo(image) == undoBefore,
+              "resource thumbnails add no undo step to an open image")
+        check(try session.copyPixels(image, merged: true).pixels == pixelsBefore,
+              "resource thumbnails do not mutate an open image's pixels")
+        check(try EngineSession.ResourceKind.allCases.map { try session.resources($0) } == catalogBefore,
+              "resource thumbnails leave every resource catalog unchanged")
     }
 }
 

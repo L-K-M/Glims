@@ -820,6 +820,43 @@ bundle checks and any Swift build. Pending root runtime validation:
 the four conformance runs, including the fresh-per-call gradient proof
 and the exact gradient strip dimensions.
 
+### Swift resource thumbnail wrapper (2026-11-08)
+
+Session side of the same branch, `feat/resource-previews`: one typed
+`EngineSession` wrapper, `resourceThumbnail(_:maxSize:foreground:background:)`,
+over the facade's `resource_thumbnail` slot, returning an owned
+`ResourceThumbnail` — checked `width`/`height`, a straight-alpha sRGB
+RGBA `Data` of exactly `width * height * 4` bytes, and a CGImage over
+the same bytes with `CGImageAlphaInfo.last`, an sRGB space and a
+`width * 4` row stride, matching `drawableThumbnail`'s straight-alpha
+contract. The opaque `UInt64` handle passes through unnarrowed;
+`foreground`/`background` are optional `NSColor`s converted with the
+existing `color(_:)` helper and documented as opaque in native FG/BG
+contexts (alpha comes from the resource's brush mask or transparent
+gradient stops, never from the colors). The native buffer is freed
+with `free_pixels` on every path, validation and CGImage-construction
+failures included, and the dimensions and byte count are checked with
+overflow-reporting multiplies before the copy; native errors surface
+through the existing `check`/`EngineError` handling. No UI flow calls
+the wrapper; its doc marks it off the main thread, like
+`resources(_:)`. The `--engine-smoke-test` gains
+`exerciseResourceThumbnails`: stock brushes, patterns and gradients of
+each kind through the wrapper (box fit, byte counts, CGImage
+dimensions/row stride and first-pixel readback), exact gradient strips
+at maxSize 15 and 1, stable handles and identity round trips across
+calls, the built-in FG/BG gradient resolved by its exact internal
+identity with the fresh-render proof (same colors agree byte for byte;
+background-only and foreground-only changes re-render; explicit colors
+differ from the defaults and leave the defaults untouched, so no
+global context is mutated), zero/all-high/high-bit ids refused as
+INVALID_ARGUMENT without narrowing, a well-shaped unissued id as
+NOT_FOUND, maxSize 0/-1/513 refused, and an open image's undo state,
+pixels and every catalog unchanged after the calls. Verified here with
+`swift build` and `swift build --build-tests` only (both pass, no new
+warnings); the root owns the engine lock and the desktop, so the
+smoke-test scenario's runtime execution is pending root validation,
+after the root's ICC integration to keep the append-only ABI order.
+
 ## Later, before any public release
 
 - Developer ID signing and notarization for the app, GTK3, Python and every
