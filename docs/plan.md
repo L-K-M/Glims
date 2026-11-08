@@ -1888,3 +1888,23 @@ field checks and the existing active-edit preservation check pass on the
 pinned engine (30 focused checks). Before this fix, the source-cache
 integration passed 399 unit tests, all-four-engine guide checks and 971
 full pinned interface checks. Follow-up review and matrix are running.
+
+### Profiled display pixels (2026-11-08)
+
+The existing renderer converts the image projection from its effective ICC
+space to 8-bit premultiplied sRGB. The native chain is
+`gimp_image_get_proj_format` / `gimp_image_get_layer_space`, with ICC spaces
+created by `gimp_color_profile_get_space` and `babl_space_from_icc`;
+EngineSession tags the resulting CGImage with sRGB. Quartz performs the
+subsequent conversion to the destination display context. Reference:
+https://developer.apple.com/library/archive/documentation/GraphicsImaging/Conceptual/drawingwithquartz2d/dq_color/dq_color.html
+
+A new independent analytic oracle assigns the existing linear-TRC profile
+with sRGB primaries to opaque and translucent midtones. Expected sRGB
+transfer values are calculated directly, rather than through another native
+render. All four engine suites pass (1,261 / 1,156 / 1,261 / 1,261), including
+premultiplied render bytes, straight-alpha clipboard bytes, unchanged
+history/dirty state on reads and profile-assignment Undo/Redo appearance.
+No production renderer change was needed. This verifies the in-gamut sRGB
+path; physical monitor calibration, wide-gamut/HDR output, proof profiles,
+proof intents and gamut warnings remain unverified or unimplemented.

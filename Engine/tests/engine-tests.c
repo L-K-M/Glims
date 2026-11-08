@@ -5234,6 +5234,88 @@ test_color_state (const char *fixtures, const char *work)
   free (after_pixels);
 }
 
+/* Independent analytic oracle for the linear-TRC fixture made with sRGB
+ * primaries in scripts/make-icc-fixtures.py. Do not derive expected values
+ * from a second babl/GIMP rendering path. */
+static int
+display_srgb_component (uint8_t linear, uint8_t alpha)
+{
+  double value = linear / 255.0;
+  double encoded = value <= 0.0031308 ? value * 12.92
+                                     : 1.055 * pow (value, 1.0 / 2.4) - 0.055;
+  return (int) lround (encoded * alpha);
+}
+
+static void
+test_render_profile_colors (const char *fixtures)
+{
+  const uint8_t original[8] = { 128, 64, 32, 255, 128, 64, 32, 128 };
+  const uint8_t baseline[8] = { 128, 64, 32, 255, 64, 32, 16, 128 };
+  GlimsImageID image = 0;
+  GlimsPixelBuffer copied = { 0 };
+  GlimsImageInfo state, after_reads;
+  uint8_t rendered[8] = { 0 }, repeated[8] = { 0 };
+  GlimsRect area = { 0, 0, 2, 1 };
+  char profile[1024];
+  int32_t depth;
+  bool matched;
+
+  snprintf (profile, sizeof profile, "%s/linear-rgb.icc", fixtures);
+  CHECK (api->image_from_pixels (engine, 2, 1, original, sizeof original, &image, NULL) == GLIMS_STATUS_OK,
+         "the profiled render oracle has opaque and translucent midtones");
+  if (! image) return;
+  CHECK (api->image_render (engine, image, 1.0, area, rendered, 8) == GLIMS_STATUS_OK &&
+         memcmp (rendered, baseline, sizeof baseline) == 0,
+         "the default sRGB render premultiplies partial alpha without changing opaque channels");
+  depth = undo_depth (image);
+  CHECK (api->image_assign_profile (engine, image, profile, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 1,
+         "assigning the linear fixture is one undo step");
+  CHECK (api->image_render (engine, image, 1.0, area, rendered, 8) == GLIMS_STATUS_OK,
+         "the assigned-profile composite renders to sRGB");
+  matched = true;
+  for (int pixel = 0; pixel < 2; pixel++)
+    {
+      for (int channel = 0; channel < 3; channel++)
+        if (abs ((int) rendered[pixel * 4 + channel] -
+                 display_srgb_component (original[pixel * 4 + channel], original[pixel * 4 + 3])) > 2)
+          matched = false;
+      if (rendered[pixel * 4 + 3] != original[pixel * 4 + 3]) matched = false;
+    }
+  CHECK (matched, "profiled premultiplied render matches the analytic sRGB oracle (%u,%u,%u,%u; %u,%u,%u,%u)",
+         rendered[0], rendered[1], rendered[2], rendered[3], rendered[4], rendered[5], rendered[6], rendered[7]);
+  CHECK (api->image_copy_pixels (engine, image, true, &copied, NULL) == GLIMS_STATUS_OK &&
+         copied.pixels && copied.byte_count == 8,
+         "the profiled clipboard read supplies two straight-alpha pixels");
+  matched = copied.pixels && copied.byte_count == 8;
+  if (matched)
+    for (int pixel = 0; pixel < 2; pixel++)
+      {
+        for (int channel = 0; channel < 3; channel++)
+          if (abs ((int) copied.pixels[pixel * 4 + channel] -
+                   display_srgb_component (original[pixel * 4 + channel], 255)) > 2)
+            matched = false;
+        if (copied.pixels[pixel * 4 + 3] != original[pixel * 4 + 3]) matched = false;
+      }
+  CHECK (matched, "profiled clipboard colors match the straight-alpha analytic sRGB oracle");
+  api->free_pixels (copied.pixels);
+  CHECK (api->image_info (engine, image, &state) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, area, repeated, 8) == GLIMS_STATUS_OK &&
+         memcmp (repeated, rendered, sizeof rendered) == 0 &&
+         api->image_info (engine, image, &after_reads) == GLIMS_STATUS_OK &&
+         after_reads.dirty == state.dirty && undo_depth (image) == depth + 1,
+         "profiled display reads change neither history, dirty state nor output");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, area, repeated, 8) == GLIMS_STATUS_OK &&
+         memcmp (repeated, baseline, sizeof baseline) == 0,
+         "undo of profile assignment restores the initial sRGB appearance");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, area, repeated, 8) == GLIMS_STATUS_OK &&
+         memcmp (repeated, rendered, sizeof rendered) == 0,
+         "redo restores the profiled appearance including premultiplied alpha");
+  api->image_close (engine, image);
+}
+
 static void
 test_profile_preserves_editable_layers (const char *fixtures)
 {
@@ -9187,6 +9269,7 @@ main (int argc, char **argv)
   test_filter_edit (argv[2]);
   test_color_state (argv[3], argv[2]);
   test_color_profiles (argv[3], argv[2]);
+  test_render_profile_colors (argv[3]);
   test_profile_preserves_editable_layers (argv[3]);
   test_qmask_name_fixture (argv[3]);
   test_resources ();
