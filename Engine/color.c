@@ -138,16 +138,18 @@ glims_image_color_info (GlimsEngine   *engine,
   /* Embedded means an ICC profile parasite travels with the image (and
    * so with its files); the label is the effective profile's — the
    * image's own when it has one, the engine's builtin fallback for its
-   * model otherwise (gimp_image_color_managed_get_color_profile). */
+   * model otherwise. Both getters return borrowed profiles: reading
+   * metadata must not release the image's profile. */
   info->profile_embedded = gimp_image_get_icc_parasite (image) != NULL;
-  profile = gimp_color_managed_get_color_profile (GIMP_COLOR_MANAGED (image));
+  profile = gimp_image_get_color_profile (image);
+  if (! profile)
+    profile = gimp_image_get_builtin_color_profile (image);
   if (profile)
     {
       const gchar *label = gimp_color_profile_get_label (profile);
 
       if (label)
         g_strlcpy (info->profile_label, label, sizeof (info->profile_label));
-      g_object_unref (profile);
     }
 
   return GLIMS_STATUS_OK;

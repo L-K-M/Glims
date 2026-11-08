@@ -3456,7 +3456,7 @@ count_differences (const uint8_t *a, const uint8_t *b, size_t bytes)
 static void
 test_color_state (const char *fixtures, const char *work)
 {
-  char               indexed_png[1024], xcf[1024];
+  char               indexed_png[1024], profiled_png[1024], xcf[1024];
   GlimsImageID       image = 0, reopened = 0, indexed = 0;
   GlimsItemID        layer = 0;
   GlimsColorInfo     info;
@@ -3474,6 +3474,7 @@ test_color_state (const char *fixtures, const char *work)
   char              *error = NULL;
 
   snprintf (indexed_png, sizeof indexed_png, "%s/indexed.png", fixtures);
+  snprintf (profiled_png, sizeof profiled_png, "%s/profiled.png", fixtures);
   snprintf (xcf, sizeof xcf, "%s/color-state.xcf", work);
 
   api->image_new (engine, 32, 24, &image, NULL);
@@ -3539,9 +3540,9 @@ test_color_state (const char *fixtures, const char *work)
   error = NULL;
   CHECK (api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
          info.mode == GLIMS_COLOR_MODE_GRAYSCALE && info.component == GLIMS_COLOR_COMPONENT_U8 &&
-         info.trc == GLIMS_COLOR_TRC_NONLINEAR && info.profile_embedded &&
+         info.trc == GLIMS_COLOR_TRC_NONLINEAR && ! info.profile_embedded &&
          strstr (info.profile_label, "Grayscale") != NULL,
-         "grayscale info: mode gray, u8 non-linear, gray profile embedded (\"%s\")", info.profile_label);
+         "grayscale info: mode gray, u8 non-linear, builtin gray profile (\"%s\")", info.profile_label);
   CHECK (api->image_components (engine, image, &comp) == GLIMS_STATUS_OK &&
          comp.mode == GLIMS_COMPONENT_MODE_GRAY,
          "the component state follows the mode");
@@ -3561,6 +3562,8 @@ test_color_state (const char *fixtures, const char *work)
          "back to RGB");
 
   /* Precision changes, including linear vs non-linear TRC. */
+  free (before_pixels);
+  before_pixels = render_all (image, &w1, &h1);
   before = undo_depth (image);
   CHECK (api->image_convert_precision (engine, image, GLIMS_COLOR_COMPONENT_U16,
                                        GLIMS_COLOR_TRC_NONLINEAR, NULL) == GLIMS_STATUS_OK &&
@@ -3607,7 +3610,7 @@ test_color_state (const char *fixtures, const char *work)
   CHECK (api->image_open (engine, xcf, &reopened, &error) == GLIMS_STATUS_OK &&
          api->image_color_info (engine, reopened, &info) == GLIMS_STATUS_OK &&
          info.mode == GLIMS_COLOR_MODE_GRAYSCALE && info.component == GLIMS_COLOR_COMPONENT_U16 &&
-         info.trc == GLIMS_COLOR_TRC_LINEAR && info.profile_embedded &&
+         info.trc == GLIMS_COLOR_TRC_LINEAR && ! info.profile_embedded &&
          strstr (info.profile_label, "Grayscale") != NULL &&
          api->image_info (engine, reopened, &basic) == GLIMS_STATUS_OK &&
          basic.width == 32 && basic.height == 24 && basic.layer_count == 1 &&
@@ -3680,6 +3683,36 @@ test_color_state (const char *fixtures, const char *work)
          api->image_convert_precision (engine, image, GLIMS_COLOR_COMPONENT_U8,
                                        GLIMS_COLOR_TRC_LINEAR, NULL) == GLIMS_STATUS_NOT_FOUND,
          "a closed image reports NOT_FOUND");
+
+  /* Reading metadata must not consume an image-owned profile. Repeated
+   * reloads and a save/reopen must preserve the custom embedded profile. */
+  image = 0;
+  CHECK (api->image_open (engine, profiled_png, &image, NULL) == GLIMS_STATUS_OK,
+         "the custom-profile PNG opens");
+  if (image)
+    {
+      int valid = 1;
+      int i;
+
+      free (before_pixels);
+      before_pixels = render_all (image, &w1, &h1);
+      for (i = 0; i < 10; i++)
+        valid = api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+                info.profile_embedded && strcmp (info.profile_label, "Glims Profile Fixture") == 0 && valid;
+      CHECK (valid, "repeated color metadata reads preserve the embedded profile");
+      free (after_pixels);
+      after_pixels = render_all (image, &w2, &h2);
+      CHECK (before_pixels && after_pixels && w1 == w2 && h1 == h2 &&
+             count_differences (before_pixels, after_pixels, (size_t) w1 * h1 * 4) == 0,
+             "reading color metadata never changes the rendered pixels");
+      CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+             api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK &&
+             api->image_color_info (engine, reopened, &info) == GLIMS_STATUS_OK &&
+             info.profile_embedded && strcmp (info.profile_label, "Glims Profile Fixture") == 0,
+             "the custom embedded profile survives XCF after repeated reads");
+      if (reopened) api->image_close (engine, reopened);
+      api->image_close (engine, image);
+    }
 
   free (before_pixels);
   free (after_pixels);
