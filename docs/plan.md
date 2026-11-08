@@ -1916,3 +1916,20 @@ undo/redo, unchanged pixels/selection/bounds, XCF, lock and busy assertions
 now pass. The compiled `layer-source` interface scenario additionally
 checks queued document cache refresh and busy admission; its runtime
 execution and the unit suite are pending the shared desktop.
+
+Ruler runtime validation caught overlapping native ruler/clip rectangles:
+this AppKit build left the viewport full-sized even with zero content
+insets. CanvasScrollView now reserves only rectangles that actually
+overlap, leaving traditional native tiling alone, and preserves the
+scrolled position across repeated tiling. The focused checks pass on all
+four engines, including real scrolling and rectangle separation.
+Independent reviews of the original rulers and the layout fix found no
+important issues. All 417 unit tests pass.
+
+The first full run exposed a stale synthetic text click: after layout
+changed, its old window coordinates mapped to image (4,-17), outside the
+saved text at (4,4). Recomputing a click inside the current text bounds
+reopens that exact layer; deleting its content then saves correctly. The
+focused file-safety scenario passes. Unknown smoke selectors now fail
+explicitly rather than silently running the full suite. The integrated
+full run is repeated after adopting the Guides field fix.

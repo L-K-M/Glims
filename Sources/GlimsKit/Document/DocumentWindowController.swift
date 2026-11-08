@@ -13,7 +13,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     let statusBar = StatusBarView(frame: .zero)
     /// The scroll view hosting the canvas and its native ruler slots;
     /// readable for the smoke test's native-slot checks.
-    let scrollView = NSScrollView()
+    let scrollView = CanvasScrollView()
     private lazy var engineUndoManager = EngineUndoManager(document: imageDocument)
     /// The open filter preview, generic or dedicated; one at a time.
     private(set) var previewPanel: FilterPreviewPanel?
@@ -151,6 +151,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     private func layOutContent(in window: NSWindow) {
         scrollView.contentView = CanvasClipView()
+        // This scroll view is below the title bar. Ruler reservation
+        // must not also include automatic title-bar overlap insets.
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
         scrollView.documentView = canvas
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
@@ -166,6 +170,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // layout and the accessibility semantics.
         horizontalRuler.canvas = canvas
         verticalRuler.canvas = canvas
+        horizontalRuler.clientView = canvas
+        verticalRuler.clientView = canvas
         scrollView.hasHorizontalRuler = true
         scrollView.hasVerticalRuler = true
         scrollView.horizontalRulerView = horizontalRuler
@@ -517,6 +523,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         guard !imageDocument.isClosing else { return }
         rulerViewState.toggle()
         scrollView.rulersVisible = rulerViewState.showsRulers
+        scrollView.tile()
         invalidateRulers()
         if let item = sender as? NSMenuItem { item.state = rulerViewState.menuState }
     }

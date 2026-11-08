@@ -98,6 +98,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "file-safety" {
+                try exerciseFileSafety(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (file safety)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-source" {
                 try exerciseLayerSourceCache(session, documents: documents)
                 print(failures == 0 ? "PASSED (layer source)" : "FAILED: \(failures) failure(s)")
@@ -152,6 +157,10 @@ enum EngineSmokeTest {
                 try exercisePixelRulers(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (pixel rulers)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
+            }
+            if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
+                check(false, "unknown engine smoke case: \(selected)")
+                return 1
             }
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
@@ -2508,7 +2517,18 @@ enum EngineSmokeTest {
             check(controller.canvas.tools.textEditor == nil && savedLayers.contains(where: { $0.kind == .text }),
                   "Save commits text still being edited into the XCF")
             try session.closeImage(savedImage)
-            controller.canvas.mouseDown(with: press)
+            guard let target = document.layers.first(where: { $0.kind == .text }),
+                  let deletePress = NSEvent.mouseEvent(with: .leftMouseDown,
+                    location: controller.canvas.convert(CGPoint(x: target.bounds.midX * controller.canvas.scale,
+                                                                y: target.bounds.midY * controller.canvas.scale), to: nil),
+                    modifierFlags: [], timestamp: 1, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 1, clickCount: 1, pressure: 1) else {
+                return check(false, "the saved text has a fresh canvas click target")
+            }
+            controller.canvas.mouseDown(with: deletePress)
+            check(controller.canvas.tools.textEditor?.textLayer == target.id
+                    && controller.canvas.tools.textEditor?.string == "Saved text",
+                  "a fresh click reopens the saved text before deleting its content")
             controller.canvas.tools.textEditor?.string = ""
             controller.saveDocument(nil)
             wait { document.pendingWork == 0 }
@@ -8019,7 +8039,7 @@ enum EngineSmokeTest {
             return best
         }
 
-        let imageA = try session.newImage(width: 240, height: 160)
+        let imageA = try session.newImage(width: 512, height: 320)
         let imageB = try session.newImage(width: 80, height: 50)
         let docA = try ImageDocument(session: session, image: imageA, name: "Rulers A")
         let docB = try ImageDocument(session: session, image: imageB, name: "Rulers B")
@@ -8047,6 +8067,9 @@ enum EngineSmokeTest {
         check(scrollA.horizontalRulerView === a.horizontalRuler
                 && scrollA.verticalRulerView === a.verticalRuler,
               "the window's rulers sit in the scroll view's native ruler slots")
+        check(!scrollA.contentView.frame.intersects(hRuler.frame)
+                && !scrollA.contentView.frame.intersects(vRuler.frame),
+              "native ruler rectangles stay outside the editable viewport")
         check(scrollA.hasHorizontalRuler && scrollA.hasVerticalRuler && scrollA.rulersVisible
                 && scrollB.rulersVisible,
               "rulers are on by default in both windows")
@@ -8081,8 +8104,9 @@ enum EngineSmokeTest {
         a.window?.contentView?.layoutSubtreeIfNeeded()
         spin(0.05)
         let viewportHidden = scrollA.contentView.bounds
-        check(viewportHidden.height > viewportWithRulers.height + 1,
-              "hiding the rulers gives the viewport back the ruler thickness")
+        check(viewportHidden.height > viewportWithRulers.height + 1
+                && viewportHidden.width > viewportWithRulers.width + 1,
+              "hiding the rulers gives the viewport back the ruler thickness (\(viewportWithRulers) -> \(viewportHidden); ruler frames \(hRuler.frame), \(vRuler.frame); clip \(scrollA.contentView.frame))")
         a.toggleShowRulers(rulersItem)
         check(rulersItem.state == .on && a.rulerViewState.showsRulers && scrollA.rulersVisible,
               "Show Rulers toggles back on while the engine is still busy")
@@ -8171,6 +8195,13 @@ enum EngineSmokeTest {
         let tickSpacingBefore = hRuler.currentPlan().map { $0.minorSpacing ?? $0.majorSpacing } ?? 1
         clip.scroll(to: NSPoint(x: expectedOriginX, y: before.origin.y))
         layout()
+        check(expectedOriginX > before.origin.x + 1,
+              "the zoomed ruler fixture actually scrolls")
+        let stableOffset = clip.bounds.origin
+        for _ in 0..<3 { scrollA.tile() }
+        check(abs(clip.bounds.origin.x - stableOffset.x) < 1e-6
+                && abs(clip.bounds.origin.y - stableOffset.y) < 1e-6,
+              "repeated ruler layout preserves the scrolled position")
         let rangeAfterScroll = oracleVisibleXRange()
         check(abs(rangeAfterScroll.0 - expectedOriginX / canvas.scale) < 1e-6,
               "the visible image range follows the actual scroll offset")
