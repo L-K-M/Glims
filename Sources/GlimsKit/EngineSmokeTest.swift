@@ -741,7 +741,7 @@ enum EngineSmokeTest {
 
         a.fill(nil)
         let invalidSheet = a.window?.attachedSheet
-        opacityField(invalidSheet)?.stringValue = "1e2"
+        opacityField(invalidSheet)?.stringValue = "50percent-junk"
         let invalidErrorsBefore = errors.count, invalidUndoBefore = first.undoInfo.undoCount
         finish(a, .alertFirstButtonReturn)
         check(errors.count > invalidErrorsBefore && first.pendingWork == 0
@@ -906,6 +906,7 @@ enum EngineSmokeTest {
         let originalError = document.onError
         var precisionError: String?
         document.onError = { message in precisionError = message; originalError?(message) }
+        defer { document.onError = originalError }
         controller.imagePrecision(nil)
         sheet = controller.window?.attachedSheet
         let activityGate = DispatchSemaphore(value: 0)
@@ -915,7 +916,7 @@ enum EngineSmokeTest {
         if let sheet {
             controller.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn)
         }
-        spin(0.2)
+        wait { precisionError != nil }
         check(held && precisionError != nil && document.colorInfo.component == .u8,
               "Precision reports Convert refused while another document holds the engine")
         activityGate.signal()
@@ -935,8 +936,7 @@ enum EngineSmokeTest {
                 component.selectItem(withTitle: EngineSession.ColorComponent.u16.title)
                 controller.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn)
             }
-            wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
-            spin()
+            wait { precisionError != nil && document.pendingWork == 0 && !EngineActivity.shared.isBusy }
             check(precisionError != nil && document.colorInfo.component == .u8,
                   "Precision reports an engine-side conversion refusal without changing the image")
         }
