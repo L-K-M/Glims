@@ -38,6 +38,20 @@ final class PlugInMenuLayoutTests: XCTestCase {
         XCTAssertEqual(PlugInMenuPlacement(menuPath: "<Image>/Filters/_Render/Fo__o")?.submenus, ["Render", "Fo_o"])
     }
 
+    func testNativePrintingReplacesOnlyTheEnginePrintingCommands() throws {
+        let commands = [
+            EngineSession.Procedure(name: "file-print-gtk", label: "Print…",
+                                    menuPath: "<Image>/File/[Send]", blurb: "", isSensitive: true),
+            EngineSession.Procedure(name: "file-print-gtk-page-setup", label: "Page Setup…",
+                                    menuPath: "<Image>/File/[Send]", blurb: "", isSensitive: true),
+            EngineSession.Procedure(name: "custom-proof", label: "Print…",
+                                    menuPath: "<Image>/File/[Send]", blurb: "", isSensitive: true),
+        ]
+        let file = try XCTUnwrap(PlugInMenuNode.layout(commands)[.file])
+        XCTAssertEqual(file.orderedSections.flatMap(\.entries).map(\.procedure.name), ["custom-proof"],
+                       "the native replacements suppress GTK printing by procedure identity, preserving other plug-ins")
+    }
+
     func testLayoutOrdersSubmenusThenMainPartThenSections() throws {
         let layout = PlugInMenuNode.layout([
             procedure("Sparkle…", "<Image>/Filters/Light and Shadow/[Light]"),
