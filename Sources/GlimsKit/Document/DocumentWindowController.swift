@@ -730,9 +730,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(repeatExport(_:)):
             menuItem.title = imageDocument.fileState.lastExportURL.map { "Export to \($0.lastPathComponent)" } ?? "Export Again…"
             return !editingBlocked && !previewBusy
-        case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(exportDocument(_:)), #selector(saveDocumentCopy(_:)):
+        case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(exportDocument(_:)), #selector(saveDocumentCopy(_:)),
+             #selector(openLayersFromFile(_:)):
             // A plug-in dialog is modal for the engine; file calls get BUSY.
             return !editingBlocked && !previewBusy
+        case #selector(placeLinkFromFile(_:)):
+            // Link layers need GIMP 3.2; an unknown version stays enabled
+            // and the facade's own UNSUPPORTED answer reports the rest.
+            return !editingBlocked && !previewBusy && imageDocument.supportsLinkLayers != false
         case #selector(runPlugIn(_:)):
             // The engine runs no plug-in while a filter preview is open.
             guard let command = menuItem.representedObject as? PlugInCommand else { return false }
@@ -854,6 +859,74 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         printJobIsOpen = false
         printJobDropped = false
         stateDidChange()
+    }
+
+    // MARK: File imports
+
+    /// File ▸ Open as Layers…: one file, imported as layers.
+    @objc func openLayersFromFile(_ sender: Any?) {
+        askForImportFile(prompt: "Open", message: "Choose a file to open as layers.") { [weak self] url in
+            self?.importChosenFile(url, asLink: false)
+        }
+    }
+
+    /// File ▸ Place…: one file, placed as a link layer.
+    /// Engines before GIMP 3.2 have no link layers; the menu already
+    /// refuses them, and this guard keeps a programmatic trigger honest.
+    @objc func placeLinkFromFile(_ sender: Any?) {
+        guard imageDocument.supportsLinkLayers != false else {
+            statusBar.message = "Linked layers are unavailable in this build. Use Open as Layers to import a copy."
+            NSSound.beep()
+            return
+        }
+        askForImportFile(prompt: "Place", message: "Choose a file to place as a link layer.") { [weak self] url in
+            self?.importChosenFile(url, asLink: true)
+        }
+    }
+
+    /// The import's file panel: one local file, presented as a sheet like
+    /// Save's. Choosing commits in-flight edits first so the load sees
+    /// the finished state; cancelling changes nothing.
+    private func askForImportFile(prompt: String, message: String,
+                                  _ chosen: @escaping (URL) -> Void) {
+        guard let window, !imageDocument.isClosing else { return }
+        endPendingEdits()
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.prompt = prompt
+        panel.message = message
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK, let url = panel.url else { return }
+            chosen(url)
+        }
+    }
+
+    /// Hands the chosen file to the document, which owns admission, the
+    /// engine-wide busy gate and the facade call; the status line reports
+    /// the outcome and any native error.
+    private func importChosenFile(_ url: URL, asLink: Bool) {
+        let name = url.lastPathComponent
+        let completion: @MainActor (Result<ImageDocument.ImportOutcome, Error>) -> Void = { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(.openedLayers):
+                self.statusBar.message = "Opened layers from \(name)"
+            case .success(.placedLink):
+                self.statusBar.message = "Placed \(name) as a link layer"
+            case .success(.cancelled):
+                self.statusBar.message = asLink ? "Placing \(name) was cancelled."
+                    : "Opening \(name) as layers was cancelled."
+            case .failure(let error):
+                self.showStatusError(String(describing: error))
+            }
+            self.stateDidChange()
+        }
+        if asLink {
+            imageDocument.placeLink(from: url, completion: completion)
+        } else {
+            imageDocument.openLayers(from: url, completion: completion)
+        }
     }
 
     // MARK: Saving, exporting and closing
