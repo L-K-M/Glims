@@ -816,8 +816,11 @@ color and busy/native refusals. Review found no important issues. The
 expanded checks include independent background color and invalid opacity.
 The integrated four-engine run passes 652 checks on 3.2.8, 3.2.0 and master,
 649 on 3.0.8, before the Paths interface merge. After that integration,
-unit and native checks are recorded in the PR. Pattern fill and resource
-selection are a separate slice.
+305 unit tests and 689 interface checks on 3.2.8/3.2.0/master, 678 on
+3.0.8 pass. An actual 50-percent Fill paints the document; cancelling
+Custom after opening its color well closes the sheet's color panel.
+The test app quit without saving. Pattern fill and resource selection
+are a separate slice.
 
 ### Paths interface verification (2026-11-08)
 
