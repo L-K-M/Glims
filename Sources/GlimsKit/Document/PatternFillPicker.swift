@@ -94,6 +94,9 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
     /// busy) shows the busy state and retries once when the engine idles.
     func load() {
         guard !isClosed, !loadInFlight, let session = document?.session else { return }
+        // Switching fill sources keeps the explicit pending choice and
+        // its previews. A fresh catalog is loaded when a new sheet opens.
+        if case .ready = model.state { return }
         loadInFlight = true
         let generation = model.generation
         let current = model.currentIdentity

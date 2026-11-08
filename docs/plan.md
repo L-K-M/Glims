@@ -1354,6 +1354,7 @@ input queue at execution, so a removed pattern is reported missing and
 refused — no default substitution. Existing fill choices 0-4 and their
 behavior are unchanged. Pure `PatternChooserModel`/`PatternThumbnailQueue`/
 `PatternFillStore` unit checks cover search, selection, missing-identity,
-generation drops, queue batching and persistence; a compiled
-`exercisePatternChooserModel` engine scenario is in place, not yet wired
-into the smoke run.
+generation drops, queue batching and persistence. The initial model-only
+scenario was replaced by actual sheet checks, wired into the smoke run.
+Those checks cover names/previews, full search, fill pixels and undo,
+persisted selection, source toggling, missing-resource refusal and cleanup.

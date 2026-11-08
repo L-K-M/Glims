@@ -7339,6 +7339,14 @@ enum EngineSmokeTest {
         wait { picker.model.thumbnail(last.id) != nil && !EngineActivity.shared.isBusy }
         check(picker.model.pendingIdentity() == last.identity && table.numberOfRows < catalogCount,
               "search selects a real pattern beyond the first preview batch")
+        let source = views(controller.window?.attachedSheet?.contentView, as: NSPopUpButton.self).first
+        for index in [2, 5] {
+            source?.selectItem(at: index)
+            if let source, let action = source.action { NSApp.sendAction(action, to: source.target, from: source) }
+        }
+        wait { !EngineActivity.shared.isBusy }
+        check(picker.model.pendingIdentity() == last.identity,
+              "switching Fill source away and back preserves the newly chosen pattern")
         search?.stringValue = "Glims-no-matching-pattern"
         if let search { picker.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search)) }
         spin(0.1)

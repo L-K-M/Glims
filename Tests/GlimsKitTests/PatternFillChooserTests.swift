@@ -167,6 +167,8 @@ final class PatternFillChooserTests: XCTestCase {
         queue.request([1, 2, 3])
         let batch = queue.beginBatch(max: 2)
         queue.requeue(batch)
-        XCTAssertEqual(queue.beginBatch(), batch, "a refused batch returns to the front")
+        XCTAssertEqual(queue.beginBatch(max: 2), batch, "a refused batch returns to the front")
+        XCTAssertTrue(queue.complete(generation: 0, rendered: batch, failed: [:]))
+        XCTAssertEqual(queue.beginBatch(), [3], "the remaining request stays queued")
     }
 }
