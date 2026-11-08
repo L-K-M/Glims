@@ -29,6 +29,7 @@ enum MainMenu {
             item("Save", #selector(DocumentWindowController.saveDocument(_:)), "s"),
             item("Save As…", #selector(DocumentWindowController.saveDocumentAs(_:)), "S"),
             item("Save a Copy…", #selector(DocumentWindowController.saveDocumentCopy(_:))),
+            item("Revert…", #selector(DocumentWindowController.revertDocument(_:))),
             item("Export…", #selector(DocumentWindowController.exportDocument(_:)), "E"),
             item("Export Again…", #selector(DocumentWindowController.repeatExport(_:)), "e"),
             .separator(),

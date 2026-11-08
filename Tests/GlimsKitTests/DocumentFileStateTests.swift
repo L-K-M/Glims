@@ -167,6 +167,44 @@ final class DocumentFileStateTests: XCTestCase {
         XCTAssertEqual(DocumentFileState(openedFrom: upper).saveRoute, .write(upper))
     }
 
+    /// An image that only exists in memory has nothing on disk to
+    /// reload: Revert stays disabled.
+    func testAnUntitledDocumentHasNoRevertSource() {
+        XCTAssertNil(DocumentFileState().revertSource)
+    }
+
+    /// A native document reverts to its own saved file.
+    func testANativeDocumentRevertsToItsSavedFile() {
+        let state = DocumentFileState(openedFrom: xcf)
+        XCTAssertEqual(state.revertSource, .native(xcf))
+        XCTAssertEqual(state.revertSource?.url, xcf)
+        XCTAssertEqual(state.revertSource?.menuTitle, "Revert to Saved…")
+    }
+
+    /// An imported image reverts to the file it came from — a fresh
+    /// import, never a pretend native save.
+    func testAnImportedDocumentRevertsToItsOriginal() {
+        let state = DocumentFileState(openedFrom: png)
+        XCTAssertEqual(state.revertSource, .imported(png))
+        XCTAssertEqual(state.revertSource?.url, png)
+        XCTAssertEqual(state.revertSource?.menuTitle, "Revert…")
+    }
+
+    /// Once an imported image has its own XCF, Revert restores the
+    /// saved file, not the foreign file it was imported from.
+    func testASavedFileWinsOverTheImportedOriginal() {
+        var state = DocumentFileState(openedFrom: png)
+        state.noteSaved(to: xcf)
+        XCTAssertEqual(state.revertSource, .native(xcf))
+    }
+
+    /// Compressed native files are saved files too.
+    func testACompressedNativeDocumentKeepsItsRevertSource() {
+        let url = URL(fileURLWithPath: "/tmp/drawing.xcf.gz")
+        let state = DocumentFileState(openedFrom: url)
+        XCTAssertEqual(state.revertSource, .native(url))
+    }
+
     /// The title's bullet tracks the unsaved-changes flag.
     func testTitleMarksUnsavedChanges() {
         XCTAssertEqual(
