@@ -1337,6 +1337,28 @@ the invalid-width case had its stroke disabled. Correcting the fixture
 makes invalid input, busy-engine and removed-target checks pass. Follow-up
 independent review found no important issues.
 
+### Fill pattern source (2026-11-08)
+
+Interface slice on `feat/pattern-chooser`, frontend only: Edit ▸ Fill…
+appends Pattern (index 5) to the fill source popup and embeds a
+searchable one-column list of the engine's FULL pattern catalog —
+`resources(.pattern)` plus `resource_identifiers` read off the main
+thread through the exclusive `EngineActivity` gate — with lazy 32 px
+`resourceThumbnail` renders in bounded batches as rows appear. The
+picker is owned by the sheet's sync object for exactly the sheet's
+lifetime; cancel or close invalidates its generation so late deliveries
+are dropped, and it opens no child panel or nested sheet. Only the
+persistent `ResourceIdentity` is committed (`PatternFillStore`,
+UserDefaults JSON) and `ImageDocument.fillPattern` re-resolves it on the
+input queue at execution, so a removed pattern is reported missing and
+refused — no default substitution. Existing fill choices 0-4 and their
+behavior are unchanged. Pure `PatternChooserModel`/`PatternThumbnailQueue`/
+`PatternFillStore` unit checks cover search, selection, missing-identity,
+generation drops, queue batching and persistence. The initial model-only
+scenario was replaced by actual sheet checks, wired into the smoke run.
+Those checks cover names/previews, full search, fill pixels and undo,
+persisted selection, source toggling, missing-resource refusal and cleanup.
+
 ### Selected-resource gradients (2026-11-08)
 
 Engine and session slices of the resource gradient backend on

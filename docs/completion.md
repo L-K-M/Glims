@@ -354,3 +354,12 @@ capture. Only `swift build` and `swift build --build-tests` were run in
 this worktree; `swift test`, the smoke run and on-screen QA were not (the
 default engine has no ICC support). Proof/display transforms and indexed
 conversion remain separate slices.
+
+2026-11-08 Pattern fill source: Edit > Fill gains Pattern (index 5), an
+embedded searchable list of the engine's full pattern catalog with lazy
+32 px thumbnails rendered off the main thread through the engine gate.
+The choice persists as a ResourceIdentity only and resolves fresh on the
+input queue at execution; a removed pattern is reported missing and the
+fill refused, never substituted. Pure model/store/queue checks and actual
+sheet-driving checks cover selection, previews, source toggling, pixels,
+undo, persistence, refusals and cleanup. Final matrix verification is pending.
