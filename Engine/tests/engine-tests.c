@@ -1356,9 +1356,10 @@ test_vector_layer_style (const char *work)
   before = undo_depth (image);
   CHECK (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK &&
          api->vector_layer_style_set (engine, image, vector, &change, NULL) == GLIMS_STATUS_BUSY &&
-         api->stroke_end (engine, stroke) == GLIMS_STATUS_OK &&
          undo_depth (image) == before,
          "a style change during an open stroke is BUSY, no undo");
+  if (stroke) api->stroke_end (engine, stroke);
+  before = undo_depth (image);
   CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK &&
          api->vector_layer_style_set (engine, image, vector, &change, NULL) == GLIMS_STATUS_BUSY &&
          api->filter_abort (engine, filter) == GLIMS_STATUS_OK &&
@@ -1453,7 +1454,41 @@ test_vector_layer_style (const char *work)
   before = undo_depth (image);
   CHECK (api->vector_layer_style_set (engine, image, vector, &noop, NULL) == GLIMS_STATUS_OK &&
          undo_depth (image) == before,
-         "a change that alters nothing is a no-op with no undo step");
+         "a change that alters nothing is a no-op with no undo step (%d -> %d; fill %.17g %.17g %.17g %.17g; stroke %.17g %.17g %.17g %.17g)",
+         before, undo_depth (image), after.fill_color.red, after.fill_color.green,
+         after.fill_color.blue, after.fill_color.alpha, after.stroke_color.red,
+         after.stroke_color.green, after.stroke_color.blue, after.stroke_color.alpha);
+
+  /* Native context colors are opaque. An ignored alpha component must
+   * not manufacture an undo step when both effective colors are equal. */
+  noop.properties = GLIMS_VECTOR_STYLE_FILL_COLOR | GLIMS_VECTOR_STYLE_STROKE_COLOR;
+  noop.fill_color.alpha = 0.5;
+  noop.stroke_color.alpha = 0.5;
+  before = undo_depth (image);
+  CHECK (api->vector_layer_style_set (engine, image, vector, &noop, NULL) == GLIMS_STATUS_OK &&
+         api->vector_layer_style_get (engine, image, vector, &style, NULL) == GLIMS_STATUS_OK &&
+         style.fill_color.alpha == 1 && style.stroke_color.alpha == 1 && undo_depth (image) == before,
+         "opaque native colors normalize ignored alpha before no-op detection");
+
+  /* Repeating a UI color with non-binary components is also a no-op
+   * after the native context's float color-space round trip. */
+  before = undo_depth (image);
+  bad.properties = GLIMS_VECTOR_STYLE_FILL_COLOR;
+  bad.fill_color = (GlimsColor) { 0.31, 0.47, 0.71, 1 };
+  status = api->vector_layer_style_set (engine, image, vector, &bad, NULL);
+  api->vector_layer_style_get (engine, image, vector, &style, NULL);
+  render_pixel (image, 50, 50, px);
+  CHECK (fabs (style.fill_color.red - 0.31) <= 1e-6 &&
+         fabs (style.fill_color.green - 0.47) <= 1e-6 && fabs (style.fill_color.blue - 0.71) <= 1e-6 &&
+         abs ((int) px[0] - 79) <= 1 && abs ((int) px[1] - 120) <= 1 && abs ((int) px[2] - 181) <= 1,
+         "vector style colors read back as sRGB and match rendered midtones (%.6f %.6f %.6f; %u,%u,%u)",
+         style.fill_color.red, style.fill_color.green, style.fill_color.blue, px[0], px[1], px[2]);
+  CHECK (status == GLIMS_STATUS_OK &&
+         api->vector_layer_style_set (engine, image, vector, &bad, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "repeating the same non-binary color adds only the first style undo");
+  while (undo_depth (image) > before)
+    if (api->image_undo (engine, image) != GLIMS_STATUS_OK) break;
 
   /* Invalid changes are refused before any mutation. */
   before = undo_depth (image);

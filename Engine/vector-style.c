@@ -168,7 +168,7 @@ check_solid_style (GimpVectorLayerOptions *options,
       gimp_fill_options_get_custom_style (GIMP_FILL_OPTIONS (options->stroke_options)) != GIMP_CUSTOM_STYLE_SOLID_COLOR)
     {
       if (error)
-        *error = strdup ("The vector layer uses a pattern fill or stroke, which this slice does not support.");
+        *error = strdup ("This vector layer uses a pattern fill or stroke. Solid-color style controls cannot edit it.");
       return GLIMS_STATUS_UNSUPPORTED;
     }
   return GLIMS_STATUS_OK;
@@ -192,8 +192,9 @@ read_style (GimpVectorLayerOptions *options,
   style->enable_fill = b ? true : false;
   color = gimp_context_get_foreground (GIMP_CONTEXT (options->fill_options));
   if (color)
-    gegl_color_get_rgba (color, &r, &g, &bl, &a);
-  style->fill_color     = (GlimsColor) { r, g, bl, a };
+    gegl_color_get_rgba_with_space (color, &r, &g, &bl, &a, NULL);
+  style->fill_color     = (GlimsColor) { CLAMP (r, 0.0, 1.0), CLAMP (g, 0.0, 1.0),
+                                         CLAMP (bl, 0.0, 1.0), 1.0 };
   style->fill_antialias = gimp_fill_options_get_antialias (options->fill_options) ? true : false;
 
   g_object_get (options, "enable-stroke", &b, NULL);
@@ -201,8 +202,9 @@ read_style (GimpVectorLayerOptions *options,
   r = g = bl = a = 0.0;
   color = gimp_context_get_foreground (GIMP_CONTEXT (options->stroke_options));
   if (color)
-    gegl_color_get_rgba (color, &r, &g, &bl, &a);
-  style->stroke_color       = (GlimsColor) { r, g, bl, a };
+    gegl_color_get_rgba_with_space (color, &r, &g, &bl, &a, NULL);
+  style->stroke_color       = (GlimsColor) { CLAMP (r, 0.0, 1.0), CLAMP (g, 0.0, 1.0),
+                                             CLAMP (bl, 0.0, 1.0), 1.0 };
   style->stroke_antialias   = gimp_fill_options_get_antialias (GIMP_FILL_OPTIONS (options->stroke_options)) ? true : false;
   style->stroke_width       = gimp_stroke_options_get_width (options->stroke_options);
   style->stroke_cap         = cap_of_glims (gimp_stroke_options_get_cap_style (options->stroke_options));
@@ -234,7 +236,12 @@ static gboolean
 color_equals (const GlimsColor *a,
               const GlimsColor *b)
 {
-  return a->red == b->red && a->green == b->green && a->blue == b->blue && a->alpha == b->alpha;
+  /* The native opaque context round-trips RGB through float color spaces.
+   * Its sub-micro-unit rounding must not create history for an unchanged
+   * control value (including an exact 1 returning slightly above 1). */
+  const gdouble epsilon = 1e-6;
+  return fabs (a->red - b->red) <= epsilon && fabs (a->green - b->green) <= epsilon &&
+         fabs (a->blue - b->blue) <= epsilon && a->alpha == b->alpha;
 }
 
 /* Validates every flagged field of `change` (clamping finite out-of-range
@@ -291,14 +298,16 @@ validate_change (const GlimsVectorStyleChange *change,
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
 
-  normalized->fill_color.red     = CLAMP (change->fill_color.red, 0.0, 1.0);
-  normalized->fill_color.green   = CLAMP (change->fill_color.green, 0.0, 1.0);
-  normalized->fill_color.blue    = CLAMP (change->fill_color.blue, 0.0, 1.0);
-  normalized->fill_color.alpha   = CLAMP (change->fill_color.alpha, 0.0, 1.0);
-  normalized->stroke_color.red   = CLAMP (change->stroke_color.red, 0.0, 1.0);
-  normalized->stroke_color.green = CLAMP (change->stroke_color.green, 0.0, 1.0);
-  normalized->stroke_color.blue  = CLAMP (change->stroke_color.blue, 0.0, 1.0);
-  normalized->stroke_color.alpha = CLAMP (change->stroke_color.alpha, 0.0, 1.0);
+  /* Only flagged fields are input. Native context colors are opaque, so
+   * normalize alpha before comparing the effective color for a no-op. */
+  if (p & GLIMS_VECTOR_STYLE_FILL_COLOR)
+    normalized->fill_color = (GlimsColor) { CLAMP (change->fill_color.red, 0.0, 1.0),
+                                           CLAMP (change->fill_color.green, 0.0, 1.0),
+                                           CLAMP (change->fill_color.blue, 0.0, 1.0), 1.0 };
+  if (p & GLIMS_VECTOR_STYLE_STROKE_COLOR)
+    normalized->stroke_color = (GlimsColor) { CLAMP (change->stroke_color.red, 0.0, 1.0),
+                                             CLAMP (change->stroke_color.green, 0.0, 1.0),
+                                             CLAMP (change->stroke_color.blue, 0.0, 1.0), 1.0 };
 
   return GLIMS_STATUS_OK;
 }

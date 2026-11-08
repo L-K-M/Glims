@@ -843,3 +843,13 @@ the corrected history reset verifies white pixels and the original history
 position. Real control actions now verify 50-percent fill pixels and saved
 channel isolation. Vector styling and multi-anchor editing remain later
 work; initial vector creation uses the native context's defaults.
+
+Pinned runtime validation now passes 780 native checks. Native sRGB style
+getters were initially paired with a linear-RGB read; the new midtone
+regression failed with 0.078/0.187/0.462 instead of 0.31/0.47/0.71 while
+rendered bytes correctly stayed 79/120/181. Matching sRGB reads fix the
+round trip. Separate observed no-op failures are fixed by normalizing
+native opaque alpha and tolerating sub-micro-unit float color round trips.
+The stroke-busy fixture now checks history before finishing its actual
+stroke, which legitimately creates an undo entry. Cross-engine runtime
+and independent review of these changes are pending.
