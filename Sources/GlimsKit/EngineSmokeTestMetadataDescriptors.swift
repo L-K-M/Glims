@@ -142,10 +142,12 @@ extension EngineSmokeTest {
             popup.sendAction(popup.action, to: popup.target)
         }
         settle(doc)
-        wait { tagRow(metaSheet, tagTable, "Xmp.dc.title") != nil }
-        if let row = tagRow(metaSheet, tagTable, "Xmp.dc.title") {
-            selectRow(tagTable, metaSheet, row)
-            settle(doc)
+        // The catalog lists present tags, not every registered XMP name.
+        // Inspect a registered absent LangAlt through Add Tag validation.
+        editableField(sheet, "New tag name")?.stringValue = "Xmp.dc.title"
+        button(sheet, "Add tag")?.performClick(nil)
+        settle(doc)
+        if metaSheet.selectedTag == "Xmp.dc.title" {
             wait { metaSheet.tagDescriptor?.valueKind == .langAlt }
             check(metaSheet.tagDescriptor?.supportsMultiple == true,
                   "LangAlt carries the native multiple flag and is still read-only")
@@ -157,7 +159,7 @@ extension EngineSmokeTest {
                   "the read-only reason is shown for LangAlt")
             check(textView(sheet, "Selected metadata value editor")?.isEditable == false,
                   "the editor is read-only for LangAlt")
-        } else { check(false, "the LangAlt tag is listed") }
+        } else { check(false, "the registered LangAlt descriptor is shown") }
 
         // Absent XMP bag via Add Tag: local draft only, Apply disabled,
         // Remove Tag permitted (the native no-op).
@@ -180,23 +182,37 @@ extension EngineSmokeTest {
               "Add Tag on an absent container performs no native write")
 
         // Unregistered Add Tag: the native NOT_FOUND is visible, no false row.
-        editableField(sheet, "New tag name")?.stringValue = "Xmp.dc.definitelyNotRegistered"
+        if let popup = popup(sheet, "Metadata domain") {
+            popup.selectItem(at: 1)
+            popup.sendAction(popup.action, to: popup.target)
+        }
+        settle(doc)
+        editableField(sheet, "New tag name")?.stringValue = "Iptc.Application2.GlimsDefinitelyNotRegistered"
         button(sheet, "Add tag")?.performClick(nil)
         wait { metaSheet.lastError != nil }
         settle(doc)
         check((label(sheet, "Metadata message")?.stringValue ?? "").isEmpty == false,
               "the unregistered tag's query error is visible in the message row")
-        check(tagRow(metaSheet, tagTable, "Xmp.dc.definitelyNotRegistered") == nil,
+        check(tagRow(metaSheet, tagTable, "Iptc.Application2.GlimsDefinitelyNotRegistered") == nil,
               "no false tag row is created")
 
-        // Undo refreshes the descriptor's presence for the same selected
-        // tag without touching a dirty local draft.
-        doc.undo()
-        settle(doc)
-        wait { metaSheet.tagDescriptor?.present == false }
-        check(metaSheet.tagDescriptor?.present == false
-                && (label(sheet, "Metadata tag presence")?.stringValue ?? "").contains("Not present") == true,
-              "Undo refreshes the descriptor presence/policy for the selected tag")
+        // Keep a dirty local draft selected while Undo removes its native
+        // tag: presence must change, but those local rows must not disappear.
+        if let row = tagRow(metaSheet, tagTable, "Iptc.Application2.Keywords") {
+            selectRow(tagTable, metaSheet, row)
+            settle(doc)
+            check(metaSheet.tagDescriptor?.present == true, "the selected tag is present before Undo")
+            button(sheet, "Add metadata value")?.performClick(nil)
+            let rowsBefore = table(sheet, "Metadata value list")?.numberOfRows
+            doc.undo() // The last native edit seeded Keywords.
+            settle(doc)
+            check(metaSheet.tagDescriptor?.present == false
+                    && (label(sheet, "Metadata tag presence")?.stringValue ?? "").contains("Not present")
+                    && (try? session.metadataValues(image, tag: "Iptc.Application2.Keywords")) == [],
+                  "Undo refreshes the descriptor after its present tag becomes absent")
+            check(rowsBefore == 2 && table(sheet, "Metadata value list")?.numberOfRows == rowsBefore,
+                  "descriptor refresh preserves the dirty local value draft")
+        } else { check(false, "the Undo presence fixture finds Keywords") }
 
         // Close invalidates the sheet: late callbacks neither update nor
         // reopen it; the queued reads still drained through close.

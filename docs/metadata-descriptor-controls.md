@@ -123,3 +123,25 @@ unwired smoke file), adapter/engine/native builds, and the full existing
 test suite. `_engine/` and `_deps/` are absent in this UI-only checkout
 and were not needed for the Swift build. Runtime UI/native acceptance is
 serialized by the root.
+
+## Acceptance fixes and runtime checks
+
+A test-only facade proxy forwards editing to a real v128 adapter but refuses
+Credit's descriptor. It reproduced two failures: Add Tag created a draft
+before descriptor validation, and Undo's successful value reload erased an
+earlier descriptor-query error. The controller now commits a local new-tag
+draft only after both queries succeed and retains descriptor errors through
+later value results. All four forced-error checks pass on every engine.
+
+The actual descriptor controls and previous metadata controls pass their
+focused runs on every engine, and all 635 unit tests pass. LangAlt is inspected
+as a registered absent tag; no fabricated present XMP fixture is assumed.
+Undo actually removes a seeded native tag while preserving a dirty local
+draft, proving the descriptor's presence transition. Broad integrated smoke
+and final CI are still pending.
+
+To reproduce descriptor failures, compile Engine/tests/metadata-descriptor-proxy.c
+as a dylib with this checkout's facade include directory. Run the app's
+metadata-descriptor-failures smoke case with GLIMS_ENGINE_LIBRARY pointing to
+that proxy and GLIMS_REAL_ENGINE_LIBRARY pointing to a real v128 adapter.
+The proxy is test-only and is never part of the engine or bundled app.

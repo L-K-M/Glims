@@ -330,6 +330,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     /// a newer selection.
     private var descriptorGeneration = 0
     private var descriptorIsLoading = false
+    private var descriptorReadError: String?
     /// The last successfully read descriptor of the CURRENTLY selected
     /// tag; nil while pending, failed, or after a selection/domain/close
     /// invalidation. It holds format facts only — it never rewrites the
@@ -617,7 +618,8 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
                     self.valuesTable.deselectAll(nil)
                     self.synchronizeEditor()
                 }
-                self.clearMessage()
+                if let failure = self.descriptorReadError { self.refuse(failure) }
+                else { self.clearMessage() }
                 self.updateControlStates()
             case .failure(let error):
                 self.refuse(String(describing: error))
@@ -633,6 +635,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     /// touches the local draft, dirty or not. A failed query keeps writes
     /// disabled (the descriptor stays nil) and shows the native error.
     private func loadDescriptor(for tag: String) {
+        descriptorReadError = nil
         descriptorGeneration += 1
         descriptorIsLoading = true
         updateControlStates()
@@ -649,7 +652,9 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
                 self.tagDescriptor = info
             case .failure(let error):
                 self.tagDescriptor = nil
-                self.refuse(String(describing: error))
+                let failure = String(describing: error)
+                self.descriptorReadError = failure
+                self.refuse(failure)
             }
             self.updateControlStates()
         }
@@ -872,38 +877,46 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
             isApplying = true
             updateControlStates()
             let owner = document
-            owner.readMetadataValues(name) { [weak self] result in
+            owner.readMetadataValues(name) { [weak self] valuesResult in
                 guard let self, !self.isInvalidated else { return }
-                self.isApplying = false
-                switch result {
-                case .success(let values):
-                    self.valuesGeneration += 1
-                    self.descriptorGeneration += 1
-                    self.valuesAreLoading = false
-                    self.descriptorIsLoading = false
-                    self.tagDescriptor = nil
-                    self.valuesReady = true
-                    self.selectedTag = name
-                    self.draft = values.isEmpty ? [""] : values
-                    self.draftIsDirty = values.isEmpty
-                    self.selectedValueIndex = 0
-                    self.valuesTable.reloadData()
-                    self.valuesTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-                    self.synchronizeEditor()
-                    self.loadTags()
-                    // Validate the new tag's kind and policy through its
-                    // descriptor too: an absent scalar becomes a one-value
-                    // local draft (Apply opens once the descriptor lands);
-                    // an absent bag/seq/alt stays Remove-only.
-                    self.loadDescriptor(for: name)
-                    if values.isEmpty {
-                        self.messageLabel.textColor = .labelColor
-                        self.messageLabel.stringValue = "New tag \(name). Enter a value, then choose Apply."
-                    }
+                switch valuesResult {
                 case .failure(let error):
+                    self.isApplying = false
                     self.refuse(String(describing: error))
+                    self.updateControlStates()
+                case .success(let values):
+                    // Preserve the previous selection/draft until both
+                    // queries validate the captured new name successfully.
+                    owner.readMetadataTagInfo(name) { [weak self] descriptorResult in
+                        guard let self, !self.isInvalidated else { return }
+                        self.isApplying = false
+                        defer { self.updateControlStates() }
+                        switch descriptorResult {
+                        case .failure(let error):
+                            self.refuse(String(describing: error))
+                        case .success(let info):
+                            self.valuesGeneration += 1
+                            self.descriptorGeneration += 1
+                            self.valuesAreLoading = false
+                            self.descriptorIsLoading = false
+                            self.descriptorReadError = nil
+                            self.tagDescriptor = info
+                            self.valuesReady = true
+                            self.selectedTag = name
+                            self.draft = values.isEmpty ? [""] : values
+                            self.draftIsDirty = values.isEmpty
+                            self.selectedValueIndex = 0
+                            self.valuesTable.reloadData()
+                            self.valuesTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+                            self.synchronizeEditor()
+                            self.loadTags()
+                            self.messageLabel.textColor = .labelColor
+                            self.messageLabel.stringValue = info.formatPolicy.contains(.supportsSet)
+                                ? "New tag \(name). Enter a value, then choose Apply."
+                                : "The tag's format is read-only here."
+                        }
+                    }
                 }
-                self.updateControlStates()
             }
         }
     }
