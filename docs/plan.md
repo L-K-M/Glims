@@ -2126,3 +2126,12 @@ history/dirty state on reads and profile-assignment Undo/Redo appearance.
 No production renderer change was needed. This verifies the in-gamut sRGB
 path; physical monitor calibration, wide-gamut/HDR output, proof profiles,
 proof intents and gamut warnings remain unverified or unimplemented.
+
+The source-controls integration passes 407 unit tests, all 33 focused
+sheet/dispatch checks on each supported engine, and the full pinned
+interface suite. Initial failures were assertions against the wrong
+state: ordinary pixels have a source-info cache entry, and the menu
+was still aimed at the retargeted pixel layer. Correcting those fixture
+expectations required no production change. Root reviewed the source
+controls, admission/drain and close paths. The independent broad UI
+helper timed out without a verdict and is not counted as approval.

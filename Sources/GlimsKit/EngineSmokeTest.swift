@@ -8294,11 +8294,14 @@ enum EngineSmokeTest {
                 && docA.layers.first(where: { $0.id == text })?.kind == .pixel
                 && (try? session.layerSource(text, image: imageA)) == rasterized,
               "Apply updates the cached kind and the session oracle agrees")
-        check(docA.layerSources[pixelLayer] == nil
+        check(docA.layerSources[pixelLayer] == .init(kind: .pixel, isRasterized: false, hasSource: false)
+                && docA.activeLayer == pixelLayer
                 && docA.layers.first(where: { $0.id == pixelLayer })?.kind == .pixel
                 && (try? session.layers(imageB)) == bLayersBefore
                 && (try? session.copyPixels(imageB, merged: true).pixels) == bPixelsBefore,
               "retarget-before-Apply and the second document stay untouched")
+        docA.selectLayer(text)
+        settle()
         check(!a.validateMenuItem(rasterizeItem) && a.validateMenuItem(restoreItem),
               "after rasterize the gating flips: Restore offered, Rasterize not")
         let sourcePixels = try session.copyPixels(imageA, merged: true).pixels
