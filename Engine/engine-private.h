@@ -122,6 +122,9 @@ GlimsStatus glims_image_save_copy  (GlimsEngine *e, GlimsImageID id, const char 
 GlimsStatus glims_image_export     (GlimsEngine *e, GlimsImageID id, const char *path, char **error);
 GlimsStatus glims_image_layers     (GlimsEngine *e, GlimsImageID id, GlimsLayerInfo *layers,
                                     int32_t capacity, int32_t *count);
+/* The facade kind of one layer; rasterized text/link/vector instances
+ * report PIXEL, their content is pixels. */
+GlimsLayerKind glims_layer_kind    (GimpLayer *layer);
 GlimsStatus glims_image_undo_info  (GlimsEngine *e, GlimsImageID id, GlimsUndoInfo *info);
 GlimsStatus glims_image_undo       (GlimsEngine *e, GlimsImageID id);
 GlimsStatus glims_image_redo       (GlimsEngine *e, GlimsImageID id);

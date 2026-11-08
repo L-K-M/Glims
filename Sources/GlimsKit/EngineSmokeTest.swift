@@ -2797,6 +2797,14 @@ enum EngineSmokeTest {
         check(document.layers.count == 2 && document.layers.first?.bounds == CGRect(x: 8, y: 10, width: 2, height: 2)
                 && document.activeLayer == document.layers.first?.id,
               "Paste in Place creates and selects a layer at the clipboard's original position")
+        document.layerCommand(.fitToImage)
+        waitForWork(document)
+        check(document.layers.first?.bounds == CGRect(x: 0, y: 0, width: 64, height: 64),
+              "Layer to Image Size grows the pasted layer to the canvas, keeping its pixels")
+        document.layerCommand(.trimToContent)
+        waitForWork(document)
+        check(document.layers.first?.bounds == CGRect(x: 8, y: 10, width: 2, height: 2),
+              "Trim Layer to Content crops it back to its content at the same spot")
         var options = EngineSession.SelectOptions()
         options.antialias = false
         document.select(.rectangle(CGRect(x: 8, y: 10, width: 1, height: 1)), options: options)
