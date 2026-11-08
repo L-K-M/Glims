@@ -243,6 +243,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        BrushChooser.shared.close()
         recovery?.stop()
         session?.stop()
     }

@@ -46,6 +46,10 @@ behavior, not every adjacent feature in `design.md`.
 - [ ] Adjustment layers/groups, remaining custom filter forms and filter inputs.
 - [ ] Path fill, vector layers and multi-anchor editing.
 - [ ] Brush, pattern and gradient resource choosers and presets.
+  - [x] Brush chooser in Tool Options (2026-11-08, `feat/brush-chooser`):
+    one chooser, per-tool persistent `ResourceIdentity` selection, owned
+    NSPanel with search and 32 px thumbnails; pattern/gradient choosers,
+    presets and resource management remain. See `plan.md`.
 - [ ] Indexed conversion policy, profile assignment/conversion, display color
       management and soft proofing.
 - [ ] Rulers, guides, grid, snapping, view rotation, trackpad/modifier behavior

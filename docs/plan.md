@@ -925,6 +925,81 @@ warnings); the root owns the engine lock and the desktop, so the
 smoke-test scenario's runtime execution is pending root validation,
 after the root's ICC integration to keep the append-only ABI order.
 
+### Brush chooser in Tool Options (2026-11-08)
+
+Interface side of the brush resource work, on `feat/brush-chooser`. One
+brush chooser only, attached to the paint tools' Tool Options rows; no
+pattern/gradient application and no presets. No C API or C implementation
+change: the slice is Swift-only over the existing append-only facade
+(`resources`, `resource_identifiers`, `resource_resolve`,
+`resource_thumbnail`, `stroke_begin_with_brush_resource`).
+
+- `Sources/GlimsKit/Tools/BrushSelectionStore.swift`: the per-tool brush
+  choice persisted through UserDefaults as Codable JSON — ONLY a
+  `ResourceIdentity` per `ToolID`, never a session `ResourceID` (handles
+  are engine-local and reused after a restart). A nil choice removes the
+  key and means the original native default brush.
+- `Sources/GlimsKit/Tools/Tools.swift` (`ToolState`): `brushStore` (tests
+  inject a suite), `baseBrush(for:)` seeds a tool's brush with the
+  persisted identity so it restores after a restart, and
+  `setBrushResource(_:for:)` persists the identity and updates only that
+  tool's `brush.resource`. `EngineSession.beginStroke` already resolves
+  the identity fresh on the engine worker, so a stale or removed resource
+  fails explicitly (native queued tests passed) instead of painting with a
+  different brush.
+- `Sources/GlimsKit/Tools/BrushChooserModel.swift`: the pure model. It
+  captures the `ToolID` at open, holds the bounded catalog (at most 512
+  rows), the 32 px thumbnails, the in-memory case-insensitive search, the
+  selection (none / native Default / a row), the missing-identity marker
+  and a generation counter that closing bumps so late native results are
+  dropped. `pendingIdentity()` maps the selection to the identity to
+  commit; applying writes only the captured tool, so switching tools while
+  the chooser is open never retargets the selection, and cancel applies
+  nothing, preserving the previous choice.
+- `Sources/GlimsKit/Tools/BrushChooserPanel.swift`: `BrushChooser.shared`
+  owns the one open panel (closed on shutdown from
+  `applicationWillTerminate`, on palette dismiss, and on retarget to a
+  different/closing document). The panel is an owned NSPanel with a search
+  field, a one-column list of native 32 px thumbnails and names (row 0 is
+  the native Default), a status line for the loading / engine-busy / error
+  / empty states with a Retry, and Choose (Return) / Cancel (Escape).
+  Loading runs OFF the main thread in ONE bounded batch through
+  `EngineActivity.perform`/`whenIdle` (the global exclusive gate):
+  `resources(.brush)` capped at 512, then per row `resourceIdentifiers`
+  and `resourceThumbnail(maxSize: 32, foreground:background:)` with the
+  FG/BG captured from `ToolState` at open — `resourceThumbnail` is a
+  synchronous RPC and is never called on main; only `ResourceThumbnail.image`
+  is displayed, and no shared global context is mutated. If the gate is
+  busy the panel shows the busy state and retries once when idle, then an
+  error with a manual Retry. Delivery checks the generation and that the
+  document is still alive, so document/parent closing or picker closing
+  invalidates stale results.
+- `Sources/GlimsKit/Tools/ToolPalettes.swift`
+  (`ToolOptionsPaletteController`): the no-op `retarget` now retains a
+  weak document as the chooser's session/loading source; paint tools get a
+  "Brush" row with a button showing the current choice (name plus the
+  loaded thumbnail, or "Missing: …" when the persisted identity does not
+  resolve — never silently defaulted) and an explicit Reset button that
+  stores nil (native Default).
+- Tests: `Tests/GlimsKitTests/BrushChooserTests.swift` covers the
+  identity-only encode/restore (raw JSON carries no session handle),
+  invalid stored data, the in-memory search, stale-generation delivery,
+  current/missing selection, and captured-tool apply / cancel / restore /
+  reset through a fresh `ToolState`. `EngineSmokeTest` gains
+  `exerciseBrushChooserSelection`: captured tool vs tool switching, the UI
+  choice painted through the document queue with undo restoring exact
+  pixels, cancel preserving the selection, a missing identity reported
+  without paint or undo, and reset restoring the default stroke path.
+
+Build status (this slice): `swift build` and `swift build --build-tests`
+run once after the change (see the commit); unit tests were NOT executed
+(AppKit initializes in the test bundle), and no engine startup, native
+smoke test, adapter build or GUI run happened here — root owns the
+runtime, GUI and native matrices. Gaps: the chooser's runtime behavior,
+thumbnail rendering through the panel, keyboard handling and the
+smoke-test scenario are unverified at runtime; pattern/gradient choosers,
+presets and resource management remain later slices.
+
 ## Later, before any public release
 
 - Developer ID signing and notarization for the app, GTK3, Python and every

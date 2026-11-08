@@ -133,6 +133,7 @@ enum EngineSmokeTest {
             try measurePluginStalls(session, work: work)
             try exerciseResourceCatalog(session)
             try exerciseSelectedBrushStrokes(session, documents: documents)
+            try exerciseBrushChooserSelection(session, documents: documents)
 
             try exerciseResourceThumbnails(session)
         } catch {
@@ -6224,6 +6225,139 @@ enum EngineSmokeTest {
         try session.endStroke(legacy)
         check(try pixels() != blank && session.undoInfo(image).undoCount == undoBefore + 1,
               "clearing the resource choice retains the ordinary default brush path")
+    }
+
+    /// The brush chooser's UI path connected to native semantics: the tool
+    /// captured at open (switching tools never retargets), a real stroke
+    /// and undo through the chosen identity, a preserved selection on
+    /// cancel, a missing identity shown and reported instead of silently
+    /// painting with the default, and identity-only persistence that
+    /// restores after a restart. Not executed in this slice: root owns the
+    /// runtime.
+    private static func exerciseBrushChooserSelection(_ session: EngineSession, documents: DocumentList) throws {
+        let suite = "ch.lkmc.Glims.smoke.brushchooser.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = BrushSelectionStore(defaults: defaults)
+        let state = ToolState.shared
+        let previousStore = state.brushStore
+        state.brushStore = store
+        defer { state.brushStore = previousStore }
+
+        let rows = try session.resources(.brush)
+        guard let soft = rows.first(where: { $0.displayName == "2. Hardness 025" }),
+              let block = rows.first(where: { $0.displayName == "2. Block 01" }) else {
+            check(false, "the soft and block brush fixtures exist for the chooser scenario")
+            return
+        }
+        let softIdentity = try session.resourceIdentifiers(soft.id)
+        let blockIdentity = try session.resourceIdentifiers(block.id)
+
+        let image = try session.newImage(width: 96, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Brush chooser")
+        documents.items.append(document)
+        defer {
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        guard let layer = document.activeLayer else {
+            check(false, "the chooser fixture has a paint layer")
+            return
+        }
+        func pixels() throws -> Data {
+            let rendered = try session.render(image, scale: 1, area: CGRect(x: 0, y: 0, width: 96, height: 64))
+            return rendered.dataProvider!.data! as Data
+        }
+        func settle() {
+            let deadline = Date().addingTimeInterval(10)
+            while document.pendingWork > 0 && Date() < deadline { spin(0.01) }
+            spin()
+        }
+
+        // The chooser captures the tool at open; switching tools while it
+        // is open must not retarget the selection.
+        state.select(.paintbrush)
+        let model = BrushChooserModel(capturedTool: state.current,
+                                      currentIdentity: state.brush(for: .paintbrush).resource)
+        check(model.capturedTool == .paintbrush, "the chooser captures the current tool at open")
+        state.select(.eraser)
+        check(model.capturedTool == .paintbrush, "switching tools keeps the captured tool")
+        state.select(.paintbrush)
+
+        // Load and choose through the model the panel drives, then apply
+        // exactly as the Choose button does.
+        model.deliver(generation: model.generation,
+                      rows: [BrushRow(id: soft.id, name: soft.displayName, identity: softIdentity),
+                             BrushRow(id: block.id, name: block.displayName, identity: blockIdentity)],
+                      thumbnails: [:], resolvedCurrent: nil, error: nil)
+        model.select(.resource(soft.id))
+        state.setBrushResource(model.pendingIdentity(), for: model.capturedTool)
+        check(state.brush(for: .paintbrush).resource == softIdentity,
+              "the UI choice sets the captured tool's brush identity")
+        check(state.brush(for: .eraser).resource == nil, "the selection never retargets another tool")
+        check(store.identity(for: .paintbrush) == softIdentity && store.identity(for: .eraser) == nil,
+              "only the identity persists per tool, never a session handle")
+        check(ToolState(brushStore: store).brush(for: .paintbrush).resource == softIdentity,
+              "the persisted identity restores into settings after a restart")
+
+        // A queued stroke paints with the chosen brush; undo restores the
+        // exact pixels as one step.
+        let first = EngineSession.StrokePoint(x: 4, y: 32, pressure: 1, timeMilliseconds: 0)
+        let points = (1...16).map {
+            EngineSession.StrokePoint(x: 4 + 88 * Double($0) / 16, y: 32, pressure: 1, timeMilliseconds: UInt32($0 * 8))
+        }
+        var brush = state.brush(for: .paintbrush)
+        brush.size = 20
+        brush.pressureSize = false
+        brush.blue = 1
+        let blank = try pixels()
+        let undoBefore = document.undoInfo.undoCount
+        document.beginStroke(at: first, brush: brush)
+        document.continueStroke(points)
+        document.endStroke()
+        settle()
+        check(try pixels() != blank && document.undoInfo.undoCount == undoBefore + 1,
+              "a stroke with the UI-chosen brush paints one undoable edit")
+        document.undo()
+        settle()
+        check(try pixels() == blank, "undo restores the exact original pixels")
+
+        // Cancel preserves the previous selection.
+        let cancelled = BrushChooserModel(capturedTool: .paintbrush, currentIdentity: softIdentity)
+        cancelled.deliver(generation: cancelled.generation,
+                          rows: [BrushRow(id: block.id, name: block.displayName, identity: blockIdentity)],
+                          thumbnails: [:], resolvedCurrent: nil, error: nil)
+        cancelled.select(.resource(block.id))
+        check(cancelled.pendingIdentity() == blockIdentity, "the cancelled chooser would have applied the other brush")
+        check(state.brush(for: .paintbrush).resource == softIdentity, "cancel preserves the previous selection")
+
+        // A missing persisted identity is shown and fails loudly: no silent
+        // fallback to the default, no paint, no undo step.
+        let missing = EngineSession.ResourceIdentity(name: "Glims missing brush", collection: nil, isInternal: false)
+        let missingModel = BrushChooserModel(capturedTool: .paintbrush, currentIdentity: missing)
+        missingModel.deliver(generation: missingModel.generation, rows: [], thumbnails: [:],
+                             resolvedCurrent: nil, error: nil)
+        check(missingModel.missingIdentity == missing, "a missing persisted identity is shown, not defaulted")
+        state.setBrushResource(missing, for: .paintbrush)
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        document.beginStroke(at: first, brush: state.brush(for: .paintbrush))
+        document.continueStroke(points)
+        document.endStroke()
+        settle()
+        check(!errors.isEmpty && (try? pixels()) == blank && document.undoInfo.undoCount == undoBefore,
+              "a missing brush choice reports failure without painting or adding undo")
+
+        // Reset to the native Default restores the ordinary stroke path.
+        state.setBrushResource(nil, for: .paintbrush)
+        check(state.brush(for: .paintbrush).resource == nil && store.identity(for: .paintbrush) == nil,
+              "reset stores nil, the original native default")
+        let legacy = try session.beginStroke(image: image, drawable: layer,
+                                             brush: state.brush(for: .paintbrush), first: first)
+        try session.continueStroke(legacy, points: points)
+        try session.endStroke(legacy)
+        check(try pixels() != blank && session.undoInfo(image).undoCount == undoBefore + 1,
+              "after reset the default brush path paints again")
     }
 
     private static func exerciseResourceCatalog(_ session: EngineSession) throws {
