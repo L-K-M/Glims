@@ -130,6 +130,7 @@ enum EngineSmokeTest {
             try exerciseNativeFilterForms(session, work: work, documents: documents)
             try exerciseFilterStackInterface(session, work: work, documents: documents)
             try measurePluginStalls(session, work: work)
+            try exerciseResourceCatalog(session)
         } catch {
             check(false, "unexpected engine error: \(error)")
         }
@@ -5993,6 +5994,47 @@ enum EngineSmokeTest {
               "main thread never stalled ≥ \(Int(maximumMainThreadStallMilliseconds)) ms during plug-in calls (worst \(String(format: "%.1f", maxLateness)) ms)")
         check(maxRenderCall < maximumMainThreadStallMilliseconds,
               "engine calls from the main thread stay responsive during plug-in calls (worst \(String(format: "%.1f", maxRenderCall)) ms)")
+    }
+
+    /// The bounded resource catalog scenario: counts and rows for all
+    /// three kinds, one identity/resolve round trip per kind, a wrong
+    /// identity and a high-bit handle. Reads only; no resource is applied.
+    private static func exerciseResourceCatalog(_ session: EngineSession) throws {
+        var liveHandle: EngineSession.ResourceID = 0
+        for kind in EngineSession.ResourceKind.allCases {
+            let rows = try session.resources(kind)
+            let second = try session.resources(kind)
+            check(!rows.isEmpty && rows.count == second.count && rows.map(\.id) == second.map(\.id),
+                  "the engine lists \(rows.count) \(kind) resources, with the count honored and stable")
+            check(rows.allSatisfy { $0.kind == kind && !$0.displayName.isEmpty },
+                  "every \(kind) row carries its kind and a display name")
+            guard let first = rows.first else { continue }
+            if liveHandle == 0 { liveHandle = first.id }
+            let identity = try session.resourceIdentifiers(first.id)
+            check(!identity.name.isEmpty, "a \(kind) handle reports a usable identity")
+            let resolved = try session.resolveResource(identity, kind: kind)
+            check(resolved == first.id, "the \(kind) identity resolves back to its own handle")
+            check(try session.resourceIdentifiers(resolved) == identity,
+                  "the resolved \(kind) handle reports the same identity, NULL and empty collections apart")
+        }
+
+        do {
+            _ = try session.resolveResource(
+                EngineSession.ResourceIdentity(name: "Glims No Such Resource", collection: nil, isInternal: false),
+                kind: .brush)
+            check(false, "a wrong identity fails")
+        } catch let error as EngineSession.EngineError {
+            check(error.status == Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
+                  "a wrong identity fails with NOT_FOUND")
+        }
+
+        do {
+            _ = try session.resourceIdentifiers((UInt64(1) << 32) | liveHandle)
+            check(false, "a high-bit resource id is refused")
+        } catch let error as EngineSession.EngineError {
+            check(error.status == Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                  "a high-bit resource id is refused without narrowing to a live handle")
+        }
     }
 }
 
