@@ -1272,6 +1272,103 @@ test_path_vector_layer (const char *work)
   api->image_close (engine, image);
 }
 
+/* An intentionally rasterized vector layer (its pixels were edited, so the
+ * XCF stores the rasterization flag together with the edited buffer) must
+ * reopen as PIXEL with those edited pixels, while a genuine vector layer in
+ * the same file stays VECTOR with its path, fill color and explicit name.
+ * GIMP 3.2.0 re-renders the converted layer when adding it, which overwrites
+ * the saved modified pixels; later engines duplicate and restore the saved
+ * buffer (xcf-load.c). */
+static void
+test_vector_rasterized_roundtrip (const char *work)
+{
+  GlimsImageID      image = 0, reopened = 0;
+  GlimsItemID       rpath = 0, gpath = 0, rasterized = 0, genuine = 0, genuine_path = 0;
+  GlimsSubpath      rsquare[1] = { { .count = 4, .closed = true } };
+  GlimsSubpath      gsquare[1] = { { .count = 4, .closed = true } };
+  GlimsPathPoint    rpoints[4] = { corner (20, 20), corner (80, 20), corner (80, 80), corner (20, 80) };
+  GlimsPathPoint    gpoints[4] = { corner (100, 20), corner (160, 20), corner (160, 80), corner (100, 80) };
+  GlimsLayerInfo    rows[4];
+  GlimsPathInfo     prows[2];
+  GlimsSubpath      rsub[2];
+  GlimsPathPoint    rpts[8];
+  GlimsFillSettings red_bg = { .struct_size = sizeof red_bg, .mode = GLIMS_FILL_SELECTION,
+                               .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  GlimsFillSettings green  = { .struct_size = sizeof green,  .mode = GLIMS_FILL_SELECTION,
+                               .color = { 0, 0.8, 0, 1 }, .opacity = 1 };
+  GlimsImageInfo    loaded_info;
+  int32_t           count = 0, pcount = 0, subcount = 0, ptcount = 0;
+  uint8_t           px[4];
+  char              xcf[1024];
+  int               vectors = supports_vector_layers ();
+
+  if (! vectors)
+    {
+      CHECK (api->image_new (engine, 40, 30, &image, NULL) == GLIMS_STATUS_OK &&
+             api->path_to_vector_layer (engine, image, 1, "x", NULL, NULL) == GLIMS_STATUS_UNSUPPORTED,
+             "engines without vector layers report UNSUPPORTED");
+      if (image)
+        api->image_close (engine, image);
+      return;
+    }
+
+  api->image_new (engine, 200, 120, &image, NULL);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &red_bg, NULL);
+  CHECK (api->path_set (engine, image, 0, "Raster shape", rsquare, 1, rpoints, 4, &rpath, NULL) == GLIMS_STATUS_OK &&
+         api->path_to_vector_layer (engine, image, rpath, "Rasterized", &rasterized, NULL) == GLIMS_STATUS_OK,
+         "the rasterized candidate is made as a vector layer named Rasterized");
+  /* Editing the vector's pixels rasterizes it: the layer turns PIXEL and
+   * the whole buffer takes the edited fill color. */
+  CHECK (api->fill (engine, image, (GlimsPoint) { 0, 0 }, &green, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK && count == 2 &&
+         rows[0].id == rasterized && rows[0].kind == GLIMS_LAYER_PIXEL &&
+         (render_pixel (image, 50, 50, px), px[1] > 150 && px[0] < 60),
+         "editing the vector layer rasterizes it to PIXEL with the edited green pixels (kind %u, %d,%d,%d)",
+         rows[0].kind, px[0], px[1], px[2]);
+
+  CHECK (api->path_set (engine, image, 0, "Genuine shape", gsquare, 1, gpoints, 4, &gpath, NULL) == GLIMS_STATUS_OK &&
+         api->path_to_vector_layer (engine, image, gpath, "Genuine", &genuine, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK && count == 3 &&
+         rows[0].id == genuine && rows[0].kind == GLIMS_LAYER_VECTOR && strcmp (rows[0].name, "Genuine") == 0,
+         "the genuine vector layer sits on top as VECTOR, named Genuine");
+
+  snprintf (xcf, sizeof xcf, "%s/vector-rasterized.xcf", work);
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, reopened, rows, 4, &count) == GLIMS_STATUS_OK && count == 3 &&
+         rows[0].kind == GLIMS_LAYER_VECTOR && strcmp (rows[0].name, "Genuine") == 0 &&
+         rows[1].kind == GLIMS_LAYER_PIXEL && strcmp (rows[1].name, "Rasterized") == 0,
+         "XCF reopen keeps the genuine layer VECTOR and the edited one PIXEL, both explicitly named (kinds %u/%u, %s/%s)",
+         rows[0].kind, rows[1].kind, rows[0].name, rows[1].name);
+  CHECK (api->paths (engine, reopened, prows, 2, &pcount) == GLIMS_STATUS_OK && pcount == 2,
+         "both paths travel with the reopened image (%d)", pcount);
+  for (int32_t i = 0; i < pcount; i++)
+    if (strcmp (prows[i].name, "Genuine shape") == 0)
+      genuine_path = prows[i].id;
+  CHECK (genuine_path != 0 &&
+         api->path_get (engine, reopened, genuine_path, rsub, 2, &subcount, rpts, 8, &ptcount) == GLIMS_STATUS_OK &&
+         subcount == 1 && ptcount == 4 && rsub[0].closed &&
+         rpts[2].anchor.x == 160 && rpts[2].anchor.y == 80,
+         "the genuine vector's path shape survives the round trip (%d points)", ptcount);
+  render_pixel (reopened, 120, 50, px);
+  CHECK (px[0] > 200 && px[1] > 200,
+         "the genuine vector's fill color still renders inside its path (%d,%d,%d,%d)",
+         px[0], px[1], px[2], px[3]);
+  render_pixel (reopened, 50, 50, px);
+  CHECK (px[1] > 150 && px[0] < 60,
+         "the rasterized layer reopens with its edited green pixels, not a fresh render (%d,%d,%d,%d)",
+         px[0], px[1], px[2], px[3]);
+  render_pixel (reopened, 10, 10, px);
+  CHECK (px[0] > 200 && px[1] < 60,
+         "outside both paths the red background shows through (%d,%d,%d,%d)", px[0], px[1], px[2], px[3]);
+  CHECK (api->image_info (engine, reopened, &loaded_info) == GLIMS_STATUS_OK &&
+         ! loaded_info.dirty && undo_depth (reopened) == 0,
+         "the rasterized round trip adds no dirty state or undo history");
+  if (reopened)
+    api->image_close (engine, reopened);
+  api->image_close (engine, image);
+}
+
 /* GIMP-made files the app must read and change as GIMP does: a layer
  * group's own blend mode, pass-through, and a text layer sized in points. */
 static void
@@ -6131,6 +6228,7 @@ main (int argc, char **argv)
   test_paths (argv[2]);
   test_path_fill (argv[2]);
   test_path_vector_layer (argv[2]);
+  test_vector_rasterized_roundtrip (argv[2]);
   test_deleted_items ();
   test_groups_and_text_units (argv[3]);
   test_layer_structure ();
