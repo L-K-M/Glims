@@ -380,6 +380,11 @@ GlimsStatus glims_guide_put    (GlimsEngine *e, GlimsImageID image,
 GlimsStatus glims_guide_remove (GlimsEngine *e, GlimsImageID image,
                                 GlimsGuideID guide, char **error);
 
+/* grid.c */
+GlimsStatus glims_image_grid     (GlimsEngine *e, GlimsImageID image, GlimsGrid *out, char **error);
+GlimsStatus glims_image_set_grid (GlimsEngine *e, GlimsImageID image,
+                                  const GlimsGrid *grid, char **error);
+
 /* layer-source.c */
 GlimsStatus glims_layer_source_info (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                      GlimsLayerSourceInfo *out, char **error);
