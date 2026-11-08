@@ -740,6 +740,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         imageDocument.strokePath(path, settings: ToolState.shared.pathLine)
     }
 
+    /// Edit ▸ Fill…: fills the current selection (or the whole drawable) with
+    /// the chosen color at the chosen opacity.
+    @objc func fill(_ sender: Any?) {
+        guard let window else { return }
+        endPendingEdits()
+        FillForm.present(in: imageDocument, on: window)
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
             || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || EngineActivity.shared.isBusy || window?.attachedSheet != nil
@@ -756,6 +764,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return canPerformClipboardCommand(menuItem.action)
         case #selector(selectFromPath(_:)), #selector(strokePath(_:)):
             return imageDocument.activePath != nil && !editingBlocked
+        case #selector(fill(_:)):
+            return !editingBlocked && !previewBusy && imageDocument.activeDrawable != nil
         case #selector(newLayerGroup(_:)):
             return !editingBlocked && !previewBusy
         case #selector(toggleLayerLock(_:)):
