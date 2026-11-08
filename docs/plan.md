@@ -2215,3 +2215,12 @@ completes exactly once and the native oracle reports the image gone.
 Engines before 3.2 skip explicitly. Added compile-checked only
 (`swift build`, `swift build --build-tests`); the runtime run is not
 exercised on this branch and happens on the review root.
+
+The linked-close smoke is now exercised. Replacing only EngineActivity's
+close method with the earlier one-shot implementation reproduced two
+failures: premature close completion during the paused loader and an image
+still present after completion. The fixed retry method passes on GIMP
+3.2.8, 3.2.0 and master; 3.0.8 explicitly skips unsupported link layers.
+The final fixture requires NOT_FOUND specifically, stops on a missing
+pause marker, checks that no app activity masks the native busy state,
+and cleans up any image left by the deliberate red implementation.

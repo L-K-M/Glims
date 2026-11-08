@@ -69,6 +69,17 @@ extension EngineSmokeTest {
             while !condition() && Date() < deadline { spin(0.02) }
         }
 
+        func imageIsMissing(_ image: Int32) -> Bool {
+            do {
+                _ = try session.info(image)
+                return false
+            } catch let error as EngineSession.EngineError {
+                return error.isNotFound
+            } catch {
+                return false
+            }
+        }
+
         let gslow = work.appendingPathComponent("slow-source.gslow")
         try "glims slow load fixture\n".write(to: gslow, atomically: false, encoding: .utf8)
 
@@ -85,6 +96,16 @@ extension EngineSmokeTest {
                 document.closeImageWhenDrained { completions += 1 }
             }
             wait { completions > 0 }
+            // The deliberately old close implementation used by the red
+            // regression may report BUSY as a completed close. Clean up
+            // that live image after releasing the loader as well.
+            let deadline = Date().addingTimeInterval(15)
+            while !imageIsMissing(image) && Date() < deadline {
+                do { try session.closeImage(image) }
+                catch let error as EngineSession.EngineError where error.isBusy { spin(0.02) }
+                catch { break }
+            }
+            check(imageIsMissing(image), "linked-close cleanup leaves no live image")
         }
 
         // The release marker is present, so this first load returns at
@@ -108,7 +129,13 @@ extension EngineSmokeTest {
         defer { writeMarker(releasePath) }
         try "glims slow load fixture, changed\n".write(to: gslow, atomically: false, encoding: .utf8)
         wait { markerExists(enteredPath) }
-        check(markerExists(enteredPath), "the link monitor's reload entered the paused slow loader")
+        guard markerExists(enteredPath) else {
+            check(false, "the link monitor's reload entered the paused slow loader")
+            return
+        }
+        check(true, "the link monitor's reload entered the paused slow loader")
+        check(!EngineActivity.shared.isBusy && document.pendingWork == 0,
+              "the paused reload is native monitor work outside an app activity")
 
         // Close while the native automatic monitor load is parked.
         document.closeImageWhenDrained { completions += 1 }
@@ -127,7 +154,7 @@ extension EngineSmokeTest {
         check(completions == 1, "the close completes exactly once after the loader is released")
         spin(0.3)
         check(completions == 1, "no retry fires a second completion")
-        check((try? session.info(image)) == nil,
-              "the native oracle reports the image gone after the single completion")
+        check(imageIsMissing(image),
+              "the native oracle reports NOT_FOUND after the single completion")
     }
 }
