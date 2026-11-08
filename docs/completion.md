@@ -31,10 +31,11 @@ behavior, not every adjacent feature in `design.md`.
 - [x] Save a Copy, Revert, native Print/Page Setup, layer properties and editor preferences.
 - [x] Retina Actual Pixels and display-density changes.
 - [x] Searchable native help content.
-- [x] A self-contained bundle passes native and interface checks with the
-      development trees inaccessible. Pointer painting, keyboard editing,
+- [x] A self-contained bundle at `9deb9ae` passes native and interface checks
+      with the development trees inaccessible. Pointer painting, keyboard editing,
       Save, Quit/reopen, mask/channel controls and PDF printing have separate
-      on-screen evidence below and in the reviewed changes.
+      on-screen evidence below and in the reviewed changes. The final
+      combined revision still needs this pass.
 
 ## Remaining implementation and final verification
 
