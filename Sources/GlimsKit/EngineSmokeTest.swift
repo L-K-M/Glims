@@ -143,6 +143,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (guides controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "path-anchors" {
+                try exercisePathAnchors(session, documents: documents)
+                print(failures == 0 ? "PASSED (path anchors)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseFileAdmission(session, work: work, documents: documents)
@@ -169,6 +174,7 @@ enum EngineSmokeTest {
             try exerciseTargetHistory(session, documents: documents)
             try exercisePreferences(session, documents: documents)
             try exercisePaths(session, documents: documents)
+            try exercisePathAnchors(session, documents: documents)
             try exercisePathFillAndVector(session, work: work, documents: documents)
             try exerciseVectorStyleForm(session, work: work, documents: documents)
             try exercisePaletteControls(session, documents: documents)
@@ -5415,6 +5421,193 @@ enum EngineSmokeTest {
         paths.run(.delete)
         settle()
         check(document.paths.isEmpty && document.activePath == nil, "the palette deletes the path")
+    }
+
+    /// The Path tool's multi-anchor selection, driven through the canvas:
+    /// Shift-click toggles anchors across subpaths without an edit or an
+    /// undo, a group drag moves every selected anchor and its handles from
+    /// the press baseline in one queued update on release, wandering motion
+    /// does not drift, toggling off without a drag mutates nothing, Delete
+    /// removes the whole set in one undo step that undo restores exactly,
+    /// and an active-path switch clears the set and refuses a stale drag.
+    /// Every shape oracle reads the engine (`session.path`), never the
+    /// document's cached working state.
+    private static func exercisePathAnchors(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 200, height: 120)
+        let document = try ImageDocument(session: session, image: image, name: "PathAnchors")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        let canvas = controller.canvas
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+        guard let window = controller.window else { return check(false, "the PathAnchors document has a window") }
+        func event(_ type: NSEvent.EventType, at point: CGPoint, flags: NSEvent.ModifierFlags = []) -> NSEvent? {
+            NSEvent.mouseEvent(with: type, location: canvas.convert(CGPoint(x: point.x * canvas.scale,
+                                                                             y: point.y * canvas.scale), to: nil),
+                               modifierFlags: flags, timestamp: 0, windowNumber: window.windowNumber,
+                               context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+        }
+        func drag(_ points: [CGPoint], flags: NSEvent.ModifierFlags = []) {
+            guard let first = points.first, let last = points.last,
+                  let down = event(.leftMouseDown, at: first, flags: flags),
+                  let up = event(.leftMouseUp, at: last, flags: flags) else { return }
+            canvas.mouseDown(with: down)
+            for point in points.dropFirst() {
+                if let moved = event(.leftMouseDragged, at: point, flags: flags) { canvas.mouseDragged(with: moved) }
+            }
+            canvas.mouseUp(with: up)
+            settle()
+        }
+        func click(_ point: CGPoint, flags: NSEvent.ModifierFlags = []) {
+            guard let down = event(.leftMouseDown, at: point, flags: flags),
+                  let up = event(.leftMouseUp, at: point, flags: flags) else { return }
+            canvas.mouseDown(with: down)
+            canvas.mouseUp(with: up)
+            settle()
+        }
+        func key(_ code: UInt16) {
+            let characters = code == 51 ? "\u{7F}" : "\r"
+            if let press = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                            windowNumber: window.windowNumber, context: nil, characters: characters,
+                                            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code) {
+                canvas.keyDown(with: press)
+            }
+        }
+        let pathTool = canvas.tools.pathTool
+        func shape(_ path: Int32) -> VectorPath? { try? session.path(path, image: image) }
+
+        let previousTool = ToolState.shared.current
+        defer { ToolState.shared.select(previousTool) }
+        ToolState.shared.select(.path)
+
+        // Two open subpaths: (20,20)-(100,20) and (20,90)-(100,90).
+        drag([CGPoint(x: 20, y: 20)])
+        drag([CGPoint(x: 100, y: 20)])
+        click(CGPoint(x: 20, y: 90), flags: .shift)
+        drag([CGPoint(x: 100, y: 90)])
+        key(36)
+        guard let path = document.activePath else { return check(false, "the drawn path is active") }
+        let a01 = VectorPath.AnchorIndex(subpath: 0, anchor: 1)
+        let a10 = VectorPath.AnchorIndex(subpath: 1, anchor: 0)
+        let built = shape(path)
+        check(built?.subpaths.count == 2
+                && built?.subpaths[0].anchors.map(\.point) == [CGPoint(x: 20, y: 20), CGPoint(x: 100, y: 20)]
+                && built?.subpaths[1].anchors.map(\.point) == [CGPoint(x: 20, y: 90), CGPoint(x: 100, y: 90)]
+                && built?.subpaths.allSatisfy({ !$0.isClosed }) == true,
+              "two open subpaths were drawn")
+        check(pathTool.selectedAnchors.isEmpty, "Return ended drawing and cleared the selection")
+
+        // Select two anchors across subpaths; the Shift-click neither edits
+        // the path nor pushes an undo.
+        let undoBase = document.undoInfo.undoCount
+        click(CGPoint(x: 100, y: 20))
+        check(pathTool.selectedAnchors == [a01], "a normal click selects one anchor")
+        click(CGPoint(x: 20, y: 90), flags: .shift)
+        check(pathTool.selectedAnchors == [a01, a10], "Shift-click toggles in an anchor of another subpath")
+        check(document.undoInfo.undoCount == undoBase && shape(path) == built,
+              "Shift-click toggling neither edits the path nor pushes an undo")
+
+        // Option-drag pulls handles on a single-selected anchor.
+        let undoHandles = document.undoInfo.undoCount
+        drag([CGPoint(x: 100, y: 20), CGPoint(x: 120, y: 25)], flags: .option)
+        check(pathTool.selectedAnchors == [a01], "Option-drag selects only the pulled anchor")
+        check(shape(path)?.subpaths[0].anchors[1].handleOut == CGPoint(x: 120, y: 25)
+                && shape(path)?.subpaths[0].anchors[1].handleIn == CGPoint(x: 80, y: 15),
+              "Option-drag pulled the anchor's handles out")
+        check(document.undoInfo.undoCount == undoHandles + 1, "pulling handles is one undo step")
+        click(CGPoint(x: 20, y: 90), flags: .shift)
+        check(pathTool.selectedAnchors == [a01, a10], "Shift-click re-adds the second anchor")
+
+        // A group drag moves all selected anchors and the handles together,
+        // as one queued update and one undo on release, computed from the
+        // press baseline: the wandering intermediate points must not
+        // accumulate.
+        let undoDrag = document.undoInfo.undoCount
+        drag([CGPoint(x: 100, y: 20), CGPoint(x: 140, y: 60), CGPoint(x: 105, y: 25), CGPoint(x: 130, y: 40)])
+        let dragged = shape(path)
+        check(dragged?.subpaths[0].anchors[1].point == CGPoint(x: 130, y: 40)
+                && dragged?.subpaths[1].anchors[0].point == CGPoint(x: 50, y: 110),
+              "the group drag moved both selected anchors by the final delta only")
+        check(dragged?.subpaths[0].anchors[1].handleOut == CGPoint(x: 150, y: 45)
+                && dragged?.subpaths[0].anchors[1].handleIn == CGPoint(x: 110, y: 35),
+              "the selected anchor's handles moved with it")
+        check(dragged?.subpaths[0].anchors[0].point == CGPoint(x: 20, y: 20)
+                && dragged?.subpaths[1].anchors[1].point == CGPoint(x: 100, y: 90),
+              "unselected anchors stayed put")
+        check(document.undoInfo.undoCount == undoDrag + 1,
+              "the group drag is one queued path update and one undo on release")
+
+        // A drag released back at its press point changes nothing.
+        let undoStill = document.undoInfo.undoCount
+        drag([CGPoint(x: 130, y: 40), CGPoint(x: 180, y: 90), CGPoint(x: 130, y: 40)])
+        check(document.undoInfo.undoCount == undoStill && shape(path) == dragged,
+              "a drag released at its press baseline neither drifts nor pushes an undo")
+
+        // Shift-click toggles anchors off without any mutation or undo.
+        click(CGPoint(x: 130, y: 40), flags: .shift)
+        check(pathTool.selectedAnchors == [a10], "Shift-click toggled the anchor out of the set")
+        check(document.undoInfo.undoCount == undoStill && shape(path) == dragged,
+              "toggling off without a drag edits nothing and pushes no undo")
+        click(CGPoint(x: 50, y: 110), flags: .shift)
+        check(pathTool.selectedAnchors.isEmpty, "Shift-click toggled the other anchor off too")
+
+        // Switching the active path clears the selected set.
+        click(CGPoint(x: 130, y: 40))
+        check(pathTool.selectedAnchors == [a01], "a normal click re-selects the single anchor")
+        guard let other = document.addPath(VectorPath(subpaths: [.init(anchors: [.init(CGPoint(x: 5, y: 5))])])) else {
+            return check(false, "a second path was added")
+        }
+        settle()
+        key(53)
+        check(document.activePath == other && pathTool.selectedAnchors.isEmpty,
+              "switching the active path clears the selected set")
+
+        // A drag whose path stops being active mid-drag is refused on
+        // release rather than written over the switch.
+        document.selectPath(path)
+        settle()
+        click(CGPoint(x: 130, y: 40))
+        check(pathTool.selectedAnchors == [a01], "the anchor is selected again on the original path")
+        let beforeStale = shape(path)
+        if let down = event(.leftMouseDown, at: CGPoint(x: 130, y: 40)),
+           let moved = event(.leftMouseDragged, at: CGPoint(x: 160, y: 60)),
+           let up = event(.leftMouseUp, at: CGPoint(x: 160, y: 60)) {
+            canvas.mouseDown(with: down)
+            canvas.mouseDragged(with: moved)
+            document.selectPath(other)
+            settle()
+            canvas.mouseUp(with: up)
+            settle()
+        }
+        check(shape(path) == beforeStale,
+              "a drag whose active path switched mid-drag is refused, not applied")
+
+        // Delete removes the whole selected set in one undo step, and undo
+        // restores the exact engine shape.
+        document.selectPath(path)
+        settle()
+        click(CGPoint(x: 130, y: 40))
+        click(CGPoint(x: 50, y: 110), flags: .shift)
+        check(pathTool.selectedAnchors == [a01, a10], "two anchors across subpaths are selected again")
+        let beforeDelete = shape(path)
+        let undoDelete = document.undoInfo.undoCount
+        key(51)
+        settle()
+        let deleted = shape(path)
+        check(deleted?.subpaths.count == 2
+                && deleted?.subpaths[0].anchors.map(\.point) == [CGPoint(x: 20, y: 20)]
+                && deleted?.subpaths[1].anchors.map(\.point) == [CGPoint(x: 100, y: 90)],
+              "Delete removed both selected anchors, one per subpath")
+        check(document.undoInfo.undoCount == undoDelete + 1, "the batch delete is one undo step")
+        check(pathTool.selectedAnchors.isEmpty, "Delete cleared the selection")
+        document.undo()
+        settle()
+        check(shape(path) == beforeDelete, "undo restores the exact pre-delete engine shape")
+        document.redo()
+        settle()
+        check(shape(path) == deleted, "redo reapplies the batch delete exactly")
     }
 
     /// Fill Path and To Vector Layer over the appended `path_fill` and
