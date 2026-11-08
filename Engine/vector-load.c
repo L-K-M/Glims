@@ -51,6 +51,7 @@
 #include "core/gimprasterizable.h"
 #include "core/gimpviewable.h"
 #include "gegl/gimp-gegl-utils.h"
+#include "path/gimppath.h"
 #include "path/gimpvectorlayer.h"
 
 /* The opening of the loader-private VectorLayerData in the pinned 3.2.0
@@ -149,8 +150,23 @@ visit_layer (gpointer object, gpointer data)
   if (GIMP_IS_VECTOR_LAYER (object))
     {
       VectorSource *source;
+      GimpItem     *layer = GIMP_ITEM (object);
+      GimpPath     *path = gimp_vector_layer_get_path (GIMP_VECTOR_LAYER (object));
+      GimpImage    *image = gimp_item_get_image (layer);
 
       gimp_rasterizable_set_auto_rename (GIMP_RASTERIZABLE (object), FALSE);
+      /* 3.2.0's vector convert calls gimp_item_convert(path, image,...)
+       * and discards the returned copy, leaving the layer's actual path
+       * tied to the temporary image. Mirror the later native in-place
+       * conversion before that image can die (3.2.8 gimpvectorlayer.c).
+       * Ordinary XCF loading already has matching images and is untouched. */
+      if (path && gimp_item_get_image (GIMP_ITEM (path)) != image)
+        {
+          GIMP_ITEM_GET_CLASS (path)->convert (GIMP_ITEM (path), image,
+                                               G_TYPE_FROM_INSTANCE (path));
+          if (! gimp_item_is_attached (GIMP_ITEM (path)))
+            gimp_image_add_path (image, path, NULL, -1, FALSE);
+        }
       /* gimp_item_replace_item() gave the converted layer the source's
        * item id, so pair them here, before the loader rasterizes it. */
       source = g_hash_table_lookup (guard->sources_by_id,
@@ -279,9 +295,12 @@ glims_vector_load_guard_end (GlimsVectorLoadGuard *guard)
        * its fresh render. */
       for (guint i = 0; i < guard->vector_sources->len; i++)
         restore_source (g_ptr_array_index (guard->vector_sources, i));
+      /* Signal connections retain loading images. Release their saved
+       * layer references while those images are still alive: detached
+       * items keep a borrowed image pointer during native finalization. */
+      g_ptr_array_unref (guard->vector_sources);
       g_ptr_array_unref (guard->connections);
       g_hash_table_unref (guard->watched);
-      g_ptr_array_unref (guard->vector_sources);
       g_hash_table_unref (guard->retained_sources);
       g_hash_table_unref (guard->sources_by_id);
       g_free (guard);

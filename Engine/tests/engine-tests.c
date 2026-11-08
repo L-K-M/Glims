@@ -1452,14 +1452,12 @@ test_vector_rasterized_open_layers (const char *work)
              rows[0].name, rows[1].name, rows[2].name, rows[3].name);
     }
 
-  CHECK (api->paths (engine, dest, prows, 4, &pcount) == GLIMS_STATUS_OK,
+  CHECK (api->paths (engine, dest, prows, 4, &pcount) == GLIMS_STATUS_OK && pcount == 2,
          "the destination's paths are listed (%d)", pcount);
   if (pcount == 2)
     {
-      /* Engines whose native convert moves the paths into the destination
-       * (3.2.8) list the duplicates under "… copy" names; 3.2.0's convert
-       * leaves the path list empty (upstream), while the layer still
-       * renders its own path — pinned by the render checks below. */
+      /* Native duplicates carry "… copy" names. Both paths must belong
+       * to the destination rather than the destroyed loading image. */
       for (int32_t i = 0; i < pcount; i++)
         if (strncmp (prows[i].name, "Genuine shape", 13) == 0)
           genuine_path = prows[i].id;
@@ -1503,6 +1501,20 @@ test_vector_rasterized_open_layers (const char *work)
          (render_pixel (dest, 50, 50, px), px[1] > 150 && px[0] < 60),
          "redo restores the import with the edited green pixels again (%d,%d,%d)",
          px[0], px[1], px[2]);
+
+  snprintf (xcf, sizeof xcf, "%s/imported-vectors-resaved.xcf", work);
+  CHECK (api->image_save (engine, dest, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &src, NULL) == GLIMS_STATUS_OK,
+         "the imported vector layers can be saved and reopened after their loading image is gone");
+  if (src)
+    {
+      CHECK (api->image_layers (engine, src, rows, 8, &count) == GLIMS_STATUS_OK && count == 4 &&
+             rows[0].kind == GLIMS_LAYER_VECTOR && rows[1].kind == GLIMS_LAYER_PIXEL &&
+             (render_pixel (src, 120, 50, px), px[0] > 200 && px[1] > 200) &&
+             (render_pixel (src, 50, 50, px), px[1] > 150 && px[0] < 60),
+             "resaving imported vectors preserves both editable geometry and raster edits");
+      api->image_close (engine, src);
+    }
 
   api->image_close (engine, dest);
 }
