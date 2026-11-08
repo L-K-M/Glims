@@ -619,11 +619,13 @@ undo_or_redo (GlimsEngine  *engine,
 {
   GlimsOpenImage *open = glims_lookup_image (engine, id);
   gboolean        done;
+  GlimsStatus     status;
 
   if (! open)
     return GLIMS_STATUS_NOT_FOUND;
-  if (engine->busy > 0)
-    return GLIMS_STATUS_BUSY;
+  status = glims_edit_ready (engine, open, NULL);
+  if (status != GLIMS_STATUS_OK)
+    return status;
 
   done = undo ? gimp_image_undo (open->image) : gimp_image_redo (open->image);
   gimp_image_flush (open->image);

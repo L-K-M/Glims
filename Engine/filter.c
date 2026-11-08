@@ -43,6 +43,9 @@ glims_filter_check_edit (GlimsEngine *engine, GlimsFilterID id, char **error)
 
   if (! session || ! gimp_item_is_attached (GIMP_ITEM (session->drawable)))
     return GLIMS_STATUS_NOT_FOUND;
+  if (session->existing &&
+      ! gimp_drawable_has_filter (session->drawable, GIMP_FILTER (session->existing)))
+    return GLIMS_STATUS_NOT_FOUND;
   if (engine->busy > 0) return GLIMS_STATUS_BUSY;
   return glims_check_item_locks (GIMP_ITEM (session->drawable), GLIMS_LOCK_PIXELS, error);
 }
@@ -61,7 +64,8 @@ glims_filters_free (gpointer data)
     {
       gimp_filter_set_active (GIMP_FILTER (session->existing),
                               session->existing_active);
-      gimp_drawable_update (session->drawable, 0, 0, -1, -1);
+      if (gimp_item_is_attached (GIMP_ITEM (session->drawable)))
+        gimp_drawable_update (session->drawable, 0, 0, -1, -1);
     }
 
   g_clear_object (&session->filter);
