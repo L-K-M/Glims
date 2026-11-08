@@ -133,6 +133,7 @@ enum EngineSmokeTest {
             try measurePluginStalls(session, work: work)
             try exerciseResourceCatalog(session)
             try exerciseResourceThumbnails(session)
+            try exercisePatternFill(session, documents: documents)
         } catch {
             check(false, "unexpected engine error: \(error)")
         }
@@ -6327,6 +6328,82 @@ enum EngineSmokeTest {
               "resource thumbnails do not mutate an open image's pixels")
         check(try EngineSession.ResourceKind.allCases.map { try session.resources($0) } == catalogBefore,
               "resource thumbnails leave every resource catalog unchanged")
+    }
+
+    /// The bounded pattern-fill scenario: a stock pattern's persistent
+    /// identity is read on a background queue, then the fill is queued
+    /// through the document's counted input path — the identity resolves
+    /// to a live handle inside the queued work, off the main thread — and
+    /// lands as one undo step on the active layer. Malformed handles and
+    /// a wrong-kind identity are refused. No chooser UI is involved.
+    private static func exercisePatternFill(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 96, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Pattern Fill")
+        documents.items.append(document)
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+            spin()
+        }
+
+        // The catalog read and the identity both belong off the main thread.
+        let identity: EngineSession.ResourceIdentity = try DispatchQueue.global(qos: .userInitiated).sync {
+            let rows = try session.resources(.pattern)
+            guard let first = rows.first else {
+                throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                                 message: "The engine lists no pattern.")
+            }
+            return try session.resourceIdentifiers(first.id)
+        }
+        check(!identity.name.isEmpty, "a stock pattern reports a usable identity")
+
+        let undoBefore = document.undoInfo.undoCount
+        let pixelsBefore = try session.copyPixels(image, merged: true).pixels
+        document.fillPattern(identity, at: CGPoint(x: 8, y: 8), EngineSession.PatternFillSettings())
+        settle()
+        check(document.pendingWork == 0, "the queued pattern fill drained")
+        check(document.undoInfo.undoCount == undoBefore + 1,
+              "the queued pattern fill is one undo step (\(undoBefore) -> \(document.undoInfo.undoCount))")
+        check(try session.copyPixels(image, merged: true).pixels != pixelsBefore,
+              "the pattern fill changed the active layer's pixels")
+
+        document.undo()
+        settle()
+        check(try session.copyPixels(image, merged: true).pixels == pixelsBefore,
+              "undo restores the layer's pixels")
+
+        for bad: EngineSession.ResourceID in [0, .max, (UInt64(1) << 32) | 1, 0x8000_0000] {
+            do {
+                _ = try session.fillPattern(image: image, pattern: bad, seed: .zero, .init())
+                check(false, "pattern handle \(bad) is refused")
+            } catch let error as EngineSession.EngineError {
+                check(error.status == Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                      "malformed pattern handle \(bad) throws INVALID_ARGUMENT without narrowing")
+            }
+        }
+        do {
+            _ = try session.fillPattern(image: image, pattern: 0x7FFF_FFFF, seed: .zero, .init())
+            check(false, "an unissued pattern handle reports NOT_FOUND")
+        } catch let error as EngineSession.EngineError {
+            check(error.status == Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
+                  "an unissued well-shaped pattern handle throws NOT_FOUND")
+        }
+        let brushIdentity: EngineSession.ResourceIdentity = try DispatchQueue.global(qos: .userInitiated).sync {
+            guard let first = try session.resources(.brush).first else {
+                throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                                 message: "The engine lists no brush.")
+            }
+            return try session.resourceIdentifiers(first.id)
+        }
+        do {
+            _ = try session.resolveResource(brushIdentity, kind: .pattern)
+            check(false, "a brush identity does not resolve as a pattern")
+        } catch let error as EngineSession.EngineError {
+            check(error.status == Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
+                  "a brush identity is NOT_FOUND as a pattern")
+        }
+        settle()
+        check(document.undoInfo.undoCount == undoBefore, "the refused calls added no undo step")
     }
 }
 

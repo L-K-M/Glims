@@ -601,6 +601,20 @@ final class ImageDocument {
         }
     }
 
+    /// Fills the paint target with the pattern `identity` names, as one
+    /// undo step. The identity is resolved to a live engine handle inside
+    /// the queued work, so the resolve runs on the input queue, never the
+    /// main thread; a persisted identity that no longer resolves fails
+    /// the command like any other engine error.
+    func fillPattern(_ identity: EngineSession.ResourceIdentity, at point: CGPoint,
+                     _ settings: EngineSession.PatternFillSettings) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        runOnPaintTarget { session, image in
+            let pattern = try session.resolveResource(identity, kind: .pattern)
+            try session.fillPattern(image: image, pattern: pattern, seed: point, settings)
+        }
+    }
+
     /// The menu commands act on the layer the engine selects when they
     /// run — layer 0, the adapter's "selected layer at execution" — so a
     /// creation or pick queued ahead of them is what they hit, not the
