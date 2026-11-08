@@ -21,6 +21,8 @@ enum MainMenu {
             item("New…", #selector(AppController.newDocument(_:)), "n"),
             item("Open…", #selector(AppController.openDocument(_:)), "o"),
             RecentDocumentsMenu.shared.makeItem(),
+            item("Open as Layers…", #selector(DocumentWindowController.openLayersFromFile(_:))),
+            item("Place as Link Layer…", #selector(DocumentWindowController.placeLinkFromFile(_:))),
             item("Recover Documents…", #selector(AppController.recoverDocuments(_:))),
             .separator(),
             item("Close", #selector(NSWindow.performClose(_:)), "w"),

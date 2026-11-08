@@ -456,6 +456,21 @@ final class EngineSession: @unchecked Sendable {
         return layer
     }
 
+    /// Whether the engine is known to place genuine link layers: they
+    /// arrived in GIMP 3.2, and older engines answer `placeLink` with
+    /// UNSUPPORTED. `nil` when the version string does not parse — the
+    /// facade's own answer then decides instead of a guess.
+    var supportsLinkLayers: Bool? {
+        Self.supportsLinkLayers(version: version)
+    }
+
+    /// Parses an engine `major.minor[.micro]` version string.
+    static func supportsLinkLayers(version: String) -> Bool? {
+        let parts = version.split(separator: ".")
+        guard parts.count >= 2, let major = Int(parts[0]), let minor = Int(parts[1]) else { return nil }
+        return major > 3 || (major == 3 && minor >= 2)
+    }
+
     func newImage(pixels: ClipboardImage) throws -> Int32 {
         guard pixels.pixels.count == (try ClipboardImage.byteCount(width: pixels.width, height: pixels.height)) else {
             throw ClipboardImage.TransferError.invalidImage
