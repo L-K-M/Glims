@@ -741,7 +741,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     /// Edit ▸ Fill Path: fills the active path's area on the current paint
-    /// target in the foreground color at full opacity.
+    /// target using the Path tool's foreground color and fill settings.
     @objc func fillPath(_ sender: Any?) {
         guard let path = imageDocument.activePath else { return }
         imageDocument.fillPath(path, settings: ToolState.shared.pathFill)

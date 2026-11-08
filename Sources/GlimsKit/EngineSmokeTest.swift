@@ -3890,10 +3890,11 @@ enum EngineSmokeTest {
         ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(buttons)
     }
 
-    private static func descendant<View: NSView>(of view: NSView, as type: View.Type) -> View? {
-        if let match = view as? View { return match }
+    private static func descendant<View: NSView>(of view: NSView, as type: View.Type,
+                                                   matching predicate: (View) -> Bool = { _ in true }) -> View? {
+        if let match = view as? View, predicate(match) { return match }
         for child in view.subviews {
-            if let match = descendant(of: child, as: type) { return match }
+            if let match = descendant(of: child, as: type, matching: predicate) { return match }
         }
         return nil
     }
@@ -4498,10 +4499,65 @@ enum EngineSmokeTest {
         check((composite(80, 80)?[0] ?? 0) > 200 && (composite(80, 80)?[2] ?? 255) < 64,
               "the fill stays clipped to the selection")
         try session.select(.none, image: image)
-        document.undo()
+        // Selection changes also occupy history entries. Return to the
+        // captured position, rather than assuming two undos remove fills.
+        var traversed = 0
+        while document.undoInfo.undoCount > undoBefore && traversed < 8 {
+            document.undo()
+            settle()
+            traversed += 1
+        }
+        check(document.undoInfo.undoCount == undoBefore &&
+                composite(60, 50)?.prefix(3).allSatisfy { $0 > 240 } == true,
+              "undo restores the white pixels and selection from before both fills")
+
+        // Commit a value through the real Tool Options control, then use
+        // the palette action. This verifies the controls affect pixels.
+        let state = ToolState.shared
+        let savedTool = state.current, savedColor = state.foreground
+        let savedOpacity = state.pathFillOpacity, savedAntialias = state.pathFillAntialias
+        defer {
+            state.foreground = savedColor
+            state.pathFillOpacity = savedOpacity
+            state.pathFillAntialias = savedAntialias
+            state.select(savedTool)
+        }
+        state.select(.path)
+        state.foreground = .red
+        let options = ToolOptionsPaletteController()
+        let opacity = options.view.subviews.compactMap { $0 as? ClassicValueSlider }.last
+        let field = opacity.flatMap { descendant(of: $0, as: NSTextField.self, matching: { $0.isEditable }) }
+        field?.stringValue = "50"
+        if let field, let action = field.action { NSApp.sendAction(action, to: field.target, from: field) }
+        let antialias = options.view.subviews.compactMap { $0 as? NSButton }.first { $0.title == "Antialias fill" }
+        if antialias?.state == .on { antialias?.performClick(nil) }
+        check(state.pathFillOpacity == 0.5 && !state.pathFillAntialias,
+              "the Path options commit fill opacity and antialias choices")
+        if let item = fillItem, let action = item.action { NSApp.sendAction(action, to: item.target, from: item) }
+        settle()
+        let translucent = composite(60, 50) ?? []
+        check(translucent.count == 4 && translucent[0] > 240 && (175...200).contains(Int(translucent[1])),
+              "the palette fill uses the options' 50 percent foreground opacity (\(translucent))")
         document.undo()
         settle()
-        check((composite(60, 50)?[0] ?? 0) > 200, "undo takes back both fills, one step each")
+        state.pathFillOpacity = savedOpacity
+        state.pathFillAntialias = savedAntialias
+
+        // A saved channel is a distinct drawable; filling it must leave
+        // layer pixels unchanged and keep the channel's outside area.
+        try session.select(.all, image: image)
+        let channel = try session.channelFromSelection(image, name: "Path fill target")
+        try session.select(.none, image: image)
+        try document.reload()
+        document.fillPath(path, settings: .init(color: .black))
+        settle()
+        check(document.activeDrawable == channel && luminance(thumbPixel(channel, 9, 9)) < 64
+                && luminance(thumbPixel(channel, 0, 0)) > 200 && luminance(thumbPixel(layer, 9, 9)) > 200,
+              "Fill Path changes the saved channel inside the path and preserves layer pixels")
+        document.selectLayer(layer)
+        settle()
+        document.deleteChannel(channel)
+        settle()
 
         // A group as the target is refused, not silently filled.
         document.createGroup()
