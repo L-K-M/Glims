@@ -11,6 +11,14 @@ final class NativeFilterCatalog {
 
     /// The engine's operations in catalog order; empty until `load` lands.
     private(set) var operations: [EngineSession.FilterOperation] = []
+
+    /// The catalog's operation with `name` — what a committed effect's
+    /// `operation` string resolves to; nil until `load` lands or for an
+    /// operation the engine does not list.
+    func operation(named name: String) -> EngineSession.FilterOperation? {
+        operations.first { $0.name == name }
+    }
+
     /// Properties already fetched, by operation name; enum choices included.
     private var properties: [String: [EngineSession.FilterProperty]] = [:]
     /// Fetch completions waiting on the same operation's properties.

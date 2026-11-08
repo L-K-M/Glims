@@ -3,14 +3,17 @@ import RigiUI
 
 /// The Layers palette: the front document's layer tree, top of the stack
 /// first. Selecting a row makes that layer or group the paint, metadata
-/// and filter target. Groups open and close with the disclosure triangle;
-/// dragging a row reorders it inside its parent or moves it into a group.
-/// Each row carries a visibility checkbox, a lock badge when locks apply,
-/// and a name that edits in place. The button bar adds a layer or a group,
-/// duplicates and deletes.
+/// and filter target; selecting a committed effect's subrow picks its
+/// parent layer and offers the effect's own commands. Groups open and
+/// close with the disclosure triangle; dragging a row reorders it
+/// inside its parent or moves it into a group. Each row carries a
+/// visibility checkbox, a lock badge when locks apply, and a name that
+/// edits in place. The button bar adds a layer or a group, duplicates
+/// and deletes.
 @MainActor
 final class LayersPaletteController: NSViewController, PaletteContent, PaletteEditScope.Content,
-                                     NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuItemValidation {
+                                     NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuItemValidation,
+                                     NSMenuDelegate {
     typealias Target = ImageDocument
 
     static let definition = PaletteDefinition(
@@ -39,6 +42,14 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     /// The selection the outline last applied; a new selection inside a
     /// collapsed group opens its parents, an unchanged one does not.
     private var lastSyncedSelection: Int32?
+    /// The effect row the user last picked, by explicit ids: it stays
+    /// selected across reloads while its parent is still the paint
+    /// target — a retarget, removal, new pick or mask/channel pick
+    /// ends it.
+    private var selectedEffect: (drawable: Int32, effect: Int32)?
+    /// Whether the picked effect row's parent must still be opened to
+    /// show it — like a layer selection inside a collapsed group.
+    private var effectSelectionIsNew = false
     /// Layer and mask thumbnails, bounded small and read off the main
     /// thread. Keys carry the document's state version, so a result read
     /// for an older state can never land on a newer row.
@@ -59,6 +70,13 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         func cancel() { lock.withLock { cancelled = true } }
     }
     private var thumbnailRequests: [ThumbnailKey: ThumbnailRequest] = [:]
+    /// The per-row menu, rebuilt in `menuNeedsUpdate` for the effect row
+    /// under the right-click; stays empty elsewhere so nothing pops.
+    private lazy var rowMenu: NSMenu = {
+        let menu = NSMenu(title: "Effect")
+        menu.delegate = self
+        return menu
+    }()
     private lazy var buttonBar = ClassicPaletteButtonBar(
         items: [Self.item("new", "New Layer", ["plus"]) { $0.layerCommand(.new) },
                 Self.item("group", "New Layer Group", ["folder.badge.plus", "folder", "plus"]) { $0.createGroup() },
@@ -102,6 +120,9 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         outline.doubleAction = #selector(editNameOfClickedRow(_:))
         outline.rowHeight = LayerRowView.rowHeight
         outline.setAccessibilityLabel("Layers")
+        // Built per right-click for the row under it; empty on a layer
+        // row means no menu, like before.
+        outline.menu = rowMenu
         outline.registerForDraggedTypes([Self.dragType])
         outline.setDraggingSourceOperationMask(.move, forLocal: true)
         outline.setDraggingSourceOperationMask([], forLocal: false)
@@ -176,6 +197,18 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             item.tag = Int(lock.rawValue)
             menu.addItem(item)
         }
+        // While an effect row is selected its stack commands live here
+        // too, next to the row's own right-click menu.
+        if let document, let selected = selectedEffect,
+           let effect = document.layerEffects[selected.drawable]?
+                .first(where: { $0.id == selected.effect }) {
+            let item = EffectItem(document: document, drawable: selected.drawable, effect: effect)
+            let submenu = NSMenuItem(title: "Filter: \(effect.name)", action: nil, keyEquivalent: "")
+            submenu.submenu = NSMenu(title: effect.name)
+            effectMenuItems(for: item).forEach { submenu.submenu?.addItem($0) }
+            menu.addItem(.separator())
+            menu.addItem(submenu)
+        }
         return menu
     }
 
@@ -217,7 +250,153 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         document?.maskToSelection(operation)
     }
 
+    // MARK: Effect rows
+
+    /// The context menu items one effect row offers: parameter editing,
+    /// properties, enable, the stack moves, remove and merge. Enabled
+    /// state mirrors the engine's guards; the document still validates
+    /// each run.
+    private func effectMenuItems(for item: EffectItem) -> [NSMenuItem] {
+        func entry(_ title: String, _ action: Selector, tag: Int = 0,
+                   enabled: Bool = true, toolTip: String? = nil) -> NSMenuItem {
+            let menuItem = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            menuItem.target = self
+            menuItem.representedObject = item
+            menuItem.tag = tag
+            menuItem.isEnabled = enabled
+            menuItem.toolTip = toolTip
+            return menuItem
+        }
+        let editSupported = NativeFilterCatalog.shared.operation(named: item.effect.operation)?.support == .supported
+        let editReason = NativeFilterMenuLayout.unavailableReason(
+            NativeFilterCatalog.shared.operation(named: item.effect.operation)?.support ?? .needsConfig)
+        let enable = entry("Enable", #selector(toggleEffectEnabled(_:)))
+        enable.state = item.effect.isEnabled ? .on : .off
+        var items = [
+            entry("Edit Parameters…", #selector(editParametersOfItem(_:)),
+                  enabled: editSupported,
+                  toolTip: editSupported ? nil : "\(item.effect.name) \(editReason ?? "cannot be edited") — not supported yet."),
+            entry("Properties…", #selector(propertiesOfItem(_:))),
+            .separator(),
+            enable,
+        ]
+        items.append(.separator())
+        for (title, command) in [("Move Up", EngineSession.EffectCommand.raise),
+                                 ("Move Down", .lower),
+                                 ("Move to Top", .toTop),
+                                 ("Move to Bottom", .toBottom)] {
+            items.append(entry(title, #selector(runEffectCommand(_:)), tag: Int(command.rawValue)))
+        }
+        items.append(.separator())
+        items.append(entry("Remove", #selector(runEffectCommand(_:)), tag: Int(EngineSession.EffectCommand.remove.rawValue)))
+        items.append(entry("Merge", #selector(runEffectCommand(_:)), tag: Int(EngineSession.EffectCommand.merge.rawValue),
+                           toolTip: "Bake the filter into the layer's pixels; the layer keeps no other filters editable after it."))
+        return items
+    }
+
+    /// Whether the effect-row menu item can run now: the document takes
+    /// edits and the effect is still on its drawable; per-command rules
+    /// (position, mergeable, editable) apply on top.
+    private func validateEffectItem(_ menuItem: NSMenuItem, _ item: EffectItem) -> Bool {
+        guard let document, item.document === document, document.acceptsEdits,
+              let stack = document.layerEffects[item.drawable],
+              let index = stack.firstIndex(where: { $0.id == item.effect.id }) else { return false }
+        let effect = stack[index]
+        switch menuItem.action {
+        case #selector(editParametersOfItem(_:)):
+            return NativeFilterCatalog.shared.operation(named: effect.operation)?.support == .supported
+        case #selector(toggleEffectEnabled(_:)):
+            menuItem.state = effect.isEnabled ? .on : .off
+            return true
+        case #selector(runEffectCommand(_:)):
+            guard let command = EngineSession.EffectCommand(rawValue: UInt32(menuItem.tag)) else { return false }
+            return EffectCommands.enabled(command, at: index, of: stack.count, effect: effect,
+                                          layer: document.layers.first { $0.id == item.drawable },
+                                          locks: document.layerLocks[item.drawable]?.effective ?? [])
+        default:
+            return true
+        }
+    }
+
+    /// Applies a row's change to the effect it was made for, and only
+    /// while that effect is still on its drawable in the document the
+    /// palette shows. Returns false when refused, so the row shows the
+    /// effect's authoritative state again.
+    private func commitEffectChange(_ item: EffectItem, _ change: EngineSession.EffectChange) -> Bool {
+        guard let document, item.document === document, document.acceptsEdits,
+              document.canChangeEffect(item.effect.id, on: item.drawable) else { return false }
+        document.changeEffect(item.effect.id, on: item.drawable, change)
+        return true
+    }
+
+    /// The row's Edit Parameters command and double-click: the generic
+    /// form drives a live edit session on the effect's own stack
+    /// position — the document window owns the nonmodal preview
+    /// lifecycle, the palette only routes it there.
+    private func editEffectParameters(_ item: EffectItem) {
+        guard let document, item.document === document, document.acceptsEdits,
+              document.canChangeEffect(item.effect.id, on: item.drawable),
+              NativeFilterCatalog.shared.operation(named: item.effect.operation)?.support == .supported
+        else { return }
+        documentWindowController(for: document)?
+            .editEffectParameters(item.effect.id, on: item.drawable, operationName: item.effect.operation)
+    }
+
+    /// The document window that owns `document`: the nonmodal parameter
+    /// form lives on it, not on the palette.
+    private func documentWindowController(for document: ImageDocument) -> DocumentWindowController? {
+        NSApp.windows.lazy.compactMap { $0.windowController as? DocumentWindowController }
+            .first { $0.imageDocument === document }
+    }
+
+    @objc private func editParametersOfItem(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? EffectItem else { return }
+        editEffectParameters(item)
+    }
+
+    @objc private func propertiesOfItem(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? EffectItem,
+              let document, item.document === document,
+              let window = view.window else { return }
+        EffectPropertiesForm.present(item: item, in: document, on: window)
+    }
+
+    @objc private func toggleEffectEnabled(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? EffectItem,
+              let document, item.document === document,
+              let current = document.layerEffects[item.drawable]?
+                  .first(where: { $0.id == item.effect.id }) else { return }
+        var change = EngineSession.EffectChange()
+        change.isEnabled = !current.isEnabled
+        _ = commitEffectChange(item, change)
+    }
+
+    @objc private func runEffectCommand(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? EffectItem,
+              let command = EngineSession.EffectCommand(rawValue: UInt32(sender.tag)),
+              let document, item.document === document, document.acceptsEdits,
+              document.canChangeEffect(item.effect.id, on: item.drawable) else { return }
+        document.effectCommand(command, effect: item.effect.id, on: item.drawable)
+    }
+
+    // MARK: Row context menu
+
+    /// Rebuilds the outline's menu for the row under the right-click:
+    /// an effect row gets its commands, anything else leaves the menu
+    /// empty so nothing pops.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard menu === rowMenu, let document, outline.clickedRow >= 0,
+              let item = outline.item(atRow: outline.clickedRow),
+              let effect = snapshot.effect(for: item, for: document,
+                                           currentEffects: document.layerEffects) else { return }
+        effectMenuItems(for: effect).forEach { menu.addItem($0) }
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if let item = menuItem.representedObject as? EffectItem {
+            return validateEffectItem(menuItem, item)
+        }
         switch menuItem.action {
         case #selector(runLayerCommand(_:)):
             guard let document, document.acceptsEdits else { return false }
@@ -268,7 +447,11 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         // Only a real target change forgets the synced selection: this
         // also runs for every state change of the shown document, and
         // resetting then would reopen its collapsed ancestors each time.
-        if target !== document { lastSyncedSelection = nil }
+        if target !== document {
+            lastSyncedSelection = nil
+            selectedEffect = nil
+            effectSelectionIsNew = false
+        }
         document = target
         reload()
     }
@@ -304,14 +487,45 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         }
         displayedDocument = shown
 
-        snapshot = LayerListSnapshot(document: document, layers: document?.layers ?? [])
+        snapshot = LayerListSnapshot(document: document, layers: document?.layers ?? [],
+                                     effects: document?.layerEffects ?? [:])
         outline.reloadData()
         for id in expandedGroupIDs {
             if let node = snapshot.tree.nodesByID[id] { outline.expandItem(node) }
         }
 
-        if let document, let active = document.activeLayer,
-           let node = snapshot.tree.nodesByID[active] {
+        // An effect selection stands while its parent is still the paint
+        // target and the effect is still on the stack; a retarget,
+        // removal, new pick or mask/channel pick ends it.
+        if let document, let selected = selectedEffect,
+           document.activeLayer != selected.drawable
+                || document.isMaskTargetActive || document.isChannelTargetActive
+                || document.layerEffects[selected.drawable]?
+                    .contains(where: { $0.id == selected.effect }) != true {
+            selectedEffect = nil
+            effectSelectionIsNew = false
+        }
+
+        var selectedItem: Any?
+        if document != nil, let selected = selectedEffect,
+           let node = snapshot.tree.nodesByID[selected.drawable],
+           let row = snapshot.effects(of: node).first(where: { $0.effect.id == selected.effect }) {
+            if effectSelectionIsNew {
+                // The row's parent and its group ancestors open once so
+                // the picked effect can be seen.
+                outline.expandItem(node)
+                expandedGroupIDs.insert(node.id)
+                var parent = node.parent
+                while let group = parent {
+                    outline.expandItem(group)
+                    expandedGroupIDs.insert(group.id)
+                    parent = group.parent
+                }
+                effectSelectionIsNew = false
+            }
+            selectedItem = row
+        } else if let document, let active = document.activeLayer,
+                  let node = snapshot.tree.nodesByID[active] {
             if active != lastSyncedSelection {
                 // A selection that landed inside a collapsed group opens
                 // its parents once so the row can be seen; opened ones
@@ -323,13 +537,16 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
                     parent = group.parent
                 }
             }
-            let row = outline.row(forItem: node)
+            selectedItem = node
+        }
+        if let item = selectedItem {
+            let row = outline.row(forItem: item)
             if row >= 0 {
                 outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             } else {
                 outline.deselectAll(nil)
             }
-            lastSyncedSelection = active
+            lastSyncedSelection = document?.activeLayer
         } else {
             outline.deselectAll(nil)
             lastSyncedSelection = nil
@@ -382,10 +599,16 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     /// The document a name edit in this palette belongs to.
     var editTarget: ImageDocument? { document }
 
-    /// The outline's double-click: edit the clicked row's name in place.
+    /// The outline's double-click: edit a layer row's name in place;
+    /// open an effect row's parameters.
     @objc private func editNameOfClickedRow(_ sender: NSOutlineView) {
-        guard sender.clickedRow >= 0,
-              let row = sender.view(atColumn: 0, row: sender.clickedRow, makeIfNecessary: true) as? LayerRowView
+        guard sender.clickedRow >= 0, let document else { return }
+        if let effect = snapshot.effect(for: sender.item(atRow: sender.clickedRow), for: document,
+                                        currentEffects: document.layerEffects) {
+            editEffectParameters(effect)
+            return
+        }
+        guard let row = sender.view(atColumn: 0, row: sender.clickedRow, makeIfNecessary: true) as? LayerRowView
         else { return }
         row.startEditingName()
     }
@@ -426,21 +649,38 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     // MARK: Outline data source
 
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        item == nil ? snapshot.tree.roots.count : (item as? LayerTree.Node)?.children.count ?? 0
+        if item == nil { return snapshot.tree.roots.count }
+        guard let node = item as? LayerTree.Node else { return 0 }
+        return snapshot.displayedChildren(of: node).count
     }
 
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-        (item == nil ? snapshot.tree.roots : (item as? LayerTree.Node)?.children ?? [])[index]
+        if item == nil { return snapshot.tree.roots[index] }
+        guard let node = item as? LayerTree.Node else { return NSNull() }
+        return snapshot.displayedChildren(of: node)[index]
     }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
         guard let node = item as? LayerTree.Node else { return false }
+        // A layer's committed effects show as its subrows; a group keeps
+        // its layer children on top of them.
+        if !snapshot.effects(of: node).isEmpty { return true }
         return node.layer.kind == .group && !node.children.isEmpty
     }
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
-        guard let document,
-              let layer = snapshot.layer(for: item, for: document, currentLayers: document.layers),
+        guard let document else { return nil }
+        if let effect = snapshot.effect(for: item, for: document,
+                                        currentEffects: document.layerEffects) {
+            let isSelected = selectedEffect?.drawable == effect.drawable
+                && selectedEffect?.effect == effect.effect.id
+            let rowView = EffectRowView(item: effect, isSelected: isSelected) { [weak self] item, change in
+                self?.commitEffectChange(item, change) ?? false
+            }
+            rowView.eye.isEnabled = document.acceptsEdits
+            return rowView
+        }
+        guard let layer = snapshot.layer(for: item, for: document, currentLayers: document.layers),
               let node = item as? LayerTree.Node else { return nil }
         let locks = snapshot.tree.lockSources(for: node, states: document.layerLocks)
         let mask = document.maskStates[layer.id]
@@ -548,8 +788,18 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     // MARK: Selection
 
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
-        guard let document, let layer = snapshot.layer(for: item, for: document,
-                                                       currentLayers: document.layers) else { return false }
+        guard let document else { return false }
+        if let effect = snapshot.effect(for: item, for: document,
+                                        currentEffects: document.layerEffects) {
+            guard document.acceptsEdits else {
+                // The pick is refused; asking the document still shows why.
+                document.selectLayer(effect.drawable)
+                return false
+            }
+            return true
+        }
+        guard let layer = snapshot.layer(for: item, for: document,
+                                         currentLayers: document.layers) else { return false }
         guard document.acceptsEdits else {
             // The pick is refused; asking the document still shows why.
             document.selectLayer(layer.id)
@@ -560,8 +810,29 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
         guard !reloading, let document,
-              let item = outline.selectedRow >= 0 ? outline.item(atRow: outline.selectedRow) : nil,
-              let layer = snapshot.layer(for: item, for: document, currentLayers: document.layers) else { return }
+              let item = outline.selectedRow >= 0 ? outline.item(atRow: outline.selectedRow) : nil
+        else { return }
+        if let effect = snapshot.effect(for: item, for: document,
+                                        currentEffects: document.layerEffects) {
+            // An effect pick means its parent layer as the paint home;
+            // the effect stays marked while that pick stands.
+            selectedEffect = (effect.drawable, effect.effect.id)
+            effectSelectionIsNew = true
+            document.selectLayer(effect.drawable)
+            lastSyncedSelection = document.activeLayer
+            // A refused pick leaves the active layer elsewhere; the
+            // effect selection cannot stand without its parent target.
+            if document.activeLayer != effect.drawable {
+                selectedEffect = nil
+                effectSelectionIsNew = false
+                reload()
+            }
+            return
+        }
+        guard let layer = snapshot.layer(for: item, for: document, currentLayers: document.layers)
+        else { return }
+        selectedEffect = nil
+        effectSelectionIsNew = false
         document.selectLayer(layer.id)
         lastSyncedSelection = document.activeLayer
         // A refused pick leaves the active layer; the list shows it again.
@@ -581,13 +852,19 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
 
     /// Where the drop lands, as the document's `moveLayer` understands it:
     /// a parent id (0: the top level) and a raw index among its children.
-    /// Drops onto a group go to its first child.
+    /// Drops onto a group go to its first child; positions inside a
+    /// parent's effect prefix are not layer positions and are refused.
     private func dropTarget(item: Any?, childIndex index: Int) -> (parent: Int32, index: Int32)? {
         if index == NSOutlineViewDropOnItemIndex {
             guard let node = item as? LayerTree.Node, node.layer.kind == .group else { return nil }
             return (node.id, 0)
         }
-        return ((item as? LayerTree.Node)?.id ?? 0, Int32(index))
+        guard let node = item as? LayerTree.Node else {
+            return item == nil ? (0, Int32(index)) : nil
+        }
+        return LayerListSnapshot.layerChildIndex(forDisplayedIndex: index,
+                                                 effectCount: snapshot.effects(of: node).count)
+            .map { (node.id, Int32($0)) }
     }
 
     private func draggedID(_ info: NSDraggingInfo) -> Int32? {
