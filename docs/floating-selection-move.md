@@ -118,3 +118,19 @@ builds, GUI/desktop runs. The new smoke case and tests compile only.
   resolve-first); no implicit float from a selection; no
   paint-target/alpha/pixel lock changes beyond what native translation
   already enforces.
+
+## Acceptance fixes
+
+Moving now closes an accepted stroke even without a window callback. The
+original command reproduced a BUSY refusal in that situation. Bounds,
+image state and history refresh on the worker, and the deferred main-actor
+completion remains counted until close drains it. A callback-triggered close
+before admission is refused without leaving a pending-work count behind.
+
+All ten focused pure tests and all 61 focused real-controls checks pass on
+each engine. The controls cover layer, mask and channel attachments,
+Undo/Redo, exact preview/commit bounds, target identity, cancellation and
+close draining. Mask/channel target pixel baselines precede Paste Into,
+because drawable thumbnails include the floating effect. Independent source
+review found no unresolved important issue after these fixes. The full
+combined app run remains pending.

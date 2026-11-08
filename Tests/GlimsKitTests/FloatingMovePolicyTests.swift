@@ -72,7 +72,7 @@ final class FloatingMovePolicyTests: XCTestCase {
         XCTAssertEqual(FloatingControlsLogic.wholePixelDelta(bounds: bounds,
             proposed: bounds.offsetBy(dx: 6.4, dy: 4.6)), CGSize(width: 6, height: 5))
         XCTAssertEqual(FloatingControlsLogic.wholePixelDelta(bounds: bounds,
-            proposed: bounds.offsetBy(dx: -3.5, dy: 2.5)), CGSize(width: -4, height: 2),
+            proposed: bounds.offsetBy(dx: -3.5, dy: 2.5)), CGSize(width: -4, height: 3),
             "ties round away from zero, like the pointer path's rounded()")
         XCTAssertEqual(FloatingControlsLogic.wholePixelDelta(bounds: bounds, proposed: bounds),
                        .zero, "a no-drag release commits a zero delta (native no-op semantics)")
@@ -163,7 +163,11 @@ final class FloatingMovePolicyTests: XCTestCase {
         let preview = SnapTargetCache.pixelMove(bounds: bounds,
                                                 proposed: raw.offsetBy(dx: plan.dx, dy: plan.dy), plan: plan)
         XCTAssertEqual(preview.rect.maxX, 64)
+        // Its lower edge at y=26 is also within six pixels of the
+        // image center y=32, so the independent vertical snap is +6.
+        XCTAssertEqual(plan.y?.target, .imageCenter)
+        XCTAssertEqual(plan.y?.targetCoordinate, 32)
         XCTAssertEqual(FloatingControlsLogic.wholePixelDelta(bounds: bounds, proposed: preview.rect),
-                       CGSize(width: 64 - bounds.minX, height: 0))
+                       CGSize(width: 64 - bounds.maxX, height: 32 - bounds.maxY))
     }
 }

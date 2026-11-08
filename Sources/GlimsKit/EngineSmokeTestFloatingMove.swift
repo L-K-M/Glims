@@ -116,12 +116,12 @@ extension EngineSmokeTest {
         }
         check(docA.floatingState == stateA, "the document cache matches the native floating state")
         selectAll(docB)
-        let pixelsBBefore = try session.copyPixels(imageB, merged: true).pixels
-        let undoBBefore = docB.undoInfo.undoCount
         let stateB = pasteFloating(b, docB)
         guard stateB.isActive, let fsBoundsB = floatingBounds(docB, stateB) else {
             return check(false, "document B has its own floating selection")
         }
+        let pixelsBBefore = try session.copyPixels(imageB, merged: true).pixels
+        let undoBBefore = docB.undoInfo.undoCount
         // B front: a gesture on A's canvas must still land in A.
         windowB.makeKeyAndOrderFront(nil)
         ToolState.shared.select(.move)
@@ -283,16 +283,16 @@ extension EngineSmokeTest {
                 && snapGesture?.plan.x?.targetCoordinate == 64,
               "with Snap To on, the floating drag plans against the captured FS bounds (image edge at 64)")
         check(snapGesture?.proposed.maxX == 64 && snapGesture.map({ FloatingControlsLogic.wholePixelDelta(
-            bounds: $0.bounds, proposed: $0.proposed) == CGSize(width: 64 - snapBase.minX, height: 0) }) == true,
-              "the whole-pixel preview equals the committed delta exactly")
+            bounds: $0.bounds, proposed: $0.proposed).width == 64 - snapBase.maxX }) == true,
+              "the whole-pixel preview puts the floating trailing edge at the image edge")
         check(docA.pendingWork == 0 && docA.undoInfo.undoCount == undoS, "the snapped drag still makes no native call per event")
         canvasA.mouseUp(with: sUp)
         wait { docA.pendingWork == 0 && docA.undoInfo.undoCount == undoS + 1 }
         spin()
         settle(docA)
         let snappedBounds = floatingBounds(docA, stateA)
-        check(snappedBounds != nil && abs(snappedBounds!.maxX - 64) <= 0.5 + 1e-9
-                && docA.undoInfo.undoCount == undoS + 1,
+        check(snappedBounds != nil && snappedBounds == snapGesture?.proposed
+                && snappedBounds?.maxX == 64 && docA.undoInfo.undoCount == undoS + 1,
               "the snapped floating move commits once onto the image edge")
         check(try session.floatingSelection(imageA) == stateA, "the snapped move keeps the floating selection unresolved")
         docA.undo()
@@ -304,6 +304,9 @@ extension EngineSmokeTest {
 
         // MARK: Accepted input ordering — a stroke lands before the queued move
 
+        // No window callback may be needed to close an accepted stroke.
+        let savedFinishInput = docA.onWillChangeLayers
+        docA.onWillChangeLayers = nil
         let undoI = docA.undoInfo.undoCount
         let strokePoint = CGPoint(x: snapBase.minX + 4, y: snapBase.minY + 4)
         let black = EngineSession.Brush(size: 4, opacity: 1, red: 0, green: 0, blue: 0, pressureSize: false)
@@ -311,8 +314,8 @@ extension EngineSmokeTest {
         docA.continueStroke([.init(x: strokePoint.x + 1, y: strokePoint.y, pressure: 1)])
         var orderedMove: Result<Void, Error>?
         docA.moveFloatingSelection(by: CGSize(width: 3, height: 2)) { orderedMove = $0 }
-        docA.endStroke()
         settle(docA)
+        docA.onWillChangeLayers = savedFinishInput
         check(orderedMove != nil && docA.undoInfo.undoCount == undoI + 2,
               "the accepted stroke and the queued floating move each landed as one undo, in order")
         check(floatingBounds(docA, stateA) == snapBase.offsetBy(dx: 3, dy: 2),
@@ -417,6 +420,60 @@ extension EngineSmokeTest {
                 && pixelsAfterDiscard == targetBeforeDiscard,
               "Discard after a move removes the floating layer and reveals the untouched target")
 
+        // Mask/channel attachments retain both their identity and target
+        // pixels while their floating pixels move. Discard still works.
+        guard let maskOwner = docA.activeLayer else { return check(false, "mask-move fixture has a layer") }
+        docA.addMask(maskOwner, source: .white, edit: true)
+        settle(docA)
+        for kind in [EngineSession.FloatingTargetKind.layerMask, .channel] {
+            if kind == .channel {
+                docA.saveSelectionToChannel(name: "Floating Move Channel")
+                settle(docA)
+                guard let channel = docA.channels.first(where: { !$0.isQuickMask }) else {
+                    return check(false, "channel-move fixture has a channel")
+                }
+                docA.selectChannel(channel.id)
+                settle(docA)
+            }
+            guard let target = docA.activeDrawable else { return check(false, "attachment has an edit target") }
+            // Thumbnails include the floating effect; baseline must precede
+            // Paste Into when comparing the target after Discard.
+            let targetBefore = try session.drawableThumbnail(target, image: imageA, maxSize: 64)
+                .flatMap { $0.dataProvider?.data as Data? }
+            let attachedState = pasteFloating(a, docA)
+            guard attachedState.isActive, attachedState.targetKind == kind, attachedState.target == target,
+                  let attachedBounds = floatingBounds(docA, attachedState) else {
+                return check(false, "a floating selection attaches to the \(kind) move target")
+            }
+            let selectedBefore = try session.selectionBounds(image: imageA)
+            let undoBefore = docA.undoInfo.undoCount
+            var attachedMove: Result<Void, Error>?
+            docA.moveFloatingSelection(by: CGSize(width: 2, height: -3)) { attachedMove = $0 }
+            settle(docA)
+            let moved = attachedBounds.offsetBy(dx: 2, dy: -3)
+            check(attachedMove.map { if case .success = $0 { return true }; return false } == true
+                    && floatingBounds(docA, attachedState) == moved
+                    && docA.undoInfo.undoCount == undoBefore + 1,
+                  "moving the \(kind)-attached floating selection changes its bounds as one undo")
+            check(try session.floatingSelection(imageA) == attachedState
+                    && session.selectionBounds(image: imageA) == selectedBefore,
+                  "the \(kind) move preserves attachment and selection")
+            docA.undo()
+            settle(docA)
+            check(floatingBounds(docA, attachedState) == attachedBounds,
+                  "Undo restores the \(kind)-attached floating bounds")
+            docA.redo()
+            settle(docA)
+            check(floatingBounds(docA, attachedState) == moved,
+                  "Redo restores the \(kind)-attached floating move")
+            paletteButton("Discard floating selection")?.performClick(nil)
+            settle(docA)
+            let targetAfter = try session.drawableThumbnail(attachedState.target, image: imageA, maxSize: 64)
+                .flatMap { $0.dataProvider?.data as Data? }
+            check(targetBefore != nil && targetAfter == targetBefore && !docA.floatingState.isActive,
+                  "Discard after the \(kind) move leaves the attached target pixels untouched")
+        }
+
         // MARK: Close drains an accepted floating move before destroying the image
 
         selectAll(docA)
@@ -425,7 +482,7 @@ extension EngineSmokeTest {
         var drainResult: Result<Void, Error>?
         let workBeforeDrain = docA.pendingWork
         docA.moveFloatingSelection(by: CGSize(width: 2, height: 1)) { drainResult = $0 }
-        check(docA.pendingWork == workBeforeDrain + 1, "an accepted floating move is counted as pending work")
+        check(docA.pendingWork > workBeforeDrain, "an accepted floating move is counted as pending work")
         var closedA = false
         docA.closeImageWhenDrained { closedA = true }
         wait { closedA }

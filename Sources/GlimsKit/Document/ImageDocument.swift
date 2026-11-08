@@ -2255,6 +2255,9 @@ final class ImageDocument {
                 ?? "The floating selection cannot be moved now.")))
         }
         endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        pendingWork += 1 // Include the deferred cache/completion stage in close drain.
         enqueue(on: inputQueue, input: true) { [session, image] in
             let result = Result<Void, Error> {
                 // Fresh read on the worker, immediately before the move:
@@ -2267,10 +2270,35 @@ final class ImageDocument {
                 }
                 try session.moveLayer(expected.floating, image: image, by: offset)
             }
+            // Moving changes bounds, dirty/history and the floating cache;
+            // collect those reads on the worker rather than blocking AppKit.
+            let refresh: Result<(EngineSession.ImageInfo, [EngineSession.Layer], EngineSession.UndoInfo,
+                                 EngineSession.History, EngineSession.FloatingState), Error>?
+            if case .success = result {
+                refresh = Result { (try session.info(image), try session.layers(image), try session.undoInfo(image),
+                                    try session.history(image), try session.floatingSelection(image)) }
+            } else { refresh = nil }
             DispatchQueue.main.async {
-                if case .failure(let error) = result { self.onError?(String(describing: error)) }
-                try? self.reload()
-                completion(result)
+                EngineActivity.shared.whenIdle {
+                    defer { self.jobDidFinish(input: false) }
+                    if !self.isClosing {
+                        if case .success(let state)? = refresh {
+                            self.stateVersion += 1
+                            self.procedureSensitivity = nil
+                            self.info = state.0
+                            self.fileState.syncDirty(state.0.isDirty)
+                            self.layers = state.1
+                            self.undoInfo = state.2
+                            self.history = state.3
+                            self.floatingState = state.4
+                            self.onStateChange?()
+                        } else if case .failure(let error)? = refresh {
+                            self.onError?(String(describing: error))
+                        }
+                        if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                    }
+                    completion(result)
+                }
             }
         }
     }
