@@ -6349,7 +6349,7 @@ enum EngineSmokeTest {
             var closed = false
             document.closeImageWhenDrained { closed = true }
             wait { closed }
-            check(closed && session.info(image) == nil,
+            check(closed && (try? session.info(image)) == nil,
                   "the pattern-fill image closes before engine shutdown")
         }
         func settle() {
