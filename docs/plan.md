@@ -2198,3 +2198,20 @@ Negative BUSY assertions remain single calls. All four suites pass
 1,459 / 1,245 / 1,459 / 1,459 checks. These runs observed zero retries in
 this fixture; controlled slow-loader tests separately verify the native
 BUSY contract. The earlier crash is not presented as a proven new UAF.
+
+### Focused linked-close smoke (2026-11-08)
+
+`GLIMS_SMOKE_CASE=linked-close` runs only `exerciseLinkedClose`
+(`Sources/GlimsKit/EngineSmokeTestLinkedClose.swift`). Before the engine
+starts, that case installs the slow-loader plug-in named by
+`GLIMS_SMOKE_SLOW_LOADER_SCRIPT` into the throwaway user directory, points
+`GLIMS_SLOWLOAD_DIR` at the smoke work directory and leaves the release
+marker present. The scenario places a `.gslow` link, rewrites the file in
+place, waits for the native link monitor's reload to park inside the
+loader, then closes through `closeImageWhenDrained`: while parked, the
+close stays deferred, the image stays alive (facade read-only oracle) and
+the main loop keeps advancing; after the marker is released the close
+completes exactly once and the native oracle reports the image gone.
+Engines before 3.2 skip explicitly. Added compile-checked only
+(`swift build`, `swift build --build-tests`); the runtime run is not
+exercised on this branch and happens on the review root.
