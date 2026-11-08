@@ -7155,14 +7155,53 @@ enum EngineSmokeTest {
             spin()
             check((browse.enclosingScrollView?.contentView.bounds.origin.y ?? 0) > 0,
                   "lazy previews preserve the user's scrolled catalog position")
+            let expected = try DispatchQueue.global(qos: .userInitiated).sync {
+                guard let last = try session.resources(.brush).last else { throw NoWindow() }
+                return try session.resourceIdentifiers(last.id)
+            }
             browse.selectRowIndexes(IndexSet(integer: last), byExtendingSelection: false)
+            let search = views(panel?.contentView, as: NSSearchField.self).first
+            search?.stringValue = "Glims-no-matching-brush"
+            if let search, let picker = browse.delegate as? BrushChooserPanel {
+                picker.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
+            }
+            spin(0.1)
+            check(browse.numberOfRows == 1, "filtering can hide the chosen brush while leaving Default visible")
             views(panel?.contentView, as: NSButton.self).first { $0.title == "Choose" }?.performClick(nil)
-            check(state.brush(for: .paintbrush).resource != nil && choiceButton()?.image != nil,
-                  "choosing a rendered brush immediately updates the Tool Options preview")
+            check(state.brush(for: .paintbrush).resource == expected && choiceButton()?.image != nil,
+                  "filtering out a chosen brush preserves its identity and Tool Options preview")
         } else {
             check(false, "the installed catalog exercises more than one thumbnail batch")
         }
         wait { !EngineActivity.shared.isBusy }
+        BrushChooser.shared.open(document: document, tool: .paintbrush)
+        panel = NSApp.windows.first { $0.title == "Brush Brush" && $0.isVisible }
+        let restored = views(panel?.contentView, as: NSTableView.self).first
+        wait { (restored?.numberOfRows ?? 0) > 1 && !EngineActivity.shared.isBusy }
+        check((restored?.selectedRow ?? -1) == (restored?.numberOfRows ?? 0) - 1,
+              "reopening the brush chooser highlights its persisted selection")
+        BrushChooser.shared.close()
+        wait { !EngineActivity.shared.isBusy }
+        let blank = try session.copyPixels(image, merged: true).pixels
+        let undoBefore = document.undoInfo.undoCount
+        var selectedBrush = state.brush(for: .paintbrush)
+        selectedBrush.size = 16
+        selectedBrush.red = 0
+        selectedBrush.green = 0
+        selectedBrush.blue = 0
+        selectedBrush.opacity = 1
+        selectedBrush.pressureSize = false
+        document.beginStroke(at: .init(x: 4, y: 16, pressure: 1, timeMilliseconds: 0), brush: selectedBrush)
+        document.continueStroke([.init(x: 28, y: 16, pressure: 1, timeMilliseconds: 20)])
+        document.endStroke()
+        wait { document.pendingWork == 0 }
+        let painted = try session.copyPixels(image, merged: true).pixels
+        check(painted != blank && document.undoInfo.undoCount == undoBefore + 1,
+              "the brush chosen in the real panel paints through Tool State and the document queue")
+        document.undo()
+        wait { document.pendingWork == 0 }
+        check(try session.copyPixels(image, merged: true).pixels == blank,
+              "undo restores the pixels before chooser-selected painting")
     }
 
     private static func exerciseResourceCatalog(_ session: EngineSession) throws {

@@ -94,6 +94,7 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
     private var loadInFlight = false
     /// Guards the single whenIdle re-pump of the thumbnail queue.
     private var thumbnailPumpScheduled = false
+    private var updatingTable = false
 
     private let searchField = NSSearchField()
     private let table = BrushChooserTableView()
@@ -327,7 +328,7 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
         }
         // Rows without a preview yet stay placeholders; reloading re-enters
         // viewFor, which re-requests them (deduplicated by the queue).
-        table.reloadData()
+        reloadTable(scrollToSelection: false)
         pumpThumbnails()
     }
 
@@ -335,11 +336,14 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
 
     private var visibleRows: [BrushRow] { model.rows(matching: model.query) }
 
-    private func refresh() {
+    private func reloadTable(scrollToSelection: Bool) {
+        let selection = model.selection
+        updatingTable = true
+        defer { updatingTable = false }
         table.reloadData()
         // Row 0 is the native Default; then the filtered catalog.
         let selectedRow: Int
-        switch model.selection {
+        switch selection {
         case .nativeDefault: selectedRow = 0
         case .none: selectedRow = -1
         case .resource(let id):
@@ -348,10 +352,14 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
         }
         if selectedRow >= 0 {
             table.selectRowIndexes(IndexSet(integer: selectedRow), byExtendingSelection: false)
-            table.scrollRowToVisible(selectedRow)
+            if scrollToSelection { table.scrollRowToVisible(selectedRow) }
         } else {
             table.deselectAll(nil)
         }
+    }
+
+    private func refresh() {
+        reloadTable(scrollToSelection: true)
         switch model.state {
         case .loading:
             statusLabel.stringValue = "Loading brushes…"
@@ -444,14 +452,15 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
+        guard !updatingTable else { return }
         let row = table.selectedRow
         if row == 0 {
             model.select(.nativeDefault)
         } else if visibleRows.indices.contains(row - 1) {
             model.select(.resource(visibleRows[row - 1].id))
-        } else {
-            model.select(.none)
         }
+        // A hidden or temporarily deselected row is not a new choice.
+        // Default is selected explicitly through row zero above.
     }
 
     // MARK: Search
