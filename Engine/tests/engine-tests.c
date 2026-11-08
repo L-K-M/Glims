@@ -13242,7 +13242,21 @@ test_place (const char *fixtures, const char *work)
       /* And a fresh open rereads it too: the stored buffer never wins. */
       {
         char *open_error = NULL;
-        GlimsStatus open_status = api->image_open (engine, placed_xcf, &again, &open_error);
+        GlimsStatus open_status;
+        int busy_attempts = 0;
+        /* Multiple live links reload this source independently. One blue
+         * composite does not mean every monitored reload has released the
+         * engine. BUSY is the documented admission response, not a failed
+         * file read: wait for it, but preserve every other failure. */
+        do
+          {
+            api->free_string (open_error);
+            open_error = NULL;
+            open_status = api->image_open (engine, placed_xcf, &again, &open_error);
+            if (open_status != GLIMS_STATUS_BUSY) break;
+            usleep (100 * 1000);
+          }
+        while (++busy_attempts < 100);
         CHECK (open_status == GLIMS_STATUS_OK && again > 0,
                "the saved link reopens again (status %d, image %d, error %s)",
                open_status, again, open_error ? open_error : "none");

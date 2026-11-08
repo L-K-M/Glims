@@ -236,7 +236,7 @@ glims_image_metadata_values (GlimsEngine *engine,
                                                       tag, &gerror);
       if (gerror)
         {
-          GlimsStatus status = glims_fail (error, gerror,
+          GlimsStatus status = glims_fail (error, g_steal_pointer (&gerror),
                                            "The engine could not read the tag.");
           g_clear_error (&gerror);
           return status;
@@ -468,7 +468,7 @@ glims_image_metadata_edit (GlimsEngine        *engine,
   present = gexiv2_metadata_try_has_tag (GEXIV2_METADATA (copy), tag, &gerror);
   if (gerror)
     {
-      status = glims_fail (error, gerror, "The engine could not inspect the tag.");
+      status = glims_fail (error, g_steal_pointer (&gerror), "The engine could not inspect the tag.");
       g_clear_error (&gerror);
       g_object_unref (copy);
       return status;
@@ -494,7 +494,7 @@ glims_image_metadata_edit (GlimsEngine        *engine,
         GEXIV2_METADATA (copy), tag, &gerror);
       if (gerror)
         {
-          status = glims_fail (error, gerror, "The engine could not inspect the tag.");
+          status = glims_fail (error, g_steal_pointer (&gerror), "The engine could not inspect the tag.");
           g_clear_error (&gerror);
           g_object_unref (copy);
           return status;
@@ -525,7 +525,7 @@ glims_image_metadata_edit (GlimsEngine        *engine,
           GEXIV2_METADATA (current), tag, &gerror);
       if (gerror)
         {
-          status = glims_fail (error, gerror, "The engine could not read the tag.");
+          status = glims_fail (error, g_steal_pointer (&gerror), "The engine could not read the tag.");
           g_clear_error (&gerror);
           g_strfreev (current_values);
           g_object_unref (copy);
@@ -574,7 +574,7 @@ glims_image_metadata_edit (GlimsEngine        *engine,
                                              values[0], &gerror);
   if (! ok || gerror)
     {
-      status = glims_fail (error, gerror,
+      status = glims_fail (error, g_steal_pointer (&gerror),
                            "The engine could not apply the metadata change.");
       g_clear_error (&gerror);
       g_object_unref (copy);
