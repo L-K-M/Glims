@@ -757,6 +757,75 @@ After merging Fill, the source-discovered pinned engine passes 708
 interface checks and all 308 unit tests. Independent Mistral Large 4
 review found no important issue. Preview and chooser UI remain separate.
 
+
+### Stroke with a selected brush resource (2026-11-08)
+
+Engine side only, on `feat/brush-resource-strokes`: one additive facade
+slot appended after the table's end, `stroke_begin_with_brush_resource`,
+API version 1 unchanged, no existing struct layout or signature touched
+(no padding repurposed). It takes the opaque `GlimsResourceID` brush plus
+the existing `GlimsBrushSettings` and `GlimsStrokePoint`, and the stroke
+runs through the same `stroke_continue`/`stroke_end`. `stroke_begin` is
+unchanged in behavior, including the inherited default brush resource.
+
+Implementation, all native C:
+
+- `Engine/resource.c` keeps its id validation private but now exposes one
+  narrowly typed internal helper, `glims_lookup_brush()`
+  (`Engine/engine-private.h`), which reuses `lookup_resource()` — so a
+  zero handle or one outside the native gint id range is still refused
+  with INVALID_ARGUMENT before the native id table, and a stale handle or
+  a brush absent from the current engine's own brush factory still
+  reports NOT_FOUND — and then requires `GIMP_IS_BRUSH`, so a live handle
+  of another resource kind is INVALID_ARGUMENT. No duplicated
+  ID-truncation validation anywhere.
+- `Engine/paint.c` splits the old `glims_stroke_begin` body into a static
+  `stroke_begin_common()` taking an optional `GimpBrush *`; all existing
+  guards (image/drawable lookup, settings validation, busy, group
+  refusal, lock checks, clone/heal source, paint-info lookup, undo
+  grouping, start/paint/flush sequence) are untouched, and every refused
+  call now also sets `*out = 0` and mutates no image or history.
+  `make_options()` gained the optional brush: when given, it defines
+  `GIMP_CONTEXT_PROP_BRUSH` locally on the stroke's own paint-options
+  context BEFORE `gimp_context_set_brush()` — an undefined property would
+  make the setter walk up to the parent, which is the shared user context
+  and must never be mutated — so the local definition both pins the brush
+  and shields the stroke from later parent/caller changes; the context
+  then holds the brush strongly (`g_set_object`) for the whole stroke.
+  The shared user context and factory resources are never written, and
+  painting stays GIMP's own paint core (`gimp_brush_core_start` reads the
+  brush from the options' context), so native colored-brush semantics are
+  preserved with no bitmap reimplementation.
+- The brush is resolved exactly once, at begin, on the engine thread.
+- `Engine/engine.c` marshals the entry with a dedicated
+  `GlimsStrokeResourceArgs` whose `brush` field is a typed
+  `GlimsResourceID` (`uint64_t`); the id never travels in an int32-width
+  field of `GlimsArgs`.
+- `Engine/tests/engine-tests.c` gains `test_stroke_brush_resource()`:
+  stock file-backed parametric brushes "Hardness 025" and "Block 01"
+  (not pipes or the clipboard brush) with `pressure_size=false`; the
+  selected brush paints its band and undo restores the exact pixels as
+  one undo step; the two distinct brushes paint differently at the same
+  place; an open resource stroke keeps its brush across an interleaved
+  legacy stroke on another image, and legacy default strokes before and
+  after all resource strokes paint identically (the inherited brush
+  context is unchanged); refusals cover zero, high-bit
+  (`1<<40`, all-ones, `0x80000000`, `(1<<32)|id`), wrong-kind (a pattern
+  handle), stale/unissued `0x7FFFFFFF`, unknown image, missing
+  point/settings/output, non-positive size, pixel LOCKED and plug-in
+  BUSY, each resetting the out stroke to 0 with no undo or pixel change;
+  the brushes' persistent identities are unchanged and still resolve to
+  the same handles.
+
+Compile status (private root, `GLIMS_ADAPTER_ROOT=$PWD/.build/engine-adapters`,
+no `--check`/`--test`, shared `_engine/.lock` was free each time):
+`scripts/build-adapter.sh GIMP_3_2_8`, `GIMP_3_2_0`, `GIMP_3_0_8` and
+`master` all compiled and linked `libglimsengine.dylib` (exports only
+`glims_engine_get_api`) plus the `glims-engine-tests` runner; the only
+warning is the pre-existing `clipboard.c` declaration-after-statement.
+Runtime conformance (`--test`), engine startup, Swift builds and app
+smoke tests were NOT run here: root runtime validation is pending.
+
 ### Resource thumbnails (2026-11-08)
 
 Engine side only, on `feat/resource-previews`: one additive footer slot
@@ -858,62 +927,93 @@ smoke-test scenario's runtime execution is pending root validation,
 after the root's ICC integration to keep the append-only ABI order.
 ### Stroke with a selected brush resource (2026-11-08)
 
-Engine side only, on `feat/brush-resource-strokes`: one additive facade
-slot appended after the table's end, `stroke_begin_with_brush_resource`,
-API version 1 unchanged, no existing struct layout or signature touched
-(no padding repurposed). It takes the opaque `GlimsResourceID` brush plus
-the existing `GlimsBrushSettings` and `GlimsStrokePoint`, and the stroke
-runs through the same `stroke_continue`/`stroke_end`. `stroke_begin` is
-unchanged in behavior, including the inherited default brush resource.
 
-Implementation, all native C:
+### Brush chooser in Tool Options (2026-11-08)
 
-- `Engine/resource.c` keeps its id validation private but now exposes one
-  narrowly typed internal helper, `glims_lookup_brush()`
-  (`Engine/engine-private.h`), which reuses `lookup_resource()` — so a
-  zero handle or one outside the native gint id range is still refused
-  with INVALID_ARGUMENT before the native id table, and a stale handle or
-  a brush absent from the current engine's own brush factory still
-  reports NOT_FOUND — and then requires `GIMP_IS_BRUSH`, so a live handle
-  of another resource kind is INVALID_ARGUMENT. No duplicated
-  ID-truncation validation anywhere.
-- `Engine/paint.c` splits the old `glims_stroke_begin` body into a static
-  `stroke_begin_common()` taking an optional `GimpBrush *`; all existing
-  guards (image/drawable lookup, settings validation, busy, group
-  refusal, lock checks, clone/heal source, paint-info lookup, undo
-  grouping, start/paint/flush sequence) are untouched, and every refused
-  call now also sets `*out = 0` and mutates no image or history.
-  `make_options()` gained the optional brush: when given, it defines
-  `GIMP_CONTEXT_PROP_BRUSH` locally on the stroke's own paint-options
-  context BEFORE `gimp_context_set_brush()` — an undefined property would
-  make the setter walk up to the parent, which is the shared user context
-  and must never be mutated — so the local definition both pins the brush
-  and shields the stroke from later parent/caller changes; the context
-  then holds the brush strongly (`g_set_object`) for the whole stroke.
-  The shared user context and factory resources are never written, and
-  painting stays GIMP's own paint core (`gimp_brush_core_start` reads the
-  brush from the options' context), so native colored-brush semantics are
-  preserved with no bitmap reimplementation.
-- The brush is resolved exactly once, at begin, on the engine thread.
-- `Engine/engine.c` marshals the entry with a dedicated
-  `GlimsStrokeResourceArgs` whose `brush` field is a typed
-  `GlimsResourceID` (`uint64_t`); the id never travels in an int32-width
-  field of `GlimsArgs`.
-- `Engine/tests/engine-tests.c` gains `test_stroke_brush_resource()`:
-  stock file-backed parametric brushes "Hardness 025" and "Block 01"
-  (not pipes or the clipboard brush) with `pressure_size=false`; the
-  selected brush paints its band and undo restores the exact pixels as
-  one undo step; the two distinct brushes paint differently at the same
-  place; an open resource stroke keeps its brush across an interleaved
-  legacy stroke on another image, and legacy default strokes before and
-  after all resource strokes paint identically (the inherited brush
-  context is unchanged); refusals cover zero, high-bit
-  (`1<<40`, all-ones, `0x80000000`, `(1<<32)|id`), wrong-kind (a pattern
-  handle), stale/unissued `0x7FFFFFFF`, unknown image, missing
-  point/settings/output, non-positive size, pixel LOCKED and plug-in
-  BUSY, each resetting the out stroke to 0 with no undo or pixel change;
-  the brushes' persistent identities are unchanged and still resolve to
-  the same handles.
+Interface side of the brush resource work, on `feat/brush-chooser`. One
+brush chooser only, attached to the paint tools' Tool Options rows; no
+pattern/gradient application and no presets. No C API or C implementation
+change: the slice is Swift-only over the existing append-only facade
+(`resources`, `resource_identifiers`, `resource_resolve`,
+`resource_thumbnail`, `stroke_begin_with_brush_resource`).
+
+- `Sources/GlimsKit/Tools/BrushSelectionStore.swift`: the per-tool brush
+  choice persisted through UserDefaults as Codable JSON — ONLY a
+  `ResourceIdentity` per `ToolID`, never a session `ResourceID` (handles
+  are engine-local and reused after a restart). A nil choice removes the
+  key and means the original native default brush.
+- `Sources/GlimsKit/Tools/Tools.swift` (`ToolState`): `brushStore` (tests
+  inject a suite), `baseBrush(for:)` seeds a tool's brush with the
+  persisted identity so it restores after a restart, and
+  `setBrushResource(_:for:)` persists the identity and updates only that
+  tool's `brush.resource`. `EngineSession.beginStroke` already resolves
+  the identity fresh on the engine worker, so a stale or removed resource
+  fails explicitly (native queued tests passed) instead of painting with a
+  different brush.
+- `Sources/GlimsKit/Tools/BrushChooserModel.swift`: the pure model. It
+  captures the `ToolID` at open, holds the FULL catalog (every engine
+  brush — no 512-row cap), the lazily rendered 32 px thumbnails, the
+  in-memory case-insensitive search over the whole catalog, the selection
+  (none / native Default / a row), the missing-identity marker and a
+  generation counter that closing bumps so late native results are
+  dropped. `pendingIdentity()` maps the selection to the identity to
+  commit; a selected row absent from the loaded rows falls back to the
+  unchanged current identity, so filtering, partial rows or an unlisted
+  current choice never reset the preference to Default. Applying writes
+  only the captured tool, so switching tools while the chooser is open
+  never retargets the selection, and cancel applies nothing, preserving
+  the previous choice. The current identity is marked missing ONLY when
+  native resolution returns NOT_FOUND; any other resolution error is kept
+  distinctly in `resolutionError`, and an engine-resolved identity outside
+  the loaded rows stays valid.
+- `Sources/GlimsKit/Tools/BrushThumbnailQueue.swift`: the pure lazy
+  thumbnail pipeline. Rows are requested as they appear (the resolved
+  current brush first), native batches are bounded to 32, never overlap,
+  and succeeded/failed attempts are cached for the generation so a single
+  bad thumbnail shows a placeholder and is never retried. Refused batches
+  (gate busy) are requeued and re-pumped once when idle; `invalidate()`
+  drops everything on close and stale generations are rejected.
+- `Sources/GlimsKit/Tools/BrushChooserPanel.swift`: `BrushChooser.shared`
+  owns the one open panel (closed on shutdown from
+  `applicationWillTerminate`, on palette dismiss, and on retarget to a
+  different/closing document). The panel is an owned NSPanel with a search
+  field, a one-column list of native 32 px thumbnails and names (row 0 is
+  the native Default), a status line for the loading / engine-busy / error
+  / empty states with a Retry, and Choose (Return) / Cancel (Escape). The
+  catalog load runs OFF the main thread through
+  `EngineActivity.perform`/`whenIdle` (the global exclusive gate) and
+  reads EVERY brush's name and persistent identity — no thumbnails in
+  that batch. Thumbnails render lazily in bounded batches of 32 through
+  the same gate (`resourceThumbnail` is a synchronous RPC and is never
+  called on main), recolored with the FG/BG captured from `ToolState` at
+  open; only `ResourceThumbnail.image` is displayed, and no shared global
+  context is mutated. If the gate is busy the panel shows the busy state
+  and retries once when idle, then an error with a manual Retry; delivery
+  checks the generation and that the document is still alive, so
+  document/parent closing or picker closing invalidates stale results.
+  The status line reports the full catalog count and the current search
+  result count ("N of M brushes"), plus the missing / resolution-error
+  marker when one applies.
+- `Sources/GlimsKit/Tools/ToolPalettes.swift`
+  (`ToolOptionsPaletteController`): the no-op `retarget` now retains a
+  weak document as the chooser's session/loading source; paint tools get a
+  "Brush" row with a button showing the current choice (name plus the
+  loaded thumbnail, or "Missing: …" when the persisted identity does not
+  resolve — never silently defaulted) and an explicit Reset button that
+  stores nil (native Default).
+- Tests: `Tests/GlimsKitTests/BrushChooserTests.swift` covers the
+  identity-only encode/restore (raw JSON carries no session handle),
+  invalid stored data, the in-memory search, stale-generation delivery,
+  current/missing selection, a >512-row catalog searched and selected in
+  full, missing reported only for native NOT_FOUND (other errors
+  distinguished), a resolved current identity outside the loaded rows, the
+  lazy thumbnail queue (dedupe, 32-row batches, no overlap, failure
+  caching, priority, stale generations), and captured-tool apply / cancel
+  / restore / reset through a fresh `ToolState`. `EngineSmokeTest` gains
+  `exerciseBrushChooserSelection`: captured tool vs tool switching, the UI
+  choice painted through the document queue with undo restoring exact
+  pixels, cancel preserving the selection, a missing identity reported
+  without paint or undo, and reset restoring the default stroke path.
 
 Compile status (private root, `GLIMS_ADAPTER_ROOT=$PWD/.build/engine-adapters`,
 no `--check`/`--test`, shared `_engine/.lock` was free each time):
@@ -923,6 +1023,15 @@ no `--check`/`--test`, shared `_engine/.lock` was free each time):
 warning is the pre-existing `clipboard.c` declaration-after-statement.
 Runtime conformance (`--test`), engine startup, Swift builds and app
 smoke tests were NOT run here: root runtime validation is pending.
+
+Build status (this slice): `swift build` and `swift build --build-tests`
+run once after the change (see the commit); unit tests were NOT executed
+(AppKit initializes in the test bundle), and no engine startup, native
+smoke test, adapter build or GUI run happened here — root owns the
+runtime, GUI and native matrices. Gaps: the chooser's runtime behavior,
+thumbnail rendering through the panel, keyboard handling and the
+smoke-test scenario are unverified at runtime; pattern/gradient choosers,
+presets and resource management remain later slices.
 
 ## Later, before any public release
 
@@ -1336,6 +1445,35 @@ fixture errors: window construction replaced the test error callback, and
 the invalid-width case had its stroke disabled. Correcting the fixture
 makes invalid input, busy-engine and removed-target checks pass. Follow-up
 independent review found no important issues.
+
+Brush chooser verification and fixes: a native AppKit row regression first
+failed because fresh table cells had no text field or image view. The cells
+now render names and previews, and the test passes. The full catalog is
+searchable without a 512-row truncation; native thumbnails load lazily in
+batches of 32, with failed attempts cached for the generation.
+
+A focused real-panel regression reproduced Reset and choosing Default
+leaving a stale Missing label. Both now pass: presentation data is tied to
+the exact persistent identity, Default clears it, and an unchanged missing
+choice preserves its warning. A late preview cannot describe a different
+choice. All 326 unit tests pass. Two new lazy-queue test fixtures initially
+omitted the required begin/complete lifecycle; correcting those fixtures
+preserved the queue's no-overlap contract. GLIMS_SMOKE_CASE=brush-chooser
+selects this bounded interface scenario; ordinary engine smoke still runs
+all scenarios. Full interface/matrix and on-screen chooser checks follow.
+
+The real-panel browse scenario confirms lazy thumbnails preserve the scroll
+position. It then reproduced a missing Tool Options preview after choosing a
+rendered brush. Presentation revisions now notify the palette when preview
+data changes even if the identity stays the same; that regression passes.
+Preview images retain their native aspect ratio. The focused scenario also
+drains its close work before stopping the native engine.
+
+Follow-up shutdown review found that isBusy does not cover unlabelled
+image-close work on the activity queue. The focused scenario now awaits
+closeImageWhenDrained's completion in its own cleanup and confirms the image
+is gone before engine shutdown; the completed callback regression passes.
+The thumbnail-batch fixture excludes the Default row when counting brushes.
 
 ### Fill pattern source (2026-11-08)
 

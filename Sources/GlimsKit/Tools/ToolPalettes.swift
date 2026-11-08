@@ -112,7 +112,13 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
     private let stack = NSStackView()
     private var shownTool: ToolID?
     private var shownFontCount = 0
+    private var shownBrushResource: EngineSession.ResourceIdentity?
+    private var shownMissingBrush: EngineSession.ResourceIdentity?
+    private var shownBrushPresentationRevision = 0
     private var observer: UUID?
+    /// The front document, retained (weakly) as the brush chooser's session
+    /// and loading source.
+    private weak var document: ImageDocument?
 
     override func loadView() {
         stack.orientation = .vertical
@@ -123,19 +129,39 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         rebuild()
         observer = ToolState.shared.observe { [weak self] in
             guard let self else { return }
-            let fontsArrived = self.shownTool == .text && self.shownFontCount != ToolState.shared.fontNames.count
-            guard self.shownTool != ToolState.shared.current || fontsArrived else { return }
+            let state = ToolState.shared
+            let fontsArrived = self.shownTool == .text && self.shownFontCount != state.fontNames.count
+            let brushChanged = state.current.paintTool != nil
+                && (self.shownBrushResource != state.brush(for: state.current).resource
+                    || self.shownBrushPresentationRevision != BrushChooser.shared.presentationRevision
+                    || self.shownMissingBrush != BrushChooser.shared.missingIdentity(
+                        for: state.current, choice: state.brush(for: state.current).resource))
+            guard self.shownTool != state.current || fontsArrived || brushChanged else { return }
             self.rebuild()
         }
     }
 
-    func retarget(to target: ImageDocument?) {}
+    func retarget(to target: ImageDocument?) {
+        // A different (or closing) document invalidates an open chooser, so
+        // its late native results cannot restore a stale sheet.
+        if target !== document {
+            document = target
+            if BrushChooser.shared.isOpen { BrushChooser.shared.close() }
+        }
+    }
+
+    func paletteDidDismiss(_ presentation: PalettePresentation) {
+        if BrushChooser.shared.isOpen { BrushChooser.shared.close() }
+    }
 
     private func rebuild() {
         let state = ToolState.shared
         let tool = state.current
         shownTool = tool
         shownFontCount = state.fontNames.count
+        shownBrushResource = tool.paintTool != nil ? state.brush(for: tool).resource : nil
+        shownMissingBrush = BrushChooser.shared.missingIdentity(for: tool, choice: shownBrushResource)
+        shownBrushPresentationRevision = BrushChooser.shared.presentationRevision
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         actionBindings.removeAll()
 
@@ -234,6 +260,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
     }
 
     private func addPaintRows(for tool: ToolID, brush: EngineSession.Brush) {
+        stack.addArrangedSubview(brushRow(for: tool, brush: brush))
         stack.addArrangedSubview(slider("Size", 1...500, brush.size, unit: "px", fractionDigits: 1) { value in
             ToolState.shared.update(tool) { $0.size = value }
         })
@@ -277,6 +304,51 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         stack.addArrangedSubview(checkbox("Pen pressure sets size", brush.pressureSize) { on in
             ToolState.shared.update(tool) { $0.pressureSize = on }
         })
+    }
+
+    /// The brush row: a button with the current choice (name and, once the
+    /// chooser loaded it, the 32 px thumbnail; a persisted identity that no
+    /// longer resolves shows as "Missing: …") that opens the brush chooser,
+    /// plus an explicit reset to the native Default brush.
+    private func brushRow(for tool: ToolID, brush: EngineSession.Brush) -> NSView {
+        let button = NSButton(title: "", target: nil, action: nil)
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: 11)
+        if let missing = BrushChooser.shared.missingIdentity(for: tool, choice: brush.resource) {
+            button.title = "Missing: \(missing.name)"
+        } else if let resource = brush.resource {
+            button.title = resource.name
+        } else {
+            button.title = "Default"
+        }
+        if let thumbnail = BrushChooser.shared.thumbnail(for: tool, choice: brush.resource) {
+            button.image = thumbnail
+            button.imagePosition = .imageLeft
+        }
+        button.toolTip = "Choose the \(tool.name) brush"
+        button.setAccessibilityLabel("Brush for \(tool.name)")
+        actionBindings.append(ActionBinding(control: button) { [weak self] _ in
+            self?.openBrushChooser(for: tool)
+        })
+        let reset = NSButton(title: "Reset", target: nil, action: nil)
+        reset.bezelStyle = .rounded
+        reset.controlSize = .small
+        reset.font = .systemFont(ofSize: 11)
+        reset.toolTip = "Reset to the native Default brush"
+        reset.setAccessibilityLabel("Reset brush to Default")
+        actionBindings.append(ActionBinding(control: reset) { _ in
+            BrushChooser.shared.resetChoice(for: tool)
+        })
+        let controls = NSStackView(views: [button, reset])
+        controls.spacing = 6
+        return row("Brush", controls, onChange: nil)
+    }
+
+    /// Opens the one brush chooser; it captures `tool` at open and applies
+    /// only that tool's selection.
+    private func openBrushChooser(for tool: ToolID) {
+        BrushChooser.shared.open(document: document, tool: tool)
     }
 
     private func addSelectionRows(for tool: ToolID) {
