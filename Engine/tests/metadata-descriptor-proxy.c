@@ -35,6 +35,8 @@ glims_engine_get_api (uint32_t version)
           return NULL;
         }
       proxy_api = *native_api;
+      proxy_api.api_version = GLIMS_ENGINE_API_VERSION;
+      proxy_api.struct_size = sizeof proxy_api;
       proxy_api.image_metadata_tag_info = fail_descriptor;
     }
   return version <= proxy_api.api_version ? &proxy_api : NULL;

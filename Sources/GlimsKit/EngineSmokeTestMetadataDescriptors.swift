@@ -1,15 +1,9 @@
 import AppKit
 import RigiUI
 
-/// `GLIMS_SMOKE_CASE=metadata-descriptors` (NOT wired into the dispatcher
-/// yet — the root owns `EngineSmokeTest.swift` and will add the dispatch
-/// line): drives the metadata sheet's descriptor adoption end to end —
-/// the native label/typeName/presence/description display, the
-/// descriptor-driven SET/REMOVE/Add-Value gates for a single scalar, a
-/// repeatable tag, a LangAlt tag and an absent XMP container, the native
-/// NOT_FOUND on an unregistered Add Tag, the Undo-triggered descriptor
-/// refresh, and close invalidation of late descriptor callbacks.
-/// Lookups go through accessibility labels. NOT run in this slice.
+/// Real metadata descriptor controls, dispatched alone and in the full
+/// engine smoke run. Lookup uses accessibility labels; native metadata
+/// drives the format gates, Undo presence transition and draft retention.
 @MainActor
 extension EngineSmokeTest {
     static func exerciseMetadataDescriptors(_ session: EngineSession, work: URL,

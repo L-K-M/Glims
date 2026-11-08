@@ -137,8 +137,7 @@ The actual descriptor controls and previous metadata controls pass their
 focused runs on every engine, and all 635 unit tests pass. LangAlt is inspected
 as a registered absent tag; no fabricated present XMP fixture is assumed.
 Undo actually removes a seeded native tag while preserving a dirty local
-draft, proving the descriptor's presence transition. Broad integrated smoke
-and final CI are still pending.
+draft, proving the descriptor's presence transition. The broad integrated pinned app smoke also passes; final CI is still pending.
 
 To reproduce descriptor failures, compile Engine/tests/metadata-descriptor-proxy.c
 as a dylib with this checkout's facade include directory. Run the app's
