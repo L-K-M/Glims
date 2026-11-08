@@ -105,9 +105,15 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "file-safety" {
+                try exerciseFileSafety(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (file safety)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "linked-close" {
                 try exerciseLinkedClose(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (linked-close)" : "FAILED: \(failures) failure(s)")
+
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "indexed-wrapper" {
@@ -170,6 +176,15 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (layer source controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "pixel-rulers" {
+                try exercisePixelRulers(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (pixel rulers)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+
+
+
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "canvas-overlays" {
                 try exerciseCanvasOverlays(session, documents: documents)
                 print(failures == 0 ? "PASSED (canvas overlays)" : "FAILED: \(failures) failure(s)")
@@ -181,6 +196,7 @@ enum EngineSmokeTest {
 
                 return failures == 0 ? 0 : 1
             }
+
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "path-anchors" {
                 try exercisePathAnchors(session, documents: documents)
                 print(failures == 0 ? "PASSED (path anchors)" : "FAILED: \(failures) failure(s)")
@@ -188,7 +204,8 @@ enum EngineSmokeTest {
                 return failures == 0 ? 0 : 1
             }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
-                print("FAIL unknown smoke case: \(selected)")
+                check(false, "unknown engine smoke case: \(selected)")
+
                 return 1
             }
             try exerciseDocument(session, work: work, documents: documents)
@@ -222,7 +239,11 @@ enum EngineSmokeTest {
             try exerciseVectorStyleForm(session, work: work, documents: documents)
             try exercisePaletteControls(session, documents: documents)
             try exerciseGuidesControls(session, work: work, documents: documents)
+            try exercisePixelRulers(session, work: work, documents: documents)
+
+
             try exerciseIndexedControls(session, work: work, documents: documents)
+
             try exerciseCanvasOverlays(session, documents: documents)
             try exercisePendingEditScope(session, documents: documents)
             try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
@@ -2551,7 +2572,18 @@ enum EngineSmokeTest {
             check(controller.canvas.tools.textEditor == nil && savedLayers.contains(where: { $0.kind == .text }),
                   "Save commits text still being edited into the XCF")
             try session.closeImage(savedImage)
-            controller.canvas.mouseDown(with: press)
+            guard let target = document.layers.first(where: { $0.kind == .text }),
+                  let deletePress = NSEvent.mouseEvent(with: .leftMouseDown,
+                    location: controller.canvas.convert(CGPoint(x: target.bounds.midX * controller.canvas.scale,
+                                                                y: target.bounds.midY * controller.canvas.scale), to: nil),
+                    modifierFlags: [], timestamp: 1, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 1, clickCount: 1, pressure: 1) else {
+                return check(false, "the saved text has a fresh canvas click target")
+            }
+            controller.canvas.mouseDown(with: deletePress)
+            check(controller.canvas.tools.textEditor?.textLayer == target.id
+                    && controller.canvas.tools.textEditor?.string == "Saved text",
+                  "a fresh click reopens the saved text before deleting its content")
             controller.canvas.tools.textEditor?.string = ""
             controller.saveDocument(nil)
             wait { document.pendingWork == 0 }
@@ -8275,6 +8307,276 @@ enum EngineSmokeTest {
               "toggling Show Guides back on redraws the overlay in the view bitmap")
         check(pixel(session, imageA, x: 3, y: 12) == pixelOnGuide,
               "the image pixels on the guide are still identical after both toggles")
+    }
+
+    /// Pixel rulers: the scroll view's native ruler slots, the per-window
+    /// View ▸ Show Rulers toggle (default on, busy-independent), tick
+    /// movement under scroll/zoom checked against an independent geometry
+    /// oracle plus a ruler view-bitmap check, display-only isolation of
+    /// pixels/dirty/history/selection, and safe close.
+    private static func exercisePixelRulers(_ session: EngineSession, work: URL,
+                                            documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        // Independent oracle for the nice major spacing: brute-force the
+        // smallest whole 1/2/5 * 10^n (n >= 0) reaching the 50-point target
+        // at the given point scale — a plain loop, not the planner's path.
+        func oracleMajorSpacing(pointsPerPixel: Double) -> Double? {
+            let raw = max(1.0, 50.0 / pointsPerPixel)
+            guard raw.isFinite else { return nil }
+            var best: Double?
+            var n = 0
+            while n <= 308 {
+                let base = pow(10.0, Double(n))
+                for multiple in [1.0, 2.0, 5.0] {
+                    let candidate = multiple * base
+                    if candidate.isFinite && candidate >= raw && (best == nil || candidate < best!) {
+                        best = candidate
+                    }
+                }
+                if base >= raw { break }
+                n += 1
+            }
+            return best
+        }
+
+        let imageA = try session.newImage(width: 512, height: 320)
+        let imageB = try session.newImage(width: 80, height: 50)
+        let docA = try ImageDocument(session: session, image: imageA, name: "Rulers A")
+        let docB = try ImageDocument(session: session, image: imageB, name: "Rulers B")
+        documents.items += [docA, docB]
+        let a = DocumentWindowController(document: docA)
+        let b = DocumentWindowController(document: docB)
+        a.showWindow(nil)
+        b.showWindow(nil)
+        a.window?.contentView?.layoutSubtreeIfNeeded()
+        b.window?.contentView?.layoutSubtreeIfNeeded()
+        defer {
+            for (controller, document) in [(a, docA), (b, docB)] {
+                controller.window?.close()
+                documents.items.removeAll { $0 === document }
+                document.closeImageWhenDrained()
+            }
+        }
+
+        let scrollA = a.scrollView
+        let scrollB = b.scrollView
+        guard let hRuler = scrollA.horizontalRulerView as? PixelRulerView,
+              let vRuler = scrollA.verticalRulerView as? PixelRulerView else {
+            return check(false, "the scroll view's native ruler slots hold the pixel rulers")
+        }
+        check(scrollA.horizontalRulerView === a.horizontalRuler
+                && scrollA.verticalRulerView === a.verticalRuler,
+              "the window's rulers sit in the scroll view's native ruler slots")
+        check(!scrollA.contentView.frame.intersects(hRuler.frame)
+                && !scrollA.contentView.frame.intersects(vRuler.frame),
+              "native ruler rectangles stay outside the editable viewport")
+        check(scrollA.hasHorizontalRuler && scrollA.hasVerticalRuler && scrollA.rulersVisible
+                && scrollB.rulersVisible,
+              "rulers are on by default in both windows")
+        check(hRuler.accessibilityLabel() == "Horizontal ruler"
+                && vRuler.accessibilityLabel() == "Vertical ruler",
+              "the rulers carry meaningful accessibility labels")
+
+        // Menu wiring: View ▸ Show Rulers on the document's own selector.
+        let mainMenu = MainMenu.make()
+        let viewMenu = mainMenu.items.first { $0.title == "View" }?.submenu
+        check(viewMenu?.items.first { $0.title == "Show Rulers" }?.action
+                == #selector(DocumentWindowController.toggleShowRulers(_:)),
+              "View offers Show Rulers on the document's selector")
+        let rulersItem = NSMenuItem(title: "Show Rulers",
+                                    action: #selector(DocumentWindowController.toggleShowRulers(_:)),
+                                    keyEquivalent: "")
+        check(a.validateMenuItem(rulersItem) && rulersItem.state == .on,
+              "Show Rulers validates checked by default")
+
+        // Busy-independent toggle: hold the engine and flip anyway; on/off
+        // changes the viewport because the rulers occupy the native slots.
+        a.window?.contentView?.layoutSubtreeIfNeeded()
+        let viewportWithRulers = scrollA.contentView.bounds
+        let gate = DispatchSemaphore(value: 0)
+        let held = EngineActivity.shared.perform(label: "Holding the engine", work: { gate.wait() },
+                                                 completion: {})
+        check(held, "the engine can be held busy")
+        check(a.validateMenuItem(rulersItem), "Show Rulers validates while the engine is busy")
+        a.toggleShowRulers(rulersItem)
+        check(rulersItem.state == .off && !a.rulerViewState.showsRulers && !scrollA.rulersVisible,
+              "Show Rulers toggles off while the engine is busy")
+        a.window?.contentView?.layoutSubtreeIfNeeded()
+        spin(0.05)
+        let viewportHidden = scrollA.contentView.bounds
+        check(viewportHidden.height > viewportWithRulers.height + 1
+                && viewportHidden.width > viewportWithRulers.width + 1,
+              "hiding the rulers gives the viewport back the ruler thickness (\(viewportWithRulers) -> \(viewportHidden); ruler frames \(hRuler.frame), \(vRuler.frame); clip \(scrollA.contentView.frame))")
+        a.toggleShowRulers(rulersItem)
+        check(rulersItem.state == .on && a.rulerViewState.showsRulers && scrollA.rulersVisible,
+              "Show Rulers toggles back on while the engine is still busy")
+        gate.signal()
+        wait { !EngineActivity.shared.isBusy }
+        a.window?.contentView?.layoutSubtreeIfNeeded()
+        spin(0.05)
+        check(abs(scrollA.contentView.bounds.height - viewportWithRulers.height) < 1,
+              "showing the rulers takes the thickness back from the viewport")
+
+        // Two windows keep independent state and checkmarks.
+        let bItem = NSMenuItem(title: "Show Rulers",
+                              action: #selector(DocumentWindowController.toggleShowRulers(_:)),
+                              keyEquivalent: "")
+        a.toggleShowRulers(rulersItem)
+        check(!a.rulerViewState.showsRulers && !scrollA.rulersVisible
+                && b.rulerViewState.showsRulers && scrollB.rulersVisible
+                && b.validateMenuItem(bItem) && bItem.state == .on,
+              "toggling one window leaves the other's ruler state and checkmark alone")
+        a.toggleShowRulers(rulersItem)
+        check(a.rulerViewState.showsRulers && scrollA.rulersVisible,
+              "the first window toggles back on independently")
+
+        // Ticks follow scroll/zoom/origin against the independent oracle.
+        let canvas = a.canvas
+        let clip = scrollA.contentView
+        func layout() {
+            a.window?.contentView?.layoutSubtreeIfNeeded()
+            spin(0.05)
+        }
+        func oracleVisibleXRange() -> (Double, Double) {
+            let bounds = clip.bounds
+            let scale = canvas.scale
+            return (bounds.origin.x / scale, (bounds.origin.x + bounds.width) / scale)
+        }
+        func rulerMapping() -> (origin: Double, perPixel: Double) {
+            let o = hRuler.convert(CGPoint.zero, from: canvas)
+            let u = hRuler.convert(CGPoint(x: canvas.scale, y: canvas.scale), from: canvas)
+            return (o.x, u.x - o.x)
+        }
+        func checkHorizontalPlan(_ label: String) {
+            guard let plan = hRuler.currentPlan() else {
+                return check(false, "\(label): the horizontal ruler plans nothing at sane geometry")
+            }
+            let positions = plan.ticks.map(\.imagePosition)
+            check(plan.ticks.count <= PixelRulerPlan.maximumTicks, "\(label): the plan is capped")
+            check(positions == positions.sorted(), "\(label): ticks are sorted")
+            check(positions.allSatisfy(\.isFinite), "\(label): ticks are finite")
+            check(positions.allSatisfy { $0 >= -1e-9 && $0 <= Double(docA.info.width) + 1e-9 },
+                  "\(label): ticks stay inside the image extent")
+            check(plan.majorSpacing == oracleMajorSpacing(pointsPerPixel: canvas.scale),
+                  "\(label): major spacing matches the independent nice-spacing oracle")
+            check(plan.ticks.filter(\.isMajor).allSatisfy { tick in
+                let m = tick.imagePosition / plan.majorSpacing
+                return abs(m - m.rounded()) < 1e-6
+            }, "\(label): majors land on whole multiples of the spacing")
+            let tickSpacing = plan.minorSpacing ?? plan.majorSpacing
+            let range = oracleVisibleXRange()
+            let lo = max(range.0, 0), hi = min(range.1, Double(docA.info.width))
+            if lo <= hi, let first = positions.first, let last = positions.last {
+                check(first <= lo + tickSpacing + 1e-9 && last >= hi - tickSpacing - 1e-9,
+                      "\(label): the first and last ticks bracket the visible image range")
+            }
+        }
+        layout()
+        checkHorizontalPlan("at rest")
+
+        // The image origin maps through NSView conversion from the canvas:
+        // one image pixel is exactly the canvas's point scale on the axis.
+        let restMapping = rulerMapping()
+        check(abs(restMapping.perPixel - canvas.scale) < 1e-9,
+              "one image pixel maps to the canvas's point scale on the ruler axis")
+
+        // Zoom rescales the ticks to the new point scale.
+        a.zoom(to: 800)
+        layout()
+        checkHorizontalPlan("at 800%")
+
+        // Scrolling moves the visible range and the first tick by the
+        // scrolled image pixels (oracle: clip bounds over the point scale).
+        let before = clip.bounds
+        let proposed = NSRect(x: before.origin.x + 13, y: before.origin.y,
+                              width: before.width, height: before.height)
+        let expectedOriginX = clip.constrainBoundsRect(proposed).origin.x
+        let firstTickBefore = hRuler.currentPlan()?.ticks.first?.imagePosition
+        let tickSpacingBefore = hRuler.currentPlan().map { $0.minorSpacing ?? $0.majorSpacing } ?? 1
+        clip.scroll(to: NSPoint(x: expectedOriginX, y: before.origin.y))
+        layout()
+        check(expectedOriginX > before.origin.x + 1,
+              "the zoomed ruler fixture actually scrolls")
+        let stableOffset = clip.bounds.origin
+        for _ in 0..<3 { scrollA.tile() }
+        check(abs(clip.bounds.origin.x - stableOffset.x) < 1e-6
+                && abs(clip.bounds.origin.y - stableOffset.y) < 1e-6,
+              "repeated ruler layout preserves the scrolled position")
+        let rangeAfterScroll = oracleVisibleXRange()
+        check(abs(rangeAfterScroll.0 - expectedOriginX / canvas.scale) < 1e-6,
+              "the visible image range follows the actual scroll offset")
+        if let t0 = firstTickBefore, let t1 = hRuler.currentPlan()?.ticks.first?.imagePosition {
+            let deltaPixels = (expectedOriginX - before.origin.x) / canvas.scale
+            check(abs((t1 - t0) - deltaPixels) <= tickSpacingBefore + 1e-6,
+                  "scrolling moves the first visible tick by the scrolled image pixels")
+        } else {
+            check(false, "the first visible tick is present before and after scrolling")
+        }
+
+        a.zoom(to: 200)
+        layout()
+        checkHorizontalPlan("at 200%")
+        check(hRuler.currentPlan()?.majorSpacing == oracleMajorSpacing(pointsPerPixel: canvas.scale)
+                && abs(canvas.scale - CanvasGeometry.pointScale(zoomPercent: 200,
+                                                                backingFactor: Double(a.window?.backingScaleFactor ?? 2))) < 1e-9,
+              "zoom rescales the tick spacing to the oracle spacing at the new point scale")
+
+        // The ruler's own view bitmap draws a dark tick where the geometry
+        // oracle places a major (bitmap rows match the flipped ruler's y).
+        if let plan = hRuler.currentPlan(), let major = plan.ticks.first(where: { $0.isMajor }) {
+            func bitmapGray(_ x: Double, _ y: Double) -> Double? {
+                guard let rep = hRuler.bitmapImageRepForCachingDisplay(in: hRuler.bounds) else { return nil }
+                hRuler.cacheDisplay(in: hRuler.bounds, to: rep)
+                let factor = Double(rep.pixelsWide) / Double(hRuler.bounds.width)
+                let px = Int(x * factor), py = Int(y * factor)
+                guard px >= 0, py >= 0, px < rep.pixelsWide, py < rep.pixelsHigh else { return nil }
+                return (rep.colorAt(x: px, y: py)?.usingColorSpace(.genericGray)?.whiteComponent).map(Double.init)
+            }
+            let map = rulerMapping()
+            let backing = Double(a.window?.backingScaleFactor ?? 2)
+            let tickX = PixelRulerGeometry.deviceAligned(map.origin + major.imagePosition * map.perPixel,
+                                                         backingFactor: backing)
+            let midX = tickX + plan.majorSpacing * map.perPixel / 2
+            let y = hRuler.bounds.height - 2
+            let tickGray = [tickX - 1, tickX, tickX + 1].compactMap { bitmapGray($0, y) }.min()
+            let midGray = [midX - 1, midX, midX + 1].compactMap { bitmapGray($0, y) }.min()
+            check(tickGray != nil && midGray != nil && tickGray! < midGray! - 0.2,
+                  "the ruler's view bitmap draws a tick where the oracle places a major (\(String(describing: tickGray)) vs \(String(describing: midGray)))")
+        } else {
+            check(false, "a major tick is visible at 200% for the bitmap check")
+        }
+
+        // Display-only isolation: toggling, scrolling and zooming change no
+        // engine pixels, undo step, dirty flag or selection, and the Guides
+        // overlay state is untouched.
+        let pxBefore = pixel(session, imageA, x: 7, y: 9)
+        let undoBefore = docA.undoInfo.undoCount
+        let dirtyBefore = docA.hasUnsavedChanges
+        let selectionBefore = docA.selectionOutline
+        let guidesBefore = a.guidesViewState.showsGuides
+        a.toggleShowRulers(rulersItem)
+        a.toggleShowRulers(rulersItem)
+        clip.scroll(to: NSPoint(x: 3, y: 2))
+        a.zoom(to: 150)
+        layout()
+        a.zoom(to: 100)
+        layout()
+        check(pixel(session, imageA, x: 7, y: 9) == pxBefore,
+              "ruler toggling, scrolling and zooming leave the engine's pixels unchanged")
+        check(docA.undoInfo.undoCount == undoBefore && docA.hasUnsavedChanges == dirtyBefore
+                && docA.selectionOutline == selectionBefore,
+              "ruler display adds no undo step, dirty flag or selection change")
+        check(a.guidesViewState.showsGuides == guidesBefore && canvas.showsGuides == guidesBefore,
+              "the Guides overlay state is unaffected by ruler toggles")
+
+        // Close is safe and removes the ruler observations.
+        check(a.rulerObserversActive, "the ruler geometry observers are registered while open")
+        a.window?.close()
+        spin(0.1)
+        check(!a.rulerObserversActive, "closing the window removes the ruler observers")
     }
 
     private static func exerciseCanvasOverlays(_ session: EngineSession, documents: DocumentList) throws {
