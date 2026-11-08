@@ -1783,6 +1783,7 @@ final class EngineSession: @unchecked Sendable {
     /// layer, UNSUPPORTED before GIMP 3.2 and for a native pattern style.
     func vectorLayerStyle(_ layer: Int32, image: Int32) throws -> VectorStyle {
         var style = GlimsVectorStyle()
+        style.struct_size = UInt32(MemoryLayout<GlimsVectorStyle>.size)
         var error: UnsafeMutablePointer<CChar>?
         try check(api.vector_layer_style_get(engine, image, layer, &style, &error), error)
         return Self.vectorStyle(style)

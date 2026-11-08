@@ -1180,3 +1180,9 @@ imported paths in place into their destination, as later native releases
 do. One undo/redo preserves imported pixels; resaving retains editable
 geometry and raster edits. No upstream source is changed. The image-lifetime
 criticals are gone; two existing startup g_file_test(NULL) diagnostics remain.
+
+The initial style interface run passed 322 pure/unit tests but failed nine
+native interface assertions: the Swift getter left the caller's output
+struct_size at zero, so the facade correctly refused every style snapshot.
+The getter now initializes its output size before the call. A full native
+interface rerun follows; compilation alone did not establish this workflow.

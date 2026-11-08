@@ -221,8 +221,7 @@ enum VectorStyleForm {
 
         let alert = NSAlert()
         alert.messageText = "Vector Style"
-        alert.informativeText = "The native fill and stroke of the selected vector layer. Solid colors only — "
-            + "opacity, blend mode, dashes and patterns are not part of the native style. Apply is one undo step."
+        alert.informativeText = "Change the selected vector layer’s fill and outline. You can undo the change."
         alert.accessoryView = grid
         alert.addButton(withTitle: "Apply")
         alert.addButton(withTitle: "Cancel")
@@ -307,8 +306,7 @@ enum VectorStyleForm {
     private static func readErrorMessage(_ error: Error) -> String {
         if let engineError = error as? EngineSession.EngineError,
            engineError.status == Int32(GLIMS_STATUS_UNSUPPORTED.rawValue) {
-            return "This layer's native style cannot be edited here: a pattern fill or stroke is "
-                + "unsupported (solid colors only), and vector layer styles need engine 3.2 or later."
+            return "This vector layer uses an unsupported fill or outline."
         }
         return String(describing: error)
     }
