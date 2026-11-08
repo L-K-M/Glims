@@ -5474,7 +5474,7 @@ enum EngineSmokeTest {
             settle()
         }
         func key(_ code: UInt16) {
-            let characters = code == 51 ? "\u{7F}" : "\r"
+            let characters = code == 51 ? "\u{7F}" : code == 53 ? "\u{1B}" : "\r"
             if let press = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
                                             windowNumber: window.windowNumber, context: nil, characters: characters,
                                             charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code) {

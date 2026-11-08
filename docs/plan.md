@@ -1917,3 +1917,8 @@ field checks and the existing active-edit preservation check pass on the
 pinned engine (30 focused checks). Before this fix, the source-cache
 integration passed 399 unit tests, all-four-engine guide checks and 971
 full pinned interface checks. Follow-up review and matrix are running.
+
+Integrated with the merged Guides/source cache: all 402 unit tests,
+focused anchor checks on all four engines and 1,000 full pinned interface
+checks pass. The synthetic Escape key now also carries the correct ESC
+character; key-code dispatch was already correct.
