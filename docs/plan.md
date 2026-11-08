@@ -1097,3 +1097,10 @@ imported paths in place into their destination, as later native releases
 do. One undo/redo preserves imported pixels; resaving retains editable
 geometry and raster edits. No upstream source is changed. The image-lifetime
 criticals are gone; two existing startup g_file_test(NULL) diagnostics remain.
+
+After integration with the merged ICC/vector loader fixes, resource previews
+pass 941 native checks on 3.2.8, 3.2.0 and master, and 881 on 3.0.8. The
+Swift build, 308 unit tests, complete pinned interface smoke and older-table
+ABI refusal regression pass. Native preview and Swift ownership reviews
+found no important issues. Native context colors remain opaque; resource
+alpha is preserved in the straight-alpha output.
