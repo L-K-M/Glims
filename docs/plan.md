@@ -2208,6 +2208,84 @@ pixel-restoration and exact undo assertions already passed. No runtime
 restore behavior required a change. User-facing confirmed dispatch and
 its interface checks follow separately.
 
+### Layer source controls: Rasterize Layer… / Restore Layer Source… (2026-11-08)
+
+UI slice on `feat/layer-source-controls`, Swift-only over the existing
+C API 113 (`LayerCommand.rasterize = 12`, `.restoreSource = 13`,
+`layer_source_info`): no C, header or dependency change.
+
+- `Sources/GlimsKit/Document/LayerSourceMenuPolicy.swift`: pure
+  cached-state gating. Rasterize only on genuine TEXT/LINK/VECTOR with
+  `hasSource && !isRasterized`; Restore only on `hasSource &&
+  isRasterized`; ordinary pixels/groups and a missing cache entry offer
+  neither; inherited (effective) PIXELS|POSITION locks, mask/channel
+  targets and the caller-composed closing/busy/pending-target/preview/
+  attached-sheet states disable. No synchronous native RPC in
+  validation or UI.
+- `ImageDocument`: `targetCommandIsPending` cached flag;
+  `rasterizeLayerSource(_:completion:)` — counted, explicit-id, routed on
+  the input queue behind accepted edits; `restoreLayerSource(_:completion:)`
+  — same explicit-id rules, but through the existing `enqueueExclusive`
+  mechanism like `convertProfile`: pending edits end, accepted input in
+  every document drains first, `pendingWork` holds until completion, and
+  the restore never goes through the ordinary input queue (a link
+  restore may load a file). Both deliver the `Result` on main exactly
+  once, reload when the document is alive, report failures through
+  `onError`, refuse closed/busy without queueing, and pass a stale id to
+  the engine untouched so it comes back NOT_FOUND, never retargeted.
+  `layerCommand(.restoreSource)` still refuses unconfirmed calls.
+- `MainMenu` Layer menu gains "Rasterize Layer…" and "Restore Layer
+  Source…"; `DocumentWindowController` owns the per-window NSAlert
+  confirmation sheets (no singleton, no callback-hook clobbering): the
+  document and explicit layer id are captured by value before the alert,
+  so Apply never uses layer 0, the front window or the current selection;
+  Cancel queues nothing; a close since the sheet opened wins over a late
+  Apply. Rasterize's text explains pixel behavior with the source
+  retained and linked layers stopping source updates; Restore's text
+  explains discarded pixel edits, undo availability, retained
+  text/path/linked source, and the native link contract (reload when
+  readable, otherwise retained source with monitoring resumed). Sheet
+  buttons carry explicit accessibility labels. `validateMenuItem` gates
+  both items through the policy over `layerSources`/`layerLocks` and the
+  existing mask/channel/busy/closing/preview/attached-sheet guards.
+- Tests: `LayerSourceMenuPolicyTests` (pure policy: kinds, source
+  states, missing cache, locks, target and blocked states),
+  `LayerMenuTests` gains the Layer-menu wiring for both selectors, and
+  `EngineSmokeTest` gains `GLIMS_SMOKE_CASE=layer-source-controls` plus
+  `exerciseLayerSourceControls` in the full suite: menu wiring and
+  cached gating (text/pixel/locks/attached-sheet/busy), sheet Cancel
+  changing nothing, Rasterize Apply as one undo with the cached kind
+  flipped, retarget-before-Apply and a second document staying untouched,
+  a pixel stroke then Restore giving the exact source pixels plus one
+  undo, undo restoring the painted pixels, BUSY refusal under a
+  controlled semaphore pause, the admitted restore counted in
+  `pendingWork` and draining the other document's accepted stroke first,
+  stale-id native NOT_FOUND, and late-close Apply queueing nothing.
+  Pixel/kind oracles read the session directly (`copyPixels`,
+  `layerSource`, `layers`), never the cache under test.
+
+Checked in this slice: `swift build -j 2` — Build complete;
+`swift build -j 2 --build-tests` — Build complete (the new
+`LayerSourceMenuPolicyTests.o` is in the build tree). NOT RUN here (the
+Mac's shared process limits; root owns runtime): `swift test`, the
+`GLIMS_SMOKE_CASE=layer-source-controls` and full `--engine-smoke-test`
+runs, all AppKit/GUI execution, and every native adapter/engine build —
+the four-engine suite 1314/1170/1314/1314 green under root predates
+this slice and does not validate it. Remaining gaps: runtime behavior
+of the sheets, the restore's link-file reload path through the UI, and
+mask/channel-target gating exercised only in the pure policy tests, not
+against a live mask/channel target.
+
+Guide field refresh regression: undoing a selected guide's move updated
+the list but left its idle position field stale because reselecting the
+same table row does not notify its delegate. The new actual-sheet check
+failed before the fix. Reload now synchronizes the selected guide's input
+fields explicitly while preserving an active text edit. Both Undo/Redo
+field checks and the existing active-edit preservation check pass on the
+pinned engine (30 focused checks). Before this fix, the source-cache
+integration passed 399 unit tests, all-four-engine guide checks and 971
+full pinned interface checks. Follow-up review and matrix are running.
+
 ### Linked-load admission and object lifetime (2026-11-08)
 
 A controlled Python file loader reproduced edits being admitted during
@@ -2515,6 +2593,15 @@ No production renderer change was needed. This verifies the in-gamut sRGB
 path; physical monitor calibration, wide-gamut/HDR output, proof profiles,
 proof intents and gamut warnings remain unverified or unimplemented.
 
+The source-controls integration passes 407 unit tests, all 33 focused
+sheet/dispatch checks on each supported engine, and the full pinned
+interface suite. Initial failures were assertions against the wrong
+state: ordinary pixels have a source-info cache entry, and the menu
+was still aimed at the retargeted pixel layer. Correcting those fixture
+expectations required no production change. Root reviewed the source
+controls, admission/drain and close paths. The independent broad UI
+helper timed out without a verdict and is not counted as approval.
+
 Grid integration validation passes 1,380 / 1,269 / 1,380 / 1,380 native
 checks on GIMP 3.2.8 / 3.0.8 / 3.2.0 / master. The initial failures were
 fixture errors: the color oracle required double precision although
@@ -2526,6 +2613,7 @@ Independent review found no important issue. Nondefault unit retention
 is verified from clone semantics in the sources; it is not directly
 covered by the facade-only XCF fixture. Swift/cache runtime follows with
 the configuration interface.
+
 
 Ruler review reproduced a major/minor classification defect at large
 scrolled coordinates: a magnitude-relative tolerance eventually exceeded

@@ -1010,6 +1010,76 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         VectorStyleForm.present(in: imageDocument, layer: id, on: window)
     }
 
+    /// Layer ▸ Rasterize Layer…: the per-window confirmation sheet that
+    /// turns the active genuine text, link or vector layer into pixels
+    /// while its source is retained.
+    @objc func rasterizeLayer(_ sender: Any?) {
+        presentLayerSourceConfirmation(.rasterize)
+    }
+
+    /// Layer ▸ Restore Layer Source…: the inverse sheet, regenerating a
+    /// rasterized layer from its retained source and discarding its pixel
+    /// edits.
+    @objc func restoreLayerSource(_ sender: Any?) {
+        presentLayerSourceConfirmation(.restore)
+    }
+
+    /// The confirmation sheet shared by both layer-source commands. The
+    /// document and the explicit layer id are captured by value before the
+    /// alert is shown, so Apply can never fall back to layer 0, the
+    /// engine's selection or the front window, and a retarget while the
+    /// sheet is up does not move the captured id. Each window owns its own
+    /// sheet — `attachedSheet` guards stacking — so two documents keep
+    /// independent forms; no singleton, no shared state, and no existing
+    /// callback hook is replaced. Cancel queues nothing. A document that
+    /// began closing after the sheet opened wins over a late Apply.
+    private func presentLayerSourceConfirmation(_ command: LayerSourceMenuPolicy.Command) {
+        guard let window, window.attachedSheet == nil, !previewBusy,
+              !imageDocument.isClosing, !imageDocument.isSavingForClose,
+              !imageDocument.isTransferringClipboard,
+              !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
+              !imageDocument.targetCommandIsPending,
+              !imageDocument.isMaskTargetActive, !imageDocument.isChannelTargetActive,
+              let layer = activeLayerInfo,
+              LayerSourceMenuPolicy.isEnabled(command,
+                                              source: imageDocument.layerSources[layer.id],
+                                              locks: imageDocument.layerLocks[layer.id],
+                                              targetIsLayer: true,
+                                              stateBlocked: false) else { return }
+        endPendingEdits()
+        let document = imageDocument
+        let layerID = layer.id
+        let layerName = layer.name
+        let alert = NSAlert()
+        switch command {
+        case .rasterize:
+            alert.messageText = "Rasterize \u{201C}\(layerName)\u{201D}?"
+            alert.informativeText = "The layer's text, link or path content becomes pixels, as one undo step. "
+                + "The source is retained, so Restore Layer Source can bring it back; while rasterized, "
+                + "a linked layer stops following changes to its file."
+            alert.addButton(withTitle: "Rasterize")
+        case .restore:
+            alert.messageText = "Restore the source of \u{201C}\(layerName)\u{201D}?"
+            alert.informativeText = "The layer's pixel edits are discarded and its text, path or linked source "
+                + "is regenerated, as one undo step; Undo brings the painted pixels back. A linked layer "
+                + "reloads its file when it can be read, otherwise it resumes from the retained source "
+                + "and follows the file again."
+            alert.addButton(withTitle: "Restore")
+        }
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.forEach { $0.setAccessibilityLabel($0.title) }
+        alert.beginSheetModal(for: window) { [weak self] response in
+            // Cancel queues nothing; only the captured document's Apply
+            // runs, on the captured explicit id alone.
+            guard let self, response == .alertFirstButtonReturn,
+                  self.imageDocument === document, !document.isClosing else { return }
+            switch command {
+            case .rasterize: document.rasterizeLayerSource(layerID)
+            case .restore: document.restoreLayerSource(layerID)
+            }
+        }
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
             || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || EngineActivity.shared.isBusy || window?.attachedSheet != nil
@@ -1043,6 +1113,21 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // layer never gets the item.
             return activeLayerInfo?.kind == .vector && !editingBlocked && !previewBusy
                 && imageDocument.supportsVectorLayers != false
+        case #selector(rasterizeLayer(_:)), #selector(restoreLayerSource(_:)):
+            // Cached source state only — never a synchronous native call:
+            // Rasterize on genuine unrasterized text/link/vector with its
+            // source retained, Restore on a rasterized retained source.
+            // Mask and channel targets, inherited pixel/position locks,
+            // a pending target command and every busy/closing/preview/
+            // attached-sheet state disable the item.
+            let command: LayerSourceMenuPolicy.Command =
+                menuItem.action == #selector(rasterizeLayer(_:)) ? .rasterize : .restore
+            guard let layer = activeLayerInfo else { return false }
+            return LayerSourceMenuPolicy.isEnabled(command,
+                source: imageDocument.layerSources[layer.id],
+                locks: imageDocument.layerLocks[layer.id],
+                targetIsLayer: !imageDocument.isMaskTargetActive && !imageDocument.isChannelTargetActive,
+                stateBlocked: editingBlocked || previewBusy || imageDocument.targetCommandIsPending)
         case #selector(newLayerGroup(_:)):
             return !editingBlocked && !previewBusy
         case #selector(layerToImageSize(_:)), #selector(trimLayerToContent(_:)):
