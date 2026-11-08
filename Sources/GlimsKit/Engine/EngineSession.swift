@@ -32,6 +32,7 @@ final class EngineSession: @unchecked Sendable {
         case progress(Progress?)
         case selectionChanged(image: Int32)
         case sizeChanged(image: Int32)
+        case channelsChanged(image: Int32)
     }
 
     // MARK: Editing types
@@ -426,6 +427,34 @@ final class EngineSession: @unchecked Sendable {
     func saveCopy(_ image: Int32, to path: String) throws {
         var error: UnsafeMutablePointer<CChar>?
         try check(api.image_save_copy(engine, image, path, &error), error)
+    }
+
+    /// File > Open as Layers: every layer of the file lands in the image
+    /// above the selected layer, as one undo step. Returns the new layer
+    /// ids, top first. Loads through the file plug-ins, so call it off
+    /// the main thread.
+    func openLayers(image: Int32, path: String) throws -> [Int32] {
+        var count: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        var buffer = [GlimsItemID](repeating: 0, count: 1024)
+        try check(buffer.withUnsafeMutableBufferPointer { buffer in
+            api.image_open_layers(engine, image, path, buffer.baseAddress,
+                                  Int32(buffer.count), &count, &error)
+        }, error)
+        guard count > buffer.count else { return Array(buffer.prefix(Int(count))) }
+        // More layers than the buffer: the import selected all of them.
+        return try layers(image).filter(\.isSelected).map(\.id)
+    }
+
+    /// File > Place: puts the file into the image as a link layer that
+    /// keeps a live reference to it, as one undo step. Returns the new
+    /// layer's id. Throws `EngineError` with `GLIMS_STATUS_UNSUPPORTED`
+    /// on engines without link layers (before GIMP 3.2).
+    func placeLink(image: Int32, path: String) throws -> Int32 {
+        var layer: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_place_link(engine, image, path, &layer, &error), error)
+        return layer
     }
 
     func newImage(pixels: ClipboardImage) throws -> Int32 {
@@ -1093,6 +1122,159 @@ final class EngineSession: @unchecked Sendable {
                        intent: .defaultIntent)
     }
 
+    // MARK: Channels and components
+
+    struct Components: OptionSet, Equatable {
+        let rawValue: UInt32
+        static let red = Components(rawValue: GLIMS_COMPONENT_RED.rawValue)
+        static let green = Components(rawValue: GLIMS_COMPONENT_GREEN.rawValue)
+        static let blue = Components(rawValue: GLIMS_COMPONENT_BLUE.rawValue)
+        static let alpha = Components(rawValue: GLIMS_COMPONENT_ALPHA.rawValue)
+        static let gray = Components(rawValue: GLIMS_COMPONENT_GRAY.rawValue)
+        static let indexed = Components(rawValue: GLIMS_COMPONENT_INDEXED.rawValue)
+    }
+
+    enum ComponentMode: UInt32 {
+        case rgb = 1, grayscale, indexed
+    }
+
+    struct ComponentState: Equatable {
+        let mode: ComponentMode
+        let supported: Components
+        let active: Components
+        let visible: Components
+    }
+
+    struct Channel: Equatable {
+        let id: Int32
+        let name: String
+        let isVisible: Bool
+        let isSelected: Bool
+        let isQuickMask: Bool
+        /// Overlay opacity; the color's alpha reports the same value.
+        let opacity: Double
+        let color: NSColor
+    }
+
+    struct ChannelChange: Equatable {
+        var name: String?
+        var isVisible: Bool?
+        var opacity: Double?
+        /// Includes overlay opacity through alpha. An explicit
+        /// `opacity` takes precedence when both fields are supplied.
+        var color: NSColor?
+    }
+
+    enum ChannelCommand: UInt32 {
+        case select = 1, duplicate, delete
+    }
+
+    struct QuickMaskState: Equatable {
+        let enabled: Bool
+        /// A drawable id while enabled; zero otherwise.
+        let channel: Int32
+        let inverted: Bool
+        let color: NSColor
+    }
+
+    func components(_ image: Int32) throws -> ComponentState {
+        var state = GlimsComponentState()
+        try check(api.image_components(engine, image, &state), nil)
+        guard let mode = ComponentMode(rawValue: state.mode) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The engine returned an unknown image component model.")
+        }
+        return ComponentState(mode: mode, supported: Components(rawValue: state.supported),
+                              active: Components(rawValue: state.active),
+                              visible: Components(rawValue: state.visible))
+    }
+
+    /// Changes only the named component bits. Changing active
+    /// components returns the native paint target from channels to
+    /// layers. These display/edit choices carry no undo step.
+    func setComponents(_ image: Int32, activeMask: Components = [], activeValues: Components = [],
+                       visibleMask: Components = [], visibleValues: Components = []) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_set_components(engine, image, activeMask.rawValue, activeValues.rawValue,
+                                            visibleMask.rawValue, visibleValues.rawValue, &error), error)
+    }
+
+    func channels(_ image: Int32) throws -> [Channel] {
+        var count: Int32 = 0
+        try check(api.image_channels(engine, image, nil, 0, &count), nil)
+        var rows = [GlimsChannelInfo](repeating: GlimsChannelInfo(), count: Int(count))
+        var filled: Int32 = 0
+        try rows.withUnsafeMutableBufferPointer { buffer in
+            try check(api.image_channels(engine, image, buffer.baseAddress, count, &filled), nil)
+        }
+        return rows.prefix(Int(min(count, filled))).map { row in
+            Channel(id: row.id, name: Self.string(row.name), isVisible: row.visible,
+                    isSelected: row.selected, isQuickMask: row.quick_mask,
+                    opacity: row.opacity, color: Self.nsColor(row.color))
+        }
+    }
+
+    /// Saves the selection as a selected, initially hidden channel.
+    @discardableResult
+    func channelFromSelection(_ image: Int32, name: String? = nil) throws -> Int32 {
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try withOptionalCString(name) { name in
+            try check(api.channel_from_selection(engine, image, name, &result, &error), error)
+        }
+        return result
+    }
+
+    func changeChannel(_ channel: Int32, image: Int32, _ change: ChannelChange) throws {
+        var settings = GlimsChannelChange()
+        settings.struct_size = UInt32(MemoryLayout<GlimsChannelChange>.size)
+        if let name = change.name {
+            settings.properties |= GLIMS_CHANNEL_NAME.rawValue
+            Self.copy(name, into: &settings.name)
+        }
+        if let visible = change.isVisible {
+            settings.properties |= GLIMS_CHANNEL_VISIBLE.rawValue
+            settings.visible = visible
+        }
+        if let opacity = change.opacity {
+            settings.properties |= GLIMS_CHANNEL_OPACITY.rawValue
+            settings.opacity = opacity
+        }
+        if let color = change.color {
+            settings.properties |= GLIMS_CHANNEL_COLOR.rawValue
+            settings.color = Self.color(color)
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.channel_change(engine, image, channel, &settings, &error), error)
+    }
+
+    /// Select with channel zero returns to the selected layers.
+    /// Duplicate returns its new channel id; Delete returns nil.
+    @discardableResult
+    func channelCommand(_ command: ChannelCommand, channel: Int32, image: Int32) throws -> Int32? {
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.channel_command(engine, image, channel, command.rawValue, &result, &error), error)
+        return result == 0 ? nil : result
+    }
+
+    func channelToSelection(_ channel: Int32, image: Int32, operation: SelectOperation) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.channel_to_selection(engine, image, channel, operation.rawValue, &error), error)
+    }
+
+    func quickMask(_ image: Int32) throws -> QuickMaskState {
+        var state = GlimsQuickMaskState()
+        try check(api.image_quick_mask(engine, image, &state), nil)
+        return QuickMaskState(enabled: state.enabled, channel: state.channel,
+                              inverted: state.inverted, color: Self.nsColor(state.color))
+    }
+
+    func setQuickMask(_ image: Int32, enabled: Bool) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_set_quick_mask(engine, image, enabled, &error), error)
+    }
+
     // MARK: Text
 
     /// The font names text settings take, sorted.
@@ -1362,6 +1544,7 @@ final class EngineSession: @unchecked Sendable {
         case GLIMS_STATUS_CANCELLED: return "Cancelled."
         case GLIMS_STATUS_NOT_RUNNING: return "The engine is not running."
         case GLIMS_STATUS_LOCKED: return "Unlock the layer or its group before editing it."
+        case GLIMS_STATUS_UNSUPPORTED: return "The engine version cannot do this."
         default: return "The engine reported an error."
         }
     }
@@ -1430,6 +1613,8 @@ private let engineEventCallback: GlimsEventCallback = { context, eventPointer in
         relay.deliver(.selectionChanged(image: event.image))
     case UInt32(GLIMS_EVENT_SIZE_CHANGED.rawValue):
         relay.deliver(.sizeChanged(image: event.image))
+    case UInt32(GLIMS_EVENT_CHANNELS_CHANGED.rawValue):
+        relay.deliver(.channelsChanged(image: event.image))
     case UInt32(GLIMS_EVENT_PROGRESS.rawValue):
         let text = event.text.map { String(cString: $0) } ?? ""
         relay.deliver(.progress(event.active

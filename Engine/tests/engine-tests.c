@@ -4023,6 +4023,455 @@ test_clipboard (void)
   api->image_close (engine, image);
 }
 
+static int
+supports_link_layers (void)
+{
+  int major = 0, minor = 0;
+  sscanf (api->engine_version (engine), "%d.%d", &major, &minor);
+  return major > 3 || (major == 3 && minor >= 2);
+}
+
+/* File > Open as Layers: the GIMP-made fixture lands in an open image
+ * with its whole tree — order, groups, modes, masks, offsets — in one
+ * undo step, above the selected layer; File > Place makes a link layer
+ * on engines that have them. */
+static void
+test_place (const char *fixtures, const char *work)
+{
+  char           xcf[1024], png[1024], missing[1024], junk[1024];
+  char           link_src[1024], placed_xcf[1024], dest_xcf[1024];
+  GlimsImageID   dest = 0, scratch = 0, src = 0, reopened = 0, again = 0;
+  GlimsLayerInfo rows[16], source_rows[16], after[16];
+  GlimsItemID    added[8] = { 0 }, placed = 0, group = 0;
+  GlimsItemID    layer = 0;
+  GlimsStrokeID  stroke = 0;
+  GlimsFilterID  filter = 0;
+  GlimsStrokePoint point = { 4, 4, 1.0, 0.0, 0.0, 0 };
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+  GlimsFillSettings  red = { .struct_size = sizeof red, .mode = GLIMS_FILL_SELECTION,
+                             .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  GlimsFillSettings  blue = { .struct_size = sizeof blue, .mode = GLIMS_FILL_SELECTION,
+                              .color = { 0, 0, 1, 1 }, .opacity = 1 };
+  GlimsImageInfo info;
+  GlimsLayerChange rename = { .struct_size = sizeof rename, .properties = GLIMS_LAYER_NAME,
+                              .name = "Base" };
+  int32_t        count = 0, n = 0, src_count = 0, before, i;
+  int            dx = 0, dy = 0, offsets_ok = 1, links;
+  uint8_t       *pixels = NULL, *reference = NULL;
+  uint8_t        corner[4] = { 0 };
+  int32_t        w1, h1, w2, h2;
+  char          *error = NULL;
+  FILE          *file;
+  BackgroundRun  run = { 0 };
+  pthread_t      thread;
+  GlimsStatus    status;
+
+  snprintf (xcf, sizeof xcf, "%s/composite.xcf", fixtures);
+  snprintf (png, sizeof png, "%s/composite.png", fixtures);
+  snprintf (missing, sizeof missing, "%s/no-such-file.png", work);
+  snprintf (junk, sizeof junk, "%s/not-an-image.txt", work);
+  snprintf (link_src, sizeof link_src, "%s/link-source.png", work);
+  snprintf (placed_xcf, sizeof placed_xcf, "%s/placed.xcf", work);
+  snprintf (dest_xcf, sizeof dest_xcf, "%s/place-dest.xcf", work);
+
+  links = supports_link_layers ();
+  file  = fopen (junk, "w");
+  if (file)
+    {
+      fputs ("this is not an image\n", file);
+      fclose (file);
+    }
+
+  /* The fixture's own layer tree, to compare against the import. */
+  CHECK (api->image_open (engine, xcf, &src, &error) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, src, source_rows, 16, &src_count) == GLIMS_STATUS_OK && src_count == 5,
+         "the fixture's 5-layer tree is readable%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->image_close (engine, src);
+  src = 0;
+  if (src_count != 5)
+    return;
+
+  CHECK (api->image_new (engine, 320, 240, &dest, NULL) == GLIMS_STATUS_OK, "destination image 320x240");
+  layer = first_layer (dest);
+  CHECK (api->layer_change (engine, dest, layer, &rename, NULL) == GLIMS_STATUS_OK,
+         "the destination layer is renamed to tell it from the imported one");
+  before = undo_depth (dest);
+
+  /* Above the only selected layer, at the top level, as one step. */
+  CHECK (api->image_open_layers (engine, dest, xcf, added, 8, &n, &error) == GLIMS_STATUS_OK && n == 3,
+         "open the fixture as layers: %d top-level items added%s%s", n, error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (n == 3 && added[0] > 0 && added[1] > 0 && added[2] > 0,
+         "the call returns the top-level layer ids");
+  CHECK (undo_depth (dest) == before + 1, "the whole import is one undo step (%d -> %d)",
+         before, undo_depth (dest));
+  CHECK (api->image_info (engine, dest, &info) == GLIMS_STATUS_OK && info.dirty &&
+         info.width == 320 && info.height == 240 && info.layer_count == 6,
+         "the image stays 320x240, gains 5 rows and is marked dirty");
+
+  count = 0;
+  CHECK (api->image_layers (engine, dest, rows, 16, &count) == GLIMS_STATUS_OK && count == 6,
+         "the destination now has %d layers", count);
+  if (count == 6)
+    {
+      int shape = 1;
+
+      for (i = 0; i < 5 && shape; i++)
+        if (strcmp (rows[i].name, source_rows[i].name) != 0 || rows[i].kind != source_rows[i].kind ||
+            rows[i].depth != source_rows[i].depth || strcmp (rows[i].mode, source_rows[i].mode) != 0 ||
+            rows[i].visible != source_rows[i].visible || rows[i].has_mask != source_rows[i].has_mask ||
+            rows[i].opacity != source_rows[i].opacity)
+          shape = 0;
+      /* Parents: 0 stays 0, a source parent maps to its imported id. */
+      for (i = 0; i < 5 && shape; i++)
+        {
+          GlimsItemID parent = 0;
+          int         j;
+
+          if (source_rows[i].parent != 0)
+            for (j = 0; j < 5; j++)
+              if (source_rows[j].id == source_rows[i].parent)
+                parent = added[j];
+          if (rows[i].parent != parent)
+            shape = 0;
+        }
+      CHECK (shape, "the imported stack keeps order, names, kinds, groups, modes, masks and opacity");
+      CHECK (strcmp (rows[5].name, "Base") == 0 && rows[5].parent == 0,
+             "the imported stack sits above the destination's own layer");
+      CHECK (rows[0].id == added[0] && rows[1].id == added[1] && rows[4].id == added[2],
+             "the returned ids are the imported top-level layers");
+      CHECK (rows[0].selected && rows[1].selected && rows[4].selected && ! rows[5].selected,
+             "the imported layers are selected, the old one is not");
+
+      dx = rows[0].bounds.x - source_rows[0].bounds.x;
+      dy = rows[0].bounds.y - source_rows[0].bounds.y;
+      for (i = 1; i < 5; i++)
+        if (rows[i].bounds.x - source_rows[i].bounds.x != dx ||
+            rows[i].bounds.y - source_rows[i].bounds.y != dy ||
+            rows[i].bounds.width != source_rows[i].bounds.width ||
+            rows[i].bounds.height != source_rows[i].bounds.height)
+          offsets_ok = 0;
+      CHECK (offsets_ok, "every layer keeps its size and offset relative to the others (moved %+d,%+d)",
+             dx, dy);
+    }
+
+  pixels = render_all (dest, &w1, &h1);
+  CHECK (pixels && w1 == 320 && h1 == 240, "the imported image renders");
+  free (pixels);
+  CHECK (api->image_undo (engine, dest) == GLIMS_STATUS_OK && layer_count (dest) == 1,
+         "undo removes all five imported rows at once");
+  CHECK (api->image_redo (engine, dest) == GLIMS_STATUS_OK && layer_count (dest) == 6,
+         "redo restores them");
+
+  /* Inserting above a chosen layer: with the bottom layer selected the
+   * stack lands between it and the top layer. */
+  CHECK (api->image_layers (engine, dest, rows, 16, &count) == GLIMS_STATUS_OK && count == 6 &&
+         api->layer_select (engine, dest, rows[5].id) == GLIMS_STATUS_OK,
+         "the destination's own layer is selected again");
+  {
+    GlimsStatus s = api->image_open_layers (engine, dest, xcf, NULL, 0, &n, &error);
+
+    CHECK (s == GLIMS_STATUS_OK && n == 3, "a second import runs (%d, n=%d)%s%s",
+           s, n, error ? ": " : "", error ? error : "");
+  }
+  api->image_layers (engine, dest, rows, 16, &count);
+  /* Duplicate names get the engine's "#1" suffix; the group keeps its
+   * children. */
+  CHECK (count == 11 && strcmp (rows[5].name, "Glims #1") == 0 &&
+         strcmp (rows[6].name, "Shapes #1") == 0 && rows[7].parent == rows[6].id &&
+         rows[7].depth == 1 && strcmp (rows[9].name, "Background #1") == 0 &&
+         strcmp (rows[10].name, "Base") == 0,
+         "a second import with the bottom layer selected lands directly above it");
+  api->free_string (error);
+  error = NULL;
+  api->image_undo (engine, dest);
+  api->image_undo (engine, dest);
+
+  /* With a group selected, the import becomes its children. */
+  CHECK (api->create_group (engine, dest, 0, 0, "Holder", &group, NULL) == GLIMS_STATUS_OK && group > 0,
+         "a group to open into");
+  CHECK (api->layer_select (engine, dest, group) == GLIMS_STATUS_OK,
+         "the group is selected");
+  CHECK (api->image_open_layers (engine, dest, xcf, added, 8, &n, &error) == GLIMS_STATUS_OK && n == 3 &&
+         api->image_layers (engine, dest, rows, 16, &count) == GLIMS_STATUS_OK && count == 7 &&
+         rows[0].id == group && strcmp (rows[0].name, "Holder") == 0 &&
+         rows[1].depth == 1 && rows[1].parent == group && strcmp (rows[1].name, "Glims") == 0 &&
+         rows[2].depth == 1 && rows[2].parent == group && strcmp (rows[2].name, "Shapes") == 0 &&
+         rows[3].depth == 2 && rows[4].depth == 2 && rows[3].parent == rows[2].id &&
+         strcmp (rows[5].name, "Background") == 0 && rows[5].depth == 1 && rows[5].parent == group &&
+         strcmp (rows[6].name, "Base") == 0 && rows[6].depth == 0 && rows[6].parent == 0,
+         "with a group selected, the imported stack lands inside it, top first%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->image_close (engine, dest);
+  dest = 0;
+
+  /* A non-XCF single-layer file imports as one layer named after it. */
+  CHECK (api->image_new (engine, 320, 240, &dest, NULL) == GLIMS_STATUS_OK, "destination for a PNG import");
+  CHECK (api->image_open_layers (engine, dest, png, NULL, 0, &n, &error) == GLIMS_STATUS_OK && n == 1 &&
+         api->image_layers (engine, dest, rows, 16, &count) == GLIMS_STATUS_OK && count == 2 &&
+         strcmp (rows[0].name, "composite.png") == 0 && rows[0].kind == GLIMS_LAYER_PIXEL &&
+         rows[0].bounds.width == 320 && rows[0].bounds.height == 240,
+         "the PNG imports as one pixel layer named after the file%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_open (engine, png, &src, NULL) == GLIMS_STATUS_OK && src > 0,
+         "the same PNG opens as an image for reference");
+  pixels    = render_all (dest, &w1, &h1);
+  reference = src ? render_all (src, &w2, &h2) : NULL;
+  CHECK (pixels && reference && w1 == w2 && h1 == h2 &&
+         count_differences (pixels, reference, (size_t) w1 * h1 * 4) == 0,
+         "the imported PNG renders exactly as the file does");
+  free (pixels);
+  free (reference);
+  api->image_close (engine, src);
+  src = 0;
+
+  /* The destination's identity is untouched: it still saves its own
+   * composite, and saving doesn't undo the import. */
+  CHECK (api->image_save (engine, dest, dest_xcf, &error) == GLIMS_STATUS_OK && file_size (dest_xcf) > 0,
+         "the destination saves to its own XCF after the import%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_open (engine, dest_xcf, &reopened, &error) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, reopened, after, 16, &count) == GLIMS_STATUS_OK && count == 2 &&
+         strcmp (after[0].name, "composite.png") == 0 && strcmp (after[1].name, "Background") == 0,
+         "the saved file holds the destination's layers, not the source image's%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->image_close (engine, reopened);
+  reopened = 0;
+
+  /* Refusals change nothing: no rows added, no undo step. */
+  before = undo_depth (dest);
+  CHECK (api->image_open_layers (engine, dest, missing, NULL, 0, &n, &error) == GLIMS_STATUS_FAILED &&
+         error && api->image_info (engine, dest, &info) == GLIMS_STATUS_OK && info.layer_count == 2 &&
+         undo_depth (dest) == before,
+         "a missing file fails cleanly: %s", error ? error : "(no message)");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_open_layers (engine, dest, junk, NULL, 0, &n, &error) == GLIMS_STATUS_FAILED &&
+         error && api->image_info (engine, dest, &info) == GLIMS_STATUS_OK && info.layer_count == 2 &&
+         undo_depth (dest) == before,
+         "a file that is not an image fails cleanly: %s", error ? error : "(no message)");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_open_layers (engine, dest, "https://example.com/a.png", NULL, 0, &n, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "a non-native path is refused before loading: %s", error ? error : "(no message)");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_open_layers (engine, dest, NULL, NULL, 0, &n, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_open_layers (engine, dest, png, NULL, 0, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_open_layers (engine, dest, png, NULL, -1, &n, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_open_layers (engine, dest, png, NULL, 4, &n, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_open_layers (engine, -1234, png, NULL, 0, &n, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "invalid arguments and unknown images are reported");
+
+  /* Busy states: an open stroke, a filter preview and a plug-in run. */
+  CHECK (api->stroke_begin (engine, dest, first_layer (dest), &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK,
+         "a stroke starts");
+  CHECK (api->image_open_layers (engine, dest, png, NULL, 0, &n, &error) == GLIMS_STATUS_BUSY && error &&
+         api->image_info (engine, dest, &info) == GLIMS_STATUS_OK && info.layer_count == 2 &&
+         undo_depth (dest) == before,
+         "open-as-layers refuses an active stroke (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->stroke_end (engine, stroke) == GLIMS_STATUS_OK, "the stroke still ends cleanly");
+  stroke = 0;
+  api->image_undo (engine, dest);
+
+  CHECK (api->filter_begin (engine, dest, first_layer (dest), "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK,
+         "a filter preview opens");
+  CHECK (api->image_open_layers (engine, dest, png, NULL, 0, &n, &error) == GLIMS_STATUS_BUSY && error &&
+         api->image_info (engine, dest, &info) == GLIMS_STATUS_OK && info.layer_count == 2,
+         "open-as-layers refuses a live filter preview (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK, "the preview still aborts cleanly");
+  filter = 0;
+
+  CHECK (api->image_new (engine, 6000, 4000, &scratch, NULL) == GLIMS_STATUS_OK, "a big image keeps a plug-in busy");
+  run.image = scratch;
+  run.name  = "plug-in-checkerboard";
+  atomic_store (&progress_active, false);
+  pthread_create (&thread, NULL, background_run, &run);
+  wait_for_progress (&run);
+  status = GLIMS_STATUS_OK;
+  {
+    int was_running = ! atomic_load (&run.finished);
+
+    if (was_running)
+      status = api->image_open_layers (engine, dest, png, NULL, 0, &n, NULL);
+    pthread_join (thread, NULL);
+    CHECK (! was_running || status == GLIMS_STATUS_BUSY,
+           "while a plug-in runs, open-as-layers reports BUSY (%d)", status);
+  }
+  CHECK (api->image_info (engine, dest, &info) == GLIMS_STATUS_OK && info.layer_count == 2,
+         "the refused calls left the destination unchanged");
+  api->image_close (engine, scratch);
+  scratch = 0;
+
+  /* File > Place: a real link layer that keeps its file reference. */
+  CHECK (api->image_new (engine, 64, 64, &src, NULL) == GLIMS_STATUS_OK &&
+         api->fill (engine, src, (GlimsPoint) { 0, 0 }, &red, NULL) == GLIMS_STATUS_OK &&
+         api->image_export (engine, src, link_src, &error) == GLIMS_STATUS_OK && file_size (link_src) > 8,
+         "a 64x64 red PNG is written for placing%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->image_close (engine, src);
+  src = 0;
+
+  /* The link goes on top of the PNG import; keep a pixel outside its
+   * bounds to compare after placing. */
+  {
+    uint8_t px[4] = { 0 };
+
+    api->image_render (engine, dest, 1.0, (GlimsRect) { 10, 10, 1, 1 }, px, 4);
+    memcpy (corner, px, 4);
+  }
+  before = undo_depth (dest);
+  status = api->image_place_link (engine, dest, link_src, &placed, &error);
+  if (! links)
+    {
+      CHECK (status == GLIMS_STATUS_UNSUPPORTED && error && placed == 0 &&
+             api->image_info (engine, dest, &info) == GLIMS_STATUS_OK && info.layer_count == 2 &&
+             undo_depth (dest) == before,
+             "this engine has no link layers: Place reports UNSUPPORTED and adds nothing (%s)",
+             error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (api->image_layers (engine, dest, rows, 16, &count) == GLIMS_STATUS_OK &&
+             count == 2 && rows[0].kind != GLIMS_LAYER_LINK && rows[1].kind != GLIMS_LAYER_LINK,
+             "no link or substitute layer appears");
+    }
+  else
+    {
+      int tries;
+
+      CHECK (status == GLIMS_STATUS_OK && placed > 0,
+             "Place puts the PNG in as a link layer%s%s", error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (undo_depth (dest) == before + 1, "placing a link is one undo step");
+      CHECK (api->image_layers (engine, dest, rows, 16, &count) == GLIMS_STATUS_OK && count == 3 &&
+             rows[0].id == placed && rows[0].kind == GLIMS_LAYER_LINK &&
+             strcmp (rows[0].name, "link-source.png") == 0 &&
+             rows[0].bounds.x == 128 && rows[0].bounds.y == 88 &&
+             rows[0].bounds.width == 64 && rows[0].bounds.height == 64,
+             "the link layer is genuine, named after the file and centered");
+      CHECK (rows[0].selected && ! rows[1].selected, "the placed layer is selected");
+      {
+        uint8_t px[4] = { 0 };
+
+        api->image_render (engine, dest, 1.0, (GlimsRect) { 160, 120, 1, 1 }, px, 4);
+        CHECK (px[0] > 200 && px[1] < 50 && px[2] < 50 && px[3] == 255,
+               "the link renders the file's pixels in the middle of the canvas (%d,%d,%d,%d)",
+               px[0], px[1], px[2], px[3]);
+        api->image_render (engine, dest, 1.0, (GlimsRect) { 10, 10, 1, 1 }, px, 4);
+        CHECK (memcmp (px, corner, 4) == 0, "outside its bounds the composite is unchanged");
+      }
+      CHECK (api->image_undo (engine, dest) == GLIMS_STATUS_OK && layer_count (dest) == 2 &&
+             api->image_redo (engine, dest) == GLIMS_STATUS_OK && layer_count (dest) == 3,
+             "placing is a normal undo step");
+      CHECK (api->image_layers (engine, dest, rows, 16, &count) == GLIMS_STATUS_OK &&
+             rows[0].kind == GLIMS_LAYER_LINK, "redo restores the link kind, not a copy");
+
+      CHECK (api->image_save (engine, dest, placed_xcf, &error) == GLIMS_STATUS_OK && file_size (placed_xcf) > 0,
+             "the image with the link layer saves%s%s", error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (api->image_open (engine, placed_xcf, &reopened, &error) == GLIMS_STATUS_OK &&
+             api->image_layers (engine, reopened, after, 16, &count) == GLIMS_STATUS_OK && count == 3 &&
+             after[0].kind == GLIMS_LAYER_LINK && strcmp (after[0].name, "link-source.png") == 0,
+             "the XCF round trip keeps a real link layer%s%s", error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (red_at (reopened, 160, 120) > 200,
+             "the reopened link layer still renders the file");
+
+      /* Overwrite the source: the monitor reloads the link in place. */
+      CHECK (api->image_new (engine, 64, 64, &src, NULL) == GLIMS_STATUS_OK &&
+             api->fill (engine, src, (GlimsPoint) { 0, 0 }, &blue, NULL) == GLIMS_STATUS_OK &&
+             api->image_export (engine, src, link_src, &error) == GLIMS_STATUS_OK,
+             "the source file is rewritten blue%s%s", error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      api->image_close (engine, src);
+      src = 0;
+      tries = 0;
+      while (tries < 100)
+        {
+          int r = red_at (reopened, 160, 120);
+          int b = 0;
+          uint8_t px[4];
+
+          if (api->image_render (engine, reopened, 1.0, (GlimsRect) { 160, 120, 1, 1 }, px, 4) == GLIMS_STATUS_OK)
+            b = px[2];
+          if (r < 50 && b > 200)
+            break;
+          usleep (100 * 1000);
+          tries++;
+        }
+      CHECK (tries < 100, "the monitored link layer rereads the rewritten source (%d00 ms)", tries);
+
+      /* And a fresh open rereads it too: the stored buffer never wins. */
+      CHECK (api->image_open (engine, placed_xcf, &again, NULL) == GLIMS_STATUS_OK && again > 0,
+             "the saved link reopens again");
+      tries = 0;
+      while (tries < 100)
+        {
+          uint8_t px[4] = { 0 };
+
+          if (api->image_render (engine, again, 1.0, (GlimsRect) { 160, 120, 1, 1 }, px, 4) == GLIMS_STATUS_OK &&
+              px[2] > 200 && px[0] < 50)
+            break;
+          usleep (100 * 1000);
+          tries++;
+        }
+      CHECK (tries < 100, "a reopened link rereads the current file, not the stored buffer (%d00 ms)", tries);
+      api->image_close (engine, again);
+      again = 0;
+      api->image_close (engine, reopened);
+      reopened = 0;
+
+      /* Missing and invalid sources fail without touching the image. */
+      before = undo_depth (dest);
+      CHECK (api->image_place_link (engine, dest, missing, &placed, &error) == GLIMS_STATUS_FAILED &&
+             error && placed == 0 && api->image_info (engine, dest, &info) == GLIMS_STATUS_OK &&
+             info.layer_count == 3 && undo_depth (dest) == before,
+             "placing a missing file fails cleanly (%s)", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (api->image_place_link (engine, dest, junk, &placed, &error) != GLIMS_STATUS_OK &&
+             placed == 0 && api->image_info (engine, dest, &info) == GLIMS_STATUS_OK &&
+             info.layer_count == 3 && undo_depth (dest) == before,
+             "placing a file that is not an image fails cleanly (%s)", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (api->image_place_link (engine, dest, "https://example.com/a.png", &placed, &error) ==
+             GLIMS_STATUS_INVALID_ARGUMENT && placed == 0,
+             "placing a non-native path is refused before loading");
+      api->free_string (error);
+      error = NULL;
+      CHECK (api->image_place_link (engine, dest, NULL, &placed, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+             api->image_place_link (engine, -1234, link_src, &placed, NULL) == GLIMS_STATUS_NOT_FOUND,
+             "place reports invalid arguments and unknown images");
+      CHECK (api->image_layers (engine, dest, rows, 16, &count) == GLIMS_STATUS_OK &&
+             count == 3 && rows[0].kind == GLIMS_LAYER_LINK,
+             "the failures left the placed link layer alone");
+    }
+
+  api->image_close (engine, dest);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -4084,6 +4533,7 @@ main (int argc, char **argv)
       CHECK (api->image_close (engine, image) == GLIMS_STATUS_NOT_FOUND, "closing twice is reported");
     }
   test_fixture (argv[3], argv[2]);
+  test_place (argv[3], argv[2]);
   test_text_layers (argv[2]);
   test_paths (argv[2]);
   test_deleted_items ();
