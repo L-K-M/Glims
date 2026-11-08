@@ -4132,6 +4132,103 @@ test_color_state (const char *fixtures, const char *work)
   free (after_pixels);
 }
 
+static void
+test_profile_preserves_editable_layers (const char *fixtures)
+{
+  GlimsImageID image = 0;
+  GlimsItemID text = 0;
+  GlimsTextSettings settings = { .struct_size = sizeof settings, .size = 14,
+                                 .color = { 0, 0, 0, 1 }, .justify = GLIMS_JUSTIFY_LEFT,
+                                 .antialias = true };
+  GlimsLayerInfo rows[4];
+  GlimsColorInfo color;
+  char rgb[1024], *fonts = NULL, *newline;
+  int32_t count = 0, depth;
+  GlimsStatus status;
+
+  snprintf (rgb, sizeof rgb, "%s/linear-rgb.icc", fixtures);
+  CHECK (api->fonts (engine, &fonts) == GLIMS_STATUS_OK && fonts && *fonts,
+         "the structured ICC fixture has a native font");
+  if (! fonts || ! *fonts) { api->free_string (fonts); return; }
+  newline = strchr (fonts, '\n');
+  snprintf (settings.font, sizeof settings.font, "%.*s",
+            (int) (newline ? newline - fonts : (ptrdiff_t)strlen (fonts)), fonts);
+  api->free_string (fonts);
+  CHECK (api->image_new (engine, 100, 60, &image, NULL) == GLIMS_STATUS_OK &&
+         api->text_layer_new (engine, image, "Editable", &settings, (GlimsPoint) { 2, 2 }, &text, NULL)
+           == GLIMS_STATUS_OK,
+         "the structured ICC fixture has an editable text layer");
+  CHECK (api->image_assign_profile (engine, image, rgb, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id == text && rows[0].kind == GLIMS_LAYER_TEXT,
+         "profile assignment keeps text editable");
+  depth = undo_depth (image);
+  CHECK (api->image_convert_profile (engine, image, rgb, GLIMS_PROFILE_RELATIVE_COLORIMETRIC,
+                                      true, NULL) == GLIMS_STATUS_OK && undo_depth (image) == depth,
+         "an equal profile on editable text is still a no-op");
+  status = api->image_convert_profile (engine, image, NULL, GLIMS_PROFILE_RELATIVE_COLORIMETRIC, true, NULL);
+  CHECK (status == GLIMS_STATUS_REQUIRES_RASTERIZE && undo_depth (image) == depth &&
+         api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK && rows[0].kind == GLIMS_LAYER_TEXT &&
+         api->image_color_info (engine, image, &color) == GLIMS_STATUS_OK && color.profile_embedded,
+         "normal profile conversion requires explicit rasterization before changing editable text (status %d)", status);
+  CHECK (api->image_convert_profile_rasterizing (engine, image, NULL, GLIMS_PROFILE_RELATIVE_COLORIMETRIC,
+                                                 true, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 1 &&
+         api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK && rows[0].kind == GLIMS_LAYER_PIXEL,
+         "explicit profile conversion rasterizes text as one undo step");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK && rows[0].kind == GLIMS_LAYER_TEXT &&
+         api->image_color_info (engine, image, &color) == GLIMS_STATUS_OK && color.profile_embedded &&
+         !strcmp (color.profile_label, "Glims Linear RGB Fixture"),
+         "undo explicit profile conversion restores text editability and its source profile");
+  {
+    char *restored_text = NULL;
+    GlimsTextSettings restored_settings = { .struct_size = sizeof restored_settings };
+    CHECK (api->text_layer_get (engine, image, text, &restored_text, &restored_settings) == GLIMS_STATUS_OK &&
+           restored_text && !strcmp (restored_text, "Editable"),
+           "the original text content remains editable after conversion undo");
+    api->free_string (restored_text);
+  }
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK && rows[0].kind == GLIMS_LAYER_PIXEL,
+         "redo reapplies the explicitly approved text rasterization");
+  api->image_close (engine, image);
+
+  if (supports_vector_layers ())
+    {
+      GlimsItemID path = 0, vector = 0, link = 0;
+      GlimsSubpath subpath = { .count = 4, .closed = true };
+      GlimsPathPoint points[] = { corner (10, 10), corner (60, 10), corner (60, 50), corner (10, 50) };
+      char linked_file[1024];
+      snprintf (linked_file, sizeof linked_file, "%s/profiled.png", fixtures);
+      api->image_new (engine, 100, 60, &image, NULL);
+      CHECK (api->path_set (engine, image, 0, "Profile shape", &subpath, 1, points, 4, &path, NULL) == GLIMS_STATUS_OK &&
+             api->path_to_vector_layer (engine, image, path, "Profile vector", &vector, NULL) == GLIMS_STATUS_OK &&
+             api->image_place_link (engine, image, linked_file, &link, NULL) == GLIMS_STATUS_OK &&
+             api->image_assign_profile (engine, image, rgb, NULL) == GLIMS_STATUS_OK &&
+             api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK && count == 3 &&
+             rows[0].id == link && rows[0].kind == GLIMS_LAYER_LINK &&
+             rows[1].id == vector && rows[1].kind == GLIMS_LAYER_VECTOR,
+             "profile assignment preserves genuine vector and linked layers");
+      depth = undo_depth (image);
+      CHECK (api->image_convert_profile (engine, image, NULL, GLIMS_PROFILE_RELATIVE_COLORIMETRIC, true, NULL)
+               == GLIMS_STATUS_REQUIRES_RASTERIZE && undo_depth (image) == depth,
+             "normal conversion refuses to rasterize vector and linked layers");
+      status = api->image_convert_profile_rasterizing (engine, image, NULL, GLIMS_PROFILE_RELATIVE_COLORIMETRIC, true, NULL);
+      api->image_layers (engine, image, rows, 4, &count);
+      CHECK (status == GLIMS_STATUS_OK && undo_depth (image) == depth + 1 &&
+             rows[0].kind == GLIMS_LAYER_PIXEL && rows[1].kind == GLIMS_LAYER_PIXEL,
+             "explicit conversion rasterizes vector and link layers in the same undo step (status %d, undo %d -> %d, kinds %u/%u)",
+             status, depth, undo_depth (image), rows[0].kind, rows[1].kind);
+      CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+             api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK &&
+             rows[0].id == link && rows[0].kind == GLIMS_LAYER_LINK &&
+             rows[1].id == vector && rows[1].kind == GLIMS_LAYER_VECTOR,
+             "undo restores genuine linked and vector layers after profile conversion");
+      api->image_close (engine, image);
+    }
+}
+
 static int
 profile_pixel (GlimsImageID image, int32_t x, int32_t y, uint8_t out[4])
 {
@@ -6054,6 +6151,7 @@ main (int argc, char **argv)
   test_filter_edit (argv[2]);
   test_color_state (argv[3], argv[2]);
   test_color_profiles (argv[3], argv[2]);
+  test_profile_preserves_editable_layers (argv[3]);
   test_qmask_name_fixture (argv[3]);
   test_resources ();
   test_procedures ();

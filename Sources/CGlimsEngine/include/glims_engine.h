@@ -51,7 +51,8 @@ typedef enum GlimsStatus {
   GLIMS_STATUS_NOT_RUNNING      = 5,
   GLIMS_STATUS_CANCELLED        = 6, /* the user cancelled, e.g. a plug-in dialog */
   GLIMS_STATUS_LOCKED           = 7, /* a layer or ancestor protects this edit */
-  GLIMS_STATUS_UNSUPPORTED      = 8  /* the engine version cannot do this */
+  GLIMS_STATUS_UNSUPPORTED      = 8, /* the engine version cannot do this */
+  GLIMS_STATUS_REQUIRES_RASTERIZE = 9 /* explicit consent is needed to turn editable layers into pixels */
 } GlimsStatus;
 
 typedef struct GlimsRect {
@@ -1384,12 +1385,23 @@ typedef struct GlimsEngineAPI {
    * GlimsProfileIntent mapping and explicit black-point compensation apply
    * only to this conversion. Same path/compatibility, undo and busy rules as
    * assignment; converting to an equal effective profile is a no-op.
+   * A non-no-op that would rasterize editable text/vector/link layers
+   * reports REQUIRES_RASTERIZE without changing anything. The caller can
+   * obtain consent and use image_convert_profile_rasterizing instead.
    * Indexed images report UNSUPPORTED: their native palette conversion
    * ignores intent/BPC. Convert to RGB first. Assignment remains supported. */
   GlimsStatus (*image_convert_profile) (GlimsEngine *engine, GlimsImageID image,
                                         const char *path, uint32_t intent,
                                         bool black_point_compensation,
                                         char **error);
+  /* Explicitly permits the native conversion to rasterize editable text,
+   * vector and link layers. The caller must obtain consent first. The
+   * complete conversion remains one undo step; undo restores editability.
+   * Equal-profile no-ops still rasterize nothing. All other conversion
+   * validation and indexed-image restrictions apply. */
+  GlimsStatus (*image_convert_profile_rasterizing) (GlimsEngine *engine, GlimsImageID image,
+                                                    const char *path, uint32_t intent,
+                                                    bool black_point_compensation, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

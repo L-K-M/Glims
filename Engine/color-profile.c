@@ -9,6 +9,12 @@
 #include "libgimpcolor/gimpcolor.h"
 #include "core/gimpimage.h"
 #include "core/gimpimage-color-profile.h"
+#include "core/gimpitem.h"
+#include "text/gimptextlayer.h"
+#if GIMP_CHECK_VERSION (3, 2, 0)
+#include "path/gimpvectorlayer.h"
+#include "core/gimplinklayer.h"
+#endif
 
 static gboolean
 profile_intent (uint32_t value, GimpColorRenderingIntent *intent)
@@ -84,10 +90,34 @@ glims_image_assign_profile (GlimsEngine *engine, GlimsImageID id,
   return GLIMS_STATUS_OK;
 }
 
-GlimsStatus
-glims_image_convert_profile (GlimsEngine *engine, GlimsImageID id,
+/* A native profile conversion replaces drawable buffers with undo enabled,
+ * which rasterizes genuine text/vector/link layers. Ordinary conversion
+ * must refuse that change; a separate entry point records explicit consent. */
+static gboolean
+has_editable_layers (GimpImage *image)
+{
+  GList *layers = gimp_image_get_layer_list (image);
+  GList *iter;
+  gboolean found = FALSE;
+  for (iter = layers; iter; iter = iter->next)
+    {
+      GimpItem *item = GIMP_ITEM (iter->data);
+      if (gimp_item_is_text_layer (item)
+#if GIMP_CHECK_VERSION (3, 2, 0)
+          || gimp_item_is_vector_layer (item) || gimp_item_is_link_layer (item)
+#endif
+         )
+        { found = TRUE; break; }
+    }
+  g_list_free (layers);
+  return found;
+}
+
+static GlimsStatus
+convert_profile (GlimsEngine *engine, GlimsImageID id,
                              const char *path, uint32_t intent_value,
-                             bool black_point_compensation, char **error)
+                             bool black_point_compensation, gboolean allow_rasterize,
+                             char **error)
 {
   GlimsOpenImage *open = glims_lookup_image (engine, id);
   GimpColorProfile *profile = NULL;
@@ -120,6 +150,23 @@ glims_image_convert_profile (GlimsEngine *engine, GlimsImageID id,
         }
       g_object_ref (profile);
     }
+  if (! gimp_image_validate_color_profile (open->image, profile, NULL, &gerror))
+    {
+      g_object_unref (profile);
+      return glims_fail (error, gerror, "This color profile is not compatible with the image.");
+    }
+  {
+    GimpColorProfile *source = gimp_image_get_color_profile (open->image);
+    if (! source) source = gimp_image_get_builtin_color_profile (open->image);
+    if (source && gimp_color_profile_is_equal (source, profile))
+      { g_object_unref (profile); return GLIMS_STATUS_OK; }
+  }
+  if (! allow_rasterize && has_editable_layers (open->image))
+    {
+      g_object_unref (profile);
+      if (error) *error = strdup ("Converting this color profile requires turning editable text, vector, or linked layers into pixels.");
+      return GLIMS_STATUS_REQUIRES_RASTERIZE;
+    }
   if (! gimp_image_convert_color_profile (open->image, profile, intent,
                                           black_point_compensation, NULL, &gerror))
     {
@@ -129,4 +176,20 @@ glims_image_convert_profile (GlimsEngine *engine, GlimsImageID id,
   g_object_unref (profile);
   gimp_image_flush (open->image);
   return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_image_convert_profile (GlimsEngine *engine, GlimsImageID id,
+                             const char *path, uint32_t intent,
+                             bool black_point_compensation, char **error)
+{
+  return convert_profile (engine, id, path, intent, black_point_compensation, FALSE, error);
+}
+
+GlimsStatus
+glims_image_convert_profile_rasterizing (GlimsEngine *engine, GlimsImageID id,
+                                         const char *path, uint32_t intent,
+                                         bool black_point_compensation, char **error)
+{
+  return convert_profile (engine, id, path, intent, black_point_compensation, TRUE, error);
 }

@@ -1099,6 +1099,8 @@ MARSHAL (image_assign_profile, return glims_image_assign_profile (e, a->image, a
 MARSHAL (image_convert_profile, return glims_image_convert_profile (e, a->image, a->string,
                                                                      (uint32_t) a->width,
                                                                      a->height != 0, a->error);)
+MARSHAL (image_convert_profile_rasterizing, return glims_image_convert_profile_rasterizing
+            (e, a->image, a->string, (uint32_t) a->width, a->height != 0, a->error);)
 MARSHAL (resources, return glims_resources (e, (uint32_t) a->width, a->out, a->capacity, a->count);)
 
 /* A path's geometry takes more arguments than GlimsArgs holds. */
@@ -1926,6 +1928,15 @@ api_image_convert_profile (GlimsEngine *e, GlimsImageID image, const char *path,
 }
 
 static GlimsStatus
+api_image_convert_profile_rasterizing (GlimsEngine *e, GlimsImageID image, const char *path,
+                                       uint32_t intent, bool black_point_compensation, char **error)
+{
+  GlimsArgs a = { .image = image, .string = path, .width = (int32_t) intent,
+                  .height = black_point_compensation, .error = error };
+  return glims_engine_call (e, image_convert_profile_rasterizing_on_engine, &a);
+}
+
+static GlimsStatus
 api_resources (GlimsEngine *e, uint32_t kind, GlimsResourceInfo *rows, int32_t capacity,
                int32_t *count)
 {
@@ -2056,6 +2067,7 @@ static const GlimsEngineAPI api_v1 = {
   .resource_resolve = api_resource_resolve,
   .image_assign_profile = api_image_assign_profile,
   .image_convert_profile = api_image_convert_profile,
+  .image_convert_profile_rasterizing = api_image_convert_profile_rasterizing,
 };
 
 __attribute__ ((visibility ("default")))
