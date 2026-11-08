@@ -1766,6 +1766,185 @@ passed before the unrelated layer-boundary integration; the combined
 Guides interface will receive its own unit and window checks. The
 independent backend review found no important issues.
 
+### Native image grid (2026-11-08)
+
+Backend-and-cache slice on `feat/native-grid`: no canvas overlay, grid
+dialog or snap support. Two append-only facade slots follow the
+canonical footer (`image_convert_indexed`): `image_grid` (a read of
+the current state into a size-versioned `GlimsGrid`) and
+`image_set_grid`. Own `GlimsGridStyle` (DOTS=1, INTERSECTIONS=2,
+ON_OFF_DASH=3, DOUBLE_DASH=4, SOLID=5) mapped by name to
+`GIMP_GRID_DOTS`/`GIMP_GRID_INTERSECTIONS`/`GIMP_GRID_ON_OFF_DASH`/
+`GIMP_GRID_DOUBLE_DASH`/`GIMP_GRID_SOLID`
+(libgimpbase/gimpbaseenums.h:522-530, identical in all four trees); no
+native enum value, struct layout or pointer crosses the facade.
+`GlimsGrid` carries `struct_size`, the style, `spacing_x/y`,
+`offset_x/y` and `foreground`/`background` as `GlimsColor` (sRGB 0...1,
+alpha included).
+
+Verified identical across GIMP_3_0_8, GIMP_3_2_0, GIMP_3_2_8 and
+master: `gimp_image_get_grid`/`gimp_image_set_grid(image, grid, TRUE)`
+(app/core/gimpimage-grid.h/.c — set compares with
+`gimp_config_is_equal_to`, returns with no undo when equal, otherwise
+pushes exactly one "Grid" undo via `gimp_image_undo_push_image_grid`
+with `GIMP_DIRTY_IMAGE_META` and syncs), the getters
+`gimp_grid_get_style`/`get_fgcolor`/`get_bgcolor`/`get_spacing`/
+`get_offset` (app/core/gimpgrid.h), `gimp_config_duplicate` and
+`gimp_config_is_equal_to` (libgimpconfig/gimpconfig-iface.h:124-125),
+and the property names and bounds in `gimp_grid_class_init`
+(app/core/gimpgrid.c): `style` (enum, default SOLID), `fgcolor`/
+`bgcolor` (color, has alpha, defaults black/white), `xspacing`/
+`yspacing` (double, 0.0 ... GIMP_MAX_IMAGE_SIZE, default 10.0),
+`spacing-unit`, `xoffset`/`yoffset` (double, -GIMP_MAX_IMAGE_SIZE ...
+GIMP_MAX_IMAGE_SIZE, default 0.0), `offset-unit`, with
+GIMP_MAX_IMAGE_SIZE = 524288 in all four trees
+(libgimpbase/gimplimits.h:57). `check_engine_interface` now asserts
+all nine property names and types on `GIMP_TYPE_GRID` at start-up.
+XCF persists the grid as a parasite (app/xcf/xcf-save.c:559-561 via
+`gimp_grid_to_parasite`, xcf-load.c:784-789 via
+`gimp_grid_from_parasite`).
+
+The adapter (Engine/grid.c) clones the image's borrowed grid with
+`gimp_config_duplicate`, so the unexposed units are retained, and
+validates the whole request before any `g_object_set` — so the native
+clamps can neither hide invalid input nor leave a partial mutation:
+INVALID_ARGUMENT for a missing/short struct, an unknown style, a
+non-finite spacing/offset, a spacing that is zero, negative or outside
+the native bounds, an offset outside the native signed range, or a
+non-finite/out-of-range color component (alpha included). The bounds
+are read from the engine's own `GParamSpecDouble` at call time, not
+hard-coded. Colors are set on freshly created `GeglColor` objects
+through `gegl_color_set_rgba_with_space(..., NULL)` — a NULL space is
+non-linear sRGB (gegl/gegl/property-types/gegl-color.h) — so the
+engine's shared default color objects are never mutated; the native
+color setter duplicates the passed object into the grid
+(gimpgrid.c, PROP_FGCOLOR/PROP_BGCOLOR), and the adapter releases its
+own references right after `g_object_set`. Readback borrows the grid
+and its colors and reads them with `gegl_color_get_rgba_with_space(...,
+NULL)`. An identical native config is detected with
+`gimp_config_is_equal_to` before the readiness gate (like guide_put's
+same-position no-op) and returns OK with no undo; a changed config
+goes through `gimp_image_set_grid(image, clone, TRUE)` — exactly one
+native undo step, pixels and selection untouched. Mutations are
+guarded by `glims_edit_ready` (BUSY during a stroke, a filter session
+or a plug-in); the read is allowed at any time. No new event kind: the
+native undo push emits "undo-event", forwarded as the existing
+GLIMS_EVENT_UNDO_CHANGED, and ImageDocument's `.state` refresh runs
+`reload`, which re-reads the grid.
+
+Session side: `EngineSession.GridStyle`, `Grid`, `grid(_:)` and
+`setGrid(_:image:)` over the facade types (struct_size set, colors via
+the existing sRGB `NSColor` conversion, no synchronous native call
+outside the queued job); `ImageDocument` caches `grid` in `reload` and
+queues `setGrid` edits through `run` on the input queue.
+
+Facade-only conformance adds `test_grid`: the native default readback
+(solid, black/white, 10/10, 0/0); all five styles with numeric, color
+and alpha readback, each exactly one undo; undo/redo restoring the
+previous grid; the identical no-op; rendered pixels, selection bounds,
+dirty flag and undo depth unchanged across every refusal (missing/short
+struct, unknown styles, zero/negative/NaN/infinite/over-maximum
+spacings, out-of-range and non-finite offsets, out-of-range and invalid
+alpha colors); the native range edges (±524288) accepted; BUSY under
+an open stroke and an open filter preview with reads still allowed;
+XCF save/reopen preserving the whole config; NOT_FOUND for unknown and
+closed images. Comparisons are against the values set and the engine
+defaults from source, not against the adapter's storage. There is no
+`source_id` anywhere in this facade (grep over the header, adapter and
+session finds none) — the concept is not invented here; the nearest
+existing notion is `layer_source_info`'s structured-source report,
+which the grid slice does not use.
+
+Checks actually run on this branch: `swift build -j 2` and
+`swift build -j 2 --build-tests` pass; `clang -fsyntax-only` with the
+existing adapter flags (from `_engine/adapter/<ref>/compile.rsp`,
+paths rewritten to this worktree) is clean for `Engine/grid.c` and
+`Engine/engine.c` on both GIMP_3_2_8 and GIMP_3_0_8, for
+`Engine/grid.c` also under `-Wall -Wextra -Werror`, and
+`Engine/tests/engine-tests.c` under `-std=c11 -O2 -Wall -Wextra
+-Werror -fsyntax-only` plus `abi.c`. NOT run here (the shared
+engine/adapter lock belongs to the root job): `build-adapter.sh
+--test` conformance, any adapter compile/link, `swift test`, the app's
+`--engine-smoke-test`, the engine matrix and any on-screen check —
+no runtime behavior of the new slots was executed in this slice.
+
+### Grid controls (2026-11-08)
+
+Interface slice on `feat/grid-controls`, frontend only over the cached
+`ImageDocument.grid` / queued `ImageDocument.setGrid` — no native call
+from the UI or menu validation, no C/header change. Three pieces:
+
+- **Image ▸ Configure Grid…** (`GridSheetController`, one per window,
+  retained by its `DocumentWindowController` like the guides sheet). The
+  sheet captures its document and seeds a local draft (spacing X/Y,
+  offset X/Y, style popup with all five native styles, foreground and
+  background color wells) from the cached grid. All edits stay local
+  until Apply commits the field edits, parses strictly, and performs
+  ONE queued atomic `setGrid` (one undo step when changed; an identical
+  grid is a no-op). Cancel and window close write nothing. Parsing is
+  whole-field `Double` plus finiteness; spacings must additionally be
+  strictly positive; offsets only finite. The native range bounds are
+  deliberately not checked client-side — the adapter refuses them and
+  the refusal is fanned out through the document's existing `onError`
+  to the sheet's message label and the status bar, never clamped, and
+  the draft is preserved so the values can be corrected. A reload
+  re-seeds the draft only while it is clean (Undo/Redo and a
+  successful Apply's refresh land in the sheet; a dirty draft is
+  never clobbered). Color wells follow the Vector Style conventions:
+  the sheet records whether the shared color panel was already visible
+  at open and, on invalidate, closes only a panel its own wells
+  activated, deactivating both. Late close callbacks are discarded
+  (`isInvalidated` + identity-checked `beginSheet` completion). Menu
+  validation allows the item whenever the document is not closing and
+  no other sheet is attached — grid configuration is image metadata,
+  so a selected channel does not restrict it.
+- **View ▸ Show Grid** (`GridViewState`, cached per window, default
+  OFF): the checkmark reads the cached flag and the toggle stays
+  available while the engine is busy. It is pure view state — no image
+  pixels, file, dirty, history, selection, export or print mutation
+  (print draws an immutable `PrintSnapshot`, never the canvas).
+- **Canvas overlay** (`EngineCanvasView.drawGridOverlay`, drawn between
+  the image tiles and the selection/path/guide overlays) over the pure,
+  bounded `GridOverlayPlanner`: the visible rect is clipped to the
+  image FIRST, line positions come from closed-form `ceil`/`floor` of
+  `offset + k*spacing` inside the visible range (never a walk over the
+  whole image), with finite/overflow guards and fixed caps (4096 lines
+  per axis, 65536 intersections — over-cap axes/dot products are
+  suppressed as illegible, reported via plan flags). An axis whose
+  scaled spacing drops below 2 device pixels is suppressed, matching
+  the engine's own threshold (gimpcanvasgrid.c, bug #599267); Dots and
+  Intersections need both axes and draw only at intersections (1-device-
+  px mark / crosshair with the engine's CROSSHAIR reach); the three
+  line styles draw visible-length segments per legible axis. Foreground
+  colors everything; the background color is used only by Double Dash
+  as the interleaved second dash. Dash phase is anchored to image
+  coordinates (`fmod(from * viewScale, period)`), so scrolled segments
+  keep the pattern glued to the image. Invalid cached metadata (NaN,
+  non-positive spacing) is suppressed, never clamped. Image
+  coordinates map straight to view points, so zoom, backing scale,
+  scroll and the flipped canvas all stay aligned.
+
+Tests: `GridControlsTests` covers the strict parser, draft validation
+(including that over-maximum spacings pass to the engine rather than
+being clamped), the toggle policy, the five style names, and planner
+oracles — modular line positions, offset non-clamping, visible-rect
+clipping, the 2-device-px legibility boundary, per-axis suppression,
+dot Cartesian products, both caps, invalid-input guards and the
+dash-phase anchoring invariant against a closed-form oracle.
+`GLIMS_SMOKE_CASE=grid-controls` (and the default smoke run) drives
+`exerciseGridControls`: real sheet Apply/Cancel/invalid/native-refusal
+paths, view-bitmap toggle and style differences with native pixel
+isolation, undo/redo cache refresh, two-document ownership, busy and
+late-close paths, all controls reached by accessibility label; waits
+are predicate-based with queue gates released on every path.
+
+Checks actually run on this branch: `swift build -j 2` and
+`swift build -j 2 --build-tests` pass. NOT run here (owned by the root
+job): `swift test`, `--smoke-test`, `--engine-smoke-test` (including
+`GLIMS_SMOKE_CASE=grid-controls`), the adapter conformance tests and any
+native/engine command — no runtime behavior of the new UI was executed
+in this slice.
+
 ### Fill pattern source (2026-11-08)
 
 Interface slice on `feat/pattern-chooser`, frontend only: Edit ▸ Fill…
@@ -2106,6 +2285,84 @@ pixel-restoration and exact undo assertions already passed. No runtime
 restore behavior required a change. User-facing confirmed dispatch and
 its interface checks follow separately.
 
+### Layer source controls: Rasterize Layer… / Restore Layer Source… (2026-11-08)
+
+UI slice on `feat/layer-source-controls`, Swift-only over the existing
+C API 113 (`LayerCommand.rasterize = 12`, `.restoreSource = 13`,
+`layer_source_info`): no C, header or dependency change.
+
+- `Sources/GlimsKit/Document/LayerSourceMenuPolicy.swift`: pure
+  cached-state gating. Rasterize only on genuine TEXT/LINK/VECTOR with
+  `hasSource && !isRasterized`; Restore only on `hasSource &&
+  isRasterized`; ordinary pixels/groups and a missing cache entry offer
+  neither; inherited (effective) PIXELS|POSITION locks, mask/channel
+  targets and the caller-composed closing/busy/pending-target/preview/
+  attached-sheet states disable. No synchronous native RPC in
+  validation or UI.
+- `ImageDocument`: `targetCommandIsPending` cached flag;
+  `rasterizeLayerSource(_:completion:)` — counted, explicit-id, routed on
+  the input queue behind accepted edits; `restoreLayerSource(_:completion:)`
+  — same explicit-id rules, but through the existing `enqueueExclusive`
+  mechanism like `convertProfile`: pending edits end, accepted input in
+  every document drains first, `pendingWork` holds until completion, and
+  the restore never goes through the ordinary input queue (a link
+  restore may load a file). Both deliver the `Result` on main exactly
+  once, reload when the document is alive, report failures through
+  `onError`, refuse closed/busy without queueing, and pass a stale id to
+  the engine untouched so it comes back NOT_FOUND, never retargeted.
+  `layerCommand(.restoreSource)` still refuses unconfirmed calls.
+- `MainMenu` Layer menu gains "Rasterize Layer…" and "Restore Layer
+  Source…"; `DocumentWindowController` owns the per-window NSAlert
+  confirmation sheets (no singleton, no callback-hook clobbering): the
+  document and explicit layer id are captured by value before the alert,
+  so Apply never uses layer 0, the front window or the current selection;
+  Cancel queues nothing; a close since the sheet opened wins over a late
+  Apply. Rasterize's text explains pixel behavior with the source
+  retained and linked layers stopping source updates; Restore's text
+  explains discarded pixel edits, undo availability, retained
+  text/path/linked source, and the native link contract (reload when
+  readable, otherwise retained source with monitoring resumed). Sheet
+  buttons carry explicit accessibility labels. `validateMenuItem` gates
+  both items through the policy over `layerSources`/`layerLocks` and the
+  existing mask/channel/busy/closing/preview/attached-sheet guards.
+- Tests: `LayerSourceMenuPolicyTests` (pure policy: kinds, source
+  states, missing cache, locks, target and blocked states),
+  `LayerMenuTests` gains the Layer-menu wiring for both selectors, and
+  `EngineSmokeTest` gains `GLIMS_SMOKE_CASE=layer-source-controls` plus
+  `exerciseLayerSourceControls` in the full suite: menu wiring and
+  cached gating (text/pixel/locks/attached-sheet/busy), sheet Cancel
+  changing nothing, Rasterize Apply as one undo with the cached kind
+  flipped, retarget-before-Apply and a second document staying untouched,
+  a pixel stroke then Restore giving the exact source pixels plus one
+  undo, undo restoring the painted pixels, BUSY refusal under a
+  controlled semaphore pause, the admitted restore counted in
+  `pendingWork` and draining the other document's accepted stroke first,
+  stale-id native NOT_FOUND, and late-close Apply queueing nothing.
+  Pixel/kind oracles read the session directly (`copyPixels`,
+  `layerSource`, `layers`), never the cache under test.
+
+Checked in this slice: `swift build -j 2` — Build complete;
+`swift build -j 2 --build-tests` — Build complete (the new
+`LayerSourceMenuPolicyTests.o` is in the build tree). NOT RUN here (the
+Mac's shared process limits; root owns runtime): `swift test`, the
+`GLIMS_SMOKE_CASE=layer-source-controls` and full `--engine-smoke-test`
+runs, all AppKit/GUI execution, and every native adapter/engine build —
+the four-engine suite 1314/1170/1314/1314 green under root predates
+this slice and does not validate it. Remaining gaps: runtime behavior
+of the sheets, the restore's link-file reload path through the UI, and
+mask/channel-target gating exercised only in the pure policy tests, not
+against a live mask/channel target.
+
+Guide field refresh regression: undoing a selected guide's move updated
+the list but left its idle position field stale because reselecting the
+same table row does not notify its delegate. The new actual-sheet check
+failed before the fix. Reload now synchronizes the selected guide's input
+fields explicitly while preserving an active text edit. Both Undo/Redo
+field checks and the existing active-edit preservation check pass on the
+pinned engine (30 focused checks). Before this fix, the source-cache
+integration passed 399 unit tests, all-four-engine guide checks and 971
+full pinned interface checks. Follow-up review and matrix are running.
+
 ### Linked-load admission and object lifetime (2026-11-08)
 
 A controlled Python file loader reproduced edits being admitted during
@@ -2413,6 +2670,50 @@ No production renderer change was needed. This verifies the in-gamut sRGB
 path; physical monitor calibration, wide-gamut/HDR output, proof profiles,
 proof intents and gamut warnings remain unverified or unimplemented.
 
+Grid controls integration passes 417 unit tests, all 38 focused checks on
+all four engines and 1,030 full pinned interface checks. A controlled
+probe of the actual planner reproduced an infinite loop when a Double
+index could not advance by one; indices outside the exact-integer range
+are now suppressed and iteration has an integer bound. Its regression
+passes. An actual-sheet regression also reproduced idle fields staying
+stale after Apply then Undo. The document now reports counted completion;
+the sheet marks the committed draft clean only on success and refreshes
+it from the cache. Accepted work disables its controls through completion.
+Close discards unapplied edits, while applied changes remain undoable.
+Own color editing ends on Apply and close without hiding another owner's
+panel. Parent integration and independent review of this fix follow.
+
+A second grid regression reproduced the cache/completion stage becoming
+uncounted while another document held exclusive engine work. That stage
+now retains its own pending-work count through the deferred callback,
+including close and failure paths. All 39 focused checks pass on each of
+the four engines. A focused independent review of the supplied exact diff
+and surrounding source found no important findings; the helper could not
+independently execute Git. The broader current-file review was also clean.
+
+The source-controls integration passes 407 unit tests, all 33 focused
+sheet/dispatch checks on each supported engine, and the full pinned
+interface suite. Initial failures were assertions against the wrong
+state: ordinary pixels have a source-info cache entry, and the menu
+was still aimed at the retargeted pixel layer. Correcting those fixture
+expectations required no production change. Root reviewed the source
+controls, admission/drain and close paths. The independent broad UI
+helper timed out without a verdict and is not counted as approval.
+
+
+Grid integration validation passes 1,380 / 1,269 / 1,380 / 1,380 native
+checks on GIMP 3.2.8 / 3.0.8 / 3.2.0 / master. The initial failures were
+fixture errors: the color oracle required double precision although
+GEGL's RGBA-with-space accessors store floats, and the preview busy probe
+submitted an identical no-op and short-circuited its cleanup. Color
+comparisons now allow float rounding; the busy probe requests a genuine
+change and always closes its preview. No production grid code changed.
+Independent review found no important issue. Nondefault unit retention
+is verified from clone semantics in the sources; it is not directly
+covered by the facade-only XCF fixture. Swift/cache runtime follows with
+the configuration interface.
+
+
 Ruler review reproduced a major/minor classification defect at large
 scrolled coordinates: a magnitude-relative tolerance eventually exceeded
 the distance between ticks. At image coordinate 1,000,000 and 3,200% zoom,
@@ -2421,6 +2722,7 @@ now uses exact divisibility of the integral tick index. The independent
 six-position oracle passes, as do all 421 unit tests and 47 focused pinned
 interface checks. The four-engine focused and 1,067 full integration checks
 above preceded this pure planner correction.
+
 
 After integrating Indexed, one native conformance run failed during the
 linked-file rewrite fixture and later crashed after cascading failures.

@@ -51,7 +51,7 @@ enum EngineSmokeTest {
             .usingColorSpace(.genericGray)?.whiteComponent).map(Double.init)
     }
 
-    private static func pixel(_ session: EngineSession, _ image: Int32, x: Int, y: Int) -> [UInt8]? {
+    static func pixel(_ session: EngineSession, _ image: Int32, x: Int, y: Int) -> [UInt8]? {
         guard let rendered = try? session.render(image, scale: 1, area: CGRect(x: x, y: y, width: 1, height: 1)),
               let data = rendered.dataProvider?.data as Data? else { return nil }
         return Array(data.prefix(4))
@@ -171,11 +171,23 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (guides controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-source-controls" {
+                try exerciseLayerSourceControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (layer source controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "grid-controls" {
+                try exerciseGridControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (grid controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "pixel-rulers" {
                 try exercisePixelRulers(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (pixel rulers)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+
 
 
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "canvas-overlays" {
@@ -186,6 +198,7 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "indexed-controls" {
                 try exerciseIndexedControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (indexed controls)" : "FAILED: \(failures) failure(s)")
+
                 return failures == 0 ? 0 : 1
             }
 
@@ -236,6 +249,7 @@ enum EngineSmokeTest {
             try exerciseVectorStyleForm(session, work: work, documents: documents)
             try exercisePaletteControls(session, documents: documents)
             try exerciseGuidesControls(session, work: work, documents: documents)
+            try exerciseGridControls(session, work: work, documents: documents)
             try exercisePixelRulers(session, work: work, documents: documents)
             try exerciseGuideDragging(session, work: work, documents: documents)
 
@@ -252,6 +266,8 @@ enum EngineSmokeTest {
             try exerciseResourceCatalog(session)
             try exerciseGuideCache(session, documents: documents)
             try exerciseLayerSourceCache(session, documents: documents)
+            try exerciseLayerSourceControls(session, work: work, documents: documents)
+
             try exerciseIndexedWrapper(session)
             try exerciseResourceGradient(session, documents: documents)
             try exerciseResourceThumbnails(session)
@@ -8310,6 +8326,344 @@ enum EngineSmokeTest {
     /// movement under scroll/zoom checked against an independent geometry
     /// oracle plus a ruler view-bitmap check, display-only isolation of
     /// pixels/dirty/history/selection, and safe close.
+    private static func exerciseGridControls(_ session: EngineSession, work: URL,
+                                             documents: DocumentList) throws {
+        // Recursive view search that recurses into children EVEN WHEN THE
+        // ROOT ITSELF MATCHES the type (an NSStackView root must not hide
+        // a nested match of the same class).
+        func allViews<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
+            guard let root else { return [] }
+            var found: [T] = []
+            if let match = root as? T { found.append(match) }
+            for child in root.subviews { found += allViews(child, as: type) }
+            return found
+        }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func button(_ sheet: NSWindow?, _ label: String) -> NSButton? {
+            allViews(sheet?.contentView, as: NSButton.self).first { $0.accessibilityLabel() == label }
+        }
+        func field(_ sheet: NSWindow?, _ label: String) -> NSTextField? {
+            allViews(sheet?.contentView, as: NSTextField.self)
+                .first { $0.isEditable && $0.accessibilityLabel() == label }
+        }
+        func message(_ sheet: NSWindow?) -> NSTextField? {
+            allViews(sheet?.contentView, as: NSTextField.self)
+                .first { !$0.isEditable && $0.accessibilityLabel() == "Grid message" }
+        }
+        func popup(_ sheet: NSWindow?, _ label: String) -> NSPopUpButton? {
+            allViews(sheet?.contentView, as: NSPopUpButton.self).first { $0.accessibilityLabel() == label }
+        }
+        func well(_ sheet: NSWindow?, _ label: String) -> NSColorWell? {
+            allViews(sheet?.contentView, as: NSColorWell.self).first { $0.accessibilityLabel() == label }
+        }
+
+        let imageA = try session.newImage(width: 40, height: 24)
+        let imageB = try session.newImage(width: 30, height: 30)
+        let docA = try ImageDocument(session: session, image: imageA, name: "Grid A")
+        let docB = try ImageDocument(session: session, image: imageB, name: "Grid B")
+        documents.items += [docA, docB]
+        let a = DocumentWindowController(document: docA)
+        let b = DocumentWindowController(document: docB)
+        a.showWindow(nil)
+        b.showWindow(nil)
+        var messages: [String] = []
+        let reportError = docA.onError
+        docA.onError = { reportError?($0); messages.append($0) }
+        defer {
+            for (controller, document) in [(a, docA), (b, docB)] {
+                if let sheet = controller.window?.attachedSheet {
+                    controller.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                }
+                controller.window?.close()
+                documents.items.removeAll { $0 === document }
+                var closed = false
+                document.closeImageWhenDrained { closed = true }
+                let deadline = Date().addingTimeInterval(10)
+                while !closed && Date() < deadline { spin(0.01) }
+            }
+        }
+
+        // Menu wiring: both items sit on the document's own selectors.
+        let mainMenu = MainMenu.make()
+        let imageMenu = mainMenu.items.first { $0.title == "Image" }?.submenu
+        let viewMenu = mainMenu.items.first { $0.title == "View" }?.submenu
+        check(imageMenu?.items.first { $0.title == "Configure Grid…" }?.action
+                == #selector(DocumentWindowController.configureGrid(_:)),
+              "Image offers Configure Grid… on the document's selector")
+        check(viewMenu?.items.first { $0.title == "Show Grid" }?.action
+                == #selector(DocumentWindowController.toggleShowGrid(_:)),
+              "View offers Show Grid on the document's selector")
+
+        // Menu validation reads only cached state: Show Grid unchecked by
+        // default and always valid; Configure Grid… enabled while no sheet
+        // is attached (image metadata: no channel-target restriction).
+        let showGridItem = NSMenuItem(title: "Show Grid",
+                                      action: #selector(DocumentWindowController.toggleShowGrid(_:)), keyEquivalent: "")
+        let configureItem = NSMenuItem(title: "Configure Grid…",
+                                       action: #selector(DocumentWindowController.configureGrid(_:)), keyEquivalent: "")
+        check(a.validateMenuItem(showGridItem) && showGridItem.state == .off,
+              "Show Grid validates unchecked by default")
+        check(a.validateMenuItem(configureItem), "Configure Grid… validates while no sheet is open")
+
+        // Two documents open independent sheets through the actual action.
+        a.configureGrid(nil)
+        b.configureGrid(nil)
+        let sheetA = a.window?.attachedSheet
+        let sheetB = b.window?.attachedSheet
+        check(sheetA != nil && sheetB != nil && sheetA !== sheetB && a.gridSheet !== b.gridSheet,
+              "two documents open independent grid sheets owned by their windows")
+        check(!a.validateMenuItem(configureItem), "Configure Grid… is disabled while its sheet is open")
+
+        // The sheet seeds its draft from the cached grid (default 10/10, 0/0, solid).
+        check(field(sheetA, "Grid spacing X")?.stringValue == "10.0"
+                && field(sheetA, "Grid spacing Y")?.stringValue == "10.0"
+                && field(sheetA, "Grid offset X")?.stringValue == "0.0"
+                && field(sheetA, "Grid offset Y")?.stringValue == "0.0"
+                && popup(sheetA, "Grid style")?.titleOfSelectedItem == "Solid"
+                && well(sheetA, "Grid foreground color") != nil && well(sheetA, "Grid background color") != nil,
+              "the sheet seeds spacing, offset, style and both color wells from the cached grid")
+
+        // Apply through the sheet's real controls: one queued atomic
+        // setGrid, one undo step, pixels untouched, sheet stays open.
+        let pixelsBefore = try session.copyPixels(imageA, merged: true).pixels
+        let undoBefore = docA.undoInfo.undoCount
+        field(sheetA, "Grid spacing X")?.stringValue = "20"
+        a.gridSheet?.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification,
+                                                       object: field(sheetA, "Grid spacing X")))
+        let applyGate = DispatchSemaphore(value: 0)
+        docA.inputQueue.async { applyGate.wait() }
+        button(sheetA, "Apply grid")?.performClick(nil)
+        check(docA.pendingWork > 0 && button(sheetA, "Apply grid")?.isEnabled == false
+                && button(sheetA, "Close grid sheet")?.isEnabled == false
+                && field(sheetA, "Grid spacing X")?.isEnabled == false,
+              "accepted grid work is counted and disables controls until completion")
+        let otherWorkGate = DispatchSemaphore(value: 0)
+        let otherWorkAccepted = EngineActivity.shared.perform(label: "Grid completion accounting",
+                                                               work: { otherWorkGate.wait() }, completion: {})
+        applyGate.signal()
+        wait { (try? session.grid(imageA).spacingX) == 20 }
+        spin()
+        check(otherWorkAccepted && EngineActivity.shared.isBusy && docA.pendingWork > 0
+                && button(sheetA, "Close grid sheet")?.isEnabled == false,
+              "grid completion remains counted while another engine activity defers its callback")
+        otherWorkGate.signal()
+        wait { !EngineActivity.shared.isBusy && docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+        spin()
+        check(docA.grid.spacingX == 20 && docA.grid.spacingY == 10
+                && docA.undoInfo.undoCount == undoBefore + 1,
+              "Apply performs one queued setGrid with one undo step")
+        check(try session.copyPixels(imageA, merged: true).pixels == pixelsBefore,
+              "the grid change leaves the image pixels untouched")
+        check(a.window?.attachedSheet === sheetA && a.gridSheet != nil,
+              "Apply keeps the sheet open")
+        docA.undo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 10 }
+        spin()
+        check(field(sheetA, "Grid spacing X")?.stringValue == "10.0",
+              "Undo after Apply refreshes the idle field in the still-open sheet")
+        docA.redo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+        spin()
+        check(field(sheetA, "Grid spacing X")?.stringValue == "20.0",
+              "Redo refreshes the open grid sheet's committed field")
+
+        // Invalid input: refused visibly in the sheet, no mutation, and
+        // the draft is preserved for correcting.
+        let undoAfterApply = docA.undoInfo.undoCount
+        field(sheetA, "Grid spacing X")?.stringValue = "abc"
+        button(sheetA, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 }
+        check(docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply
+                && a.gridSheet?.lastError != nil && !(message(sheetA)?.stringValue ?? "").isEmpty
+                && field(sheetA, "Grid spacing X")?.stringValue == "abc",
+              "an unparsable spacing is refused in the sheet without mutation and the draft is kept")
+        field(sheetA, "Grid spacing X")?.stringValue = "0"
+        button(sheetA, "Apply grid")?.performClick(nil)
+        check(docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply
+                && (message(sheetA)?.stringValue ?? "").contains("greater than zero"),
+              "a zero spacing is refused visibly without mutation")
+
+        // A native bounds refusal (spacing beyond the engine's maximum)
+        // is reported, not clamped; the draft survives.
+        field(sheetA, "Grid spacing X")?.stringValue = "1000000000"
+        button(sheetA, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && !messages.isEmpty }
+        spin()
+        check(docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply
+                && a.gridSheet?.lastError != nil && !(message(sheetA)?.stringValue ?? "").isEmpty
+                && field(sheetA, "Grid spacing X")?.stringValue == "1000000000",
+              "an over-maximum spacing is refused by the engine and shown in the sheet, draft preserved")
+
+        // Cancel writes nothing and closes the sheet.
+        field(sheetA, "Grid spacing X")?.stringValue = "33"
+        button(sheetA, "Close grid sheet")?.performClick(nil)
+        wait { a.window?.attachedSheet == nil }
+        spin()
+        check(a.gridSheet == nil && docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply,
+              "Cancel closes the sheet without writing anything")
+
+        // A reopened sheet re-seeds from the cache; applying the identical
+        // grid is a no-op with no undo.
+        a.configureGrid(nil)
+        let reopened = a.window?.attachedSheet
+        check(field(reopened, "Grid spacing X")?.stringValue == "20.0",
+              "a reopened sheet re-seeds its draft from the cached grid")
+        button(reopened, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 }
+        spin()
+        check(docA.undoInfo.undoCount == undoAfterApply && docA.grid.spacingX == 20,
+              "applying the identical grid is a no-op with no undo")
+        if let sheet = a.window?.attachedSheet {
+            a.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+        }
+        wait { a.window?.attachedSheet == nil }
+
+        // Undo/Redo refresh the cached grid.
+        docA.undo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 10 }
+        spin()
+        check(docA.grid.spacingX == 10, "undo refreshes the cached grid")
+        docA.redo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+        spin()
+        check(docA.grid.spacingX == 20, "redo refreshes the cached grid")
+
+        // Late close: after the sheet ended, a grid change must not
+        // reopen or update it.
+        docA.setGrid(EngineSession.Grid(style: .solid, spacingX: 15, spacingY: 10,
+                                        offsetX: 0, offsetY: 0,
+                                        foreground: .black, background: .white))
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 15 }
+        spin()
+        check(a.window?.attachedSheet == nil && a.gridSheet == nil,
+              "a late grid change does not reopen or update a closed sheet")
+        docA.undo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+
+        // Two-document ownership: A's sheet drives only docA.
+        a.configureGrid(nil)
+        b.configureGrid(nil)
+        let sheetA2 = a.window?.attachedSheet
+        field(sheetA2, "Grid spacing X")?.stringValue = "25"
+        button(sheetA2, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 25 }
+        spin()
+        check(docA.grid.spacingX == 25 && docB.grid.spacingX == 10 && docB.undoInfo.undoCount == 0,
+              "the two sheets drive their own documents independently")
+
+        // Busy: the sheet's Apply gates on cached state, but Show Grid —
+        // pure view state — stays available while the engine is busy. The
+        // gate is released on every path by the defer.
+        do {
+            let gate = DispatchSemaphore(value: 0)
+            defer { gate.signal() }
+            let held = EngineActivity.shared.perform(label: "Holding the engine for grid", work: { gate.wait() },
+                                                     completion: {})
+            check(held && button(sheetA2, "Apply grid")?.isEnabled == false,
+                  "Apply disables while the engine is busy (cached state)")
+            check(a.validateMenuItem(showGridItem), "Show Grid stays valid while the engine is busy")
+            a.toggleShowGrid(showGridItem)
+            check(a.gridViewState.showsGrid && showGridItem.state == .on && a.canvas.showsGrid,
+                  "Show Grid toggles while the engine is busy")
+            a.toggleShowGrid(showGridItem)
+            check(!a.gridViewState.showsGrid && showGridItem.state == .off,
+                  "Show Grid toggles back while the engine is busy")
+        }
+        wait { !EngineActivity.shared.isBusy }
+        spin()
+        check(button(a.window?.attachedSheet, "Apply grid")?.isEnabled == true,
+              "Apply re-enables when the engine is idle again")
+
+        // Set a known grid (solid 10/10, 0/0) through the sheet for the
+        // bitmap checks, then close the sheet.
+        let sheetA3 = a.window?.attachedSheet
+        field(sheetA3, "Grid spacing X")?.stringValue = "10"
+        popup(sheetA3, "Grid style")?.selectItem(withTitle: "Solid")
+        button(sheetA3, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 10 && docA.grid.style == .solid }
+        spin()
+        if let sheet = a.window?.attachedSheet {
+            a.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+        }
+        wait { a.window?.attachedSheet == nil }
+        for (controller, document) in [(a, docA), (b, docB)] where controller.window?.attachedSheet != nil {
+            controller.window?.endSheet(controller.window!.attachedSheet!, returnCode: .alertSecondButtonReturn)
+        }
+        wait { b.window?.attachedSheet == nil }
+
+        // View bitmap: Show Grid draws the cached grid between the image
+        // and the other overlays; toggling and re-styling change only the
+        // view, never the native pixels, dirty state or history.
+        let canvas = a.canvas
+        try canvas.renderVisibleTilesNow()
+        func bitmap() -> Data? {
+            guard let rep = canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds) else { return nil }
+            canvas.cacheDisplay(in: canvas.bounds, to: rep)
+            guard let bytes = rep.bitmapData else { return nil }
+            return Data(bytes: bytes, count: rep.bytesPerRow * rep.pixelsHigh)
+        }
+        func brightnessNear(_ x: Int, _ y: Int) -> Double? {
+            [CGPoint(x: x, y: y), CGPoint(x: x, y: y - 1), CGPoint(x: x, y: y + 1),
+             CGPoint(x: x - 1, y: y), CGPoint(x: x + 1, y: y)]
+                .compactMap { canvasBrightness(canvas, at: $0) }.min()
+        }
+        let pixelOnLine = pixel(session, imageA, x: 10, y: 5)
+        let pixelAtIntersection = pixel(session, imageA, x: 10, y: 10)
+        let dirtyBefore = docA.hasUnsavedChanges
+        let undoBeforeBitmap = docA.undoInfo
+        let bitmapOff = bitmap()
+        a.toggleShowGrid(showGridItem)
+        let bitmapOn = bitmap()
+        check(showGridItem.state == .on && canvas.showsGrid
+                && bitmapOff != nil && bitmapOn != nil && bitmapOn != bitmapOff,
+              "Show Grid changes the canvas view bitmap")
+        let onLine = brightnessNear(10, 5)   // on the vertical line x = 10
+        let offLine = brightnessNear(5, 5)   // between grid lines
+        check(onLine != nil && offLine != nil && onLine! < offLine! - 0.05,
+              "the solid grid draws its line in the view bitmap (\(String(describing: onLine)) vs \(String(describing: offLine)))")
+        check(!b.gridViewState.showsGrid && !b.canvas.showsGrid,
+              "Show Grid is cached per window: the other window stays off")
+        check(pixel(session, imageA, x: 10, y: 5) == pixelOnLine
+                && pixel(session, imageA, x: 10, y: 10) == pixelAtIntersection
+                && docA.hasUnsavedChanges == dirtyBefore && docA.undoInfo == undoBeforeBitmap,
+              "toggling Show Grid changes neither the engine pixels nor dirty state or history")
+        a.toggleShowGrid(showGridItem)
+        check(bitmap() == bitmapOff && showGridItem.state == .off,
+              "toggling Show Grid off restores the view bitmap")
+        check(pixel(session, imageA, x: 10, y: 5) == pixelOnLine,
+              "the image pixels on the grid line are identical after both toggles")
+
+        // Style differences in the view bitmap: Dots darken only the
+        // intersections, not the line between them.
+        a.configureGrid(nil)
+        let sheetA4 = a.window?.attachedSheet
+        popup(sheetA4, "Grid style")?.selectItem(withTitle: "Dots")
+        button(sheetA4, "Apply grid")?.performClick(nil)
+        wait { docA.pendingWork == 0 && docA.grid.style == .dots }
+        spin()
+        if let sheet = a.window?.attachedSheet {
+            a.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+        }
+        wait { a.window?.attachedSheet == nil }
+        a.toggleShowGrid(showGridItem)
+        let bitmapDots = bitmap()
+        check(bitmapDots != nil && bitmapDots != bitmapOn,
+              "the Dots style draws a different view bitmap than Solid")
+        let dotsOnLine = brightnessNear(10, 5)
+        let dotsAtIntersection = brightnessNear(10, 10)
+        check(dotsOnLine != nil && offLine != nil && abs(dotsOnLine! - offLine!) < 0.05,
+              "Dots leave the line between intersections untouched")
+        check(dotsAtIntersection != nil && offLine != nil && dotsAtIntersection! < offLine! - 0.05,
+              "Dots darken the intersections in the view bitmap")
+        check(pixel(session, imageA, x: 10, y: 5) == pixelOnLine
+                && pixel(session, imageA, x: 10, y: 10) == pixelAtIntersection,
+              "re-styling the grid changes no native image pixel")
+        a.toggleShowGrid(showGridItem)
+    }
+
     private static func exercisePixelRulers(_ session: EngineSession, work: URL,
                                             documents: DocumentList) throws {
         func wait(_ condition: () -> Bool) {
@@ -8585,481 +8939,6 @@ enum EngineSmokeTest {
     /// frame-arithmetic oracle and the canvas view bitmap at zoom+scroll;
     /// every commit is exactly one undo step and ghosts/cancels leave the
     /// native render pixels and history untouched.
-    private static func exerciseGuideDragging(_ session: EngineSession, work: URL,
-                                              documents: DocumentList) throws {
-        func wait(_ condition: () -> Bool) {
-            let deadline = Date().addingTimeInterval(10)
-            while !condition() && Date() < deadline { spin(0.01) }
-        }
-        // Recursive lookup that keeps the root when it matches the queried
-        // type AND still descends into its children.
-        func views<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
-            guard let root else { return [] }
-            var found: [T] = []
-            if let match = root as? T { found.append(match) }
-            for subview in root.subviews { found += views(subview, as: type) }
-            return found
-        }
-        func mouse(_ type: NSEvent.EventType, _ location: CGPoint, _ window: NSWindow,
-                   flags: NSEvent.ModifierFlags = []) -> NSEvent? {
-            NSEvent.mouseEvent(with: type, location: location, modifierFlags: flags, timestamp: 0,
-                               windowNumber: window.windowNumber, context: nil, eventNumber: 0,
-                               clickCount: 1, pressure: 1)
-        }
-        func keyEvent(_ window: NSWindow, keyCode: Int, characters: String) -> NSEvent? {
-            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
-                             windowNumber: window.windowNumber, context: nil, characters: characters,
-                             charactersIgnoringModifiers: characters, isARepeat: false, keyCode: UInt16(keyCode))
-        }
-
-        let imageA = try session.newImage(width: 400, height: 300)
-        let imageB = try session.newImage(width: 120, height: 90)
-        let docA = try ImageDocument(session: session, image: imageA, name: "Guide drag A")
-        let docB = try ImageDocument(session: session, image: imageB, name: "Guide drag B")
-        documents.items += [docA, docB]
-        let a = DocumentWindowController(document: docA)
-        let b = DocumentWindowController(document: docB)
-        a.showWindow(nil)
-        b.showWindow(nil)
-        a.window?.contentView?.layoutSubtreeIfNeeded()
-        b.window?.contentView?.layoutSubtreeIfNeeded()
-        let previousTool = ToolState.shared.current
-        defer {
-            ToolState.shared.select(previousTool)
-            for (controller, document) in [(a, docA), (b, docB)] {
-                controller.window?.close()
-                documents.items.removeAll { $0 === document }
-                document.closeImageWhenDrained()
-            }
-        }
-        guard let windowA = a.window, let windowB = b.window else {
-            return check(false, "the guide-drag windows exist")
-        }
-        let canvasA = a.canvas, canvasB = b.canvas
-        let scrollA = a.scrollView
-        func settle(_ document: ImageDocument) {
-            document.inputQueue.sync {}
-            wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
-            spin()
-        }
-        func layout() {
-            a.window?.contentView?.layoutSubtreeIfNeeded()
-            spin(0.05)
-        }
-        // An image point to its window location through the canvas's own
-        // conversion (the path the gesture handlers use).
-        func windowPoint(ofImagePoint p: CGPoint, _ canvas: EngineCanvasView) -> CGPoint {
-            canvas.convert(CGPoint(x: p.x * canvas.scale, y: p.y * canvas.scale), to: nil)
-        }
-        // Independent oracle: plain frame arithmetic down the view chain
-        // (window content -> scroll view -> clip view + scroll offset),
-        // not NSView.convert to the canvas.
-        func oracleImagePoint(_ location: CGPoint, scroll: NSScrollView, canvas: EngineCanvasView) -> CGPoint {
-            var chain: [NSView] = []
-            var current: NSView? = canvas
-            while let view = current { chain.append(view); current = view.superview }
-            var point = location
-            for view in chain.reversed() {
-                let sx = view.frame.width / view.bounds.width
-                let sy = view.frame.height / view.bounds.height
-                guard sx.isFinite, sy.isFinite, sx > 0, sy > 0 else {
-                    return CGPoint(x: Double.nan, y: Double.nan)
-                }
-                point.x = view.bounds.minX + (point.x - view.frame.minX) / sx
-                if view.isFlipped != (view.superview?.isFlipped ?? false) {
-                    point.y = view.bounds.minY + (view.frame.maxY - point.y) / sy
-                } else {
-                    point.y = view.bounds.minY + (point.y - view.frame.minY) / sy
-                }
-            }
-            return CGPoint(x: point.x / canvas.scale, y: point.y / canvas.scale)
-        }
-        // A row of the canvas's own view bitmap: does the dashed orange
-        // ghost line cross it at this image y?
-        func canvasRowShowsGhost(_ canvas: EngineCanvasView, imageY: Double) -> Bool {
-            guard let rep = canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds) else { return false }
-            canvas.cacheDisplay(in: canvas.bounds, to: rep)
-            let factor = Double(rep.pixelsWide) / Double(canvas.bounds.width)
-            let row = Int(imageY * canvas.scale * factor)
-            guard row >= 0, row < rep.pixelsHigh else { return false }
-            // A one-device-pixel antialiased line can straddle rows.
-            for y in max(0, row - 1)...min(rep.pixelsHigh - 1, row + 1) {
-                for x in stride(from: 4, to: rep.pixelsWide - 4, by: 3) {
-                    guard let c = rep.colorAt(x: x, y: y) else { continue }
-                    if c.redComponent - c.blueComponent > 0.3 && c.greenComponent - c.blueComponent > 0.1 {
-                        return true
-                    }
-                }
-            }
-            return false
-        }
-
-        guard let hRuler = scrollA.horizontalRulerView as? PixelRulerView,
-              let vRuler = scrollA.verticalRulerView as? PixelRulerView else {
-            return check(false, "the scroll view's native ruler slots hold the pixel rulers")
-        }
-        // Accessibility: meaningful labels and help on both rulers.
-        check(hRuler.accessibilityLabel() == "Horizontal ruler" && vRuler.accessibilityLabel() == "Vertical ruler",
-              "the rulers keep their accessibility labels")
-        check((hRuler.accessibilityHelp() ?? "").contains("horizontal guide")
-                && (vRuler.accessibilityHelp() ?? "").contains("vertical guide")
-                && (hRuler.accessibilityHelp() ?? "").contains("Escape"),
-              "the rulers carry help describing the drag gesture and Escape cancel")
-        // Recursive view lookup, including children when the root matches.
-        let rulersInWindow = views(windowA.contentView, as: PixelRulerView.self)
-        check(rulersInWindow.count == 2 && rulersInWindow.contains(hRuler) && rulersInWindow.contains(vRuler),
-              "a recursive lookup finds both pixel rulers in the window")
-        check(views(scrollA, as: NSView.self).count > 3 && views(scrollA, as: NSView.self).contains(scrollA),
-              "the recursive lookup includes the root itself and still descends into children")
-
-        let pixelsBefore = try session.copyPixels(imageA, merged: true).pixels
-        var undoA = docA.undoInfo.undoCount
-        let undoB = docB.undoInfo.undoCount
-
-        // MARK: Ruler drags create matching guides at the dropped image pixel
-
-        // Horizontal ruler -> horizontal guide at the drop's image y (100%).
-        let downH = mouse(.leftMouseDown, hRuler.convert(CGPoint(x: 100, y: 5), to: nil), windowA)
-        let dragH = mouse(.leftMouseDragged, windowPoint(ofImagePoint: CGPoint(x: 30, y: 118), canvasA), windowA)
-        let upH = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 30, y: 120), canvasA), windowA)
-        guard let downH, let dragH, let upH else { return check(false, "the ruler drag events build") }
-        hRuler.mouseDown(with: downH)
-        check(canvasA.guideDrag.isActive, "a press on the horizontal ruler begins a guide gesture")
-        hRuler.mouseDragged(with: dragH)
-        check(abs((canvasA.guideDrag.gesture?.position ?? .nan) - 118) < 1e-9,
-              "the ghost tracks the drag in image pixels on the guide's axis")
-        check(docA.guides.isEmpty && docA.undoInfo.undoCount == undoA && docA.pendingWork == 0,
-              "mouseDragged makes no native guide call per event (cached state only)")
-        hRuler.mouseUp(with: upH)
-        wait { docA.pendingWork == 0 && docA.guides.count == 1 }
-        spin()
-        settle(docA)
-        check(docA.guides.count == 1 && docA.guides[0].orientation == .horizontal && docA.guides[0].position == 120,
-              "a horizontal ruler drag commits one horizontal guide at the dropped image y")
-        check(docA.undoInfo.undoCount == undoA + 1, "the creation is exactly one undo step")
-        check(!canvasA.guideDrag.isActive, "the gesture is cleared after the commit")
-        undoA = docA.undoInfo.undoCount
-
-        // Vertical ruler -> vertical guide at the drop's image x (100%).
-        let downV = mouse(.leftMouseDown, vRuler.convert(CGPoint(x: 5, y: 60), to: nil), windowA)
-        let upV = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 200, y: 40), canvasA), windowA)
-        guard let downV, let upV else { return check(false, "the vertical ruler drag events build") }
-        vRuler.mouseDown(with: downV)
-        vRuler.mouseUp(with: upV)
-        wait { docA.pendingWork == 0 && docA.guides.contains(where: { $0.orientation == .vertical && $0.position == 200 }) }
-        spin()
-        settle(docA)
-        check(docA.guides.count == 2 && docA.guides.contains(where: { $0.orientation == .vertical && $0.position == 200 }),
-              "a vertical ruler drag commits one vertical guide at the dropped image x")
-        check(docA.undoInfo.undoCount == undoA + 1, "the second creation is one more undo step")
-        undoA = docA.undoInfo.undoCount
-        check(try session.copyPixels(imageA, merged: true).pixels == pixelsBefore,
-              "guide creation leaves the native render pixels unchanged")
-
-        // MARK: Zoom + scroll + backing geometry against the independent oracle
-
-        a.zoom(to: 800)
-        layout()
-        let clip = scrollA.contentView
-        clip.scroll(to: NSPoint(x: 100, y: 80))
-        layout()
-        check(abs(clip.bounds.origin.x - 100) < 1e-6 && abs(clip.bounds.origin.y - 80) < 1e-6,
-              "the zoomed fixture actually scrolls")
-        let target = CGPoint(x: 55.5, y: 150.4)
-        let targetWindow = windowPoint(ofImagePoint: target, canvasA)
-        let oracle = oracleImagePoint(targetWindow, scroll: scrollA, canvas: canvasA)
-        check(abs(oracle.x - target.x) < 1e-6 && abs(oracle.y - target.y) < 1e-6,
-              "at 800% zoom, scrolled, the independent frame-arithmetic oracle agrees with the canvas conversion (\(oracle) vs \(target))")
-
-        // MARK: View-only ghost in the canvas bitmap; Escape cancels
-
-        try canvasA.renderVisibleTilesNow()
-        let ghostDown = mouse(.leftMouseDown, hRuler.convert(CGPoint(x: 220, y: 5), to: nil), windowA)
-        let ghostDrag = mouse(.leftMouseDragged, targetWindow, windowA)
-        let ghostUp = mouse(.leftMouseUp, targetWindow, windowA)
-        guard let ghostDown, let ghostDrag, let ghostUp else { return check(false, "the ghost drag events build") }
-        hRuler.mouseDown(with: ghostDown)
-        hRuler.mouseDragged(with: ghostDrag)
-        check(canvasA.guideDrag.isActive && abs((canvasA.guideDrag.gesture?.position ?? .nan) - 150.4) < 1e-6,
-              "at 800% + scroll the ghost sits at the oracle's image y (fractional)")
-        check(canvasRowShowsGhost(canvasA, imageY: 150.4) && !canvasRowShowsGhost(canvasA, imageY: 162.4),
-              "the canvas view bitmap draws the dashed ghost line at the dragged row only")
-        check(docA.guides.count == 2 && docA.undoInfo.undoCount == undoA && docA.pendingWork == 0,
-              "the ghost changes no native metadata or history")
-        check(try session.copyPixels(imageA, merged: true).pixels == pixelsBefore,
-              "the ghost changes no native render pixels")
-        // Escape through the canvas's key handler cancels; the release then commits nothing.
-        guard let escape = keyEvent(windowA, keyCode: GuideDragLogic.escapeKeyCode, characters: "\u{1b}") else {
-            return check(false, "the Escape key event builds")
-        }
-        canvasA.keyDown(with: escape)
-        check(!canvasA.guideDrag.isActive, "Escape cancels the guide gesture and clears the ghost")
-        hRuler.mouseUp(with: ghostUp)
-        settle(docA)
-        check(docA.guides.count == 2 && docA.undoInfo.undoCount == undoA,
-              "a cancelled drag commits nothing (no guide, no undo)")
-        check(try session.copyPixels(imageA, merged: true).pixels == pixelsBefore,
-              "cancel leaves the native render pixels unchanged")
-
-        // A committed drop at a fractional image coordinate rounds to the nearest pixel.
-        let dropV = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 55.5, y: 20), canvasA), windowA)
-        let downV2 = mouse(.leftMouseDown, vRuler.convert(CGPoint(x: 5, y: 200), to: nil), windowA)
-        guard let dropV, let downV2 else { return check(false, "the zoomed ruler drag events build") }
-        vRuler.mouseDown(with: downV2)
-        vRuler.mouseUp(with: dropV)
-        wait { docA.pendingWork == 0 && docA.guides.contains(where: { $0.orientation == .vertical && $0.position == 56 }) }
-        spin()
-        settle(docA)
-        check(docA.guides.contains(where: { $0.orientation == .vertical && $0.position == 56 }),
-              "a drop at image x=55.5 at 800% commits the vertical guide at x=56 (nearest pixel)")
-        check(docA.undoInfo.undoCount == undoA + 1, "the zoomed creation is one undo step")
-        undoA = docA.undoInfo.undoCount
-
-        // MARK: Move tool: hit, move, same-position no-op, delete outside
-
-        ToolState.shared.select(.move)
-        guard let hGuide = docA.guides.first(where: { $0.orientation == .horizontal }) else {
-            return check(false, "the horizontal guide exists for the Move-tool checks")
-        }
-        let moveDown = mouse(.leftMouseDown, windowPoint(ofImagePoint: CGPoint(x: 30, y: 120), canvasA), windowA)
-        let moveDrag = mouse(.leftMouseDragged, windowPoint(ofImagePoint: CGPoint(x: 30, y: 180), canvasA), windowA)
-        let moveUp = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 30, y: 180), canvasA), windowA)
-        guard let moveDown, let moveDrag, let moveUp else { return check(false, "the move drag events build") }
-        canvasA.mouseDown(with: moveDown)
-        check(canvasA.guideDrag.isActive, "a Move-tool press on a visible guide begins a guide gesture")
-        canvasA.mouseDragged(with: moveDrag)
-        canvasA.mouseUp(with: moveUp)
-        wait { docA.pendingWork == 0 && docA.guides.first(where: { $0.id == hGuide.id })?.position == 180 }
-        spin()
-        settle(docA)
-        check(docA.guides.first(where: { $0.id == hGuide.id })?.position == 180
-                && docA.guides.first(where: { $0.id == hGuide.id })?.orientation == .horizontal,
-              "the Move tool drags the guide to y=180 keeping its identity and orientation")
-        check(docA.undoInfo.undoCount == undoA + 1, "the move is exactly one undo step")
-        undoA = docA.undoInfo.undoCount
-
-        // A release at the guide's own position keeps the native no-op: no undo.
-        let sameDown = mouse(.leftMouseDown, windowPoint(ofImagePoint: CGPoint(x: 30, y: 180), canvasA), windowA)
-        let sameUp = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 30, y: 180), canvasA), windowA)
-        guard let sameDown, let sameUp else { return check(false, "the same-position events build") }
-        canvasA.mouseDown(with: sameDown)
-        canvasA.mouseUp(with: sameUp)
-        settle(docA)
-        check(docA.guides.first(where: { $0.id == hGuide.id })?.position == 180
-                && docA.undoInfo.undoCount == undoA,
-              "a move released at the same position is the native no-op (no undo)")
-
-        // Dragging outside the image never deletes by itself; only the release does.
-        let delDown = mouse(.leftMouseDown, windowPoint(ofImagePoint: CGPoint(x: 30, y: 180), canvasA), windowA)
-        let delDrag = mouse(.leftMouseDragged, windowPoint(ofImagePoint: CGPoint(x: 30, y: -40), canvasA), windowA)
-        let delUp = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 30, y: -40), canvasA), windowA)
-        guard let delDown, let delDrag, let delUp else { return check(false, "the delete drag events build") }
-        canvasA.mouseDown(with: delDown)
-        canvasA.mouseDragged(with: delDrag)
-        check(docA.guides.contains(where: { $0.id == hGuide.id }) && docA.undoInfo.undoCount == undoA,
-              "merely moving the pointer outside the image does not remove the guide")
-        canvasA.mouseUp(with: delUp)
-        wait { docA.pendingWork == 0 && !docA.guides.contains(where: { $0.id == hGuide.id }) }
-        spin()
-        settle(docA)
-        check(!docA.guides.contains(where: { $0.id == hGuide.id }) && docA.undoInfo.undoCount == undoA + 1,
-              "an intentional release outside the image removes the existing guide (one undo step)")
-        undoA = docA.undoInfo.undoCount
-
-        // An ordinary Move-tool drag away from any guide still moves the layer.
-        let layerBefore = docA.layers.first(where: { $0.id == docA.activeLayer })?.bounds
-        let ordDown = mouse(.leftMouseDown, windowPoint(ofImagePoint: CGPoint(x: 300, y: 250), canvasA), windowA)
-        let ordDrag = mouse(.leftMouseDragged, windowPoint(ofImagePoint: CGPoint(x: 320, y: 260), canvasA), windowA)
-        let ordUp = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 320, y: 260), canvasA), windowA)
-        guard let ordDown, let ordDrag, let ordUp, let layerBefore else {
-            return check(false, "the ordinary move drag events build")
-        }
-        canvasA.mouseDown(with: ordDown)
-        check(!canvasA.guideDrag.isActive, "a Move-tool press away from guides starts the ordinary layer move")
-        canvasA.mouseDragged(with: ordDrag)
-        canvasA.mouseUp(with: ordUp)
-        settle(docA)
-        let layerAfter = docA.layers.first(where: { $0.id == docA.activeLayer })?.bounds
-        check(layerAfter != nil && abs(layerAfter!.minX - (layerBefore.minX + 20)) < 1e-6
-                && abs(layerAfter!.minY - (layerBefore.minY + 10)) < 1e-6,
-              "the ordinary Move-tool drag still moves the active layer by the dragged delta")
-        undoA = docA.undoInfo.undoCount
-
-
-        // MARK: Hidden guides are not hit; hidden rulers cannot start a drag
-
-        let guidesItem = NSMenuItem(title: "Show Guides",
-                                    action: #selector(DocumentWindowController.toggleShowGuides(_:)), keyEquivalent: "")
-        a.toggleShowGuides(guidesItem)
-        check(!canvasA.showsGuides, "Show Guides toggles the overlay off")
-        let hiddenDown = mouse(.leftMouseDown, windowPoint(ofImagePoint: CGPoint(x: 200, y: 50), canvasA), windowA)
-        let hiddenUp = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 200, y: 50), canvasA), windowA)
-        guard let hiddenDown, let hiddenUp else { return check(false, "the hidden-guide events build") }
-        canvasA.mouseDown(with: hiddenDown)
-        check(!canvasA.guideDrag.isActive, "a hidden guide cannot be grabbed by the Move tool")
-        canvasA.mouseUp(with: hiddenUp)
-        a.toggleShowGuides(guidesItem)
-        settle(docA)
-        check(docA.undoInfo.undoCount == undoA, "the hidden-guide click changed nothing")
-
-        let rulersItem = NSMenuItem(title: "Show Rulers",
-                                    action: #selector(DocumentWindowController.toggleShowRulers(_:)), keyEquivalent: "")
-        a.toggleShowRulers(rulersItem)
-        check(!scrollA.rulersVisible, "Show Rulers toggles the native slots off")
-        let hiddenRulerDown = mouse(.leftMouseDown, hRuler.convert(CGPoint(x: 100, y: 5), to: nil), windowA)
-        let hiddenRulerUp = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 30, y: 90), canvasA), windowA)
-        guard let hiddenRulerDown, let hiddenRulerUp else { return check(false, "the hidden-ruler events build") }
-        hRuler.mouseDown(with: hiddenRulerDown)
-        check(!canvasA.guideDrag.isActive, "hidden rulers cannot begin a new guide drag")
-        hRuler.mouseUp(with: hiddenRulerUp)
-        settle(docA)
-        check(docA.guides.count == 2 && docA.undoInfo.undoCount == undoA,
-              "the hidden-ruler drag committed nothing")
-        a.toggleShowRulers(rulersItem)
-        layout()
-
-        // MARK: Engine-busy guard (cached state; the gate releases on all paths)
-
-        do {
-            let gate = DispatchSemaphore(value: 0)
-            defer { gate.signal() }
-            let held = EngineActivity.shared.perform(label: "Holding the engine for guide drag",
-                                                     work: { gate.wait() }, completion: {})
-            check(held, "the engine can be held busy")
-            if held {
-                let busyDown = mouse(.leftMouseDown, hRuler.convert(CGPoint(x: 100, y: 5), to: nil), windowA)
-                let busyUp = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 30, y: 90), canvasA), windowA)
-                if let busyDown, let busyUp {
-                    hRuler.mouseDown(with: busyDown)
-                    check(!canvasA.guideDrag.isActive, "a ruler press while the engine is busy starts no gesture")
-                    hRuler.mouseUp(with: busyUp)
-                } else {
-                    check(false, "the busy-guard events build")
-                }
-            }
-            gate.signal()
-            wait { !EngineActivity.shared.isBusy }
-            spin(0.05)
-            settle(docA)
-            check(docA.guides.count == 2 && docA.undoInfo.undoCount == undoA,
-                  "the busy ruler drag committed nothing and added no undo")
-        }
-
-        // MARK: Tool change cancels mid-drag
-
-        let cancelDown = mouse(.leftMouseDown, hRuler.convert(CGPoint(x: 100, y: 5), to: nil), windowA)
-        let cancelUp = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 30, y: 90), canvasA), windowA)
-        guard let cancelDown, let cancelUp else { return check(false, "the tool-change events build") }
-        hRuler.mouseDown(with: cancelDown)
-        check(canvasA.guideDrag.isActive, "the gesture is active before the tool change")
-        ToolState.shared.select(.crop)
-        check(!canvasA.guideDrag.isActive, "a tool change cancels the guide gesture and clears the ghost")
-        hRuler.mouseUp(with: cancelUp)
-        ToolState.shared.select(.move)
-        settle(docA)
-        check(docA.guides.count == 2 && docA.undoInfo.undoCount == undoA,
-              "the tool-change-cancelled drag committed nothing")
-
-        // MARK: Per-document isolation: the gesture cannot be redirected
-
-        let isoDown = mouse(.leftMouseDown, hRuler.convert(CGPoint(x: 100, y: 5), to: nil), windowA)
-        guard let isoDown else { return check(false, "the isolation press builds") }
-        hRuler.mouseDown(with: isoDown)
-        check(canvasA.guideDrag.isActive, "window A's gesture is active")
-        // Events delivered to window B's ruler must not touch A's gesture or B's document.
-        let scrollB = b.scrollView
-        guard let vRulerB = scrollB.verticalRulerView as? PixelRulerView else {
-            return check(false, "window B's vertical ruler exists")
-        }
-        let foreignDrag = mouse(.leftMouseDragged, windowPoint(ofImagePoint: CGPoint(x: 20, y: 20), canvasB), windowB)
-        let foreignUp = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 20, y: 20), canvasB), windowB)
-        if let foreignDrag, let foreignUp {
-            vRulerB.mouseDragged(with: foreignDrag)
-            vRulerB.mouseUp(with: foreignUp)
-        } else {
-            check(false, "the foreign events build")
-        }
-        check(canvasA.guideDrag.isActive && docA.guides.count == 2 && docB.guides.isEmpty
-                && docA.undoInfo.undoCount == undoA && docB.undoInfo.undoCount == undoB,
-              "another window's ruler events neither redirect nor commit the gesture")
-        let isoUp = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 60, y: 90), canvasA), windowA)
-        guard let isoUp else { return check(false, "the isolation release builds") }
-        hRuler.mouseUp(with: isoUp)
-        wait { docA.pendingWork == 0 && docA.guides.contains(where: { $0.orientation == .horizontal && $0.position == 90 }) }
-        spin()
-        settle(docA)
-        settle(docB)
-        check(docA.guides.contains(where: { $0.orientation == .horizontal && $0.position == 90 })
-                && docA.undoInfo.undoCount == undoA + 1 && docB.guides.isEmpty && docB.undoInfo.undoCount == undoB,
-              "the release commits only to the gesture's own document and window")
-        undoA = docA.undoInfo.undoCount
-
-        // MARK: Exactly one-step Undo/Redo of a dragged-in guide
-
-        docA.undo()
-        wait { docA.pendingWork == 0 && !docA.guides.contains(where: { $0.orientation == .horizontal && $0.position == 90 }) }
-        spin()
-        settle(docA)
-        check(!docA.guides.contains(where: { $0.orientation == .horizontal && $0.position == 90 })
-                && docA.undoInfo.undoCount == undoA - 1,
-              "Undo removes the dragged-in guide as one step")
-        docA.redo()
-        wait { docA.pendingWork == 0 && docA.guides.contains(where: { $0.orientation == .horizontal && $0.position == 90 }) }
-        spin()
-        settle(docA)
-        check(docA.guides.contains(where: { $0.orientation == .horizontal && $0.position == 90 })
-                && docA.undoInfo.undoCount == undoA,
-              "Redo restores it at the dragged position as one step")
-
-        // A drop outside the perpendicular edge is outside the image,
-        // even when the guide's own axis coordinate is valid.
-        let outsideCount = docA.guides.count
-        let outsideUndo = docA.undoInfo.undoCount
-        if let down = mouse(.leftMouseDown, hRuler.convert(CGPoint(x: 100, y: 5), to: nil), windowA),
-           let up = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: -40, y: 60), canvasA), windowA) {
-            hRuler.mouseDown(with: down)
-            hRuler.mouseUp(with: up)
-            settle(docA)
-            check(docA.guides.count == outsideCount && docA.undoInfo.undoCount == outsideUndo,
-                  "a new horizontal guide dropped past the image's left edge cancels")
-            if docA.guides.count != outsideCount { docA.undo(); settle(docA) }
-        } else { check(false, "the perpendicular outside-drop events build") }
-
-        if let existing = docA.guides.first(where: { $0.orientation == .horizontal && $0.position == 90 }),
-           let down = mouse(.leftMouseDown, windowPoint(ofImagePoint: CGPoint(x: 30, y: 90), canvasA), windowA),
-           let up = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: -40, y: 90), canvasA), windowA) {
-            let before = docA.undoInfo.undoCount
-            canvasA.mouseDown(with: down)
-            canvasA.mouseUp(with: up)
-            settle(docA)
-            check(!docA.guides.contains(where: { $0.id == existing.id }) && docA.undoInfo.undoCount == before + 1,
-                  "an existing horizontal guide dropped past the image's left edge is removed in one step")
-            docA.undo(); settle(docA)
-        } else { check(false, "the existing guide perpendicular-drop fixture exists") }
-
-        // MARK: Window close cancels; late events are ignored
-
-        let closeDown = mouse(.leftMouseDown, hRuler.convert(CGPoint(x: 100, y: 5), to: nil), windowA)
-        guard let closeDown else { return check(false, "the close-test press builds") }
-        hRuler.mouseDown(with: closeDown)
-        check(canvasA.guideDrag.isActive, "the gesture is active before the close")
-        let guidesAtClose = docA.guides
-        let undoAtClose = docA.undoInfo.undoCount
-        a.window?.close()
-        spin(0.2)
-        check(!canvasA.guideDrag.isActive, "window close cancels the gesture and clears the ghost")
-        // Late events after the close are ignored: no commit, no mutation.
-        let lateDrag = mouse(.leftMouseDragged, windowPoint(ofImagePoint: CGPoint(x: 30, y: 70), canvasA), windowA)
-        let lateUp = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 30, y: 70), canvasA), windowA)
-        if let lateDrag, let lateUp {
-            hRuler.mouseDragged(with: lateDrag)
-            hRuler.mouseUp(with: lateUp)
-        }
-        settle(docA)
-        check(docA.guides == guidesAtClose && docA.undoInfo.undoCount == undoAtClose,
-              "late closed-window events are ignored: no guide action, no history change")
-    }
-
     private static func exerciseCanvasOverlays(_ session: EngineSession, documents: DocumentList) throws {
         let image = try session.newImage(width: 48, height: 32)
         guard let layer = try session.layers(image).first?.id else {
@@ -9721,6 +9600,274 @@ enum EngineSmokeTest {
         check(accepted && errors.count == baseline + 1 && document.pendingWork == 0,
               "busy admission refuses Rasterize before queueing input")
         settle()
+    }
+
+    /// Layer ▸ Rasterize Layer… / Restore Layer Source…: menu wiring and
+    /// cached gating, the per-window confirmation sheets (Cancel changes
+    /// nothing, Apply runs on the captured document and explicit layer
+    /// id), the counted explicit-id document methods, the exclusive
+    /// restore with its global input drain, BUSY refusal, stale-id
+    /// NOT_FOUND and late-close safety. Pixel and kind oracles read the
+    /// session directly, never the document cache; sheet buttons are
+    /// queried by their accessibility labels.
+    private static func exerciseLayerSourceControls(_ session: EngineSession, work: URL,
+                                                    documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(15)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func buttons(in view: NSView?) -> [NSButton] {
+            guard let view else { return [] }
+            if let button = view as? NSButton { return [button] }
+            return view.subviews.flatMap { buttons(in: $0) }
+        }
+        func alertButton(_ sheet: NSWindow?, _ label: String) -> NSButton? {
+            buttons(in: sheet?.contentView).first { $0.accessibilityLabel() == label }
+        }
+        func endSheet(_ controller: DocumentWindowController, _ response: NSApplication.ModalResponse) {
+            wait { controller.window?.attachedSheet != nil }
+            if let sheet = controller.window?.attachedSheet {
+                NSApp.endSheet(sheet, returnCode: response.rawValue)
+            }
+        }
+
+        // Document A holds a genuine text layer plus a plain pixel layer;
+        // document B only witnesses the global drain.
+        let imageA = try session.newImage(width: 96, height: 64)
+        let pixelLayer = try session.layerCommand(.new, image: imageA) ?? 0
+        let text = try session.addTextLayer(image: imageA, text: "Source", settings: .init(),
+                                            at: CGPoint(x: 4, y: 4))
+        try session.selectLayer(text, image: imageA)
+        let docA = try ImageDocument(session: session, image: imageA, name: "Source A")
+        let imageB = try session.newImage(width: 64, height: 64)
+        let docB = try ImageDocument(session: session, image: imageB, name: "Source B")
+        documents.items += [docA, docB]
+        let a = DocumentWindowController(document: docA)
+        let b = DocumentWindowController(document: docB)
+        a.showWindow(nil)
+        b.showWindow(nil)
+        var errors: [String] = []
+        docA.onError = { errors.append($0) }
+        docB.onError = { errors.append($0) }
+        func settle() {
+            docA.inputQueue.sync {}
+            docB.inputQueue.sync {}
+            wait { docA.pendingWork == 0 && docB.pendingWork == 0 && !EngineActivity.shared.isBusy }
+            spin()
+        }
+        defer {
+            for (controller, document) in [(a, docA), (b, docB)] {
+                if let sheet = controller.window?.attachedSheet {
+                    NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertSecondButtonReturn.rawValue)
+                }
+                controller.window?.close()
+                documents.items.removeAll { $0 === document }
+                document.closeImageWhenDrained()
+            }
+            wait { (try? session.info(imageA)) == nil && (try? session.info(imageB)) == nil }
+        }
+
+        // Menu wiring: both commands sit on the Layer menu, on the
+        // document window's own sheet selectors.
+        let mainMenu = MainMenu.make()
+        let layerMenu = mainMenu.items.first { $0.title == "Layer" }?.submenu
+        let rasterizeItem = NSMenuItem(title: "Rasterize Layer…",
+                                       action: #selector(DocumentWindowController.rasterizeLayer(_:)),
+                                       keyEquivalent: "")
+        let restoreItem = NSMenuItem(title: "Restore Layer Source…",
+                                     action: #selector(DocumentWindowController.restoreLayerSource(_:)),
+                                     keyEquivalent: "")
+        check(layerMenu?.items.first { $0.title == "Rasterize Layer…" }?.action
+                == #selector(DocumentWindowController.rasterizeLayer(_:))
+                && layerMenu?.items.first { $0.title == "Restore Layer Source…" }?.action
+                == #selector(DocumentWindowController.restoreLayerSource(_:)),
+              "the Layer menu lists Rasterize Layer… and Restore Layer Source… on the document's selectors")
+
+        let editable = EngineSession.LayerSource(kind: .text, isRasterized: false, hasSource: true)
+        let rasterized = EngineSession.LayerSource(kind: .text, isRasterized: true, hasSource: true)
+        check(docA.layerSources[text] == editable && docA.activeLayer == text,
+              "the text layer starts editable with its source retained")
+
+        // The ordinary unconfirmed restore route still refuses.
+        let bErrors0 = errors.count
+        docB.layerCommand(.restoreSource)
+        check(errors.count == bErrors0 + 1 && docB.pendingWork == 0,
+              "layerCommand(.restoreSource) still refuses unconfirmed calls")
+
+        // Cached gating: an editable text layer offers Rasterize only.
+        check(a.validateMenuItem(rasterizeItem) && !a.validateMenuItem(restoreItem),
+              "an editable text layer offers Rasterize only")
+        docA.selectLayer(pixelLayer)
+        settle()
+        check(!a.validateMenuItem(rasterizeItem) && !a.validateMenuItem(restoreItem),
+              "an ordinary pixel layer offers neither source command")
+        docA.selectLayer(text)
+        settle()
+        check(a.validateMenuItem(rasterizeItem) && !a.validateMenuItem(restoreItem),
+              "selecting the text layer again offers Rasterize only")
+        // An effective pixel lock (own or inherited) disables the item.
+        docA.setLayerLocks(text, .pixels, to: true)
+        settle()
+        try docA.reload()
+        check(!a.validateMenuItem(rasterizeItem), "a pixel-locked text layer disables Rasterize")
+        docA.setLayerLocks(text, .pixels, to: false)
+        settle()
+        try docA.reload()
+        check(a.validateMenuItem(rasterizeItem), "unlocking re-enables Rasterize")
+
+        // Sheet Cancel changes nothing; the sheet's buttons are found by
+        // their accessibility labels, and both items disable while it is
+        // attached.
+        let undo0 = docA.undoInfo.undoCount
+        let pixels0 = try session.copyPixels(imageA, merged: true).pixels
+        a.rasterizeLayer(nil)
+        wait { a.window?.attachedSheet != nil }
+        let cancelSheet = a.window?.attachedSheet
+        check(alertButton(cancelSheet, "Rasterize") != nil && alertButton(cancelSheet, "Cancel") != nil,
+              "the rasterize sheet offers labeled Rasterize and Cancel buttons")
+        check(!a.validateMenuItem(rasterizeItem) && !a.validateMenuItem(restoreItem),
+              "both source items disable while the sheet is attached")
+        if let cancelSheet {
+            NSApp.endSheet(cancelSheet, returnCode: NSApplication.ModalResponse.alertSecondButtonReturn.rawValue)
+        }
+        spin(0.15)
+        check(docA.pendingWork == 0 && docA.undoInfo.undoCount == undo0
+                && docA.layerSources[text] == editable
+                && (try? session.copyPixels(imageA, merged: true).pixels) == pixels0,
+              "the rasterize sheet's Cancel queues nothing and changes nothing")
+
+        // Sheet Apply rasterizes only the captured explicit id: the
+        // selection is retargeted to the pixel layer while the sheet is
+        // up, and the other document stays untouched.
+        let bLayersBefore = try session.layers(imageB)
+        let bPixelsBefore = try session.copyPixels(imageB, merged: true).pixels
+        a.rasterizeLayer(nil)
+        wait { a.window?.attachedSheet != nil }
+        docA.selectLayer(pixelLayer)
+        settle()
+        check(docA.activeLayer == pixelLayer, "the selection retargets while the sheet is up")
+        endSheet(a, .alertFirstButtonReturn)
+        wait { docA.layerSources[text]?.isRasterized == true && docA.pendingWork == 0 }
+        settle()
+        check(docA.undoInfo.undoCount == undo0 + 1, "Rasterize Apply is one undo step")
+        check(docA.layerSources[text] == rasterized
+                && docA.layers.first(where: { $0.id == text })?.kind == .pixel
+                && (try? session.layerSource(text, image: imageA)) == rasterized,
+              "Apply updates the cached kind and the session oracle agrees")
+        check(docA.layerSources[pixelLayer] == .init(kind: .pixel, isRasterized: false, hasSource: false)
+                && docA.activeLayer == pixelLayer
+                && docA.layers.first(where: { $0.id == pixelLayer })?.kind == .pixel
+                && (try? session.layers(imageB)) == bLayersBefore
+                && (try? session.copyPixels(imageB, merged: true).pixels) == bPixelsBefore,
+              "retarget-before-Apply and the second document stay untouched")
+        docA.selectLayer(text)
+        settle()
+        check(!a.validateMenuItem(rasterizeItem) && a.validateMenuItem(restoreItem),
+              "after rasterize the gating flips: Restore offered, Rasterize not")
+        let sourcePixels = try session.copyPixels(imageA, merged: true).pixels
+        check(sourcePixels == pixels0, "rasterizing keeps the pixels identical")
+
+        // A pixel stroke on the rasterized layer, as one undo step.
+        docA.selectLayer(text)
+        settle()
+        let undoBeforeStroke = docA.undoInfo.undoCount
+        docA.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
+        docA.endStroke()
+        settle()
+        let paintedPixels = try session.copyPixels(imageA, merged: true).pixels
+        check(docA.undoInfo.undoCount == undoBeforeStroke + 1 && paintedPixels != sourcePixels,
+              "a stroke paints on the rasterized layer as one undo step")
+
+        // BUSY refusal: while a controlled pause holds the engine-wide
+        // gate, the explicit restore refuses before queueing, reports,
+        // and the menu item disables.
+        let gate = DispatchSemaphore(value: 0)
+        let held = EngineActivity.shared.perform(label: "Source controls hold", work: { gate.wait() },
+                                                 completion: {})
+        check(held && EngineActivity.shared.isBusy, "the controlled pause holds the engine-wide gate")
+        var busyResult: Result<Void, Error>?
+        let busyErrors = errors.count
+        docA.restoreLayerSource(text) { busyResult = $0 }
+        if case .failure(ImageDocument.DocumentError.busy) = busyResult {
+            check(docA.pendingWork == 0 && errors.count == busyErrors + 1,
+                  "a busy restore refuses without queueing and reports busy")
+        } else {
+            check(false, "a busy restore refuses with busy (got \(String(describing: busyResult)))")
+        }
+        check(!a.validateMenuItem(restoreItem), "the Restore item disables while the engine is busy")
+        gate.signal()
+        wait { !EngineActivity.shared.isBusy }
+        settle()
+
+        // The restore sheet's Cancel also changes nothing.
+        a.restoreLayerSource(nil)
+        wait { a.window?.attachedSheet != nil }
+        check(alertButton(a.window?.attachedSheet, "Restore") != nil
+                && alertButton(a.window?.attachedSheet, "Cancel") != nil,
+              "the restore sheet offers labeled Restore and Cancel buttons")
+        endSheet(a, .alertSecondButtonReturn)
+        spin(0.15)
+        check(docA.pendingWork == 0 && docA.layerSources[text] == rasterized
+                && docA.undoInfo.undoCount == undoBeforeStroke + 1,
+              "the restore sheet's Cancel queues nothing")
+
+        // Accepted input in the other document drains before the restore
+        // runs; the admitted restore stays counted until its completion.
+        docB.beginStroke(at: .init(x: 20, y: 20, pressure: 1))
+        docB.endStroke()
+        var restoreResult: Result<Void, Error>?
+        let undoBeforeRestore = docA.undoInfo.undoCount
+        docA.restoreLayerSource(text) { restoreResult = $0 }
+        check(docA.pendingWork == 1, "the admitted restore is counted in pendingWork until completion")
+        wait { restoreResult != nil && docA.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        settle()
+        if case .failure(let error) = restoreResult { check(false, "restore failed: \(error)") }
+        check(docA.undoInfo.undoCount == undoBeforeRestore + 1, "Restore is one undo step")
+        check(try session.copyPixels(imageA, merged: true).pixels == sourcePixels,
+              "Restore after a pixel stroke gives the exact source pixels")
+        check(docA.layerSources[text] == editable
+                && docA.layers.first(where: { $0.id == text })?.kind == .text
+                && (try? session.layerSource(text, image: imageA)) == editable,
+              "Restore refreshes the cached kind to editable text")
+        check((pixel(session, imageB, x: 20, y: 20)?.first ?? 255) < 128,
+              "input accepted in the other document drained before the restore ran")
+
+        // Undo brings the painted pixels back.
+        docA.undo()
+        settle()
+        check(try session.copyPixels(imageA, merged: true).pixels == paintedPixels
+                && docA.layerSources[text] == rasterized,
+              "undo restores the painted pixels and the rasterized cache")
+
+        // A deleted/stale explicit id reaches native NOT_FOUND and is
+        // never retargeted.
+        let errorsBeforeStale = errors.count
+        var staleResult: Result<Void, Error>?
+        docA.rasterizeLayerSource(424242) { staleResult = $0 }
+        wait { staleResult != nil && docA.pendingWork == 0 }
+        if case .failure(let error as EngineSession.EngineError) = staleResult {
+            check(error.isNotFound, "a stale explicit id reports native NOT_FOUND")
+        } else {
+            check(false, "a stale explicit id fails with NOT_FOUND (got \(String(describing: staleResult)))")
+        }
+        check(errors.count == errorsBeforeStale + 1 && docA.layerSources[text] == rasterized,
+              "the stale id changed nothing, was reported, and never retargeted")
+
+        // Late-close safety: a sheet still up when the document begins
+        // closing queues nothing on Apply.
+        a.restoreLayerSource(nil)
+        wait { a.window?.attachedSheet != nil }
+        var closedA = false
+        docA.closeImageWhenDrained { closedA = true }
+        let errorsBeforeLateApply = errors.count
+        endSheet(a, .alertFirstButtonReturn)
+        spin(0.2)
+        check(docA.pendingWork == 0 && errors.count == errorsBeforeLateApply,
+              "a late Apply after close queues nothing and reports nothing")
+        wait { closedA }
+        check(closedA && (try? session.info(imageA)) == nil,
+              "the late-closed document drained and its image is gone")
+        documents.items.removeAll { $0 === docA }
     }
 
     private static func exerciseGuideCache(_ session: EngineSession, documents: DocumentList) throws {
