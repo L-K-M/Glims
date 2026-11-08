@@ -135,6 +135,16 @@ component_changed (GimpImage       *image,
   glims_emit (open->engine, GLIMS_EVENT_CHANNELS_CHANGED, image, NULL, NULL);
 }
 
+/* "guide-added", "guide-removed" and "guide-moved" each carry the one
+ * GimpGuide; the event reports only the image — re-read image_guides. */
+static void
+guide_changed (GimpImage      *image,
+               GimpGuide      *guide,
+               GlimsOpenImage *open)
+{
+  glims_emit (open->engine, GLIMS_EVENT_GUIDES, image, NULL, NULL);
+}
+
 GlimsStatus
 glims_adopt_image (GlimsEngine  *engine,
                    GimpImage    *image,
@@ -164,6 +174,12 @@ glims_adopt_image (GlimsEngine  *engine,
     g_signal_connect (image, "component-visibility-changed", G_CALLBACK (component_changed), open);
   open->quick_mask_changed_handler =
     g_signal_connect (image, "quick-mask-changed", G_CALLBACK (channels_changed), open);
+  open->guide_added_handler =
+    g_signal_connect (image, "guide-added", G_CALLBACK (guide_changed), open);
+  open->guide_removed_handler =
+    g_signal_connect (image, "guide-removed", G_CALLBACK (guide_changed), open);
+  open->guide_moved_handler =
+    g_signal_connect (image, "guide-moved", G_CALLBACK (guide_changed), open);
 
   g_hash_table_insert (engine->images, GINT_TO_POINTER (gimp_image_get_id (image)), open);
 

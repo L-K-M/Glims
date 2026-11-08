@@ -1560,6 +1560,79 @@ the regression instead requires refusal with pixels and undo unchanged.
 Perceptual RGB and Lab rendering remain available. No upstream source was
 modified.
 
+### Native image guides (2026-11-08)
+
+Backend-and-cache slice on `feat/native-guides`: no canvas, ruler, menu
+or chooser UI. Three append-only facade slots follow the canonical
+footer (`gradient_resource`): `image_guides` (rows/capacity/count),
+`guide_put` (`id` 0 creates at `orientation`/`position`, nonzero moves
+an existing ordinary guide) and `guide_remove`. Own
+`GlimsGuideOrientation` (HORIZONTAL=1, VERTICAL=2) mapped to
+`GIMP_ORIENTATION_HORIZONTAL`/`VERTICAL`, own int32 `GlimsGuideID` (the
+engine's GimpAuxItem id) and `GlimsGuideInfo`; no native enum value or
+pointer crosses the facade. Verified identical across the pinned
+GIMP_3_2_8 and GIMP_3_0_8 trees: `gimp_image_add_hguide`/`add_vguide`/
+`move_guide`/`remove_guide`/`get_guides`/`get_guide`,
+`gimp_guide_get_orientation`/`get_position`/`is_custom`,
+`gimp_aux_item_get_id`, and the `guide-added`/`guide-removed`/
+`guide-moved` signals, each with one `GIMP_TYPE_GUIDE` parameter (also
+asserted by `check_engine_interface`).
+
+Every put/remove validates struct, orientation, id and position
+(0 ... image height horizontal, 0 ... image width vertical) plus
+`glims_edit_ready` before any mutation — stroke, filter session and
+plug-in report BUSY. A nonzero `id` must resolve through
+`gimp_image_get_guide` to a non-custom guide of this image: stale,
+foreign, custom tool-owned and never-issued ids are NOT_FOUND, and a
+put whose orientation differs from the guide's own is refused rather
+than reoriented. A same-position move is a no-op that pushes no undo.
+Each applied change is exactly one native undo step ("Add
+Horizontal/Vertical Guide", "Move Guide", "Remove Guide"); undo/redo
+restore position and orientation through the same guide object and id.
+Guide edits are metadata: pixels and the selection are untouched and
+pixel locks do not refuse. `image_guides` lists ordinary guides only —
+`gimp_guide_is_custom` rows are skipped — and is a plain read.
+A new `GLIMS_EVENT_GUIDES` (= 9) fires for all three signals on every
+adopted image, disconnected in `open_image_free`; it carries only the
+image id, never the native pointer.
+
+Session side: `EngineSession.GuideOrientation`, `Guide`, `guides(_:)`,
+`putGuide(_:image:)`, `removeGuide(_:image:)` and a `guidesChanged`
+event; `ImageDocument` caches `guides` in `reload`, refreshes the list
+alone through the deferred `PendingRefresh.guides` kind (one re-read
+per busy period, never synchronously in an event or menu validation)
+and queues `addGuide`/`moveGuide`/`removeGuide` edits on the input
+queue. The C facade gained an event kind, so engine-adapter and app
+must be rebuilt together — an older app simply never receives kind 9.
+
+Facade-only conformance adds `test_guides`: both axes and boundary
+positions; create/move/remove with undo/redo; the same-position no-op;
+rendered pixels and selection bounds byte-identical across guide
+changes; XCF save/reopen compared by (orientation, position) sets
+rather than runtime ids; invalid orientation/position/id/struct
+refusals; unknown, foreign, stale and closed-image NOT_FOUND; BUSY
+under an open stroke with reads still allowed; and GUIDES event
+delivery. `swift build` and `swift build --build-tests` pass. With the
+shared-lock grant, private-adapter-root conformance runs pass on both
+pinned engines (`build-adapter.sh --test` with
+`GLIMS_ADAPTER_ROOT=$PWD/.build/engine-adapters`): all checks green on
+GIMP_3_2_8 and GIMP_3_0_8, including the full `test_guides` block. The
+first 3.2.8 run caught one test-expectation error — undo of a removal
+restores the position the guide was removed at (65), not an earlier
+one — fixed in the test, not the adapter. Custom-guide exclusion has
+no facade-reachable creation path, so it is covered by the `is_custom`
+filter in code and code review only.
+
+Integration validation after the layer-boundary commands merged: native
+conformance passes 1,212 / 1,117 / 1,212 / 1,212 checks on GIMP 3.2.8,
+3.0.8, 3.2.0 and master. The compiled `native-guides` interface scenario
+passes ten checks on each engine: queued creation/move/removal, undo,
+unchanged rendered pixels, busy refusal, deferred cache refresh while
+the input worker is occupied, and close completion. All 369 unit tests
+passed before the unrelated layer-boundary integration; the combined
+Guides interface will receive its own unit and window checks. The
+independent backend review found no important issues.
+
 ### Fill pattern source (2026-11-08)
 
 Interface slice on `feat/pattern-chooser`, frontend only: Edit ▸ Fill…

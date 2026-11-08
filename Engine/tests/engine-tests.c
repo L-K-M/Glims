@@ -36,6 +36,7 @@ static atomic_bool           progress_active;
 static atomic_int            selection_events;
 static atomic_int            size_events;
 static atomic_int            channels_events;
+static atomic_int            guide_events;
 
 #define CHECK(condition, ...)                       \
   do {                                              \
@@ -74,6 +75,8 @@ on_event (void *context, const GlimsEvent *event)
     atomic_fetch_add (&selection_events, 1);
   else if (event->kind == GLIMS_EVENT_CHANNELS_CHANGED)
     atomic_fetch_add (&channels_events, 1);
+  else if (event->kind == GLIMS_EVENT_GUIDES)
+    atomic_fetch_add (&guide_events, 1);
   else if (event->kind == GLIMS_EVENT_PROGRESS)
     {
       if (event->active && ! atomic_exchange (&progress_active, true))
@@ -7774,6 +7777,283 @@ test_resource_gradient (void)
   api->image_close (engine, image);
 }
 
+static int32_t
+guide_count (GlimsImageID image)
+{
+  int32_t count = -1;
+
+  api->image_guides (engine, image, NULL, 0, &count);
+  return count;
+}
+
+/* All ordinary guides, sorted by (orientation, position) so a reloaded
+ * image compares equal although its guide ids changed. `n` receives the
+ * count; the buffer must hold at least 64 rows. */
+static int32_t
+guides_sorted (GlimsImageID image, GlimsGuideInfo rows[64])
+{
+  int32_t count = 0, i, j;
+
+  if (api->image_guides (engine, image, rows, 64, &count) != GLIMS_STATUS_OK)
+    return -1;
+  for (i = 1; i < MIN (count, 64); i++)
+    for (j = i; j > 0 && (rows[j - 1].orientation > rows[j].orientation ||
+                          (rows[j - 1].orientation == rows[j].orientation &&
+                           rows[j - 1].position > rows[j].position)); j--)
+      {
+        GlimsGuideInfo swap = rows[j];
+        rows[j] = rows[j - 1];
+        rows[j - 1] = swap;
+      }
+  return count;
+}
+
+static int
+find_guide (GlimsImageID image, GlimsGuideID id, GlimsGuideInfo *out)
+{
+  GlimsGuideInfo rows[64];
+  int32_t        count, i;
+
+  count = guides_sorted (image, rows);
+  for (i = 0; i < MIN (count, 64); i++)
+    if (rows[i].id == id)
+      {
+        if (out)
+          *out = rows[i];
+        return 1;
+      }
+  return 0;
+}
+
+static void
+test_guides (const char *work)
+{
+  GlimsImageID       image = 0, other = 0, reopened = 0;
+  GlimsItemID        layer;
+  GlimsGuideInfo     row, rows[64], saved[64];
+  GlimsGuideID       h = 0, v = 0, other_guide = 0;
+  GlimsStatus        status;
+  int32_t            count = 0, before, saved_count, i;
+  int                events = atomic_load (&guide_events);
+  GlimsRect          bounds, before_bounds;
+  bool               empty = true;
+  uint8_t           *pixels_before = NULL, *pixels_after = NULL;
+  int32_t            pw = 0, ph = 0, aw = 0, ah = 0;
+  char               path[1100];
+  char              *error = NULL;
+  GlimsStrokeID      stroke = 0;
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+  GlimsStrokePoint   first = { 5, 5, 1.0, 0.0, 0.0, 0 };
+
+  api->image_new (engine, 100, 80, &image, NULL);
+  layer = first_layer (image);
+
+  CHECK (guide_count (image) == 0, "a new image has no guides");
+  CHECK (api->image_guides (engine, image, rows, 4, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a missing count is refused");
+  CHECK (api->image_guides (engine, image, rows, -1, &count) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a negative capacity is refused");
+  CHECK (api->image_guides (engine, image, NULL, 4, &count) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "missing rows with a positive capacity is refused");
+  CHECK (api->image_guides (engine, image, rows, 4, &count) == GLIMS_STATUS_OK && count == 0,
+         "an empty guide list fills no rows");
+
+  /* Create on both axes. */
+  status = api->guide_put (engine, image,
+                           &(GlimsGuideInfo) { 0, GLIMS_GUIDE_HORIZONTAL, 40 }, &h, &error);
+  CHECK (status == GLIMS_STATUS_OK && h > 0 && guide_count (image) == 1,
+         "a horizontal guide is created%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { 0, GLIMS_GUIDE_VERTICAL, 60 }, &v,
+                         NULL) == GLIMS_STATUS_OK && v > 0 && v != h && guide_count (image) == 2,
+         "a vertical guide is created (%d)", v);
+  CHECK (find_guide (image, h, &row) && row.orientation == GLIMS_GUIDE_HORIZONTAL &&
+         row.position == 40, "the horizontal guide lists at y 40");
+  CHECK (find_guide (image, v, &row) && row.orientation == GLIMS_GUIDE_VERTICAL &&
+         row.position == 60, "the vertical guide lists at x 60");
+  CHECK (atomic_load (&guide_events) >= events + 2, "guide events arrived (%d)",
+         atomic_load (&guide_events) - events);
+
+  /* Each create is one undo step; undo and redo walk them. */
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && guide_count (image) == 1 &&
+         ! find_guide (image, v, NULL), "undo removes the last added guide");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK && find_guide (image, v, &row) &&
+         row.position == 60, "redo restores it with its id and position");
+
+  /* Moving is one undo step and restores the position. */
+  before = undo_depth (image);
+  CHECK (api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { v, GLIMS_GUIDE_VERTICAL, 70 }, NULL,
+                         NULL) == GLIMS_STATUS_OK && find_guide (image, v, &row) &&
+         row.position == 70 && undo_depth (image) == before + 1,
+         "a move is one undo step");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && find_guide (image, v, &row) &&
+         row.position == 60, "undo restores the guide's position");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK && find_guide (image, v, &row) &&
+         row.position == 70, "redo moves it again");
+
+  /* A same-position move succeeds without touching the undo stack. */
+  before = undo_depth (image);
+  CHECK (api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { v, GLIMS_GUIDE_VERTICAL, 70 }, NULL,
+                         NULL) == GLIMS_STATUS_OK && undo_depth (image) == before,
+         "a same-position move is a no-op with no undo");
+
+  /* Boundary positions are accepted; a put that would reorient is not. */
+  CHECK (api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { 0, GLIMS_GUIDE_HORIZONTAL, 0 }, NULL,
+                         NULL) == GLIMS_STATUS_OK &&
+         api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { 0, GLIMS_GUIDE_VERTICAL, 100 }, NULL,
+                         NULL) == GLIMS_STATUS_OK && guide_count (image) == 4,
+         "positions on the image edges are valid");
+  CHECK (api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { v, GLIMS_GUIDE_HORIZONTAL, 30 }, NULL,
+                         NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         find_guide (image, v, &row) && row.position == 70,
+         "reorienting a guide is refused, its position untouched");
+
+  /* Invalid puts change nothing. */
+  before = guide_count (image);
+  CHECK (api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { 0, GLIMS_GUIDE_HORIZONTAL, -1 }, NULL,
+                         NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { 0, GLIMS_GUIDE_HORIZONTAL, 81 }, NULL,
+                         NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { 0, GLIMS_GUIDE_VERTICAL, 101 }, NULL,
+                         NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         guide_count (image) == before,
+         "out-of-range positions are refused on each axis");
+  CHECK (api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { 0, 0, 40 }, NULL,
+                         NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { 0, 99, 40 }, NULL,
+                         NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "unknown orientations are refused");
+  CHECK (api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { -7, GLIMS_GUIDE_VERTICAL, 40 }, NULL,
+                         NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->guide_put (engine, image, NULL, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a negative id and a missing struct are refused");
+
+  /* Guide changes are metadata: pixels and the selection do not move. */
+  paint_line (image, layer, 10, 90, 40);
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 20, 20 }, { 50, 50 } }, 2,
+                            NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &before_bounds) == GLIMS_STATUS_OK && ! empty,
+         "a selection exists for the metadata check");
+  pixels_before = render_all (image, &pw, &ph);
+  CHECK (api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { 0, GLIMS_GUIDE_HORIZONTAL, 10 }, NULL,
+                         NULL) == GLIMS_STATUS_OK &&
+         api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { v, GLIMS_GUIDE_VERTICAL, 65 }, NULL,
+                         NULL) == GLIMS_STATUS_OK,
+         "guides are added and moved over a painted selection");
+  pixels_after = render_all (image, &aw, &ah);
+  CHECK (pixels_before && pixels_after && pw == aw && ph == ah &&
+         memcmp (pixels_before, pixels_after, (size_t) pw * ph * 4) == 0,
+         "guide changes leave the pixels identical");
+  CHECK (api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         rect_equals (bounds, before_bounds.x, before_bounds.y,
+                      before_bounds.width, before_bounds.height),
+         "guide changes leave the selection identical");
+  free (pixels_before);
+  free (pixels_after);
+
+  /* A stroke session BUSYs the mutators; reads still work. */
+  CHECK (api->stroke_begin (engine, image, layer, &brush, &first, &stroke,
+                            &error) == GLIMS_STATUS_OK, "a stroke opens%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { 0, GLIMS_GUIDE_HORIZONTAL, 30 }, NULL,
+                         &error) == GLIMS_STATUS_BUSY && error,
+         "guide_put during a stroke is BUSY (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->guide_remove (engine, image, v, NULL) == GLIMS_STATUS_BUSY,
+         "guide_remove during a stroke is BUSY");
+  CHECK (api->image_guides (engine, image, rows, 64, &count) == GLIMS_STATUS_OK,
+         "the guides list still reads during a stroke");
+  CHECK (api->stroke_end (engine, stroke) == GLIMS_STATUS_OK &&
+         api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { 0, GLIMS_GUIDE_HORIZONTAL, 30 }, NULL,
+                         NULL) == GLIMS_STATUS_OK,
+         "guide changes work again after the stroke ends");
+
+  /* Foreign, unknown and stale ids. */
+  api->image_new (engine, 64, 64, &other, NULL);
+  CHECK (api->guide_put (engine, other,
+                         &(GlimsGuideInfo) { 0, GLIMS_GUIDE_HORIZONTAL, 20 }, &other_guide,
+                         NULL) == GLIMS_STATUS_OK,
+         "the other image takes a guide");
+  CHECK (api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { other_guide, GLIMS_GUIDE_HORIZONTAL, 20 },
+                         NULL, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->guide_remove (engine, image, other_guide, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a foreign guide id is refused on this image");
+  CHECK (api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { 424242, GLIMS_GUIDE_VERTICAL, 10 }, NULL,
+                         NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->guide_remove (engine, image, 424242, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an unknown guide id is refused");
+  CHECK (api->guide_remove (engine, image, v, NULL) == GLIMS_STATUS_OK &&
+         ! find_guide (image, v, NULL),
+         "guide_remove removes the guide");
+  CHECK (api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { v, GLIMS_GUIDE_VERTICAL, 10 }, NULL,
+                         NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->guide_remove (engine, image, v, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a removed guide's stale id is refused");
+  CHECK (api->guide_remove (engine, image, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "removing id 0 is invalid");
+
+  /* Undo of the removal restores the same guide id at the position it
+   * was removed from (65, after the metadata-check move). */
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && find_guide (image, v, &row) &&
+         row.position == 65 && row.orientation == GLIMS_GUIDE_VERTICAL,
+         "undo restores the removed guide with its id");
+
+  /* XCF round trip: ids change, the guide set compares by position
+   * and orientation. */
+  saved_count = guides_sorted (image, saved);
+  snprintf (path, sizeof path, "%s/guides.xcf", work);
+  CHECK (api->image_save (engine, image, path, &error) == GLIMS_STATUS_OK,
+         "the image saves%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_open (engine, path, &reopened, &error) == GLIMS_STATUS_OK,
+         "the saved image reopens%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  count = guides_sorted (reopened, rows);
+  CHECK (count == saved_count && saved_count > 0, "the reopened image keeps %d guides",
+         saved_count);
+  for (i = 0; i < MIN (count, saved_count) && i < 64; i++)
+    CHECK (rows[i].orientation == saved[i].orientation && rows[i].position == saved[i].position,
+           "guide %d round-trips as %u at %d", i, rows[i].orientation, rows[i].position);
+
+  api->image_close (engine, reopened);
+  api->image_close (engine, other);
+  api->image_close (engine, image);
+
+  /* A closed image reports NOT_FOUND. */
+  CHECK (api->image_guides (engine, image, rows, 64, &count) == GLIMS_STATUS_NOT_FOUND &&
+         api->guide_put (engine, image,
+                         &(GlimsGuideInfo) { 0, GLIMS_GUIDE_HORIZONTAL, 10 }, NULL,
+                         NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->guide_remove (engine, image, h, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a closed image refuses guide calls");
+}
+
 static void
 test_procedures (void)
 {
@@ -8587,6 +8867,7 @@ main (int argc, char **argv)
   test_pattern_fill ();
 
   test_resource_gradient ();
+  test_guides (argv[2]);
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 

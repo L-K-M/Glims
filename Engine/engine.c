@@ -531,6 +531,9 @@ check_engine_interface (Gimp    *gimp,
   check_signal (problems, GIMP_TYPE_IMAGE, "selected-layers-changed", 0);
   check_signal (problems, GIMP_TYPE_IMAGE, "mask-changed", 0);
   check_signal (problems, GIMP_TYPE_IMAGE, "size-changed", 0);
+  check_signal (problems, GIMP_TYPE_IMAGE, "guide-added", 1);
+  check_signal (problems, GIMP_TYPE_IMAGE, "guide-removed", 1);
+  check_signal (problems, GIMP_TYPE_IMAGE, "guide-moved", 1);
   check_property (problems, GIMP_TYPE_PAINT_OPTIONS, "brush-size", G_TYPE_DOUBLE);
   check_property (problems, GIMP_TYPE_PAINT_CORE, "undo-desc", G_TYPE_STRING);
   check_property (problems, G_OBJECT_TYPE (gimp->edit_config), "prev-language", G_TYPE_STRING);
@@ -812,6 +815,12 @@ open_image_free (gpointer data)
         g_signal_handler_disconnect (open->image, open->component_visible_handler);
       if (open->quick_mask_changed_handler)
         g_signal_handler_disconnect (open->image, open->quick_mask_changed_handler);
+      if (open->guide_added_handler)
+        g_signal_handler_disconnect (open->image, open->guide_added_handler);
+      if (open->guide_removed_handler)
+        g_signal_handler_disconnect (open->image, open->guide_removed_handler);
+      if (open->guide_moved_handler)
+        g_signal_handler_disconnect (open->image, open->guide_moved_handler);
 
       g_object_unref (open->image);
     }
@@ -2072,6 +2081,33 @@ api_vector_layer_style_set (GlimsEngine *e, GlimsImageID image, GlimsItemID laye
   return glims_engine_call (e, vector_layer_style_set_on_engine, &a);
 }
 
+MARSHAL (image_guides, return glims_image_guides (e, a->image, a->out, a->capacity, a->count);)
+MARSHAL (guide_put, return glims_guide_put (e, a->image, a->in, a->out, a->error);)
+MARSHAL (guide_remove, return glims_guide_remove (e, a->image, a->width, a->error);)
+
+static GlimsStatus
+api_image_guides (GlimsEngine *e, GlimsImageID image, GlimsGuideInfo *rows,
+                  int32_t capacity, int32_t *count)
+{
+  GlimsArgs a = { .image = image, .out = rows, .capacity = capacity, .count = count };
+  return glims_engine_call (e, image_guides_on_engine, &a);
+}
+
+static GlimsStatus
+api_guide_put (GlimsEngine *e, GlimsImageID image, const GlimsGuideInfo *guide,
+               GlimsGuideID *result, char **error)
+{
+  GlimsArgs a = { .image = image, .in = guide, .out = result, .error = error };
+  return glims_engine_call (e, guide_put_on_engine, &a);
+}
+
+static GlimsStatus
+api_guide_remove (GlimsEngine *e, GlimsImageID image, GlimsGuideID guide, char **error)
+{
+  GlimsArgs a = { .image = image, .width = guide, .error = error };
+  return glims_engine_call (e, guide_remove_on_engine, &a);
+}
+
 static GlimsStatus
 api_gradient_resource (GlimsEngine *e, GlimsImageID image, GlimsResourceID gradient,
                        GlimsPoint from, GlimsPoint to,
@@ -2197,6 +2233,9 @@ static const GlimsEngineAPI api_v1 = {
 
 
   .gradient_resource = api_gradient_resource,
+  .image_guides    = api_image_guides,
+  .guide_put       = api_guide_put,
+  .guide_remove    = api_guide_remove,
 };
 
 __attribute__ ((visibility ("default")))
