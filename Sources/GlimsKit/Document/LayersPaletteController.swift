@@ -39,9 +39,10 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     /// the outline would forget groups nested inside collapsed parents.
     private var expandedGroupIDs = Set<Int32>()
     private var expansionByDocument: [ObjectIdentifier: Set<Int32>] = [:]
-    /// The selection the outline last applied; a new selection inside a
-    /// collapsed group opens its parents, an unchanged one does not.
-    private var lastSyncedSelection: Int32?
+    /// The ordered selection the outline last applied (primary first);
+    /// a new selection inside a collapsed group opens its parents, an
+    /// unchanged one does not.
+    private var lastSyncedSelectionIDs: [Int32] = []
     /// The effect row the user last picked, by explicit ids: it stays
     /// selected across reloads while its parent is still the paint
     /// target — a retarget, removal, new pick or mask/channel pick
@@ -120,6 +121,9 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         outline.indentationPerLevel = 12
         outline.dataSource = self
         outline.delegate = self
+        // Native Shift/Command multi-selection: the selected rows map to
+        // the document's ordered selected-layer list, primary first.
+        outline.allowsMultipleSelection = true
         outline.target = self
         outline.doubleAction = #selector(editNameOfClickedRow(_:))
         outline.rowHeight = LayerRowView.rowHeight
@@ -444,7 +448,19 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
                 : readiness.reason
             return readiness.allowed
         case #selector(runLayerCommand(_:)):
-            guard let document, document.acceptsEdits else { return false }
+            guard let document, document.acceptsEdits,
+                  let command = EngineSession.LayerCommand(rawValue: UInt32(menuItem.tag)) else { return false }
+            // While more than one layer is selected, every single-layer
+            // command but New Layer is disabled with the reason; New
+            // Layer creates and selects a fresh row, which is safe.
+            if LayerSelectionPolicy.gates(command) {
+                if let reason = LayerSelectionPolicy.refusal(count: document.selectedLayerIDs.count,
+                                                             action: LayerSelectionPolicy.actionTitle(for: command)) {
+                    menuItem.toolTip = reason
+                    return false
+                }
+                menuItem.toolTip = nil
+            }
             // The resize commands are pixel-only, like Apply Mask: the
             // engine refuses groups and editable text, link and vector
             // layers, so those never offer them.
@@ -460,38 +476,52 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             return document?.acceptsEdits == true
         case #selector(toggleLock(_:)):
             guard let document, let active = document.activeLayer else { return false }
+            if document.hasMultipleSelectedLayers,
+               let reason = LayerSelectionPolicy.refusal(count: document.selectedLayerIDs.count, action: "Lock") {
+                menuItem.toolTip = reason
+                return false
+            }
             let lock = EngineSession.LayerLocks(rawValue: UInt32(menuItem.tag))
             let sources = snapshot.tree.nodesByID[active]
                 .map { snapshot.tree.lockSources(for: $0, states: document.layerLocks) }
             menuItem.state = sources?.local.contains(lock) == true ? .on : .off
             menuItem.toolTip = DocumentWindowController.lockNote(lock, sources: sources)
             return document.acceptsEdits
-        case #selector(addLayerMask(_:)):
-            guard let document, document.acceptsEdits, let active = document.activeLayer,
-                  let layer = document.layers.first(where: { $0.id == active }) else { return false }
-            return !layer.hasMask
-        case #selector(applyLayerMask(_:)):
-            // Apply is raster-only; the engine refuses groups and
-            // text, link and vector layers, so they never offer it.
-            guard let document, document.acceptsEdits, let active = document.activeLayer,
-                  let layer = document.layers.first(where: { $0.id == active }) else { return false }
-            return layer.hasMask && layer.kind == .pixel
-        case #selector(deleteLayerMask(_:)), #selector(maskToSelection(_:)):
-            guard let document, document.acceptsEdits, let active = document.activeLayer else { return false }
-            return document.layers.first(where: { $0.id == active })?.hasMask == true
-        case #selector(toggleMaskEnabled(_:)), #selector(toggleMaskEditing(_:)),
+        case #selector(addLayerMask(_:)), #selector(applyLayerMask(_:)),
+             #selector(deleteLayerMask(_:)), #selector(maskToSelection(_:)),
+             #selector(toggleMaskEnabled(_:)), #selector(toggleMaskEditing(_:)),
              #selector(toggleMaskShowing(_:)):
-            guard let document, document.acceptsEdits, let active = document.activeLayer,
-                  let mask = document.maskStates[active] else { return false }
-            switch menuItem.action {
-            case #selector(toggleMaskEnabled(_:)):
-                menuItem.state = mask.enabled ? .on : .off
-            case #selector(toggleMaskEditing(_:)):
-                menuItem.state = mask.editing ? .on : .off
-            default:
-                menuItem.state = mask.showing ? .on : .off
+            // The active-layer mask commands are single-layer commands:
+            // disabled with the reason while a multi-selection stands.
+            guard let document, document.acceptsEdits, let active = document.activeLayer else { return false }
+            if document.hasMultipleSelectedLayers,
+               let reason = LayerSelectionPolicy.refusal(count: document.selectedLayerIDs.count,
+                                                         action: menuItem.title) {
+                menuItem.toolTip = reason
+                return false
             }
-            return true
+            switch menuItem.action {
+            case #selector(addLayerMask(_:)):
+                return document.layers.first(where: { $0.id == active })?.hasMask == false
+            case #selector(applyLayerMask(_:)):
+                // Apply is raster-only; the engine refuses groups and
+                // text, link and vector layers, so they never offer it.
+                guard let layer = document.layers.first(where: { $0.id == active }) else { return false }
+                return layer.hasMask && layer.kind == .pixel
+            case #selector(deleteLayerMask(_:)), #selector(maskToSelection(_:)):
+                return document.layers.first(where: { $0.id == active })?.hasMask == true
+            default:
+                guard let mask = document.maskStates[active] else { return false }
+                switch menuItem.action {
+                case #selector(toggleMaskEnabled(_:)):
+                    menuItem.state = mask.enabled ? .on : .off
+                case #selector(toggleMaskEditing(_:)):
+                    menuItem.state = mask.editing ? .on : .off
+                default:
+                    menuItem.state = mask.showing ? .on : .off
+                }
+                return true
+            }
         default:
             return true
         }
@@ -503,7 +533,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         // also runs for every state change of the shown document, and
         // resetting then would reopen its collapsed ancestors each time.
         if target !== document {
-            lastSyncedSelection = nil
+            lastSyncedSelectionIDs = []
             selectedEffect = nil
             effectSelectionIsNew = false
         }
@@ -525,10 +555,14 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         // While a floating selection is active the structural layer
         // commands are gated resolve-first, so their buttons go quiet too.
         let floatingActive = document?.floatingState.isActive == true
+        // While more than one layer is selected the single-layer buttons
+        // go quiet too; New Layer and New Layer Group stay available:
+        // they create and select a fresh row, which is safe.
+        let multi = document?.hasMultipleSelectedLayers == true
         buttonBar.setEnabled(editable && !floatingActive, forItem: "new")
         buttonBar.setEnabled(editable && !floatingActive, forItem: "group")
-        buttonBar.setEnabled(hasLayer && !floatingActive, forItem: "duplicate")
-        buttonBar.setEnabled(hasLayer && !floatingActive, forItem: "delete")
+        buttonBar.setEnabled(hasLayer && !floatingActive && !multi, forItem: "duplicate")
+        buttonBar.setEnabled(hasLayer && !floatingActive && !multi, forItem: "delete")
         // The floating-selection footer appears only while the shown
         // document's cached floating state is active; its buttons read
         // the cached readiness, never the engine.
@@ -573,7 +607,14 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             effectSelectionIsNew = false
         }
 
-        var selectedItem: Any?
+        // Re-apply the document's ordered multi-selection to the fresh
+        // rows: every selected layer's row, primary included. All of
+        // this runs under `reloading`, so the outline's selection change
+        // fires no delegate mutation and a programmatic reload never
+        // clears the native selection — rows that no longer resolve are
+        // simply not re-selected, and the document reconciles them on
+        // its next reload.
+        var selectedItems: [Any] = []
         if document != nil, let selected = selectedEffect,
            let node = snapshot.tree.nodesByID[selected.drawable],
            let row = snapshot.effects(of: node).first(where: { $0.effect.id == selected.effect }) {
@@ -590,13 +631,16 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
                 }
                 effectSelectionIsNew = false
             }
-            selectedItem = row
-        } else if let document, let active = document.activeLayer,
-                  let node = snapshot.tree.nodesByID[active] {
-            if active != lastSyncedSelection {
-                // A selection that landed inside a collapsed group opens
-                // its parents once so the row can be seen; opened ones
-                // count as expanded like a user's own expansion.
+            selectedItems = [row]
+        } else if let document {
+            selectedItems = document.selectedLayerIDs.compactMap { snapshot.tree.nodesByID[$0] }
+        }
+        if let document, document.selectedLayerIDs != lastSyncedSelectionIDs {
+            // A selection that landed inside a collapsed group opens its
+            // parents once so the rows can be seen; opened ones count as
+            // expanded like a user's own expansion.
+            for item in selectedItems {
+                guard let node = item as? LayerTree.Node else { continue }
                 var parent = node.parent
                 while let group = parent {
                     outline.expandItem(group)
@@ -604,20 +648,14 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
                     parent = group.parent
                 }
             }
-            selectedItem = node
         }
-        if let item = selectedItem {
-            let row = outline.row(forItem: item)
-            if row >= 0 {
-                outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            } else {
-                outline.deselectAll(nil)
-            }
-            lastSyncedSelection = document?.activeLayer
-        } else {
+        let selectedRows = selectedItems.compactMap { outline.row(forItem: $0) }.filter { $0 >= 0 }
+        if selectedRows.isEmpty {
             outline.deselectAll(nil)
-            lastSyncedSelection = nil
+        } else {
+            outline.selectRowIndexes(IndexSet(selectedRows), byExtendingSelection: false)
         }
+        lastSyncedSelectionIDs = document?.selectedLayerIDs ?? []
     }
 
     /// Whether a layer name in the list is being edited.
@@ -879,18 +917,27 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         return true
     }
 
+    /// The outline's selection changed — a user click, Shift-range or
+    /// Command-toggle, or a programmatic change outside a reload. Maps
+    /// the actual selected row ids through the snapshot and asks the
+    /// document for the ordered selection. Stale rows (a layer gone
+    /// since the snapshot was built) and an emptied selection refuse:
+    /// nothing is sent to the engine and the list refreshes, which
+    /// re-applies the native selection — the native selection is never
+    /// cleared as a side effect.
     func outlineViewSelectionDidChange(_ notification: Notification) {
-        guard !reloading, let document,
-              let item = outline.selectedRow >= 0 ? outline.item(atRow: outline.selectedRow) : nil
-        else { return }
-        if let effect = snapshot.effect(for: item, for: document,
+        guard !reloading, let document else { return }
+        let rows = outline.selectedRowIndexes
+        // A single effect-row pick keeps its existing meaning: the
+        // parent layer becomes the paint home and the effect stays
+        // marked. Effect rows never join a layer multi-selection.
+        if rows.count == 1, let item = outline.item(atRow: rows.first!),
+           let effect = snapshot.effect(for: item, for: document,
                                         currentEffects: document.layerEffects) {
-            // An effect pick means its parent layer as the paint home;
-            // the effect stays marked while that pick stands.
             selectedEffect = (effect.drawable, effect.effect.id)
             effectSelectionIsNew = true
             document.selectLayer(effect.drawable)
-            lastSyncedSelection = document.activeLayer
+            lastSyncedSelectionIDs = document.selectedLayerIDs
             // A refused pick leaves the active layer elsewhere; the
             // effect selection cannot stand without its parent target.
             if document.activeLayer != effect.drawable {
@@ -900,14 +947,33 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             }
             return
         }
-        guard let layer = snapshot.layer(for: item, for: document, currentLayers: document.layers)
-        else { return }
+        var rowIDs: [Int32] = []
+        var stale = false
+        for row in rows {
+            guard let item = outline.item(atRow: row) else { stale = true; continue }
+            if snapshot.effect(for: item, for: document,
+                               currentEffects: document.layerEffects) != nil { continue }
+            if let layer = snapshot.layer(for: item, for: document, currentLayers: document.layers) {
+                rowIDs.append(layer.id)
+            } else {
+                stale = true
+            }
+        }
         selectedEffect = nil
         effectSelectionIsNew = false
-        document.selectLayer(layer.id)
-        lastSyncedSelection = document.activeLayer
-        // A refused pick leaves the active layer; the list shows it again.
-        if document.activeLayer != layer.id { reload() }
+        guard !stale, let ordered = LayerSelectionPolicy.resolveSelection(
+            previous: document.selectedLayerIDs, rowIDs: rowIDs) else {
+            // Refused: refresh the rows from the document's authoritative
+            // selection; the engine's selection is left untouched.
+            reload()
+            return
+        }
+        document.selectLayers(ordered)
+        lastSyncedSelectionIDs = document.selectedLayerIDs
+        // A refused pick (floating selection resolve-first, closing,
+        // busy) leaves the document's selection elsewhere; the list
+        // shows the native selection again.
+        if document.selectedLayerIDs != ordered { reload() }
     }
 
     // MARK: Drag and drop
@@ -944,7 +1010,10 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
 
     func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo,
                      proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
-        guard let document, document.acceptsEdits, let dragged = draggedID(info),
+        // Drag-drop reorder is a single-layer structural command: no
+        // drop is offered while a multi-selection stands.
+        guard let document, document.acceptsEdits, !document.hasMultipleSelectedLayers,
+              let dragged = draggedID(info),
               let target = dropTarget(item: item, childIndex: index),
               snapshot.tree.resolveDrop(item: dragged, ontoParent: target.parent, at: target.index) != .invalid
         else { return [] }
@@ -953,7 +1022,8 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
 
     func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo,
                      item: Any?, childIndex index: Int) -> Bool {
-        guard let document, document.acceptsEdits, let dragged = draggedID(info),
+        guard let document, document.acceptsEdits, !document.hasMultipleSelectedLayers,
+              let dragged = draggedID(info),
               let target = dropTarget(item: item, childIndex: index) else { return false }
         document.moveLayer(dragged, toParent: target.parent, atIndex: target.index)
         if let node = item as? LayerTree.Node { outline.expandItem(node) }
