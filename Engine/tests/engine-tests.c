@@ -5283,6 +5283,7 @@ test_indexed_conversion (const char *work)
   int32_t              w = 0, h = 0, w2 = 0, h2 = 0, before, i;
   char                *fonts = NULL, *error = NULL, *newline, png[1024];
   int                  vectors, links;
+  size_t               none_bytes = 0, fs_bytes = 0;
 
   vectors = supports_vector_layers ();
   links   = supports_link_layers ();
@@ -5501,18 +5502,26 @@ test_indexed_conversion (const char *work)
          "Floyd-Steinberg custom conversion succeeds");
   CHECK (api->image_copy_pixels (engine, src, false, &copied, NULL) == GLIMS_STATUS_OK,
          "the no-dither result copies");
-  d_none = malloc (copied.byte_count);
-  if (d_none) memcpy (d_none, copied.pixels, copied.byte_count);
+  none_bytes = copied.byte_count;
+  if (copied.pixels && none_bytes == sizeof ramp)
+    {
+      d_none = malloc (none_bytes);
+      if (d_none) memcpy (d_none, copied.pixels, none_bytes);
+    }
   api->free_pixels (copied.pixels);
   memset (&copied, 0, sizeof copied);
   CHECK (api->image_copy_pixels (engine, dup, false, &copied, NULL) == GLIMS_STATUS_OK,
          "the dithered result copies");
-  d_fs = malloc (copied.byte_count);
-  if (d_fs) memcpy (d_fs, copied.pixels, copied.byte_count);
+  fs_bytes = copied.byte_count;
+  if (copied.pixels && fs_bytes == sizeof ramp)
+    {
+      d_fs = malloc (fs_bytes);
+      if (d_fs) memcpy (d_fs, copied.pixels, fs_bytes);
+    }
   api->free_pixels (copied.pixels);
   memset (&copied, 0, sizeof copied);
-  CHECK (d_none && d_fs &&
-         memcmp (d_none, d_fs, (size_t) 8 * 8 * 4) != 0,
+  CHECK (d_none && d_fs && none_bytes == sizeof ramp && fs_bytes == none_bytes &&
+         memcmp (d_none, d_fs, none_bytes) != 0,
          "Floyd-Steinberg dithers differently from no dithering");
   free (d_none);
   free (d_fs);
