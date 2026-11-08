@@ -91,3 +91,16 @@ Not run (out of scope for this slice; root owns the runtime matrix):
 `swift test`, the `--engine-smoke-test` runtime (including
 `GLIMS_SMOKE_CASE=float-selected-pixels`), adapter/conformance builds, GUI/
 desktop runs. The smoke case and the pure tests compile only.
+
+## Soft-selection acceptance
+
+The original controls used marching-ants visibility to admit a float. A real
+25%-alpha Select From Alpha regression had nonzero native bounds but no
+outline, and reproduced two refusals. The document now caches native bounds
+separately and uses them for both Float actions. Selection display stays
+independent. Initial document loading refreshes both caches.
+
+Fixture corrections use an alpha-capable source for transparent cuts, refill
+the source before the independent COPY case, and keep the accepted stroke
+inside its selection. The corrected focused pinned run and all eight policy
+tests pass. Full parent integration and the engine matrix remain pending.

@@ -147,8 +147,9 @@ enum FloatingControlsLogic {
             return FloatTarget(drawable: nil, reason: "There is no selection to float; select an area first.")
         }
         if channels.contains(where: { $0.id == drawable }) {
-            // A channel holds no locks and no structured source; the
-            // native check enforces neither on it.
+            // Channel locks are not exposed by the cached channel model.
+            // Native MOVE rechecks content locks and reports any refusal;
+            // COPY remains non-destructive. Channels have no layer source.
             return FloatTarget(drawable: drawable, reason: nil)
         }
         if let owner = maskStates.first(where: { $0.value.mask != 0 && $0.value.mask == drawable })?.key {

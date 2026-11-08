@@ -14,6 +14,13 @@ extension EngineSmokeTest {
     static func exerciseFloatSelectedPixels(_ session: EngineSession, work: URL,
                                             documents: DocumentList) throws {
         let imageA = try session.newImage(width: 64, height: 64)
+        // Use a single alpha-capable raster layer. The native Background
+        // has no alpha and a cut correctly replaces its pixels with white.
+        let backgroundA = try session.layers(imageA).first!.id
+        let white = ClipboardImage(width: 64, height: 64,
+                                   pixels: Data(repeating: 255, count: 64 * 64 * 4), origin: .zero)
+        _ = try session.pastePixels(imageA, pixels: white, at: .zero)
+        _ = try session.layerCommand(.delete, image: imageA, layer: backgroundA)
         let documentA = try ImageDocument(session: session, image: imageA, name: "FloatSel A")
         documents.items.append(documentA)
         let controllerA = DocumentWindowController(document: documentA)
@@ -57,6 +64,34 @@ extension EngineSmokeTest {
             settle(document)
             _ = image
         }
+
+        // Nonzero selection coverage below the marching-ants threshold
+        // must still be floatable. Select From Alpha on 25%-alpha pixels.
+        let softImage = try session.newImage(width: 32, height: 32)
+        let softPixels = ClipboardImage(width: 8, height: 8,
+            pixels: Data((0..<64).flatMap { _ in [UInt8(255), 0, 0, 64] }), origin: .zero)
+        let softLayer = try session.pastePixels(softImage, pixels: softPixels, at: CGPoint(x: 4, y: 4))
+        let softDoc = try ImageDocument(session: session, image: softImage, name: "Soft Selection")
+        documents.items.append(softDoc)
+        softDoc.select(.fromAlpha)
+        settle(softDoc)
+        softDoc.refreshSelection()
+        check((try? session.selectionBounds(image: softImage)) != nil && softDoc.selectionOutline.isEmpty,
+              "a 25%-coverage selection has native bounds but no marching ants")
+        check(softDoc.floatReadiness(.move).allowed && softDoc.floatReadiness(.copy).allowed,
+              "both float actions admit a nonempty soft selection without an outline")
+        var softFloat: Result<Void, Error>?
+        softDoc.floatSelectedPixels(mode: .copy, target: softLayer) { softFloat = $0 }
+        settle(softDoc)
+        check(softFloat.map { if case .success = $0 { return true }; return false } == true
+                && (try? session.floatingSelection(softImage))?.isActive == true,
+              "Float a Copy preserves nonzero coverage below the outline threshold")
+        var softClosed = false
+        softDoc.closeImageWhenDrained { softClosed = true }
+        let softCloseDeadline = Date().addingTimeInterval(10)
+        while !softClosed && Date() < softCloseDeadline { spin(0.01) }
+        check(softClosed, "the soft-selection fixture closes before continuing")
+        documents.items.removeAll { $0 === softDoc }
 
         // Fixture on A: a red 8x8 block inside the selection on a white layer.
         reselect(documentA, imageA)
@@ -182,6 +217,8 @@ extension EngineSmokeTest {
         // COPY: the source is preserved and the selection is still
         // cleared; undo/redo behave the same way.
         reselect(documentA, imageA)
+        documentA.fill(at: .zero, mode: .selection, color: .red, threshold: 0, sampleMerged: false)
+        settle(documentA)
         let undoBeforeCopy = documentA.undoInfo.undoCount
         if let copyItem, let action = copyItem.action {
             NSApp.sendAction(action, to: controllerA, from: copyItem)
@@ -214,14 +251,14 @@ extension EngineSmokeTest {
         reselect(documentA, imageA)
         let undoBeforeStroke = documentA.undoInfo.undoCount
         let black = EngineSession.Brush(size: 6, opacity: 1, red: 0, green: 0, blue: 0, pressureSize: false)
-        documentA.beginStroke(at: .init(x: 40, y: 40, pressure: 1), brush: black)
+        documentA.beginStroke(at: .init(x: 6, y: 6, pressure: 1), brush: black)
         check(documentA.strokeIsActive, "the stroke is active before the float command")
         if let moveItem, let action = moveItem.action {
             NSApp.sendAction(action, to: controllerA, from: moveItem)
         }
         check(!documentA.strokeIsActive, "the float command ends the active stroke before enqueueing")
         settle(documentA)
-        check((pixel(session, imageA, x: 40, y: 40)?[0] ?? 255) < 30,
+        check((pixel(session, imageA, x: 6, y: 6)?[0] ?? 255) < 30,
               "the accepted stroke landed on the layer before the float ran")
         check((try? session.floatingSelection(imageA))?.isActive == true,
               "the float queued behind the drained stroke input")

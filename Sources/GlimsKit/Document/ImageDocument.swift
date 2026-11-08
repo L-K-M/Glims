@@ -162,6 +162,9 @@ final class ImageDocument {
     var onUserCommand: (() -> Void)?
     /// The selection outline in image pixels, for marching ants.
     private(set) var selectionOutline: [EngineSession.Segment] = []
+    /// Nonzero native coverage, including soft selections below the
+    /// marching-ants threshold. Outline visibility is a separate fact.
+    private(set) var selectionBounds: CGRect?
     /// The image's ordinary guides, read with the rest of the state.
     /// Guide changes are metadata — they never touch pixels or the
     /// selection — so the cache refreshes with `reload` and on the
@@ -249,6 +252,7 @@ final class ImageDocument {
         self.info = try session.info(image)
         self.colorInfo = try session.colorInfo(image)
         try reload()
+        refreshSelection()
         EngineActivity.shared.register(self)
     }
 
@@ -1848,6 +1852,7 @@ final class ImageDocument {
     /// Re-reads the outline; the engine caches it until the selection changes.
     func refreshSelection() {
         selectionOutline = (try? session.selectionOutline(image: image)) ?? []
+        selectionBounds = try? session.selectionBounds(image: image)
         onSelectionChange?()
     }
 
@@ -2240,7 +2245,7 @@ final class ImageDocument {
             return .init(drawable: nil, reason: reason)
         }
         return FloatingControlsLogic.floatTarget(activeDrawable, mode: mode,
-                                                 hasSelection: !selectionOutline.isEmpty, state: floatingState,
+                                                 hasSelection: selectionBounds != nil, state: floatingState,
                                                  layers: layers, maskStates: maskStates, channels: channels,
                                                  sources: layerSources, locks: layerLocks, acceptsEdits: acceptsEdits,
                                                  pendingTarget: !pendingTargetCommands.isEmpty)
@@ -2270,7 +2275,7 @@ final class ImageDocument {
         guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
         guard !refuseWhileTargetPending() else { return completion(.failure(DocumentError.busy)) }
         let readiness = FloatingControlsLogic.floatTarget(target, mode: mode,
-            hasSelection: !selectionOutline.isEmpty, state: floatingState, layers: layers,
+            hasSelection: selectionBounds != nil, state: floatingState, layers: layers,
             maskStates: maskStates, channels: channels, sources: layerSources, locks: layerLocks,
             acceptsEdits: acceptsEdits, pendingTarget: !pendingTargetCommands.isEmpty)
         guard let drawable = readiness.drawable else {
