@@ -732,6 +732,34 @@ and substantial parts of `design.md`, still need implementation and checks.
   re-associated in `app/xcf/xcf-load.c`), so the layer survives save
   and reopen as structured content. Conformance tests cover both; the
   four-engine run is left to the root checkout.
+- 2026-11-08: the frontend slice for the two new facade calls, on this
+  worktree branch. `EngineSession` gained typed `fillPath` and
+  `toVectorLayer` wrappers and a `supportsVectorLayers` version
+  capability (one shared parser with `supportsLinkLayers`).
+  `ImageDocument.fillPath` queues on the input queue behind accepted
+  input, passing the explicit current drawable (layer, editing mask or
+  channel) and refusing groups, stale path rows, missing, pixel-locked,
+  busy and closed states with an error instead of silent success; the
+  native call revalidates path and target, is one undo step and clips to
+  the selection. `ImageDocument.toVectorLayer` queues as a target
+  command, so the completion's authoritative reload makes the
+  engine-selected vector layer the active one; on a pre-3.2 engine it
+  reports the honest 3.2 requirement and never degrades to a raster.
+  The Paths palette has Fill Path and To Vector Layer buttons and menu
+  items (membership-guarded, the vector item capability-gated, its
+  tooltip stating the engine's default white-fill/black-stroke style,
+  not the foreground color), as do Edit ▸ Fill Path and Edit ▸ To
+  Vector Layer; the bundled manual documents both. No engine or facade
+  change, no global native context mutation. Added scoped engine smoke
+  cases (real pixels and fill color, selection clipping, one undo step,
+  vector kind / selection / name, re-render after a path edit, XCF
+  round trip and target reconcile, pre-3.2 UNSUPPORTED, missing, busy
+  and closed guards) and pure unit tests for the capability parser, the
+  palette command metadata and the fill settings. Checked on this
+  branch: `swift build --build-tests` compiles only — no adapter
+  rebuild, no library relink, no test or smoke run (the root checkout
+  serializes desktop tests). Pending: the runtime run of the new smoke
+  cases and `swift test` on all four engines in the root checkout.
 
 ## Open decisions
 

@@ -82,7 +82,14 @@ of the active layer (or the whole layer when nothing is selected); on
 a layer without transparency it fills them with the background color.
 
 Edit > Stroke Path draws along the active path with the foreground
-color, at the width set in Tool Options.
+color, at the width set in Tool Options. Edit > Fill Path fills the
+path's area on the active layer (or its mask, or the selected channel)
+with the foreground color; the fill stays inside the current selection.
+Edit > To Vector Layer turns the active path into a genuine vector
+layer (engine 3.2 and later). The new layer starts in the engine's
+default style — a white fill and a black stroke — which the foreground
+color does not affect; editing the path re-renders the layer. The Paths
+palette's buttons run the same commands on the selected path.
 
 # Tools
 
