@@ -1225,3 +1225,10 @@ omitted the required begin/complete lifecycle; correcting those fixtures
 preserved the queue's no-overlap contract. GLIMS_SMOKE_CASE=brush-chooser
 selects this bounded interface scenario; ordinary engine smoke still runs
 all scenarios. Full interface/matrix and on-screen chooser checks follow.
+
+The real-panel browse scenario confirms lazy thumbnails preserve the scroll
+position. It then reproduced a missing Tool Options preview after choosing a
+rendered brush. Presentation revisions now notify the palette when preview
+data changes even if the identity stays the same; that regression passes.
+Preview images retain their native aspect ratio. The focused scenario also
+drains its close work before stopping the native engine.

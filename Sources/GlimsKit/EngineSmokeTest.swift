@@ -100,6 +100,9 @@ enum EngineSmokeTest {
         do {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brush-chooser" {
                 try exerciseBrushChooserPresentation(session, documents: documents)
+                let drainDeadline = Date().addingTimeInterval(10)
+                while EngineActivity.shared.isBusy && Date() < drainDeadline { spin(0.01) }
+                check(!EngineActivity.shared.isBusy, "focused chooser cleanup drains before stopping the engine")
                 print(failures == 0 ? "PASSED (brush chooser)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
@@ -6422,6 +6425,31 @@ enum EngineSmokeTest {
         check(state.brush(for: .paintbrush).resource == nil && choiceButton()?.title == "Default"
                 && choiceButton()?.image == nil && !BrushChooser.shared.isOpen,
               "choosing Default clears a previous Missing marker and closes the real picker")
+        wait { !EngineActivity.shared.isBusy }
+
+        BrushChooser.shared.open(document: document, tool: .paintbrush)
+        panel = NSApp.windows.first { $0.title == "Brush Brush" && $0.isVisible }
+        let browse = views(panel?.contentView, as: NSTableView.self).first
+        wait { (browse?.numberOfRows ?? 0) > 32 && !EngineActivity.shared.isBusy }
+        if let browse, browse.numberOfRows > 32 {
+            let last = browse.numberOfRows - 1
+            browse.scrollRowToVisible(last)
+            panel?.displayIfNeeded()
+            _ = browse.view(atColumn: 0, row: last, makeIfNecessary: true)
+            wait {
+                !EngineActivity.shared.isBusy
+                    && (browse.view(atColumn: 0, row: last, makeIfNecessary: true) as? NSTableCellView)?.imageView?.image != nil
+            }
+            spin()
+            check((browse.enclosingScrollView?.contentView.bounds.origin.y ?? 0) > 0,
+                  "lazy previews preserve the user's scrolled catalog position")
+            browse.selectRowIndexes(IndexSet(integer: last), byExtendingSelection: false)
+            views(panel?.contentView, as: NSButton.self).first { $0.title == "Choose" }?.performClick(nil)
+            check(state.brush(for: .paintbrush).resource != nil && choiceButton()?.image != nil,
+                  "choosing a rendered brush immediately updates the Tool Options preview")
+        } else {
+            check(false, "the installed catalog exercises more than one thumbnail batch")
+        }
         wait { !EngineActivity.shared.isBusy }
     }
 

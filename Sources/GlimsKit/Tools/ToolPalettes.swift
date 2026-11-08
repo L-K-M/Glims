@@ -114,6 +114,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
     private var shownFontCount = 0
     private var shownBrushResource: EngineSession.ResourceIdentity?
     private var shownMissingBrush: EngineSession.ResourceIdentity?
+    private var shownBrushPresentationRevision = 0
     private var observer: UUID?
     /// The front document, retained (weakly) as the brush chooser's session
     /// and loading source.
@@ -132,6 +133,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
             let fontsArrived = self.shownTool == .text && self.shownFontCount != state.fontNames.count
             let brushChanged = state.current.paintTool != nil
                 && (self.shownBrushResource != state.brush(for: state.current).resource
+                    || self.shownBrushPresentationRevision != BrushChooser.shared.presentationRevision
                     || self.shownMissingBrush != BrushChooser.shared.missingIdentity(
                         for: state.current, choice: state.brush(for: state.current).resource))
             guard self.shownTool != state.current || fontsArrived || brushChanged else { return }
@@ -159,6 +161,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         shownFontCount = state.fontNames.count
         shownBrushResource = tool.paintTool != nil ? state.brush(for: tool).resource : nil
         shownMissingBrush = BrushChooser.shared.missingIdentity(for: tool, choice: shownBrushResource)
+        shownBrushPresentationRevision = BrushChooser.shared.presentationRevision
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         actionBindings.removeAll()
 

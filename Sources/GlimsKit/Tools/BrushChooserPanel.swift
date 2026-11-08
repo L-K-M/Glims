@@ -13,6 +13,7 @@ final class BrushChooser {
     private var panel: BrushChooserPanel?
     private(set) var isOpen = false
     private var choiceCache = BrushChoiceCache()
+    private(set) var presentationRevision = 0
 
     private init() {}
 
@@ -38,7 +39,7 @@ final class BrushChooser {
 
     func thumbnail(for tool: ToolID, choice: EngineSession.ResourceIdentity?) -> NSImage? {
         choiceCache.preview(for: tool, choice: choice).map {
-            NSImage(cgImage: $0, size: NSSize(width: 32, height: 32))
+            NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height))
         }
     }
 
@@ -48,15 +49,19 @@ final class BrushChooser {
 
     func resetChoice(for tool: ToolID) {
         choiceCache.reset(tool)
+        presentationRevision += 1
         ToolState.shared.setBrushResource(nil, for: tool)
     }
 
     fileprivate func noteChoiceThumbnail(_ tool: ToolID, identity: EngineSession.ResourceIdentity?, _ image: CGImage?) {
         choiceCache.setPreview(image, identity: identity, for: tool)
+        presentationRevision += 1
+        ToolState.shared.notifyChange()
     }
 
     fileprivate func noteMissing(_ tool: ToolID, _ identity: EngineSession.ResourceIdentity?) {
         choiceCache.setMissing(identity, for: tool)
+        presentationRevision += 1
         ToolState.shared.notifyChange()
     }
 
@@ -400,7 +405,7 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
             let item = rows[row - 1]
             cell.textField?.stringValue = item.name
             if let cgImage = model.thumbnail(item.id) {
-                cell.imageView?.image = NSImage(cgImage: cgImage, size: NSSize(width: 32, height: 32))
+                cell.imageView?.image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
             } else {
                 // No preview yet: a placeholder until the lazy queue renders
                 // this row in a bounded native batch.
