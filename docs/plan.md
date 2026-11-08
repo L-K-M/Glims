@@ -798,3 +798,17 @@ is compiled only for 3.2.0; later engines restore the saved name themselves.
 No upstream source, file metadata, dirty state or undo history changes.
 Pinned and cross-version checks plus independent review are recorded in
 the PR before merge. Frontend path controls remain a separate slice.
+
+### Paths interface verification (2026-11-08)
+
+The Paths palette and Edit menu expose Fill Path and To Vector Layer.
+Fill uses the current layer, mask or saved channel; the Path options now
+include opacity and antialias controls. Vector creation adopts the native
+selected layer after reload and reports unsupported engines explicitly.
+Independent review found no important issues. The integrated branch passes
+305 unit tests and 677 interface checks on 3.2.8/3.2.0/master, 666 on 3.0.8.
+The first mask test failure was a fixture retaining a selection after undo;
+the corrected history reset verifies white pixels and the original history
+position. Real control actions now verify 50-percent fill pixels and saved
+channel isolation. Vector styling and multi-anchor editing remain later
+work; initial vector creation uses the native context's defaults.
