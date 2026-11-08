@@ -10322,6 +10322,339 @@ test_grid (const char *work)
          "a closed image refuses grid calls");
 }
 
+/* Image metadata (slots 124-127): honest empty reads on a metadata-less
+ * image, EXIF/IPTC/XMP set/remove with exact undo accounting, multivalue
+ * order and duplicates, single-value refusal, empty-set vs REMOVE,
+ * unsupported LangAlt/new-container/protected tags, unknown
+ * domains/tags/UTF-8, BUSY under a stroke and a filter preview with reads
+ * still allowed, exact undo/redo restoration, unrelated-tag survival,
+ * rejection atomicity and XCF round trip. */
+static char **
+metadata_tags (GlimsImageID image, uint32_t domain, int32_t *count)
+{
+  char **result = NULL;
+
+  *count = -1;
+  if (api->image_metadata_tags (engine, image, domain, &result, count, NULL) != GLIMS_STATUS_OK)
+    return NULL;
+  return result;   /* caller releases with api->free_metadata_strings */
+}
+
+static char **
+metadata_values (GlimsImageID image, const char *tag, int32_t *count)
+{
+  char **result = NULL;
+
+  *count = -1;
+  if (api->image_metadata_values (engine, image, tag, &result, count, NULL) != GLIMS_STATUS_OK)
+    return NULL;
+  return result;
+}
+
+static int
+vector_has (char **vector, const char *string)
+{
+  int i;
+
+  if (! vector)
+    return 0;
+  for (i = 0; vector[i]; i++)
+    if (! strcmp (vector[i], string))
+      return 1;
+  return 0;
+}
+
+static int
+values_equal (char **vector, int32_t count, const char *const *want, int32_t want_count)
+{
+  int32_t i;
+
+  if (! vector || count != want_count)
+    return 0;
+  for (i = 0; i < count; i++)
+    if (! vector[i] || strcmp (vector[i], want[i]))
+      return 0;
+  return vector[count] == NULL;
+}
+
+static void
+test_image_metadata (const char *work)
+{
+  GlimsImageID       image = 0, reopened = 0;
+  GlimsItemID        layer;
+  GlimsStrokeID      stroke = 0;
+  GlimsFilterID      filter = 0;
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+  GlimsStrokePoint   first = { 5, 5, 1.0, 0.0, 0.0, 0 };
+  char              *error = NULL;
+  char             **vec, **vals;
+  int32_t            count, vcount, before;
+  char               path[1100];
+  static const char *const artist[1]  = { "Alice" };
+  static const char *const desc[1]    = { "a test image" };
+  static const char *const kw[5]      = { "one", "two", "one", "UNREQUESTED", NULL };
+  static const char *const two[2]     = { "x", "y" };
+  static const char *const tool[1]    = { "Glims test" };
+  static const char *const nine[1]    = { "999" };
+
+  api->image_new (engine, 64, 48, &image, NULL);
+  layer = first_layer (image);
+
+  /* Reads on an image with no metadata: honest empty OWNED vectors,
+   * and the reads create nothing (all three domains stay empty). */
+  vec = metadata_tags (image, GLIMS_METADATA_EXIF, &count);
+  CHECK (vec != NULL && count >= 0 && vec[count] == NULL,
+         "a fresh image lists its actual default EXIF tags as an owned terminated vector");
+  api->free_metadata_strings (vec);
+  vec = metadata_tags (image, GLIMS_METADATA_IPTC, &count);
+  CHECK (vec != NULL && count == 0 && vec[0] == NULL,
+         "a fresh image lists zero IPTC tags as an owned empty vector");
+  api->free_metadata_strings (vec);
+  vec = metadata_tags (image, GLIMS_METADATA_XMP, &count);
+  CHECK (vec != NULL && count == 0 && vec[0] == NULL,
+         "a fresh image lists zero XMP tags as an owned empty vector");
+  api->free_metadata_strings (vec);
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (vals != NULL && vcount == 0 && vals[0] == NULL,
+         "an absent tag reads as an owned empty vector, not an error");
+  api->free_metadata_strings (vals);
+
+  /* Validation: domains, outputs, tag shape, unknown image/tag. */
+  vec = (char **) 0x1;
+  count = 7;
+  CHECK (api->image_metadata_tags (engine, image, 0, &vec, &count, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         vec == NULL && count == 0,
+         "an unknown domain is INVALID_ARGUMENT and resets the outputs");
+  CHECK (api->image_metadata_tags (engine, image, 4, &vec, &count, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "domain 4 is refused");
+  CHECK (api->image_metadata_tags (engine, image, GLIMS_METADATA_EXIF, NULL, &count, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a missing result pointer is refused");
+  CHECK (api->image_metadata_tags (engine, image, GLIMS_METADATA_EXIF, &vec, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a missing count pointer is refused");
+  CHECK (api->image_metadata_tags (engine, 9999, GLIMS_METADATA_EXIF, &vec, &count, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an unknown image is NOT_FOUND for the tag list");
+  CHECK (api->image_metadata_values (engine, image, NULL, &vec, &count, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_metadata_values (engine, image, "", &vec, &count, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_metadata_values (engine, image, "Exif.\xff", &vec, &count, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_metadata_values (engine, image, "Foo.Bar", &vec, &count, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "NULL, empty, non-UTF-8 and prefix-less tags are INVALID_ARGUMENT");
+  CHECK (api->image_metadata_values (engine, 9999, "Exif.Image.Artist", &vec, &count, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an unknown image is NOT_FOUND for values");
+  CHECK (api->image_metadata_values (engine, image, "Exif.Bogus.Tag", &vec, &count, &error) == GLIMS_STATUS_NOT_FOUND &&
+         vec == NULL && count == 0 && error != NULL,
+         "a well-formed but unregistered tag is NOT_FOUND with an actionable message%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* SET one EXIF tag: exactly one undo, reads back in all three slots. */
+  before = undo_depth (image);
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_SET, artist, 1, &error) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "SET of one EXIF tag succeeds as exactly one undo%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (values_equal (vals, vcount, artist, 1), "the EXIF tag reads back its value");
+  api->free_metadata_strings (vals);
+  vec = metadata_tags (image, GLIMS_METADATA_EXIF, &count);
+  CHECK (vec != NULL && vector_has (vec, "Exif.Image.Artist"),
+         "the EXIF tag list contains the new tag");
+  api->free_metadata_strings (vec);
+
+  /* Identical SET: a no-op with zero undo. */
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_SET, artist, 1, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "SET of the identical value is a no-op with no undo");
+
+  /* A second tag: one more undo, the unrelated tag is preserved. */
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.ImageDescription", GLIMS_METADATA_SET, desc, 1, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 2,
+         "SET of a second EXIF tag is one more undo");
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (values_equal (vals, vcount, artist, 1),
+         "the unrelated EXIF tag survives the second edit");
+  api->free_metadata_strings (vals);
+
+  /* Multivalue: a repeatable IPTC tag keeps order and duplicates. */
+  CHECK (api->image_metadata_edit (engine, image, "Iptc.Application2.Keywords", GLIMS_METADATA_SET, kw, 3, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 3,
+         "SET of three values on a repeatable IPTC tag is one undo");
+  vals = metadata_values (image, "Iptc.Application2.Keywords", &vcount);
+  CHECK (values_equal (vals, vcount, kw, 3),
+         "the IPTC multivalue reads back in order, duplicates kept (not flattened)");
+  api->free_metadata_strings (vals);
+
+  /* EXIF tags are single-value natively: two values refused, no undo. */
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_SET, two, 2, &error) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before + 3,
+         "a second value on a single-value EXIF tag is refused with no undo%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (values_equal (vals, vcount, artist, 1),
+         "the refused multi-value edit left the tag unchanged (rejection atomicity)");
+  api->free_metadata_strings (vals);
+
+  /* Empty SET is not a value; REMOVE takes no values. */
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_SET, NULL, 0, &error) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an empty SET is refused — REMOVE erases instead%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_REMOVE, artist, 1, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "REMOVE with a value list is refused");
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", 99, artist, 1, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown operation is refused");
+  CHECK (api->image_metadata_edit (engine, 9999, "Exif.Image.Artist", GLIMS_METADATA_SET, artist, 1, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an unknown image is NOT_FOUND for edits");
+
+  /* XMP: a text tag sets and reads back; LangAlt and a new container
+   * refuse UNSUPPORTED; two values on an XmpText refuse. */
+  CHECK (api->image_metadata_edit (engine, image, "Xmp.xmp.CreatorTool", GLIMS_METADATA_SET, tool, 1, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 4,
+         "SET of an XMP text tag is one undo");
+  vals = metadata_values (image, "Xmp.xmp.CreatorTool", &vcount);
+  CHECK (values_equal (vals, vcount, tool, 1), "the XMP tag reads back");
+  api->free_metadata_strings (vals);
+  vec = metadata_tags (image, GLIMS_METADATA_XMP, &count);
+  CHECK (vec != NULL && vector_has (vec, "Xmp.xmp.CreatorTool"),
+         "the XMP tag list contains the new tag");
+  api->free_metadata_strings (vec);
+  CHECK (api->image_metadata_edit (engine, image, "Xmp.dc.title", GLIMS_METADATA_SET, tool, 1, &error) == GLIMS_STATUS_UNSUPPORTED &&
+         undo_depth (image) == before + 4,
+         "a LangAlt (language-alternative) tag refuses SET as UNSUPPORTED with no undo%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_metadata_edit (engine, image, "Xmp.dc.subject", GLIMS_METADATA_SET, kw, 2, NULL) == GLIMS_STATUS_UNSUPPORTED &&
+         undo_depth (image) == before + 4,
+         "a new XmpBag container tag refuses SET as UNSUPPORTED (no faithful container choice)");
+  CHECK (api->image_metadata_edit (engine, image, "Xmp.xmp.CreatorTool", GLIMS_METADATA_SET, kw, 2, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before + 4,
+         "two values on an XmpText tag are refused");
+
+  /* Tags the native setter rewrites from the image state are refused. */
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.ImageWidth", GLIMS_METADATA_SET, nine, 1, &error) == GLIMS_STATUS_UNSUPPORTED &&
+         undo_depth (image) == before + 4,
+         "a normalization-rewritten tag refuses SET as UNSUPPORTED with no undo%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.XResolution", GLIMS_METADATA_REMOVE, NULL, 0, NULL) == GLIMS_STATUS_UNSUPPORTED,
+         "a normalization-rewritten tag refuses REMOVE too");
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Bogus.Tag", GLIMS_METADATA_SET, artist, 1, &error) == GLIMS_STATUS_NOT_FOUND &&
+         undo_depth (image) == before + 4,
+         "an unregistered tag refuses edits as NOT_FOUND with no undo");
+  api->free_string (error);
+  error = NULL;
+
+  /* REMOVE: one undo, then the tag is honestly absent; removing again
+   * is a no-op; unrelated tags survive. */
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_REMOVE, NULL, 0, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 5,
+         "REMOVE of a present tag is exactly one undo");
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (vals != NULL && vcount == 0 && vals[0] == NULL,
+         "a removed tag reads as an owned empty vector");
+  api->free_metadata_strings (vals);
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_REMOVE, NULL, 0, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 5,
+         "removing an absent tag is a no-op with zero undo");
+  vals = metadata_values (image, "Exif.Image.ImageDescription", &vcount);
+  CHECK (values_equal (vals, vcount, desc, 1),
+         "the unrelated EXIF tag survives the removal");
+  api->free_metadata_strings (vals);
+  vals = metadata_values (image, "Iptc.Application2.Keywords", &vcount);
+  CHECK (values_equal (vals, vcount, kw, 3),
+         "the IPTC multivalue survives the EXIF removal");
+  api->free_metadata_strings (vals);
+
+  /* Undo/redo restore the exact metadata. */
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK, "undo runs");
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (values_equal (vals, vcount, artist, 1),
+         "undo restores the removed tag's exact value");
+  api->free_metadata_strings (vals);
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK, "redo runs");
+  vals = metadata_values (image, "Exif.Image.Artist", &vcount);
+  CHECK (vals != NULL && vcount == 0,
+         "redo restores the removal exactly");
+  api->free_metadata_strings (vals);
+
+  /* BUSY gates: a stroke and a filter preview refuse edits before any
+   * mutation, while the reads stay allowed. */
+  if (api->stroke_begin (engine, image, layer, &brush, &first, &stroke, NULL) == GLIMS_STATUS_OK)
+    {
+      CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_SET, artist, 1, NULL) == GLIMS_STATUS_BUSY &&
+             undo_depth (image) == before + 5,
+             "edit is BUSY during a stroke, with no undo");
+      vals = metadata_values (image, "Exif.Image.ImageDescription", &vcount);
+      CHECK (values_equal (vals, vcount, desc, 1),
+             "value reads stay allowed during a stroke");
+      api->free_metadata_strings (vals);
+      vec = metadata_tags (image, GLIMS_METADATA_IPTC, &count);
+      CHECK (vec != NULL && count == 1 && vector_has (vec, "Iptc.Application2.Keywords"),
+             "tag listing stays allowed during a stroke");
+      api->free_metadata_strings (vec);
+      CHECK (api->stroke_end (engine, stroke) == GLIMS_STATUS_OK, "the busy-check stroke ends");
+    }
+  else
+    CHECK (0, "the stroke for the busy check began");
+  if (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK)
+    {
+      int32_t before_preview = undo_depth (image);
+      CHECK (api->image_metadata_edit (engine, image, "Iptc.Application2.Keywords", GLIMS_METADATA_REMOVE, NULL, 0, NULL) == GLIMS_STATUS_BUSY &&
+             undo_depth (image) == before_preview,
+             "edit is BUSY during a filter preview, with no undo");
+      CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+             "the busy-check filter preview aborts");
+    }
+  else
+    CHECK (0, "the filter for the busy check began");
+
+  /* XCF round trip: tags, multivalues and order survive. */
+  snprintf (path, sizeof path, "%s/metadata.xcf", work);
+  CHECK (api->image_save (engine, image, path, &error) == GLIMS_STATUS_OK,
+         "the image saves%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_open (engine, path, &reopened, &error) == GLIMS_STATUS_OK,
+         "the saved image reopens%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  vec = metadata_tags (reopened, GLIMS_METADATA_EXIF, &count);
+  CHECK (vec != NULL && vector_has (vec, "Exif.Image.ImageDescription"),
+         "EXIF tags round-trip through XCF");
+  api->free_metadata_strings (vec);
+  vals = metadata_values (reopened, "Iptc.Application2.Keywords", &vcount);
+  CHECK (values_equal (vals, vcount, kw, 3),
+         "IPTC multivalues round-trip through XCF in order, duplicates kept");
+  api->free_metadata_strings (vals);
+  vals = metadata_values (reopened, "Xmp.xmp.CreatorTool", &vcount);
+  CHECK (values_equal (vals, vcount, tool, 1),
+         "the XMP tag round-trips through XCF");
+  api->free_metadata_strings (vals);
+  before = undo_depth (reopened);
+  CHECK (api->image_metadata_edit (engine, reopened, "Exif.Image.Artist", GLIMS_METADATA_SET, artist, 1, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (reopened) == before + 1,
+         "an edit on the reopened image works as one undo");
+  api->image_close (engine, reopened);
+
+  api->free_metadata_strings (NULL);
+  CHECK (1, "free_metadata_strings(NULL) is a no-op");
+
+  api->image_close (engine, image);
+  CHECK (api->image_metadata_tags (engine, image, GLIMS_METADATA_EXIF, &vec, &count, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a closed image refuses tag reads");
+  CHECK (api->image_metadata_values (engine, image, "Exif.Image.Artist", &vec, &count, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a closed image refuses value reads");
+  CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_SET, artist, 1, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a closed image refuses edits");
+}
+
 /* Stroking the selection's boundary on a layer: the native
  * gimp_item_stroke on the image's mask with the selection suspended, so
  * the stroke straddles the boundary (both sides painted) and the
@@ -12674,6 +13007,7 @@ main (int argc, char **argv)
   test_resource_gradient ();
   test_guides (argv[2]);
   test_grid (argv[2]);
+  test_image_metadata (argv[2]);
   test_selection_stroke ();
   test_floating_selection (argv[2]);
   test_selection_float ();
