@@ -126,6 +126,45 @@ final class RecoveryPanelTests: XCTestCase {
         XCTAssertEqual(RecoveryPanelController.sourceDescription(record), "Imported from /tmp/a.png")
     }
 
+    func testStartupOfferWaitsForAnOpenQueuedAfterIt() throws {
+        let (store, _) = try makeRecords()
+        let app = AppController()
+        app.recoveryStore = store
+        let firstGate = DispatchSemaphore(value: 0)
+        let secondGate = DispatchSemaphore(value: 0)
+        var secondDocumentWasAdopted = false
+        defer {
+            firstGate.signal()
+            secondGate.signal()
+            let deadline = Date().addingTimeInterval(5)
+            while EngineActivity.shared.isBusy && Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            }
+            app.recoveryPanel?.close()
+        }
+        XCTAssertTrue(EngineActivity.shared.perform(label: "First startup open", work: {
+            firstGate.wait()
+        }, completion: {}))
+        app.offerRecoveryAfterStartup()
+        EngineActivity.shared.performWhenReady(label: "Later startup open", work: {
+            secondGate.wait()
+            DispatchQueue.main.async { secondDocumentWasAdopted = true }
+        })
+        firstGate.signal()
+        let deadline = Date().addingTimeInterval(5)
+        while EngineActivity.shared.label != "Later startup open" && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertEqual(EngineActivity.shared.label, "Later startup open")
+        XCTAssertNil(app.recoveryPanel, "a later queued open must not cover the recovery offer")
+        secondGate.signal()
+        while (EngineActivity.shared.isBusy || app.recoveryPanel == nil) && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertTrue(secondDocumentWasAdopted)
+        XCTAssertTrue(app.recoveryPanel?.window?.isVisible == true)
+    }
+
     func testEmptyAndBusyStates() throws {
         let (_, records) = try makeRecords()
         let panel = RecoveryPanelController()

@@ -565,13 +565,19 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     /// Offers prior copies when the startup document has been adopted.
     func offerRecoveryAfterStartup() {
-        // Initial opens are asynchronous. Presenting before their main-
-        // queue adoption lets the new document cover the entire panel.
-        // The engine activity's idle actions follow those adoptions.
+        // Let this idle-action batch admit any opens queued after the
+        // offer before testing readiness. Otherwise one of those opens
+        // could adopt a window on top of a panel just presented here.
         EngineActivity.shared.whenIdle { [weak self] in
-            guard let self, !self.terminationRequested,
-                  self.recoveryStore?.discoverRecoverableDocuments().isEmpty == false else { return }
-            self.showRecoveryPanel()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.terminationRequested else { return }
+                guard !EngineActivity.shared.isBusy, self.pendingFileOperations == 0 else {
+                    self.offerRecoveryAfterStartup()
+                    return
+                }
+                guard self.recoveryStore?.discoverRecoverableDocuments().isEmpty == false else { return }
+                self.showRecoveryPanel()
+            }
         }
     }
 
