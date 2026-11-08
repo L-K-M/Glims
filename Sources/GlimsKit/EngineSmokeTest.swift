@@ -125,6 +125,7 @@ enum EngineSmokeTest {
             try exerciseFileImports(session, work: work, documents: documents)
             try exerciseFillForm(session, documents: documents)
             try exerciseColorConversions(session, work: work, documents: documents)
+            try exerciseColorProfiles(session, work: work, documents: documents)
             try exercisePrinting(session, work: work, documents: documents)
             try exerciseRecovery(session, work: work, documents: documents)
             try exerciseRecoveryInterface(session, work: work, documents: documents)
@@ -1150,6 +1151,475 @@ enum EngineSmokeTest {
         check(closed == true && (try? session.info(closingImage)) == nil,
               "the deferred close destroys the image after its conversion lands")
         check(ok(closingOutcome), "the closing document's conversion still reports success")
+    }
+
+    /// Image ▸ Color Profile ▸ Assign…/Convert…: typed assignment and
+    /// conversion through counted exclusive admission on the generated
+    /// ICC fixtures, the shared form's seeding/Cancel/Apply/error paths,
+    /// the indexed guard, undo, XCF persistence, file identity and
+    /// per-sheet document capture. Needs an engine with ICC support.
+    private static func exerciseColorProfiles(_ session: EngineSession, work: URL,
+                                              documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(15)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func ok(_ result: Result<Void, Error>?) -> Bool {
+            if case .success? = result { return true }
+            return false
+        }
+        func failed(_ result: Result<Void, Error>?) -> Bool {
+            if case .failure? = result { return true }
+            return false
+        }
+        func views<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
+            guard let root else { return [] }
+            return (root as? T).map { [$0] } ?? root.subviews.flatMap { views($0, as: type) }
+        }
+        // The conformance fixtures make-fixtures.sh generated with the engine.
+        let fixtures = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Engine/tests/fixtures")
+        let rgbICC = fixtures.appendingPathComponent("linear-rgb.icc").path
+        let grayICC = fixtures.appendingPathComponent("gray.icc").path
+        let indexedPNG = fixtures.appendingPathComponent("indexed.png").path
+        let missingICC = work.appendingPathComponent("missing-profile.icc").path
+        check(FileManager.default.fileExists(atPath: rgbICC)
+                && FileManager.default.fileExists(atPath: grayICC)
+                && FileManager.default.fileExists(atPath: indexedPNG),
+              "the generated ICC fixtures exist")
+
+        let directory = work.appendingPathComponent("profiles")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        // A midtone image gives assignment and conversion pixels to judge.
+        let image = try session.newImage(width: 32, height: 24)
+        try session.select(.all, image: image)
+        try session.fill(image: image, at: .zero, mode: .selection,
+                         color: NSColor(srgbRed: 0.5, green: 0.25, blue: 0.75, alpha: 1))
+        let document = try ImageDocument(session: session, image: image, name: "Profiles")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        defer {
+            documents.items.removeAll { $0 === document }
+            document.onError = nil
+            document.closeImageWhenDrained()
+            controller.window?.close()
+        }
+
+        check(!document.colorInfo.hasEmbeddedProfile && !document.colorInfo.profileLabel.isEmpty,
+              "a fresh document caches the builtin profile, not an embedded one")
+        let assignItem = NSMenuItem(title: "Assign…",
+                                    action: #selector(DocumentWindowController.assignColorProfile(_:)),
+                                    keyEquivalent: "")
+        let convertItem = NSMenuItem(title: "Convert…",
+                                     action: #selector(DocumentWindowController.convertColorProfile(_:)),
+                                     keyEquivalent: "")
+        check(controller.validateMenuItem(assignItem) && controller.validateMenuItem(convertItem),
+              "Assign and Convert validate on an RGB document")
+
+        // Typed assignment: one undo step, the fixture embeds, and the
+        // unchanged component values are reinterpreted.
+        let before = pixel(session, image, x: 8, y: 8) ?? []
+        var undoBefore = document.undoInfo.undoCount
+        var assignResult: Result<Void, Error>?
+        document.assignProfile(path: rgbICC) { assignResult = $0 }
+        wait { assignResult != nil && document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(ok(assignResult), "typed assignment embeds the ICC profile (\(assignResult as Any))")
+        check(document.colorInfo.hasEmbeddedProfile
+                && document.colorInfo.profileLabel == "Glims Linear RGB Fixture",
+              "the reload reports the embedded fixture profile")
+        check(document.undoInfo.undoCount == undoBefore + 1, "assignment is one undo step")
+        let assigned = pixel(session, image, x: 8, y: 8) ?? []
+        check(before.count == 4 && assigned.count == 4 && assigned[0] > before[0] + 30,
+              "assignment reinterprets the unchanged component values (\(before) -> \(assigned))")
+
+        document.undo()
+        wait { document.pendingWork == 0 }
+        spin()
+        check(!document.colorInfo.hasEmbeddedProfile, "undo assignment restores the builtin profile")
+        document.redo()
+        wait { document.pendingWork == 0 }
+        spin()
+        check(document.colorInfo.hasEmbeddedProfile
+                && document.colorInfo.profileLabel == "Glims Linear RGB Fixture",
+              "redo assignment restores the embedded profile")
+
+        // Typed conversion to the builtin: one undo step, appearance kept.
+        undoBefore = document.undoInfo.undoCount
+        let beforeConvert = pixel(session, image, x: 8, y: 8) ?? []
+        var convertResult: Result<Void, Error>?
+        document.convertProfile(path: nil, intent: .relativeColorimetric,
+                                blackPointCompensation: true) { convertResult = $0 }
+        wait { convertResult != nil && document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(ok(convertResult), "typed conversion to the builtin profile succeeds (\(convertResult as Any))")
+        check(!document.colorInfo.hasEmbeddedProfile, "conversion lands on the builtin profile")
+        check(document.undoInfo.undoCount == undoBefore + 1, "conversion is one undo step")
+        let afterConvert = pixel(session, image, x: 8, y: 8) ?? []
+        check(beforeConvert.count == 4 && afterConvert.count == 4
+                && zip(beforeConvert, afterConvert).allSatisfy { abs(Int($0) - Int($1)) <= 2 },
+              "conversion preserves appearance (\(beforeConvert) -> \(afterConvert))")
+        document.undo()
+        wait { document.pendingWork == 0 }
+        spin()
+        check(document.colorInfo.hasEmbeddedProfile, "undo conversion restores the embedded source profile")
+
+        // XCF persistence and file identity.
+        let xcf = directory.appendingPathComponent("profile.xcf")
+        var saved = false
+        document.save(to: xcf) { error in
+            if error == nil { document.noteSaved(to: xcf) }
+            saved = error == nil
+        }
+        wait { saved && document.pendingWork == 0 }
+        check(saved && document.fileState.nativeURL == xcf, "the assigned document saves")
+        let nativeName = document.name
+        var noopResult: Result<Void, Error>?
+        document.assignProfile(path: rgbICC) { noopResult = $0 }
+        wait { noopResult != nil && document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        check(ok(noopResult) && document.fileState.nativeURL == xcf && document.name == nativeName
+                && document.undoInfo.undoCount == undoBefore,
+              "assigning the equal profile is a no-op that keeps the file identity")
+        let reopenedImage = try session.openImage(path: xcf.path)
+        let reopened = try ImageDocument(session: session, image: reopenedImage, name: "Profiles")
+        documents.items.append(reopened)
+        defer {
+            documents.items.removeAll { $0 === reopened }
+            reopened.closeImageWhenDrained()
+        }
+        check(reopened.colorInfo.hasEmbeddedProfile
+                && reopened.colorInfo.profileLabel == "Glims Linear RGB Fixture",
+              "the assigned profile survives XCF save and reopen")
+
+        // The Assign form seeds the cached profile and offers the two
+        // sources; Cancel queues nothing.
+        controller.assignColorProfile(nil)
+        var sheet = controller.window?.attachedSheet
+        check(sheet != nil, "the Assign form opens as a sheet")
+        let seededLabels = views(sheet?.contentView, as: NSTextField.self).map(\.stringValue)
+        check(seededLabels.contains { $0.contains("Glims Linear RGB Fixture") },
+              "the form seeds the cached profile label")
+        let assignPopups = views(sheet?.contentView, as: NSPopUpButton.self)
+        check(assignPopups.count == 1
+                && assignPopups.first?.itemTitles == ["Built-in profile", "ICC file…"]
+                && assignPopups.first?.indexOfSelectedItem == 0,
+              "the Assign form offers builtin and ICC file, seeded on builtin")
+        undoBefore = document.undoInfo.undoCount
+        if let sheet { NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertSecondButtonReturn.rawValue) }
+        spin()
+        check(document.undoInfo.undoCount == undoBefore && document.pendingWork == 0,
+              "Cancel queues nothing and changes nothing")
+
+        // Apply with an incompatible ICC file: the native refusal is
+        // reported, nothing mutates.
+        controller.assignColorProfile(nil)
+        sheet = controller.window?.attachedSheet
+        if let content = sheet?.contentView {
+            let popup = views(content, as: NSPopUpButton.self).first
+            popup?.selectItem(at: 1)
+            if let popup, let action = popup.action { NSApp.sendAction(action, to: popup.target, from: popup) }
+            let field = views(content, as: NSTextField.self).first { $0.isEditable }
+            check(field?.isEnabled == true, "choosing ICC file enables the path field")
+            field?.stringValue = grayICC
+        }
+        undoBefore = document.undoInfo.undoCount
+        let errorsBefore = errors.count
+        if let sheet { NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue) }
+        wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(errors.count > errorsBefore && document.undoInfo.undoCount == undoBefore
+                && document.colorInfo.profileLabel == "Glims Linear RGB Fixture",
+              "Apply reports a native refusal (gray profile on RGB) without mutating")
+
+        // Apply discarding the embedded profile via the builtin source,
+        // then assigning the fixture back through the form.
+        controller.assignColorProfile(nil)
+        sheet = controller.window?.attachedSheet
+        undoBefore = document.undoInfo.undoCount
+        if let sheet { NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue) }
+        wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(!document.colorInfo.hasEmbeddedProfile && document.undoInfo.undoCount == undoBefore + 1,
+              "Apply on the builtin source discards the embedded profile as one undo step")
+        controller.assignColorProfile(nil)
+        sheet = controller.window?.attachedSheet
+        if let content = sheet?.contentView {
+            let popup = views(content, as: NSPopUpButton.self).first
+            popup?.selectItem(at: 1)
+            if let popup, let action = popup.action { NSApp.sendAction(action, to: popup.target, from: popup) }
+            views(content, as: NSTextField.self).first { $0.isEditable }?.stringValue = rgbICC
+        }
+        if let sheet { NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue) }
+        wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(document.colorInfo.hasEmbeddedProfile
+                && document.colorInfo.profileLabel == "Glims Linear RGB Fixture"
+                && document.undoInfo.undoCount == undoBefore + 2,
+              "Apply with the ICC file assigns the chosen profile as one undo step")
+
+        // The Convert form seeds the intent choices and BPC; Cancel
+        // queues nothing.
+        controller.convertColorProfile(nil)
+        sheet = controller.window?.attachedSheet
+        let convertPopups = views(sheet?.contentView, as: NSPopUpButton.self)
+        check(convertPopups.count == 2, "the Convert form has source and intent popups")
+        check(convertPopups.last?.itemTitles == EngineSession.ProfileIntent.conversionChoices.map(\.title)
+                && convertPopups.last?.titleOfSelectedItem == "Perceptual",
+              "the intent popup offers the four facade intents, seeded on Perceptual")
+        let bpc = views(sheet?.contentView, as: NSButton.self).first { $0.title == "Black point compensation" }
+        check(bpc?.state == .on, "black point compensation is offered and on")
+        undoBefore = document.undoInfo.undoCount
+        if let sheet { NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertSecondButtonReturn.rawValue) }
+        spin()
+        check(document.undoInfo.undoCount == undoBefore && document.pendingWork == 0,
+              "Convert Cancel queues nothing")
+
+        // Apply with a missing ICC file: the engine's error is reported,
+        // nothing mutates.
+        controller.convertColorProfile(nil)
+        sheet = controller.window?.attachedSheet
+        if let content = sheet?.contentView {
+            let popup = views(content, as: NSPopUpButton.self).first
+            popup?.selectItem(at: 1)
+            if let popup, let action = popup.action { NSApp.sendAction(action, to: popup.target, from: popup) }
+            views(content, as: NSTextField.self).first { $0.isEditable }?.stringValue = missingICC
+        }
+        undoBefore = document.undoInfo.undoCount
+        let missingErrorsBefore = errors.count
+        if let sheet { NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue) }
+        wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(errors.count > missingErrorsBefore && document.undoInfo.undoCount == undoBefore
+                && document.colorInfo.hasEmbeddedProfile,
+              "Convert Apply reports a missing ICC file without mutating")
+
+        // A relative path is refused by the form's own validation before
+        // anything queues.
+        controller.convertColorProfile(nil)
+        sheet = controller.window?.attachedSheet
+        if let content = sheet?.contentView {
+            let popup = views(content, as: NSPopUpButton.self).first
+            popup?.selectItem(at: 1)
+            if let popup, let action = popup.action { NSApp.sendAction(action, to: popup.target, from: popup) }
+            views(content, as: NSTextField.self).first { $0.isEditable }?.stringValue = "relative.icc"
+        }
+        let relativeErrorsBefore = errors.count
+        if let sheet { NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue) }
+        spin()
+        check(errors.count > relativeErrorsBefore && document.undoInfo.undoCount == undoBefore
+                && document.pendingWork == 0,
+              "a relative ICC path is refused by the form without queueing")
+
+        // Apply a real conversion through the form: to the builtin with
+        // the chosen intent and BPC, one undo step.
+        controller.convertColorProfile(nil)
+        sheet = controller.window?.attachedSheet
+        if let content = sheet?.contentView {
+            views(content, as: NSPopUpButton.self).last?.selectItem(withTitle: "Saturation")
+        }
+        if let sheet { NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue) }
+        wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(!document.colorInfo.hasEmbeddedProfile && document.undoInfo.undoCount == undoBefore + 1,
+              "Convert Apply to the builtin converts as one undo step")
+
+        // The sheet can stay open while another document holds the
+        // engine; Apply then reports busy instead of vanishing.
+        controller.convertColorProfile(nil)
+        sheet = controller.window?.attachedSheet
+        let gate = DispatchSemaphore(value: 0)
+        let held = EngineActivity.shared.perform(label: "Other work", work: { gate.wait() }, completion: {})
+        let busyErrorsBefore = errors.count
+        if let sheet { controller.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn) }
+        wait { errors.count > busyErrorsBefore }
+        check(held && document.pendingWork == 0 && !document.colorInfo.hasEmbeddedProfile,
+              "Convert Apply reports a busy engine acquired after its sheet opened")
+        gate.signal()
+        wait { !EngineActivity.shared.isBusy }
+
+        // Indexed: Convert is disabled in the menu and refused by the
+        // document guard; Assign stays allowed for a compatible RGB
+        // profile.
+        let indexedImage = try session.openImage(path: indexedPNG)
+        let indexed = try ImageDocument(session: session, image: indexedImage, name: "Indexed")
+        documents.items.append(indexed)
+        let indexedController = DocumentWindowController(document: indexed)
+        indexedController.showWindow(nil)
+        defer {
+            documents.items.removeAll { $0 === indexed }
+            indexed.closeImageWhenDrained()
+            indexedController.window?.close()
+        }
+        check(indexed.colorInfo.mode == .indexed, "the indexed fixture opens indexed")
+        let indexedConvertItem = NSMenuItem(title: "Convert…",
+                                            action: #selector(DocumentWindowController.convertColorProfile(_:)),
+                                            keyEquivalent: "")
+        let indexedAssignItem = NSMenuItem(title: "Assign…",
+                                           action: #selector(DocumentWindowController.assignColorProfile(_:)),
+                                           keyEquivalent: "")
+        check(!indexedController.validateMenuItem(indexedConvertItem)
+                && indexedController.validateMenuItem(indexedAssignItem),
+              "Convert is disabled for an indexed image while Assign stays enabled")
+        var indexedAssign: Result<Void, Error>?
+        indexed.assignProfile(path: rgbICC) { indexedAssign = $0 }
+        wait { indexedAssign != nil && indexed.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(ok(indexedAssign) && indexed.colorInfo.hasEmbeddedProfile
+                && indexed.colorInfo.profileLabel == "Glims Linear RGB Fixture",
+              "an indexed image accepts a compatible RGB profile assignment")
+        let indexedUndo = indexed.undoInfo.undoCount
+        var indexedConvert: Result<Void, Error>?
+        indexed.convertProfile(path: nil, intent: .perceptual, blackPointCompensation: true) { indexedConvert = $0 }
+        spin()
+        check(failed(indexedConvert) && indexed.undoInfo.undoCount == indexedUndo && indexed.pendingWork == 0,
+              "the document guard refuses indexed conversion without queueing (\(indexedConvert as Any))")
+        check(indexed.colorInfo.profileLabel == "Glims Linear RGB Fixture",
+              "the refused conversion leaves the assigned profile unchanged")
+
+        // Two documents' sheets keep their own captured document:
+        // cancelling one does not disturb the other's bindings.
+        let secondImage = try session.newImage(width: 16, height: 16)
+        let second = try ImageDocument(session: session, image: secondImage, name: "Profiles B")
+        documents.items.append(second)
+        let secondController = DocumentWindowController(document: second)
+        secondController.showWindow(nil)
+        defer {
+            documents.items.removeAll { $0 === second }
+            second.closeImageWhenDrained()
+            secondController.window?.close()
+        }
+        controller.assignColorProfile(nil)
+        let firstSheet = controller.window?.attachedSheet
+        secondController.assignColorProfile(nil)
+        let secondSheet = secondController.window?.attachedSheet
+        check(firstSheet != nil && secondSheet != nil, "two documents can open independent profile sheets")
+        if let firstSheet { controller.window?.endSheet(firstSheet, returnCode: .alertSecondButtonReturn) }
+        spin()
+        var secondField: NSTextField?
+        if let content = secondSheet?.contentView {
+            let popup = views(content, as: NSPopUpButton.self).first
+            popup?.selectItem(at: 1)
+            if let popup, let action = popup.action { NSApp.sendAction(action, to: popup.target, from: popup) }
+            secondField = views(content, as: NSTextField.self).first { $0.isEditable }
+            check(secondField?.isEnabled == true, "closing one sheet preserves the other sheet's source binding")
+            secondField?.stringValue = rgbICC
+        }
+        let secondUndo = second.undoInfo.undoCount
+        if let secondSheet { secondController.window?.endSheet(secondSheet, returnCode: .alertFirstButtonReturn) }
+        wait { second.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(second.colorInfo.hasEmbeddedProfile
+                && second.colorInfo.profileLabel == "Glims Linear RGB Fixture"
+                && second.undoInfo.undoCount == secondUndo + 1,
+              "the surviving sheet applies to its own captured document")
+
+        // The typed facade must reject NUL before withCString can select
+        // the valid file prefix instead of the path the caller supplied.
+        for convert in [false, true] {
+            var refused = false
+            do {
+                if convert {
+                    try session.convertProfile(secondImage, path: rgbICC + "\0.other.icc",
+                                               intent: .perceptual, blackPointCompensation: true)
+                } else {
+                    try session.assignProfile(secondImage, path: rgbICC + "\0.other.icc")
+                }
+            } catch { refused = true }
+            check(refused && (try? session.undoInfo(secondImage).undoCount) == second.undoInfo.undoCount,
+                  "typed \(convert ? "conversion" : "assignment") refuses a NUL path without mutation")
+        }
+
+        // Native profile conversion rasterizes structured layers. The
+        // ordinary document operation must refuse it without mutation;
+        // only an accepted, separate confirmation may use the explicit
+        // rasterizing entry point. Both stages capture this document.
+        let textImage = try session.newImage(width: 96, height: 64)
+        var textSettings = EngineSession.TextSettings()
+        textSettings.size = 24
+        let textID = try session.addTextLayer(image: textImage, text: "Editable",
+                                             settings: textSettings, at: CGPoint(x: 3, y: 3))
+        try session.assignProfile(textImage, path: rgbICC)
+        let textDocument = try ImageDocument(session: session, image: textImage, name: "Profile consent")
+        documents.items.append(textDocument)
+        let textController = DocumentWindowController(document: textDocument)
+        textController.showWindow(nil)
+        let textWindow = try XCTUnwrapWindow(textController)
+        var consentErrors: [String] = []
+        textDocument.onError = { consentErrors.append($0) }
+        defer {
+            if let sheet = textWindow.attachedSheet { textWindow.endSheet(sheet, returnCode: .alertSecondButtonReturn) }
+            documents.items.removeAll { $0 === textDocument }
+            textDocument.closeImageWhenDrained()
+            textWindow.close()
+        }
+        func editableText() -> Bool {
+            textDocument.layers.contains { $0.id == textID && $0.kind == .text }
+                && (try? session.textLayer(image: textImage, layer: textID).text) == "Editable"
+        }
+        func openRasterizeConfirmation() -> NSWindow? {
+            textController.convertColorProfile(nil)
+            guard let form = textWindow.attachedSheet else { return nil }
+            textWindow.endSheet(form, returnCode: .alertFirstButtonReturn)
+            wait {
+                textWindow.attachedSheet.map {
+                    views($0.contentView, as: NSTextField.self).contains { $0.stringValue == "Rasterize editable layers?" }
+                } == true && textDocument.pendingWork == 0 && !EngineActivity.shared.isBusy
+            }
+            return textWindow.attachedSheet
+        }
+        let textUndo = textDocument.undoInfo.undoCount
+        var confirmation = openRasterizeConfirmation()
+        check(confirmation != nil && editableText() && textDocument.undoInfo.undoCount == textUndo
+                && textDocument.colorInfo.hasEmbeddedProfile,
+              "conversion asks before rasterizing editable text and changes nothing")
+        if let confirmation { textWindow.endSheet(confirmation, returnCode: .alertSecondButtonReturn) }
+        spin()
+        check(editableText() && textDocument.undoInfo.undoCount == textUndo
+                && textDocument.pendingWork == 0 && !EngineActivity.shared.isBusy,
+              "cancelling profile rasterization preserves text, profile and history")
+
+        confirmation = openRasterizeConfirmation()
+        if let confirmation { textWindow.endSheet(confirmation, returnCode: .alertFirstButtonReturn) }
+        wait { textDocument.pendingWork == 0 && !EngineActivity.shared.isBusy && textWindow.attachedSheet == nil }
+        spin()
+        check(textDocument.layers.contains { $0.id == textID && $0.kind == .pixel }
+                && !textDocument.colorInfo.hasEmbeddedProfile && textDocument.undoInfo.undoCount == textUndo + 1,
+              "Rasterize and Convert applies the captured destination as one undo step")
+        textDocument.undo()
+        wait { textDocument.pendingWork == 0 }
+        spin()
+        check(editableText() && textDocument.colorInfo.hasEmbeddedProfile
+                && textDocument.undoInfo.undoCount == textUndo,
+              "undo profile conversion restores the original editable text and profile")
+
+        confirmation = openRasterizeConfirmation()
+        let consentGate = DispatchSemaphore(value: 0)
+        let heldForConsent = EngineActivity.shared.perform(label: "Other profile work", work: { consentGate.wait() }, completion: {})
+        let consentErrorsBefore = consentErrors.count
+        if let confirmation { textWindow.endSheet(confirmation, returnCode: .alertFirstButtonReturn) }
+        wait { consentErrors.count > consentErrorsBefore }
+        check(heldForConsent && editableText() && textDocument.undoInfo.undoCount == textUndo
+                && textDocument.pendingWork == 0,
+              "rasterization approval rechecks the engine gate before changing text")
+        consentGate.signal()
+        wait { !EngineActivity.shared.isBusy }
+
+        textDocument.inputQueue.async { usleep(400_000) }
+        textController.convertColorProfile(nil)
+        if let form = textWindow.attachedSheet { textWindow.endSheet(form, returnCode: .alertFirstButtonReturn) }
+        wait { textDocument.pendingWork > 0 }
+        check(textDocument.pendingWork > 0, "profile conversion is counted while accepted input drains")
+        var textClosed = false
+        textDocument.closeImageWhenDrained { textClosed = true }
+        wait { textClosed && textDocument.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(textClosed && (try? session.info(textImage)) == nil && textWindow.attachedSheet == nil,
+              "closing a queued conversion suppresses a late rasterization confirmation and destroys the image")
     }
 
     /// File ▸ Print… and Page Setup…: a committed composite rendered in
