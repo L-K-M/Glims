@@ -99,6 +99,7 @@ enum EngineSmokeTest {
             try exerciseEditing(session, documents: documents)
             try exerciseLayerTree(session, documents: documents)
             try exerciseLayerMasks(session, documents: documents)
+            try exerciseChannelBindings(session, work: work)
             try exercisePreferences(session, documents: documents)
             try exercisePaths(session, documents: documents)
             try exercisePaletteControls(session, documents: documents)
@@ -113,6 +114,93 @@ enum EngineSmokeTest {
 
         print(failures == 0 ? "PASSED" : "FAILED: \(failures) failure(s)")
         return failures == 0 ? 0 : 1
+    }
+
+    /// Exercises every channel/component facade binding against real
+    /// engine state before the palette starts depending on it.
+    private static func exerciseChannelBindings(_ session: EngineSession, work: URL) throws {
+        let image = try session.newImage(width: 48, height: 32)
+        defer { try? session.closeImage(image) }
+        let components = try session.components(image)
+        let rgb: EngineSession.Components = [.red, .green, .blue]
+        check(components.mode == .rgb && components.supported.isSuperset(of: rgb)
+                && components.active.isSuperset(of: rgb) && components.visible.isSuperset(of: rgb),
+              "Swift component reads preserve the RGB model and separate active/visible bits")
+        let undoBeforeComponents = try session.undoInfo(image)
+        try session.setComponents(image, activeMask: [.blue], activeValues: [],
+                                   visibleMask: [.red], visibleValues: [])
+        let changed = try session.components(image)
+        check(!changed.active.contains(.blue) && changed.active.contains(.red)
+                && !changed.visible.contains(.red) && changed.visible.contains(.blue),
+              "Swift component writes change only the requested edit and visibility bits")
+        check(try session.undoInfo(image) == undoBeforeComponents,
+              "component display and edit toggles add no undo step")
+        try session.setComponents(image, activeMask: components.supported, activeValues: components.active,
+                                   visibleMask: components.supported, visibleValues: components.visible)
+
+        let area = CGRect(x: 4, y: 5, width: 8, height: 6)
+        try session.select(.rectangle(area), image: image)
+        let saved = try session.channelFromSelection(image, name: "Coverage α")
+        var rows = try session.channels(image)
+        check(rows.count == 1 && rows.first?.id == saved && rows.first?.name == "Coverage α"
+                && rows.first?.isSelected == true && rows.first?.isVisible == false
+                && rows.first?.isQuickMask == false,
+              "saving a selection through Swift returns the selected hidden channel and UTF-8 name")
+        try session.changeChannel(saved, image: image, .init(name: "Saved α", isVisible: true,
+                                   opacity: 0.4, color: NSColor.green.withAlphaComponent(0.8)))
+        rows = try session.channels(image)
+        let row = rows.first
+        let color = row?.color.usingColorSpace(.sRGB)
+        check(row?.name == "Saved α" && row?.isVisible == true
+                && abs((row?.opacity ?? 0) - 0.4) < 0.000001
+                && abs((color?.alphaComponent ?? 0) - 0.4) < 0.000001
+                && (color?.greenComponent ?? 0) > 0.99,
+              "channel attributes preserve color, name, visibility and explicit opacity precedence")
+        try session.changeChannel(saved, image: image, .init(isVisible: false))
+        try session.channelCommand(.select, channel: 0, image: image)
+        check(try session.channels(image).allSatisfy { !$0.isSelected },
+              "channel zero returns the native target to layers")
+        try session.select(.none, image: image)
+        try session.channelToSelection(saved, image: image, operation: .replace)
+        check(try session.selectionBounds(image: image) == area,
+              "the Swift channel-to-selection binding restores exact selection bounds")
+        let duplicate = try session.channelCommand(.duplicate, channel: saved, image: image)
+        let duplicatedRows = try session.channels(image)
+        check(duplicate != nil && duplicate != saved
+                && duplicatedRows.first(where: { $0.id == duplicate })?.isSelected == true,
+              "channel Duplicate returns and selects its new native channel")
+        if let duplicate { try session.channelCommand(.delete, channel: duplicate, image: image) }
+        check(try session.channels(image).count == 1, "channel Delete removes only its chosen channel")
+        try session.channelCommand(.select, channel: 0, image: image)
+        try session.setQuickMask(image, enabled: true)
+        let quick = try session.quickMask(image)
+        let quickRows = try session.channels(image)
+        check(quick.enabled && quick.channel != 0
+                && quickRows.contains { $0.id == quick.channel && $0.isQuickMask && $0.isSelected },
+              "Quick Mask exposes its selected native drawable through Swift")
+        check(try session.selectionBounds(image: image) == nil,
+              "enabling Quick Mask moves the selection into the channel")
+        try session.setQuickMask(image, enabled: false)
+        let disabled = try session.quickMask(image)
+        let restoredBounds = try session.selectionBounds(image: image)
+        check(!disabled.enabled && disabled.channel == 0
+                && restoredBounds == area,
+              "disabling Quick Mask restores the original selection without changing it")
+
+        let file = work.appendingPathComponent("swift-channels.xcf")
+        try session.save(image, to: file.path)
+        let reopened = try session.openImage(path: file.path)
+        defer { try? session.closeImage(reopened) }
+        let restored = try session.channels(reopened)
+        check(restored.count == 1 && restored.first?.name == "Saved α"
+                && abs((restored.first?.opacity ?? 0) - 0.4) < 0.000001,
+              "saved channel names and overlay opacity survive an XCF round trip through Swift")
+        if let id = restored.first?.id {
+            try session.select(.none, image: reopened)
+            try session.channelToSelection(id, image: reopened, operation: .replace)
+            check(try session.selectionBounds(image: reopened) == area,
+                  "saved channel pixels survive the Swift XCF round trip")
+        }
     }
 
     /// A file plug-in holds the engine across all documents. Its admission
