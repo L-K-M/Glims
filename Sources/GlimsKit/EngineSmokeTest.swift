@@ -128,6 +128,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (vector style)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "guides-controls" {
+                try exerciseGuidesControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (guides controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseFileAdmission(session, work: work, documents: documents)
@@ -157,6 +162,7 @@ enum EngineSmokeTest {
             try exercisePathFillAndVector(session, work: work, documents: documents)
             try exerciseVectorStyleForm(session, work: work, documents: documents)
             try exercisePaletteControls(session, documents: documents)
+            try exerciseGuidesControls(session, work: work, documents: documents)
             try exercisePendingEditScope(session, documents: documents)
             try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
             try exercisePlugInCommands(session, documents: documents)
@@ -7719,6 +7725,230 @@ enum EngineSmokeTest {
         wait { document.pendingWork == 0 }
         check(try session.copyPixels(image, merged: true).pixels == blank,
               "undo restores the pixels before chooser-selected painting")
+    }
+
+    /// The guides controls end to end through the actual sheet: Image ▸
+    /// Guides… on two documents at once, add/move/remove/undo through the
+    /// sheet's own buttons, refused out-of-range and non-integer input with
+    /// no mutation, busy disabling, selection and field-edit preservation
+    /// across asynchronous reloads, late close, and View ▸ Show Guides
+    /// changing only the canvas view bitmap while the engine's image pixels
+    /// stay identical.
+    private static func exerciseGuidesControls(_ session: EngineSession, work: URL,
+                                               documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func views<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
+            guard let root else { return [] }
+            return (root as? T).map { [$0] } ?? root.subviews.flatMap { views($0, as: type) }
+        }
+        func button(_ sheet: NSWindow?, _ label: String) -> NSButton? {
+            buttons(in: sheet?.contentView ?? NSView()).first { $0.accessibilityLabel() == label }
+        }
+        func editableField(_ sheet: NSWindow?, _ label: String) -> NSTextField? {
+            views(sheet?.contentView, as: NSTextField.self)
+                .first { $0.isEditable && $0.accessibilityLabel() == label }
+        }
+        func messageField(_ sheet: NSWindow?) -> NSTextField? {
+            views(sheet?.contentView, as: NSTextField.self)
+                .first { !$0.isEditable && $0.accessibilityLabel() == "Guides message" }
+        }
+        func popup(_ sheet: NSWindow?, _ label: String) -> NSPopUpButton? {
+            views(sheet?.contentView, as: NSPopUpButton.self).first { $0.accessibilityLabel() == label }
+        }
+        func table(_ sheet: NSWindow?) -> NSTableView? {
+            views(sheet?.contentView, as: NSTableView.self).first { $0.accessibilityLabel() == "Guides list" }
+        }
+
+        let imageA = try session.newImage(width: 40, height: 24)
+        let imageB = try session.newImage(width: 30, height: 30)
+        let docA = try ImageDocument(session: session, image: imageA, name: "Guides A")
+        let docB = try ImageDocument(session: session, image: imageB, name: "Guides B")
+        documents.items += [docA, docB]
+        let a = DocumentWindowController(document: docA)
+        let b = DocumentWindowController(document: docB)
+        a.showWindow(nil)
+        b.showWindow(nil)
+        defer {
+            for (controller, document) in [(a, docA), (b, docB)] {
+                if let sheet = controller.window?.attachedSheet {
+                    controller.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                }
+                controller.window?.close()
+                documents.items.removeAll { $0 === document }
+                document.closeImageWhenDrained()
+            }
+        }
+
+        // Menu wiring: both items sit on the document's own selectors.
+        let mainMenu = MainMenu.make()
+        let imageMenu = mainMenu.items.first { $0.title == "Image" }?.submenu
+        let viewMenu = mainMenu.items.first { $0.title == "View" }?.submenu
+        check(imageMenu?.items.first { $0.title == "Guides…" }?.action
+                == #selector(DocumentWindowController.showGuides(_:)),
+              "Image offers Guides… on the document's selector")
+        check(viewMenu?.items.first { $0.title == "Show Guides" }?.action
+                == #selector(DocumentWindowController.toggleShowGuides(_:)),
+              "View offers Show Guides on the document's selector")
+
+        // Menu validation reads only cached state: Show Guides checked by
+        // default, Guides… enabled while no sheet is attached.
+        let showItem = NSMenuItem(title: "Show Guides",
+                                  action: #selector(DocumentWindowController.toggleShowGuides(_:)), keyEquivalent: "")
+        check(a.validateMenuItem(showItem) && showItem.state == .on,
+              "Show Guides validates checked by default")
+        let guidesItem = NSMenuItem(title: "Guides…",
+                                    action: #selector(DocumentWindowController.showGuides(_:)), keyEquivalent: "")
+        check(a.validateMenuItem(guidesItem), "Guides… validates while no sheet is open")
+
+        // Two documents open independent sheets through the actual action.
+        a.showGuides(nil)
+        b.showGuides(nil)
+        let sheetA = a.window?.attachedSheet
+        let sheetB = b.window?.attachedSheet
+        check(sheetA != nil && sheetB != nil && sheetA !== sheetB && a.guidesSheet !== b.guidesSheet,
+              "two documents open independent Guides sheets owned by their windows")
+        check(!a.validateMenuItem(guidesItem), "Guides… is disabled while its sheet is open")
+
+        // Add a horizontal guide at y=10 on A through the sheet's controls.
+        let undoBefore = docA.undoInfo.undoCount
+        popup(sheetA, "Guide orientation")?.selectItem(withTitle: "Horizontal")
+        editableField(sheetA, "Guide position in pixels")?.stringValue = "10"
+        button(sheetA, "Add guide")?.performClick(nil)
+        wait { docA.guides.count == 1 && docA.pendingWork == 0 }
+        spin()
+        check(docA.guides.count == 1 && docA.guides[0].orientation == .horizontal
+                && docA.guides[0].position == 10,
+              "Add enqueues one horizontal guide at y=10")
+        check(docA.undoInfo.undoCount == undoBefore + 1, "Add is one undo step")
+        wait { (table(sheetA)?.numberOfRows ?? 0) == 1 }
+        check(table(sheetA)?.numberOfRows == 1,
+              "the open sheet reloads the cached guide list through the window's callback")
+
+        // The second document's sheet edits its own document only.
+        popup(sheetB, "Guide orientation")?.selectItem(withTitle: "Vertical")
+        editableField(sheetB, "Guide position in pixels")?.stringValue = "5"
+        button(sheetB, "Add guide")?.performClick(nil)
+        wait { docB.guides.count == 1 && docB.pendingWork == 0 }
+        spin()
+        check(docB.guides.count == 1 && docB.guides[0].orientation == .vertical
+                && docB.guides[0].position == 5 && docA.guides.count == 1,
+              "the two sheets drive their own documents independently")
+
+        // Write controls disable while the engine is busy (cached state).
+        let gate = DispatchSemaphore(value: 0)
+        let held = EngineActivity.shared.perform(label: "Holding the engine", work: { gate.wait() },
+                                                 completion: {})
+        check(held && button(sheetB, "Add guide")?.isEnabled == false,
+              "the sheet's write controls disable while the engine is busy")
+        gate.signal()
+        wait { !EngineActivity.shared.isBusy }
+        spin(0.05)
+        check(button(sheetB, "Add guide")?.isEnabled == true,
+              "the sheet's write controls re-enable when the engine is idle")
+
+        // Move the selected row to y=20; the guide identity is preserved.
+        table(sheetA)?.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        spin(0.05)
+        let addedID = docA.guides[0].id
+        editableField(sheetA, "Guide position in pixels")?.stringValue = "20"
+        let undoBeforeMove = docA.undoInfo.undoCount
+        button(sheetA, "Move selected guide")?.performClick(nil)
+        wait { docA.pendingWork == 0 && docA.guides.first?.position == 20 }
+        spin()
+        check(docA.guides.count == 1 && docA.guides[0].id == addedID && docA.guides[0].position == 20,
+              "Move keeps the guide's identity and orientation and changes only its position")
+        check(docA.undoInfo.undoCount == undoBeforeMove + 1, "Move is one undo step")
+        check(table(sheetA)?.selectedRow == 0,
+              "the selected row survives the asynchronous reload by guide identity")
+
+        // Out-of-range and non-integer input: refused visibly, no mutation.
+        editableField(sheetA, "Guide position in pixels")?.stringValue = "999"
+        let undoBeforeInvalid = docA.undoInfo.undoCount
+        button(sheetA, "Add guide")?.performClick(nil)
+        wait { docA.pendingWork == 0 }
+        check(docA.guides.count == 1 && docA.undoInfo.undoCount == undoBeforeInvalid
+                && a.guidesSheet?.lastError != nil && !(messageField(sheetA)?.stringValue ?? "").isEmpty,
+              "an out-of-range position is refused in the sheet without mutation or undo")
+        editableField(sheetA, "Guide position in pixels")?.stringValue = "12px"
+        button(sheetA, "Add guide")?.performClick(nil)
+        check(docA.guides.count == 1 && docA.pendingWork == 0
+                && !(messageField(sheetA)?.stringValue ?? "").isEmpty,
+              "a non-integer position is refused visibly without mutation")
+        editableField(sheetA, "Guide position in pixels")?.stringValue = "20"
+
+        // Remove the selected guide, then undo restores it.
+        button(sheetA, "Remove selected guide")?.performClick(nil)
+        wait { docA.pendingWork == 0 && docA.guides.isEmpty }
+        spin()
+        check(docA.guides.isEmpty && (table(sheetA)?.numberOfRows ?? 1) == 0,
+              "Remove deletes the selected guide and the sheet reloads to empty")
+        docA.undo()
+        wait { docA.pendingWork == 0 && docA.guides.contains { $0.orientation == .horizontal && $0.position == 20 } }
+        spin()
+        check(docA.guides.contains { $0.orientation == .horizontal && $0.position == 20 },
+              "undo restores the removed guide at its position and orientation")
+
+        // An asynchronous reload never overwrites an active field edit.
+        table(sheetA)?.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        spin(0.05)
+        guard let positionField = editableField(sheetA, "Guide position in pixels") else {
+            return check(false, "the sheet's position field is reachable by its accessibility label")
+        }
+        sheetA?.makeFirstResponder(positionField)
+        positionField.stringValue = "7"
+        docA.addGuide(.vertical, at: 3)
+        wait { docA.pendingWork == 0 && docA.guides.contains { $0.orientation == .vertical } }
+        spin(0.1)
+        check(editableField(sheetA, "Guide position in pixels")?.stringValue == "7",
+              "an asynchronous reload does not overwrite an active field edit")
+        sheetA?.endEditing(for: nil)
+
+        // Late close: after the sheet ends, a guides change must not reopen
+        // or update it.
+        if let sheet = a.window?.attachedSheet {
+            a.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+        }
+        spin(0.1)
+        check(a.guidesSheet == nil, "closing the sheet releases the window's reference")
+        docA.addGuide(.horizontal, at: 2)
+        wait { docA.pendingWork == 0 && docA.guides.contains { $0.position == 2 } }
+        spin(0.2)
+        check(a.window?.attachedSheet == nil && a.guidesSheet == nil,
+              "a late guides change does not reopen or update a closed sheet")
+
+        // View ▸ Show Guides: the overlay is visible in the canvas's own
+        // view bitmap; toggling changes only the view, never image pixels
+        // or the dirty state.
+        let canvas = a.canvas
+        try canvas.renderVisibleTilesNow()
+        func brightnessNear(_ x: Int, _ y: Int) -> Double? {
+            [CGPoint(x: x, y: y), CGPoint(x: x, y: y - 1), CGPoint(x: x, y: y + 1),
+             CGPoint(x: x - 1, y: y), CGPoint(x: x + 1, y: y)]
+                .compactMap { canvasBrightness(canvas, at: $0) }.min()
+        }
+        let onGuide = brightnessNear(3, 12)   // the vertical guide at x=3
+        let offGuide = canvasBrightness(canvas, at: CGPoint(x: 10, y: 12))
+        check(onGuide != nil && offGuide != nil && onGuide! < offGuide! - 0.05,
+              "the canvas view bitmap draws the vertical guide line (\(String(describing: onGuide)) vs \(String(describing: offGuide)))")
+        let pixelOnGuide = pixel(session, imageA, x: 3, y: 12)
+        let dirtyBefore = docA.hasUnsavedChanges
+        a.toggleShowGuides(showItem)
+        check(showItem.state == .off && !a.guidesViewState.showsGuides,
+              "Show Guides toggles the cached per-window flag and the menu state")
+        let hiddenGuide = brightnessNear(3, 12)
+        check(hiddenGuide != nil && offGuide != nil && abs(hiddenGuide! - offGuide!) < 0.05,
+              "with Show Guides off the view bitmap no longer draws the line")
+        check(pixel(session, imageA, x: 3, y: 12) == pixelOnGuide && docA.hasUnsavedChanges == dirtyBefore,
+              "toggling Show Guides changes neither the engine's image pixels nor the dirty state")
+        a.toggleShowGuides(showItem)
+        let backOn = brightnessNear(3, 12)
+        check(backOn != nil && offGuide != nil && backOn! < offGuide! - 0.05,
+              "toggling Show Guides back on redraws the overlay in the view bitmap")
+        check(pixel(session, imageA, x: 3, y: 12) == pixelOnGuide,
+              "the image pixels on the guide are still identical after both toggles")
     }
 
 }

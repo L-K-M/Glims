@@ -15,6 +15,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private lazy var engineUndoManager = EngineUndoManager(document: imageDocument)
     /// The open filter preview, generic or dedicated; one at a time.
     private(set) var previewPanel: FilterPreviewPanel?
+    /// Image ▸ Guides…'s sheet, retained by this window for its lifetime;
+    /// nil while none is open. Two documents keep independent sheets
+    /// through their own controllers — no global binding or singleton.
+    private(set) var guidesSheet: GuidesSheetController?
+    /// View ▸ Show Guides' cached per-window state, defaulting to on.
+    private(set) var guidesViewState = GuideViewState()
     /// Bumped by every filter start and every cancellation, so a begin
     /// that lands late can tell it is stale and abort its session.
     private var previewRequest = 0
@@ -70,6 +76,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         imageDocument.onError = { [weak self] message in
             self?.showStatusError(message)
             self?.previewPanel?.showError(message)
+            // Fan out to the guides sheet as well, alongside the existing
+            // handlers — the sheet never installs its own callback.
+            self?.guidesSheet?.showError(message)
         }
         // Palette picks and structural or lock changes first commit any
         // field/text edit and end an active stroke; each command also
@@ -210,6 +219,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private func endPendingEdits() {
         window?.endEditing(for: nil)
         previewPanel?.window?.endEditing(for: nil)
+        guidesSheet?.commitFieldEdit()
         for paletteWindow in PaletteEditScope.windowsEditing(imageDocument) {
             paletteWindow.endEditing(for: nil)
         }
@@ -244,8 +254,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         (PaletteCenter.shared.registeredPalette(for: ChannelsPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: PathsPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: HistoryPaletteController.definition.kind))?.retarget()
-        // Path shapes arrive with the state; the canvas draws them.
+        // Path shapes arrive with the state; the canvas draws them, and
+        // the cached guide list arrives with it too (reloadGuides fires
+        // this same callback), so the canvas redraws the guide overlay.
         canvas.needsDisplay = true
+        // Fan out to the guides sheet through this existing hook.
+        guidesSheet?.documentStateDidChange()
     }
 
     // MARK: Menu commands
@@ -398,6 +412,34 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     /// Image ▸ New Snapshot: an independent copy opened as a new document.
     @objc func newSnapshot(_ sender: Any?) { imageDocument.newSnapshot() }
+
+    // MARK: Guides
+
+    /// Image ▸ Guides…: opens this document's guide management sheet. The
+    /// sheet is owned by this window controller and reads only the cached
+    /// document state, so opening it never makes a native call.
+    @objc func showGuides(_ sender: Any?) {
+        guard let window, !imageDocument.isClosing, window.attachedSheet == nil,
+              guidesSheet == nil else { return }
+        let sheet = GuidesSheetController(document: imageDocument, hostWindow: window)
+        guidesSheet = sheet
+        window.beginSheet(sheet.panel) { [weak self, weak sheet] _ in
+            guard let self, let sheet, self.guidesSheet === sheet else { return }
+            sheet.invalidate()
+            self.guidesSheet = nil
+        }
+    }
+
+    /// View ▸ Show Guides: flips this window's cached flag and redraws the
+    /// canvas. Pure view state — no native guide edit, no pixel, dirty,
+    /// export or print change.
+    @objc func toggleShowGuides(_ sender: Any?) {
+        guard !imageDocument.isClosing else { return }
+        guidesViewState.toggle()
+        canvas.showsGuides = guidesViewState.showsGuides
+        canvas.needsDisplay = true
+        if let item = sender as? NSMenuItem { item.state = guidesViewState.menuState }
+    }
 
     /// A catalog item in a Filter category: opens its generic form.
     @objc func runNativeFilter(_ sender: Any?) {
@@ -909,6 +951,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // Read-only and cheap: the sheet shows the cached state,
             // so it works wherever another sheet does not already.
             return !imageDocument.isClosing && window?.attachedSheet == nil
+        case #selector(showGuides(_:)):
+            // The sheet reads only cached state; it just must not stack
+            // on another sheet of this window.
+            return !imageDocument.isClosing && window?.attachedSheet == nil
+        case #selector(toggleShowGuides(_:)):
+            // The checkmark reads the window's cached flag, never the
+            // engine; toggling is view-only, so it stays available
+            // wherever navigation is.
+            menuItem.state = guidesViewState.menuState
+            return !imageDocument.isClosing
         case #selector(assignColorProfile(_:)):
             // Assignment is allowed on every mode, indexed included:
             // it embeds a compatible profile without converting pixels.
@@ -1464,6 +1516,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     func windowWillClose(_ notification: Notification) {
         closeStarted = true
+        guidesSheet?.invalidate()
         previewPanel?.cancel()
         cancelPendingPreview()
         canvas.stopRendering { [self] in

@@ -1033,6 +1033,32 @@ thumbnail rendering through the panel, keyboard handling and the
 smoke-test scenario are unverified at runtime; pattern/gradient choosers,
 presets and resource management remain later slices.
 
+### Guides interface (2026-11-08)
+
+Image > Guides… opens a per-window management sheet (GuidesSheetController,
+retained by its DocumentWindowController) listing the cached
+ImageDocument.guides by orientation and position. Inline orientation plus
+a strictly parsed integer position feed Add, Move selected, Remove
+selected and Close; each edit goes through the queued
+addGuide/moveGuide/removeGuide as one undo step, so Close is not Cancel
+and the sheet says changes can be undone. Orientation is fixed at
+creation: a move sends the guide's own cached orientation, never a
+reorienting put. Reload/error/close fan out through the window's existing
+onStateChange/onError/windowWillClose hooks; the selected row is preserved
+by guide id across asynchronous reloads and an active field edit is never
+overwritten; write controls disable on the cached busy/closing state and
+refusals show in the sheet. View > Show Guides is a cached per-window
+Boolean (default on) whose checkmark reads the cache; toggling redraws
+only the canvas overlay (drawn from document.guides through the
+CanvasGeometry image/view mapping, clipped to the displayed image) and
+never touches pixels, dirty state, export or print — printing draws an
+immutable PrintSnapshot, not the canvas view. Rulers, snapping and canvas
+guide dragging are later work. Compile-checked here (swift build,
+--build-tests); unit tests cover parsing, range/orientation, menu state,
+row/edit preservation and overlay geometry; the GLIMS_SMOKE_CASE=
+guides-controls scenario is wired but NOT run — root owns the runtime
+matrix against the native-guides libraries.
+
 ## Later, before any public release
 
 - Developer ID signing and notarization for the app, GTK3, Python and every
