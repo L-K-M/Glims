@@ -63,10 +63,10 @@ final class GuidesControlsTests: XCTestCase {
 
     func testSelectionIsPreservedByGuideIdentityAcrossAReload() {
         let before = [guide(1, .horizontal, 5), guide(2, .vertical, 9), guide(3, .horizontal, 20)]
-        // A new guide lands in front and shifts every index.
+        // A new horizontal guide sorts first; the vertical guide sorts last.
         let after = [guide(9, .horizontal, 1)] + before
         XCTAssertEqual(GuidesSheetLogic.index(ofGuide: 3, in: before), 2)
-        XCTAssertEqual(GuidesSheetLogic.index(ofGuide: 3, in: GuidesSheetLogic.sortedGuides(after)), 3)
+        XCTAssertEqual(GuidesSheetLogic.index(ofGuide: 3, in: GuidesSheetLogic.sortedGuides(after)), 2)
         XCTAssertNil(GuidesSheetLogic.index(ofGuide: 42, in: after))
     }
 
