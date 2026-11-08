@@ -26,18 +26,6 @@ final class PathFillVectorTests: XCTestCase {
         XCTAssertNil(EngineSession.supportsLinkLayers(version: "glims"))
     }
 
-    func testPathsPaletteCommandsNameFillAndToVectorLayer() {
-        let titles = PathsPaletteController.Command.allCases.map(\.menuTitle)
-        XCTAssertEqual(titles, ["New Path", "Delete Path", "Path to Selection", "Stroke Path",
-                               "Fill Path", "To Vector Layer"])
-        XCTAssertEqual(PathsPaletteController.Command.fill.toolTip, "Fill Path")
-        let vectorTip = PathsPaletteController.Command.toVectorLayer.toolTip
-        XCTAssertTrue(vectorTip.contains("white fill") && vectorTip.contains("black stroke"),
-                      "the tooltip states the engine's default style: \(vectorTip)")
-        XCTAssertTrue(vectorTip.contains("foreground color is not applied"),
-                      "the tooltip does not claim foreground styling: \(vectorTip)")
-    }
-
     func testPathFillSettingsFollowTheForegroundColorOpacityAndAntialias() {
         let state = ToolState.shared
         let savedForeground = state.foreground

@@ -56,8 +56,7 @@ final class PathsPaletteController: NSViewController, PaletteContent, PaletteEdi
         var toolTip: String {
             switch self {
             case .toVectorLayer:
-                return "To Vector Layer — a new vector layer in the engine's default style "
-                    + "(white fill, black stroke); the foreground color is not applied"
+                return "Create a vector layer with white fill and black stroke."
             default:
                 return menuTitle
             }
