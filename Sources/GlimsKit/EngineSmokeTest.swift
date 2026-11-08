@@ -229,14 +229,25 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (floating controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
-            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "menu-shortcuts" {
-                try exerciseMenuShortcuts(session, work: work, documents: documents)
-                print(failures == 0 ? "PASSED (menu shortcuts)" : "FAILED: \(failures) failure(s)")
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recovery-admission" {
+                try exercisePrinting(session, work: work, documents: documents)
+                try exerciseRecovery(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (recovery admission)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tool-presets" {
+                try exerciseToolPresetControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (tool-presets)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "guide-dragging" {
                 try exerciseGuideDragging(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (guide dragging)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "menu-shortcuts" {
+                try exerciseMenuShortcuts(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (menu shortcuts)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
@@ -278,8 +289,9 @@ enum EngineSmokeTest {
             try exerciseGridControls(session, work: work, documents: documents)
             try exercisePixelRulers(session, work: work, documents: documents)
             try exerciseGuideDragging(session, work: work, documents: documents)
-            try exerciseFloatingControls(session, work: work, documents: documents)
+            try exerciseToolPresetControls(session, work: work, documents: documents)
             try exerciseMenuShortcuts(session, work: work, documents: documents)
+            try exerciseFloatingControls(session, work: work, documents: documents)
 
             try exerciseStrokeSelectionControls(session, work: work, documents: documents)
 
@@ -2192,12 +2204,23 @@ enum EngineSmokeTest {
 
         let native = work.appendingPathComponent("recovery-source.xcf")
         var saved = false
+        var saveFinished = false
+        var saveFailure: String?
+        let admissionLabel = EngineActivity.shared.label
         document.save(to: native) { error in
+            saveFinished = true
+            saveFailure = error.map { String(describing: $0) }
             if error == nil { document.noteSaved(to: native); saved = true }
         }
-        wait { saved && document.pendingWork == 0 }
+        wait { saveFinished && document.pendingWork == 0 }
         check(saved && document.fileState.nativeURL == native && !document.hasUnsavedChanges,
-              "the document saves natively before recovery begins")
+              "the document saves natively before recovery begins (finished \(saveFinished), error \(saveFailure ?? "none"), admission \(admissionLabel ?? "idle"), pending \(document.pendingWork))")
+        guard saved else {
+            controller.window?.orderOut(nil)
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+            return
+        }
 
         let store = RecoveryStore(base: work.appendingPathComponent("recovery-store"))
         try store.prepare()
@@ -5074,6 +5097,10 @@ enum EngineSmokeTest {
         document.onError = { reportError?($0); messages.append($0) }
         func settle() {
             document.inputQueue.sync {}
+            // Native work finishing does not drain its main-queue reload
+            // callbacks. Observe their counted completion before reading
+            // the cached history or driving the next palette action.
+            wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
             spin()
         }
         func wait(_ condition: @escaping () -> Bool) {
