@@ -796,6 +796,88 @@ final class ImageDocument {
         }
     }
 
+    // MARK: Image metadata
+
+    /// The tag names present on the image's metadata in `domain`, read
+    /// as asynchronous COUNTED document work on the input queue — never
+    /// on the main thread and never while a menu validates. The read is
+    /// a plain native read (allowed even while a stroke, preview or
+    /// plug-in holds the image), but it still counts in `pendingWork`,
+    /// so a close drains it before the image is destroyed and a
+    /// completion always lands on a live image or reports `closed`.
+    /// The image id is captured by value in the queued job.
+    func readMetadataTags(_ domain: EngineSession.MetadataDomain,
+                          completion: @escaping @MainActor (Result<[String], Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueue(on: inputQueue) { [session, image] in
+            let result = Result { try session.metadataTags(image, domain: domain) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// The ordered value list of one metadata `tag`, queued and counted
+    /// exactly like `readMetadataTags(_:)`: duplicates, empty strings,
+    /// newlines and order are the engine's own vector, never flattened
+    /// or re-joined here. An unregistered tag reports the native
+    /// NOT_FOUND through the completion.
+    func readMetadataValues(_ tag: String,
+                            completion: @escaping @MainActor (Result<[String], Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueue(on: inputQueue) { [session, image] in
+            let result = Result { try session.metadataValues(image, tag: tag) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// Sets or removes ONE metadata `tag` with the captured ordered
+    /// `values` array (SET requires at least one value; REMOVE takes [])
+    /// as one undo step, as counted input work on the input queue — the
+    /// same serial queue as every other accepted edit, so it lands behind
+    /// them in order. Before queueing, in-flight field/text edits are
+    /// committed and an active stroke ended (the
+    /// finishInput/endPendingUserEdits convention): both enqueue their
+    /// jobs on this queue ahead of this one.
+    ///
+    /// Admission reads only the cached busy/preview/closing/modal state
+    /// (`refuseWhileEditingUnavailable`): metadata edits are image-level,
+    /// so pixel/alpha locks and layer/mask/channel target types never
+    /// refuse them. The native readiness gate (BUSY under a stroke,
+    /// preview or plug-in) still applies on the queue. The completion
+    /// reports the engine's own answer — UNSUPPORTED (protected,
+    /// LangAlt, new XMP containers), NOT_FOUND (unregistered tag),
+    /// INVALID_ARGUMENT (empty SET, multi-value on a single-value tag),
+    /// BUSY — unchanged; every refusal leaves the image, its metadata
+    /// and its history untouched. The cache reloads only after a
+    /// successful change; a no-op (identical values, absent-tag REMOVE)
+    /// is a success with no undo.
+    func editMetadata(_ tag: String, _ operation: EngineSession.MetadataEdit, values: [String] = [],
+                      completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !refuseWhileEditingUnavailable() else {
+            return completion(.failure(isClosing ? DocumentError.closed : DocumentError.busy))
+        }
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        // Keep the deferred cache/completion stage alive through another
+        // document's exclusive work as well as the native input job.
+        pendingWork += 1
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let result = Result { try session.editMetadata(image, tag: tag, operation, values: values) }
+            DispatchQueue.main.async {
+                EngineActivity.shared.whenIdle {
+                    defer { self.jobDidFinish(input: false) }
+                    if !self.isClosing {
+                        // Reload only after a successful change; a refusal
+                        // leaves the cached state as it was.
+                        if case .success = result { try? self.reload() }
+                        if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                    }
+                    completion(result)
+                }
+            }
+        }
+    }
+
     // MARK: Editing
 
     func fill(at point: CGPoint, mode: EngineSession.FillMode, color: NSColor, threshold: Double,
