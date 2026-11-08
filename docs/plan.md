@@ -830,6 +830,19 @@ No upstream source, file metadata, dirty state or undo history changes.
 Pinned and cross-version checks plus independent review are recorded in
 the PR before merge. Frontend path controls remain a separate slice.
 
+The same 3.2.0 loader guard now also retains, until loading finishes, every
+source layer that carries the `gimp-vector-layer-data` qdata. GIMP 3.2.0's
+`xcf-load.c` reads `vdata->modified` after `gimp_layer_from_layer()` has
+unref'd and finalized the original plain layer that owns that data (3.2.8
+snapshots the flag before converting), so the read was a use-after-free:
+depending on heap contents it crashed the load or rasterized the reopened
+vector layer, which made the style facade refuse it with NOT_FOUND. The
+XCF bytes themselves were always correct — `PROP_VECTOR_LAYER` stores
+width/miter as float32 in every 3.2.x, and a 3.2.0-written file reopens
+with 12.3/5.2 intact once the source layer stays alive. Fractional
+persistence is therefore a native guarantee on 3.2.0+ (float32 precision),
+not an adapter addition.
+
 ### Paths interface verification (2026-11-08)
 
 The Paths palette and Edit menu expose Fill Path and To Vector Layer.

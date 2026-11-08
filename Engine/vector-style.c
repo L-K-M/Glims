@@ -11,7 +11,7 @@
  * layer and its options, push the snapshot, mutate, thaw, end the group —
  * inlined here so GIMP 3.2.0, which has no helper and no
  * GIMP_UNDO_GROUP_VECTOR, gets the identical semantics with
- * GIMP_UNDO_GROUP_DRAWABLE_MOD, the group its own vector push_undo uses.
+ * GIMP_UNDO_GROUP_DRAWABLE_MOD, an ordinary drawable-modification group available in that version.
  * The notify chain re-renders the layer on options-level properties; the
  * fill/stroke sub-objects do not re-emit the options' notify, so the setter
  * refreshes explicitly afterwards (gimp_vector_layer_refresh, which pushes
@@ -54,8 +54,8 @@
 #if GIMP_CHECK_VERSION (3, 2, 8)
 #define GLIMS_VECTOR_UNDO_GROUP GIMP_UNDO_GROUP_VECTOR
 #else
-/* 3.2.0 has no GIMP_UNDO_GROUP_VECTOR; its own vector-layer undo pushes
- * group under GIMP_UNDO_GROUP_DRAWABLE_MOD (gimpvectorlayer.c). */
+/* 3.2.0 has no GIMP_UNDO_GROUP_VECTOR; its ordinary drawable-modification
+ * group still wraps the whole-options snapshot as one undo step. */
 #define GLIMS_VECTOR_UNDO_GROUP GIMP_UNDO_GROUP_DRAWABLE_MOD
 #endif
 #endif
@@ -427,13 +427,16 @@ glims_vector_layer_style_set (GlimsEngine                   *engine,
       differs = TRUE;
     if ((p & GLIMS_VECTOR_STYLE_STROKE_ANTIALIAS) && c.stroke_antialias != current.stroke_antialias)
       differs = TRUE;
-    if ((p & GLIMS_VECTOR_STYLE_STROKE_WIDTH) && c.stroke_width != current.stroke_width)
+    /* XCF stores these scalar values as float32. Compare at that
+     * precision so reapplying the displayed value after reopen is a no-op. */
+    if ((p & GLIMS_VECTOR_STYLE_STROKE_WIDTH) && (gfloat) c.stroke_width != (gfloat) current.stroke_width)
       differs = TRUE;
     if ((p & GLIMS_VECTOR_STYLE_STROKE_CAP) && c.stroke_cap != current.stroke_cap)
       differs = TRUE;
     if ((p & GLIMS_VECTOR_STYLE_STROKE_JOIN) && c.stroke_join != current.stroke_join)
       differs = TRUE;
-    if ((p & GLIMS_VECTOR_STYLE_STROKE_MITER) && c.stroke_miter_limit != current.stroke_miter_limit)
+    if ((p & GLIMS_VECTOR_STYLE_STROKE_MITER) &&
+        (gfloat) c.stroke_miter_limit != (gfloat) current.stroke_miter_limit)
       differs = TRUE;
     if (! differs)
       return GLIMS_STATUS_OK;

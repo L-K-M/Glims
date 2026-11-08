@@ -1546,6 +1546,12 @@ test_vector_layer_style (const char *work)
          "a live path edit re-renders the styled layer and keeps the name (22,22 bg %d,%d; 50,50 fill %d,%d; %s)",
          px[0], px[1], px[0], px[1], rows[1].name);
 
+  bad = (GlimsVectorStyleChange) { .struct_size = sizeof bad,
+          .properties = GLIMS_VECTOR_STYLE_STROKE_WIDTH | GLIMS_VECTOR_STYLE_STROKE_MITER,
+          .stroke_width = 12.3, .stroke_miter_limit = 5.2 };
+  CHECK (api->vector_layer_style_set (engine, image, vector, &bad, NULL) == GLIMS_STATUS_OK,
+         "fractional width and miter are set before the XCF round trip");
+
   /* An XCF round trip keeps the style, the name and the group. */
   snprintf (xcf, sizeof xcf, "%s/vector-style.xcf", work);
   CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
@@ -1558,8 +1564,8 @@ test_vector_layer_style (const char *work)
          style.enable_fill && style.enable_stroke &&
          style.fill_color.green > 0.99 && style.fill_color.red < 0.01 &&
          style.stroke_color.red > 0.99 && style.stroke_color.green < 0.01 &&
-         style.stroke_width == 12 && style.stroke_cap == GLIMS_VECTOR_CAP_ROUND &&
-         style.stroke_join == GLIMS_VECTOR_JOIN_BEVEL && style.stroke_miter_limit == 5 &&
+         fabs (style.stroke_width - 12.3) < 1e-5 && style.stroke_cap == GLIMS_VECTOR_CAP_ROUND &&
+         style.stroke_join == GLIMS_VECTOR_JOIN_BEVEL && fabs (style.stroke_miter_limit - 5.2) < 1e-5 &&
          ! style.fill_antialias && ! style.stroke_antialias,
          "XCF reopen preserves the style (w %.1f, cap %u, join %u, miter %.1f)%s%s",
          style.stroke_width, style.stroke_cap, style.stroke_join, style.stroke_miter_limit,
@@ -1568,6 +1574,18 @@ test_vector_layer_style (const char *work)
   render_pixel (reopened, 50, 50, px);
   CHECK (px[1] > 200 && px[0] < 60,
          "the reopened vector layer renders the saved style (%d,%d,%d,%d)", px[0], px[1], px[2], px[3]);
+  before = undo_depth (reopened);
+  CHECK (api->vector_layer_style_set (engine, reopened, rows[1].id, &bad, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (reopened) == before,
+         "reapplying displayed fractional width and miter after XCF is a no-op");
+  bad.stroke_width = 14.3;
+  before = undo_depth (reopened);
+  CHECK (api->vector_layer_style_set (engine, reopened, rows[1].id, &bad, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (reopened) == before + 1 &&
+         api->image_layers (engine, reopened, rows, 4, &count) == GLIMS_STATUS_OK &&
+         !strcmp (rows[1].name, "Vector") && rows[1].kind == GLIMS_LAYER_VECTOR &&
+         api->paths (engine, reopened, prows, 2, &pcount) == GLIMS_STATUS_OK && pcount == 1,
+         "style editing after XCF is one undo and preserves the named vector and path");
   if (reopened)
     api->image_close (engine, reopened);
 
