@@ -6,7 +6,7 @@ import AppKit
 /// from the cached `ImageDocument.grid`. Every edit stays local until
 /// Apply parses and validates the whole draft and performs ONE queued
 /// atomic `setGrid` (one undo step when changed; an identical grid is a
-/// no-op). Cancel and window close write nothing. Validation and native
+/// no-op). Close discards unapplied edits; accepted changes remain undoable. Validation and native
 /// refusals are shown in the sheet and the draft is preserved, so the
 /// user can correct the values. The owning window controller retains
 /// this controller for the sheet's lifetime and routes reload, error and
@@ -26,7 +26,7 @@ final class GridSheetController: NSObject, NSTextFieldDelegate {
     private let foregroundWell = NSColorWell(frame: NSRect(x: 0, y: 0, width: 64, height: 28))
     private let backgroundWell = NSColorWell(frame: NSRect(x: 0, y: 0, width: 64, height: 28))
     private let applyButton = NSButton(title: "Apply", target: nil, action: nil)
-    private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
+    private let cancelButton = NSButton(title: "Close", target: nil, action: nil)
     private let messageLabel = NSTextField(labelWithString: "")
     private let hintLabel = NSTextField(labelWithString: "")
 
@@ -36,6 +36,7 @@ final class GridSheetController: NSObject, NSTextFieldDelegate {
     /// refusal — is never clobbered.
     private var draft: EngineSession.Grid
     private var draftIsDirty = false
+    private var isApplying = false
     /// The last validation or native refusal shown in the sheet.
     private(set) var lastError: String?
     /// Set on close; late reload/error callbacks then do nothing.
@@ -51,7 +52,7 @@ final class GridSheetController: NSObject, NSTextFieldDelegate {
         self.draft = document.grid
         self.colorPanelWasVisible = NSColorPanel.sharedColorPanelExists && NSColorPanel.shared.isVisible
         self.panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 260),
-                             styleMask: [.titled, .closable, .utilityWindow],
+                             styleMask: [.titled, .utilityWindow],
                              backing: .buffered, defer: false)
         super.init()
         panel.title = "Configure Grid"
@@ -81,7 +82,7 @@ final class GridSheetController: NSObject, NSTextFieldDelegate {
         backgroundWell.target = self
         backgroundWell.action = #selector(colorChanged(_:))
         applyButton.setAccessibilityLabel("Apply grid")
-        cancelButton.setAccessibilityLabel("Cancel grid changes")
+        cancelButton.setAccessibilityLabel("Close grid sheet")
         applyButton.target = self
         applyButton.action = #selector(apply(_:))
         cancelButton.target = self
@@ -95,7 +96,7 @@ final class GridSheetController: NSObject, NSTextFieldDelegate {
         hintLabel.lineBreakMode = .byWordWrapping
         hintLabel.maximumNumberOfLines = 2
         hintLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        hintLabel.stringValue = "Changes apply to this image as one undoable step when you press Apply. Cancel discards them."
+        hintLabel.stringValue = "Each Apply is undoable. Close discards edits made since the last Apply."
 
         let grid = NSGridView(views: [
             [NSTextField(labelWithString: "Style:"), stylePopup, NSView(), NSView()],
@@ -174,11 +175,15 @@ final class GridSheetController: NSObject, NSTextFieldDelegate {
     func invalidate() {
         guard !isInvalidated else { return }
         isInvalidated = true
+        finishColorEditing()
+        panel.endEditing(for: nil)
+    }
+
+    private func finishColorEditing() {
         let ownActivation = foregroundWell.isActive || backgroundWell.isActive
         if ownActivation && !colorPanelWasVisible { NSColorPanel.shared.orderOut(nil) }
         foregroundWell.deactivate()
         backgroundWell.deactivate()
-        panel.endEditing(for: nil)
     }
 
     // MARK: Controls
@@ -212,7 +217,13 @@ final class GridSheetController: NSObject, NSTextFieldDelegate {
         // Cached busy/closing state only — no native call here. The draft
         // controls stay editable while busy (edits are local); only Apply
         // gates on the document's cached acceptsEdits.
-        applyButton.isEnabled = !isInvalidated && document.acceptsEdits
+        let canEdit = !isInvalidated && !isApplying
+        stylePopup.isEnabled = canEdit
+        for field in [spacingXField, spacingYField, offsetXField, offsetYField] { field.isEnabled = canEdit }
+        foregroundWell.isEnabled = canEdit
+        backgroundWell.isEnabled = canEdit
+        cancelButton.isEnabled = canEdit
+        applyButton.isEnabled = canEdit && document.acceptsEdits
     }
 
     private func refuse(_ message: String) {
@@ -250,7 +261,7 @@ final class GridSheetController: NSObject, NSTextFieldDelegate {
     /// (e.g. a spacing beyond the engine's bounds) comes back through
     /// the document's error callback and is shown with the values intact.
     @objc private func apply(_ sender: Any?) {
-        guard !isInvalidated, document.acceptsEdits else { return }
+        guard !isInvalidated, !isApplying, document.acceptsEdits else { return }
         panel.endEditing(for: nil)
         switch GridSheetLogic.validateDraft(style: selectedStyle,
                                             spacingXText: spacingXField.stringValue,
@@ -264,13 +275,29 @@ final class GridSheetController: NSObject, NSTextFieldDelegate {
         case .success(let grid):
             clearMessage()
             draft = grid
+            draftIsDirty = true
+            isApplying = true
+            finishColorEditing()
+            updateControlStates()
             let owner = document
-            owner.setGrid(grid)
+            owner.setGrid(grid) { [weak self] result in
+                guard let self, !self.isInvalidated else { return }
+                self.isApplying = false
+                switch result {
+                case .success:
+                    self.draftIsDirty = false
+                    self.seedFromCache()
+                case .failure(let error):
+                    self.refuse(error.localizedDescription)
+                }
+                self.updateControlStates()
+            }
         }
     }
 
-    /// Cancel: closes the sheet; nothing was written.
+    /// Close discards the unapplied draft. Accepted work completes first.
     @objc private func cancel(_ sender: Any?) {
+        guard !isInvalidated, !isApplying else { return }
         hostWindow?.endSheet(panel, returnCode: .alertSecondButtonReturn)
     }
 }

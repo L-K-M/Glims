@@ -2222,3 +2222,16 @@ history/dirty state on reads and profile-assignment Undo/Redo appearance.
 No production renderer change was needed. This verifies the in-gamut sRGB
 path; physical monitor calibration, wide-gamut/HDR output, proof profiles,
 proof intents and gamut warnings remain unverified or unimplemented.
+
+Grid controls integration passes 417 unit tests, all 38 focused checks on
+all four engines and 1,030 full pinned interface checks. A controlled
+probe of the actual planner reproduced an infinite loop when a Double
+index could not advance by one; indices outside the exact-integer range
+are now suppressed and iteration has an integer bound. Its regression
+passes. An actual-sheet regression also reproduced idle fields staying
+stale after Apply then Undo. The document now reports counted completion;
+the sheet marks the committed draft clean only on success and refreshes
+it from the cache. Accepted work disables its controls through completion.
+Close discards unapplied edits, while applied changes remain undoable.
+Own color editing ends on Apply and close without hiding another owner's
+panel. Parent integration and independent review of this fix follow.

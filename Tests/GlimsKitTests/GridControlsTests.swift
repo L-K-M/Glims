@@ -12,6 +12,17 @@ import XCTest
 final class GridControlsTests: XCTestCase {
     private static let accuracy = 1e-9
 
+    func testExtremeOffsetSuppressesAnUnrepresentableGridIndex() {
+        let settings = grid(spacingX: 2, spacingY: 2, offsetX: -1e20, offsetY: -1e20)
+        let plan = GridOverlayPlanner.plan(grid: settings, imageSize: CGSize(width: 10, height: 10),
+                                          visibleImageRect: CGRect(x: 0, y: 0, width: 10, height: 10),
+                                          deviceScale: 1, viewScale: 1)
+        XCTAssertTrue(plan.isSuppressed)
+        XCTAssertTrue(plan.verticalLines.isEmpty)
+        XCTAssertTrue(plan.horizontalLines.isEmpty)
+    }
+
+
     private func grid(style: EngineSession.GridStyle = .solid, spacingX: Double = 10, spacingY: Double = 10,
                       offsetX: Double = 0, offsetY: Double = 0) -> EngineSession.Grid {
         EngineSession.Grid(style: style, spacingX: spacingX, spacingY: spacingY,

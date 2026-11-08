@@ -260,7 +260,11 @@ enum GridOverlayPlanner {
         guard first.isFinite, last.isFinite else { return nil }
         let k0 = first.rounded(.up)
         let k1 = last.rounded(.down)
-        guard k0.isFinite, k1.isFinite else { return nil }
+        // Beyond the exact-integer range, adding one can leave a Double
+        // unchanged. Such indices cannot safely describe individual lines.
+        let largestExactIndex = 9_007_199_254_740_991.0
+        guard k0.isFinite, k1.isFinite,
+              abs(k0) <= largestExactIndex, abs(k1) <= largestExactIndex else { return nil }
         let count = k1 - k0 + 1
         guard count >= 0 else { return [] }
         guard count.isFinite, count <= Double(cap) else {
@@ -269,11 +273,9 @@ enum GridOverlayPlanner {
         }
         var coordinates: [Double] = []
         coordinates.reserveCapacity(Int(count))
-        var k = k0
-        while k <= k1 {
-            let x = offset + k * spacing
+        for index in 0..<Int(count) {
+            let x = offset + (k0 + Double(index)) * spacing
             if x.isFinite, x >= lower, x <= upper { coordinates.append(x) }
-            k += 1
         }
         return coordinates
     }

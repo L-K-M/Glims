@@ -8168,7 +8168,16 @@ enum EngineSmokeTest {
         let pixelsBefore = try session.copyPixels(imageA, merged: true).pixels
         let undoBefore = docA.undoInfo.undoCount
         field(sheetA, "Grid spacing X")?.stringValue = "20"
+        a.gridSheet?.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification,
+                                                       object: field(sheetA, "Grid spacing X")))
+        let applyGate = DispatchSemaphore(value: 0)
+        docA.inputQueue.async { applyGate.wait() }
         button(sheetA, "Apply grid")?.performClick(nil)
+        check(docA.pendingWork > 0 && button(sheetA, "Apply grid")?.isEnabled == false
+                && button(sheetA, "Close grid sheet")?.isEnabled == false
+                && field(sheetA, "Grid spacing X")?.isEnabled == false,
+              "accepted grid work is counted and disables controls until completion")
+        applyGate.signal()
         wait { docA.pendingWork == 0 && docA.grid.spacingX == 20 }
         spin()
         check(docA.grid.spacingX == 20 && docA.grid.spacingY == 10
@@ -8178,6 +8187,16 @@ enum EngineSmokeTest {
               "the grid change leaves the image pixels untouched")
         check(a.window?.attachedSheet === sheetA && a.gridSheet != nil,
               "Apply keeps the sheet open")
+        docA.undo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 10 }
+        spin()
+        check(field(sheetA, "Grid spacing X")?.stringValue == "10.0",
+              "Undo after Apply refreshes the idle field in the still-open sheet")
+        docA.redo()
+        wait { docA.pendingWork == 0 && docA.grid.spacingX == 20 }
+        spin()
+        check(field(sheetA, "Grid spacing X")?.stringValue == "20.0",
+              "Redo refreshes the open grid sheet's committed field")
 
         // Invalid input: refused visibly in the sheet, no mutation, and
         // the draft is preserved for correcting.
@@ -8208,7 +8227,7 @@ enum EngineSmokeTest {
 
         // Cancel writes nothing and closes the sheet.
         field(sheetA, "Grid spacing X")?.stringValue = "33"
-        button(sheetA, "Cancel grid changes")?.performClick(nil)
+        button(sheetA, "Close grid sheet")?.performClick(nil)
         wait { a.window?.attachedSheet == nil }
         spin()
         check(a.gridSheet == nil && docA.grid.spacingX == 20 && docA.undoInfo.undoCount == undoAfterApply,
