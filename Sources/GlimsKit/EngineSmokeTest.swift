@@ -6340,9 +6340,21 @@ enum EngineSmokeTest {
         let image = try session.newImage(width: 96, height: 64)
         let document = try ImageDocument(session: session, image: image, name: "Pattern Fill")
         documents.items.append(document)
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        defer {
+            documents.items.removeAll { $0 === document }
+            var closed = false
+            document.closeImageWhenDrained { closed = true }
+            wait { closed }
+            check(closed && session.info(image) == nil,
+                  "the pattern-fill image closes before engine shutdown")
+        }
         func settle() {
             document.inputQueue.sync {}
-            spin()
+            wait { document.pendingWork == 0 }
             spin()
         }
 
