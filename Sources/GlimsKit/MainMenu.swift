@@ -185,6 +185,8 @@ enum MainMenu {
             item("Actual Pixels", #selector(DocumentWindowController.actualPixels(_:)), "1"),
             .separator(),
             item("Show Guides", #selector(DocumentWindowController.toggleShowGuides(_:))),
+            item("Show Layer Boundary", #selector(DocumentWindowController.toggleLayerBoundary(_:))),
+            item("Show Selection Edges", #selector(DocumentWindowController.toggleSelectionEdges(_:))),
         ])
         let lastFilterSettings = item("Last Filter Settings…", #selector(DocumentWindowController.reshowLastFilter(_:)), "f")
         lastFilterSettings.keyEquivalentModifierMask = [.command, .option]
