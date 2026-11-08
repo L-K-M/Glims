@@ -59,6 +59,16 @@ final class EngineCanvasView: NSView {
     /// The current tool's handling of pointer and key events.
     private(set) lazy var tools = CanvasToolController(canvas: self)
 
+    /// View ▸ Show Guides: whether the canvas draws the image's guides.
+    /// Cached per window (the document window controller owns the toggle);
+    /// flipping it is pure view state and just redraws.
+    var showsGuides = true {
+        didSet { needsDisplay = true }
+    }
+    /// Guide overlay lines: a saturated blue with a white underlay, so the
+    /// line reads on light and dark images alike.
+    static let guideColor = NSColor(calibratedRed: 0.05, green: 0.55, blue: 0.95, alpha: 1)
+
     /// The selection outline in image pixels, drawn as marching ants.
     var selectionOutline: [EngineSession.Segment] = [] {
         didSet {
@@ -343,7 +353,39 @@ final class EngineCanvasView: NSView {
         }
         drawSelectionOutline()
         drawVisiblePaths()
+        if showsGuides { drawGuidesOverlay() }
         tools.drawOverlay(scale: scale)
+    }
+
+    /// The image's ordinary guides as full-width/full-height lines in view
+    /// points, clipped to the displayed image. A pure canvas overlay: it
+    /// touches neither the rendered tiles nor any pixel path — printing
+    /// draws an immutable PrintSnapshot rendered from the engine, never
+    /// this view, so guides cannot leak into printed output.
+    private func drawGuidesOverlay() {
+        let guides = document.guides
+        guard !guides.isEmpty else { return }
+        let imageSize = CGSize(width: Double(document.info.width), height: Double(document.info.height))
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: CanvasGeometry.imageViewRect(imageSize: imageSize, zoomPercent: zoomPercent,
+                                                        backingFactor: backingScale)).addClip()
+        for guide in guides {
+            guard let (from, to) = CanvasGeometry.guideLineEndpoints(orientation: guide.orientation,
+                                                                    position: guide.position,
+                                                                    imageSize: imageSize,
+                                                                    zoomPercent: zoomPercent,
+                                                                    backingFactor: backingScale) else { continue }
+            let path = NSBezierPath()
+            path.move(to: from)
+            path.line(to: to)
+            path.lineWidth = 3
+            NSColor.white.setStroke()
+            path.stroke()
+            path.lineWidth = 1
+            Self.guideColor.setStroke()
+            path.stroke()
+        }
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     /// Visible paths as thin lines, as GIMP shows them with any tool. The

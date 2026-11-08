@@ -56,6 +56,40 @@ enum CanvasGeometry {
         return CGPoint(x: viewPoint.x / scale, y: viewPoint.y / scale)
     }
 
+    /// The inverse: where an image pixel lands in view points.
+    static func viewPoint(imagePoint: CGPoint, zoomPercent: Int, backingFactor: Double) -> CGPoint {
+        let scale = pointScale(zoomPercent: zoomPercent, backingFactor: backingFactor)
+        return CGPoint(x: imagePoint.x * scale, y: imagePoint.y * scale)
+    }
+
+    /// The displayed image's rect in view points, at the origin.
+    static func imageViewRect(imageSize: CGSize, zoomPercent: Int, backingFactor: Double) -> CGRect {
+        let scale = pointScale(zoomPercent: zoomPercent, backingFactor: backingFactor)
+        return CGRect(origin: .zero,
+                      size: CGSize(width: imageSize.width * scale, height: imageSize.height * scale))
+    }
+
+    /// One guide's line in view coordinates, clipped to the displayed
+    /// image: a horizontal guide (position on the y axis) spans the image's
+    /// full width at y = position × scale; a vertical one (position on the
+    /// x axis) spans the full height at x = position × scale. Nil when the
+    /// position lies outside the displayed image.
+    static func guideLineEndpoints(orientation: EngineSession.GuideOrientation, position: Int32,
+                                   imageSize: CGSize, zoomPercent: Int, backingFactor: Double) -> (CGPoint, CGPoint)? {
+        let scale = pointScale(zoomPercent: zoomPercent, backingFactor: backingFactor)
+        let image = imageViewRect(imageSize: imageSize, zoomPercent: zoomPercent, backingFactor: backingFactor)
+        switch orientation {
+        case .horizontal:
+            let y = Double(position) * scale
+            guard y >= image.minY && y <= image.maxY else { return nil }
+            return (CGPoint(x: image.minX, y: y), CGPoint(x: image.maxX, y: y))
+        case .vertical:
+            let x = Double(position) * scale
+            guard x >= image.minX && x <= image.maxX else { return nil }
+            return (CGPoint(x: x, y: image.minY), CGPoint(x: x, y: image.maxY))
+        }
+    }
+
     /// The image pixel under the viewport centre, given the clip view's
     /// bounds (`scrollOffset` and `viewportSize`, both in view points).
     static func imageCenter(scrollOffset: CGPoint, viewportSize: CGSize,
