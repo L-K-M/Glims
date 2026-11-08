@@ -101,6 +101,11 @@ final class ImageDocument {
     /// The lock state the engine reported per layer id at the last reload:
     /// the item's own locks and the locks enforced on it.
     private(set) var layerLocks: [Int32: EngineSession.LayerLockState] = [:]
+    /// Each layer's committed effects by layer id, top first, read with
+    /// the rest of the state — metadata only, never per paint. The
+    /// Layers palette's effect rows show them; the engine's listing
+    /// never counts a live preview session among them.
+    private(set) var layerEffects: [Int32: [EngineSession.Effect]] = [:]
     /// While the window's filter preview is open, layer changes are
     /// refused — the preview owns its drawable. Set by the controller.
     var filterPreviewIsOpen = false
@@ -203,14 +208,19 @@ final class ImageDocument {
         layers = try session.layers(image)
         var locks: [Int32: EngineSession.LayerLockState] = [:]
         var masks: [Int32: EngineSession.MaskState] = [:]
+        var effects: [Int32: [EngineSession.Effect]] = [:]
         for layer in layers {
             locks[layer.id] = try? session.layerState(layer.id, image: image)
             if layer.hasMask, let state = try? session.layerMask(layer.id, image: image),
                state.mask != 0 {
                 masks[layer.id] = state
             }
+            if layer.filterCount > 0 {
+                effects[layer.id] = (try? session.effects(on: layer.id, image: image)) ?? []
+            }
         }
         layerLocks = locks
+        layerEffects = effects
         if let pick = pendingTargetPick, let pickedLayer = pick.target.layer {
             for (id, var mask) in masks {
                 mask.editing = id == pickedLayer && pick.target.mask != nil
@@ -1150,6 +1160,35 @@ final class ImageDocument {
         onSelectionChange?()
     }
 
+    // MARK: Committed effects
+
+    /// Whether `effect` still names a committed effect of `drawable` as
+    /// the last reload saw them — the membership guard every effect-row
+    /// command takes, so a stale row cannot hit another drawable's stack.
+    func canChangeEffect(_ effect: Int32, on drawable: Int32) -> Bool {
+        layers.contains(where: { $0.id == drawable })
+            && layerEffects[drawable]?.contains(where: { $0.id == effect }) == true
+    }
+
+    /// Sets the committed effect's name, enabled state or opacity as one
+    /// undo step (`effect_change`); an empty name restores the
+    /// operation's default title.
+    func changeEffect(_ effect: Int32, on drawable: Int32, _ change: EngineSession.EffectChange) {
+        guard canChangeEffect(effect, on: drawable), !refuseWhileEditingUnavailable() else { return }
+        endPendingUserEdits()
+        run { session, image in try session.changeEffect(effect, on: drawable, image: image, change) }
+    }
+
+    /// A stack command — remove, merge or reorder — on the committed
+    /// effect, as one undo step (`effect_command`). The ids are
+    /// explicit: a stale row's command cannot reach another drawable's
+    /// stack, and the engine's guards stay authoritative.
+    func effectCommand(_ command: EngineSession.EffectCommand, effect: Int32, on drawable: Int32) {
+        guard canChangeEffect(effect, on: drawable), !refuseWhileEditingUnavailable() else { return }
+        endPendingUserEdits()
+        run { session, image in try session.effectCommand(command, effect: effect, on: drawable, image: image) }
+    }
+
     // MARK: Undo
 
     /// Undo and redo replace the paint target like a delete does: the
@@ -1617,6 +1656,38 @@ final class ImageDocument {
             let result = Result<FilterPreviewStart, Error> {
                 try self.requirePaintTarget()
                 let filter = try session.beginFilter(image: image, drawable: drawable, operation: operation)
+                var values: [String: EngineSession.FilterValue] = [:]
+                for property in properties where property.kind.isEditable {
+                    values[property.name] = try? session.filterProperty(filter, property.name)
+                }
+                return FilterPreviewStart(filter: filter, values: values)
+            }
+            DispatchQueue.main.async {
+                completion(result)
+                self.jobDidFinish(input: false)
+            }
+        }
+    }
+
+    /// Begins a live session editing committed effect `effect` of
+    /// `drawable` — both ids explicit, never the implicit paint target —
+    /// and reads `properties`' starting values, as one counted job on
+    /// the input queue behind pending input, like a new filter's begin.
+    /// The completion runs on the main actor before the job counts down,
+    /// so a stale completion that aborts the session it just created
+    /// still keeps the close drain waiting.
+    func beginEffectPreview(effect: Int32, on drawable: Int32,
+                            properties: [EngineSession.FilterProperty],
+                            completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard canChangeEffect(effect, on: drawable) else {
+            return completion(.failure(DocumentError.targetChanged))
+        }
+        guard !EngineActivity.shared.isBusy else { return completion(.failure(DocumentError.busy)) }
+        pendingWork += 1
+        inputQueue.async { [session, image] in
+            let result = Result<FilterPreviewStart, Error> {
+                let filter = try session.beginEditingEffect(effect, on: drawable, image: image)
                 var values: [String: EngineSession.FilterValue] = [:]
                 for property in properties where property.kind.isEditable {
                     values[property.name] = try? session.filterProperty(filter, property.name)
