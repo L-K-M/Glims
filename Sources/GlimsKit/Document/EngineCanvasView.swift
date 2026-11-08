@@ -62,10 +62,15 @@ final class EngineCanvasView: NSView {
     /// The selection outline in image pixels, drawn as marching ants.
     var selectionOutline: [EngineSession.Segment] = [] {
         didSet {
+            selectionPath = nil
             needsDisplay = true
             updateAntsTimer()
         }
     }
+    // Animation changes only the dash phase. Join the boundary again only
+    // when the selection or the view's image scale changes.
+    private var selectionPath: NSBezierPath?
+    private var selectionPathScale: Double = 0
     private var antsPhase: CGFloat = 0
     private var antsTimer: Timer?
 
@@ -308,7 +313,11 @@ final class EngineCanvasView: NSView {
 
     private func drawSelectionOutline() {
         guard !selectionOutline.isEmpty else { return }
-        Self.strokeMarchingAnts(SelectionContour.outlinePath(for: selectionOutline, scale: scale), phase: antsPhase)
+        if selectionPath == nil || selectionPathScale != scale {
+            selectionPath = SelectionContour.outlinePath(for: selectionOutline, scale: scale)
+            selectionPathScale = scale
+        }
+        if let selectionPath { Self.strokeMarchingAnts(selectionPath, phase: antsPhase) }
     }
 
     override func draw(_ dirtyRect: NSRect) {
