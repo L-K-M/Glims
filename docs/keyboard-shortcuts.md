@@ -88,7 +88,7 @@ UserDefaults key, storing one schema-1 JSON document as `Data`:
   unknown modifier bits, empty/control command ids and duplicate command ids
   (the overrides are an array precisely so duplicates are detectable) all
   **throw**; nothing is ever silently reset. An absent key is an empty store.
-- Storage is UserDefaults `Data`, written atomically; the store keeps no
+- Storage is one validated UserDefaults `Data` value; the store keeps no
   cache, so externally changed bytes are picked up by the next mutation.
 
 ### Catalog evolution (orphans)
@@ -99,7 +99,7 @@ mutation — never dropped, never rewritten. They are ignored by
 `effectiveShortcuts` until the command is **known again**, at which point the
 stored override is revalidated (Command/Control, reservations, conflicts)
 **before** it is applied; a conflict then fails the resolution and any
-persisting mutation, naming both commands. `reset(command:)` removes an
+persisting mutation, naming both commands. `reset(_:catalog:)` removes an
 orphan explicitly.
 
 ## Verification
@@ -110,3 +110,13 @@ modifier bits, default conflicts, disabled, reset, reservations, corrupt and
 unknown-key documents, version handling, duplicate ids, orphans and failed
 mutations preserving the store. Not covered: any UI/menu wiring (out of
 scope), and end-to-end key-event delivery.
+
+
+Reset validation follow-up: restoring a disabled command's default must
+check the complete effective catalog too. A regression disabled Command-A,
+assigned that key to another command, then reset the original command.
+It first failed two assertions because reset persisted the conflict.
+Reset and Reset All now require the catalog, and every mutation validates
+before writing. All 38 focused model/store tests pass. UserDefaults does
+not expose write failures or a crash-durability acknowledgment; those are
+not guarantees of this store. No menus or settings UI use it yet.

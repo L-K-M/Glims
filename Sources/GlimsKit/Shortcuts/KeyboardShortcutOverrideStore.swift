@@ -62,24 +62,25 @@ final class KeyboardShortcutOverrideStore {
     /// shortcut when it has none). Also removes an orphaned override of a
     /// command the catalog no longer knows. The removal itself is validated
     /// and persisted like every mutation.
-    func reset(_ command: String) throws {
-        try mutate(catalog: nil) { overrides in
+    func reset(_ command: String, catalog: KeyboardShortcutCatalog) throws {
+        try mutate(catalog: catalog) { overrides in
             overrides.removeValue(forKey: command)
         }
     }
 
     /// Removes every stored override. The stored document is read strictly
     /// first: a corrupt or future document throws and the bytes stay.
-    func resetAll() throws {
+    func resetAll(catalog: KeyboardShortcutCatalog) throws {
         _ = try document()
+        _ = try catalog.effectiveShortcuts(overrides: [:])
         defaults.removeObject(forKey: Self.overridesKey)
     }
 
     /// Loads the stored document, applies `change`, validates the result
-    /// against `catalog` (when given) and only then writes the single encoded
+    /// against the complete `catalog` and only then writes the single encoded
     /// document back. Any load, validation or encoding failure throws before
     /// the write, so the stored bytes are untouched.
-    private func mutate(catalog: KeyboardShortcutCatalog?,
+    private func mutate(catalog: KeyboardShortcutCatalog,
                         _ change: (inout [String: CommandShortcutOverride]) throws -> Void) throws {
         var overrides = try document().overrides
         try change(&overrides)
@@ -87,9 +88,7 @@ final class KeyboardShortcutOverrideStore {
         // revalidated against the catalog's effective shortcuts (this is
         // also where an override of a command that became known again is
         // rechecked); stored orphans stay untouched and inactive.
-        if let catalog {
-            _ = try catalog.effectiveShortcuts(overrides: overrides)
-        }
+        _ = try catalog.effectiveShortcuts(overrides: overrides)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data: Data

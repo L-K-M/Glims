@@ -77,11 +77,11 @@ final class KeyboardShortcutOverrideStoreTests: XCTestCase {
             try store.disable("edit.undo", catalog: catalog)
             XCTAssertEqual(try store.load()["edit.undo"], .disable)
 
-            try store.reset("edit.undo")
+            try store.reset("edit.undo", catalog: try self.catalog())
             XCTAssertEqual(try store.load(), [:])
 
             try store.assign(shortcut("u", [.command]), to: "edit.undo", catalog: catalog)
-            try store.resetAll()
+            try store.resetAll(catalog: try self.catalog())
             XCTAssertEqual(try store.load(), [:])
             XCTAssertNil(store.storedData)
         }
@@ -187,8 +187,8 @@ final class KeyboardShortcutOverrideStoreTests: XCTestCase {
             XCTAssertNil(effective.shortcut(forCommand: "edit.undo"))
             XCTAssertEqual(effective.shortcut(forCommand: "edit.redo"), shortcut("z", [.command]))
             // Reset restores the factory base.
-            try store.reset("edit.redo")
-            try store.reset("edit.undo")
+            try store.reset("edit.redo", catalog: try self.catalog())
+            try store.reset("edit.undo", catalog: try self.catalog())
             let restored = try catalog.effectiveShortcuts(overrides: try store.load())
             XCTAssertEqual(restored.shortcut(forCommand: "edit.undo"), shortcut("z", [.command]))
             XCTAssertEqual(restored.shortcut(forCommand: "edit.redo"), shortcut("z", [.command, .shift]))
@@ -326,7 +326,7 @@ final class KeyboardShortcutOverrideStoreTests: XCTestCase {
             XCTAssertNil(effective.command(forShortcut: shortcut("j", [.command])))
 
             // Reset removes the orphan explicitly.
-            try store.reset("legacy.command")
+            try store.reset("legacy.command", catalog: try self.catalog())
             XCTAssertEqual(try store.load().keys.sorted(), ["edit.undo"])
         }
     }
@@ -358,20 +358,36 @@ final class KeyboardShortcutOverrideStoreTests: XCTestCase {
 
     // MARK: - Reset validation
 
+    func testResetCannotRestoreADefaultTakenByAnotherOverride() throws {
+        try withDefaults { defaults in
+            let store = KeyboardShortcutOverrideStore(defaults: defaults)
+            let commands = try KeyboardShortcutCatalog([
+                ("command.a", shortcut("a", [.command])),
+                ("command.b", shortcut("b", [.command]))
+            ])
+            try store.disable("command.a", catalog: commands)
+            try store.assign(shortcut("a", [.command]), to: "command.b", catalog: commands)
+            let before = store.storedData
+            XCTAssertThrowsError(try store.reset("command.a", catalog: commands))
+            XCTAssertEqual(store.storedData, before, "a conflicting default must not be persisted")
+        }
+    }
+
+
     func testResetAllValidatesBeforeRemoving() throws {
         try withDefaults { defaults in
             let store = KeyboardShortcutOverrideStore(defaults: defaults)
             seed(defaults, json: "corrupt bytes")
-            assertError({ try store.resetAll() }) { if case .malformed = $0 { return true }; return false }
+            assertError({ try store.resetAll(catalog: try self.catalog()) }) { if case .malformed = $0 { return true }; return false }
             XCTAssertEqual(store.storedData, Data("corrupt bytes".utf8), "a failed reset must keep the stored bytes")
 
             seed(defaults, json: #"{"schemaVersion":99,"overrides":[]}"#)
-            assertError({ try store.resetAll() }) { if case .unsupportedSchemaVersion = $0 { return true }; return false }
+            assertError({ try store.resetAll(catalog: try self.catalog()) }) { if case .unsupportedSchemaVersion = $0 { return true }; return false }
             XCTAssertNotNil(store.storedData, "a failed reset must keep the stored bytes")
             defaults.removeObject(forKey: KeyboardShortcutOverrideStore.overridesKey)
 
             try store.assign(shortcut("u", [.command]), to: "edit.undo", catalog: try catalog())
-            try store.resetAll()
+            try store.resetAll(catalog: try self.catalog())
             XCTAssertNil(store.storedData)
         }
     }
@@ -383,7 +399,7 @@ final class KeyboardShortcutOverrideStoreTests: XCTestCase {
             assertError({ try store.assign(shortcut("u", [.command]), to: "edit.undo", catalog: try catalog()) }) {
                 if case .malformed = $0 { return true }; return false
             }
-            assertError({ try store.reset("edit.undo") }) { if case .malformed = $0 { return true }; return false }
+            assertError({ try store.reset("edit.undo", catalog: try self.catalog()) }) { if case .malformed = $0 { return true }; return false }
             XCTAssertEqual(store.storedData, Data("corrupt bytes".utf8))
         }
     }
