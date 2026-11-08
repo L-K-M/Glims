@@ -132,6 +132,7 @@ enum EngineSmokeTest {
             try exerciseFilterStackInterface(session, work: work, documents: documents)
             try measurePluginStalls(session, work: work)
             try exerciseResourceCatalog(session)
+            try exerciseResourceGradient(session, documents: documents)
             try exerciseResourceThumbnails(session)
         } catch {
             check(false, "unexpected engine error: \(error)")
@@ -6328,6 +6329,75 @@ enum EngineSmokeTest {
         check(try EngineSession.ResourceKind.allCases.map { try session.resources($0) } == catalogBefore,
               "resource thumbnails leave every resource catalog unchanged")
     }
+    private static func exerciseResourceGradient(_ session: EngineSession,
+                                                  documents: DocumentList) throws {
+        let image = try session.newImage(width: 120, height: 80)
+        let document = try ImageDocument(session: session, image: image, name: "Resource Gradient")
+        documents.items.append(document)
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func settle() {
+            document.inputQueue.sync {}
+            wait { document.pendingWork == 0 }
+            spin()
+        }
+        defer {
+            documents.items.removeAll { $0 === document }
+            var closed = false
+            document.closeImageWhenDrained { closed = true }
+            wait { closed }
+            check(closed && (try? session.info(image)) == nil,
+                  "the resource-gradient image closes before engine shutdown")
+        }
+        let identity: EngineSession.ResourceIdentity = try DispatchQueue.global(qos: .userInitiated).sync {
+            for resource in try session.resources(.gradient) {
+                let identity = try session.resourceIdentifiers(resource.id)
+                if identity.isInternal && identity.collection == "gimp-gradient-fg-bg-rgb" { return identity }
+            }
+            throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
+                                             message: "The native foreground/background gradient is unavailable.")
+        }
+        let before = try session.copyPixels(image, merged: true).pixels
+        let undoBefore = document.undoInfo.undoCount
+        var settings = EngineSession.ResourceGradientSettings()
+        let from = CGPoint(x: 0, y: 40), to = CGPoint(x: 100, y: 40)
+        document.gradientResource(identity, from: from, to: to, settings: settings)
+        settle()
+        let middle = pixel(session, image, x: 50, y: 40) ?? []
+        check(document.pendingWork == 0 && errors.isEmpty && middle.count == 4
+                && (118...138).contains(Int(middle.first ?? 0)),
+              "the queued resource gradient resolves its identity and renders a perceptual midpoint")
+        check(document.undoInfo.undoCount == undoBefore + 1,
+              "the queued resource gradient is one undo step")
+        document.undo()
+        settle()
+        check(try session.copyPixels(image, merged: true).pixels == before,
+              "undo restores the pixels before the resource gradient")
+
+        settings.blendSpace = .rgbLinear
+        let unsupportedErrors = errors.count
+        document.gradientResource(identity, from: from, to: to, settings: settings)
+        settle()
+        let afterUnsupported = try session.copyPixels(image, merged: true).pixels
+        check(errors.count == unsupportedErrors + 1 && document.undoInfo.undoCount == undoBefore
+                && afterUnsupported == before,
+              "unsupported linear-light resource blending reports refusal without editing")
+
+        settings.blendSpace = .rgbPerceptual
+        let missing = EngineSession.ResourceIdentity(name: "Glims Missing Gradient", collection: nil, isInternal: false)
+        let missingErrors = errors.count
+        document.gradientResource(missing, from: from, to: to, settings: settings)
+        settle()
+        let afterMissing = try session.copyPixels(image, merged: true).pixels
+        check(errors.count == missingErrors + 1 && document.undoInfo.undoCount == undoBefore
+                && afterMissing == before,
+              "a missing selected gradient reports refusal without a fallback or undo")
+    }
+
 }
 
 @MainActor
