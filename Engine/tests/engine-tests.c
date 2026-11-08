@@ -6727,6 +6727,7 @@ tiled_region_diff (GlimsImageID image, GlimsRect region, int32_t origin_x, int32
   int32_t  x, y;
   int      worst = 0, covered = 0;
 
+  *covered_out = 0;
   pixels = calloc ((size_t) region.width * region.height, 4);
   if (! pixels)
     return 256;
