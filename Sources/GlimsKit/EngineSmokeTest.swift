@@ -98,6 +98,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "pattern-fill" {
+                try exercisePatternFill(session, documents: documents)
+                print(failures == 0 ? "PASSED (pattern-fill)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseFileAdmission(session, work: work, documents: documents)
