@@ -330,11 +330,12 @@ glims_effect_undo_free (GimpUndo     *undo,
  * attached to that drawable's stack, and is committed — not a temporary
  * preview and not only held by the undo stack after a removal. The id
  * table returns removed filters too while undo keeps them alive, so the
- * stack membership test is what proves the effect is live. */
-static GimpDrawableFilter *
-lookup_effect (GlimsEngine  *engine,
-               GimpDrawable *drawable,
-               GlimsEffectID effect_id)
+ * stack membership test is what proves the effect is live. filter.c
+ * uses this for edit sessions. */
+GimpDrawableFilter *
+glims_lookup_effect (GlimsEngine  *engine,
+                     GimpDrawable *drawable,
+                     GlimsEffectID effect_id)
 {
   GimpDrawableFilter *filter;
 
@@ -445,7 +446,7 @@ glims_effect_change (GlimsEngine              *engine,
   if (! drawable)
     return GLIMS_STATUS_NOT_FOUND;
 
-  filter = lookup_effect (engine, drawable, effect_id);
+  filter = glims_lookup_effect (engine, drawable, effect_id);
   if (! filter)
     return GLIMS_STATUS_NOT_FOUND;
 
@@ -571,7 +572,7 @@ glims_effect_command (GlimsEngine   *engine,
   if (! drawable)
     return GLIMS_STATUS_NOT_FOUND;
 
-  filter = lookup_effect (engine, drawable, effect_id);
+  filter = glims_lookup_effect (engine, drawable, effect_id);
   if (! filter)
     return GLIMS_STATUS_NOT_FOUND;
 

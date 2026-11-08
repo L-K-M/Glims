@@ -166,3 +166,26 @@ source, untitled, re-import identity, cross-document drain and a
 direct close during the load. `swift build` and `swift test` (246
 tests) pass; the engine smoke run and interactive QA were not run in
 this session.
+2026-11-08: the File menu commands are wired. Open as Layers… and Place
+as Link Layer… sit below Open Recent and run through
+`DocumentWindowController`'s single-file panel into
+`ImageDocument.openLayers`/`placeLink`, which take the same
+`EngineActivity` exclusive admission a file write gets: accepted strokes,
+text and field edits end first, every document's input drains, the
+engine-wide busy label holds for the whole load including a plug-in's
+modal dialog, and the work counts toward close and Quit. The engine's
+native selection of the imported result becomes the target only through
+the completion's reload — no selection is issued on the main thread —
+file identity and the on-disk XCF stay untouched, and one undo step
+covers the import. A failed or cancelled load adds nothing and reports
+the engine's own message; a loader cancel surfaces as a cancelled
+outcome rather than an error. Place consults the engine's verified
+version (`EngineSession.supportsLinkLayers`, link layers need 3.2) to
+disable its menu item and guard the action, and an unparsable version
+leaves the facade's UNSUPPORTED answer to report; there is no raster
+fallback. `EngineSmokeTest.exerciseFileImports` covers the drain,
+refusals, identity, undo grouping, failure recovery, close during the
+load and the link layer's save/reload/reread; it was added but not run —
+engine smoke stays with the desktop pass against the private adapters.
+`swift build` and `swift test` (229 tests, including new menu-placement
+and version-parsing cases) pass headless.

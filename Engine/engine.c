@@ -1081,6 +1081,8 @@ MARSHAL (image_open_layers, return glims_image_open_layers (e, a->image, a->stri
                                                             a->capacity, a->count, a->error);)
 MARSHAL (image_place_link, return glims_image_place_link (e, a->image, a->string,
                                                           a->out, a->error);)
+MARSHAL (filter_edit_begin, return glims_filter_edit_begin (e, a->image, a->item, a->effect,
+                                                            a->out, a->error);)
 
 /* A path's geometry takes more arguments than GlimsArgs holds. */
 typedef struct
@@ -1809,6 +1811,15 @@ api_image_place_link (GlimsEngine *e, GlimsImageID image, const char *path,
   return glims_engine_call (e, image_place_link_on_engine, &a);
 }
 
+static GlimsStatus
+api_filter_edit_begin (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
+                       GlimsEffectID effect, GlimsFilterID *filter, char **error)
+{
+  GlimsArgs a = { .image = image, .item = drawable, .effect = effect,
+                  .out = filter, .error = error };
+  return glims_engine_call (e, filter_edit_begin_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1903,6 +1914,7 @@ static const GlimsEngineAPI api_v1 = {
   .effect_command = api_effect_command,
   .image_open_layers = api_image_open_layers,
   .image_place_link = api_image_place_link,
+  .filter_edit_begin = api_filter_edit_begin,
 };
 
 __attribute__ ((visibility ("default")))

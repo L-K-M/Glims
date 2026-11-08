@@ -1,4 +1,5 @@
 import AppKit
+import CGlimsEngine
 import CoreGraphics
 
 /// One open image in the engine, as the interface sees it.
@@ -1337,6 +1338,100 @@ final class ImageDocument {
         fileState.noteSaved(to: url)
         name = url.lastPathComponent
         try? reload()
+    }
+
+    /// Whether the engine is known to place genuine link layers (GIMP
+    /// 3.2 and later); nil when its version does not say, in which case
+    /// the facade's own UNSUPPORTED answer reports the rest. Place's
+    /// menu item and action consult this.
+    var supportsLinkLayers: Bool? { session.supportsLinkLayers }
+
+    /// What a file import did, for the caller's status line.
+    enum ImportOutcome: Equatable {
+        /// Open as Layers: the file's layers joined this image.
+        case openedLayers
+        /// Place: the file joined this image as a link layer.
+        case placedLink
+        /// The engine's loader reported a cancellation; nothing changed.
+        case cancelled
+    }
+
+    /// File ▸ Open as Layers…: every layer of the file at `url` lands in
+    /// this image above the selected layer — or inside a selected group —
+    /// centered on the canvas, as one undo step.
+    func openLayers(from url: URL,
+                    completion: @escaping @MainActor (Result<ImportOutcome, Error>) -> Void) {
+        importFile(url, asLink: false, completion: completion)
+    }
+
+    /// File ▸ Place…: the file at `url` joins this image as a genuine
+    /// link layer — it keeps the file reference and re-renders when the
+    /// source changes — above the selected layer, as one undo step.
+    func placeLink(from url: URL,
+                   completion: @escaping @MainActor (Result<ImportOutcome, Error>) -> Void) {
+        importFile(url, asLink: true, completion: completion)
+    }
+
+    /// Shared admission for both imports: end accepted edits, take the
+    /// engine-wide exclusive gate so every document's input drains and
+    /// the busy label holds for the whole load — including a file
+    /// plug-in's modal dialog — then run the facade call off the main
+    /// thread. The work counts toward close and Quit like a save, so a
+    /// closing image is never destroyed under a running load and its
+    /// completion still lands.
+    ///
+    /// The engine selects the imported result natively; the completion's
+    /// reload is what makes it the interface's target — it never
+    /// selects anything itself. File identity (native file, imported
+    /// source, name) is untouched; only the edit's own dirty state
+    /// reaches `fileState` through the reload. A failed or cancelled
+    /// load adds nothing and leaves the image editable; the facade's
+    /// native error reaches the caller.
+    private func importFile(_ url: URL, asLink: Bool,
+                            completion: @escaping @MainActor (Result<ImportOutcome, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning else {
+            return completion(.failure(DocumentError.busy))
+        }
+        let label = asLink ? "Placing \(url.lastPathComponent)" : "Opening \(url.lastPathComponent) as layers"
+        enqueueExclusive(label: label, rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
+            let result = Result<ImportOutcome, Error> {
+                if asLink {
+                    _ = try session.placeLink(image: image, path: url.path)
+                    return .placedLink
+                }
+                _ = try session.openLayers(image: image, path: url.path)
+                return .openedLayers
+            }
+            if case .success = result {
+                // Admission drained this queue and still holds the global
+                // gate. Keep the queue-owned validity flag confined to it.
+                self.inputQueue.sync { self.paintTargetIsValid = true }
+            }
+            DispatchQueue.main.async {
+                if case .success = result { self.rejectedTargetPick = false }
+                // The reload mirrors the engine's native selection — the
+                // imported top layer or the placed link — as the target.
+                // A closing image skips it: the drain destroys it next.
+                if !self.isClosing { try? self.reload() }
+                switch result {
+                case .success(let outcome):
+                    completion(.success(outcome))
+                case .failure(let error):
+                    if Self.isLoaderCancellation(error) {
+                        completion(.success(.cancelled))
+                    } else {
+                        completion(.failure(error))
+                    }
+                }
+            }
+        }
+    }
+
+    /// The facade reports a loader's cancel as CANCELLED with no engine
+    /// message; it is an outcome, not an error.
+    private static func isLoaderCancellation(_ error: Error) -> Bool {
+        (error as? EngineSession.EngineError)?.status == Int32(GLIMS_STATUS_CANCELLED.rawValue)
     }
 
     // MARK: Printing
