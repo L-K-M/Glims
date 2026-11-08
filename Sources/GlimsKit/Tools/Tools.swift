@@ -171,6 +171,8 @@ final class ToolState {
 
     /// Where the per-tool brush identities persist; tests inject a suite.
     var brushStore: BrushSelectionStore
+    /// Where the gradient tool's preferences persist; tests inject a suite.
+    var gradientStore: GradientToolStore
 
     private(set) var current: ToolID = .paintbrush
     /// The tool each group shows, so a shortcut returns to the last one used.
@@ -179,13 +181,36 @@ final class ToolState {
     /// Brush settings per painting tool; `brush(for:)` fills in the tool.
     private var brushes: [ToolID: EngineSession.Brush] = [:]
 
-    init(brushStore: BrushSelectionStore = .shared) {
+    init(brushStore: BrushSelectionStore = .shared, gradientStore: GradientToolStore = .shared) {
         self.brushStore = brushStore
+        self.gradientStore = gradientStore
     }
     var selectOptions = EngineSession.SelectOptions()
     var foreground = NSColor.black
     var background = NSColor.white
-    var gradientShape = EngineSession.GradientShape.linear
+
+    /// The gradient tool's live preferences, read through the store so an
+    /// injected store (tests) takes effect immediately.
+    private var gradientPrefs: GradientToolPreferences { gradientStore.preferences }
+    /// The chosen gradient resource; nil is the Foreground-to-Background
+    /// Default (the built-in persistent identity).
+    var gradientResource: EngineSession.ResourceIdentity? { gradientPrefs.identity }
+    var gradientShape: EngineSession.GradientShape {
+        get { gradientPrefs.shape }
+        set { updateGradientPrefs { $0.shape = newValue } }
+    }
+    var gradientReverse: Bool {
+        get { gradientPrefs.reverse }
+        set { updateGradientPrefs { $0.reverse = newValue } }
+    }
+    var gradientBlendSpace: EngineSession.GradientBlendSpace {
+        get { gradientPrefs.blendSpace }
+        set { updateGradientPrefs { $0.blendSpace = newValue } }
+    }
+    var gradientOpacity: Double {
+        get { gradientPrefs.opacity }
+        set { updateGradientPrefs { $0.opacity = newValue } }
+    }
     var transformInterpolation = EngineSession.Interpolation.cubic
     /// How Stroke Path draws; its color is the foreground color.
     var pathLineWidth: Double = 2
@@ -286,6 +311,37 @@ final class ToolState {
     func setBrushResource(_ identity: EngineSession.ResourceIdentity?, for tool: ToolID) {
         brushStore.set(identity, for: tool)
         update(tool) { $0.resource = identity }
+    }
+
+    /// Sets the gradient resource choice and persists it (nil resets to the
+    /// Foreground-to-Background Default). Only the identity plus the tool's
+    /// own primitive settings cross into UserDefaults — never a session
+    /// `ResourceID`, a rendered image or the FG/BG colors; the gesture
+    /// resolves the identity fresh on the engine worker.
+    func setGradientResource(_ identity: EngineSession.ResourceIdentity?) {
+        updateGradientPrefs { $0.identity = identity }
+    }
+
+    /// Captures one canvas gradient gesture as pure values: the identity
+    /// (the choice, or the built-in Foreground-to-Background identity for
+    /// the Default), shape, reverse, blend space, opacity, the global
+    /// foreground/background colors as an opaque per-gesture snapshot, and
+    /// the endpoints. Later UI, tool, preference or color changes cannot
+    /// redirect the queued work from this snapshot.
+    func gradientSnapshot(from: CGPoint, to: CGPoint) -> GradientGestureSnapshot {
+        let prefs = gradientPrefs
+        return GradientGestureSnapshot.capture(identity: prefs.identity, shape: prefs.shape,
+                                               reverse: prefs.reverse, blendSpace: prefs.blendSpace,
+                                               opacity: prefs.opacity,
+                                               foreground: foreground, background: background,
+                                               from: from, to: to)
+    }
+
+    private func updateGradientPrefs(_ change: (inout GradientToolPreferences) -> Void) {
+        var prefs = gradientPrefs
+        change(&prefs)
+        gradientStore.set(prefs)
+        notify()
     }
 
     func notifyChange() { notify() }

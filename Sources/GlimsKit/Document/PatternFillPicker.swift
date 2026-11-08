@@ -4,9 +4,10 @@ import AppKit
 /// sheet's lifetime. It lists the FULL native pattern catalog (names and
 /// identities only) behind a search field and a one-column table of lazy
 /// 32 px thumbnails; the catalog and every render run off the main
-/// thread through the global exclusive engine gate — `resources`,
-/// `resource_identifiers`, `resource_resolve` and `resourceThumbnail`
-/// are synchronous RPCs and are never called on main.
+/// thread through the global exclusive engine gate via the shared
+/// `ResourcePickerController` — `resources`, `resource_identifiers`,
+/// `resource_resolve` and `resourceThumbnail` are synchronous RPCs and
+/// are never called on main.
 ///
 /// The document is captured at open, so a retarget cannot redirect the
 /// load. When the sheet ends — Fill, Cancel, or the document closing —
@@ -16,26 +17,28 @@ import AppKit
 @MainActor
 final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDelegate,
                                NSSearchFieldDelegate {
-    let model: PatternChooserModel
-    private weak var document: ImageDocument?
-    private(set) var isClosed = false
-    private var autoRetryScheduled = false
-    /// True while a catalog load is on the engine: no overlapping loads.
-    private var loadInFlight = false
-    /// Guards the single whenIdle re-pump of the thumbnail queue.
-    private var thumbnailPumpScheduled = false
-    private var updatingTable = false
+    let model: ResourceChooserModel
+    private let controller: ResourcePickerController
+    var isClosed: Bool { controller.isClosed }
 
     let view: NSView
     private let searchField = NSSearchField()
     private let table = NSTableView()
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
+    private var updatingTable = false
 
     init(document: ImageDocument, currentIdentity: EngineSession.ResourceIdentity?) {
-        self.document = document
-        self.model = PatternChooserModel(currentIdentity: currentIdentity)
+        self.model = ResourceChooserModel(kind: .pattern, currentIdentity: currentIdentity)
+        self.controller = ResourcePickerController(document: document, model: model)
         self.view = NSView()
         super.init()
+        // The catalog loads once per sheet, the first time the list shows;
+        // switching fill sources keeps the explicit pending choice.
+        controller.loadOnlyOnce = true
+        controller.onChange = { [weak self] in self?.refresh() }
+        controller.onCatalogDelivered = { [weak self] in self?.refresh() }
+        controller.onThumbnailsDelivered = { [weak self] in self?.reloadTable(scrollToSelection: false) }
+        controller.onAbandoned = { [weak self] in self?.invalidate() }
         buildContent()
         refresh()
     }
@@ -89,145 +92,13 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
     // MARK: Catalog load (off the main thread, through the engine gate)
 
     /// Starts the one catalog load; call when the picker becomes visible.
-    /// Every pattern's name and identity are read — the list is never
-    /// capped — while thumbnails stay lazy. A refused admission (gate
-    /// busy) shows the busy state and retries once when the engine idles.
     func load() {
-        guard !isClosed, !loadInFlight, let session = document?.session else { return }
-        // Switching fill sources keeps the explicit pending choice and
-        // its previews. A fresh catalog is loaded when a new sheet opens.
-        if case .ready = model.state { return }
-        loadInFlight = true
-        let generation = model.generation
-        let current = model.currentIdentity
-        var outRows: [PatternRow] = []
-        var resolvedCurrent: EngineSession.ResourceID?
-        var resolutionError: EngineSession.EngineError?
-        var outError: String?
-        let accepted = EngineActivity.shared.perform(label: "Loading patterns", work: {
-            do {
-                for row in try session.resources(.pattern) {
-                    let identity = try session.resourceIdentifiers(row.id)
-                    outRows.append(PatternRow(id: row.id, name: row.displayName, identity: identity))
-                }
-                if let current {
-                    do {
-                        resolvedCurrent = try session.resolveResource(current, kind: .pattern)
-                    } catch {
-                        // Only NOT_FOUND means the pattern is really gone;
-                        // any other failure is reported distinctly, never
-                        // as "missing" (the model checks the status).
-                        resolutionError = (error as? EngineSession.EngineError)
-                            ?? EngineSession.EngineError(status: 0, message: String(describing: error))
-                    }
-                }
-            } catch {
-                outError = (error as? EngineSession.EngineError)?.message ?? String(describing: error)
-            }
-        }, completion: { [weak self] in
-            self?.loadInFlight = false
-            self?.deliver(generation: generation, rows: outRows, resolvedCurrent: resolvedCurrent,
-                          resolutionError: resolutionError, error: outError)
-        })
-        if !accepted {
-            loadInFlight = false
-            model.setLoading(.busy)
-            refresh()
-            if !autoRetryScheduled {
-                autoRetryScheduled = true
-                EngineActivity.shared.whenIdle { [weak self] in
-                    guard let self, !self.isClosed, case .busy = self.model.state else { return }
-                    self.autoRetryScheduled = false
-                    self.load()
-                }
-            }
-        }
-    }
-
-    private func deliver(generation: Int, rows: [PatternRow],
-                         resolvedCurrent: EngineSession.ResourceID?,
-                         resolutionError: EngineSession.EngineError?, error: String?) {
-        // Stale delivery: the sheet (or its document) closed meanwhile.
-        guard !isClosed, generation == model.generation else { return }
-        guard let document, !document.isClosing else {
-            invalidate()
-            return
-        }
-        guard model.deliver(generation: generation, rows: rows, resolvedCurrent: resolvedCurrent,
-                            resolutionError: resolutionError, error: error) else { return }
-        // Prime the lazy thumbnail queue: the resolved current pattern
-        // first, then only the initial visible batch — the rest render as
-        // rows scroll into view.
-        if let resolvedCurrent {
-            model.thumbnailQueue.request([resolvedCurrent], priority: true)
-        }
-        model.thumbnailQueue.request(visibleRows.prefix(PatternThumbnailQueue.batchSize).map { $0.id })
-        pumpThumbnails()
-        refresh()
-    }
-
-    // MARK: Lazy thumbnails (bounded native batches, off the main thread)
-
-    /// Starts one bounded native thumbnail batch when the queue has
-    /// pending ids and no batch is in flight. A refused batch (gate busy)
-    /// is requeued and re-pumped once when the engine goes idle.
-    private func pumpThumbnails() {
-        guard !isClosed, case .ready = model.state else { return }
-        let queue = model.thumbnailQueue
-        guard queue.pendingCount > 0, queue.inFlightCount == 0 else { return }
-        let batch = queue.beginBatch()
-        guard !batch.isEmpty, let session = document?.session else {
-            queue.requeue(batch)
-            return
-        }
-        let generation = model.generation
-        var rendered: [EngineSession.ResourceID: CGImage] = [:]
-        var failed: [EngineSession.ResourceID: String] = [:]
-        let accepted = EngineActivity.shared.perform(label: "Rendering pattern previews", work: {
-            // One bounded batch; a single bad thumbnail fails only its own
-            // entry and is cached as failed by the queue (never retried).
-            for id in batch {
-                do {
-                    rendered[id] = try session.resourceThumbnail(id, maxSize: 32).image
-                } catch {
-                    failed[id] = ((error as? EngineSession.EngineError)?.message) ?? String(describing: error)
-                }
-            }
-        }, completion: { [weak self] in
-            self?.deliverThumbnails(generation: generation, rendered: rendered, failed: failed)
-        })
-        if !accepted {
-            queue.requeue(batch)
-            if !thumbnailPumpScheduled {
-                thumbnailPumpScheduled = true
-                EngineActivity.shared.whenIdle { [weak self] in
-                    guard let self, !self.isClosed else { return }
-                    self.thumbnailPumpScheduled = false
-                    self.pumpThumbnails()
-                }
-            }
-        }
-    }
-
-    private func deliverThumbnails(generation: Int,
-                                   rendered: [EngineSession.ResourceID: CGImage],
-                                   failed: [EngineSession.ResourceID: String]) {
-        // Stale delivery: the sheet (or its document) closed meanwhile.
-        guard !isClosed, generation == model.generation else { return }
-        guard let document, !document.isClosing else {
-            invalidate()
-            return
-        }
-        guard model.deliverThumbnails(generation: generation, rendered: rendered, failed: failed) else { return }
-        // Rows without a preview yet stay placeholders; reloading re-enters
-        // viewFor, which re-requests them (deduplicated by the queue).
-        reloadTable(scrollToSelection: false)
-        pumpThumbnails()
+        controller.load()
     }
 
     // MARK: Display
 
-    private var visibleRows: [PatternRow] { model.rows(matching: model.query) }
+    private var visibleRows: [ResourceRow] { model.rows(matching: model.query) }
 
     private func reloadTable(scrollToSelection: Bool) {
         let selection = model.selection
@@ -295,8 +166,7 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
             // No preview yet: a placeholder until the lazy queue renders
             // this row in a bounded native batch.
             cell.imageView?.image = nil
-            model.thumbnailQueue.request([item.id])
-            pumpThumbnails()
+            controller.requestThumbnails([item.id])
         }
         return cell
     }
@@ -348,8 +218,6 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
     /// The sheet ended: no in-flight native result may touch this stale
     /// view again. Idempotent.
     func invalidate() {
-        guard !isClosed else { return }
-        isClosed = true
-        model.invalidate()
+        controller.invalidate()
     }
 }

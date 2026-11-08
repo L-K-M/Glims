@@ -115,10 +115,30 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
     private var shownBrushResource: EngineSession.ResourceIdentity?
     private var shownMissingBrush: EngineSession.ResourceIdentity?
     private var shownBrushPresentationRevision = 0
+    private var shownGradient: GradientPresentation?
     private var observer: UUID?
-    /// The front document, retained (weakly) as the brush chooser's session
-    /// and loading source.
+    /// The front document, retained (weakly) as the resource choosers'
+    /// session and loading source.
     private weak var document: ImageDocument?
+
+    /// Everything the gradient rows show, so a change rebuilds them.
+    private struct GradientPresentation: Equatable {
+        let resource: EngineSession.ResourceIdentity?
+        let missing: EngineSession.ResourceIdentity?
+        let revision: Int
+        let shape: EngineSession.GradientShape
+        let reverse: Bool
+        let blendSpace: EngineSession.GradientBlendSpace
+        let opacity: Double
+    }
+
+    private static func gradientPresentation(of state: ToolState) -> GradientPresentation {
+        GradientPresentation(resource: state.gradientResource,
+                             missing: GradientChooser.shared.missingIdentity(choice: state.gradientResource),
+                             revision: GradientChooser.shared.presentationRevision,
+                             shape: state.gradientShape, reverse: state.gradientReverse,
+                             blendSpace: state.gradientBlendSpace, opacity: state.gradientOpacity)
+    }
 
     override func loadView() {
         stack.orientation = .vertical
@@ -136,7 +156,9 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
                     || self.shownBrushPresentationRevision != BrushChooser.shared.presentationRevision
                     || self.shownMissingBrush != BrushChooser.shared.missingIdentity(
                         for: state.current, choice: state.brush(for: state.current).resource))
-            guard self.shownTool != state.current || fontsArrived || brushChanged else { return }
+            let gradientChanged = state.current == .gradient
+                && self.shownGradient != Self.gradientPresentation(of: state)
+            guard self.shownTool != state.current || fontsArrived || brushChanged || gradientChanged else { return }
             self.rebuild()
         }
     }
@@ -147,11 +169,13 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         if target !== document {
             document = target
             if BrushChooser.shared.isOpen { BrushChooser.shared.close() }
+            if GradientChooser.shared.isOpen { GradientChooser.shared.close() }
         }
     }
 
     func paletteDidDismiss(_ presentation: PalettePresentation) {
         if BrushChooser.shared.isOpen { BrushChooser.shared.close() }
+        if GradientChooser.shared.isOpen { GradientChooser.shared.close() }
     }
 
     private func rebuild() {
@@ -162,6 +186,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         shownBrushResource = tool.paintTool != nil ? state.brush(for: tool).resource : nil
         shownMissingBrush = BrushChooser.shared.missingIdentity(for: tool, choice: shownBrushResource)
         shownBrushPresentationRevision = BrushChooser.shared.presentationRevision
+        shownGradient = tool == .gradient ? Self.gradientPresentation(of: state) : nil
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         actionBindings.removeAll()
 
@@ -174,11 +199,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         } else if tool.isSelectionTool {
             addSelectionRows(for: tool)
         } else if tool == .gradient {
-            stack.addArrangedSubview(popUp("Shape", ["Linear", "Bi-Linear", "Radial"],
-                                           selected: Int(state.gradientShape.rawValue)) { index in
-                ToolState.shared.gradientShape = EngineSession.GradientShape(rawValue: UInt32(index)) ?? .linear
-            })
-            stack.addArrangedSubview(hint("Drag across the image: foreground to background color."))
+            addGradientRows(state)
         } else if tool == .text {
             addTextRows(state.textSettings)
         } else if tool == .transform {
@@ -349,6 +370,78 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
     /// only that tool's selection.
     private func openBrushChooser(for tool: ToolID) {
         BrushChooser.shared.open(document: document, tool: tool)
+    }
+
+    /// The Gradient tool's options: the resource row (button with the
+    /// current choice's real name and preview, plus an explicit reset to
+    /// the Foreground-to-Background Default), then shape, blend, reverse
+    /// and opacity. The blend popup offers only Perceptual RGB and Lab —
+    /// the backend refuses RGB Linear with UNSUPPORTED, so it is never
+    /// offered.
+    private func addGradientRows(_ state: ToolState) {
+        stack.addArrangedSubview(gradientRow(state))
+        stack.addArrangedSubview(popUp("Shape", ["Linear", "Bi-Linear", "Radial"],
+                                       selected: Int(state.gradientShape.rawValue)) { index in
+            ToolState.shared.gradientShape = EngineSession.GradientShape(rawValue: UInt32(index)) ?? .linear
+        })
+        let blendSpaces = EngineSession.GradientBlendSpace.selectable
+        stack.addArrangedSubview(popUp("Blend", blendSpaces.map(\.name),
+                                       selected: blendSpaces.firstIndex(of: state.gradientBlendSpace) ?? 0) { index in
+            ToolState.shared.gradientBlendSpace = blendSpaces[index]
+        })
+        stack.addArrangedSubview(checkbox("Reverse", state.gradientReverse) { on in
+            ToolState.shared.gradientReverse = on
+        })
+        stack.addArrangedSubview(slider("Opacity", 0...100, state.gradientOpacity * 100, unit: "%") { value in
+            ToolState.shared.gradientOpacity = value / 100
+        })
+        stack.addArrangedSubview(hint("Drag across the image to draw the gradient. "
+            + "The default is foreground to background."))
+    }
+
+    /// The gradient row: a button with the current choice (name and, once
+    /// the chooser rendered it, the preview; a persisted identity that no
+    /// longer resolves shows as "Missing: …"; no choice shows the
+    /// Foreground-to-Background Default) that opens the gradient chooser,
+    /// plus an explicit reset to the Default.
+    private func gradientRow(_ state: ToolState) -> NSView {
+        let button = NSButton(title: "", target: nil, action: nil)
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: 11)
+        if let missing = GradientChooser.shared.missingIdentity(choice: state.gradientResource) {
+            button.title = "Missing: \(missing.name)"
+        } else if let resource = state.gradientResource {
+            button.title = resource.name
+        } else {
+            button.title = "Foreground to Background"
+        }
+        if let thumbnail = GradientChooser.shared.thumbnail(choice: state.gradientResource) {
+            button.image = thumbnail
+            button.imagePosition = .imageLeft
+        }
+        button.toolTip = "Choose the gradient"
+        button.setAccessibilityLabel("Gradient")
+        actionBindings.append(ActionBinding(control: button) { [weak self] _ in
+            self?.openGradientChooser()
+        })
+        let reset = NSButton(title: "Reset", target: nil, action: nil)
+        reset.bezelStyle = .rounded
+        reset.controlSize = .small
+        reset.font = .systemFont(ofSize: 11)
+        reset.toolTip = "Reset to the Foreground-to-Background default gradient"
+        reset.setAccessibilityLabel("Reset gradient to Foreground to Background")
+        actionBindings.append(ActionBinding(control: reset) { _ in
+            GradientChooser.shared.resetChoice()
+        })
+        let controls = NSStackView(views: [button, reset])
+        controls.spacing = 6
+        return row("Gradient", controls, onChange: nil)
+    }
+
+    /// Opens the one gradient chooser; it captures the document at open.
+    private func openGradientChooser() {
+        GradientChooser.shared.open(document: document)
     }
 
     private func addSelectionRows(for tool: ToolID) {
