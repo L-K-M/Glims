@@ -469,7 +469,10 @@ glims_selection_stroke (GlimsEngine              *engine,
       ! isfinite (settings.size) || ! (settings.size > 0.0) ||
       ! isfinite (settings.opacity) ||
       ! isfinite (settings.red) || ! isfinite (settings.green) || ! isfinite (settings.blue))
-    return glims_fail (error, NULL, "The brush settings are not valid.");
+    {
+      glims_fail (error, NULL, "The brush settings are not valid.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
 
   /* brush_id 0 keeps stroke_begin's convention: the stroke inherits the
    * shared user context's current brush. Any other handle is resolved
@@ -520,6 +523,13 @@ glims_selection_stroke (GlimsEngine              *engine,
 
   if (settings.tool == GLIMS_PAINT_CLONE || settings.tool == GLIMS_PAINT_HEAL)
     {
+      if (! isfinite (settings.source_x) || ! isfinite (settings.source_y) ||
+          settings.source_x < G_MININT || settings.source_x > G_MAXINT ||
+          settings.source_y < G_MININT || settings.source_y > G_MAXINT)
+        {
+          glims_fail (error, NULL, "The source point is outside the supported coordinate range.");
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        }
       GimpItem *item = gimp_item_get_by_id (engine->gimp, settings.source_drawable);
 
       if (! GIMP_IS_DRAWABLE (item) || GIMP_IS_GROUP_LAYER (item) || ! gimp_item_is_attached (item))
@@ -556,6 +566,12 @@ glims_selection_stroke (GlimsEngine              *engine,
 
   paint_options = glims_make_paint_options (engine->gimp, info, &settings, resource);
   glims_set_tool_options (paint_options, &settings, source);
+  /* Native prepare undefines these properties on paint_options and
+   * reparents them to context. Define and copy them here first so the
+   * requested brush/foreground/opacity survive without changing the
+   * shared user context. PAINT_INFO is separate and stays pinned above. */
+  gimp_context_define_properties (context, GIMP_CONTEXT_PROP_MASK_PAINT, TRUE);
+  gimp_context_copy_properties (GIMP_CONTEXT (paint_options), context, GIMP_CONTEXT_PROP_MASK_PAINT);
 
   drawables = g_list_prepend (NULL, GIMP_DRAWABLE (layer));
   done = gimp_item_stroke (GIMP_ITEM (mask), drawables, context, options, paint_options,

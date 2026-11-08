@@ -2262,3 +2262,16 @@ Independent review found no important issue. Nondefault unit retention
 is verified from clone semantics in the sources; it is not directly
 covered by the facade-only XCF fixture. Swift/cache runtime follows with
 the configuration interface.
+
+Stroke Selection runtime validation supersedes the compile-only report
+above: native suites pass 1,422 / 1,311 / 1,422 / 1,422 checks on GIMP
+3.2.8 / 3.0.8 / 3.2.0 / master. Runtime tests reproduced invalid settings
+returning FAILED instead of INVALID_ARGUMENT and native stroke preparation
+replacing the requested translucent red with opaque black. The adapter now
+returns the specified validation status and pins the paint properties on
+the private context before preparation reparents the options. A separate
+ordinary paint stroke supplies the color/opacity oracle. Clone/heal source
+coordinates are checked for finite, native-integer range before conversion.
+The 3.2.0 suite still logs two startup GLib filename assertions before the
+checks, as recorded in its log; it reports zero failed checks. Swift document
+queue execution and user-facing Stroke Selection controls remain to verify.

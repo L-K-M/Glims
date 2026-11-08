@@ -9389,6 +9389,12 @@ test_selection_stroke (void)
   bad = brush; bad.opacity = NAN;
   CHECK (api->selection_stroke (engine, image, layer, 0, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
          "a non-finite opacity is refused");
+  bad = brush; bad.tool = GLIMS_PAINT_CLONE; bad.source_drawable = layer; bad.source_x = NAN;
+  CHECK (api->selection_stroke (engine, image, layer, 0, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a clone source with non-finite coordinates is refused before integer conversion");
+  bad.source_x = 0; bad.source_y = 1e100; bad.tool = GLIMS_PAINT_HEAL;
+  CHECK (api->selection_stroke (engine, image, layer, 0, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a healing source outside the integer range is refused before conversion");
   bad = brush; bad.red = NAN;
   CHECK (api->selection_stroke (engine, image, layer, 0, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
          "a non-finite color is refused");
@@ -9466,6 +9472,23 @@ test_selection_stroke (void)
   free (after);
   free (shot);
   shot = NULL;
+
+  /* The private stroke context must retain the requested color and
+   * opacity when native prepare reparents the paint options. */
+  bad = brush;
+  bad.red = 1.0; bad.green = 0.0; bad.blue = 0.0; bad.opacity = 0.5;
+  CHECK (api->selection_stroke (engine, image, layer, 0, &bad, NULL) == GLIMS_STATUS_OK,
+         "the selection stroke accepts an explicit translucent red");
+  uint8_t reference[4];
+  CHECK (stroke_line (other, first_layer (other), &bad, 20, 5, 20, 59, NULL) == GLIMS_STATUS_OK,
+         "a normal paint stroke supplies the independent color/opacity reference");
+  render_pixel (other, 20, 30, reference);
+  render_pixel (image, 20, 50, px);
+  CHECK (memcmp (px, reference, sizeof px) == 0 && px[0] > 240 && px[1] > 0 && px[1] < 255,
+         "selection stroke preserves requested red and opacity (got %u,%u,%u,%u; reference %u,%u,%u,%u)",
+         px[0], px[1], px[2], px[3], reference[0], reference[1], reference[2], reference[3]);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK,
+         "the explicit-color selection stroke undoes");
 
   /* A nonrectangular (elliptical) selection, stroked with the selected
    * soft brush resource: the resource handle is resolved and the
