@@ -2153,6 +2153,9 @@ MARSHAL (image_metadata_edit, return glims_image_metadata_edit (e, a->image, a->
                                                                 (uint32_t) a->width,
                                                                 (const char *const *) a->in,
                                                                 a->capacity, a->error);)
+MARSHAL (image_metadata_tag_info, return glims_image_metadata_tag_info (e, a->image, a->string,
+                                                                         (GlimsMetadataTagInfo *) a->in_out,
+                                                                         a->error);)
 
 static GlimsStatus
 api_image_guides (GlimsEngine *e, GlimsImageID image, GlimsGuideInfo *rows,
@@ -2304,6 +2307,14 @@ api_image_metadata_edit (GlimsEngine *e, GlimsImageID image, const char *tag,
   return glims_engine_call (e, image_metadata_edit_on_engine, &a);
 }
 
+static GlimsStatus
+api_image_metadata_tag_info (GlimsEngine *e, GlimsImageID image, const char *tag,
+                             GlimsMetadataTagInfo *outInfo, char **error)
+{
+  GlimsArgs a = { .image = image, .string = tag, .in_out = outInfo, .error = error };
+  return glims_engine_call (e, image_metadata_tag_info_on_engine, &a);
+}
+
 /* No engine state is involved: free directly, like free_string. */
 static void
 api_free_metadata_strings (char **strings)
@@ -2444,6 +2455,7 @@ static const GlimsEngineAPI api_v1 = {
   .image_metadata_values = api_image_metadata_values,
   .image_metadata_edit = api_image_metadata_edit,
   .free_metadata_strings = api_free_metadata_strings,
+  .image_metadata_tag_info = api_image_metadata_tag_info,
 };
 
 __attribute__ ((visibility ("default")))
