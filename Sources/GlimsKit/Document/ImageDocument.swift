@@ -669,6 +669,15 @@ final class ImageDocument {
             NSSound.beep()
             return
         }
+        // End in-flight field/text edits and an active stroke first, the
+        // finishInput/endPendingUserEdits convention: both enqueue their
+        // jobs on this same serial input queue ahead of the one below, so
+        // every already accepted edit — and the open stroke's end — lands
+        // on the engine before the selection stroke runs. Without that,
+        // the native readiness check would report BUSY under the open
+        // stroke instead of stroking on the committed image.
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
         enqueue(on: inputQueue, input: true) { [session, image] in
             do {
                 try self.requirePaintTarget()
@@ -677,6 +686,49 @@ final class ImageDocument {
                 self.report(error)
             }
         }
+    }
+
+    /// The cached-state reason Edit ▸ Stroke Selection… cannot run right
+    /// now, or nil when it can. Reads only the document's cached state —
+    /// never the engine — so menu validation and the sheet's open/accept
+    /// gates make no synchronous native call. An editable structured
+    /// source (text, link or vector layer that still carries its source)
+    /// refuses with a rasterize-first explanation rather than silently
+    /// destroying it; the rasterize UI is a separate pending change and
+    /// is not adopted here.
+    var strokeSelectionRefusal: String? {
+        if let activity = EngineActivity.shared.label, !PlugInCommands.isRunning {
+            return "\(activity)… Wait for it to finish before editing."
+        }
+        if isClosing { return DocumentError.closed.localizedDescription }
+        if isSavingForClose || isTransferringClipboard { return DocumentError.busy.localizedDescription }
+        if filterPreviewIsOpen { return "Apply or cancel the filter preview first." }
+        if let running = PlugInCommands.running {
+            let title = running.procedure.label.replacingOccurrences(of: "…", with: "")
+            return "Finish or cancel \u{201C}\(title)\u{201D} first."
+        }
+        if selectionOutline.isEmpty { return "There is no selection to stroke; select an area first." }
+        if isChannelTargetActive {
+            return "A selection cannot be stroked onto a channel; select the layer first."
+        }
+        if isMaskTargetActive {
+            return "A selection cannot be stroked onto a mask; select the layer first."
+        }
+        guard let drawable = activeDrawable else { return DocumentError.targetChanged.localizedDescription }
+        if let layer = paintTarget?.layer,
+           layers.first(where: { $0.id == drawable })?.kind == .group {
+            return "A selection cannot be stroked onto a layer group; select a layer."
+        }
+        if let layer = paintTarget?.layer,
+           layerLocks[layer]?.effective.contains(.pixels) == true {
+            return "Unlock the layer's pixels (or its group's) before stroking the selection."
+        }
+        if let layer = paintTarget?.layer,
+           let source = layerSources[layer], source.hasSource, !source.isRasterized {
+            let what = source.kind == .text ? "text" : source.kind == .link ? "linked" : "vector"
+            return "Rasterize the \(what) layer first (Layer ▸ Rasterize): stroking the selection would paint over its editable source."
+        }
+        return nil
     }
 
     // MARK: Guides

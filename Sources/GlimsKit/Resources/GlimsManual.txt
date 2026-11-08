@@ -81,6 +81,16 @@ a new document of its own. Clear (Delete) erases the selected pixels
 of the active layer (or the whole layer when nothing is selected); on
 a layer without transparency it fills them with the background color.
 
+Edit > Stroke Selection… opens the document's stroke sheet. It captures
+the current brush (shown by its resource name), size, opacity and color
+by value when it opens — editing or cancelling the sheet never changes
+the global tool settings — and Stroke paints the selection's boundary on
+the active layer as one undo step, leaving the selection itself
+unchanged. It refuses with a reason when there is no selection, the
+target is a mask, channel or layer group, the pixels are locked, the
+layer still has an editable text/link/vector source (rasterize it
+first), or the engine is busy.
+
 Edit > Stroke Path draws along the active path with the foreground
 color, at the width set in Tool Options. Edit > Fill Path fills the
 path's area on the active layer (or its mask, or the selected channel)

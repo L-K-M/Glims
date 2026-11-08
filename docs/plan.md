@@ -1969,6 +1969,82 @@ and `Sources/CGlimsEngine/abi.c` pass `-std=c11 -O2 -Wall -Wextra
 `swift test`, the app's `--engine-smoke-test`, the engine matrix and
 any on-screen check — no runtime behavior of the new slot was executed
 
+in this slice.
+
+### Stroke selection controls (2026-11-08)
+
+Interface slice on `feat/stroke-selection-controls`, frontend only: no
+facade, C, header or dependency change. Edit ▸ Stroke Selection… (listed
+in docs/design.md's Edit menu since the plan) now exists:
+`MainMenu` wires it to `DocumentWindowController.strokeSelection(_:)`,
+which opens a per-document sheet
+(`StrokeSelectionSheetController`, owned by the window controller exactly
+like the guides sheet — two documents keep independent sheets and
+controllers, and the document's existing onError/onStateChange/
+onWillChangeLayers/windowWillClose callbacks fan out to it alongside the
+guides sheet instead of being replaced). The sheet captures the document
+and each offered paint tool's brush — resource identity, size, opacity,
+color — BY VALUE at open from `ToolState.brush(for:)`; opening, editing
+or cancelling the sheet never mutates the global ToolState, the brush
+row shows the captured identity's real name ("Default", or the chooser's
+verified "Missing: …" marker — never silently replaced, never a session
+handle), and an accepted stroke carries the captured
+`ResourceIdentity`, resolved on the engine worker as before. Local
+fields are the paint tool (paintbrush/pencil/eraser), size, opacity and
+a color well owned by the sheet (deactivated and ordered out on close
+only when the sheet opened it). Validation is strict finite whole-string
+parsing with inline reasons (`StrokeSelectionFormValidation`): junk,
+whitespace, NaN/inf and out-of-range size (0 < s ≤ 500) or opacity
+(0…100 %) keep the sheet open with the reason; Cancel mutates nothing.
+Accept is one-shot: a reentry flag goes up before anything that can call
+back into the UI (ending field edits, ending pending input), so a
+duplicate/reentrant accept is blocked before it can mutate; on success
+exactly one counted input job is enqueued through
+`ImageDocument.strokeSelection` and the sheet closes. Native errors use
+the document's existing onError path.
+
+Gates read only cached state — no synchronous native RPC from menu
+validation, sheet open or accept (`ImageDocument.strokeSelectionRefusal`
+plus `validateMenuItem`, the refusal as tool tip): busy/plug-in, filter
+preview, closing/saving/clipboard, empty selection (cached
+`selectionOutline`), mask/channel/group targets, effective pixel locks,
+and an editable structured source from the cached `layerSources`
+(`hasSource && !isRasterized`) which refuses with a rasterize-first
+explanation — the rasterize UI is a separate pending change and is not
+adopted here.
+
+Queue-defect fix in the same slice: `ImageDocument.strokeSelection` now
+ends pending user edits and an active stroke (`endPendingUserEdits()` +
+`endStroke()`) before enqueueing, the `finishInput` convention — both
+land as input-queue jobs ahead of the selection stroke, so an active
+stroke and queued accepted input finish BEFORE it (previously the native
+readiness check could report BUSY under the open stroke). Counted
+input-queue ordering, captured identity/settings/target and the error
+path are unchanged.
+
+Tests: `StrokeSelectionFormTests` (pure parser ranges/reasons, by-value
+brush build with identity, menu wiring) and `EngineSmokeTest` gains
+`exerciseStrokeSelectionControls`, wired as
+`GLIMS_SMOKE_CASE=stroke-selection-controls` and into the default run:
+menu wiring and cached validation; two independent documents/sheets;
+non-default resource/size/opacity/color capture shown and used; accept
+while the other window is front; unchanged selection; exact one-step
+undo/redo; cancel and invalid input; busy (held gate, released on every
+path), busy-after-open, preview, empty-selection, mask, channel, group,
+pixel-lock and structured-source gates; the queue-order regression
+(active stroke + accepted fill behind a controlled gate finish before
+the selection stroke — no BUSY, three undo steps, "Stroke Selection"
+last); duplicate/reentrant accept and in-flight-field-edit accept
+enqueue exactly once; late callbacks after close; close-drain.
+
+Checks actually run on this branch: `swift build -j 2` and
+`swift build -j 2 --build-tests` pass. NOT run here (root owns all
+runtime): `swift test`, `GLIMS_SMOKE_CASE=stroke-selection-controls`,
+the full `--engine-smoke-test`, the engine matrix, any GUI/on-screen
+check, any adapter build — no runtime behavior of the new sheet, menu
+item, gate or queue fix was executed in this slice.
+
+
 ### Grid controls (2026-11-08)
 
 Interface slice on `feat/grid-controls`, frontend only over the cached
@@ -2045,6 +2121,7 @@ job): `swift test`, `--smoke-test`, `--engine-smoke-test` (including
 `GLIMS_SMOKE_CASE=grid-controls`), the adapter conformance tests and any
 native/engine command — no runtime behavior of the new UI was executed
 in this slice.
+
 
 ### Fill pattern source (2026-11-08)
 
@@ -2772,6 +2849,7 @@ path; physical monitor calibration, wide-gamut/HDR output, proof profiles,
 proof intents and gamut warnings remain unverified or unimplemented.
 
 
+
 Grid controls integration passes 417 unit tests, all 38 focused checks on
 all four engines and 1,030 full pinned interface checks. A controlled
 probe of the actual planner reproduced an infinite loop when a Double
@@ -2953,6 +3031,8 @@ removing the selection clip. That appearance uses an independent known
 RGBA-cell oracle rather than assuming the clipped preview stays identical.
 
 
+
+
 Ruler review reproduced a major/minor classification defect at large
 scrolled coordinates: a magnitude-relative tolerance eventually exceeded
 the distance between ticks. At image coordinate 1,000,000 and 3,200% zoom,
@@ -2961,6 +3041,8 @@ now uses exact divisibility of the integral tick index. The independent
 six-position oracle passes, as do all 421 unit tests and 47 focused pinned
 interface checks. The four-engine focused and 1,067 full integration checks
 above preceded this pure planner correction.
+
+
 
 
 After integrating Indexed, one native conformance run failed during the
