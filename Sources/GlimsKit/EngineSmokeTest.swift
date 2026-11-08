@@ -103,6 +103,7 @@ enum EngineSmokeTest {
             try exerciseFileAdmission(session, work: work, documents: documents)
             try exerciseRevert(session, work: work, documents: documents)
             try exerciseFileImports(session, work: work, documents: documents)
+            try exerciseFillForm(session, documents: documents)
             try exerciseColorConversions(session, work: work, documents: documents)
             try exercisePrinting(session, work: work, documents: documents)
             try exerciseRecovery(session, work: work, documents: documents)
@@ -638,6 +639,143 @@ enum EngineSmokeTest {
         }
     }
 
+    /// The Edit Fill sheet, including independent controls when two
+    /// documents have sheets open and a refusal after opening the sheet.
+    private static func exerciseFillForm(_ session: EngineSession, documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func views<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
+            guard let root else { return [] }
+            return (root as? T).map { [$0] } ?? root.subviews.flatMap { views($0, as: type) }
+        }
+        let first = try ImageDocument(session: session, image: session.newImage(width: 16, height: 16), name: "Fill A")
+        let second = try ImageDocument(session: session, image: session.newImage(width: 16, height: 16), name: "Fill B")
+        documents.items += [first, second]
+        let a = DocumentWindowController(document: first)
+        let b = DocumentWindowController(document: second)
+        a.showWindow(nil)
+        b.showWindow(nil)
+        var errors: [String] = []
+        first.onError = { errors.append($0) }
+        second.onError = { errors.append($0) }
+        let foreground = ToolState.shared.foreground
+        let background = ToolState.shared.background
+        ToolState.shared.foreground = .red
+        ToolState.shared.background = .green
+        defer {
+            ToolState.shared.foreground = foreground
+            ToolState.shared.background = background
+            for (controller, document) in [(a, first), (b, second)] {
+                if let sheet = controller.window?.attachedSheet { controller.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn) }
+                controller.window?.close()
+                document.onError = nil
+                documents.items.removeAll { $0 === document }
+                document.closeImageWhenDrained()
+            }
+        }
+        func finish(_ controller: DocumentWindowController, _ response: NSApplication.ModalResponse) {
+            if let sheet = controller.window?.attachedSheet { controller.window?.endSheet(sheet, returnCode: response) }
+            spin(0.1)
+        }
+        func opacityField(_ sheet: NSWindow?) -> NSTextField? {
+            views(sheet?.contentView, as: NSTextField.self).first { $0.isEditable }
+        }
+
+        let undoBefore = first.undoInfo.undoCount
+        a.fill(nil)
+        let firstSheet = a.window?.attachedSheet
+        b.fill(nil)
+        let secondSheet = b.window?.attachedSheet
+        check(firstSheet != nil && secondSheet != nil, "two documents can open independent Fill sheets")
+        finish(a, .alertSecondButtonReturn)
+        let slider = views(secondSheet?.contentView, as: NSSlider.self).first
+        slider?.doubleValue = 25
+        if let slider, let action = slider.action { NSApp.sendAction(action, to: slider.target, from: slider) }
+        check(opacityField(secondSheet)?.stringValue == "25",
+              "closing one Fill sheet preserves the other sheet's slider binding")
+        finish(b, .alertSecondButtonReturn)
+        check(first.undoInfo.undoCount == undoBefore && first.pendingWork == 0 && second.pendingWork == 0,
+              "cancelling Fill changes neither document nor its undo history")
+
+        try session.select(.rectangle(CGRect(x: 4, y: 4, width: 8, height: 8)), image: first.image, options: .init())
+        try first.reload()
+        let beforeFill = first.undoInfo.undoCount
+        a.fill(nil)
+        let sheet = a.window?.attachedSheet
+        opacityField(sheet)?.stringValue = "50"
+        finish(a, .alertFirstButtonReturn)
+        wait { first.pendingWork == 0 }
+        let inside = pixel(session, first.image, x: 6, y: 6) ?? []
+        let outside = pixel(session, first.image, x: 1, y: 1) ?? []
+        check(inside.count == 4 && inside[0] > 240 && (175...200).contains(Int(inside[1]))
+                && outside.count == 4 && outside.prefix(3).allSatisfy { $0 == 255 },
+              "Fill uses the foreground at 50 percent only inside the selection (\(inside), \(outside))")
+        check(first.undoInfo.undoCount == beforeFill + 1, "Fill is one undo step")
+        first.undo()
+        wait { first.pendingWork == 0 }
+        check(pixel(session, first.image, x: 6, y: 6)?.prefix(3).allSatisfy { $0 == 255 } == true,
+              "undo restores the area before Fill")
+
+        b.fill(nil)
+        let customSheet = b.window?.attachedSheet
+        let choice = views(customSheet?.contentView, as: NSPopUpButton.self).first
+        choice?.selectItem(at: 4)
+        if let choice, let action = choice.action { NSApp.sendAction(action, to: choice.target, from: choice) }
+        let well = views(customSheet?.contentView, as: NSColorWell.self).first
+        check(well?.isEnabled == true, "choosing Custom enables the Fill color well")
+        well?.color = .blue
+        finish(b, .alertFirstButtonReturn)
+        wait { second.pendingWork == 0 }
+        let custom = pixel(session, second.image, x: 8, y: 8) ?? []
+        check(custom.count == 4 && custom[0] < 20 && custom[2] > 240,
+              "Custom Fill uses its chosen color across the whole layer without a selection (\(custom))")
+
+        b.fill(nil)
+        let backgroundSheet = b.window?.attachedSheet
+        views(backgroundSheet?.contentView, as: NSPopUpButton.self).first?.selectItem(at: 1)
+        finish(b, .alertFirstButtonReturn)
+        wait { second.pendingWork == 0 }
+        let green = pixel(session, second.image, x: 8, y: 8) ?? []
+        check(green.count == 4 && green[0] < 20 && green[1] > 240 && green[2] < 20,
+              "Background Fill uses the background color independently of the foreground")
+
+        a.fill(nil)
+        let invalidSheet = a.window?.attachedSheet
+        opacityField(invalidSheet)?.stringValue = "50percent-junk"
+        let invalidErrorsBefore = errors.count, invalidUndoBefore = first.undoInfo.undoCount
+        finish(a, .alertFirstButtonReturn)
+        check(errors.count > invalidErrorsBefore && first.pendingWork == 0
+                && first.undoInfo.undoCount == invalidUndoBefore,
+              "Fill refuses a malformed opacity without editing or adding undo")
+
+        a.fill(nil)
+        let errorsBefore = errors.count
+        let gate = DispatchSemaphore(value: 0)
+        let held = EngineActivity.shared.perform(label: "Other work", work: { gate.wait() }, completion: {})
+        finish(a, .alertFirstButtonReturn)
+        check(held && errors.count > errorsBefore && first.pendingWork == 0,
+              "Fill reports a busy engine acquired after its sheet opened")
+        gate.signal()
+        wait { !EngineActivity.shared.isBusy }
+
+        a.fill(nil)
+        let nativeErrorsBefore = errors.count
+        if let layer = first.activeLayer {
+            try session.setLayerLocks(layer, image: first.image, mask: .pixels, values: .pixels)
+            finish(a, .alertFirstButtonReturn)
+            wait { first.pendingWork == 0 }
+            spin()
+            check(errors.count > nativeErrorsBefore
+                    && pixel(session, first.image, x: 6, y: 6)?.prefix(3).allSatisfy { $0 == 255 } == true,
+                  "Fill reports a native locked-target refusal and preserves its pixels")
+            try session.setLayerLocks(layer, image: first.image, mask: .pixels, values: [])
+        } else {
+            check(false, "the Fill refusal fixture has an active layer")
+        }
+    }
+
     /// Image ▸ Mode and Image ▸ Precision…: the cached color state
     /// behind the title, the checkmarks and the form's seeding; the
     /// conversions through counted exclusive admission; and the rules
@@ -770,6 +908,7 @@ enum EngineSmokeTest {
         let originalError = document.onError
         var precisionError: String?
         document.onError = { message in precisionError = message; originalError?(message) }
+        defer { document.onError = originalError }
         controller.imagePrecision(nil)
         sheet = controller.window?.attachedSheet
         let activityGate = DispatchSemaphore(value: 0)
@@ -779,7 +918,7 @@ enum EngineSmokeTest {
         if let sheet {
             controller.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn)
         }
-        spin(0.2)
+        wait { precisionError != nil }
         check(held && precisionError != nil && document.colorInfo.component == .u8,
               "Precision reports Convert refused while another document holds the engine")
         activityGate.signal()
@@ -799,8 +938,7 @@ enum EngineSmokeTest {
                 component.selectItem(withTitle: EngineSession.ColorComponent.u16.title)
                 controller.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn)
             }
-            wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
-            spin()
+            wait { precisionError != nil && document.pendingWork == 0 && !EngineActivity.shared.isBusy }
             check(precisionError != nil && document.colorInfo.component == .u8,
                   "Precision reports an engine-side conversion refusal without changing the image")
         }
