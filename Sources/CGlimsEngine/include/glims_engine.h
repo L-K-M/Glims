@@ -952,6 +952,8 @@ typedef struct GlimsEngineAPI {
                                     GlimsImageID *image, char **error);
   GlimsStatus  (*image_open)       (GlimsEngine *engine, const char *path,
                                     GlimsImageID *image, char **error);
+  /* BUSY while a native file load owns a nested engine loop. The image
+   * stays alive on refusal; retry after the load unwinds. */
   GlimsStatus  (*image_close)      (GlimsEngine *engine, GlimsImageID image);
   GlimsStatus  (*image_info)       (GlimsEngine *engine, GlimsImageID image,
                                     GlimsImageInfo *info);

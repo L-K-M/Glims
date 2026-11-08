@@ -66,8 +66,8 @@ call_dispatch (gpointer user_data)
    * iterates the context, such as a link layer reloading its changed
    * file. Not every native path raises `busy` itself (the link monitor's
    * reload runs with no facade call around it), so raise it for this
-   * call's duration: the mutation gates refuse, while reads, cancels and
-   * stroke/filter delivery — which never check busy — still run. */
+   * call's duration: mutation gates refuse while reads and cancellation
+   * remain deliverable. This does not discard or block RPC dispatch. */
   gboolean   nested = g_main_depth () > 1;
 
   if (nested)
@@ -834,6 +834,7 @@ open_image_free (gpointer data)
       if (open->guide_moved_handler)
         g_signal_handler_disconnect (open->image, open->guide_moved_handler);
 
+      glims_track_image_links (open->image);
       g_object_unref (open->image);
     }
 

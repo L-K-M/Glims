@@ -1925,3 +1925,39 @@ struct. Initializing `struct_size` fixes those tests; the independent
 pixel-restoration and exact undo assertions already passed. No runtime
 restore behavior required a change. User-facing confirmed dispatch and
 its interface checks follow separately.
+
+### Linked-load admission and object lifetime (2026-11-08)
+
+A controlled Python file loader reproduced edits being admitted during
+Restore Source, Undo, history navigation and automatic linked-file refresh.
+Restore/Undo/history now hold balanced native busy counters. RPC dispatch
+from a nested engine loop also raises busy for the call so mutation gates
+refuse while reads and cancellation remain deliverable. This is not a
+blanket dispatch block; existing stroke delivery keeps its prior contract.
+The public event callback contract already forbids synchronous reentry.
+
+A second red regression showed close destroying images during a load.
+Native close now returns BUSY and leaves the image alive; EngineActivity
+retries asynchronously without occupying its queue or reporting a false
+completion. The session stays retained until a real close result arrives.
+The retry intentionally waits for native completion; a permanently wedged
+loader can therefore keep the close pending while cancellation remains
+available.
+
+GIMP 3.2's link finalizer leaves a changed idle with bare link userdata.
+The adapter tracks links in current layers, detached undo-owned layers,
+link undo records and nested undo/redo stacks. A weak notification removes
+pending sources only when the link object actually dies, preserving live
+shared owners and future monitoring. Adoption, undo events and final image
+release install the hooks. Master cancels the idle natively, so this
+compatibility cleanup applies only to the pinned 3.2 engines. No upstream
+source was modified. Re-audit the workaround when updating those pins.
+
+Native suites pass 1,361 / 1,171 / 1,361 / 1,361 checks on GIMP 3.2.8 /
+3.0.8 / 3.2.0 / master, including close BUSY/no destruction, post-load
+close, unchanged pixels/history after refused edits, reads/cancel delivery
+and native monitor reload. The fixture now observes native close status
+rather than assuming a Python marker or a fixed delay proves completion.
+Independent review of the lifetime change found no important issues.
+Swift targets compile; application-side retry runtime remains part of
+subsequent interface integration.

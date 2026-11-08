@@ -27,6 +27,7 @@ final class EngineSession: @unchecked Sendable {
         /// failure (busy, locked, engine error, ...) must not be read as
         /// "missing".
         var isNotFound: Bool { status == Int32(GLIMS_STATUS_NOT_FOUND.rawValue) }
+        var isBusy: Bool { status == Int32(GLIMS_STATUS_BUSY.rawValue) }
 
         /// Any thrown error as an `EngineError`, wrapping non-facade errors
         /// so callers can classify results (NOT_FOUND vs other) uniformly.

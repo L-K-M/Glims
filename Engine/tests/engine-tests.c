@@ -1675,16 +1675,27 @@ probe_busy_during_load (const char *work, GlimsImageID other,
   int32_t    depth = undo_depth (other), w = 0, h = 0;
   uint8_t   *before = render_all (other, &w, &h);
   int        entered;
+  GlimsImageID close_candidate = 0;
+  GlimsImageInfo close_info;
 
+  api->image_new (engine, 8, 8, &close_candidate, NULL);
   slow_load_arm (work);
   pthread_create (&id, NULL, busy_thread_run, &thread);
   entered = slow_load_seen (work, "slow-load-entered", 15);
   CHECK (entered, "%s: the .gslow load ran inside the operation", what);
   if (entered)
-    check_busy_window (other, before, w, h, depth, what);
+    {
+      check_busy_window (other, before, w, h, depth, what);
+      CHECK (api->image_close (engine, close_candidate) == GLIMS_STATUS_BUSY &&
+             api->image_info (engine, close_candidate, &close_info) == GLIMS_STATUS_OK,
+             "%s: close refuses BUSY and keeps the image alive during loading", what);
+    }
   free (before);
   slow_load_release (work);
   pthread_join (id, NULL);
+  if (api->image_info (engine, close_candidate, &close_info) == GLIMS_STATUS_OK)
+    CHECK (api->image_close (engine, close_candidate) == GLIMS_STATUS_OK,
+           "%s: close succeeds after the loader returns", what);
   CHECK (thread.status == expected, "%s: the operation completed once released (%d)",
          what, thread.status);
 }
@@ -1790,36 +1801,34 @@ test_busy_during_link_load (const char *work)
   entered = slow_load_seen (work, "slow-load-entered", 15);
   CHECK (entered, "the link monitor reloaded the changed file");
   if (entered)
-    check_busy_window (other, before, w, h, depth, "the monitor's reload");
+    {
+      GlimsImageInfo live;
+      check_busy_window (other, before, w, h, depth, "the monitor's reload");
+      CHECK (api->image_close (engine, monitor_image) == GLIMS_STATUS_BUSY &&
+             api->image_info (engine, monitor_image, &live) == GLIMS_STATUS_OK,
+             "close keeps the monitored image alive until its native reload unwinds");
+    }
   free (before);
   slow_load_release (work);
-  CHECK (slow_load_seen (work, "slow-load-done", 15),
-         "the monitor's reload finished after the release");
-
-  /* Draining the monitor: the rewrite can leave one more emission queued
-   * — idle_changed_source admits a single pending idle, and it fires on
-   * the bare link pointer, which closing the image would leave dangling
-   * (gimp_link_finalize never removes it). Let a queued emission run its
-   * load while the image is still open: a queued idle fires the moment
-   * the engine is idle again, so a bounded wait covers 0-or-1 pending
-   * emissions, and nothing new is monitored afterwards because the test
-   * writes the file no more. */
-  {
-    char marker[1100];
-
-    slow_load_marker (work, "slow-load-entered", marker, sizeof marker);
-    unlink (marker);
-    slow_load_marker (work, "slow-load-done", marker, sizeof marker);
-    unlink (marker);
-    if (slow_load_seen (work, "slow-load-entered", 5) ||
-        slow_load_seen (work, "slow-load-done", 1))
-      CHECK (slow_load_seen (work, "slow-load-done", 15),
-             "the queued monitor emission reloaded before the close");
-  }
-
-  api->image_close (engine, monitor_image);
-  api->image_close (engine, image);
-  api->image_close (engine, other);
+  /* Completion is observed through the status-bearing native close,
+   * not a Python marker written before the loader has returned. Pending
+   * callbacks on dying links must be cancelled by production teardown. */
+  GlimsImageID closing[] = { monitor_image, image, other };
+  for (size_t i = 0; i < sizeof closing / sizeof closing[0]; i++)
+    {
+      GlimsStatus status;
+      GlimsImageInfo live;
+      double deadline = now_ms () + 15000;
+      do
+        {
+          status = api->image_close (engine, closing[i]);
+          if (status == GLIMS_STATUS_BUSY) usleep (10000);
+        }
+      while (status == GLIMS_STATUS_BUSY && now_ms () < deadline);
+      CHECK (status == GLIMS_STATUS_OK &&
+             api->image_info (engine, closing[i], &live) == GLIMS_STATUS_NOT_FOUND,
+             "the linked-load fixture closes image %zu safely after native completion", i);
+    }
 }
 
 static void
