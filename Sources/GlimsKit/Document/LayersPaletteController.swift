@@ -190,6 +190,8 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         menu.addItem(.separator())
         menu.addItem(commandItem("Bring Forward", .raise))
         menu.addItem(commandItem("Send Backward", .lower))
+        menu.addItem(commandItem("Layer to Image Size", .fitToImage))
+        menu.addItem(commandItem("Trim Layer to Content", .trimToContent))
         menu.addItem(.separator())
         for (lock, title) in EngineSession.LayerLocks.menuOrder {
             let item = NSMenuItem(title: "Lock \(title)", action: #selector(toggleLock(_:)), keyEquivalent: "")
@@ -400,6 +402,14 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         switch menuItem.action {
         case #selector(runLayerCommand(_:)):
             guard let document, document.acceptsEdits else { return false }
+            // The resize commands are pixel-only, like Apply Mask: the
+            // engine refuses groups and editable text, link and vector
+            // layers, so those never offer them.
+            if menuItem.tag == Int(EngineSession.LayerCommand.fitToImage.rawValue)
+                || menuItem.tag == Int(EngineSession.LayerCommand.trimToContent.rawValue) {
+                guard let active = document.activeLayer else { return false }
+                return document.layers.first(where: { $0.id == active })?.kind == .pixel
+            }
             return menuItem.tag == Int(EngineSession.LayerCommand.new.rawValue) || document.activeLayer != nil
         case #selector(newLayerGroup(_:)):
             return document?.acceptsEdits == true

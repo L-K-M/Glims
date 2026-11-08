@@ -618,6 +618,13 @@ final class ImageDocument {
             }
         case .raise, .lower, .toTop, .toBottom:
             run { session, image in _ = try session.layerCommand(command, image: image) }
+        case .fitToImage, .trimToContent:
+            // Pixel edits like the layer transforms: a mask or channel
+            // paint target refuses them.
+            guard !refuseWhileTargetPending() else { return }
+            guard !isMaskTargetActive else { return refuseMaskEdit() }
+            guard !isChannelTargetActive else { return refuseChannelTransform() }
+            run { session, image in _ = try session.layerCommand(command, image: image) }
         }
     }
 

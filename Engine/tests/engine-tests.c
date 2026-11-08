@@ -470,6 +470,208 @@ test_editing (void)
   api->image_close (engine, image);
 }
 
+/* Layer to Image Size and Trim Layer to Content: pixels, bounds, offsets,
+ * undo accounting, masks, locks, the busy gate, no-ops and the refusal of
+ * groups and editable text layers. */
+static void
+test_layer_fit_trim (void)
+{
+  GlimsImageID        image = 0;
+  GlimsItemID         layer = 0, empty_layer = 0, group = 0, text = 0, mask = 0;
+  GlimsStrokeID       stroke = 0;
+  GlimsLayerInfo      rows[4];
+  int32_t             n = 0, before;
+  uint8_t             pixel[4];
+  char               *error = NULL, *fonts = NULL, *newline;
+  GlimsBrushSettings  brush = brush_for (GLIMS_PAINT_PENCIL, 8);
+  GlimsStrokePoint    point = { .x = 5, .y = 5, .pressure = 1.0 };
+  GlimsFillSettings   fill = { .struct_size = sizeof fill, .mode = GLIMS_FILL_SELECTION,
+                               .color = { 1, 0, 0, 1 }, .opacity = 1, .threshold = 0.1,
+                               .antialias = true };
+  GlimsTextSettings   text_settings = { .struct_size = sizeof text_settings, .size = 24,
+                                        .color = { 0, 0, 0, 1 }, .justify = GLIMS_JUSTIFY_LEFT,
+                                        .antialias = true };
+
+  api->image_new (engine, 100, 80, &image, NULL);
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer, NULL);
+
+  CHECK (api->layer_command (engine, image, 4242, GLIMS_LAYER_FIT_TO_IMAGE, NULL, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->layer_command (engine, image, 4242, GLIMS_LAYER_TRIM_TO_CONTENT, NULL, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an explicit unknown layer is NOT_FOUND for both commands");
+
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_FIT_TO_IMAGE, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "fitting an image-sized layer at 0,0 is a no-op without undo");
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_TRIM_TO_CONTENT, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "trimming a transparent layer is a no-op without undo");
+
+  /* Content: a red 30x25 rectangle at (10,20) on the transparent layer. */
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 10, 20 }, { 40, 45 } }, 2, NULL);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL);
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+
+  api->layer_move (engine, image, layer, 10, 5);
+  before = undo_depth (image);
+  render_pixel (image, 25, 30, pixel);
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_FIT_TO_IMAGE, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->image_layers (engine, image, rows, 4, &n) == GLIMS_STATUS_OK &&
+         rect_equals (rows[0].bounds, 0, 0, 100, 80) &&
+         pixel[0] == 255 && pixel[1] == 0,
+         "Layer to Image Size is one undo step to 0,0 100x80 keeping the content in place (%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2]);
+  render_pixel (image, 25, 30, pixel);
+  CHECK (pixel[0] == 255 && pixel[1] == 0,
+         "the red content keeps its image position (%d,%d,%d at 25,30)",
+         pixel[0], pixel[1], pixel[2]);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &n) == GLIMS_STATUS_OK &&
+         rows[0].bounds.x == 10 && rows[0].bounds.y == 5,
+         "undo restores the layer's offset");
+  api->image_redo (engine, image);
+
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_TRIM_TO_CONTENT, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->image_layers (engine, image, rows, 4, &n) == GLIMS_STATUS_OK &&
+         rect_equals (rows[0].bounds, 20, 25, 30, 25) &&
+         red_at (image, 25, 30) == 255,
+         "Trim Layer to Content crops to the red rectangle at its position");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &n) == GLIMS_STATUS_OK &&
+         rect_equals (rows[0].bounds, 0, 0, 100, 80),
+         "undo restores the image-sized layer");
+  api->image_redo (engine, image);
+
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_TRIM_TO_CONTENT, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "trimming an already tight layer is a no-op without undo");
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_FIT_TO_IMAGE, NULL, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &n) == GLIMS_STATUS_OK &&
+         rect_equals (rows[0].bounds, 0, 0, 100, 80) && red_at (image, 25, 30) == 255,
+         "fitting the cropped layer grows it back around the content");
+
+  /* A black mask painted white over the left half of the content: only
+   * (20..35, 25..45) of the red rectangle shows; the masked-out part
+   * falls through to the white background. Fit and trim resize the mask
+   * with the layer, keeping that alignment. */
+  api->layer_command (engine, image, layer, GLIMS_LAYER_TRIM_TO_CONTENT, NULL, NULL);
+  api->layer_mask_add (engine, image, layer, GLIMS_MASK_BLACK, true, &mask, NULL);
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 20, 25 }, { 35, 45 } }, 2, NULL);
+  fill.color = (GlimsColor) { 1, 1, 1, 1 };
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL);
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_FIT_TO_IMAGE, NULL, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &n) == GLIMS_STATUS_OK &&
+         rect_equals (rows[0].bounds, 0, 0, 100, 80) && rows[0].has_mask,
+         "fitting a masked layer grows layer and mask together");
+  render_pixel (image, 25, 30, pixel);
+  CHECK (pixel[0] == 255 && pixel[1] == 0, "the unmasked red still shows at 25,30");
+  render_pixel (image, 45, 40, pixel);
+  CHECK (pixel[1] == 255, "the masked-out corner still falls through to the background at 45,40");
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_TRIM_TO_CONTENT, NULL, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 4, &n) == GLIMS_STATUS_OK &&
+         rect_equals (rows[0].bounds, 20, 25, 30, 25) && rows[0].has_mask,
+         "trimming crops layer and mask to the same bounds");
+  render_pixel (image, 25, 30, pixel);
+  CHECK (pixel[0] == 255 && pixel[1] == 0, "the mask alignment survives the trim at 25,30");
+  render_pixel (image, 45, 40, pixel);
+  CHECK (pixel[1] == 255, "and at 45,40");
+
+  /* No-ops and refusals: an empty layer trims to nothing, and a group
+   * or a genuine text layer is UNSUPPORTED with a reason. */
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &empty_layer, NULL);
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, empty_layer, GLIMS_LAYER_TRIM_TO_CONTENT, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "a transparent layer trims to nothing without an undo step");
+  api->layer_command (engine, image, empty_layer, GLIMS_LAYER_DELETE, NULL, NULL);
+
+  api->create_group (engine, image, 0, 0, "Group", &group, NULL);
+  CHECK (api->layer_command (engine, image, group, GLIMS_LAYER_FIT_TO_IMAGE, NULL, &error) == GLIMS_STATUS_UNSUPPORTED &&
+         error &&
+         api->layer_command (engine, image, group, GLIMS_LAYER_TRIM_TO_CONTENT, NULL, NULL) == GLIMS_STATUS_UNSUPPORTED,
+         "a group is refused with a reason (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  if (api->fonts (engine, &fonts) == GLIMS_STATUS_OK && fonts && *fonts)
+    {
+      if (strstr (fonts, "Sans-serif\n") == fonts || strstr (fonts, "\nSans-serif\n"))
+        strcpy (text_settings.font, "Sans-serif");
+      else
+        {
+          newline = strchr (fonts, '\n');
+          snprintf (text_settings.font, sizeof text_settings.font, "%.*s",
+                    (int) (newline ? newline - fonts : (ptrdiff_t) strlen (fonts)), fonts);
+        }
+      if (api->text_layer_new (engine, image, "Hi", &text_settings, (GlimsPoint) { 10, 10 },
+                               &text, NULL) == GLIMS_STATUS_OK && text != 0)
+        {
+          int i, found = 0;
+
+          before = undo_depth (image);
+          api->image_layers (engine, image, rows, 4, &n);
+          for (i = 0; i < n && i < 4; i++)
+            if (rows[i].id == text) found = rows[i].kind == GLIMS_LAYER_TEXT;
+          CHECK (found &&
+                 api->layer_command (engine, image, text, GLIMS_LAYER_FIT_TO_IMAGE, NULL, &error)
+                   == GLIMS_STATUS_UNSUPPORTED && error &&
+                 api->layer_command (engine, image, text, GLIMS_LAYER_TRIM_TO_CONTENT, NULL, NULL)
+                   == GLIMS_STATUS_UNSUPPORTED &&
+                 undo_depth (image) == before,
+                 "a genuine text layer is unsupported, never rasterized (%s)", error ? error : "");
+          api->free_string (error);
+          error = NULL;
+        }
+      else
+        CHECK (0, "the text layer for the rasterize refusal exists");
+    }
+  else
+    CHECK (0, "the engine lists fonts for the rasterize refusal");
+  api->free_string (fonts);
+
+  /* Locks: pixels or position, own or inherited, refuse both commands. */
+  before = undo_depth (image);
+  api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION,
+                        GLIMS_LOCK_PIXELS, NULL);
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_FIT_TO_IMAGE, NULL, NULL) == GLIMS_STATUS_LOCKED &&
+         api->layer_command (engine, image, layer, GLIMS_LAYER_TRIM_TO_CONTENT, NULL, NULL) == GLIMS_STATUS_LOCKED,
+         "a pixel lock refuses both commands");
+  api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION,
+                        GLIMS_LOCK_POSITION, NULL);
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_FIT_TO_IMAGE, NULL, NULL) == GLIMS_STATUS_LOCKED,
+         "a position lock refuses them too");
+  api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, 0, NULL);
+  api->reparent_layer (engine, image, layer, group, 0, NULL);
+  api->set_layer_locks (engine, image, group, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL);
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_TRIM_TO_CONTENT, NULL, NULL) == GLIMS_STATUS_LOCKED &&
+         undo_depth (image) == before,
+         "a group's inherited pixel lock refuses them without an undo step");
+  api->set_layer_locks (engine, image, group, GLIMS_LOCK_PIXELS, 0, NULL);
+
+  /* A stroke in progress makes the edits BUSY, like every mutation. */
+  if (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK)
+    {
+      CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_FIT_TO_IMAGE, NULL, NULL) == GLIMS_STATUS_BUSY &&
+             api->layer_command (engine, image, layer, GLIMS_LAYER_TRIM_TO_CONTENT, NULL, NULL) == GLIMS_STATUS_BUSY,
+             "both commands report BUSY during a stroke");
+      api->stroke_end (engine, stroke);
+    }
+  else
+    CHECK (0, "the stroke for the busy check began");
+
+  api->image_close (engine, image);
+}
+
 static void
 test_transforms (void)
 {
@@ -7447,6 +7649,7 @@ main (int argc, char **argv)
   test_paint_tools ();
   test_selections ();
   test_editing ();
+  test_layer_fit_trim ();
   test_clipboard ();
   test_clear_srgb_and_readiness (argv[3]);
   test_render_freshness ();
