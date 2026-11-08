@@ -715,6 +715,12 @@ final class ImageDocument {
             guard !isMaskTargetActive else { return refuseMaskEdit() }
             guard !isChannelTargetActive else { return refuseChannelTransform() }
             run { session, image in _ = try session.layerCommand(command, image: image) }
+        case .restoreSource:
+            // Restoration can reload a linked file and must use the
+            // confirmed engine-wide exclusive route. Ordinary input
+            // dispatch refuses it rather than starting file I/O here.
+            onError?("Use the confirmed restore command.")
+            NSSound.beep()
         }
     }
 

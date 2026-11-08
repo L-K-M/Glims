@@ -1858,3 +1858,106 @@ undo/redo, unchanged pixels/selection/bounds, XCF, lock and busy assertions
 now pass. The compiled `layer-source` interface scenario additionally
 checks queued document cache refresh and busy admission; its runtime
 execution and the unit suite are pending the shared desktop.
+
+### Retained-source restore (2026-11-08)
+
+Backend slice on `feat/layer-source-restore`, engine plus a typed Swift
+case, no UI and no document dispatch. `GLIMS_LAYER_RESTORE_SOURCE = 13`
+on `layer_command` (purely additive enum value, ABI version stays 1) is
+the inverse of RASTERIZE for layers that still retain their structured
+source: it discards the pixel edits and regenerates the content from the
+retained text, link or path as ONE undo step, preserving the selection,
+the item id, the source kind and a mask attachment. Dispatch in
+`glims_layer_command` (Engine/edit.c) mirrors RASTERIZE exactly:
+`glims_edit_ready` first (BUSY during stroke/filter/plug-in), then
+`glims_check_item_locks` with PIXELS|POSITION (LOCKED, own or inherited),
+then `glims_layer_restore_source` (Engine/layer-source.c). An explicit
+layer id that names no attached layer of the image is NOT_FOUND before
+the switch, like RASTERIZE.
+
+Kind decision in `glims_layer_restore_source`: ordinary pixel layers,
+groups and structured layers whose source is gone (`source_is_retained`
+is false) report UNSUPPORTED with an actionable message before any
+mutation; an already editable instance (`source_is_editable`, the
+core's own `gimp_item_is_text/link/vector_layer` predicates) is a no-op
+that pushes no undo.
+
+On GIMP 3.2+ with the genuine rasterizable flag TRUE — text and vector
+always (their predicates ARE the flag), and a link rasterized
+explicitly — the mutation is `gimp_rasterizable_restore`
+(app/core/gimprasterizable.c): one "Revert Rasterize …" undo group
+around the rasterizable undo plus `gimp_image_undo_push_drawable_mod`
+(copy TRUE), then `set_rasterized(FALSE)`, whose handlers re-render
+the retained text (app/text/gimptextlayer.c), re-render the path
+(app/path/gimpvectorlayer.c) or thaw the link, reset its matrix and
+render its buffer (app/core/gimplinklayer.c).
+
+A link layer whose monitor stopped while the generic flag stayed FALSE
+— native pixel edits or an indexed conversion call
+`gimp_link_freeze` from `gimp_link_layer_set_buffer`, and
+`gimp_item_is_link_layer` computes `gimp_link_layer_is_monitored`, so
+`gimp_item_is_rasterized` sees it without the flag — never touches the
+restore guard or fakes the flag. The restore is assembled from public
+core headers as one undo group: `gimp_image_undo_push_drawable_mod`
+(copy TRUE) BEFORE `gimp_image_undo_push_link_layer`, so undo first
+stops the monitor (the link undo restores the unmonitored duplicate)
+and then restores the painted buffer; then `gimp_link_thaw` on the
+retained link and `gimp_link_layer_set_link(layer, same_link, FALSE)`,
+which resets the transform matrix to identity and re-renders the
+retained source. Link policy, stated exactly: the file is RELOADED when
+it is readable; on a read failure the RETAINED SOURCE BUFFER is kept and
+monitoring resumes — a missing file is NOT an error
+(`gimp_link_update_buffer` keeps the old buffer when the load fails,
+app/core/gimplink.c). The static `gimp_link_update_buffer` and the
+private flag setter are never called. `gimp_link_layer_set_link` returns
+FALSE only when the link has no buffer or the buffer's extents are zero
+(`gimp_link_layer_render_link`), so the retained link's GFile
+(`gimp_link_get_file`) and nonempty buffer (`gimp_link_get_buffer`) are
+prevalidated BEFORE the undo group; an unexpected FALSE after that is
+reported as FAILED with a message disclosing the gap, never silently
+OK.
+
+Before GIMP 3.2 only text exists; the restore reproduces
+`gimp_text_layer_set`'s own undo group (app/text/gimptextlayer.c):
+`gimp_image_undo_push_text_layer_modified` plus
+`gimp_image_undo_push_drawable_mod` (copy TRUE) in one
+GIMP_UNDO_GROUP_TEXT group, alpha added when the painted layer lost it,
+`"modified"=FALSE`, then the GimpText `"changed"` signal (no args)
+re-triggers the layer's existing private render callback.
+`gimp_text_layer_set` itself cannot be used while modified is TRUE —
+its `gimp_item_is_text_layer` predicate guard refuses — and
+`gimp_text_layer_discard` is never used: it would destroy the text.
+
+Swift: `EngineSession.LayerCommand.restoreSource = 13` (typed, routed
+through the existing `layerCommand(_:image:layer:)` call), but
+`ImageDocument.layerCommand` REFUSES `.restoreSource` with "Use the
+confirmed restore command." until the root's global confirmed-restore
+dispatch exists — the input queue must not run native file I/O (a link
+restore can reload its file). No new footer slots; no palette or menu
+entry.
+
+Tests: `test_layer_restore_source` in `Engine/tests/engine-tests.c`
+(exact oracles, rows matched by identity via `source_test_row`): edited
+pixels -> source restoration (pixel-identical render) -> UNDO exact
+edited pixels + retained raster state -> REDO source again, for the
+explicit-rasterize text on every engine (3.0's modified-flag path
+included), the vector on 3.2+, the explicitly rasterized link (flag
+TRUE) and the painted link (flag FALSE, monitor stopped); no-op without
+history on already editable layers; unchanged selection/bounds/item
+id/source kind/mask attachment; UNSUPPORTED for pixel/group and
+NOT_FOUND for stale/foreign/closed ids before any mutation; own and
+inherited PIXELS/POSITION locks LOCKED; BUSY during a stroke and a
+filter preview; the reload-file policy (rewritten file renders blue) and
+the missing-file retained-buffer policy (deleted file restores the
+exact retained render, monitoring resumed, no error). The adapter and
+these tests were NOT compiled or run in this slice — only
+`swift build --build-tests` (the facade header compiles through
+CGlimsEngine). Root compiles the C matrix.
+
+Root validation: the native restore suite passes 1,314 / 1,170 / 1,314 /
+1,314 checks on GIMP 3.2.8 / 3.0.8 / 3.2.0 / master. The first run's
+retained-source assertions used an uninitialized size-versioned output
+struct. Initializing `struct_size` fixes those tests; the independent
+pixel-restoration and exact undo assertions already passed. No runtime
+restore behavior required a change. User-facing confirmed dispatch and
+its interface checks follow separately.
