@@ -428,6 +428,34 @@ final class EngineSession: @unchecked Sendable {
         try check(api.image_save_copy(engine, image, path, &error), error)
     }
 
+    /// File > Open as Layers: every layer of the file lands in the image
+    /// above the selected layer, as one undo step. Returns the new layer
+    /// ids, top first. Loads through the file plug-ins, so call it off
+    /// the main thread.
+    func openLayers(image: Int32, path: String) throws -> [Int32] {
+        var count: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        var buffer = [GlimsItemID](repeating: 0, count: 1024)
+        try check(buffer.withUnsafeMutableBufferPointer { buffer in
+            api.image_open_layers(engine, image, path, buffer.baseAddress,
+                                  Int32(buffer.count), &count, &error)
+        }, error)
+        guard count > buffer.count else { return Array(buffer.prefix(Int(count))) }
+        // More layers than the buffer: the import selected all of them.
+        return try layers(image).filter(\.isSelected).map(\.id)
+    }
+
+    /// File > Place: puts the file into the image as a link layer that
+    /// keeps a live reference to it, as one undo step. Returns the new
+    /// layer's id. Throws `EngineError` with `GLIMS_STATUS_UNSUPPORTED`
+    /// on engines without link layers (before GIMP 3.2).
+    func placeLink(image: Int32, path: String) throws -> Int32 {
+        var layer: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_place_link(engine, image, path, &layer, &error), error)
+        return layer
+    }
+
     func newImage(pixels: ClipboardImage) throws -> Int32 {
         guard pixels.pixels.count == (try ClipboardImage.byteCount(width: pixels.width, height: pixels.height)) else {
             throw ClipboardImage.TransferError.invalidImage
@@ -1362,6 +1390,7 @@ final class EngineSession: @unchecked Sendable {
         case GLIMS_STATUS_CANCELLED: return "Cancelled."
         case GLIMS_STATUS_NOT_RUNNING: return "The engine is not running."
         case GLIMS_STATUS_LOCKED: return "Unlock the layer or its group before editing it."
+        case GLIMS_STATUS_UNSUPPORTED: return "The engine version cannot do this."
         default: return "The engine reported an error."
         }
     }
