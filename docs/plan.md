@@ -1558,3 +1558,64 @@ image-close work on the activity queue. The focused scenario now awaits
 closeImageWhenDrained's completion in its own cleanup and confirms the image
 is gone before engine shutdown; the completed callback regression passes.
 The thumbnail-batch fixture excludes the Default row when counting brushes.
+
+### Gradient chooser and canvas wiring (2026-11-08)
+
+Interface slice on `feat/gradient-chooser`, frontend only. The pattern
+picker's machinery is now resource-kind parameterized instead of copied a
+third time: `ResourceRow`/`ResourceChooserState`/`ResourceChooserModel`/
+`ResourceThumbnailQueue` (in `Document/ResourceChooserModel.swift`, with
+`PatternRow`/`PatternChooserState`/`PatternChooserModel`/
+`PatternThumbnailQueue` as compatibility aliases, so all pattern behavior
+and tests are unchanged) carry a `kind` and drive `resources(kind)`,
+`resolveResource(_:kind:)` and the bounded 32-thumbnail batches. The
+off-main engine driving that the embedded `PatternFillPicker` owned is
+extracted into the shared `ResourcePickerController` (one catalog load at
+a time, one batch in flight, busy → one whenIdle retry, failed attempts
+cached per generation, close-generation invalidation, document-captured-at-open,
+abandon on document close); `PatternFillPicker` keeps its exact view and
+load-once semantics on top of it, and `BrushChoiceCache` became the generic
+`ResourceChoiceCache<Key>` (alias kept) so previews and missing markers
+stay tagged to the exact persistent identity.
+
+The Gradient tool's Tool Options rows (`ToolPalettes.swift`) are a resource
+row (button with the choice's real name and identity-tagged preview, a
+"Missing: …" marker for a verified NOT_FOUND, "Foreground to Background"
+for the Default, plus an explicit Reset), the three shapes, a blend popup
+offering ONLY Perceptual RGB and Lab (the backend returns UNSUPPORTED for
+RGB Linear, so it is never offered), Reverse, and opacity. The owned
+`GradientChooser` panel (row 0 = Foreground-to-Background Default) captures
+the document at open; Tool Options retarget/palette dismiss close it, and
+close bumps the model generation so no late native result can restore a
+stale view. Choosing commits only a persistent `ResourceIdentity`; nil is
+the Default, persisted in `GradientToolStore` together with the tool's own
+primitive settings (shape/reverse/blend/opacity) — never a session handle,
+a CGImage, or the FG/BG colors (the global color behavior is unchanged).
+
+The real canvas gradient gesture (`CanvasTools.swift`) captures a
+`GradientGestureSnapshot` once at the press — identity (nil → the built-in
+`gimp-gradient-fg-bg-rgb` internal identity, so the Default also gets
+reverse/blend/opacity), shape, reverse, blend space, opacity, and the
+global FG/BG colors forced opaque per the backend contract — and commits
+through the counted `ImageDocument.gradientResource` queue at release with
+only the endpoints moving; the identity resolves on the engine worker
+inside the queued job, never on main, and no mutable `ToolState` is read
+from the worker closure. Default settings (perceptual, non-reversed,
+opacity 1) preserve the previous FG-to-BG appearance; the low-level
+`gradient(from:to:shape:fromColor:toColor:)` API is untouched.
+
+Pure `GradientChooserTests` cover the store's default/reset and
+identity-only persistence, the allowed blend/shape settings, the Default
+identity, snapshot capture semantics (value capture, opaque colors,
+endpoint move, ToolState write-through) and the shared kind-parameterized
+model (pending choice through search/reload, missing-only-on-NOT_FOUND,
+bounded batches, stale-generation drops). The smoke scenario
+`GLIMS_SMOKE_CASE=gradient-chooser` (`exerciseGradientChooser`, also in the
+default run) drives the real palette controls and panel — catalog, Default
+row, search, lazy previews, Choose, Reset, missing marker, cancel/retarget
+close — and the actual canvas drag: chosen gradient changes pixels as one
+undo step and undo restores them, and the Default gesture paints the
+built-in FG-to-BG midpoint even when the colors change mid-drag (capture
+at the press). Runtime/desktop verification of these scenarios is owned by
+the root harness; here only `swift build` and `swift build --build-tests`
+were run.

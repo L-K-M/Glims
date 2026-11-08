@@ -123,6 +123,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (pattern-fill)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "gradient-chooser" {
+                try exerciseGradientChooser(session, documents: documents)
+                print(failures == 0 ? "PASSED (gradient chooser)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "vector-style" {
                 try exerciseVectorStyleForm(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (vector style)" : "FAILED: \(failures) failure(s)")
@@ -172,6 +177,7 @@ enum EngineSmokeTest {
 
             try exercisePatternFill(session, documents: documents)
             try exercisePatternChooser(session, documents: documents)
+            try exerciseGradientChooser(session, documents: documents)
         } catch {
             check(false, "unexpected engine error: \(error)")
         }
@@ -720,7 +726,11 @@ enum EngineSmokeTest {
             spin(0.1)
         }
         func opacityField(_ sheet: NSWindow?) -> NSTextField? {
-            views(sheet?.contentView, as: NSTextField.self).first { $0.isEditable }
+            // The embedded pattern picker's hidden search field is an
+            // editable text field too; identify the opacity field by its
+            // accessibility label, not by position.
+            views(sheet?.contentView, as: NSTextField.self)
+                .first { $0.isEditable && $0.accessibilityLabel() == "Fill opacity, percent" }
         }
 
         let undoBefore = first.undoInfo.undoCount
@@ -7718,6 +7728,236 @@ enum EngineSmokeTest {
         wait { document.pendingWork == 0 }
         check(try session.copyPixels(image, merged: true).pixels == blank,
               "undo restores the pixels before chooser-selected painting")
+    }
+
+    /// The Gradient tool's Tool Options rows and the actual chooser panel,
+    /// wired to the real canvas gradient gesture: selection, Default/reset,
+    /// search and lazy previews, missing-identity reporting, close/retarget
+    /// invalidation, and the queued resource gradient with undo.
+    private static func exerciseGradientChooser(_ session: EngineSession, documents: DocumentList) throws {
+        let suite = "ch.lkmc.Glims.smoke.gradientchooser.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        let store = GradientToolStore(defaults: defaults)
+        let state = ToolState.shared
+        let previousStore = state.gradientStore
+        let previousTool = state.current
+        let previousFG = state.foreground
+        let previousBG = state.background
+        state.gradientStore = store
+        store.reset()
+        defer {
+            GradientChooser.shared.close()
+            state.gradientStore = previousStore
+            state.select(previousTool)
+            state.foreground = previousFG
+            state.background = previousBG
+            defaults.removePersistentDomain(forName: suite)
+        }
+
+        let image = try session.newImage(width: 120, height: 80)
+        let document = try ImageDocument(session: session, image: image, name: "Gradient chooser")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(15)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func settle() {
+            document.inputQueue.sync {}
+            wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+            spin()
+        }
+        func views<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
+            guard let root else { return [] }
+            return (root as? T).map { [$0] } ?? root.subviews.flatMap { views($0, as: type) }
+        }
+        defer {
+            controller.window?.close()
+            documents.items.removeAll { $0 === document }
+            var closed = false
+            document.closeImageWhenDrained { closed = true }
+            wait { closed }
+            check(closed && (try? session.info(image)) == nil,
+                  "the gradient-chooser image closes before engine shutdown")
+        }
+
+        state.select(.gradient)
+        state.foreground = .black
+        state.background = .white
+        let options = ToolOptionsPaletteController()
+        _ = options.view
+        options.retarget(to: document)
+        func gradientButton() -> NSButton? {
+            views(options.view, as: NSButton.self).first { $0.toolTip == "Choose the gradient" }
+        }
+        func panelButton(_ title: String) -> NSButton? {
+            let panel = NSApp.windows.first { $0.title == "Gradient" && $0.isVisible }
+            return views(panel?.contentView, as: NSButton.self).first { $0.title == title }
+        }
+
+        // The gradient rows: the resource button on the Default, the three
+        // shapes, a blend popup with only Perceptual RGB and Lab, Reverse,
+        // and opacity.
+        check(gradientButton()?.title == "Foreground to Background",
+              "Tool Options shows the Foreground-to-Background Default with no explicit choice")
+        let popups = views(options.view, as: NSPopUpButton.self)
+        let shape = popups.first { $0.numberOfItems == 3 }
+        check(shape?.itemTitle(at: 0) == "Linear" && shape?.itemTitle(at: 1) == "Bi-Linear"
+                && shape?.itemTitle(at: 2) == "Radial",
+              "all three gradient shapes stay available")
+        let blend = popups.first { $0.numberOfItems == 2 }
+        check(blend?.itemTitle(at: 0) == "Perceptual RGB" && blend?.itemTitle(at: 1) == "Lab",
+              "the blend popup offers only Perceptual RGB and Lab (never the UNSUPPORTED RGB Linear)")
+        check(views(options.view, as: NSButton.self).contains { $0.title == "Reverse" },
+              "the Reverse control shows")
+
+        // Open the actual panel: the full catalog loads off the main thread,
+        // with the Default row on top.
+        gradientButton()?.performClick(nil)
+        wait { GradientChooser.shared.isOpen }
+        let panel = NSApp.windows.first { $0.title == "Gradient" && $0.isVisible }
+        check(panel != nil, "the gradient chooser opens its owned panel")
+        let table = views(panel?.contentView, as: NSTableView.self).first
+        let picker = table?.delegate as? GradientChooserPanel
+        let catalogCount = try DispatchQueue.global(qos: .userInitiated).sync {
+            try session.resources(.gradient).count
+        }
+        wait { (table?.numberOfRows ?? 0) == catalogCount + 1 && !EngineActivity.shared.isBusy }
+        check((table?.numberOfRows ?? 0) == catalogCount + 1 && catalogCount > ResourceThumbnailQueue.batchSize,
+              "the actual panel lists the whole native gradient catalog plus the Default row")
+        check((table?.view(atColumn: 0, row: 0, makeIfNecessary: true) as? NSTableCellView)?.textField?.stringValue
+                == "Foreground to Background (Default)",
+              "row 0 is the explicit Foreground-to-Background Default")
+        check(table?.selectedRow == 0, "with no persisted choice the Default row is selected")
+        let firstCell = table?.view(atColumn: 0, row: 1, makeIfNecessary: true) as? NSTableCellView
+        wait { firstCell?.imageView?.image != nil && !EngineActivity.shared.isBusy }
+        check(firstCell?.textField?.stringValue.isEmpty == false && firstCell?.imageView?.image != nil,
+              "actual gradient cells display real names and native previews")
+
+        // Search a catalog gradient beyond the first batch, select it, Choose.
+        let chosen = try DispatchQueue.global(qos: .userInitiated).sync {
+            () -> (EngineSession.Resource, EngineSession.ResourceIdentity) in
+            let rows = try session.resources(.gradient)
+            guard let row = rows.last else { throw NoWindow() }
+            return (row, try session.resourceIdentifiers(row.id))
+        }
+        let search = views(panel?.contentView, as: NSSearchField.self)
+            .first { $0.accessibilityLabel() == "Search gradients" }
+            ?? views(panel?.contentView, as: NSSearchField.self).first
+        search?.stringValue = chosen.0.displayName
+        if let search, let picker {
+            picker.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
+        }
+        spin(0.1)
+        guard let picker,
+              let match = picker.model.rows(matching: chosen.0.displayName)
+                  .firstIndex(where: { $0.identity == chosen.1 }) else {
+            check(false, "search finds the gradient beyond the first preview batch")
+            return
+        }
+        if let table {
+            table.selectRowIndexes(IndexSet(integer: match + 1), byExtendingSelection: false)
+            picker.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification,
+                                                           object: table))
+        }
+        let chosenID = picker.model.rows(matching: chosen.0.displayName)[match].id
+        wait { picker.model.thumbnail(chosenID) != nil && !EngineActivity.shared.isBusy }
+        panelButton("Choose")?.performClick(nil)
+        wait { !GradientChooser.shared.isOpen && !EngineActivity.shared.isBusy }
+        check(state.gradientResource == chosen.1 && store.preferences.identity == chosen.1,
+              "choosing in the real panel persists exactly the selected gradient identity")
+        check(gradientButton()?.title == chosen.1.name,
+              "Tool Options shows the chosen gradient's real name")
+        wait { gradientButton()?.image != nil && !EngineActivity.shared.isBusy }
+        check(gradientButton()?.image != nil, "the chosen gradient's identity-tagged preview reaches Tool Options")
+
+        // Explicit reset to the Foreground-to-Background Default (nil).
+        views(options.view, as: NSButton.self).first { $0.toolTip == "Reset to the Foreground-to-Background default gradient" }?
+            .performClick(nil)
+        check(state.gradientResource == nil && store.preferences.identity == nil
+                && gradientButton()?.title == "Foreground to Background" && gradientButton()?.image == nil,
+              "Reset clears the choice, preview and marker to the Default")
+
+        // A persisted identity the engine cannot resolve is reported as
+        // missing, never substituted; closing preserves it.
+        let missing = EngineSession.ResourceIdentity(name: "Glims missing gradient", collection: nil, isInternal: false)
+        state.setGradientResource(missing)
+        gradientButton()?.performClick(nil)
+        wait { GradientChooser.shared.isOpen }
+        wait { GradientChooser.shared.missingIdentity(choice: missing) != nil && !EngineActivity.shared.isBusy }
+        check(gradientButton()?.title == "Missing: Glims missing gradient",
+              "the real chooser reports a missing persisted gradient in Tool Options")
+        panelButton("Cancel")?.performClick(nil)
+        wait { !GradientChooser.shared.isOpen }
+        check(state.gradientResource == missing,
+              "cancelling preserves the missing choice instead of substituting another resource")
+
+        // A palette retarget closes the open chooser (close-generation
+        // invalidation: no late result may restore the stale panel).
+        gradientButton()?.performClick(nil)
+        wait { GradientChooser.shared.isOpen }
+        options.retarget(to: nil)
+        check(!GradientChooser.shared.isOpen, "retargeting Tool Options closes the gradient chooser")
+        options.retarget(to: document)
+
+        // The real canvas gradient gesture with the chosen resource: one
+        // undoable edit through the counted queue.
+        state.setGradientResource(chosen.1)
+        settle()
+        let before = try session.copyPixels(image, merged: true).pixels
+        let undoBefore = document.undoInfo.undoCount
+        func send(_ type: NSEvent.EventType, _ point: CGPoint) {
+            guard let window = controller.window,
+                  let event = NSEvent.mouseEvent(
+                      with: type, location: controller.canvas.convert(
+                          CGPoint(x: point.x * controller.canvas.scale, y: point.y * controller.canvas.scale), to: nil),
+                      modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                      eventNumber: 0, clickCount: 1, pressure: 1) else { return }
+            switch type {
+            case .leftMouseDown: controller.canvas.mouseDown(with: event)
+            case .leftMouseDragged: controller.canvas.mouseDragged(with: event)
+            default: controller.canvas.mouseUp(with: event)
+            }
+        }
+        send(.leftMouseDown, CGPoint(x: 10, y: 40))
+        send(.leftMouseDragged, CGPoint(x: 60, y: 40))
+        send(.leftMouseUp, CGPoint(x: 110, y: 40))
+        settle()
+        let afterChosen = try session.copyPixels(image, merged: true).pixels
+        check(errors.isEmpty && afterChosen != before
+                && document.undoInfo.undoCount == undoBefore + 1,
+              "the actual canvas gesture paints the chosen gradient as one undo step")
+        document.undo()
+        settle()
+        check(try session.copyPixels(image, merged: true).pixels == before,
+              "undo restores the pixels before the chosen-gradient gesture")
+
+        // The Default (nil choice) uses the built-in FG/BG resource path,
+        // and the gesture's colors are captured at the press: a mid-drag
+        // color change cannot redirect the queued work.
+        state.setGradientResource(nil)
+        state.foreground = .black
+        state.background = .white
+        settle()
+        let beforeDefault = try session.copyPixels(image, merged: true).pixels
+        let undoDefault = document.undoInfo.undoCount
+        send(.leftMouseDown, CGPoint(x: 10, y: 40))
+        state.foreground = .red
+        state.background = .blue
+        send(.leftMouseDragged, CGPoint(x: 60, y: 40))
+        send(.leftMouseUp, CGPoint(x: 110, y: 40))
+        settle()
+        let mid = pixel(session, image, x: 60, y: 40) ?? []
+        check(errors.isEmpty && mid.count == 4 && (118...138).contains(Int(mid[0])) && (118...138).contains(Int(mid[1]))
+                && document.undoInfo.undoCount == undoDefault + 1,
+              "the Default gesture draws the built-in FG-to-BG gradient captured at the press (gray midpoint)")
+        document.undo()
+        settle()
+        check(try session.copyPixels(image, merged: true).pixels == beforeDefault,
+              "undo restores the pixels before the Default gesture")
     }
 
 }

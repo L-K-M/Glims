@@ -70,14 +70,14 @@ final class EngineSession: @unchecked Sendable {
         var antialias = true
     }
 
-    enum GradientShape: UInt32 {
+    enum GradientShape: UInt32, CaseIterable, Codable {
         case linear = 0, bilinear, radial
     }
 
     /// The color space a selected-resource gradient blends its stops in
     /// (GlimsGradientBlendSpace). Facade-owned values; the engine's enum
     /// never crosses the boundary.
-    enum GradientBlendSpace: UInt32 {
+    enum GradientBlendSpace: UInt32, Codable {
         case rgbPerceptual = 0
         /// Reserved: native engines currently report UNSUPPORTED.
         case rgbLinear
