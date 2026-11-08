@@ -8080,7 +8080,7 @@ enum EngineSmokeTest {
         }
         func views<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
             guard let root else { return [] }
-            return (root as? T).map { [$0] } ?? root.subviews.flatMap { views($0, as: type) }
+            return ((root as? T).map { [$0] } ?? []) + root.subviews.flatMap { views($0, as: type) }
         }
         func button(_ root: NSView?, _ label: String) -> NSButton? {
             views(root, as: NSButton.self).first { $0.accessibilityLabel() == label }
@@ -8240,6 +8240,28 @@ enum EngineSmokeTest {
               "undo restores RGB and the original pixels")
         check(controller.validateMenuItem(indexedItem()) , "the item validates again after undo")
 
+        // Reject malformed numeric text instead of silently parsing a prefix.
+        sheet = openSheet(controller)
+        let malformedContent = sheet?.contentView
+        depth = nativeUndoCount(image)
+        field(malformedContent, "Maximum colors")?.stringValue = "12px"
+        formButton(malformedContent, "Convert")?.performClick(nil)
+        wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(nativeMode(image) == .rgb && nativeUndoCount(image) == depth
+                && controller.window?.attachedSheet === sheet
+                && !(message(malformedContent)?.stringValue ?? "").isEmpty,
+              "a malformed maximum-color count is refused visibly without conversion")
+        // Keep subsequent checks independent when this regression fails.
+        if nativeMode(image) == .indexed {
+            document.undo()
+            wait { document.pendingWork == 0 }
+            spin()
+        } else {
+            formButton(malformedContent, "Cancel")?.performClick(nil)
+            spin()
+        }
+
         // Generated with a checked maximum color count.
         sheet = openSheet(controller)
         let genContent = sheet?.contentView
@@ -8260,6 +8282,8 @@ enum EngineSmokeTest {
 
         // BUSY: a typed call refuses without queueing, and Apply in an open
         // sheet shows the refusal inline and keeps the sheet open.
+        sheet = openSheet(controller)
+        let busyContent = sheet?.contentView
         let gate = DispatchSemaphore(value: 0)
         let held = EngineActivity.shared.perform(label: "Holding the engine", work: { gate.wait() },
                                                  completion: {})
@@ -8273,9 +8297,11 @@ enum EngineSmokeTest {
         spin()
         check(failed(busyResult) && document.pendingWork == 0 && document.colorInfo.mode == .rgb,
               "a typed conversion refuses while the engine is busy without queueing (\(busyResult as Any))")
-        sheet = openSheet(controller)
-        let busyContent = sheet?.contentView
-        formButton(busyContent, "Convert")?.performClick(nil)
+        // Dispatch a stale action directly; a disabled button correctly
+        // ignores performClick and cannot exercise the action's guard.
+        if let convert = formButton(busyContent, "Convert"), let action = convert.action {
+            NSApp.sendAction(action, to: convert.target, from: convert)
+        }
         spin()
         check(!(message(busyContent)?.stringValue ?? "").isEmpty
                 && controller.window?.attachedSheet === sheet
@@ -8297,7 +8323,8 @@ enum EngineSmokeTest {
             documents.items.removeAll { $0 === other }
             other.closeImageWhenDrained()
         }
-        other.inputQueue.async { usleep(300_000) }
+        let inputGate = DispatchSemaphore(value: 0)
+        other.inputQueue.async { inputGate.wait() }
         other.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
         other.endStroke()
         sheet = openSheet(controller)
@@ -8310,6 +8337,7 @@ enum EngineSmokeTest {
         other.beginStroke(at: .init(x: 4, y: 4, pressure: 1))
         check(!other.strokeIsActive, "the other document's edits refuse behind the conversion gate")
         if other.strokeIsActive { other.endStroke() }
+        inputGate.signal()
         wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
         spin()
         check(ok(drainSheet?.lastResult) && nativeMode(image) == .indexed
@@ -8372,6 +8400,11 @@ enum EngineSmokeTest {
         check(button(consentBox, "Rasterize and Convert") != nil && button(consentBox, "Back") != nil
                 && button(consentBox, "Cancel") != nil,
               "the confirmation offers Rasterize and Convert / Back / Cancel")
+        textContent?.layoutSubtreeIfNeeded()
+        let visibleConsent = button(confirmation(textContent)?.contentView, "Rasterize and Convert")
+        check(visibleConsent?.isHiddenOrHasHiddenAncestor == false
+                && visibleConsent?.visibleRect.isEmpty == false,
+              "the rasterization confirmation button occupies visible sheet space")
         check(nativeMode(textImage) == .rgb && textIsEditable()
                 && nativeUndoCount(textImage) == textDepth,
               "the consent step mutates nothing")

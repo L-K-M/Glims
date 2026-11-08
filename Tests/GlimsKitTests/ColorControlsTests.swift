@@ -52,9 +52,9 @@ final class ColorControlsTests: XCTestCase {
         XCTAssertLessThan(precision, size, "the color commands precede the geometry ones")
     }
 
-    func testTheModeSubmenuOffersRGBAndGrayscale() throws {
+    func testTheModeSubmenuOffersRGBGrayscaleAndIndexed() throws {
         let mode = try XCTUnwrap(imageMenu()?.item(withTitle: "Mode")?.submenu)
-        XCTAssertEqual(mode.items.map(\.title), ["RGB", "Grayscale"])
+        XCTAssertEqual(mode.items.map(\.title), ["RGB", "Grayscale", "Indexed…"])
         for (entry, target) in zip(mode.items, [EngineSession.ColorMode.rgb, .grayscale]) {
             XCTAssertEqual(entry.action, #selector(DocumentWindowController.convertImageMode(_:)))
             // The tag is the mode's facade value: menu validation
@@ -63,11 +63,12 @@ final class ColorControlsTests: XCTestCase {
         }
     }
 
-    /// The menu advertises no conversion the facade cannot honor — no
-    /// "Indexed" entry until palette and dither policy land.
-    func testTheModeSubmenuStopsShortOfIndexed() throws {
+    /// Indexed uses its policy sheet rather than the direct mode command.
+    func testIndexedUsesItsOwnPalettePolicyCommand() throws {
         let mode = try XCTUnwrap(imageMenu()?.item(withTitle: "Mode")?.submenu)
         XCTAssertFalse(mode.items.contains { $0.tag == Int(EngineSession.ColorMode.indexed.rawValue) })
+        XCTAssertEqual(mode.item(withTitle: "Indexed…")?.action,
+                       #selector(DocumentWindowController.convertImageToIndexed(_:)))
     }
 
     func testTheImageMenuEndsWithImageInformation() throws {

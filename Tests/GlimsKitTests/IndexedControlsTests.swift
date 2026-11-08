@@ -10,6 +10,14 @@ import XCTest
 /// are covered by the engine smoke test.
 @MainActor
 final class IndexedControlsTests: XCTestCase {
+    func testMaximumColorTextRejectsNumericPrefixes() {
+        for value in ["", "12px", "12.5", " 12", "+12", "012", "1", "257", "１２"] {
+            XCTAssertNil(IndexedFormLogic.parseMaxColors(value), value)
+        }
+        XCTAssertEqual(IndexedFormLogic.parseMaxColors("2"), 2)
+        XCTAssertEqual(IndexedFormLogic.parseMaxColors("256"), 256)
+    }
+
 
     // MARK: Menu structure
 

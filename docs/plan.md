@@ -2080,3 +2080,13 @@ both complete (compile only). NOT RUN: `swift test`, every
 GLIMS_SMOKE_CASE including indexed-controls, any GUI/native/adapter run —
 no engine or adapter was started in this worktree; root owns the unit,
 native and full-suite validation.
+
+Indexed controls validation passes 425 unit tests, 64 focused actual-sheet
+checks on every engine and 1,045 full pinned interface checks. A real
+numeric-prefix bug accepted “12px” as 12; complete canonical integer
+parsing now rejects it before conversion. The first fixture also skipped
+nested action stacks and tried to open a new sheet while already busy;
+its traversal/action setup and controlled input-drain gates are corrected.
+Root reviewed form state, explicit consent, captured settings/document,
+validation, exclusive work and close handling. The separate independent
+UI review failed without findings and provides no approval.

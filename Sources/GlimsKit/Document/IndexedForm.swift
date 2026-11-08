@@ -30,6 +30,14 @@ enum IndexedFormLogic {
         (2...256).contains(value)
     }
 
+    /// Numeric fields accept a complete canonical integer, never a prefix.
+    static func parseMaxColors(_ text: String) -> Int? {
+        guard !text.isEmpty, text.utf8.allSatisfy({ (48...57).contains($0) }),
+              let value = Int(text), String(value) == text,
+              isValidMaxColors(value) else { return nil }
+        return value
+    }
+
     /// The custom palette's color count: 1 ... 256.
     static func isValidCustomColorCount(_ count: Int) -> Bool {
         (1...256).contains(count)
@@ -429,7 +437,7 @@ final class IndexedSheetController: NSObject {
     private func capturedValues() -> IndexedFormLogic.FormValues {
         IndexedFormLogic.FormValues(
             palette: selectedPalette,
-            maxColors: maxColorsField.integerValue,
+            maxColors: IndexedFormLogic.parseMaxColors(maxColorsField.stringValue) ?? 0,
             removeUnused: removeUnusedBox.state == .on,
             dither: selectedDither,
             ditherAlpha: ditherAlphaBox.state == .on,
