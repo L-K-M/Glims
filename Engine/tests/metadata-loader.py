@@ -1,39 +1,9 @@
 #!/usr/bin/env python3
-# Throwaway conformance fixture plug-in for the metadata-preservation tests
-# (see docs/metadata-preservation-fixtures.md). engine-tests.c installs this
-# file under the test user's plug-ins/<dir>/ before the engine starts, so it
-# is discovered by the plug-in scan at engine start, exactly like the
-# glims-slow-load fixture.
-#
-# It registers two procedures:
-#
-#   file-glims-gmeta-load     a loader for the made-up ".gmeta" extension.
-#                             It creates a small image and layer, then seeds
-#                             the image's ORIGINAL metadata by invoking the
-#                             Core PDB procedure gimp-image-set-metadata with a
-#                             RAW metadata-string XML (app/pdb/image-cmds.c,
-#                             image_set_metadata_invoker ->
-#                             gimp_metadata_deserialize ->
-#                             gimp_image_set_metadata). It deliberately never
-#                             uses Gimp.Image.set_metadata() or
-#                             Gimp.Metadata.serialize(): those serialize the
-#                             metadata, and the serializer caps
-#                             Xmp.photoshop.DocumentAncestors at 1000 values
-#                             (libgimpbase/gimpmetadata.c, gimp_metadata_serialize).
-#
-#   plug-in-glims-meta-oracle an image procedure that dumps the image's
-#                             metadata through the Core PDB procedure
-#                             gimp-image-get-metadata (serialized XML, in
-#                             which XMP LangAlt qualifiers appear as
-#                             lang="..." prefixes per exiv2's LangAltValue)
-#                             into <GLIMS_GMETA_DIR>/gmeta-oracle.xml, where
-#                             the C test reads it. Never run it on the
-#                             ancestors fixture: the serialize path caps
-#                             DocumentAncestors, the facade value read does not.
-#
-# The mode file <GLIMS_GMETA_DIR>/gmeta-mode selects the fixture the loader
-# seeds: "qualified" (LangAlt with distinct xml:lang keys plus XmpBag/XmpSeq
-# plus EXIF/IPTC) or "ancestors" (exactly 1001 DocumentAncestors values).
+# Test-only .gmeta loader and qualified metadata oracle. Never shipped.
+# A minimal raw XCF seeds original metadata through native XCF loading,
+# avoiding the serializer's 1000-ancestor cap. No private PDB lookup is used.
+# The oracle serializes only the small qualified fixture, never ancestors.
+# See docs/metadata-preservation-fixtures.md for the format and limitations.
 
 import gi
 gi.require_version('Gimp', '3.0')
@@ -41,7 +11,8 @@ from gi.repository import Gimp
 gi.require_version('Gegl', '0.4')
 from gi.repository import Gegl
 from gi.repository import GObject
-from gi.repository import GLib
+from gi.repository import GLib, Gio
+import struct
 import os
 import sys
 from xml.sax.saxutils import escape, quoteattr
@@ -66,7 +37,7 @@ def _xml_text(value):
 
 
 def build_metadata_xml(mode):
-    """Builds the raw metadata-string XML for gimp-image-set-metadata.
+    """Builds native metadata XML for the raw XCF parasite.
 
     Shape (libgimpbase/gimpmetadata.c, gimp_metadata_serialize /
     gimp_metadata_deserialize): a <metadata> root, <namespace> elements
@@ -129,22 +100,26 @@ def load_gmeta(procedure, run_mode, file, metadata, flags, config, data):
     except ValueError as e:
         return _fail(procedure, str(e))
 
-    image = Gimp.Image.new(64, 48, Gimp.ImageBaseType.RGB)
+    # Minimal version-11 XCF: a metadata parasite, no stored layer/channel
+    # offsets. Loading this raw file invokes native metadata deserialization
+    # without first running the serializer that caps ancestor lists.
+    name = b'gimp-image-metadata\0'
+    payload = xml.encode('utf-8') + b'\0'
+    parasite = struct.pack('>I', len(name)) + name + struct.pack('>II', 1, len(payload)) + payload
+    raw_xcf = (b'gimp xcf v011\0' + struct.pack('>4I', 64, 48, 0, 150)
+               + struct.pack('>II', 21, len(parasite)) + parasite
+               + struct.pack('>IIQQ', 0, 0, 0, 0))
+    seed_file = Gio.File.new_for_path(os.path.join(work, 'gmeta-seed.xcf'))
+    with open(seed_file.get_path(), 'wb') as output:
+        output.write(raw_xcf)
+    image = Gimp.file_load(Gimp.RunMode.NONINTERACTIVE, seed_file)
+    if image is None:
+        return _fail(procedure, 'could not load raw metadata XCF seed')
     layer = Gimp.Layer.new(image, 'gmeta', 64, 48, Gimp.ImageType.RGBA_IMAGE,
                            100.0, Gimp.LayerMode.NORMAL)
     image.insert_layer(layer, None, 0)
     Gimp.context_set_foreground(Gegl.Color.new('#336699'))
     layer.edit_fill(Gimp.FillType.FOREGROUND)
-
-    # Seed the ORIGINAL metadata through the Core PDB raw-XML setter: the
-    # config takes the image and the raw metadata-string only.
-    set_proc = Gimp.get_pdb().lookup_procedure('gimp-image-set-metadata')
-    pdb_config = set_proc.create_config()
-    pdb_config.set_property('image', image)
-    pdb_config.set_property('metadata-string', xml)
-    result = set_proc.run(pdb_config)
-    if result.index(0) != Gimp.PDBStatusType.SUCCESS:
-        return _fail(procedure, 'gimp-image-set-metadata failed for mode %r' % mode)
 
     return Gimp.ValueArray.new_from_values([
         GObject.Value(Gimp.PDBStatusType, Gimp.PDBStatusType.SUCCESS),
@@ -153,17 +128,12 @@ def load_gmeta(procedure, run_mode, file, metadata, flags, config, data):
 
 
 def oracle_gmeta(procedure, run_mode, image, drawables, config, data):
-    """Dumps the image's serialized metadata XML for the C test to assert on."""
+    """Dumps the small fixture's serialized XML, including LangAlt keys."""
     work = _work_dir()
     if not work:
         return _fail(procedure, 'GLIMS_GMETA_DIR is not set')
-    get_proc = Gimp.get_pdb().lookup_procedure('gimp-image-get-metadata')
-    pdb_config = get_proc.create_config()
-    pdb_config.set_property('image', image)
-    result = get_proc.run(pdb_config)
-    if result.index(0) != Gimp.PDBStatusType.SUCCESS:
-        return _fail(procedure, 'gimp-image-get-metadata failed')
-    metadata_string = result.index(1)
+    metadata = image.get_metadata()
+    metadata_string = metadata.serialize() if metadata else ''
     try:
         with open(os.path.join(work, 'gmeta-oracle.xml'), 'w', encoding='utf-8') as f:
             f.write(metadata_string if metadata_string else '')
@@ -185,7 +155,8 @@ class GlimsMetadataLoader(Gimp.PlugIn):
             procedure.set_menu_label('Glims metadata fixture')
             procedure.set_documentation('load a .gmeta test fixture',
                                         'loads a .gmeta test fixture', name)
-            procedure.set_mime_types('image/x-glims-gmeta')
+            # No MIME type: LoadProcedure must not replace seeded metadata
+            # with the empty metadata read from the .gmeta marker file.
             procedure.set_extensions('gmeta')
         else:
             procedure = Gimp.ImageProcedure.new(self, name,

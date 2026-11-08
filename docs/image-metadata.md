@@ -220,3 +220,14 @@ step created by the busy-check stroke before the preview case. The fixtures
 now inspect the actual owned catalog and snapshot Undo depth after that stroke.
 Positive existing-LangAlt/container and overlong-ancestor preservation cases
 remain unverified; the copy guard does not count as evidence for those fixtures.
+
+
+Qualified-copy follow-up: a raw XCF fixture first proved that an unrelated
+Artist edit was safely refused because native duplication reordered XMP
+properties and namespace attributes. Packet comparison now canonicalizes
+XML attributes and RDF Description properties only. It retains container
+names, array order, language qualifiers and exact leaf text. Malformed,
+mixed-content or excessively nested packets fail closed. The original
+1,001-ancestor fixture is verified before editing and the refusal preserves
+every entry. The final positive fixture and engine matrix are reported in
+the PR, superseding the earlier unverified-fixture note above.

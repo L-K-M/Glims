@@ -35,6 +35,7 @@
  * native behavior, documented, not a requested-value override.
  */
 #include "engine-private.h"
+#include "metadata-xmp.h"
 
 #include <string.h>
 
@@ -325,7 +326,11 @@ metadata_equal_native (GimpMetadata *left, GimpMetadata *right)
           else
             {
               packet_b = gexiv2_metadata_try_generate_xmp_packet (GEXIV2_METADATA (right), flags, 0, &failure);
-              equal = ! failure && packet_b && ! strcmp (packet_a, packet_b);
+              gchar *structure_a = glims_metadata_xmp_structure (packet_a);
+              gchar *structure_b = packet_b ? glims_metadata_xmp_structure (packet_b) : NULL;
+              equal = ! failure && structure_a && structure_b && ! strcmp (structure_a, structure_b);
+              g_free (structure_a);
+              g_free (structure_b);
               g_clear_error (&failure);
               g_free (packet_a);
               g_free (packet_b);

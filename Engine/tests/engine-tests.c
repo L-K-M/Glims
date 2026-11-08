@@ -1744,9 +1744,9 @@ install_slow_load_plug_in (const char *user_dir)
  * <user_dir>/plug-ins before the engine starts, like the slow-load fixture,
  * so the engine's plug-in scan finds it at start. It registers a loader for
  * the made-up ".gmeta" extension that creates the image and seeds the
- * ORIGINAL metadata through the Core PDB gimp-image-set-metadata with a raw
- * metadata-string XML (never through the serializing wrappers, which cap
- * Xmp.photoshop.DocumentAncestors), plus a plug-in-glims-meta-oracle image
+ * ORIGINAL metadata through a raw XCF metadata parasite (never through
+ * the serializing wrappers, which cap Xmp.photoshop.DocumentAncestors),
+ * plus a plug-in-glims-meta-oracle image
  * procedure that dumps the serialized metadata XML for qualifier-level
  * assertions. The mode file <work>/gmeta-mode selects "qualified" or
  * "ancestors"; the plug-in finds the work directory through GLIMS_GMETA_DIR.
@@ -10705,22 +10705,13 @@ test_image_metadata (const char *work)
 }
 
 /* ---- Metadata preservation fixtures (.gmeta loader + oracle) -----------
- *
- * The glims-metadata-loader plug-in (installed before engine start by
- * install_metadata_loader_plug_in) loads the made-up ".gmeta" files: it
- * creates the image and layer, then seeds the ORIGINAL metadata by invoking
- * the Core PDB gimp-image-set-metadata with a raw metadata-string XML
- * (procedure config: image + metadata-string only). It never goes through
- * Gimp.Image.set_metadata()/Metadata.serialize(), which serialize and cap
- * Xmp.photoshop.DocumentAncestors at 1000 values. The facade string-vector
- * read of a LangAlt omits the xml:lang qualifiers, so qualifier fidelity is
- * asserted through the fixture-only plug-in-glims-meta-oracle procedure,
- * run here via the facade procedure_run: it dumps the Core PDB
- * gimp-image-get-metadata XML — in which each LangAlt alternative is its
- * own <tag> line carrying an escaped lang=&quot;...&quot; prefix — into
- * <work>/gmeta-oracle.xml, which these tests read and compare line-exact.
- * The oracle is never run on the ancestors image: that PDB getter also
- * serializes (and would cap), while the facade value read does not. */
+ * The test-only loader seeds a raw XCF metadata parasite, bypassing the
+ * native serializer's ancestor cap. Its MIME type is unset so automatic
+ * metadata import cannot overwrite the original metadata after loading.
+ * The small-fixture oracle uses public metadata serialization, which
+ * preserves the language qualifiers. Never invoke it on the ancestors
+ * image: facade value reads establish all 1001 original entries directly.
+ */
 
 /* Reads a whole file into an owned NUL-terminated buffer; NULL if absent. */
 static char *
@@ -13249,8 +13240,14 @@ test_place (const char *fixtures, const char *work)
       CHECK (tries < 100, "the monitored link layer rereads the rewritten source (%d00 ms)", tries);
 
       /* And a fresh open rereads it too: the stored buffer never wins. */
-      CHECK (api->image_open (engine, placed_xcf, &again, NULL) == GLIMS_STATUS_OK && again > 0,
-             "the saved link reopens again");
+      {
+        char *open_error = NULL;
+        GlimsStatus open_status = api->image_open (engine, placed_xcf, &again, &open_error);
+        CHECK (open_status == GLIMS_STATUS_OK && again > 0,
+               "the saved link reopens again (status %d, image %d, error %s)",
+               open_status, again, open_error ? open_error : "none");
+        api->free_string (open_error);
+      }
       tries = 0;
       while (tries < 100)
         {
