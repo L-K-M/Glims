@@ -182,6 +182,10 @@ extension EngineSmokeTest {
         palette.reload()
         check(Set(selectedIDs()) == [l1, l2], "re-expanding shows both selected rows again")
 
+        // Let AppKit finish the collapse/expansion turn before the next
+        // synthetic user action, as separate user events do naturally.
+        spin()
+
         // MARK: Native multi-selection exits mask editing, pixels unchanged
 
         outline.selectRowIndexes(IndexSet(integer: row(of: l2)), byExtendingSelection: false)
