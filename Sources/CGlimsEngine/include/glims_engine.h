@@ -51,7 +51,8 @@ typedef enum GlimsStatus {
   GLIMS_STATUS_NOT_RUNNING      = 5,
   GLIMS_STATUS_CANCELLED        = 6, /* the user cancelled, e.g. a plug-in dialog */
   GLIMS_STATUS_LOCKED           = 7, /* a layer or ancestor protects this edit */
-  GLIMS_STATUS_UNSUPPORTED      = 8  /* the engine version cannot do this */
+  GLIMS_STATUS_UNSUPPORTED      = 8, /* the engine version cannot do this */
+  GLIMS_STATUS_REQUIRES_RASTERIZE = 9 /* explicit consent is needed to turn editable layers into pixels */
 } GlimsStatus;
 
 typedef struct GlimsRect {
@@ -412,6 +413,77 @@ typedef struct GlimsPathFillSettings {
   bool       antialias;      /* the fill edge */
 } GlimsPathFillSettings;
 
+/* A vector layer's stroke cap, as the engine's own line caps. Facade-owned
+ * values; the engine's enum never crosses this boundary. */
+typedef enum GlimsVectorCapStyle {
+  GLIMS_VECTOR_CAP_BUTT   = 1,
+  GLIMS_VECTOR_CAP_ROUND  = 2,
+  GLIMS_VECTOR_CAP_SQUARE = 3
+} GlimsVectorCapStyle;
+
+/* A vector layer's stroke join. */
+typedef enum GlimsVectorJoinStyle {
+  GLIMS_VECTOR_JOIN_MITER = 1,
+  GLIMS_VECTOR_JOIN_ROUND = 2,
+  GLIMS_VECTOR_JOIN_BEVEL = 3
+} GlimsVectorJoinStyle;
+
+/* Which fields of GlimsVectorStyleChange apply. */
+typedef enum GlimsVectorStyleProperty {
+  GLIMS_VECTOR_STYLE_ENABLE_FILL      = 1 << 0,
+  GLIMS_VECTOR_STYLE_FILL_COLOR       = 1 << 1,
+  GLIMS_VECTOR_STYLE_FILL_ANTIALIAS   = 1 << 2,
+  GLIMS_VECTOR_STYLE_ENABLE_STROKE    = 1 << 3,
+  GLIMS_VECTOR_STYLE_STROKE_COLOR     = 1 << 4,
+  GLIMS_VECTOR_STYLE_STROKE_ANTIALIAS = 1 << 5,
+  GLIMS_VECTOR_STYLE_STROKE_WIDTH     = 1 << 6,
+  GLIMS_VECTOR_STYLE_STROKE_CAP       = 1 << 7,
+  GLIMS_VECTOR_STYLE_STROKE_JOIN      = 1 << 8,
+  GLIMS_VECTOR_STYLE_STROKE_MITER     = 1 << 9
+} GlimsVectorStyleProperty;
+
+/* A genuine vector layer's native fill/stroke style, as
+ * vector_layer_style_get reports it. Solid paint only: a layer whose
+ * native fill or stroke is a pattern reports UNSUPPORTED instead of
+ * converting it. The fields are exactly what XCF persists for a vector
+ * layer (PROP_VECTOR_LAYER): enable flags, solid colors, antialias, and
+ * stroke width, cap, join and miter limit. Opacity, paint mode, unit,
+ * dash offset, feather and stroke method are not persisted by XCF and are
+ * deliberately not exposed. Colors are explicit sRGB RGBA per call; the
+ * engine keeps a context color's alpha opaque natively, as its own PDB
+ * and XCF load do. `stroke_width` is in image pixels. */
+typedef struct GlimsVectorStyle {
+  uint32_t   struct_size;        /* sizeof (GlimsVectorStyle) */
+  bool       enable_fill;
+  GlimsColor fill_color;         /* sRGB, 0 ... 1 */
+  bool       fill_antialias;
+  bool       enable_stroke;
+  GlimsColor stroke_color;       /* sRGB, 0 ... 1 */
+  bool       stroke_antialias;
+  double     stroke_width;       /* image pixels, > 0 */
+  uint32_t   stroke_cap;         /* GlimsVectorCapStyle */
+  uint32_t   stroke_join;        /* GlimsVectorJoinStyle */
+  double     stroke_miter_limit;
+} GlimsVectorStyle;
+
+/* A requested change to a vector layer's style; the bits of `properties`
+ * (GlimsVectorStyleProperty) say which fields apply, the rest keep their
+ * state. */
+typedef struct GlimsVectorStyleChange {
+  uint32_t   struct_size;        /* sizeof (GlimsVectorStyleChange) */
+  uint32_t   properties;         /* GlimsVectorStyleProperty bits */
+  bool       enable_fill;
+  GlimsColor fill_color;         /* finite sRGB components, 0 ... 1 */
+  bool       fill_antialias;
+  bool       enable_stroke;
+  GlimsColor stroke_color;       /* finite sRGB components, 0 ... 1 */
+  bool       stroke_antialias;
+  double     stroke_width;       /* image pixels, finite, 0 < w <= 2000 */
+  uint32_t   stroke_cap;         /* GlimsVectorCapStyle */
+  uint32_t   stroke_join;        /* GlimsVectorJoinStyle */
+  double     stroke_miter_limit; /* finite, 0 ... 100 */
+} GlimsVectorStyleChange;
+
 typedef enum GlimsRunMode {
   GLIMS_RUN_INTERACTIVE      = 1, /* the plug-in may show its dialog */
   GLIMS_RUN_WITH_LAST_VALUES = 2  /* repeat with the last settings, no dialog */
@@ -703,6 +775,14 @@ typedef enum GlimsColorTRC {
   GLIMS_COLOR_TRC_NONLINEAR  = 2,
   GLIMS_COLOR_TRC_PERCEPTUAL = 3
 } GlimsColorTRC;
+
+/* Rendering intents owned by the facade, not native engine enum values. */
+typedef enum GlimsProfileIntent {
+  GLIMS_PROFILE_PERCEPTUAL = 1,
+  GLIMS_PROFILE_RELATIVE_COLORIMETRIC = 2,
+  GLIMS_PROFILE_SATURATION = 3,
+  GLIMS_PROFILE_ABSOLUTE_COLORIMETRIC = 4
+} GlimsProfileIntent;
 
 /* The image's color state. Caller-owned: image_color_info fills the
  * struct in place; the fixed buffers are UTF-8, truncated, and need no
@@ -1363,6 +1443,36 @@ typedef struct GlimsEngineAPI {
                                         const char *name, const char *collection,
                                         bool internal, GlimsResourceID *outID,
                                         char **error);
+  /* Assign an ICC profile without converting pixel component values, or
+   * discard embedded/hidden profiles when path is NULL. Non-NULL paths
+   * must be absolute, nonempty UTF-8 paths to valid ICC profiles compatible
+   * with the image model. A native single undo group, no mutation on refusal;
+   * BUSY during strokes/previews/plugin work. Discarding an already builtin
+   * profile and assigning an equal profile are no-ops. */
+  GlimsStatus (*image_assign_profile) (GlimsEngine *engine, GlimsImageID image,
+                                       const char *path, char **error);
+  /* Convert pixels to preserve appearance in the destination ICC profile.
+   * NULL path chooses the image model/precision's builtin profile. The own
+   * GlimsProfileIntent mapping and explicit black-point compensation apply
+   * only to this conversion. Same path/compatibility, undo and busy rules as
+   * assignment; converting to an equal effective profile is a no-op.
+   * A non-no-op that would rasterize editable text/vector/link layers
+   * reports REQUIRES_RASTERIZE without changing anything. The caller can
+   * obtain consent and use image_convert_profile_rasterizing instead.
+   * Indexed images report UNSUPPORTED: their native palette conversion
+   * ignores intent/BPC. Convert to RGB first. Assignment remains supported. */
+  GlimsStatus (*image_convert_profile) (GlimsEngine *engine, GlimsImageID image,
+                                        const char *path, uint32_t intent,
+                                        bool black_point_compensation,
+                                        char **error);
+  /* Explicitly permits the native conversion to rasterize editable text,
+   * vector and link layers. The caller must obtain consent first. The
+   * complete conversion remains one undo step; undo restores editability.
+   * Equal-profile no-ops still rasterize nothing. All other conversion
+   * validation and indexed-image restrictions apply. */
+  GlimsStatus (*image_convert_profile_rasterizing) (GlimsEngine *engine, GlimsImageID image,
+                                                    const char *path, uint32_t intent,
+                                                    bool black_point_compensation, char **error);
   /* An owned thumbnail of the resource `id` names, rendered fresh on
    * every call and fitted inside a `max_size` x `max_size` box
    * (1 ... 512). `foreground` and `background` are optional explicit
@@ -1390,6 +1500,33 @@ typedef struct GlimsEngineAPI {
                                         const GlimsColor *foreground,
                                         const GlimsColor *background,
                                         GlimsPixelBuffer *out, char **error);
+  /* A genuine vector layer's native fill/stroke style (GIMP 3.2+).
+   * vector_layer_style_get is a read: it fills `style` from the layer's
+   * own options and is always allowed, also during a stroke, a preview
+   * or a plug-in. NOT_FOUND for an unknown image or a layer id that is
+   * not a genuine (not rasterized) vector layer of the image;
+   * UNSUPPORTED before GIMP 3.2 and when the layer's native fill or
+   * stroke is a pattern — the pattern is reported, never converted.
+   *
+   * vector_layer_style_set applies the flagged fields of `change` as
+   * exactly one native undo step ("Change Vector Layer Style") around a
+   * whole-options snapshot (gimp_image_undo_push_vector_layer with no
+   * property), preserving every unflagged setting, the layer's name and
+   * auto-rename policy and the same path association; the style change
+   * re-renders the layer. All guards run before any mutation: BUSY
+   * while a stroke, a filter preview or a plug-in holds the image,
+   * INVALID_ARGUMENT for a malformed change or non-finite colors, a
+   * width outside 0 ... 2000 or an unknown cap/join, NOT_FOUND for an
+   * unknown image or non-vector layer, LOCKED when a pixel lock of the
+   * layer or a group around it protects it, UNSUPPORTED before GIMP 3.2
+   * or for a native pattern style. A change that would alter nothing is
+   * a no-op that pushes no undo. */
+  GlimsStatus  (*vector_layer_style_get)  (GlimsEngine *engine, GlimsImageID image,
+                                           GlimsItemID layer, GlimsVectorStyle *style,
+                                           char **error);
+  GlimsStatus  (*vector_layer_style_set)  (GlimsEngine *engine, GlimsImageID image,
+                                           GlimsItemID layer, const GlimsVectorStyleChange *change,
+                                           char **error);
 
   /* A paint stroke that paints with one specific brush: the resource
    * `brush` names, a handle from resources() of GLIMS_RESOURCE_BRUSH.
