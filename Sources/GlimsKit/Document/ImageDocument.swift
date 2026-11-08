@@ -2422,7 +2422,13 @@ final class ImageDocument {
                     _ = try session.placeLink(image: image, path: url.path)
                     return .placedLink
                 }
-                _ = try session.openLayers(image: image, path: url.path)
+                let imported = try session.openLayers(image: image, path: url.path)
+                // Importing a stack is not a user multi-selection. Keep
+                // its primary immediately editable while the exclusive
+                // load still owns the target; no later UI pick can race it.
+                if let primary = imported.first {
+                    try session.selectLayers([primary], image: image)
+                }
                 return .openedLayers
             }
             if case .success = result {

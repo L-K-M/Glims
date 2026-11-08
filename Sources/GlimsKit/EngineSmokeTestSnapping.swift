@@ -332,6 +332,7 @@ extension EngineSmokeTest {
         // integral native layer offsets. The displayed rectangle must
         // still equal the committed rectangle, without a release jump.
         let savedGrid = docA.grid
+        let savedSnapTo = canvasA.snapTo
         var fractionalGrid = savedGrid
         fractionalGrid.spacingX = 2.5
         fractionalGrid.spacingY = 2.5
@@ -356,7 +357,7 @@ extension EngineSmokeTest {
         } else { check(false, "fractional-grid events and captured bounds exist") }
         try session.setGrid(savedGrid, image: imageA)
         try docA.reload()
-        canvasA.snapTo = SnapToViewState()
+        canvasA.snapTo = savedSnapTo
         undoA = docA.undoInfo.undoCount
 
         // MARK: Layer Bounds entry snaps to another layer's edge
