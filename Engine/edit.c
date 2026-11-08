@@ -583,7 +583,7 @@ glims_image_selected_layers (GlimsEngine  *engine,
 }
 
 /* Selects exactly `layers`, in the given order, as the image's whole
- * selected-layer list. Transient: no undo, no dirty, no pixel or mask
+ * selected-layer list. Transient: no undo, no dirty, no pixel or mask-data
  * change; the core emits "selected-layers-changed" (the facade's
  * LAYERS_CHANGED) only when the selection actually changes. Same
  * readiness as glims_layer_select: the image must exist, and there is
@@ -611,7 +611,21 @@ glims_image_select_layers (GlimsEngine       *engine,
   image = open->image;
 
   if (count > 0 && ! layers)
-    return glims_fail (error, NULL, "A NULL layer list needs count 0.");
+    {
+      glims_fail (error, NULL, "A NULL layer list needs count 0.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  if (count > 0)
+    {
+      GList *available = gimp_image_get_layer_list (image);
+      size_t available_count = g_list_length (available);
+      g_list_free (available);
+      if (count > available_count)
+        {
+          glims_fail (error, NULL, "The requested selection contains more ids than the image has layers.");
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        }
+    }
 
   /* Validate the ENTIRE input before any mutation: duplicates, id 0,
    * stale/foreign/detached ids and non-layer items (masks, channels,
@@ -627,16 +641,28 @@ glims_image_select_layers (GlimsEngine       *engine,
           GimpItem   *item;
 
           if (item_id == 0)
-            status = glims_fail (error, NULL, "The layer list contains the id 0, which names no layer.");
+            {
+              glims_fail (error, NULL, "The layer list contains the id 0, which names no layer.");
+              status = GLIMS_STATUS_INVALID_ARGUMENT;
+            }
           else if (g_hash_table_contains (seen, GINT_TO_POINTER (item_id)))
-            status = glims_fail (error, NULL, "The layer list repeats an id.");
+            {
+              glims_fail (error, NULL, "The layer list repeats an id.");
+              status = GLIMS_STATUS_INVALID_ARGUMENT;
+            }
           else
             {
               item = gimp_item_get_by_id (image->gimp, item_id);
               if (! item || gimp_item_get_image (item) != image || ! gimp_item_is_attached (item))
-                status = GLIMS_STATUS_NOT_FOUND;
+                {
+                  glims_fail (error, NULL, "A requested layer is missing or belongs to another image.");
+                  status = GLIMS_STATUS_NOT_FOUND;
+                }
               else if (! GIMP_IS_LAYER (item))
-                status = glims_fail (error, NULL, "The id names a mask, channel or path, not a layer.");
+                {
+                  glims_fail (error, NULL, "The id names a mask, channel or path, not a layer.");
+                  status = GLIMS_STATUS_INVALID_ARGUMENT;
+                }
               else
                 {
                   g_hash_table_add (seen, GINT_TO_POINTER (item_id));
@@ -671,9 +697,29 @@ glims_image_select_layers (GlimsEngine       *engine,
 
   /* g_list_append keeps the caller's order; the first id becomes the
    * active layer. */
-  for (i = 0; i < count; i++)
-    list = g_list_append (list, resolved[i]);
+  for (i = count; i > 0; i--)
+    list = g_list_prepend (list, resolved[i - 1]);
 
+  /* Core compares membership, ignoring order. Clear only for a genuine
+   * reorder of the same members so the next setter can change the primary
+   * layer. The floating-selection gate above excludes an invalid clear.
+   * Both changes are transient and queue their normal selection events. */
+  selected = gimp_image_get_selected_layers (image);
+  if (count > 1 && g_list_length (selected) == count)
+    {
+      GList *iter;
+      gboolean same_members = TRUE;
+      gboolean same_order = TRUE;
+      for (iter = selected, i = 0; iter; iter = iter->next, i++)
+        {
+          if (! g_hash_table_contains (seen, GINT_TO_POINTER (gimp_item_get_id (iter->data))))
+            same_members = FALSE;
+          if (iter->data != resolved[i])
+            same_order = FALSE;
+        }
+      if (same_members && ! same_order)
+        gimp_image_set_selected_layers (image, NULL);
+    }
   gimp_image_set_selected_layers (image, list);
 
   /* The native call copies the passed list (the item tree takes the
@@ -681,7 +727,7 @@ glims_image_select_layers (GlimsEngine       *engine,
    * exactly once here. */
   g_list_free (list);
 
-  /* Postcondition: the core stores the passed list verbatim, so the
+  /* Postcondition: a changed selection stores the passed order, so the
    * read-back must be the exact list in the exact order (the borrowed
    * selected list is not freed). A mismatch means the core silently
    * refused — report it rather than returning success. */

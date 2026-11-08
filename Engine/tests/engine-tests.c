@@ -11609,6 +11609,7 @@ test_layer_multiselection (void)
   api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &a, NULL);
   api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &b, NULL);
   CHECK (api->reparent_layer (engine, image, a, group, 0, NULL) == GLIMS_STATUS_OK &&
+         api->reparent_layer (engine, image, b, 0, 0, NULL) == GLIMS_STATUS_OK &&
          tree_is (image, (GlimsItemID[]) { b, group, a, background },
                   (GlimsItemID[]) { 0, 0, group, 0 }, (int32_t[]) { 0, 0, 1, 0 }, 4),
          "the fixture tree is b, group, nested child a, background");
@@ -11659,6 +11660,12 @@ test_layer_multiselection (void)
          count == 2 && ids[0] == b && ids[1] == a &&
          atomic_load (&layers_events) > events,
          "a reordered selection is a real change and the new order is kept");
+  events = atomic_load (&layers_events);
+  CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { a, b }, 2, NULL) == GLIMS_STATUS_OK &&
+         api->image_selected_layers (engine, image, ids, 8, &count) == GLIMS_STATUS_OK &&
+         count == 2 && ids[0] == a && ids[1] == b &&
+         atomic_load (&layers_events) > events,
+         "changing only the primary layer preserves the requested order");
 
   /* Transient: no undo step, no dirty flag, no pixel change. */
   before = undo_depth (image);
@@ -11714,6 +11721,8 @@ test_layer_multiselection (void)
   before = undo_depth (image);
   CHECK (api->image_select_layers (engine, image, NULL, 1, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
          "a NULL list with a positive count is INVALID_ARGUMENT");
+  CHECK (api->image_select_layers (engine, image, &a, SIZE_MAX, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an oversized count is refused before allocation or reading input ids");
   CHECK (api->image_select_layers (engine, image, (GlimsItemID[]) { a, a }, 2, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error,
          "a repeated id is INVALID_ARGUMENT (%s)", error ? error : "");
   api->free_string (error);

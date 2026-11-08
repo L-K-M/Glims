@@ -130,3 +130,21 @@ adapter build/link, the conformance suite itself, and the app's
 `--engine-smoke-test` — no engine runtime in this environment; the test
 above must be run with `scripts/build-adapter.sh --test` on a built
 engine set.
+
+Root runtime checkpoint: the draft returned FAILED for invalid arguments
+whose contract specifies INVALID_ARGUMENT and omitted the missing-layer
+message. Those failures are reproduced and corrected. A new same-members,
+reverse-order regression also failed: Core compares membership and ignores
+an order-only change. The adapter now clears the transient selection only
+for that case before applying the requested order. It validates the whole
+request first, rejects counts larger than the image's flattened layer tree
+before allocation, and never frees Core's borrowed selected-layer list.
+
+The initial fixture assumed New Layer always inserted at the tree's front;
+it now explicitly places that layer before checking tree order. Native
+multi-selection exits mask-edit mode as Core intends; it does not change
+mask pixels. Read/write selection remains transient and follows the existing
+layer_select readiness policy, including during a preview/stroke.
+
+All four native suites pass: 1,777 / 1,563 / 1,777 / 1,777 checks on 3.2.8 /
+3.0.8 / 3.2.0 / master. Runtime UI adoption remains separate.
