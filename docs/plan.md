@@ -730,6 +730,69 @@ runtime validation: `scripts/build-adapter.sh --test` per engine set
 before merge; later slices cover thumbnails, selection and application
 of resources, settings, management and the choosers' UI.
 
+### Resource thumbnails (2026-11-08)
+
+Engine side only, on `feat/resource-previews`: one additive footer slot
+appended after `resource_resolve` (the root's slot 68),
+`resource_thumbnail(engine, id, max_size, foreground, background, out,
+error)`. API version 1 and every existing layout and signature are
+unchanged. It renders a fresh thumbnail of the resource `id` names into
+an owned straight-alpha sRGB RGBA `GlimsPixelBuffer` (released with the
+existing `free_pixels`), fitted into a `max_size` x `max_size` box
+(`max_size` restricted to 1 ... 512): gradients fill exactly
+`max_size` x `max(1, max_size / 2)`, brushes and patterns keep their
+source aspect inside the box without upscaling, matching their native
+preview. `foreground` and `background` are optional explicit colors
+(every component finite inside 0 ... 1, the filter-property
+convention): the foreground recolors mask-only brushes and both feed
+gradients with foreground/background segments; NULL uses the core's
+canonical black foreground and white background. The handle path
+reuses `lookup_resource` exactly (zero and out-of-native-gint-range
+refused before the native id table with "This handle cannot name a
+resource.", stale or foreign NOT_FOUND, fresh re-resolution and
+factory-membership revalidation per call), and the dispatcher carries
+the handle in a typed `uint64_t` `GlimsResourceArgs`. Everything is
+read-only: no image, factory or global context is touched.
+
+The render deliberately avoids the cached preview paths. Verified in
+the pinned sources: `gimp_viewable_get_new_pixbuf`'s default runs the
+cached `gimp_viewable_get_preview`, whose cache key (width, height,
+foreground) omits the background, so same-size gradient thumbnails
+would come back stale when only the background changes. Instead each
+call takes the fresh, owned `gimp_viewable_get_new_preview` (all three
+resource classes override it; it never consults the cache) followed by
+`gimp_temp_buf_create_pixbuf` for format normalization, unrefing the
+TempBuf (`gimp_temp_buf_unref`) and the pixbuf (`g_object_unref`). On
+master (3.3.x) `get_new_preview` takes `scale_factor` before
+`fg_color` (passed as 1); the three released trees take five
+arguments. The per-call `GimpContext` is parentless
+(`gimp_context_new (gimp, ..., NULL)`) and carries explicit per-call
+FG/BG `GeglColor`s, so the user and global contexts are never read or
+changed. The pixbuf's rows are copied rowstride-safe into the owned
+buffer, RGB previews expanded to RGBA with opaque alpha; allocation
+overflow and OOM are checked and `out` is reset on entry and on every
+failure.
+
+Bounded conformance tests (facade only) cover stock brushes, patterns
+and gradients: dimensions, bounds, byte counts, pixel and alpha
+coverage, exact gradient strips at 15 and 1, the same-id same-size
+FG/BG gradient proof (only the background changed, then only the
+foreground, must change the pixels, and identical colors must agree),
+invalid/stale/high-bit handles, bad sizes and colors, missing outputs,
+error text, output resets and five repeated allocate/free rounds.
+Checked here (compile only, private adapter root
+`$PWD/.build/engine-adapters`): `scripts/build-adapter.sh --check` for
+GIMP_3_0_8, GIMP_3_2_0, GIMP_3_2_8 and master; every `Engine/*.c`
+against all four sets' `compile.rsp` flags with `-fsyntax-only`;
+`engine-tests.c` with its `-std=c11 -O2 -Wall -Wextra -Werror` flags;
+the facade header standalone in C11 and C++17; and full
+`scripts/build-adapter.sh` builds per set (compile, link, the
+exports-only check) in the private root. Not run here (the root owns
+the native runtime): `scripts/build-adapter.sh --test` per engine set,
+bundle checks and any Swift build. Pending root runtime validation:
+the four conformance runs, including the fresh-per-call gradient proof
+and the exact gradient strip dimensions.
+
 ## Later, before any public release
 
 - Developer ID signing and notarization for the app, GTK3, Python and every

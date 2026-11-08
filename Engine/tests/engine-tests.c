@@ -5168,6 +5168,322 @@ test_resources (void)
     }
 }
 
+/* Resource thumbnails: fresh per-call previews of stock brushes,
+ * patterns and gradients, fitted into the requested box, with the
+ * FG/BG color contract and every refusal path. The dynamic checks use
+ * a stock FG to BG gradient, whose endpoints read the per-call colors:
+ * repeated same-id, same-size renders that differ only in the
+ * background (then only in the foreground) prove the preview is
+ * recomputed per call instead of served from a cache keyed without
+ * the background. */
+static int
+buffer_differs (const GlimsPixelBuffer *a, const GlimsPixelBuffer *b)
+{
+  if (! a->pixels || ! b->pixels || a->byte_count != b->byte_count)
+    return 1;
+
+  return memcmp (a->pixels, b->pixels, a->byte_count) != 0;
+}
+
+static void
+test_resource_thumbnails (void)
+{
+  static const struct
+  {
+    uint32_t    kind;
+    const char *label;
+  } kinds[] = {
+    { GLIMS_RESOURCE_BRUSH, "brush" },
+    { GLIMS_RESOURCE_PATTERN, "pattern" },
+    { GLIMS_RESOURCE_GRADIENT, "gradient" },
+  };
+  GlimsResourceInfo rows[8];
+  GlimsPixelBuffer  first = { 0 }, again = { 0 };
+  GlimsPixelBuffer  a = { 0 }, b = { 0 }, c = { 0 }, d = { 0 };
+  GlimsColor        red = { 1.0, 0.0, 0.0, 1.0 }, blue = { 0.0, 0.0, 1.0, 1.0 };
+  GlimsColor        green = { 0.0, 1.0, 0.0, 1.0 }, yellow = { 1.0, 1.0, 0.0, 1.0 };
+  GlimsColor        bad;
+  GlimsResourceID   brush_id = 0, gradient_id = 0, dynamic_id = 0;
+  char             *error = NULL;
+  size_t            k;
+  int32_t           filled = 0, i;
+
+  /* One stock resource of each kind renders inside the box. */
+  for (k = 0; k < sizeof kinds / sizeof kinds[0]; k++)
+    {
+      uint32_t    kind  = kinds[k].kind;
+      const char *label = kinds[k].label;
+      int         shown = 0, n, j;
+
+      CHECK (api->resources (engine, kind, rows, (int32_t) (sizeof rows / sizeof rows[0]),
+                             &filled) == GLIMS_STATUS_OK && filled > 0,
+             "thumbnails: %s stock resources are listed (%d)", label, filled);
+
+      n = filled < 3 ? filled : 3;
+      for (i = 0; i < n; i++)
+        {
+          GlimsPixelBuffer buffer = { 0 };
+          int32_t          w, h;
+          int              nonzero = 0, covered = 0;
+
+          if (api->resource_thumbnail (engine, rows[i].id, 32, NULL, NULL,
+                                       &buffer, NULL) == GLIMS_STATUS_OK && buffer.pixels)
+            shown++;
+
+          w = buffer.bounds.width;
+          h = buffer.bounds.height;
+          CHECK (buffer.pixels && w >= 1 && h >= 1 && w <= 32 && h <= 32 &&
+                 buffer.bounds.x == 0 && buffer.bounds.y == 0 &&
+                 buffer.byte_count == (size_t) w * (size_t) h * 4,
+                 "%s thumbnail %s fits 32 x 32 at its own bounds (%d x %d, %zu bytes)",
+                 label, rows[i].name, w, h, buffer.byte_count);
+
+          if (kind == GLIMS_RESOURCE_GRADIENT)
+            CHECK (buffer.pixels && w == 32 && h == 16,
+                   "a gradient thumbnail is exactly 32 x 16 (%d x %d)", w, h);
+
+          for (j = 0; j < w * h && buffer.pixels; j++)
+            {
+              if (buffer.pixels[j * 4] || buffer.pixels[j * 4 + 1] ||
+                  buffer.pixels[j * 4 + 2] || buffer.pixels[j * 4 + 3])
+                nonzero = 1;
+              if (buffer.pixels[j * 4 + 3])
+                covered = 1;
+            }
+          /* Mask-only brushes recolor with the black default
+           * foreground, so any byte counts as content; alpha coverage
+           * still proves the RGBA buffer is real. */
+          CHECK (nonzero && covered,
+                 "%s thumbnail %s carries pixels and alpha coverage", label, rows[i].name);
+
+          if (buffer.pixels)
+            api->free_pixels (buffer.pixels);
+        }
+
+      CHECK (shown == n, "every listed stock %s renders a thumbnail (%d of %d)",
+             label, shown, n);
+      if (kind == GLIMS_RESOURCE_BRUSH && filled > 0)
+        brush_id = rows[0].id;
+      if (kind == GLIMS_RESOURCE_GRADIENT && filled > 0)
+        gradient_id = rows[0].id;
+    }
+
+  /* Gradients fill exactly the documented strip at any size. */
+  if (gradient_id)
+    {
+      GlimsPixelBuffer strip = { 0 };
+
+      CHECK (api->resource_thumbnail (engine, gradient_id, 15, NULL, NULL, &strip, NULL) ==
+                 GLIMS_STATUS_OK && strip.bounds.width == 15 && strip.bounds.height == 7,
+             "a gradient thumbnail is exactly 15 x 7 at max_size 15 (%d x %d)",
+             strip.bounds.width, strip.bounds.height);
+      if (strip.pixels)
+        api->free_pixels (strip.pixels);
+
+      CHECK (api->resource_thumbnail (engine, gradient_id, 1, NULL, NULL, &strip, NULL) ==
+                 GLIMS_STATUS_OK && strip.bounds.width == 1 && strip.bounds.height == 1 &&
+                 strip.byte_count == 4,
+             "a gradient thumbnail is exactly 1 x 1 at max_size 1 (%zu bytes)",
+             strip.byte_count);
+      if (strip.pixels)
+        api->free_pixels (strip.pixels);
+    }
+
+  /* Same id, same size, only the background (then only the
+   * foreground) changed: the pixels must change, or the thumbnails
+   * came from a preview cache that ignores the colors. */
+  CHECK (api->resources (engine, GLIMS_RESOURCE_GRADIENT, rows,
+                         (int32_t) (sizeof rows / sizeof rows[0]), &filled) == GLIMS_STATUS_OK,
+         "thumbnails: gradients listed again for the FG/BG checks (%d)", filled);
+  for (i = 0; i < filled; i++)
+    if (strstr (rows[i].name, "FG to BG"))
+      {
+        dynamic_id = rows[i].id;
+        break;
+      }
+  CHECK (dynamic_id != 0, "a stock FG to BG gradient is listed");
+
+  if (dynamic_id)
+    {
+      int32_t w, h;
+
+      CHECK (api->resource_thumbnail (engine, dynamic_id, 32, &red, &blue, &a, NULL) ==
+                 GLIMS_STATUS_OK &&
+             api->resource_thumbnail (engine, dynamic_id, 32, &red, &blue, &again, NULL) ==
+                 GLIMS_STATUS_OK &&
+             a.pixels && again.pixels && ! buffer_differs (&a, &again),
+             "repeated FG/BG gradient thumbnails with the same colors agree");
+      if (again.pixels)
+        api->free_pixels (again.pixels);
+
+      CHECK (api->resource_thumbnail (engine, dynamic_id, 32, &red, &green, &b, NULL) ==
+                 GLIMS_STATUS_OK &&
+             api->resource_thumbnail (engine, dynamic_id, 32, &yellow, &blue, &c, NULL) ==
+                 GLIMS_STATUS_OK &&
+             api->resource_thumbnail (engine, dynamic_id, 32, NULL, NULL, &d, NULL) ==
+                 GLIMS_STATUS_OK,
+             "FG/BG gradient thumbnails with changed colors render");
+
+      CHECK (a.pixels && b.pixels && buffer_differs (&a, &b),
+             "changing only the background changes the FG/BG gradient thumbnail");
+      CHECK (a.pixels && c.pixels && buffer_differs (&a, &c),
+             "changing only the foreground changes the FG/BG gradient thumbnail");
+      CHECK (a.pixels && d.pixels && buffer_differs (&a, &d),
+             "the default black/white colors differ from explicit ones");
+
+      w = a.bounds.width;
+      h = a.bounds.height;
+      {
+        int j, opaque = 1;
+
+        for (j = 0; j < w * h && a.pixels; j++)
+          if (a.pixels[j * 4 + 3] != 255)
+            opaque = 0;
+        CHECK (w == 32 && h == 16 && opaque,
+               "an opaque FG/BG gradient thumbnail is 32 x 16 with alpha 255");
+      }
+
+      if (a.pixels) api->free_pixels (a.pixels);
+      if (b.pixels) api->free_pixels (b.pixels);
+      if (c.pixels) api->free_pixels (c.pixels);
+      if (d.pixels) api->free_pixels (d.pixels);
+    }
+
+  /* Bad sizes and colors refuse with the output reset. */
+  if (brush_id)
+    {
+      static const int32_t bad_sizes[] = { 0, -1, 513 };
+      GlimsPixelBuffer     out = { 0 };
+      GlimsResourceID      ids[3];
+      int                  j, reset_ok = 1, refused_ok = 1;
+
+      for (j = 0; j < 3; j++)
+        {
+          out.bounds    = (GlimsRect) { 1, 2, 3, 4 };
+          out.pixels    = (uint8_t *) (uintptr_t) 1;
+          out.byte_count = 99;
+          if (api->resource_thumbnail (engine, brush_id, bad_sizes[j], NULL, NULL,
+                                       &out, NULL) != GLIMS_STATUS_INVALID_ARGUMENT)
+            refused_ok = 0;
+          if (out.pixels || out.byte_count || out.bounds.x || out.bounds.y ||
+              out.bounds.width || out.bounds.height)
+            reset_ok = 0;
+        }
+      CHECK (refused_ok && reset_ok,
+             "max_size 0, -1 and 513 are refused with the output reset");
+
+      bad = (GlimsColor) { NAN, 0.0, 0.0, 1.0 };
+      out.pixels = (uint8_t *) (uintptr_t) 1;
+      out.byte_count = 99;
+      refused_ok = api->resource_thumbnail (engine, brush_id, 32, &bad, NULL, &out, NULL) ==
+                   GLIMS_STATUS_INVALID_ARGUMENT && ! out.pixels && ! out.byte_count;
+      bad = (GlimsColor) { 0.0, 1.5, 0.0, 1.0 };
+      out.pixels = (uint8_t *) (uintptr_t) 1;
+      if (api->resource_thumbnail (engine, brush_id, 32, NULL, &bad, &out, NULL) !=
+          GLIMS_STATUS_INVALID_ARGUMENT)
+        refused_ok = 0;
+      bad = (GlimsColor) { 0.0, 0.0, -0.25, 1.0 };
+      out.pixels = (uint8_t *) (uintptr_t) 1;
+      if (api->resource_thumbnail (engine, brush_id, 32, &bad, NULL, &out, NULL) !=
+          GLIMS_STATUS_INVALID_ARGUMENT)
+        refused_ok = 0;
+      bad = (GlimsColor) { 0.0, 0.0, 0.0, 2.0 };
+      out.pixels = (uint8_t *) (uintptr_t) 1;
+      if (api->resource_thumbnail (engine, brush_id, 32, NULL, &bad, &out, NULL) !=
+          GLIMS_STATUS_INVALID_ARGUMENT || out.pixels || out.byte_count)
+        refused_ok = 0;
+      CHECK (refused_ok,
+             "NaN and out-of-range foreground/background components are refused");
+
+      /* Refusals carry the documented error text. */
+      CHECK (api->resource_thumbnail (engine, brush_id, 32, NULL, NULL, NULL, &error) ==
+                 GLIMS_STATUS_INVALID_ARGUMENT && error &&
+             strcmp (error, "The pixel buffer output is required.") == 0,
+             "a missing pixel buffer output is refused (%s)", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (api->resource_thumbnail (engine, brush_id, 513, NULL, NULL, &out, &error) ==
+                 GLIMS_STATUS_INVALID_ARGUMENT && error &&
+             strcmp (error, "The maximum size must be between 1 and 512.") == 0,
+             "the maximum size limit is reported (%s)", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      bad = (GlimsColor) { NAN, 0.0, 0.0, 1.0 };
+      CHECK (api->resource_thumbnail (engine, brush_id, 32, &bad, NULL, &out, &error) ==
+                 GLIMS_STATUS_INVALID_ARGUMENT && error &&
+             strcmp (error, "The foreground and background colors need "
+                            "finite components inside 0...1.") == 0,
+             "the color contract is reported (%s)", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+
+      /* Zero, out-of-range and high-bit handles never narrow to a
+       * live resource; a well-shaped stale handle reports NOT_FOUND. */
+      ids[0] = 0;
+      ids[1] = 0xFFFFFFFFFFFFFFFFull;
+      ids[2] = (UINT64_C(1) << 32) | brush_id;
+      refused_ok = 1;
+      reset_ok = 1;
+      for (j = 0; j < 3; j++)
+        {
+          out.bounds     = (GlimsRect) { 1, 2, 3, 4 };
+          out.pixels     = (uint8_t *) (uintptr_t) 1;
+          out.byte_count = 99;
+          if (api->resource_thumbnail (engine, ids[j], 32, NULL, NULL, &out, &error) !=
+              GLIMS_STATUS_INVALID_ARGUMENT)
+            refused_ok = 0;
+          if (! error || strcmp (error, "This handle cannot name a resource.") != 0)
+            refused_ok = 0;
+          api->free_string (error);
+          error = NULL;
+          if (out.pixels || out.byte_count || out.bounds.width)
+            reset_ok = 0;
+        }
+      out.bounds     = (GlimsRect) { 1, 2, 3, 4 };
+      out.pixels     = (uint8_t *) (uintptr_t) 1;
+      out.byte_count = 99;
+      if (api->resource_thumbnail (engine, 0x80000000ull, 32, NULL, NULL, &out, &error) !=
+          GLIMS_STATUS_INVALID_ARGUMENT)
+        refused_ok = 0;
+      api->free_string (error);
+      error = NULL;
+      CHECK (refused_ok && reset_ok,
+             "zero, all-high and high-bit resource ids are refused and the output reset");
+
+      out.bounds     = (GlimsRect) { 1, 2, 3, 4 };
+      out.pixels     = (uint8_t *) (uintptr_t) 1;
+      out.byte_count = 99;
+      CHECK (api->resource_thumbnail (engine, 0x7FFFFFFFull, 32, NULL, NULL, &out, &error) ==
+                 GLIMS_STATUS_NOT_FOUND && ! out.pixels && ! out.byte_count && ! error,
+             "a well-shaped but unissued resource id reports NOT_FOUND and resets the output");
+
+      /* Repeated allocate/free stays stable. */
+      {
+        int stable = 1, repeat;
+
+        for (repeat = 0; repeat < 5; repeat++)
+          {
+            if (api->resource_thumbnail (engine, brush_id, 32, NULL, NULL,
+                                         &again, NULL) != GLIMS_STATUS_OK || ! again.pixels)
+              stable = 0;
+            if (repeat == 0)
+              first = again;
+            else
+              {
+                if (buffer_differs (&first, &again))
+                  stable = 0;
+                if (again.pixels)
+                  api->free_pixels (again.pixels);
+              }
+          }
+        CHECK (stable && first.pixels && first.byte_count > 0,
+               "five same-id thumbnails render identically and free cleanly");
+        if (first.pixels)
+          api->free_pixels (first.pixels);
+      }
+    }
+}
+
 static void
 test_procedures (void)
 {
@@ -5911,6 +6227,7 @@ main (int argc, char **argv)
   test_color_state (argv[3], argv[2]);
   test_qmask_name_fixture (argv[3]);
   test_resources ();
+  test_resource_thumbnails ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 

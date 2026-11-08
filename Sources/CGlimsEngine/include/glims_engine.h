@@ -1317,8 +1317,8 @@ typedef struct GlimsEngineAPI {
 
   /* Brushes, patterns and gradients: what a resource chooser lists,
    * and the persistent identity that restores a saved choice after a
-   * restart. All three are reads: they change nothing and are allowed
-   * at any time.
+   * restart. All of these are reads: they change nothing and are
+   * allowed at any time.
    *
    * resources() lists the engine's resources of `kind` (a
    * GlimsResourceKind) in the engine's own order; the interface sorts
@@ -1363,6 +1363,31 @@ typedef struct GlimsEngineAPI {
                                         const char *name, const char *collection,
                                         bool internal, GlimsResourceID *outID,
                                         char **error);
+  /* An owned thumbnail of the resource `id` names, rendered fresh on
+   * every call and fitted inside a `max_size` x `max_size` box
+   * (1 ... 512). `foreground` and `background` are optional explicit
+   * colors (finite components inside 0 ... 1) for previews that react
+   * to them: the foreground recolors mask-only brushes, and both feed
+   * gradients with foreground/background segments. NULL uses the
+   * engine's canonical black foreground and white background. The
+   * colors apply to this call only; no user or global context is read
+   * or changed. `out` receives a straight-alpha sRGB RGBA buffer of
+   * byte_count = width * height * 4 (release with free_pixels) and is
+   * reset first, on every failure too. Brushes and patterns keep their
+   * source aspect and are never scaled up, so a small resource comes
+   * back at its native size; gradients render exactly
+   * max_size x max (1, max_size / 2). INVALID_ARGUMENT for a missing
+   * `out`, a `max_size` outside 1 ... 512, a color component that is
+   * not finite or outside 0 ... 1, or an `id` of 0 or outside the
+   * range of the issued handles (such a value can never name a
+   * resource); NOT_FOUND for a validly shaped handle that no longer
+   * resolves: stale, or issued by another engine; FAILED when the
+   * engine cannot render a thumbnail, with `out` reset. */
+  GlimsStatus  (*resource_thumbnail)   (GlimsEngine *engine, GlimsResourceID id,
+                                        int32_t max_size,
+                                        const GlimsColor *foreground,
+                                        const GlimsColor *background,
+                                        GlimsPixelBuffer *out, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
