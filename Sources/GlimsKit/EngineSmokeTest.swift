@@ -8357,6 +8357,7 @@ enum EngineSmokeTest {
         state.setBrushResource(softIdentity, for: .paintbrush)
         state.update(.paintbrush) { $0.size = 9; $0.opacity = 0.5 }
         state.foreground = .blue
+        let fixturePaintbrush = state.brush(for: .paintbrush)
         check(state.brush(for: .paintbrush).resource == softIdentity
                 && state.brush(for: .paintbrush).size == 9
                 && state.brush(for: .paintbrush).opacity == 0.5,
@@ -8387,6 +8388,14 @@ enum EngineSmokeTest {
                 && a.strokeSelectionSheet != nil && a.strokeSelectionSheet !== b.strokeSelectionSheet,
               "two documents open independent Stroke Selection sheets owned by their windows")
         check(!a.validateMenuItem(strokeItem()), "the item is disabled while its sheet is open")
+        for label in ["Stroke selection", "Cancel stroke selection"] {
+            let control = button(sheetA, label)
+            check(control != nil && control!.visibleRect.contains(control!.bounds),
+                  "the entire \(label) button is visible inside the sheet")
+        }
+        let well = colorWell(sheetA)
+        check(well != nil && well!.visibleRect.contains(well!.bounds),
+              "the captured color control is fully visible inside the sheet")
         check(brushLabel(sheetA)?.stringValue == softIdentity.name,
               "the sheet shows the captured current brush resource name (\(brushLabel(sheetA)?.stringValue ?? "nil"))")
         check(editableField(sheetA, "Stroke size, pixels")?.stringValue == "9.0"
@@ -8395,7 +8404,7 @@ enum EngineSmokeTest {
         let capturedWell = colorWell(sheetA)?.color.usingColorSpace(.sRGB)
         check(capturedWell != nil && capturedWell!.blueComponent > 0.9 && capturedWell!.redComponent < 0.1,
               "the color well is seeded with the captured foreground color")
-        check(state.brush(for: .paintbrush) == previousPaintbrush,
+        check(state.brush(for: .paintbrush) == fixturePaintbrush,
               "opening the sheets never mutates the global ToolState")
 
         // Cancel on B after local edits: nothing mutates anywhere.
@@ -8406,7 +8415,7 @@ enum EngineSmokeTest {
         check(b.window?.attachedSheet == nil && b.strokeSelectionSheet == nil, "Cancel closes B's sheet")
         check(docB.undoInfo.undoCount == undoB0 && docB.pendingWork == 0 && errorsB.isEmpty,
               "Cancel mutates nothing: no undo, no queued work, no error")
-        check(state.brush(for: .paintbrush) == previousPaintbrush,
+        check(state.brush(for: .paintbrush) == fixturePaintbrush,
               "editing and cancelling the sheet never mutates the global ToolState")
 
         // Accept on A while B's window is front: the captured document and
@@ -8428,7 +8437,7 @@ enum EngineSmokeTest {
         check(docB.undoInfo.undoCount == undoB0, "the other document is untouched even while its window is front")
         let boundary = pixel(session, imageA, x: 4, y: 12) ?? []
         let inside = pixel(session, imageA, x: 12, y: 12) ?? []
-        let outside = pixel(session, imageA, x: 1, y: 1) ?? []
+        let outside = pixel(session, imageA, x: 30, y: 30) ?? []
         check(boundary.count == 4 && boundary[0] > 240 && boundary[1] < 20 && boundary[2] < 20,
               "the boundary is stroked in the sheet's local color (\(boundary))")
         check(inside.count == 4 && inside.prefix(3).allSatisfy({ $0 == 255 })
@@ -8517,7 +8526,8 @@ enum EngineSmokeTest {
             spin(0.05)
             check(a.window?.attachedSheet === sheetBusy
                     && !(messageField(sheetBusy)?.stringValue ?? "").isEmpty
-                    && docA.undoInfo.undoCount == undoBusy && docA.pendingWork == 0,
+                    && docA.undoInfo.undoCount == undoBusy && docA.pendingWork == 0
+                    && button(sheetBusy, "Stroke selection")?.isEnabled == false,
                   "accepting while the engine became busy keeps the sheet open with a reason and mutates nothing")
         }
         wait { !EngineActivity.shared.isBusy }
@@ -8599,38 +8609,36 @@ enum EngineSmokeTest {
         spin()
         check(docA.strokeSelectionRefusal == nil, "the gate clears once a plain pixel layer is active again")
 
-        // Queue-order regression on B: an active stroke and a queued
-        // accepted fill finish BEFORE the selection stroke. A controlled
-        // gate holds the engine so every job provably queues first; the
-        // gate releases on every path.
+        // Hold this document's serial input queue without marking the
+        // engine globally busy: these are accepted input commands. A fill
+        // precedes a real stroke, then Stroke Selection must end that
+        // stroke before its own native boundary operation.
         let undoB = docB.undoInfo.undoCount
         var strokeBrush = EngineSession.Brush()
         strokeBrush.size = 5
         strokeBrush.pressureSize = false
-        let p0 = EngineSession.StrokePoint(x: 1, y: 1, pressure: 1, timeMilliseconds: 0)
-        let p1 = EngineSession.StrokePoint(x: 2, y: 1, pressure: 1, timeMilliseconds: 8)
-        do {
-            let gate = DispatchSemaphore(value: 0)
-            defer { gate.signal() }
-            let held = EngineActivity.shared.perform(label: "Stroke ordering gate",
-                                                     work: { gate.wait() }, completion: {})
-            check(held, "the ordering gate holds the engine activity")
-            docB.beginStroke(at: p0, brush: strokeBrush)
-            docB.continueStroke([p1])
-            docB.fill(at: CGPoint(x: 16, y: 16), mode: .selection, color: .green,
-                      threshold: 0, sampleMerged: false)
-            check(docB.pendingWork > 0 && docB.strokeIsActive,
-                  "the stroke and the accepted fill queue behind the held gate without running")
-        }
-        wait { !EngineActivity.shared.isBusy && docB.pendingWork == 0 }
-        spin()
-        check(docB.strokeIsActive, "the stroke is still active after its points and the fill ran")
+        let p0 = EngineSession.StrokePoint(x: 12, y: 12, pressure: 1, timeMilliseconds: 0)
+        let p1 = EngineSession.StrokePoint(x: 13, y: 12, pressure: 1, timeMilliseconds: 8)
         var selectionBrush = EngineSession.Brush()
         selectionBrush.size = 12
         selectionBrush.pressureSize = false
         selectionBrush.blue = 1
-        docB.strokeSelection(selectionBrush)
-        wait { docB.pendingWork == 0 && !docB.strokeIsActive }
+        do {
+            let gate = DispatchSemaphore(value: 0)
+            defer { gate.signal() }
+            docB.inputQueue.async { gate.wait() }
+            docB.fill(at: CGPoint(x: 16, y: 16), mode: .selection, color: .green,
+                      threshold: 0, sampleMerged: false)
+            docB.beginStroke(at: p0, brush: strokeBrush)
+            docB.continueStroke([p1])
+            check(!EngineActivity.shared.isBusy && docB.pendingWork > 0 && docB.strokeIsActive,
+                  "the fill and active stroke are accepted behind the document input gate")
+            let pending = docB.pendingWork
+            docB.strokeSelection(selectionBrush)
+            check(!docB.strokeIsActive && docB.pendingWork >= pending + 2,
+                  "Stroke Selection queues the active stroke end and its own operation before the gate releases")
+        }
+        wait { docB.pendingWork == 0 }
         spin()
         check(errorsB.isEmpty, "no BUSY refusal: the active stroke finished before the selection stroke")
         check(docB.undoInfo.undoCount == undoB + 3,

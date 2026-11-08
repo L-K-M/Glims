@@ -76,7 +76,7 @@ final class StrokeSelectionFormTests: XCTestCase {
         let identity = EngineSession.ResourceIdentity(name: "2. Block 01",
                                                       collection: "Brushes", isInternal: false)
         let result = StrokeSelectionFormValidation.brush(tool: .eraser,
-                                                         capturedResource: identity,
+                                                         capturedBrush: EngineSession.Brush(resource: identity),
                                                          sizeText: "9",
                                                          opacityText: "50",
                                                          color: .red)
@@ -93,17 +93,40 @@ final class StrokeSelectionFormTests: XCTestCase {
         XCTAssertEqual(brush.resource, identity)
     }
 
+    func testBrushBuildKeepsUnexposedCapturedSettings() throws {
+        var captured = EngineSession.Brush()
+        captured.tool = .eraser
+        captured.pressureSize = false
+        captured.hardness = 0.17
+        captured.rate = 0.25
+        captured.flow = 0.35
+        captured.exposure = 0.45
+        captured.tones = .highlights
+        captured.antiErase = true
+        captured.source = EngineSession.Brush.Source(drawable: 91, x: 1.5, y: 2.5)
+        captured.resource = EngineSession.ResourceIdentity(name: "Captured", collection: nil, isInternal: false)
+        let result = try StrokeSelectionFormValidation.brush(tool: .eraser, capturedBrush: captured,
+                                                             sizeText: "9", opacityText: "50", color: .red).get()
+        var expected = captured
+        expected.size = 9
+        expected.opacity = 0.5
+        expected.red = 1
+        expected.green = 0
+        expected.blue = 0
+        XCTAssertEqual(result, expected, "Unexposed settings, including anti-erase, remain captured")
+    }
+
     func testBrushBuildPropagatesTheFirstInlineReason() {
         let identity = EngineSession.ResourceIdentity(name: "B", collection: nil, isInternal: false)
         if case .failure(let reason) = StrokeSelectionFormValidation.brush(tool: .paintbrush,
-                                                                           capturedResource: identity,
+                                                                           capturedBrush: EngineSession.Brush(resource: identity),
                                                                            sizeText: "junk",
                                                                            opacityText: "50",
                                                                            color: .black) {
             XCTAssertFalse(reason.message.isEmpty)
         } else { XCTFail("invalid size must fail the build") }
         if case .failure(let reason) = StrokeSelectionFormValidation.brush(tool: .pencil,
-                                                                           capturedResource: nil,
+                                                                           capturedBrush: EngineSession.Brush(),
                                                                            sizeText: "9",
                                                                            opacityText: "1000",
                                                                            color: .black) {
@@ -112,7 +135,7 @@ final class StrokeSelectionFormTests: XCTestCase {
         // A nil captured resource keeps the inherit convention (nil), never
         // a substituted handle.
         if case .success(let brush) = StrokeSelectionFormValidation.brush(tool: .paintbrush,
-                                                                          capturedResource: nil,
+                                                                          capturedBrush: EngineSession.Brush(),
                                                                           sizeText: "9",
                                                                           opacityText: "100",
                                                                           color: .black) {

@@ -62,7 +62,7 @@ enum StrokeSelectionFormValidation {
     /// local size, opacity and color. The color must convert to finite
     /// sRGB components in 0 ... 1 — exactly the range the facade accepts.
     static func brush(tool: EngineSession.Brush.Tool,
-                      capturedResource: EngineSession.ResourceIdentity?,
+                      capturedBrush: EngineSession.Brush,
                       sizeText: String, opacityText: String, color: NSColor) -> Result<EngineSession.Brush, Rejection> {
         let size: Double
         switch validateSize(sizeText) {
@@ -81,14 +81,13 @@ enum StrokeSelectionFormValidation {
         guard components.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else {
             return .failure(Rejection(message: "The stroke color's components must be finite and within 0 to 1."))
         }
-        var brush = EngineSession.Brush()
+        var brush = capturedBrush
         brush.tool = tool
         brush.size = size
         brush.opacity = opacity
         brush.red = components[0]
         brush.green = components[1]
         brush.blue = components[2]
-        brush.resource = capturedResource
         return .success(brush)
     }
 }
@@ -140,6 +139,7 @@ final class StrokeSelectionSheetController: NSObject {
     private var isAccepting = false
     /// The last validation or refusal reason shown inline.
     private(set) var lastError: String?
+    private var displayedGateReason: String?
 
     init(document: ImageDocument, hostWindow: NSWindow) {
         self.document = document
@@ -274,8 +274,16 @@ final class StrokeSelectionSheetController: NSObject {
     }
 
     private func updateControlStates() {
-        // Cached busy/closing state only — no native call here.
-        strokeButton.isEnabled = !isInvalidated && document.acceptsEdits
+        // Cached admission only; keep the disabled action's reason visible.
+        let reason = document.strokeSelectionRefusal
+        strokeButton.isEnabled = !isInvalidated && !isAccepting && reason == nil
+        if let reason {
+            refuse(reason)
+            displayedGateReason = reason
+        } else if let previous = displayedGateReason {
+            displayedGateReason = nil
+            if lastError == previous { clearMessage() }
+        }
     }
 
     private func refuse(_ message: String) {
@@ -364,7 +372,7 @@ final class StrokeSelectionSheetController: NSObject {
         let paintTool = tool.paintTool ?? .paintbrush
         let result = StrokeSelectionFormValidation.brush(
             tool: paintTool,
-            capturedResource: capturedBrushes[tool]?.resource,
+            capturedBrush: capturedBrushes[tool] ?? EngineSession.Brush(),
             sizeText: sizeField.stringValue,
             opacityText: opacityField.stringValue,
             color: colorWell.color)
