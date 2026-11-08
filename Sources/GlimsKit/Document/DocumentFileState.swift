@@ -73,6 +73,38 @@ struct DocumentFileState: Equatable {
         nativeURL.map(SaveRoute.write) ?? .askForFile
     }
 
+    /// The on-disk state File ▸ Revert reloads.
+    enum RevertSource: Equatable {
+        /// The saved XCF: the file the image was opened from or last
+        /// saved to. Reloading it restores a clean native document.
+        case native(URL)
+        /// The foreign file the image was imported from. Reloading it
+        /// is a fresh import, so the document keeps imported identity.
+        case imported(URL)
+
+        var url: URL {
+            switch self { case .native(let url), .imported(let url): return url }
+        }
+
+        /// The File menu item's title for this source.
+        var menuTitle: String {
+            switch self {
+            case .native: return "Revert to Saved…"
+            case .imported: return "Revert…"
+            }
+        }
+    }
+
+    /// What Revert restores, if anything: the native file wins over the
+    /// imported original — a saved image reverts to its own XCF, never
+    /// to the foreign file it once came from. `nil` for an image with
+    /// no file; untitled documents have nothing to revert to.
+    var revertSource: RevertSource? {
+        if let nativeURL { return .native(nativeURL) }
+        if let importedSourceURL { return .imported(importedSourceURL) }
+        return nil
+    }
+
     /// Syncs the flag with the dirty state the engine reports. An
     /// imported image stays unsaved even when the engine calls it
     /// clean: its only disk copy is still the foreign source.

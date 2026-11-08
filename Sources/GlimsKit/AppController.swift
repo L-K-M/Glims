@@ -355,6 +355,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                                                     openFiles: openFiles, opening: Array(self.openingURLs))
             return { [weak self] in self?.fileWrites.release(token) }
         }
+        controller.revertHandler = { [weak self, weak controller] source, done in
+            guard let self, let controller else {
+                return done(.failure(ImageDocument.DocumentError.closed))
+            }
+            self.revert(controller, to: source, completion: done)
+        }
         if let previous = documents.last?.window, previous.isVisible, let window = controller.window,
            let visible = (previous.screen ?? NSScreen.main)?.visibleFrame {
             window.setFrameTopLeftPoint(DocumentWindowController.cascadedTopLeft(
@@ -793,6 +799,78 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 }
             case .failure(let error):
                 document.onError?(String(describing: error))
+            }
+        }
+    }
+
+    /// File ▸ Revert's load for a confirmed discard. The reload is a
+    /// file operation — it waits behind other engine work, gates new
+    /// edits on every document and counts toward Quit — and the
+    /// replacement is adopted only into a still-live window.
+    func revert(_ controller: DocumentWindowController, to source: URL,
+                completion: @escaping @MainActor (Result<DocumentWindowController, Error>) -> Void) {
+        guard !terminationRequested else {
+            return completion(.failure(ImageDocument.DocumentError.closed))
+        }
+        // The reload runs in the document's own engine session.
+        let session = controller.imageDocument.session
+        pendingFileOperations += 1
+        EngineActivity.shared.performWhenReady(label: "Reverting \(source.lastPathComponent)", work: {
+            let result = Result { try session.openImage(path: source.path) }
+            DispatchQueue.main.async {
+                self.pendingFileOperations -= 1
+                defer { self.closeNextDocumentForTermination() }
+                self.adoptRevertedImage(result, from: source, into: controller, completion: completion)
+            }
+        })
+    }
+
+    /// The loaded side of Revert on the main queue. Adoption is all or
+    /// nothing: the replacement opens through the ordinary document
+    /// path, takes the old window's frame and view, and only then does
+    /// the old document close without asking again. A window that
+    /// closed or a Quit that began while the file loaded wins instead:
+    /// the loaded image is destroyed unopened.
+    private func adoptRevertedImage(_ result: Result<Int32, Error>, from source: URL,
+                                    into controller: DocumentWindowController,
+                                    completion: @escaping @MainActor (Result<DocumentWindowController, Error>) -> Void) {
+        let session = controller.imageDocument.session
+        switch result {
+        case .failure(let error):
+            completion(.failure(error))
+        case .success(let image):
+            guard !terminationRequested, documents.contains(where: { $0 === controller }),
+                  !controller.imageDocument.isClosing, !controller.closeStarted,
+                  !controller.waitingForActivityToClose else {
+                // The confirmed discard still stands — a Quit or close
+                // in flight must never prompt to save it — and the
+                // image nobody can adopt is destroyed on the engine
+                // queue, behind every earlier file call.
+                controller.approveDiscard()
+                EngineActivity.shared.closeImage(image, session: session) { _ in }
+                return completion(.failure(ImageDocument.DocumentError.closed))
+            }
+            let frame = controller.window?.frame
+            let zoom = controller.canvas.zoomPercent
+            let center = controller.canvasCenter
+            do {
+                let document = try ImageDocument(session: session, image: image,
+                                                 name: source.lastPathComponent, openedFrom: source)
+                open(document)
+                guard let replacement = documents.first(where: { $0.imageDocument === document }) else {
+                    // open() only appends, so this cannot happen; if it
+                    // ever does, keep the adopted document rather than
+                    // destroying its image under it.
+                    return completion(.failure(ImageDocument.DocumentError.closed))
+                }
+                if let frame { replacement.window?.setFrame(frame, display: false) }
+                replacement.zoom(to: zoom)
+                replacement.center(on: center)
+                controller.closeDiscardingChanges()
+                completion(.success(replacement))
+            } catch {
+                EngineActivity.shared.closeImage(image, session: session) { _ in }
+                completion(.failure(error))
             }
         }
     }
