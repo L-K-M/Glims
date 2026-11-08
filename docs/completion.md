@@ -24,30 +24,30 @@ behavior, not every adjacent feature in `design.md`.
 - [x] History palette, undo/redo traversal and image snapshots.
 - [x] Periodic private recovery copies, startup recovery/discard and original
       file identity and dirty-state preservation.
-- [x] Native filter discovery and supported property forms. Committed-effect
-      listing/reorder/edit APIs are present; their Layers controls are pending.
+- [x] Native filter discovery and supported property forms, plus committed
+      effect rows with visibility, parameter editing, reorder, remove and merge.
 - [x] Open as Layers and native link-layer Place, including failure recovery,
       undo and source refresh. Link layers require an engine with that feature.
 - [x] Save a Copy, Revert, native Print/Page Setup, layer properties and editor preferences.
 - [x] Retina Actual Pixels and display-density changes.
 - [x] Searchable native help content.
-- [x] A self-contained bundle at `9deb9ae` passes native and interface checks
+- [x] RGB/Grayscale conversion, native precision controls, accurate mode titles
+      and read-only working-profile information, with undo and XCF persistence.
+- [x] A self-contained bundle at `ff5cc54` passes 697 native and 597 interface checks
       with the development trees inaccessible. Pointer painting, keyboard editing,
       Save, Quit/reopen, mask/channel controls and PDF printing have separate
       on-screen evidence below and in the reviewed changes. The final
-      combined revision still needs this pass.
+      combined revision, including the color controls, still needs this pass.
 
 ## Remaining implementation and final verification
 
 - [ ] Layer multi-selection and saved sets, fit/trim, and consistent
       rasterize/revert policy for structured layers.
-- [ ] Committed-effect controls, adjustment layers/groups, remaining custom
-      filter forms and filter inputs. The backend alone does not close this.
-- [ ] Integrated file-panel verification for Open as Layers, Place and Revert.
+- [ ] Adjustment layers/groups, remaining custom filter forms and filter inputs.
 - [ ] Path fill, vector layers and multi-anchor editing.
 - [ ] Brush, pattern and gradient resource choosers and presets.
-- [ ] Accurate mode/precision/profile controls, profile assignment/conversion
-      and soft proofing.
+- [ ] Indexed conversion policy, profile assignment/conversion, display color
+      management and soft proofing.
 - [ ] Rulers, guides, grid, snapping, view rotation, trackpad/modifier behavior
       and initial fit that avoids palettes.
 - [ ] Paste Into/floating selection controls, Stroke Selection and resource
@@ -236,6 +236,44 @@ load and the link layer's save/reload/reread; it was added but not run —
 engine smoke stays with the desktop pass against the private adapters.
 `swift build` and `swift test` (229 tests, including new menu-placement
 and version-parsing cases) pass headless.
+2026-11-08: the Image menu's color controls are wired on the existing
+facade. `EngineSession` gains typed `ColorInfo`/`ColorMode`/
+`ColorComponent`/`ColorTRC` and wrappers for `image_color_info`,
+`image_convert_mode` and `image_convert_precision` — facade values only,
+unknowns map to `.unknown`, and the precision nick `ImageInfo.precision`
+reports is preserved. `ImageDocument` caches the color info with the rest
+of its state, and `handle` no longer reloads synchronously on layers/
+channels/undo/size events: the refreshes coalesce into one pending run
+through `EngineActivity.whenIdle` while an exclusive activity is busy —
+a large conversion emits events before its worker returns, and a main-
+thread reload would have waited on it — while selection and size
+callbacks survive and a closing document is skipped. Projection redraws
+stay asynchronous. The window title now shows the image's real mode
+(RGB, Grayscale, Indexed, or Unknown) instead of hard-coded RGB, after
+undo/redo and reopen alike. Image ▸ Mode ▸ RGB / Grayscale check the
+cached mode live in validation — no engine call there — and run the
+conversion through counted exclusive admission, so accepted input in
+every document drains first and close/Quit wait; Image ▸ Precision…
+opens a sheet with component (8/16/32 integer, 16/32/64 float) and
+transfer-curve (linear/non-linear/perceptual) popups seeded from the
+cache, with a disabled Unknown row when the state cannot be named, and
+Image ▸ Image Information… shows mode, precision, the effective profile
+label and embedded-vs-builtin honestly. Converting to the current mode
+or seeded precision queues nothing and pushes no undo; indexed precision
+stays fixed at u8 non-linear (the Precision item stays listed but
+disabled and says why) and no Indexed menu entry exists — palette and
+dither policy are a later slice. Refusals (closing, clipboard transfer,
+save-for-close, plug-in, active preview, a busy gate) report busy or the
+facade's own actionable message, and a failed conversion leaves the
+image usable. Unit tests cover non-RGB titles, menu structure and tags,
+choice lists, seeding and unknowns, the indexed restriction and the
+information rows; `exerciseColorConversions` in the engine smoke covers
+fresh state, RGB↔grayscale with pixel verification, form seeding/cancel/
+no-op/pick, undo/redo, XCF roundtrip, file identity, preview refusal,
+cross-document drain, close during a conversion and deferred event
+refresh — it compiles here and the desktop pass runs it. `swift build`
+and `swift build --build-tests` pass; `swift test`, the smoke run and
+interactive QA were not run in this worktree.
 
 2026-11-08 verification checkpoint: the checked self-contained bundle at
 `9deb9ae` passed 603 native and 474 interface checks with development trees
@@ -249,3 +287,27 @@ heads, review findings and remaining manual gaps.
 Revert verification: 495 interface checks passed on each engine before
 integration; the placement-integrated head passed 248 unit tests and 538
 pinned-engine interface checks. Manual confirmation-sheet checks remain.
+
+2026-11-08 integrated verification: bundle `ff5cc54` passes 697 native and
+597 interface checks with development trees inaccessible. Running two
+interface apps together caused two focus-sensitive checks to fail; the
+isolated run passes. The desktop pass opened a layered XCF, added a PNG
+through Open as Layers, placed a genuine link layer, cancelled Revert
+without losing the seven-layer edited state, then confirmed Revert and
+restored the original five-layer clean image at the same frame and zoom.
+A Gaussian Blur on the text layer appears as an effect row; double-click
+opens its native parameters, setting both radii to zero restores sharp
+text and keeps the text layer and effect. Selection edges are visible.
+Quit prompted for the edited documents and Don't Save completed cleanup.
+
+The color controls pass 283 unit tests and 640 interface checks on
+3.2.8/3.2.0/master, 637 on 3.0.8. Independent review reproduced silent
+Precision-sheet refusal while another document holds the engine and on
+a native conversion error. Both regressions failed before the fix and
+pass afterward. A raw facade conversion now tests deferred refresh
+without relying on the document command's own completion reload: state,
+selection and size events coalesce once after the activity. The accepted
+stroke in another document is checked by its changed pixels. Follow-up
+review reports no important findings. A grayscale PNG opened in the old
+bundle reproduced its incorrect RGB title; interactive verification of
+the corrected title and conversion sheets remains pending.
