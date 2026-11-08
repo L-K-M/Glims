@@ -58,14 +58,14 @@ enum MainMenu {
         // Plug-in commands are appended to Image, Layer and Select (PlugInMenus).
         let mode = NSMenuItem(title: "Mode", action: nil, keyEquivalent: "")
         mode.submenu = NSMenu(title: "Mode")
-        // No Indexed entry: an indexed image converts out through these,
-        // but conversion to indexed — palette and dither policy — is a
-        // later slice, so the menu advertises nothing toward it.
         for target in [EngineSession.ColorMode.rgb, .grayscale] {
             let entry = item(target.title, #selector(DocumentWindowController.convertImageMode(_:)))
             entry.tag = Int(target.rawValue)
             mode.submenu?.addItem(entry)
         }
+        // Indexed… opens the palette/dither policy sheet; the item's
+        // checkmark and gates read the cached color state in validation.
+        mode.submenu?.addItem(item("Indexed…", #selector(DocumentWindowController.convertImageToIndexed(_:))))
         add(menu, "Image", [
             mode,
             item("Precision…", #selector(DocumentWindowController.imagePrecision(_:))),

@@ -95,7 +95,19 @@ final class EngineActivity {
                     completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
         queue.async {
             let result = Result { try session.closeImage(image) }
-            DispatchQueue.main.async { completion(result) }
+            DispatchQueue.main.async {
+                if case .failure(let error) = result,
+                   (error as? EngineSession.EngineError)?.isBusy == true {
+                    // A native link monitor can reload without an app job.
+                    // Keep the session/image alive and leave the queue free
+                    // for cancellation while that loader unwinds.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        self.closeImage(image, session: session, completion: completion)
+                    }
+                } else {
+                    completion(result)
+                }
+            }
         }
     }
 }
