@@ -70,7 +70,7 @@ enum ColorForms {
 
         let alert = NSAlert()
         alert.messageText = "Image Precision"
-        alert.informativeText = "The current precision is \(document.info.precision). The conversion rewrites every layer's storage as one undo step, with no dithering."
+        alert.informativeText = "Reducing precision may lose color detail. No dithering is applied. You can undo the conversion."
         alert.accessoryView = grid
         alert.addButton(withTitle: "Convert")
         alert.addButton(withTitle: "Cancel")
