@@ -354,4 +354,9 @@ GlimsStatus glims_resource_resolve     (GlimsEngine *e, uint32_t kind, const cha
  * handles or brushes absent from the current factory. */
 GlimsStatus glims_lookup_brush         (GlimsEngine *e, GlimsResourceID id, GimpBrush **out);
 
+GlimsStatus glims_resource_thumbnail   (GlimsEngine *e, GlimsResourceID id, int32_t max_size,
+                                        const GlimsColor *foreground,
+                                        const GlimsColor *background,
+                                        GlimsPixelBuffer *out, char **error);
+
 #endif /* GLIMS_ENGINE_PRIVATE_H */

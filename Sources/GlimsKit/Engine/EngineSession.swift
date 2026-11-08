@@ -1710,6 +1710,12 @@ final class EngineSession: @unchecked Sendable {
         try string.withCString { try body($0) }
     }
 
+    private func withOptionalPointer<T, Result>(_ value: T?,
+                                                _ body: (UnsafePointer<T>?) throws -> Result) rethrows -> Result {
+        guard let value else { return try body(nil) }
+        return try withUnsafePointer(to: value) { try body($0) }
+    }
+
     func scaleImage(_ image: Int32, width: Int, height: Int) throws {
         var error: UnsafeMutablePointer<CChar>?
         try check(api.image_scale(engine, image, Int32(width), Int32(height), &error), error)
@@ -1892,6 +1898,83 @@ final class EngineSession: @unchecked Sendable {
             }
         }
         return handle
+    }
+
+    /// An owned thumbnail of one brush, pattern or gradient: the
+    /// straight-alpha 8-bit sRGB RGBA pixels of one `resource_thumbnail`
+    /// call, copied out of the native buffer, plus the same pixels as a
+    /// CGImage for display.
+    struct ResourceThumbnail {
+        let width: Int
+        let height: Int
+        /// Straight-alpha sRGB RGBA, exactly `width * height * 4` bytes.
+        let pixels: Data
+        /// The same pixels (sRGB, straight alpha, `width * 4` bytes per row).
+        let image: CGImage
+    }
+
+    /// Renders a fresh thumbnail of the resource `id` names, fitted
+    /// inside a `maxSize` x `maxSize` box (1 ... 512): gradients come
+    /// back exactly `maxSize` x `max(1, maxSize / 2)`, brushes and
+    /// patterns keep their source aspect and are never scaled up. Every
+    /// call renders fresh; nothing is cached between calls.
+    ///
+    /// `foreground` and `background` are optional explicit recolor
+    /// inputs: the foreground recolors mask-only brushes, and both feed
+    /// gradients with foreground/background segments. Native contexts
+    /// use opaque FG/BG, so a color's alpha never makes the preview
+    /// transparent — the resource supplies alpha through its brush mask
+    /// or transparent gradient stops. Nil uses the engine's canonical
+    /// black foreground and white background. The colors apply to this
+    /// call only: no user or global context is read or changed, and no
+    /// image, catalog or resource is mutated.
+    ///
+    /// The render runs synchronously on the engine thread, so call this
+    /// off the main thread, like `resources(_:)`.
+    func resourceThumbnail(_ id: ResourceID, maxSize: Int32 = 32,
+                           foreground: NSColor? = nil,
+                           background: NSColor? = nil) throws -> ResourceThumbnail {
+        var output = GlimsPixelBuffer()
+        var error: UnsafeMutablePointer<CChar>?
+        // The native buffer is owned from the call on, so it is freed on
+        // every path, validation and CGImage-construction failures too.
+        defer { api.free_pixels(output.pixels) }
+        let foregroundColor = foreground.map { Self.color($0) }
+        let backgroundColor = background.map { Self.color($0) }
+        let status = withOptionalPointer(foregroundColor) { foreground in
+            withOptionalPointer(backgroundColor) { background in
+                api.resource_thumbnail(engine, id, maxSize, foreground, background, &output, &error)
+            }
+        }
+        try check(status, error)
+
+        let width = Int(output.bounds.width)
+        let height = Int(output.bounds.height)
+        let (pixelCount, countOverflow) = width.multipliedReportingOverflow(by: height)
+        let (expectedBytes, byteOverflow) = pixelCount.multipliedReportingOverflow(by: 4)
+        guard output.bounds.x == 0, output.bounds.y == 0,
+              width > 0, height > 0, width <= Int(maxSize), height <= Int(maxSize),
+              !countOverflow, !byteOverflow,
+              let nativePixels = output.pixels,
+              output.byte_count == expectedBytes else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine returned a malformed resource thumbnail.")
+        }
+        let pixels = Data(bytes: nativePixels, count: expectedBytes)
+        // Straight alpha, like drawableThumbnail: CGImageAlphaInfo.last
+        // with an sRGB space and a width * 4 row stride over the copied
+        // bytes.
+        guard let provider = CGDataProvider(data: pixels as CFData),
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                                  bytesPerRow: width * 4, space: space,
+                                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+                                  provider: provider, decode: nil, shouldInterpolate: true,
+                                  intent: .defaultIntent) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The resource thumbnail could not be decoded as straight-alpha sRGB.")
+        }
+        return ResourceThumbnail(width: width, height: height, pixels: pixels, image: image)
     }
 
     /// The facade kind of an engine row; unknown kind values never reach

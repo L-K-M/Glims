@@ -1144,6 +1144,10 @@ typedef struct
   char            **out_collection;
   bool             *out_internal;
   GlimsResourceID  *out_id;
+  int32_t           max_size;
+  const GlimsColor *foreground;
+  const GlimsColor *background;
+  GlimsPixelBuffer *pixels;
   char            **error;
 } GlimsResourceArgs;
 
@@ -1186,6 +1190,15 @@ stroke_begin_with_brush_resource_on_engine (GlimsEngine *e, gpointer data)
 
   return glims_stroke_begin_with_brush_resource (e, a->image, a->item, a->brush,
                                                  a->brush_settings, a->first, a->out, a->error);
+}
+
+static GlimsStatus
+resource_thumbnail_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsResourceArgs *a = data;
+
+  return glims_resource_thumbnail (e, a->id, a->max_size, a->foreground, a->background,
+                                   a->pixels, a->error);
 }
 
 static GlimsStatus
@@ -1965,6 +1978,16 @@ api_resource_resolve (GlimsEngine *e, uint32_t kind, const char *name, const cha
   return glims_engine_call (e, resource_resolve_on_engine, &a);
 }
 
+static GlimsStatus
+api_resource_thumbnail (GlimsEngine *e, GlimsResourceID id, int32_t max_size,
+                        const GlimsColor *foreground, const GlimsColor *background,
+                        GlimsPixelBuffer *out, char **error)
+{
+  GlimsResourceArgs a = { .id = id, .max_size = max_size, .foreground = foreground,
+                          .background = background, .pixels = out, .error = error };
+  return glims_engine_call (e, resource_thumbnail_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -2068,6 +2091,7 @@ static const GlimsEngineAPI api_v1 = {
   .resources = api_resources,
   .resource_identifiers = api_resource_identifiers,
   .resource_resolve = api_resource_resolve,
+  .resource_thumbnail = api_resource_thumbnail,
   .stroke_begin_with_brush_resource = api_stroke_begin_with_brush_resource,
 };
 

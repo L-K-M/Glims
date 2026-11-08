@@ -59,6 +59,9 @@ jobs:
         with:
           xcode-version: '26.0'   # pin so a runner-image bump can't change the toolchain
 
+      - name: Check conformance runner ABI refusal
+        run: scripts/test-conformance-abi.sh
+
       - name: Build
         run: swift build
 
