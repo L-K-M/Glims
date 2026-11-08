@@ -511,7 +511,7 @@ glims_image_metadata_edit (GlimsEngine        *engine,
       g_object_unref (copy);
       return status;
     }
-  if (is_container && ! present)
+  if (operation == GLIMS_METADATA_SET && is_container && ! present)
     {
       g_object_unref (copy);
       if (error)
@@ -848,7 +848,7 @@ glims_image_metadata_tag_info (GlimsEngine          *engine,
   present = gexiv2_metadata_try_has_tag (GEXIV2_METADATA (probe), tag, &gerror);
   if (gerror)
     {
-      status = glims_fail (error, gerror, "The engine could not inspect the tag.");
+      status = glims_fail (error, g_steal_pointer (&gerror), "The engine could not inspect the tag.");
       g_clear_error (&gerror);
       if (probe != current)
         g_object_unref (probe);
@@ -858,7 +858,7 @@ glims_image_metadata_tag_info (GlimsEngine          *engine,
     GEXIV2_METADATA (probe), tag, &gerror);
   if (gerror)
     {
-      status = glims_fail (error, gerror, "The engine could not inspect the tag.");
+      status = glims_fail (error, g_steal_pointer (&gerror), "The engine could not inspect the tag.");
       g_clear_error (&gerror);
       if (probe != current)
         g_object_unref (probe);

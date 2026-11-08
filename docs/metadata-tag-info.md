@@ -177,3 +177,14 @@ tests and any GUI. No runtime result is claimed beyond what the sources
 above state; the C conformance expectations are source-derived (exiv2
 0.28.9 registry tables plus the existing `test_image_metadata`
 behavior), not observed runs.
+
+## Acceptance fixes
+
+The descriptor's REMOVE bit for an absent XMP container initially disagreed
+with editing: a strict regression returned Unsupported. Only SET now needs
+a chosen new container type; absent REMOVE succeeds as the documented
+no-op with no history change. Two new descriptor GError branches also
+transfer consumed errors explicitly.
+
+All four native suites pass 1,917 / 1,703 / 1,917 / 1,917 checks after these
+fixes and integration of the exact-value and error-ownership changes.

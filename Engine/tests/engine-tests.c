@@ -10933,13 +10933,11 @@ test_image_metadata_tag_info (const char *work)
   CHECK (api->image_metadata_edit (engine, image, "Xmp.dc.subject", GLIMS_METADATA_SET, kw, 1, NULL) == GLIMS_STATUS_UNSUPPORTED,
          "an absent XmpBag refuses SET, matching its REMOVE-only policy");
   {
-    /* The REMOVE bit allows removing an absent container as a no-op;
-     * the current edit path's container guard still refuses it with
-     * UNSUPPORTED — flags are type/format policy only, never a write
-     * promise. Either way nothing may mutate. */
+    /* A registered, absent container must obey REMOVE's no-op contract
+     * and the descriptor's declared format policy. */
     GlimsStatus remove_status = api->image_metadata_edit (engine, image, "Xmp.dc.subject",
                                                           GLIMS_METADATA_REMOVE, NULL, 0, NULL);
-    CHECK ((remove_status == GLIMS_STATUS_OK || remove_status == GLIMS_STATUS_UNSUPPORTED) &&
+    CHECK (remove_status == GLIMS_STATUS_OK &&
            undo_depth (image) == before + 1,
            "REMOVE of the absent XmpBag mutates nothing (status %d)", (int) remove_status);
   }
