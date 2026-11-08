@@ -662,16 +662,7 @@ final class EngineSession: @unchecked Sendable {
     /// id — and returns the stroke session `continueStroke`/`endStroke`
     /// take.
     func beginStroke(image: Int32, drawable: Int32, brush: Brush, first: StrokePoint) throws -> Int32 {
-        var settings = GlimsBrushSettings(struct_size: UInt32(MemoryLayout<GlimsBrushSettings>.size),
-                                          size: brush.size, opacity: brush.opacity,
-                                          red: brush.red, green: brush.green, blue: brush.blue,
-                                          pressure_size: brush.pressureSize,
-                                          tool: brush.tool.rawValue,
-                                          hardness: brush.hardness ?? -1, rate: brush.rate ?? -1,
-                                          flow: brush.flow ?? -1, exposure: brush.exposure ?? -1,
-                                          tones: brush.tones.rawValue, anti_erase: brush.antiErase,
-                                          source_drawable: brush.source?.drawable ?? 0,
-                                          source_x: brush.source?.x ?? 0, source_y: brush.source?.y ?? 0)
+        var settings = Self.nativeBrush(brush)
         var point = Self.point(first)
         var stroke: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
@@ -981,6 +972,31 @@ final class EngineSession: @unchecked Sendable {
         return segments.prefix(Int(min(count, filled))).map {
             Segment(from: CGPoint(x: Int($0.x1), y: Int($0.y1)), to: CGPoint(x: Int($0.x2), y: Int($0.y2)))
         }
+    }
+
+    /// Strokes the selection's boundary on `drawable` — an attached layer
+    /// of the image (nil: the selected layer) — with `brush`'s tool and
+    /// settings, as exactly one undo step (selection_stroke). The native
+    /// core suspends the selection for the stroke, so the line straddles
+    /// the boundary and paints both sides of it; the selection itself is
+    /// never modified. `brush.resource` is resolved to a live handle
+    /// here, on the engine worker this call runs on — never a session id
+    /// is stored — and a nil resource keeps the established convention of
+    /// `beginStroke`: the stroke inherits the user context's current
+    /// brush. An empty selection, a non-layer target (group, mask,
+    /// channel), a locked target, bad settings or a stale/malformed
+    /// brush handle fail without changing pixels or history; BUSY while
+    /// a stroke, a filter session or a plug-in holds the image.
+    func strokeSelection(image: Int32, drawable: Int32? = nil, brush: Brush) throws {
+        var settings = Self.nativeBrush(brush)
+        var error: UnsafeMutablePointer<CChar>?
+        let resource: ResourceID
+        if let identity = brush.resource {
+            resource = try resolveResource(identity, kind: .brush)
+        } else {
+            resource = 0
+        }
+        try check(api.selection_stroke(engine, image, drawable ?? 0, resource, &settings, &error), error)
     }
 
     private static func corners(_ rect: CGRect) -> [GlimsPoint] {
@@ -2609,6 +2625,21 @@ final class EngineSession: @unchecked Sendable {
     private static func point(_ point: StrokePoint) -> GlimsStrokePoint {
         GlimsStrokePoint(x: point.x, y: point.y, pressure: point.pressure,
                          xtilt: point.xTilt, ytilt: point.yTilt, time_ms: point.timeMilliseconds)
+    }
+
+    /// A Brush's captured settings as the facade's GlimsBrushSettings:
+    /// nil option numbers become -1 (the engine's default for that tool).
+    private static func nativeBrush(_ brush: Brush) -> GlimsBrushSettings {
+        GlimsBrushSettings(struct_size: UInt32(MemoryLayout<GlimsBrushSettings>.size),
+                           size: brush.size, opacity: brush.opacity,
+                           red: brush.red, green: brush.green, blue: brush.blue,
+                           pressure_size: brush.pressureSize,
+                           tool: brush.tool.rawValue,
+                           hardness: brush.hardness ?? -1, rate: brush.rate ?? -1,
+                           flow: brush.flow ?? -1, exposure: brush.exposure ?? -1,
+                           tones: brush.tones.rawValue, anti_erase: brush.antiErase,
+                           source_drawable: brush.source?.drawable ?? 0,
+                           source_x: brush.source?.x ?? 0, source_y: brush.source?.y ?? 0)
     }
 
     private static func layer(_ row: GlimsLayerInfo) -> Layer {
