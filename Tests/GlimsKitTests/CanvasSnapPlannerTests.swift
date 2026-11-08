@@ -351,4 +351,14 @@ final class CanvasSnapPlannerTests: XCTestCase {
                        targets: [.guide], viewPointTolerance: 0)
         XCTAssertEqual(off, .none)
     }
+    func testLargeGridOffsetNeverInventsACoincidentLine() {
+        let moving = input(moving: CGRect(x: 1, y: 10, width: 0.125, height: 0.125),
+                           grid: .init(spacingX: 10, spacingY: 10, offsetX: 1e16, offsetY: 0))
+        let exact = plan(moving, targets: [.grid], viewPointTolerance: 0)
+        XCTAssertNil(exact.x, "the lattice contains 0 and 10, never 1")
+        let near = plan(moving, targets: [.grid], viewPointTolerance: 2)
+        XCTAssertEqual(near.dx, -1, accuracy: Self.accuracy)
+        assertEqual(near.x?.targetCoordinate, 0, accuracy: Self.accuracy)
+    }
+
 }

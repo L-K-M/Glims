@@ -228,24 +228,32 @@ enum CanvasSnapPlanner {
         return best?.match
     }
 
-    /// The nearest grid lattice line to `value`: the line at
-    /// `offset + k * spacing` with `k = round((value - offset) / spacing)`.
-    /// O(1) per anchor — the lattice is never enumerated.
-    ///
-    /// Returns nil when the quotient or the line is non-finite, or when
-    /// the lattice index is not exactly representable (|k| > 2^53):
-    /// extreme offsets or a huge span over a tiny spacing must not
-    /// produce a garbage line. The line is computed in residual form
-    /// (`value - (q - k) * spacing`) so a huge offset does not cancel
-    /// against `k * spacing`.
+    /// Reconstruct actual lattice lines with one rounded multiply-add.
+    /// A residual derived from the quotient can invent a line when
+    /// subtracting a large offset loses the moving coordinate's low bits.
+    /// Check a fixed neighborhood because the rounded quotient itself can
+    /// lose a few indices near the exact-integer limit. This is bounded
+    /// work per anchor, independent of grid density or image span.
     private static func nearestGridLine(value: Double, spacing: Double, offset: Double) -> Double? {
         let quotient = (value - offset) / spacing
         guard quotient.isFinite else { return nil }
         let index = quotient.rounded()
         guard index.magnitude <= maximumLatticeIndex else { return nil }
-        let line = value - (quotient - index) * spacing
-        guard line.isFinite else { return nil }
-        return line
+        var nearest: Double?
+        var distance = Double.infinity
+        // Prefer the rounded index on a tie, retaining the ordinary grid's
+        // halfway rule; other candidates only replace a strictly farther line.
+        for step in [0, -1, 1, -2, 2, -3, 3] {
+            let candidate = index + Double(step)
+            guard candidate.magnitude <= maximumLatticeIndex else { continue }
+            let line = offset.addingProduct(candidate, spacing)
+            let separation = (line - value).magnitude
+            if line.isFinite && separation < distance {
+                nearest = line
+                distance = separation
+            }
+        }
+        return nearest
     }
 
     /// The midpoint of two finite coordinates, computed as

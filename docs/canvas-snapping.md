@@ -94,3 +94,11 @@ the finite image-space tolerance.
 and the tests. The tests were not executed in this environment (no
 `swift test` run); they are compile-checked only and should be run in CI
 or locally before relying on them.
+
+Root runtime acceptance: a grid offset of 10^16 and spacing 10 invented a
+coincident line at image coordinate 1. The quotient's residual had lost the
+low bits of the moving coordinate. The new regression failed in all three
+assertions before correction. Candidate lines now use a fused multiply-add
+and a fixed seven-index neighborhood around the rounded quotient, avoiding
+both cancellation and unbounded enumeration. All 21 planner tests pass.
+No canvas integration or on-screen snapping is claimed by this model slice.
