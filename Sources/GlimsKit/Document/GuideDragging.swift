@@ -34,6 +34,11 @@ enum GuideDragLogic {
         return raw >= 0 && raw <= extent(orientation, width: width, height: height)
     }
 
+    static func containsImagePoint(_ point: CGPoint, width: Int, height: Int) -> Bool {
+        guard point.x.isFinite, point.y.isFinite, width > 0, height > 0 else { return false }
+        return point.x >= 0 && point.y >= 0 && point.x <= CGFloat(width) && point.y <= CGFloat(height)
+    }
+
     /// The integer image-pixel position a drop at the raw axis coordinate
     /// commits to: rounded to the nearest pixel and accepted only inside
     /// the inclusive 0...extent range. Nil for a non-finite or absurd raw
@@ -160,8 +165,8 @@ final class GuideDragController {
     private func imageAxisPoint(for event: NSEvent, orientation: EngineSession.GuideOrientation) -> Double? {
         let viewPoint = canvas.convert(event.locationInWindow, from: nil)
         let image = canvas.imagePoint(at: viewPoint)
-        let raw = GuideDragLogic.axisCoordinate(orientation, of: image)
-        return raw.isFinite ? raw : nil
+        guard image.x.isFinite, image.y.isFinite else { return nil }
+        return GuideDragLogic.axisCoordinate(orientation, of: image)
     }
 
     /// Whether the active gesture still belongs to its captured window
@@ -228,7 +233,9 @@ final class GuideDragController {
         guard stillValid() else { cancel(); return true }
         guard let raw = imageAxisPoint(for: event, orientation: gesture.orientation) else { cancel(); return true }
         gesture.position = raw
-        commit(gesture)
+        let imagePoint = canvas.imagePoint(at: canvas.convert(event.locationInWindow, from: nil))
+        let inside = GuideDragLogic.containsImagePoint(imagePoint, width: document.info.width, height: document.info.height)
+        commit(gesture, inside: inside)
         self.gesture = nil
         canvas.needsDisplay = true
         return true
@@ -240,12 +247,10 @@ final class GuideDragController {
     /// the native no-op, no undo) and one intentionally released outside
     /// the image is removed. Each is a single addGuide/moveGuide/
     /// removeGuide — one undo step when anything changed.
-    private func commit(_ gesture: Gesture) {
+    private func commit(_ gesture: Gesture, inside: Bool) {
         let document = gesture.document
         let width = document.info.width, height = document.info.height
         let orientation = gesture.orientation
-        let inside = GuideDragLogic.isInsideImage(gesture.position, orientation: orientation,
-                                                  width: width, height: height)
         switch gesture.kind {
         case .newFromRuler:
             guard inside, let position = GuideDragLogic.commitPosition(gesture.position, orientation: orientation,

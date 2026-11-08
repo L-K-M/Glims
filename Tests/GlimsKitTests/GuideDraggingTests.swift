@@ -16,6 +16,16 @@ final class GuideDraggingTests: XCTestCase {
 
     // MARK: Axis coordinate and extent
 
+    func testDropContainmentIncludesBothImageAxes() {
+        XCTAssertTrue(GuideDragLogic.containsImagePoint(CGPoint(x: 0, y: 0), width: 400, height: 300))
+        XCTAssertTrue(GuideDragLogic.containsImagePoint(CGPoint(x: 400, y: 300), width: 400, height: 300))
+        for point in [CGPoint(x: -1, y: 60), CGPoint(x: 401, y: 60),
+                      CGPoint(x: 60, y: -1), CGPoint(x: 60, y: 301),
+                      CGPoint(x: Double.nan, y: 60), CGPoint(x: 60, y: Double.infinity)] {
+            XCTAssertFalse(GuideDragLogic.containsImagePoint(point, width: 400, height: 300))
+        }
+    }
+
     func testAxisCoordinateReadsTheGuidesOwnAxis() {
         // A horizontal guide's position is a y coordinate, a vertical one's
         // an x coordinate.
@@ -85,17 +95,17 @@ final class GuideDraggingTests: XCTestCase {
         let guides = [guide(1, .horizontal, 100), guide(2, .vertical, 50), guide(3, .horizontal, 104)]
         // At 1 pt/px the tolerance is 8 view points = 8 image pixels.
         let hit = GuideDragLogic.hitTest(guides: guides, guidesVisible: true,
-                                         at: CGPoint(x: 50, y: 103), scale: 1)
+                                         at: CGPoint(x: 80, y: 103), scale: 1)
         XCTAssertEqual(hit?.id, 3, "the nearest guide wins")
         XCTAssertNil(GuideDragLogic.hitTest(guides: guides, guidesVisible: true,
-                                            at: CGPoint(x: 50, y: 120), scale: 1),
+                                            at: CGPoint(x: 80, y: 120), scale: 1),
                      "nothing within tolerance")
         // At 8 pt/px the same image distance is 8x the view distance.
         XCTAssertNotNil(GuideDragLogic.hitTest(guides: guides, guidesVisible: true,
-                                               at: CGPoint(x: 50, y: 101), scale: 8),
-                        "at high zoom the tolerance covers more image pixels")
+                                               at: CGPoint(x: 80, y: 101), scale: 8),
+                        "at high zoom the tolerance covers only one image pixel")
         XCTAssertNil(GuideDragLogic.hitTest(guides: guides, guidesVisible: true,
-                                            at: CGPoint(x: 50, y: 102), scale: 8),
+                                            at: CGPoint(x: 80, y: 102), scale: 8),
                      "16 view points away is still a miss")
         // The tolerance edge itself is a hit.
         XCTAssertNotNil(GuideDragLogic.hitTest(guides: [guide(1, .horizontal, 100)], guidesVisible: true,

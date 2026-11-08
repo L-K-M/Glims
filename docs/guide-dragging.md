@@ -99,3 +99,16 @@ and the default suite) against a real engine, adapter conformance, and any
 GUI run. The smoke case is compile-checked only; its runtime assertions
 (oracle tolerances, ghost bitmap colors, undo-count deltas) are unverified
 until root executes them.
+
+## Root acceptance checkpoint
+
+An actual ruler drag beyond the image's perpendicular edge reproduced a
+wrong guide creation. Drop containment now checks both image coordinates;
+an existing guide dropped there is removed as one step, while a new one
+cancels. Twelve pure tests and the focused pinned interface case pass.
+The first run also exposed fixture errors: a zero-distance vertical guide
+was ignored by the nearest-guide expectation; an ordinary layer move left
+an old undo baseline; the independent frame oracle omitted flipped-view
+transforms. Those are corrected, and the ghost bitmap check samples the
+one-device-pixel antialiased footprint. Four-engine/full integration and
+current-main adoption remain pending.

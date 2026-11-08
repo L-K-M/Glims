@@ -8655,13 +8655,24 @@ enum EngineSmokeTest {
         // (window content -> scroll view -> clip view + scroll offset),
         // not NSView.convert to the canvas.
         func oracleImagePoint(_ location: CGPoint, scroll: NSScrollView, canvas: EngineCanvasView) -> CGPoint {
-            guard let content = scroll.window?.contentView else {
-                return CGPoint(x: Double.nan, y: Double.nan)
+            var chain: [NSView] = []
+            var current: NSView? = canvas
+            while let view = current { chain.append(view); current = view.superview }
+            var point = location
+            for view in chain.reversed() {
+                let sx = view.frame.width / view.bounds.width
+                let sy = view.frame.height / view.bounds.height
+                guard sx.isFinite, sy.isFinite, sx > 0, sy > 0 else {
+                    return CGPoint(x: Double.nan, y: Double.nan)
+                }
+                point.x = view.bounds.minX + (point.x - view.frame.minX) / sx
+                if view.isFlipped != (view.superview?.isFlipped ?? false) {
+                    point.y = view.bounds.minY + (view.frame.maxY - point.y) / sy
+                } else {
+                    point.y = view.bounds.minY + (point.y - view.frame.minY) / sy
+                }
             }
-            let clip = scroll.contentView
-            let p = CGPoint(x: location.x - content.frame.minX - scroll.frame.minX - clip.frame.minX + clip.bounds.minX,
-                            y: location.y - content.frame.minY - scroll.frame.minY - clip.frame.minY + clip.bounds.minY)
-            return CGPoint(x: p.x / canvas.scale, y: p.y / canvas.scale)
+            return CGPoint(x: point.x / canvas.scale, y: point.y / canvas.scale)
         }
         // A row of the canvas's own view bitmap: does the dashed orange
         // ghost line cross it at this image y?
@@ -8671,10 +8682,13 @@ enum EngineSmokeTest {
             let factor = Double(rep.pixelsWide) / Double(canvas.bounds.width)
             let row = Int(imageY * canvas.scale * factor)
             guard row >= 0, row < rep.pixelsHigh else { return false }
-            for x in stride(from: 4, to: rep.pixelsWide - 4, by: 3) {
-                guard let c = rep.colorAt(x: x, y: row) else { continue }
-                if c.redComponent > 0.8, c.greenComponent > 0.25, c.greenComponent < 0.85, c.blueComponent < 0.4 {
-                    return true
+            // A one-device-pixel antialiased line can straddle rows.
+            for y in max(0, row - 1)...min(rep.pixelsHigh - 1, row + 1) {
+                for x in stride(from: 4, to: rep.pixelsWide - 4, by: 3) {
+                    guard let c = rep.colorAt(x: x, y: y) else { continue }
+                    if c.redComponent - c.blueComponent > 0.3 && c.greenComponent - c.blueComponent > 0.1 {
+                        return true
+                    }
                 }
             }
             return false
@@ -8869,6 +8883,8 @@ enum EngineSmokeTest {
         check(layerAfter != nil && abs(layerAfter!.minX - (layerBefore.minX + 20)) < 1e-6
                 && abs(layerAfter!.minY - (layerBefore.minY + 10)) < 1e-6,
               "the ordinary Move-tool drag still moves the active layer by the dragged delta")
+        undoA = docA.undoInfo.undoCount
+
 
         // MARK: Hidden guides are not hit; hidden rulers cannot start a drag
 
@@ -8994,6 +9010,32 @@ enum EngineSmokeTest {
         check(docA.guides.contains(where: { $0.orientation == .horizontal && $0.position == 90 })
                 && docA.undoInfo.undoCount == undoA,
               "Redo restores it at the dragged position as one step")
+
+        // A drop outside the perpendicular edge is outside the image,
+        // even when the guide's own axis coordinate is valid.
+        let outsideCount = docA.guides.count
+        let outsideUndo = docA.undoInfo.undoCount
+        if let down = mouse(.leftMouseDown, hRuler.convert(CGPoint(x: 100, y: 5), to: nil), windowA),
+           let up = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: -40, y: 60), canvasA), windowA) {
+            hRuler.mouseDown(with: down)
+            hRuler.mouseUp(with: up)
+            settle(docA)
+            check(docA.guides.count == outsideCount && docA.undoInfo.undoCount == outsideUndo,
+                  "a new horizontal guide dropped past the image's left edge cancels")
+            if docA.guides.count != outsideCount { docA.undo(); settle(docA) }
+        } else { check(false, "the perpendicular outside-drop events build") }
+
+        if let existing = docA.guides.first(where: { $0.orientation == .horizontal && $0.position == 90 }),
+           let down = mouse(.leftMouseDown, windowPoint(ofImagePoint: CGPoint(x: 30, y: 90), canvasA), windowA),
+           let up = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: -40, y: 90), canvasA), windowA) {
+            let before = docA.undoInfo.undoCount
+            canvasA.mouseDown(with: down)
+            canvasA.mouseUp(with: up)
+            settle(docA)
+            check(!docA.guides.contains(where: { $0.id == existing.id }) && docA.undoInfo.undoCount == before + 1,
+                  "an existing horizontal guide dropped past the image's left edge is removed in one step")
+            docA.undo(); settle(docA)
+        } else { check(false, "the existing guide perpendicular-drop fixture exists") }
 
         // MARK: Window close cancels; late events are ignored
 
