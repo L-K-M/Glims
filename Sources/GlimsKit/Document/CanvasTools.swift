@@ -67,6 +67,9 @@ final class CanvasToolController {
     /// window's Snap To state enables any target; nil when snapping is off
     /// (the legacy raw move) or no layer could be captured.
     private(set) var moveSnap: MoveSnapGesture?
+    /// Distinguishes snapping off from a refused capture. A refused press
+    /// must never fall back to moving whichever layer is active later.
+    private var moveSnapWasRequested = false
     /// How near a handle a press grabs it, in view points.
     private static let handleReach: Double = 6
     /// The Text tool's editor while text is being typed.
@@ -270,6 +273,7 @@ final class CanvasToolController {
             handOrigin = nil
             gradientCapture = nil
             moveSnap = nil
+            moveSnapWasRequested = false
             canvas.needsDisplay = true
         }
         // An intentional release of a guide drag commits exactly one
@@ -310,6 +314,7 @@ final class CanvasToolController {
                 document.moveActiveLayer(by: delta)
                 return
             }
+            guard !moveSnapWasRequested else { return }
             document.moveActiveLayer(by: CGSize(width: (end.x - start.x).rounded(), height: (end.y - start.y).rounded()))
         case .gradient:
             guard let start = dragStart, hypot(end.x - start.x, end.y - start.y) >= 1,
@@ -358,7 +363,8 @@ final class CanvasToolController {
     /// keeps the legacy raw behavior.
     private func beginMoveSnap() {
         moveSnap = nil
-        guard !canvas.snapTo.isEmpty, let window = canvas.window,
+        moveSnapWasRequested = !canvas.snapTo.isEmpty
+        guard moveSnapWasRequested, let window = canvas.window,
               !document.isClosing, document.acceptsEdits,
               let layer = document.activeLayer,
               let captured = document.layers.first(where: { $0.id == layer }),
@@ -612,10 +618,11 @@ final class CanvasToolController {
             // The selected layer's outline, following the pointer — at the
             // snapped position while a snapping drag is active.
             let bounds: CGRect
-            if let gesture = moveSnap, !gesture.cancelled {
+            if let gesture = moveSnap {
+                guard !gesture.cancelled else { return }
                 bounds = gesture.proposed
             } else {
-                guard let start = dragStart, let end = dragCurrent,
+                guard !moveSnapWasRequested, let start = dragStart, let end = dragCurrent,
                       let layer = document.layers.first(where: { $0.id == document.activeLayer }) else { return }
                 bounds = layer.bounds.offsetBy(dx: end.x - start.x, dy: end.y - start.y)
             }

@@ -87,3 +87,14 @@ scroll with snapped native bounds and exactly one undo, disabled
 independence across two windows, cancel with no mutation, guide-hit first
 priority, invalid/stale-bounds refusal, and the overlay not changing
 export pixels.
+
+Root runtime acceptance reproduced two gesture defects: a failed window-bound
+capture fell back to ordinary movement of a later target, and Escape left the
+ordinary move outline visible. Requested snapping is now distinct from disabled
+snapping, so a refused capture cannot fall back; cancelled captures draw neither
+outline nor indicators. Both regressions pass through actual canvas events.
+
+The export fixture compared encoded PNG bytes, which can differ in metadata;
+it now reopens both exports and compares decoded pixels and dimensions. All
+14 pure controls tests and the focused pinned snapping scenario pass. Current
+parent, four-engine and full workflow validation follow.

@@ -103,7 +103,6 @@ extension EngineSmokeTest {
         let exportBeforeURL = work.appendingPathComponent("snap-before.png")
         let exportMidURL = work.appendingPathComponent("snap-mid.png")
         try session.export(imageA, to: exportBeforeURL.path)
-        let exportBefore = try Data(contentsOf: exportBeforeURL)
 
         // MARK: Menu wiring and per-window defaults
 
@@ -215,8 +214,16 @@ extension EngineSmokeTest {
         check(try session.copyPixels(imageA, merged: true).pixels == pixelsBefore,
               "the in-progress preview changes no native pixels")
         try session.export(imageA, to: exportMidURL.path)
-        check(try Data(contentsOf: exportMidURL) == exportBefore,
-              "the snapped preview and indicators do not change export pixels")
+        let exportedBefore = try session.openImage(path: exportBeforeURL.path)
+        let exportedMid = try session.openImage(path: exportMidURL.path)
+        let exportedBeforePixels = try session.copyPixels(exportedBefore, merged: true)
+        let exportedMidPixels = try session.copyPixels(exportedMid, merged: true)
+        check(exportedBeforePixels.width == exportedMidPixels.width
+                && exportedBeforePixels.height == exportedMidPixels.height
+                && exportedBeforePixels.pixels == exportedMidPixels.pixels,
+              "the snapped preview and indicators do not change decoded export pixels")
+        try session.closeImage(exportedBefore)
+        try session.closeImage(exportedMid)
         let midBitmap = settledBitmap()
         check(beforeDrag != nil && midBitmap != nil && midBitmap != beforeDrag,
               "the view bitmap does draw the move preview over the tiles")
@@ -224,6 +231,7 @@ extension EngineSmokeTest {
         let cancelUp = mouse(.leftMouseUp, windowPoint(ofImagePoint: dragTo, canvasA), windowA)
         if let cancelEscape { canvasA.keyDown(with: cancelEscape) }
         check(canvasA.tools.moveSnap?.cancelled == true, "Escape marks the snap drag cancelled")
+        check(settledBitmap() == beforeDrag, "Escape clears both the move outline and snap indicators before release")
         if let cancelUp { canvasA.mouseUp(with: cancelUp) }
         settle(docA)
         let pixelsAfterCancel = try session.copyPixels(imageA, merged: true).pixels
@@ -352,6 +360,32 @@ extension EngineSmokeTest {
               "the Layer Bounds move commits once onto the other layer's edge")
         undoA = docA.undoInfo.undoCount
         a.toggleSnapToLayerBounds(layerItem)
+
+        // A detached canvas cannot capture a valid window-bound snap.
+        // Its late synthetic events must never fall back to moving the
+        // document's newly selected layer.
+        let detached = EngineCanvasView(document: docA)
+        detached.snapTo = canvasA.snapTo
+        if detached.snapTo.isEmpty { detached.snapTo.toggle(.canvas) }
+        let unavailableDown = mouse(.leftMouseDown, CGPoint(x: 22, y: 22), windowA)
+        let unavailableUp = mouse(.leftMouseUp, CGPoint(x: 32, y: 29), windowA)
+        if let unavailableDown, let unavailableUp {
+            detached.tools.mouseDown(with: unavailableDown)
+            docA.selectLayer(otherID)
+            settle(docA)
+            let untouched = otherBounds()
+            let undoUnavailable = docA.undoInfo.undoCount
+            detached.tools.mouseUp(with: unavailableUp)
+            settle(docA)
+            check(otherBounds() == untouched && docA.undoInfo.undoCount == undoUnavailable,
+                  "an unavailable snap capture refuses instead of moving a later target")
+            if docA.undoInfo.undoCount != undoUnavailable { docA.undo(); settle(docA) }
+            docA.selectLayer(movingID)
+            settle(docA)
+        } else { check(false, "the unavailable-capture events build") }
+        var detachedStopped = false
+        detached.stopRendering { detachedStopped = true }
+        wait { detachedStopped }
 
         // MARK: Window close cancels; late events commit nothing
 
