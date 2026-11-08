@@ -5253,8 +5253,18 @@ test_resource_thumbnails (void)
           /* Mask-only brushes recolor with the black default
            * foreground, so any byte counts as content; alpha coverage
            * still proves the RGBA buffer is real. */
-          CHECK (nonzero && covered,
-                 "%s thumbnail %s carries pixels and alpha coverage", label, rows[i].name);
+          char *resource_name = NULL, *collection = NULL;
+          bool internal = false;
+          int empty_clipboard_brush = 0;
+          if (kind == GLIMS_RESOURCE_BRUSH &&
+              api->resource_identifiers (engine, rows[i].id, &resource_name, &collection, &internal, NULL)
+                == GLIMS_STATUS_OK && internal && collection)
+            empty_clipboard_brush = !strcmp (collection, "gimp-brush-clipboard-image") ||
+                                    !strcmp (collection, "gimp-brush-clipboard-mask");
+          api->free_string (resource_name);
+          api->free_string (collection);
+          CHECK ((nonzero && covered) || empty_clipboard_brush,
+                 "%s thumbnail %s has native content or the valid empty clipboard mask", label, rows[i].name);
 
           if (buffer.pixels)
             api->free_pixels (buffer.pixels);
@@ -5295,17 +5305,26 @@ test_resource_thumbnails (void)
   CHECK (api->resources (engine, GLIMS_RESOURCE_GRADIENT, rows,
                          (int32_t) (sizeof rows / sizeof rows[0]), &filled) == GLIMS_STATUS_OK,
          "thumbnails: gradients listed again for the FG/BG checks (%d)", filled);
-  for (i = 0; i < filled; i++)
-    if (strstr (rows[i].name, "FG to BG"))
-      {
-        dynamic_id = rows[i].id;
-        break;
-      }
+  /* Resolve the builtin identity, whose collection is stable in all
+   * four source sets; the display name is localized and ignored here.
+   * A short row buffer's total count must never bound an array scan. */
+  CHECK (api->resource_resolve (engine, GLIMS_RESOURCE_GRADIENT, "FG to BG",
+                                 "gimp-gradient-fg-bg-rgb", true, &dynamic_id, NULL) == GLIMS_STATUS_OK,
+         "the native FG/BG RGB gradient resolves by exact internal identity");
   CHECK (dynamic_id != 0, "a stock FG to BG gradient is listed");
 
   if (dynamic_id)
     {
       int32_t w, h;
+      GlimsColor midtone = { 0.5, 0.25, 0.75, 1 };
+      GlimsPixelBuffer mid = { 0 };
+      GlimsStatus mid_status = api->resource_thumbnail (engine, dynamic_id, 16, &midtone, &midtone, &mid, NULL);
+      CHECK (mid_status == GLIMS_STATUS_OK && mid.pixels &&
+             abs ((int) mid.pixels[0] - 128) <= 1 && abs ((int) mid.pixels[1] - 64) <= 1 &&
+             abs ((int) mid.pixels[2] - 191) <= 1 && mid.pixels[3] == 255,
+             "thumbnail foreground/background colors are sRGB midtones (%u,%u,%u)",
+             mid.pixels ? mid.pixels[0] : 0, mid.pixels ? mid.pixels[1] : 0, mid.pixels ? mid.pixels[2] : 0);
+      if (mid.pixels) api->free_pixels (mid.pixels);
 
       CHECK (api->resource_thumbnail (engine, dynamic_id, 32, &red, &blue, &a, NULL) ==
                  GLIMS_STATUS_OK &&
@@ -6167,7 +6186,8 @@ main (int argc, char **argv)
   api = get_api ? get_api (GLIMS_ENGINE_API_VERSION) : NULL;
   CHECK (api && api->api_version == GLIMS_ENGINE_API_VERSION && api->struct_size >= sizeof (GlimsEngineAPI),
          "library serves facade version %u", GLIMS_ENGINE_API_VERSION);
-  if (! api)
+  if (! api || api->api_version != GLIMS_ENGINE_API_VERSION ||
+      api->struct_size < sizeof (GlimsEngineAPI))
     return 1;
   CHECK (get_api (GLIMS_ENGINE_API_VERSION + 1) == NULL, "library refuses an unknown facade version");
 

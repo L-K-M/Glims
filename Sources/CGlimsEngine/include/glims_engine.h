@@ -1368,7 +1368,9 @@ typedef struct GlimsEngineAPI {
    * (1 ... 512). `foreground` and `background` are optional explicit
    * colors (finite components inside 0 ... 1) for previews that react
    * to them: the foreground recolors mask-only brushes, and both feed
-   * gradients with foreground/background segments. NULL uses the
+   * gradients with foreground/background segments. Native FG/BG contexts
+   * are opaque; the resource supplies alpha through its brush mask or
+   * transparent gradient stops. NULL uses the
    * engine's canonical black foreground and white background. The
    * colors apply to this call only; no user or global context is read
    * or changed. `out` receives a straight-alpha sRGB RGBA buffer of

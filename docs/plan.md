@@ -887,3 +887,19 @@ is compiled only for 3.2.0; later engines restore the saved name themselves.
 No upstream source, file metadata, dirty state or undo history changes.
 Pinned and cross-version checks plus independent review are recorded in
 the PR before merge. Frontend path controls remain a separate slice.
+
+Pinned runtime validation passes 867 native checks after one observed
+sRGB input regression: plain GEGL RGBA setters interpreted the requested
+midtone as linear and produced 188/137/225 instead of 128/64/191. Matching
+sRGB setters now preserve the facade color. The empty native clipboard
+brushes legitimately have transparent masks; the content fixture now
+recognizes their exact internal identities, while file-backed brushes
+still need content. FG/BG gradient selection now uses its exact builtin
+identity instead of scanning a short buffer with the total catalog count.
+
+A separate observed conformance-runner defect called engine functions after
+rejecting a too-small API table. The runner now exits immediately. The
+engine-free `scripts/test-conformance-abi.sh` reproduced the invalid call
+before the guard and passes after it; CI runs this regression. Initial
+independent review found no important issue; the sRGB/guard follow-up and
+cross-engine native runs are pending.

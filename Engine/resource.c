@@ -493,16 +493,16 @@ glims_resource_thumbnail (GlimsEngine       *engine,
   context  = gimp_context_new (engine->gimp, "Glims resource thumbnail", NULL);
   fg_color = gegl_color_new (NULL);
   bg_color = gegl_color_new (NULL);
-  gegl_color_set_rgba (fg_color,
+  gegl_color_set_rgba_with_space (fg_color,
                        foreground ? foreground->red   : 0.0,
                        foreground ? foreground->green : 0.0,
                        foreground ? foreground->blue  : 0.0,
-                       foreground ? foreground->alpha : 1.0);
-  gegl_color_set_rgba (bg_color,
+                       foreground ? foreground->alpha : 1.0, NULL);
+  gegl_color_set_rgba_with_space (bg_color,
                        background ? background->red   : 1.0,
                        background ? background->green : 1.0,
                        background ? background->blue  : 1.0,
-                       background ? background->alpha : 1.0);
+                       background ? background->alpha : 1.0, NULL);
   gimp_context_set_foreground (context, fg_color);
   gimp_context_set_background (context, bg_color);
 
