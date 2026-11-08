@@ -1222,6 +1222,31 @@ link/vector classes after rasterization; it now reports current editability,
 consistent with text layers. Full cross-engine rechecks and UI consent
 coverage follow before merge.
 
+### Color profile controls and consent (2026-11-08)
+
+Image > Color Profile now provides Assign and Convert sheets with a built-in
+profile or an ICC file, rendering intent and black-point compensation.
+The per-sheet captured document and settings feed counted exclusive work;
+file loading stays off the main thread. Both form and typed facade reject
+embedded NUL paths before CString conversion. An observed failing path test
+passes after that validation.
+
+Conversion first preserves editable layers. A native rasterization refusal
+opens a separate Rasterize and Convert confirmation after the engine gate
+drains. Cancel preserves the image; approval rechecks admission and performs
+conversion/rasterization as one undoable edit. The pinned interface run
+passes 758 checks including Cancel, approval, undo restoration, busy-engine
+refusal, direct facade NUL validation and late-close suppression while
+accepted input drains. All 324 unit tests pass. Independent Beam review of
+the consent delta found no important issues.
+
+In a real window the ICC source enabled its path and Choose controls;
+cancelling the file picker returned to the form. Assignment embedded the
+fixture. Conversion of newly typed text asked for rasterization; Cancel
+kept text editable, approval converted, and Undo restored the text layer
+and its embedded source profile. The test app quit with Don't Save and left
+no dialog. Cross-engine interface validation follows before merge.
+
 ### Clear color and mutation readiness (2026-11-08)
 
 Three regressions reproduced on the previous implementation: an opaque RGB
