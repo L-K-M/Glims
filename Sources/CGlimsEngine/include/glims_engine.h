@@ -876,6 +876,57 @@ typedef struct GlimsColorInfo {
   char     profile_label[256];  /* UTF-8, truncated; "" when none */
 } GlimsColorInfo;
 
+/* The palette an indexed conversion builds, as image_convert_indexed's
+ * settings name it. Facade-owned values; the engine's
+ * GimpConvertPaletteType never crosses this boundary. */
+typedef enum GlimsIndexedPalette {
+  GLIMS_INDEXED_PALETTE_GENERATED = 1,  /* quantize to the image's own
+                                         * colors, at most `max_colors` */
+  GLIMS_INDEXED_PALETTE_WEB       = 2,  /* the fixed 216-color web palette */
+  GLIMS_INDEXED_PALETTE_MONO      = 3,  /* black and white */
+  GLIMS_INDEXED_PALETTE_CUSTOM    = 4   /* the call's own `colors` list */
+} GlimsIndexedPalette;
+
+/* How an indexed conversion dithers, as image_convert_indexed's
+ * settings name it. Facade-owned values; the engine's
+ * GimpConvertDitherType never crosses this boundary. FIXED is the
+ * engine's built-in positioned (ordered) matrix. */
+typedef enum GlimsIndexedDither {
+  GLIMS_INDEXED_DITHER_NONE         = 1,
+  GLIMS_INDEXED_DITHER_FS           = 2,  /* Floyd-Steinberg */
+  GLIMS_INDEXED_DITHER_FS_LOW_BLEED = 3,  /* Floyd-Steinberg, reduced bleeding */
+  GLIMS_INDEXED_DITHER_FIXED        = 4   /* positioned/ordered matrix */
+} GlimsIndexedDither;
+
+/* What image_convert_indexed does when the image holds a genuine
+ * editable text, vector or link layer the conversion would rasterize. */
+typedef enum GlimsIndexedPreservation {
+  GLIMS_INDEXED_PRESERVE_EDITABLE = 1,  /* refuse; nothing changes */
+  GLIMS_INDEXED_ALLOW_RASTERIZE   = 2   /* rasterize them inside the
+                                         * conversion's one undo step;
+                                         * their sources are retained */
+} GlimsIndexedPreservation;
+
+/* How image_convert_indexed quantizes, validated as a whole before any
+ * mutation. `max_colors` applies only to GENERATED (2 ... 256) and is
+ * ignored otherwise. `remove_unused` asks the engine to drop unused and
+ * duplicate colormap entries; the engine honors it for WEB and CUSTOM
+ * and ignores it for GENERATED and MONO. `dither_alpha` also dithers
+ * partially transparent pixels. `dither_text` quantizes genuine text
+ * layers' pixels with dithering like any raster layer; with it false a
+ * text layer is re-rendered in indexed format and stays editable.
+ * `preservation` is a GlimsIndexedPreservation. */
+typedef struct GlimsIndexedSettings {
+  uint32_t struct_size;        /* sizeof (GlimsIndexedSettings) */
+  uint32_t palette;            /* GlimsIndexedPalette */
+  int32_t  max_colors;
+  bool     remove_unused;
+  uint32_t dither;             /* GlimsIndexedDither */
+  bool     dither_alpha;
+  bool     dither_text;
+  uint32_t preservation;       /* GlimsIndexedPreservation */
+} GlimsIndexedSettings;
+
 /* Brushes, patterns and gradients. These are the facade's own kind
  * values; the engine's own enums never cross this boundary. */
 typedef enum GlimsResourceKind {
@@ -1439,8 +1490,9 @@ typedef struct GlimsEngineAPI {
    *
    * image_convert_mode takes a GlimsColorMode and supports RGB and
    * grayscale, including from indexed; conversion TO indexed is
-   * UNSUPPORTED for now (palette and dither policy need a later slice),
-   * while an indexed image's info still reports accurately.
+   * UNSUPPORTED here — indexed needs palette and dither policy, which
+   * image_convert_indexed takes — while an indexed image's info still
+   * reports accurately.
    * image_convert_precision takes a GlimsColorComponent and a
    * GlimsColorTRC, converts with no dithering, and supports the
    * combinations the engine accepts: every component/TRC pair for RGB
@@ -1768,6 +1820,47 @@ typedef struct GlimsEngineAPI {
    * nothing is selected. */
   GlimsStatus  (*layer_source_info)     (GlimsEngine *engine, GlimsImageID image,
                                          GlimsItemID layer, GlimsLayerSourceInfo *out,
+                                         char **error);
+
+  /* Converts the whole image to indexed color as exactly one native
+   * undo step ("Convert Image to Indexed"; the core's
+   * gimp_image_convert_indexed, app/core/gimpimage-convert-indexed.c),
+   * with `settings` (a GlimsIndexedSettings) deciding the palette, the
+   * dithering and the editable-layer policy. For
+   * GLIMS_INDEXED_PALETTE_CUSTOM, `colors`/`color_count` name the
+   * caller-owned palette: 1 ... 256 opaque sRGB colors, read only
+   * during this synchronous call and never retained. `colors` is
+   * ignored — and may be NULL — for every other palette mode.
+   *
+   * An already indexed image is a no-op that pushes no undo (the core
+   * refuses it). The source must hold 8-bit non-linear precision
+   * exactly — the only precision indexed images allow — and a flat
+   * layer stack: anything else is UNSUPPORTED without a mutation, the
+   * same gates the engine's own image menu and PDB invoker apply.
+   * With GLIMS_INDEXED_PRESERVE_EDITABLE, a genuine editable vector or
+   * link layer (the quantize path always rasterizes them) or a genuine
+   * editable text layer while `dither_text` is on answers
+   * REQUIRES_RASTERIZE before anything changes; the caller can obtain
+   * consent and retry with GLIMS_INDEXED_ALLOW_RASTERIZE, which keeps
+   * the structured sources (a retained GimpText, the path, the link)
+   * inside the same single undo step. With `dither_text` off a text
+   * layer stays editable under both policies.
+   *
+   * Everything is validated before any mutation: INVALID_ARGUMENT for
+   * missing or short settings, an unknown palette, dither or
+   * preservation value, `max_colors` outside 2 ... 256 for GENERATED, a
+   * missing or empty `colors` list or one over 256 entries for CUSTOM,
+   * or a non-finite, out-of-range or non-opaque palette color;
+   * NOT_FOUND for an unknown image; UNSUPPORTED for a non-u8-non-linear
+   * precision or a layer stack containing a group; REQUIRES_RASTERIZE
+   * under the preservation rules above; BUSY while a stroke, a filter
+   * session or a plug-in holds the image; FAILED with `error` when the
+   * core reports one. Refusals change no pixels and push no undo; undo
+   * of a successful call restores the RGB or grayscale pixels, the
+   * color mode and every layer's structured kind. */
+  GlimsStatus  (*image_convert_indexed) (GlimsEngine *engine, GlimsImageID image,
+                                         const GlimsIndexedSettings *settings,
+                                         const GlimsColor *colors, int32_t color_count,
                                          char **error);
 } GlimsEngineAPI;
 

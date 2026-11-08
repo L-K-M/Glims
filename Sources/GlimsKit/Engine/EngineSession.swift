@@ -432,7 +432,7 @@ final class EngineSession: @unchecked Sendable {
     }
 
     func clearPixels(_ image: Int32, background: NSColor) throws {
-        var color = Self.color(background)
+        var color = try Self.color(background)
         var error: UnsafeMutablePointer<CChar>?
         try check(api.image_clear(engine, image, &color, &error), error)
     }
@@ -914,7 +914,7 @@ final class EngineSession: @unchecked Sendable {
             copy(text, into: &raw.string)
         case .color(let color):
             raw.kind = GLIMS_FILTER_VALUE_COLOR.rawValue
-            raw.color = Self.color(color)
+            raw.color = try Self.color(color)
         }
         return raw
     }
@@ -991,7 +991,7 @@ final class EngineSession: @unchecked Sendable {
     func fill(image: Int32, at point: CGPoint, mode: FillMode, color: NSColor, opacity: Double = 1,
               threshold: Double = 15.0 / 255.0, sampleMerged: Bool = false) throws {
         var settings = GlimsFillSettings(struct_size: UInt32(MemoryLayout<GlimsFillSettings>.size),
-                                         mode: mode.rawValue, color: Self.color(color), opacity: opacity,
+                                         mode: mode.rawValue, color: try Self.color(color), opacity: opacity,
                                          threshold: threshold, sample_merged: sampleMerged, antialias: true)
         var error: UnsafeMutablePointer<CChar>?
         try check(api.fill(engine, image, GlimsPoint(x: point.x, y: point.y), &settings, &error), error)
@@ -1019,8 +1019,8 @@ final class EngineSession: @unchecked Sendable {
     func gradient(image: Int32, from: CGPoint, to: CGPoint, shape: GradientShape,
                   fromColor: NSColor, toColor: NSColor, opacity: Double = 1) throws {
         var settings = GlimsGradientSettings(struct_size: UInt32(MemoryLayout<GlimsGradientSettings>.size),
-                                             shape: shape.rawValue, from: Self.color(fromColor),
-                                             to: Self.color(toColor), opacity: opacity)
+                                             shape: shape.rawValue, from: try Self.color(fromColor),
+                                             to: try Self.color(toColor), opacity: opacity)
         var error: UnsafeMutablePointer<CChar>?
         try check(api.gradient(engine, image, GlimsPoint(x: from.x, y: from.y), GlimsPoint(x: to.x, y: to.y),
                                &settings, &error), error)
@@ -1038,8 +1038,8 @@ final class EngineSession: @unchecked Sendable {
         var values = GlimsResourceGradientSettings(
             struct_size: UInt32(MemoryLayout<GlimsResourceGradientSettings>.size),
             shape: settings.shape.rawValue,
-            foreground: Self.color(settings.foreground),
-            background: Self.color(settings.background),
+            foreground: try Self.color(settings.foreground),
+            background: try Self.color(settings.background),
             opacity: settings.opacity, reverse: settings.reverse,
             blend_space: settings.blendSpace.rawValue)
         var error: UnsafeMutablePointer<CChar>?
@@ -1503,7 +1503,7 @@ final class EngineSession: @unchecked Sendable {
         }
         if let color = change.color {
             settings.properties |= GLIMS_CHANNEL_COLOR.rawValue
-            settings.color = Self.color(color)
+            settings.color = try Self.color(color)
         }
         var error: UnsafeMutablePointer<CChar>?
         try check(api.channel_change(engine, image, channel, &settings, &error), error)
@@ -1540,8 +1540,8 @@ final class EngineSession: @unchecked Sendable {
 
     /// The image's color model, as `colorInfo` reports it and
     /// `convertMode` takes (GlimsColorMode). Conversion to `.indexed`
-    /// is not implemented yet — palette and dither policy are a later
-    /// slice — but an indexed image's info still reports `.indexed`.
+    /// goes through `convertToIndexed`, which takes palette and dither
+    /// settings; an indexed image's info still reports `.indexed`.
     enum ColorMode: UInt32 {
         case unknown = 0, rgb = 1, grayscale = 2, indexed = 3
 
@@ -1622,8 +1622,9 @@ final class EngineSession: @unchecked Sendable {
 
     /// Image ▸ Mode ▸ …: the whole image's color model as one undo
     /// step (image_convert_mode). A no-op changes nothing and pushes no
-    /// undo; converting to `.indexed` is UNSUPPORTED for now; BUSY while
-    /// a stroke, a preview or a plug-in holds the image.
+    /// undo; converting to `.indexed` stays UNSUPPORTED here — use
+    /// `convertToIndexed`; BUSY while a stroke, a preview or a plug-in
+    /// holds the image.
     func convertMode(_ image: Int32, to mode: ColorMode) throws {
         var error: UnsafeMutablePointer<CChar>?
         try check(api.image_convert_mode(engine, image, mode.rawValue, &error), error)
@@ -1712,6 +1713,100 @@ final class EngineSession: @unchecked Sendable {
         }
     }
 
+    /// The palette an indexed conversion builds (GlimsIndexedPalette):
+    /// the facade's own values, never the engine's enum.
+    enum IndexedPalette: UInt32 {
+        /// Quantize to the image's own colors, at most `maxColors`.
+        case generated = 1
+        /// The fixed 216-color web palette.
+        case web = 2
+        /// Black and white.
+        case mono = 3
+        /// The call's own `customColors` list.
+        case custom = 4
+    }
+
+    /// How an indexed conversion dithers (GlimsIndexedDither).
+    enum IndexedDither: UInt32 {
+        case none = 1
+        case floydSteinberg = 2
+        /// Floyd-Steinberg, reduced color bleeding.
+        case floydSteinbergLowBleed = 3
+        /// The engine's built-in positioned/ordered matrix.
+        case fixed = 4
+    }
+
+    /// What `convertToIndexed` does when the image holds a genuine
+    /// editable text, vector or link layer the conversion would
+    /// rasterize (GlimsIndexedPreservation).
+    enum IndexedPreservation: UInt32 {
+        /// Refuse; nothing changes.
+        case preserveEditable = 1
+        /// Rasterize them inside the conversion's one undo step; their
+        /// structured sources are retained and restored by undo.
+        case allowRasterize = 2
+    }
+
+    /// How `convertToIndexed` quantizes (GlimsIndexedSettings).
+    /// `maxColors` applies only to `.generated` (2 ... 256).
+    /// `removeUnused` drops unused and duplicate colormap entries; the
+    /// engine honors it for `.web` and `.custom` and ignores it
+    /// otherwise. `ditherText` quantizes text layers' pixels like a
+    /// raster layer; with it off a text layer is re-rendered and stays
+    /// editable. `customColors` is the `.custom` palette: 1 ... 256
+    /// colors; the engine keeps opaque colors only, so non-opaque
+    /// entries are refused.
+    struct IndexedSettings: Equatable {
+        var palette: IndexedPalette = .generated
+        var maxColors: Int32 = 256
+        var removeUnused = true
+        var dither: IndexedDither = .none
+        var ditherAlpha = false
+        var ditherText = false
+        var preservation: IndexedPreservation = .preserveEditable
+        var customColors: [NSColor] = []
+    }
+
+    /// Converts the whole image to indexed color as exactly one undo
+    /// step (image_convert_indexed). An already indexed image is a
+    /// no-op. `.preserveEditable` (the default) reports
+    /// `EngineError.requiresRasterization` when the image holds a
+    /// genuine editable vector or link layer, or a genuine editable
+    /// text layer while `ditherText` is on; retry with
+    /// `.allowRasterize` after consent. Throws UNSUPPORTED for a
+    /// non-8-bit-non-linear precision or a layer stack containing a
+    /// group, BUSY while a stroke, a preview or a plug-in holds the
+    /// image, and INVALID_ARGUMENT for invalid settings.
+    func convertToIndexed(_ image: Int32, settings: IndexedSettings) throws {
+        var values = GlimsIndexedSettings(
+            struct_size: UInt32(MemoryLayout<GlimsIndexedSettings>.size),
+            palette: settings.palette.rawValue,
+            max_colors: settings.maxColors,
+            remove_unused: settings.removeUnused,
+            dither: settings.dither.rawValue,
+            dither_alpha: settings.ditherAlpha,
+            dither_text: settings.ditherText,
+            preservation: settings.preservation.rawValue)
+        let colors: [GlimsColor]
+        if settings.palette == .custom {
+            guard (1...256).contains(settings.customColors.count) else {
+                throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                                  message: "A custom palette needs from 1 to 256 colors.")
+            }
+            colors = try settings.customColors.map(Self.color)
+        } else {
+            colors = []
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        // The buffer covers the complete synchronous C call; an empty
+        // list passes a NULL base address, valid for non-custom modes.
+        try colors.withUnsafeBufferPointer { buffer in
+            try check(api.image_convert_indexed(engine, image, &values,
+                                                buffer.baseAddress, Int32(buffer.count), &error),
+                      error)
+        }
+    }
+
     // MARK: Text
 
     /// The font names text settings take, sorted.
@@ -1724,7 +1819,7 @@ final class EngineSession: @unchecked Sendable {
 
     /// Adds a text layer with its top-left at `position`; returns it.
     func addTextLayer(image: Int32, text: String, settings: TextSettings, at position: CGPoint) throws -> Int32 {
-        var values = Self.textSettings(settings)
+        var values = try Self.textSettings(settings)
         var layer: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
         try check(api.text_layer_new(engine, image, text, &values, GlimsPoint(x: position.x, y: position.y),
@@ -1751,19 +1846,19 @@ final class EngineSession: @unchecked Sendable {
     /// Nil text keeps the text; nil settings keep the look.
     func setTextLayer(image: Int32, layer: Int32, text: String?, settings: TextSettings?) throws {
         var error: UnsafeMutablePointer<CChar>?
-        if var values = settings.map(Self.textSettings) {
+        if var values = try settings.map(Self.textSettings) {
             try check(api.text_layer_set(engine, image, layer, text, &values, &error), error)
         } else {
             try check(api.text_layer_set(engine, image, layer, text, nil, &error), error)
         }
     }
 
-    private static func textSettings(_ settings: TextSettings) -> GlimsTextSettings {
+    private static func textSettings(_ settings: TextSettings) throws -> GlimsTextSettings {
         var values = GlimsTextSettings()
         values.struct_size = UInt32(MemoryLayout<GlimsTextSettings>.size)
         copy(settings.font, into: &values.font)
         values.size = settings.size
-        values.color = color(settings.color)
+        values.color = try color(settings.color)
         values.justify = settings.justify.rawValue
         values.line_spacing = settings.lineSpacing
         values.letter_spacing = settings.letterSpacing
@@ -1880,7 +1975,7 @@ final class EngineSession: @unchecked Sendable {
     /// Draws the path on `layer` (nil: the selected layer).
     func strokePath(_ path: Int32, image: Int32, layer: Int32? = nil, settings: LineSettings) throws {
         var values = GlimsLineSettings(struct_size: UInt32(MemoryLayout<GlimsLineSettings>.size),
-                                       width: settings.width, color: Self.color(settings.color),
+                                       width: settings.width, color: try Self.color(settings.color),
                                        antialias: settings.antialias)
         var error: UnsafeMutablePointer<CChar>?
         try check(api.path_stroke(engine, image, path, layer ?? 0, &values, &error), error)
@@ -1893,7 +1988,7 @@ final class EngineSession: @unchecked Sendable {
     /// target is refused. The engine revalidates the path and the target.
     func fillPath(_ path: Int32, image: Int32, drawable: Int32, settings: PathFillSettings) throws {
         var values = GlimsPathFillSettings(struct_size: UInt32(MemoryLayout<GlimsPathFillSettings>.size),
-                                           color: Self.color(settings.color), opacity: settings.opacity,
+                                           color: try Self.color(settings.color), opacity: settings.opacity,
                                            antialias: settings.antialias)
         var error: UnsafeMutablePointer<CChar>?
         try check(api.path_fill(engine, image, path, drawable, &values, &error), error)
@@ -2021,10 +2116,10 @@ final class EngineSession: @unchecked Sendable {
             struct_size: UInt32(MemoryLayout<GlimsVectorStyleChange>.size),
             properties: change.properties.rawValue,
             enable_fill: change.fillEnabled,
-            fill_color: Self.color(change.fillColor),
+            fill_color: try Self.color(change.fillColor),
             fill_antialias: change.fillAntialias,
             enable_stroke: change.strokeEnabled,
-            stroke_color: Self.color(change.strokeColor),
+            stroke_color: try Self.color(change.strokeColor),
             stroke_antialias: change.strokeAntialias,
             stroke_width: change.strokeWidth,
             stroke_cap: change.strokeCap.rawValue,
@@ -2065,16 +2160,25 @@ final class EngineSession: @unchecked Sendable {
     }
 
     func resizeCanvas(_ image: Int32, width: Int, height: Int, offset: CGPoint, fill: NSColor) throws {
-        var color = Self.color(fill)
+        var color = try Self.color(fill)
         var error: UnsafeMutablePointer<CChar>?
         try check(api.image_resize_canvas(engine, image, Int32(width), Int32(height),
                                           Int32(offset.x), Int32(offset.y), &color, &error), error)
     }
 
-    private static func color(_ color: NSColor) -> GlimsColor {
-        let rgb = color.usingColorSpace(.sRGB) ?? .black
-        return GlimsColor(red: Double(rgb.redComponent), green: Double(rgb.greenComponent),
-                          blue: Double(rgb.blueComponent), alpha: Double(rgb.alphaComponent))
+    private static func color(_ color: NSColor) throws -> GlimsColor {
+        guard let rgb = color.usingColorSpace(.sRGB) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a solid color that can be converted to sRGB.")
+        }
+        let components = [Double(rgb.redComponent), Double(rgb.greenComponent),
+                          Double(rgb.blueComponent), Double(rgb.alphaComponent)]
+        guard components.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Color components must be finite and between 0 and 1.")
+        }
+        return GlimsColor(red: components[0], green: components[1],
+                          blue: components[2], alpha: components[3])
     }
 
     /// Copies a string into a fixed-size C char array, truncated on a UTF-8
@@ -2282,8 +2386,8 @@ final class EngineSession: @unchecked Sendable {
         // The native buffer is owned from the call on, so it is freed on
         // every path, validation and CGImage-construction failures too.
         defer { api.free_pixels(output.pixels) }
-        let foregroundColor = foreground.map { Self.color($0) }
-        let backgroundColor = background.map { Self.color($0) }
+        let foregroundColor = try foreground.map(Self.color)
+        let backgroundColor = try background.map(Self.color)
         let status = withOptionalPointer(foregroundColor) { foreground in
             withOptionalPointer(backgroundColor) { background in
                 api.resource_thumbnail(engine, id, maxSize, foreground, background, &output, &error)
