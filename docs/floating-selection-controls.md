@@ -91,3 +91,15 @@ Not run (out of scope for this slice): `swift test`, the
 `--engine-smoke-test` runtime (including `GLIMS_SMOKE_CASE=floating-controls`),
 adapter/conformance builds, GUI/desktop runs. The smoke case and tests
 compile only; root owns the runtime matrix.
+
+## Root acceptance checkpoint
+
+The first interface run exposed fixture assumptions, not native mutation:
+selection_outline follows the active floating boundary; drawable thumbnails
+include applied effects and the floating preview; To Layer preserves the
+existing floating layer ID and row count. The fixture now compares selection
+mask bounds, verifies the untouched target after Undo/Discard, and checks
+successful conversion of that same row. The focused pinned run passes after
+these corrections. The general clipboard is preserved and restored around
+the private test payload. Nine pure policy tests also pass. Final parent
+integration and four-engine/full runs remain pending.

@@ -9299,8 +9299,21 @@ enum EngineSmokeTest {
         let board = NSPasteboard.withUniqueName()
         defer { board.releaseGlobally() }
         try red.write(to: board)
+        let savedItems = (NSPasteboard.general.pasteboardItems ?? []).map { item in
+            item.types.compactMap { type -> (NSPasteboard.PasteboardType, Data)? in
+                item.data(forType: type).map { (type, $0) }
+            }
+        }
+        defer {
+            NSPasteboard.general.clearContents()
+            let restored = savedItems.map { values in
+                let item = NSPasteboardItem()
+                for (type, data) in values { item.setData(data, forType: type) }
+                return item
+            }
+            if !restored.isEmpty { NSPasteboard.general.writeObjects(restored) }
+        }
         try red.write(to: .general)
-        defer { NSPasteboard.general.clearContents() }
 
         guard let layerA = documentA.activeLayer else {
             check(false, "document A has a layer to paste into")
@@ -9312,7 +9325,8 @@ enum EngineSmokeTest {
         settle(documentA)
         let outlineBefore = try session.selectionOutline(image: imageA)
         check(!outlineBefore.isEmpty, "document A has a selection to paste into")
-        let targetThumbBefore = (try? session.drawableThumbnail(layerA, image: imageA, maxSize: 64))?.dataProvider?.data as Data?
+        let selectionBefore = try session.selectionBounds(image: imageA)
+        let targetPixelsBefore = try session.copyPixels(imageA, merged: true).pixels
 
         // The real menu item, validated against cached state, then sent
         // to A's controller while B is front.
@@ -9335,14 +9349,13 @@ enum EngineSmokeTest {
         check(documentA.floatingState == stateA, "the document cache refreshes to the native floating state")
         check((try? session.floatingSelection(imageB))?.isActive == false,
               "document B, frontmost, keeps no floating selection (two-document capture)")
-        check(try session.selectionOutline(image: imageA) == outlineBefore,
-              "Paste Into leaves the selection unchanged")
+        check(try session.selectionBounds(image: imageA) == selectionBefore,
+              "Paste Into leaves the selection mask bounds unchanged")
         check((pixel(session, imageA, x: 12, y: 12)?[1] ?? 255) == 0,
               "the floating preview is clipped to the selection in the composite (inside red)")
         check((pixel(session, imageA, x: 7, y: 7)?[1] ?? 0) == 255,
               "pixels outside the selection are untouched by the clipped preview")
-        check((try? session.drawableThumbnail(layerA, image: imageA, maxSize: 64))?.dataProvider?.data as Data? == targetThumbBefore,
-              "the target layer's own pixels are unchanged until the floating selection resolves")
+
         check(pasteIntoItem.map { controllerA.validateMenuItem($0) } == false
                 && pasteItem.map { controllerA.validateMenuItem($0) } == false,
               "while floating is active the menu disables Paste Into and ordinary Paste (resolve-first)")
@@ -9360,6 +9373,8 @@ enum EngineSmokeTest {
         settle(documentA)
         check(documentA.floatingState == (try? session.floatingSelection(imageA)),
               "Undo refreshes the cached floating state to the native oracle")
+        check(try session.copyPixels(imageA, merged: true).pixels == targetPixelsBefore,
+              "Undo of Paste Into restores the untouched target pixels")
         documentA.redo()
         settle(documentA)
         let stateAfterRedo = try session.floatingSelection(imageA)
@@ -9378,8 +9393,16 @@ enum EngineSmokeTest {
         documentA.endStroke()
         settle(documentA)
         check(documentA.undoInfo.undoCount == undoBeforeStroke + 1
-                && (try? session.drawableThumbnail(layerA, image: imageA, maxSize: 64))?.dataProvider?.data as Data? == targetThumbBefore,
-              "a stroke accepted while floating paints the floating layer, not the target, as one undo step")
+                && (pixel(session, imageA, x: 12, y: 12)?[0] ?? 255) < 30,
+              "a stroke accepted while floating paints the floating layer as one undo step")
+        documentA.resolveFloatingSelection(.discard) { _ in }
+        settle(documentA)
+        check(try session.copyPixels(imageA, merged: true).pixels == targetPixelsBefore,
+              "discarding the painted floating layer reveals the untouched target")
+        documentA.undo()
+        settle(documentA)
+        check(documentA.floatingState.floating == stateAfterRedo.floating,
+              "Undo of Discard restores the painted floating layer with the same identity")
 
         // New Layer (toLayer) on a layer attachment: allowed, and it
         // reveals the full pasted payload beyond the selection clipping.
@@ -9387,7 +9410,10 @@ enum EngineSmokeTest {
         var toLayerResult: Result<Void, Error>?
         documentA.resolveFloatingSelection(.toLayer) { toLayerResult = $0 }
         settle(documentA)
-        check(toLayerResult != nil && documentA.layers.count == layersBeforeToLayer + 1
+        let toLayerSucceeded: Bool
+        if case .success = toLayerResult { toLayerSucceeded = true } else { toLayerSucceeded = false }
+        check(toLayerSucceeded && documentA.layers.count == layersBeforeToLayer
+                && documentA.layers.contains(where: { $0.id == stateAfterRedo.floating })
                 && (try? session.floatingSelection(imageA))?.isActive == false,
               "New Layer resolves the floating selection into an independent layer")
         check((pixel(session, imageA, x: 7, y: 7)?[1] ?? 255) == 0,
