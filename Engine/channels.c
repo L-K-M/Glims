@@ -178,6 +178,29 @@ glims_image_set_components (GlimsEngine  *engine,
 
 /* ---- Channels --------------------------------------------------------- */
 
+/* The engine locates the Quick Mask's channel by the reserved name
+ * GIMP_IMAGE_QUICK_MASK_NAME, not by identity: adding a channel under
+ * it, or renaming a channel to or from it, toggles the mask through the
+ * container's add/remove/name-changed handlers (app/core/gimpimage.c).
+ * `name` is reported after the same normalization the engine applies to
+ * renames and adds — trailing whitespace is chomped by
+ * gimp_item_tree_uniquefy_name. */
+static gboolean
+quick_mask_name (const char *name)
+{
+  gchar   *copy;
+  gboolean matches;
+
+  if (! name)
+    return FALSE;
+
+  copy    = g_strchomp (g_strdup (name));
+  matches = g_strcmp0 (copy, GIMP_IMAGE_QUICK_MASK_NAME) == 0;
+  g_free (copy);
+
+  return matches;
+}
+
 GlimsStatus
 glims_image_channels (GlimsEngine      *engine,
                       GlimsImageID      id,
@@ -244,6 +267,17 @@ glims_channel_from_selection (GlimsEngine  *engine,
   if (status != GLIMS_STATUS_OK)
     return status;
 
+  /* A channel created under the reserved name would be adopted as the
+   * live mask by the container's add handler — toggling the mask on
+   * without a lifecycle and consuming the channel when it turns off.
+   * Refuse it before any mutation. */
+  if (quick_mask_name (name))
+    {
+      glims_fail (error, NULL,
+                  "The Quick Mask's channel name is reserved.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
   /* Select > Save to Channel (select_save_cmd_callback): a copy of the
    * selection mask, invisible by default, added with undo. */
   channel = GIMP_CHANNEL (gimp_item_duplicate (GIMP_ITEM (gimp_image_get_mask (open->image)),
@@ -295,6 +329,34 @@ glims_channel_change (GlimsEngine              *engine,
   if (! channel)
     return GLIMS_STATUS_NOT_FOUND;
 
+  /* The name decides which channel is the Quick Mask's, so renaming
+   * across it is a lifecycle change, not an attribute edit: an ordinary
+   * channel renamed to it would be adopted (and consumed on exit); the
+   * live mask's channel renamed away would strand the mode — the
+   * name-changed handler turns the mask off without the toggle's
+   * selection conversion. Renaming the mask to its own name stays a
+   * no-op; renaming a legacy channel away from the name while the mask
+   * is off stays allowed. */
+  if (change->properties & GLIMS_CHANNEL_NAME)
+    {
+      if (gimp_image_get_quick_mask_state (open->image) &&
+          channel == gimp_image_get_quick_mask (open->image))
+        {
+          if (! quick_mask_name (change->name))
+            {
+              glims_fail (error, NULL,
+                          "The Quick Mask's channel keeps its reserved name.");
+              return GLIMS_STATUS_INVALID_ARGUMENT;
+            }
+        }
+      else if (quick_mask_name (change->name))
+        {
+          glims_fail (error, NULL,
+                      "The Quick Mask's channel name is reserved.");
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        }
+    }
+
   /* The dock's attribute edits (channels_edit_attributes_cmd_callback):
    * each native setter pushes its own undo. */
   if ((change->properties & GLIMS_CHANNEL_NAME) &&
@@ -317,17 +379,6 @@ glims_channel_change (GlimsEngine              *engine,
     }
   if (change->properties & GLIMS_CHANNEL_OPACITY)
     gimp_channel_set_opacity (channel, CLAMP (change->opacity, 0.0, 1.0), TRUE);
-
-  /* A visibility change reaches the projection through the drawable
-   * stack's active-changed handler, but color and opacity changes only
-   * update the engine's Quick Mask bookkeeping — the projection keeps
-   * showing the old composite (in GIMP the display marks the region).
-   * Invalidate the canvas — channels are image-sized — so a render
-   * right after sees the overlay. */
-  if (change->properties & (GLIMS_CHANNEL_VISIBLE | GLIMS_CHANNEL_COLOR | GLIMS_CHANNEL_OPACITY))
-    gimp_image_invalidate (open->image, 0, 0,
-                           gimp_image_get_width (open->image),
-                           gimp_image_get_height (open->image));
 
   gimp_image_flush (open->image);
 
@@ -500,6 +551,19 @@ glims_image_set_quick_mask (GlimsEngine  *engine,
   status = glims_edit_ready (engine, open, error);
   if (status != GLIMS_STATUS_OK)
     return status;
+
+  /* A channel already holding the reserved name while the mask is off
+   * would make the toggle adopt it, and the exit consume it. The name
+   * guards keep that state unreachable through the facade; refuse it if
+   * it ever arrives anyway — the channel can still be renamed away or
+   * deleted while the mask is off. */
+  if (enabled && ! gimp_image_get_quick_mask_state (open->image) &&
+      gimp_image_get_channel_by_name (open->image, GIMP_IMAGE_QUICK_MASK_NAME))
+    {
+      glims_fail (error, NULL,
+                  "A channel already holds the Quick Mask's reserved name.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
 
   /* The Quick Mask button (image_quick_mask_cmd_callback). The engine
    * moves the selection into the mask's channel or back, swaps the edit

@@ -575,8 +575,8 @@ typedef struct GlimsChannelInfo {
   bool        selected;    /* a selected channel is the edit target,
                             * in preference to the selected layers */
   bool        quick_mask;  /* the Quick Mask's own channel */
-  double      opacity;     /* overlay opacity, 0 ... 1 */
-  GlimsColor  color;       /* overlay color */
+  double      opacity;     /* overlay opacity, 0 ... 1 — the color's alpha */
+  GlimsColor  color;       /* overlay color; its alpha IS `opacity` */
 } GlimsChannelInfo;
 
 /* Which fields of GlimsChannelChange apply. */
@@ -664,8 +664,15 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*stroke_end)       (GlimsEngine *engine, GlimsStrokeID stroke);
 
   /* A live filter session: the filter previews while it is open. Commit
-   * adds it to the layer as one non-destructive undo step; abort leaves
-   * no trace. Layers only: channels and masks report INVALID_ARGUMENT. */
+   * applies it as one undo step; abort leaves no trace. `drawable` may
+   * be a layer, a layer mask, a saved channel or the Quick Mask's
+   * channel; the image's selection mask reports INVALID_ARGUMENT.
+   * Commit keeps the filter on the drawable non-destructively where XCF
+   * keeps such filters — layers, and saved channels on GIMP 3.2.6+,
+   * whose XCF writer serializes channel effects — and merges it into
+   * the pixels elsewhere: layer masks, the Quick Mask's channel, and
+   * saved channels on earlier engines. Either way the result is one
+   * undo step and survives save and reopen. */
   GlimsStatus  (*filter_begin)     (GlimsEngine *engine, GlimsImageID image,
                                     GlimsItemID drawable, const char *operation,
                                     GlimsFilterID *filter, char **error);
@@ -998,11 +1005,17 @@ typedef struct GlimsEngineAPI {
                                         int32_t *count);
   /* Saves the current selection as a new channel (Select > Save to
    * Channel): invisible by default, selected, one undo step. `name` may
-   * be NULL or empty for the engine's default. */
+   * be NULL or empty for the engine's default. The Quick Mask's channel
+   * name is reserved — it is how the engine finds the mask — and is
+   * INVALID_ARGUMENT here, after the engine's own normalization. */
   GlimsStatus  (*channel_from_selection)(GlimsEngine *engine, GlimsImageID image,
                                          const char *name, GlimsItemID *result, char **error);
   /* Changes a channel's name, visibility or overlay style; each applied
-   * property is its own undo step. */
+   * property is its own undo step. `color`'s alpha is the same overlay
+   * opacity `opacity` sets: COLOR without OPACITY changes the opacity
+   * through it, and OPACITY wins when both bits are set. The Quick
+   * Mask's reserved channel name is refused for ordinary channels, and
+   * renaming the mask's own channel is refused while the mask is on. */
   GlimsStatus  (*channel_change)       (GlimsEngine *engine, GlimsImageID image,
                                         GlimsItemID channel, const GlimsChannelChange *change,
                                         char **error);

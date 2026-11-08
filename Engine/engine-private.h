@@ -70,13 +70,16 @@ typedef struct
 } GlimsOpenImage;
 
 /* A live filter session, owned by `filters` until commit or abort.
- * filter-properties.c reads its members too. */
+ * filter-properties.c reads its members too. `non_destructive` is how
+ * commit leaves the drawable — the filter on its stack, or merged into
+ * its pixels. */
 typedef struct
 {
   GimpImage          *image;
   GimpDrawable       *drawable;
   GeglNode           *operation;
   GimpDrawableFilter *filter;
+  gboolean            non_destructive;
 } GlimsFilter;
 
 typedef GlimsStatus (*GlimsEngineFunc) (GlimsEngine *engine, gpointer data);
