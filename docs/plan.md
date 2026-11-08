@@ -1158,3 +1158,10 @@ Swift build, 308 unit tests, complete pinned interface smoke and older-table
 ABI refusal regression pass. Native preview and Swift ownership reviews
 found no important issues. Native context colors remain opaque; resource
 alpha is preserved in the straight-alpha output.
+
+Final integrated native vector style runs pass 979 checks on 3.2.8, 3.2.0
+and master, and 884 on 3.0.8. The preserved ICC/load guard fixes keep imported
+paths in their destination and retain raster edits; style changes keep
+fractional float32 XCF width/miter values and avoid empty undo on reapplying
+the displayed values. Native style colors stay opaque sRGB. The sheet is a
+separate interface slice, with independent wrapper/runtime verification.
