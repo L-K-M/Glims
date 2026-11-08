@@ -1858,3 +1858,13 @@ undo/redo, unchanged pixels/selection/bounds, XCF, lock and busy assertions
 now pass. The compiled `layer-source` interface scenario additionally
 checks queued document cache refresh and busy admission; its runtime
 execution and the unit suite are pending the shared desktop.
+
+Guide field refresh regression: undoing a selected guide's move updated
+the list but left its idle position field stale because reselecting the
+same table row does not notify its delegate. The new actual-sheet check
+failed before the fix. Reload now synchronizes the selected guide's input
+fields explicitly while preserving an active text edit. Both Undo/Redo
+field checks and the existing active-edit preservation check pass on the
+pinned engine (30 focused checks). Before this fix, the source-cache
+integration passed 399 unit tests, all-four-engine guide checks and 971
+full pinned interface checks. Follow-up review and matrix are running.
