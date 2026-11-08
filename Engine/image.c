@@ -94,6 +94,7 @@ undo_event (GimpImage      *image,
   open->history_revision++;
   glims_emit (open->engine, GLIMS_EVENT_UNDO_CHANGED, image, NULL, NULL);
   glims_emit (open->engine, GLIMS_EVENT_LAYERS_CHANGED, image, NULL, NULL);
+  glims_emit (open->engine, GLIMS_EVENT_CHANNELS_CHANGED, image, NULL, NULL);
 }
 
 static void
@@ -118,6 +119,22 @@ mask_changed (GimpImage      *image,
   glims_emit (open->engine, GLIMS_EVENT_SELECTION_CHANGED, image, NULL, NULL);
 }
 
+static void
+channels_changed (GimpImage      *image,
+                  GlimsOpenImage *open)
+{
+  glims_emit (open->engine, GLIMS_EVENT_CHANNELS_CHANGED, image, NULL, NULL);
+}
+
+/* "component-*-changed" carries the component between image and user data. */
+static void
+component_changed (GimpImage       *image,
+                   GimpChannelType  type,
+                   GlimsOpenImage  *open)
+{
+  glims_emit (open->engine, GLIMS_EVENT_CHANNELS_CHANGED, image, NULL, NULL);
+}
+
 GlimsStatus
 glims_adopt_image (GlimsEngine  *engine,
                    GimpImage    *image,
@@ -139,6 +156,14 @@ glims_adopt_image (GlimsEngine  *engine,
     g_signal_connect (image, "mask-changed", G_CALLBACK (mask_changed), open);
   open->size_changed_handler =
     g_signal_connect (image, "size-changed", G_CALLBACK (size_changed), open);
+  open->channels_changed_handler =
+    g_signal_connect (image, "selected-channels-changed", G_CALLBACK (channels_changed), open);
+  open->component_active_handler =
+    g_signal_connect (image, "component-active-changed", G_CALLBACK (component_changed), open);
+  open->component_visible_handler =
+    g_signal_connect (image, "component-visibility-changed", G_CALLBACK (component_changed), open);
+  open->quick_mask_changed_handler =
+    g_signal_connect (image, "quick-mask-changed", G_CALLBACK (channels_changed), open);
 
   g_hash_table_insert (engine->images, GINT_TO_POINTER (gimp_image_get_id (image)), open);
 

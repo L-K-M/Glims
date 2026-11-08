@@ -62,17 +62,24 @@ typedef struct
   gulong     layers_changed_handler;
   gulong     mask_changed_handler;
   gulong     size_changed_handler;
+  gulong     channels_changed_handler;
+  gulong     component_active_handler;
+  gulong     component_visible_handler;
+  gulong     quick_mask_changed_handler;
   guint64    history_revision;
 } GlimsOpenImage;
 
 /* A live filter session, owned by `filters` until commit or abort.
- * filter-properties.c reads its members too. */
+ * filter-properties.c reads its members too. `non_destructive` is how
+ * commit leaves the drawable — the filter on its stack, or merged into
+ * its pixels. */
 typedef struct
 {
   GimpImage          *image;
   GimpDrawable       *drawable;
   GeglNode           *operation;
   GimpDrawableFilter *filter;
+  gboolean            non_destructive;
 } GlimsFilter;
 
 typedef GlimsStatus (*GlimsEngineFunc) (GlimsEngine *engine, gpointer data);
@@ -166,6 +173,28 @@ GlimsStatus glims_layer_mask_to_selection (GlimsEngine *e, GlimsImageID image, G
 GlimsStatus glims_drawable_thumbnail (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
                                       int32_t max_size, uint8_t *pixels, size_t byte_count,
                                       int32_t *width, int32_t *height);
+
+/* channels.c */
+GlimsStatus glims_image_components (GlimsEngine *e, GlimsImageID image,
+                                    GlimsComponentState *state);
+GlimsStatus glims_image_set_components (GlimsEngine *e, GlimsImageID image,
+                                        uint32_t active_mask, uint32_t active_values,
+                                        uint32_t visible_mask, uint32_t visible_values,
+                                        char **error);
+GlimsStatus glims_image_channels (GlimsEngine *e, GlimsImageID image,
+                                  GlimsChannelInfo *rows, int32_t capacity, int32_t *count);
+GlimsStatus glims_channel_from_selection (GlimsEngine *e, GlimsImageID image,
+                                          const char *name, GlimsItemID *result, char **error);
+GlimsStatus glims_channel_change (GlimsEngine *e, GlimsImageID image, GlimsItemID channel,
+                                  const GlimsChannelChange *change, char **error);
+GlimsStatus glims_channel_command (GlimsEngine *e, GlimsImageID image, GlimsItemID channel,
+                                   uint32_t command, GlimsItemID *result, char **error);
+GlimsStatus glims_channel_to_selection (GlimsEngine *e, GlimsImageID image, GlimsItemID channel,
+                                        uint32_t operation, char **error);
+GlimsStatus glims_image_quick_mask (GlimsEngine *e, GlimsImageID image,
+                                    GlimsQuickMaskState *state);
+GlimsStatus glims_image_set_quick_mask (GlimsEngine *e, GlimsImageID image,
+                                        gboolean enabled, char **error);
 
 /* progress.c */
 GlimsProgress * glims_progress_new (GlimsEngine *engine);
