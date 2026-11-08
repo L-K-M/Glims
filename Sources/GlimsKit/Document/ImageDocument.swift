@@ -1242,6 +1242,9 @@ final class ImageDocument {
                     do { try consume(result.get()) } catch {
                         return self.finishClipboard(error, completion: completion)
                     }
+                    guard !self.isClosing else {
+                        return self.finishClipboard(DocumentError.closed, completion: completion)
+                    }
                     guard cutting else { return self.finishClipboard(nil, completion: completion) }
                     // No edits were accepted between the copy and clear.
                     self.enqueue(on: self.inputQueue, input: true) {

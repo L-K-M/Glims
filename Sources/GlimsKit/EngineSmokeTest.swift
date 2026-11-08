@@ -95,6 +95,7 @@ enum EngineSmokeTest {
             try exerciseRecovery(session, work: work, documents: documents)
             try exerciseRecoveryInterface(session, work: work, documents: documents)
             try exerciseClipboard(session, documents: documents)
+            try exerciseClipboardReentrantClose(session, documents: documents)
             try exercisePreviewLifetimes(session, work: work, documents: documents)
             try exerciseDisplayDensity(session, documents: documents)
             try exerciseTools(session, documents: documents)
@@ -1410,6 +1411,29 @@ enum EngineSmokeTest {
     /// a mask cannot take.
     /// A layer pick must leave a channel even when that layer was already
     /// selected natively. Otherwise implicit fills still edit the channel.
+    private static func exerciseClipboardReentrantClose(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 8, height: 8)
+        let document = try ImageDocument(session: session, image: image, name: "Cut Close")
+        documents.items.append(document)
+        defer {
+            documents.items.removeAll { $0 === document }
+            if !document.isClosing { document.closeImageWhenDrained() }
+        }
+        var closed = false, completed = false
+        var failure: Error?
+        document.copyPixels(.cutLayer, background: .white, consume: { _ in
+            // The consumer may synchronously close its document. The
+            // deferred Clear must still complete the clipboard transaction.
+            document.closeImageWhenDrained { closed = true }
+        }, completion: { error in completed = true; failure = error })
+        let deadline = Date().addingTimeInterval(3)
+        while (!closed || !completed) && Date() < deadline { spin(0.02) }
+        check(completed && failure?.localizedDescription == ImageDocument.DocumentError.closed.localizedDescription,
+              "closing inside Cut's consumer completes the transaction with a closed-image error")
+        check(closed && document.pendingWork == 0 && !document.isTransferringClipboard,
+              "a reentrant Cut close clears its transfer gate and drains the image")
+    }
+
     private static func exerciseChannelTargets(_ session: EngineSession, documents: DocumentList) throws {
         let image = try session.newImage(width: 64, height: 64)
         let document = try ImageDocument(session: session, image: image, name: "Channel Targets")
