@@ -56,11 +56,18 @@ final class ImageDocument {
     /// While the window's filter preview is open, layer changes are
     /// refused — the preview owns its drawable. Set by the controller.
     var filterPreviewIsOpen = false
-    /// User selection intents, bumped by every user pick and by commands
-    /// that create a layer. An asynchronous creation auto-selects its new
-    /// layer only while the intent it captured still stands, so a later
-    /// user selection is never overridden.
-    private(set) var selectionIntent = 0
+    /// Queued engine commands whose result becomes or replaces the paint
+    /// target — a created, pasted or text layer, an editing mask, or a
+    /// command that removes the target. While one is queued the drawable
+    /// it lands on is unknown: `activeDrawable` reports none so an edit
+    /// accepted now cannot capture the drawable the command is about to
+    /// replace, and a reload holds the interface's target rather than a
+    /// half-observed native selection. Each token clears when its
+    /// completion lands, on success or failure; a valid target pick
+    /// clears them all — its mirrored target wins ahead of their
+    /// completions.
+    private var pendingTargetCommands: Set<Int> = []
+    private var nextTargetCommandToken = 0
     /// Bound by the window controller: commits in-flight field and text
     /// edits and ends an active stroke before a user selection or a
     /// structural/lock change.
@@ -161,7 +168,12 @@ final class ImageDocument {
         maskStates = masks
         undoInfo = try session.undoInfo(image)
         history = try session.history(image)
-        if activeLayer == nil || !layers.contains(where: { $0.id == activeLayer }) {
+        // While a pick or a pending target command mirrors an intended
+        // target, keep it; otherwise the engine's own selected layer is
+        // authoritative, so a completion only needs this reconcile —
+        // never a native select of its own.
+        let targetIsMirrored = pendingTargetPick != nil || !pendingTargetCommands.isEmpty
+        if !targetIsMirrored || activeLayer == nil || !layers.contains(where: { $0.id == activeLayer }) {
             activeLayer = layers.first(where: \.isSelected)?.id ?? layers.first?.id
         }
         reloadPaths()
@@ -189,7 +201,7 @@ final class ImageDocument {
     /// layer itself otherwise. Fill, gradient, Copy and Clear resolve
     /// the same target natively from the engine's selected drawables.
     var activeDrawable: Int32? {
-        guard !rejectedTargetPick else { return nil }
+        guard !rejectedTargetPick, pendingTargetCommands.isEmpty else { return nil }
         guard let layer = activeLayer else { return nil }
         if let pick = pendingTargetPick, pick.layer == layer { return pick.mask ?? layer }
         if let state = maskStates[layer], state.editing, state.mask != 0 { return state.mask }
@@ -209,29 +221,10 @@ final class ImageDocument {
     /// selected: they are valid metadata and filter targets. Picking the
     /// layer as the target leaves mask editing, as clicking the layer's
     /// own thumbnail does in GIMP.
-    enum SelectionSource { case user, engine }
-
-    /// The intent a creation command captured; auto-selection applies
-    /// only while `selectLayerIfLatest` sees it unchanged.
-    func noteSelectionIntent() -> Int {
-        selectionIntent += 1
-        return selectionIntent
-    }
-
-    /// Selects `id` as an engine-side completion of a creation command —
-    /// only when the user has not picked another layer since `intent`.
-    func selectLayerIfLatest(_ id: Int32, intent: Int) {
-        guard selectionIntent == intent else { return }
-        selectLayer(id, source: .engine)
-    }
-
-    func selectLayer(_ id: Int32, source: SelectionSource = .user) {
+    func selectLayer(_ id: Int32) {
         guard !isClosing else { return }
-        if source == .user {
-            guard !refuseWhileEditingUnavailable() else { return }
-            endPendingUserEdits()
-            _ = noteSelectionIntent()
-        }
+        guard !refuseWhileEditingUnavailable() else { return }
+        endPendingUserEdits()
         selectTarget(id, editingMask: false)
     }
 
@@ -242,7 +235,6 @@ final class ImageDocument {
         guard !isClosing else { return }
         guard !refuseWhileEditingUnavailable() else { return }
         endPendingUserEdits()
-        _ = noteSelectionIntent()
         guard let layer = layers.first(where: { $0.id == id }), layer.hasMask else { return }
         // Without a cached state the mask's drawable id is unknown, and
         // activeDrawable could not name it; read it now — a cheap engine
@@ -273,6 +265,10 @@ final class ImageDocument {
         let pick = TargetPick(version: targetPickVersion, layer: id, mask: editingMask ? mask : nil)
         pendingTargetPick = pick
         rejectedTargetPick = false
+        // A valid known pick resolves the target itself: queued target
+        // commands keep running, but their completions now reconcile to
+        // this pick rather than their own result.
+        pendingTargetCommands.removeAll()
         // Mask editing is one target at a time: a mask still flagged
         // EDITING on another layer would keep claiming fills and
         // gradients, so its flag clears in the same job. EDITING
@@ -345,7 +341,8 @@ final class ImageDocument {
     // MARK: Painting
 
     func beginStroke(at point: EngineSession.StrokePoint, brush: EngineSession.Brush = EngineSession.Brush()) {
-        guard let drawable = activeDrawable, !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileEditingUnavailable(), !refuseWhileTargetPending(),
+              let drawable = activeDrawable else { return }
         // A group's own pixels cannot be painted on; its mask can, so the
         // check applies to the layer, not the drawable.
         if drawable == activeLayer,
@@ -422,20 +419,16 @@ final class ImageDocument {
     func layerCommand(_ command: EngineSession.LayerCommand) {
         guard !refuseWhileEditingUnavailable() else { return }
         endPendingUserEdits()
-        // A creation counts as a selection intent; other commands take
-        // the current one, so an engine-side result is still selected
-        // unless the user picked another layer meanwhile.
-        let intent = command == .new || command == .duplicate ? noteSelectionIntent() : selectionIntent
         let layer = activeLayer ?? 0
-        run { session, image in
-            let created = try session.layerCommand(command, image: image, layer: layer)
-            if let created {
-                // The engine selects what it created; keep the interface in step.
-                DispatchQueue.main.async {
-                    try? self.reload()
-                    self.selectLayerIfLatest(created, intent: intent)
-                }
+        switch command {
+        case .new, .duplicate, .delete, .mergeDown, .flatten:
+            // The command's result becomes or replaces the paint target
+            // once it lands; the engine selects it natively.
+            enqueueTargetCommand { session, image in
+                _ = try session.layerCommand(command, image: image, layer: layer)
             }
+        case .raise, .lower, .toTop, .toBottom:
+            run { session, image in _ = try session.layerCommand(command, image: image, layer: layer) }
         }
     }
 
@@ -446,18 +439,9 @@ final class ImageDocument {
         guard !refuseWhileEditingUnavailable() else { return }
         endPendingUserEdits()
         let placement = LayerTree(layers: layers).newGroupPlacement(nearActive: activeLayer)
-        let intent = noteSelectionIntent()
-        enqueue(on: inputQueue, input: true) { [session, image] in
-            do {
-                let group = try session.createGroup(image: image, parent: placement.parent,
-                                                    index: Int32(placement.index))
-                DispatchQueue.main.async {
-                    try? self.reload()
-                    self.selectLayerIfLatest(group, intent: intent)
-                }
-            } catch {
-                self.report(error)
-            }
+        enqueueTargetCommand { session, image in
+            _ = try session.createGroup(image: image, parent: placement.parent,
+                                        index: Int32(placement.index))
         }
     }
 
@@ -507,7 +491,8 @@ final class ImageDocument {
     /// engine has no mask move — the mask's offset is part of the layer
     /// — so the gesture refuses rather than silently moving the layer.
     func moveActiveLayer(by offset: CGSize) {
-        guard let layer = activeLayer, offset != .zero, !refuseWhileEditingUnavailable() else { return }
+        guard let layer = activeLayer, offset != .zero,
+              !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
         guard !isMaskTargetActive else { return refuseMaskEdit() }
         run { session, image in try session.moveLayer(layer, image: image, by: offset) }
     }
@@ -524,7 +509,8 @@ final class ImageDocument {
     }
 
     func transformActiveLayer(_ transform: EngineSession.Transform) {
-        guard let layer = activeLayer, !refuseWhileEditingUnavailable() else { return }
+        guard let layer = activeLayer,
+              !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
         run { session, image in try session.transformLayer(layer, image: image, transform) }
     }
 
@@ -533,14 +519,8 @@ final class ImageDocument {
     /// Adds a text layer at `position` and makes it the active layer.
     func addText(_ text: String, settings: EngineSession.TextSettings, at position: CGPoint) {
         guard !text.isEmpty, !refuseWhileEditingUnavailable() else { return }
-        let intent = noteSelectionIntent()
-        enqueue(on: inputQueue, input: true) { [session, image] in
-            do {
-                let layer = try session.addTextLayer(image: image, text: text, settings: settings, at: position)
-                DispatchQueue.main.async { self.selectLayerIfLatest(layer, intent: intent) }
-            } catch {
-                self.report(error)
-            }
+        enqueueTargetCommand { session, image in
+            _ = try session.addTextLayer(image: image, text: text, settings: settings, at: position)
         }
     }
 
@@ -661,27 +641,42 @@ final class ImageDocument {
 
     /// Layer ▸ Mask ▸ Add… on `layer` — the menus pass the active layer,
     /// the Add Mask form the layer it opened for. `edit` starts mask
-    /// editing at once.
+    /// editing at once: it replaces the paint target with a drawable
+    /// whose id is unknown until the job lands, so it queues as a
+    /// target command.
     func addMask(_ layer: Int32, source: EngineSession.MaskSource, edit: Bool) {
         guard layers.contains(where: { $0.id == layer }) else { return }
-        runMaskCommand { session, image in
-            _ = try session.addLayerMask(layer, image: image, source: source, edit: edit)
+        if edit {
+            guard !isClosing, !refuseWhileEditingUnavailable() else { return }
+            endPendingUserEdits()
+            enqueueTargetCommand { session, image in
+                // addLayerMask sets the mask's EDITING flag but does not
+                // select the layer; without selecting it first the new
+                // target could land on a layer the engine selected last.
+                try session.selectLayer(layer, image: image)
+                _ = try session.addLayerMask(layer, image: image, source: source, edit: true)
+            }
+        } else {
+            runMaskCommand { session, image in
+                _ = try session.addLayerMask(layer, image: image, source: source, edit: false)
+            }
         }
     }
 
     /// Layer ▸ Mask ▸ Apply / Delete: bakes the active layer's mask into
-    /// it or removes it. The engine refuses Apply on groups and text,
-    /// link and vector layers.
+    /// it or removes it. Removing the mask replaces its drawable as the
+    /// paint target, so it queues as a target command. The engine
+    /// refuses Apply on groups and text, link and vector layers.
     func applyMask() {
         guard let layer = activeLayer else { return }
-        runMaskCommand { session, image in
+        runMaskTargetCommand { session, image in
             try session.applyLayerMask(layer, image: image, mode: .apply)
         }
     }
 
     func deleteMask() {
         guard let layer = activeLayer else { return }
-        runMaskCommand { session, image in
+        runMaskTargetCommand { session, image in
             try session.applyLayerMask(layer, image: image, mode: .discard)
         }
     }
@@ -748,6 +743,16 @@ final class ImageDocument {
             do { try work(session, image) } catch { self.report(error) }
             DispatchQueue.main.async { try? self.reload() }
         }
+    }
+
+    /// Mask commands that remove the target drawable queue as target
+    /// commands: the gate keeps an edit accepted meanwhile from
+    /// capturing the drawable about to disappear.
+    private func runMaskTargetCommand(_ work: @escaping (EngineSession, Int32) throws -> Void) {
+        guard !isClosing else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
+        endPendingUserEdits()
+        enqueueTargetCommand(work)
     }
 
     /// Edit ▸ Stroke Path: draws the path on the active layer. The
@@ -819,12 +824,10 @@ final class ImageDocument {
     func moveToHistoryState(_ position: Int32, revision: UInt64) {
         guard !refuseWhileEditingUnavailable() else { return }
         endPendingUserEdits()
-        enqueue(on: inputQueue, input: true) { [session, image] in
-            let result = Result { try session.moveHistory(image, revision: revision, to: position) }
-            DispatchQueue.main.async {
-                if case .failure(let error) = result { self.onError?(String(describing: error)) }
-                try? self.reload()
-            }
+        // A history move can remove the layers and masks the interface
+        // paints through — its target ids are replaced like a delete's.
+        enqueueTargetCommand { session, image in
+            _ = try session.moveHistory(image, revision: revision, to: position)
         }
     }
 
@@ -933,7 +936,13 @@ final class ImageDocument {
                     consume: @escaping @MainActor (ClipboardImage.Encoded) throws -> Void,
                     completion: @escaping @MainActor (Error?) -> Void) {
         guard !isClosing else { return completion(DocumentError.closed) }
-        if operation != .merged, activeDrawable == nil { return completion(DocumentError.targetChanged) }
+        // A pending target command does not refuse the copy: the read
+        // and a cut's deferred clear resolve the native drawable on the
+        // input queue as one pair — only a rejected pick or a missing
+        // target is refused here.
+        if operation != .merged, activeDrawable == nil, pendingTargetCommands.isEmpty {
+            return completion(DocumentError.targetChanged)
+        }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
               !EngineActivity.shared.isBusy, !(operation == .cutLayer && filterPreviewIsOpen) else {
             return completion(DocumentError.busy)
@@ -979,6 +988,20 @@ final class ImageDocument {
         isTransferringClipboard = false
         if !isClosing { try? reload() }
         completion(error)
+    }
+
+    /// Edit ▸ Paste: the payload becomes a new layer the engine selects,
+    /// so it queues as a target command. `origin` resolves the placement
+    /// on the queue once the payload is decoded.
+    func pastePixels(_ payload: ClipboardImage.Payload, origin: @escaping (ClipboardImage) -> CGPoint,
+                     completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
+        endPendingUserEdits()
+        enqueueTargetCommand({ session, image in
+            let pixels = try payload.decoded()
+            _ = try session.pastePixels(image, pixels: pixels, at: origin(pixels))
+        }, completion: completion)
     }
 
     // MARK: Files
@@ -1072,7 +1095,9 @@ final class ImageDocument {
     func beginFilterPreview(operation: String, properties: [EngineSession.FilterProperty],
                             completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
-        guard let drawable = activeDrawable else { return completion(.failure(DocumentError.noLayer)) }
+        guard let drawable = activeDrawable else {
+            return completion(.failure(pendingTargetCommands.isEmpty ? DocumentError.noLayer : DocumentError.busy))
+        }
         guard !EngineActivity.shared.isBusy else { return completion(.failure(DocumentError.busy)) }
         pendingWork += 1
         inputQueue.async { [session, image] in
@@ -1128,10 +1153,51 @@ final class ImageDocument {
         }
     }
 
-    /// Refuses commands after a failed queued target pick, before they
-    /// can act on the engine's previous implicit drawable target.
+    /// While a queued command has yet to report the drawable it creates
+    /// or leaves selected, an edit that captures the paint target now
+    /// could hit the drawable that command is about to replace; refuse
+    /// it and say why. Picks are unaffected — a valid pick resolves the
+    /// target itself.
+    private func refuseWhileTargetPending() -> Bool {
+        guard !pendingTargetCommands.isEmpty else { return false }
+        onUserCommand?()
+        onError?(DocumentError.busy.localizedDescription)
+        return true
+    }
+
+    /// Queues a command whose result becomes or replaces the paint
+    /// target — a created, pasted or text layer, an editing mask, or a
+    /// command that removes the target — as counted input. While the
+    /// command is queued `activeDrawable` reports none, so an edit that
+    /// captures it now is refused instead of landing on the drawable
+    /// being replaced. The command selects its result in the engine;
+    /// the completion only clears the gate and reconciles the
+    /// interface's state — it must never enqueue another native select,
+    /// which could land between another operation's pixel read and its
+    /// deferred write.
+    private func enqueueTargetCommand(_ work: @escaping (EngineSession, Int32) throws -> Void,
+                                      completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
+        nextTargetCommandToken += 1
+        let token = nextTargetCommandToken
+        pendingTargetCommands.insert(token)
+        onStateChange?()
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let result = Result { try work(session, image) }
+            DispatchQueue.main.async {
+                self.pendingTargetCommands.remove(token)
+                if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                try? self.reload()
+                completion?(result)
+            }
+        }
+    }
+
+    /// Refuses commands after a failed queued target pick or while a
+    /// target command's result is unknown, before they can act on the
+    /// engine's previous implicit drawable target.
     @discardableResult
     func runOnPaintTarget(_ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
+        guard !refuseWhileTargetPending() else { return false }
         guard activeDrawable != nil else {
             onError?(DocumentError.targetChanged.localizedDescription)
             return false

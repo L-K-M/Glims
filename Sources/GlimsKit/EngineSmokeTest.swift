@@ -99,6 +99,7 @@ enum EngineSmokeTest {
             try exerciseEditing(session, documents: documents)
             try exerciseLayerTree(session, documents: documents)
             try exerciseLayerMasks(session, documents: documents)
+            try exerciseTargetCommands(session, documents: documents)
             try exercisePreferences(session, documents: documents)
             try exercisePaths(session, documents: documents)
             try exercisePaletteControls(session, documents: documents)
@@ -1323,6 +1324,217 @@ enum EngineSmokeTest {
         settle()
 
         controller.window?.orderOut(nil)
+    }
+
+    /// A command whose result becomes or replaces the paint target — a new
+    /// or duplicated layer, a pasted or text layer, an editing mask —
+    /// learns its drawable id only when its queued job finishes. Edits
+    /// accepted meanwhile must be refused instead of capturing the
+    /// drawable the command is about to replace, and a completion must
+    /// never enqueue another native select that could land inside a
+    /// clipboard cut's read/clear pair.
+    private static func exerciseTargetCommands(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 64, height: 64)
+        let document = try ImageDocument(session: session, image: image, name: "Target Commands")
+        documents.items.append(document)
+        defer {
+            document.onWillChangeLayers = nil
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        var errors: [String] = []
+        document.onError = { errors.append($0) }
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+        }
+        func composite(_ x: Int, _ y: Int) -> [UInt8]? { pixel(session, image, x: x, y: y) }
+        func thumbPixel(_ drawable: Int32, _ x: Int, _ y: Int) -> [UInt8]? {
+            guard let cg = try? session.drawableThumbnail(drawable, image: image, maxSize: 32),
+                  let data = cg.dataProvider?.data as Data? else { return nil }
+            let offset = (y * cg.width + x) * 4
+            guard offset + 4 <= data.count else { return nil }
+            return Array(data[offset..<offset + 4])
+        }
+        func luminance(_ rgba: [UInt8]?) -> Int {
+            guard let rgba else { return -1 }
+            return (Int(rgba[0]) + Int(rgba[1]) + Int(rgba[2])) / 3
+        }
+        let black = EngineSession.Brush(size: 8, opacity: 1, red: 0, green: 0, blue: 0, pressureSize: false)
+        guard let layer = document.activeLayer else {
+            check(false, "a new image has a layer for the target-command checks")
+            return
+        }
+
+        // A mask added with Edit Mask Immediately replaces the paint
+        // target with a drawable whose id is unknown until the job lands.
+        // A stroke or fill accepted meanwhile is refused rather than
+        // painted on the layer the mask is about to cover.
+        let maskGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { maskGate.wait() }
+        document.addMask(layer, source: .white, edit: true)
+        document.beginStroke(at: .init(x: 40, y: 40, pressure: 1), brush: black)
+        document.continueStroke((41...46).map { .init(x: Double($0), y: 40, pressure: 1) })
+        document.endStroke()
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        maskGate.signal()
+        settle()
+        check(luminance(composite(43, 40)) > 200 && (composite(43, 40)?[3] ?? 0) > 200,
+              "edits accepted behind a queued mask creation are refused "
+                + "(composite \(composite(43, 40) ?? []))")
+        check(errors.contains { $0.contains("Wait") },
+              "the refused edits explain the pending target change (\(errors.last ?? "none"))")
+        guard let mask = document.maskStates[layer], mask.mask != 0, mask.editing else {
+            check(false, "the queued mask creation completes as the edit target")
+            return
+        }
+        check(document.activeDrawable == mask.mask,
+              "the mask becomes the active drawable once the creation lands")
+        document.beginStroke(at: .init(x: 40, y: 40, pressure: 1), brush: black)
+        document.continueStroke((41...46).map { .init(x: Double($0), y: 40, pressure: 1) })
+        document.endStroke()
+        settle()
+        check(luminance(thumbPixel(mask.mask, 21, 20)) < 64,
+              "a stroke accepted after the mask lands paints the mask")
+
+        // The same unknown-target window exists for a queued layer
+        // creation; an explicit stroke and an implicit fill must not
+        // disagree about the target.
+        let newGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { newGate.wait() }
+        let countBeforeNew = document.layers.count
+        document.layerCommand(.new)
+        document.beginStroke(at: .init(x: 20, y: 20, pressure: 1), brush: black)
+        document.continueStroke((21...24).map { .init(x: Double($0), y: 20, pressure: 1) })
+        document.endStroke()
+        document.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        newGate.signal()
+        settle()
+        check(document.layers.count == countBeforeNew + 1 && document.activeLayer == document.layers.first?.id,
+              "the queued layer creation still lands and becomes the active layer")
+        if let created = document.layers.first, created.id != layer {
+            check((thumbPixel(created.id, 11, 10)?[3] ?? 255) == 0,
+                  "a fill accepted behind a queued layer creation is refused "
+                    + "(new layer pixel \(thumbPixel(created.id, 11, 10) ?? []))")
+        }
+        check(luminance(thumbPixel(mask.mask, 11, 10)) > 200,
+              "a stroke accepted behind a queued layer creation is refused "
+                + "(mask pixel \(thumbPixel(mask.mask, 11, 10) ?? []))")
+
+        // A known pick accepted behind the queued creation resolves the
+        // target optimistically: input after it follows the pick in queue
+        // order, and the pick still wins over the creation's completion.
+        document.selectLayer(layer)
+        settle()
+        let pickGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { pickGate.wait() }
+        document.layerCommand(.new)
+        document.selectLayer(layer)
+        document.beginStroke(at: .init(x: 56, y: 56, pressure: 1), brush: black)
+        document.continueStroke((57...58).map { .init(x: Double($0), y: 56, pressure: 1) })
+        document.endStroke()
+        pickGate.signal()
+        settle()
+        check(document.activeLayer == layer && luminance(composite(57, 56)) < 64,
+              "a pick accepted behind a queued creation wins and the queued stroke follows it")
+
+        // A pick of a layer that does not exist must not reopen the gate.
+        let invalidGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { invalidGate.wait() }
+        document.layerCommand(.new)
+        document.selectLayer(999_999)
+        document.beginStroke(at: .init(x: 8, y: 8, pressure: 1), brush: black)
+        document.continueStroke([.init(x: 9, y: 8, pressure: 1)])
+        document.endStroke()
+        invalidGate.signal()
+        settle()
+        check(luminance(composite(8, 8)) > 200 && (composite(8, 8)?[3] ?? 0) > 200,
+              "an invalid pick does not reopen the unknown-target gate "
+                + "(composite \(composite(8, 8) ?? []))")
+
+        // Cut while a duplicate of a mask-editing layer is queued. The
+        // engine's duplicate selects the copy's mask; a completion that
+        // enqueued another native select could land between the cut's
+        // pixel read and its deferred clear and clear the layer instead.
+        let cutImage = try session.newImage(width: 64, height: 64)
+        let cutDocument = try ImageDocument(session: session, image: cutImage, name: "Cut Completion")
+        documents.items.append(cutDocument)
+        defer {
+            cutDocument.onWillChangeLayers = nil
+            documents.items.removeAll { $0 === cutDocument }
+            cutDocument.closeImageWhenDrained()
+        }
+        guard let cutLayer = cutDocument.activeLayer else {
+            check(false, "the cut document has a layer")
+            return
+        }
+        func cutThumb(_ drawable: Int32, _ x: Int, _ y: Int) -> [UInt8]? {
+            guard let cg = try? session.drawableThumbnail(drawable, image: cutImage, maxSize: 32),
+                  let data = cg.dataProvider?.data as Data? else { return nil }
+            let offset = (y * cg.width + x) * 4
+            guard offset + 4 <= data.count else { return nil }
+            return Array(data[offset..<offset + 4])
+        }
+        func boardPixel(_ copied: ClipboardImage, _ x: Int, _ y: Int) -> Int {
+            let bx = x - Int(copied.origin.x), by = y - Int(copied.origin.y)
+            guard bx >= 0, by >= 0, bx < copied.width, by < copied.height else { return -1 }
+            let offset = (by * copied.width + bx) * 4
+            guard offset + 3 < copied.pixels.count else { return -1 }
+            let px = copied.pixels
+            return (Int(px[offset]) + Int(px[offset + 1]) + Int(px[offset + 2])) / 3
+        }
+        cutDocument.addMask(cutLayer, source: .white, edit: true)
+        cutDocument.inputQueue.sync {}
+        spin()
+        guard cutDocument.maskStates[cutLayer]?.editing == true else {
+            check(false, "the cut document's mask is editing before the race")
+            return
+        }
+        cutDocument.beginStroke(at: .init(x: 40, y: 40, pressure: 1), brush: black)
+        cutDocument.continueStroke((41...46).map { .init(x: Double($0), y: 40, pressure: 1) })
+        cutDocument.endStroke()
+        cutDocument.inputQueue.sync {}
+        spin()
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        cutDocument.layerCommand(.duplicate)
+        var cutError: Error?
+        cutDocument.copyPixels(.cutLayer, background: .cyan, consume: { encoded in
+            // Hold the transaction open until anything the duplicate's
+            // completion queued has reached the engine; the deferred
+            // clear is enqueued only after this returns.
+            cutDocument.inputQueue.sync {}
+            try encoded.write(to: board)
+        }, completion: { cutError = $0 })
+        let cutDeadline = Date().addingTimeInterval(10)
+        while cutDocument.pendingWork > 0 && Date() < cutDeadline { spin() }
+        cutDocument.inputQueue.sync {}
+        spin()
+        check(cutError == nil, "the cut transaction completes")
+        guard let duplicate = cutDocument.layers.first(where: { $0.id != cutLayer }),
+              let duplicateMask = cutDocument.maskStates[duplicate.id] else {
+            check(false, "the duplicate and its mask exist after the race")
+            return
+        }
+        check((try? session.layerMask(duplicate.id, image: cutImage))?.editing == true
+                && (try? session.layerMask(cutLayer, image: cutImage))?.editing == true,
+              "the completion cannot change native mask editing after the duplicate selected its mask "
+                + "(duplicate \((try? session.layerMask(duplicate.id, image: cutImage))?.editing == true), "
+                + "source \((try? session.layerMask(cutLayer, image: cutImage))?.editing == true))")
+        if let cutPixels = try? ClipboardImage.read(from: board) {
+            check(boardPixel(cutPixels, 43, 40) < 64,
+                  "the cut copied the duplicate mask's pixels (read \(boardPixel(cutPixels, 43, 40)))")
+        } else {
+            check(false, "the cut wrote its copied mask to the clipboard")
+        }
+        check(luminance(cutThumb(duplicate.id, 21, 20)) > 200,
+              "the deferred cut clear left the duplicate's layer pixels alone "
+                + "(layer pixel \(cutThumb(duplicate.id, 21, 20) ?? []))")
+        check(luminance(cutThumb(duplicateMask.mask, 21, 20)) > 100,
+              "the deferred cut clear hit the duplicate's mask "
+                + "(mask pixel \(cutThumb(duplicateMask.mask, 21, 20) ?? []))")
+        check(cutDocument.activeDrawable == duplicateMask.mask,
+              "the adopted target after the race is the duplicate's mask")
     }
 
     /// The Layer menu, the paint bucket and gradient, layer moves, and a

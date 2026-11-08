@@ -53,25 +53,17 @@ extension DocumentWindowController {
         let center = visible.isEmpty
             ? CGPoint(x: Double(imageDocument.info.width) / 2, y: Double(imageDocument.info.height) / 2)
             : CGPoint(x: visible.midX / canvas.scale, y: visible.midY / canvas.scale)
-        let document = imageDocument
-        // The paste is a layer creation: only auto-select its layer while
-        // the user has not picked another one since.
-        let intent = document.noteSelectionIntent()
         statusBar.message = "Pasting pixels…"
-        document.run { [weak self] session, image in
-            let pixels = try payload.decoded()
-            let origin = placement == .originalPosition ? pixels.origin
+        imageDocument.pastePixels(payload, origin: { pixels in
+            placement == .originalPosition ? pixels.origin
                 : CGPoint(x: (center.x - Double(pixels.width) / 2).rounded(),
                           y: (center.y - Double(pixels.height) / 2).rounded())
-            let layer = try session.pastePixels(image, pixels: pixels, at: origin)
-            DispatchQueue.main.async {
-                do {
-                    try document.reload()
-                    document.selectLayerIfLatest(layer, intent: intent)
-                    self?.statusBar.message = "Pasted as a new layer"
-                } catch {
-                    document.onError?(error.localizedDescription)
-                }
+        }) { [weak self] result in
+            switch result {
+            case .success:
+                self?.statusBar.message = "Pasted as a new layer"
+            case .failure(let error):
+                self?.statusBar.message = error.localizedDescription
             }
         }
     }
