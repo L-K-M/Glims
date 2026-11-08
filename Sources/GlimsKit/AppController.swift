@@ -289,11 +289,6 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 // and prior records can still be offered read-only.
                 noteRecoveryFailure("Recovery copies are unavailable: \(error.localizedDescription)")
             }
-            // Prior crashed runs' records are offered, never opened
-            // silently: the panel lists them until the user picks.
-            if !store.discoverRecoverableDocuments().isEmpty {
-                showRecoveryPanel()
-            }
             workspace?.close()
             workspace = nil
             if pendingOpenURLs.isEmpty {
@@ -303,6 +298,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 pendingOpenURLs.removeAll()
                 openFiles(urls)
             }
+            offerRecoveryAfterStartup()
         case .failure(let error):
             state = .failed(String(describing: error))
             workspace?.canvas.message = "Image engine could not start"
@@ -565,6 +561,18 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     /// keeps the records and this menu item reopens the list.
     @objc func recoverDocuments(_ sender: Any?) {
         showRecoveryPanel()
+    }
+
+    /// Offers prior copies when the startup document has been adopted.
+    func offerRecoveryAfterStartup() {
+        // Initial opens are asynchronous. Presenting before their main-
+        // queue adoption lets the new document cover the entire panel.
+        // The engine activity's idle actions follow those adoptions.
+        EngineActivity.shared.whenIdle { [weak self] in
+            guard let self, !self.terminationRequested,
+                  self.recoveryStore?.discoverRecoverableDocuments().isEmpty == false else { return }
+            self.showRecoveryPanel()
+        }
     }
 
     private func showRecoveryPanel() {

@@ -78,6 +78,41 @@ final class RecoveryPanelTests: XCTestCase {
         XCTAssertEqual(sourceCell?.textField?.stringValue, "/tmp/first.xcf")
     }
 
+    func testStartupOfferWaitsForTheInitialDocument() throws {
+        let (store, _) = try makeRecords()
+        let app = AppController()
+        app.recoveryStore = store
+        let gate = DispatchSemaphore(value: 0)
+        let initialWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+                                     styleMask: [.titled], backing: .buffered, defer: false)
+        initialWindow.isReleasedWhenClosed = false
+        var initialDocumentWasAdopted = false
+        defer {
+            gate.signal()
+            app.recoveryPanel?.close()
+            initialWindow.close()
+        }
+        XCTAssertTrue(EngineActivity.shared.perform(label: "Opening the startup image", work: {
+            gate.wait()
+            DispatchQueue.main.async {
+                initialWindow.makeKeyAndOrderFront(nil)
+                initialDocumentWasAdopted = true
+            }
+        }, completion: {}))
+
+        app.offerRecoveryAfterStartup()
+        XCTAssertNil(app.recoveryPanel, "opening the initial document must not cover an earlier recovery offer")
+        gate.signal()
+        let deadline = Date().addingTimeInterval(5)
+        while (EngineActivity.shared.isBusy || app.recoveryPanel == nil) && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertTrue(initialDocumentWasAdopted)
+        XCTAssertTrue(app.recoveryPanel?.window?.isVisible == true,
+                      "recovery is offered after the startup image is adopted")
+        XCTAssertFalse(app.recoveryPanel?.window?.canBecomeMain ?? true)
+    }
+
     func testSourceDescriptionsAreInformational() {
         var record = RecoveryStore.RecoveredDocument(runID: UUID(), documentID: UUID(), name: "A",
                                                      nativeURL: nil, importedSourceURL: nil,
