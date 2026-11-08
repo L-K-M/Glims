@@ -289,6 +289,7 @@ enum EngineSmokeTest {
         check(saved && document.fileState.nativeURL == native && !document.hasUnsavedChanges,
               "the import target starts as a clean saved native image")
         let nativeBytes = try Data(contentsOf: native)
+        let nativeName = document.name
         let oldActive = document.activeLayer
         let oldUndo = document.undoInfo.undoCount
         var expectedLayers = document.layers.count
@@ -335,7 +336,7 @@ enum EngineSmokeTest {
                 && document.activeLayer == document.layers.first(where: \.isSelected)?.id,
               "the engine's imported selection becomes the active target through reload")
         check(document.undoInfo.undoCount > oldUndo, "the import is undoable")
-        check(document.fileState.nativeURL == native && document.name == "Imports",
+        check(document.fileState.nativeURL == native && document.name == nativeName,
               "the import keeps native file identity and name")
         check(try Data(contentsOf: native) == nativeBytes,
               "the import does not rewrite the native file")
@@ -386,11 +387,45 @@ enum EngineSmokeTest {
         check(document.layers.count == expectedLayers,
               "a failed import inserts nothing")
         check(document.acceptsEdits, "the document edits again after a failed import")
-        document.beginStroke(at: .init(x: 30, y: 5, pressure: 1), brush: brush)
+        document.beginStroke(at: .init(x: 30, y: 16, pressure: 1), brush: brush)
         document.endStroke()
         wait { document.pendingWork == 0 }
-        check((pixel(session, image, x: 30, y: 5)?[0] ?? 255) < 128,
+        check((pixel(session, image, x: 30, y: 16)?[0] ?? 255) < 128,
               "edits work again after the failed import")
+
+        // A native import establishes a new target even when the prior
+        // known pick failed after its mask disappeared from the queue.
+        let healingImage = try session.newImage(width: 64, height: 64)
+        let healing = try ImageDocument(session: session, image: healingImage, name: "Import target recovery")
+        documents.items.append(healing)
+        defer {
+            documents.items.removeAll { $0 === healing }
+            healing.closeImageWhenDrained()
+        }
+        guard let healingLayer = healing.activeLayer else { throw NoWindow() }
+        healing.onError = { _ in }
+        healing.addMask(healingLayer, source: .white, edit: false)
+        wait { healing.pendingWork == 0 }
+        healing.run { session, image in
+            try session.applyLayerMask(healingLayer, image: image, mode: .discard)
+        }
+        healing.editMask(healingLayer)
+        wait { healing.pendingWork == 0 }
+        check(healing.activeDrawable == nil, "the import recovery starts with a refused stale mask target")
+        var healingFailure: Result<ImageDocument.ImportOutcome, Error>?
+        healing.openLayers(from: directory.appendingPathComponent("missing-again.xcf")) { healingFailure = $0 }
+        wait { healingFailure != nil && healing.pendingWork == 0 }
+        check(healing.activeDrawable == nil, "a failed import does not reopen the rejected paint target")
+        var healed: Result<ImageDocument.ImportOutcome, Error>?
+        healing.openLayers(from: sourceXCF) { healed = $0 }
+        wait { healed != nil && healing.pendingWork == 0 }
+        check(succeeded(healed, as: .openedLayers), "a valid import succeeds after the refused target")
+        check(healing.activeDrawable != nil && healing.activeDrawable == healing.activeLayer,
+              "successful import adopts its new drawable after a refused target pick")
+        healing.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
+        wait { healing.pendingWork == 0 }
+        check((pixel(session, healingImage, x: 20, y: 20)?[0] ?? 255) < 64,
+              "pixel edits reach the newly imported layer without another target pick")
 
         // Input accepted in another document before the choice drains
         // ahead of the load; edits there refuse behind the same gate.
@@ -465,7 +500,8 @@ enum EngineSmokeTest {
         case .success(.placedLink):
             check(document.layers.count == beforePlace + 1 && document.layers.contains { $0.kind == .link },
                   "Place adds one genuine link layer")
-            check(document.activeLayer == document.layers.first?.id && document.layers.first?.kind == .link,
+            let selectedLink = document.layers.first { $0.isSelected && $0.kind == .link }
+            check(selectedLink?.id == document.activeLayer && selectedLink != nil,
                   "the placed link is the active target through reload")
             check(document.undoInfo.undoCount == beforePlaceUndo + 1, "Place is one undo step")
             let placedXCF = directory.appendingPathComponent("placed.xcf")

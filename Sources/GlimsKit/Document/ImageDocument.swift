@@ -1150,7 +1150,13 @@ final class ImageDocument {
                 _ = try session.openLayers(image: image, path: url.path)
                 return .openedLayers
             }
+            if case .success = result {
+                // Admission drained this queue and still holds the global
+                // gate. Keep the queue-owned validity flag confined to it.
+                self.inputQueue.sync { self.paintTargetIsValid = true }
+            }
             DispatchQueue.main.async {
+                if case .success = result { self.rejectedTargetPick = false }
                 // The reload mirrors the engine's native selection — the
                 // imported top layer or the placed link — as the target.
                 // A closing image skips it: the drain destroys it next.
