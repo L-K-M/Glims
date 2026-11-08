@@ -101,6 +101,7 @@ enum EngineSmokeTest {
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseFileAdmission(session, work: work, documents: documents)
+            try exerciseRevert(session, work: work, documents: documents)
             try exerciseFileImports(session, work: work, documents: documents)
             try exercisePrinting(session, work: work, documents: documents)
             try exerciseRecovery(session, work: work, documents: documents)
@@ -1557,6 +1558,208 @@ enum EngineSmokeTest {
         discarded.save(to: native) { closedSaveFailed = $0 != nil }
         check(closedSaveFailed, "a save requested after close reports an error through its completion")
         documents.items.removeAll { $0 === discarded }
+    }
+
+    /// File ▸ Revert…: the confirm sheet, the file-admission reload and
+    /// the window replacement on success — plus every refusal path:
+    /// Cancel, an unreadable source, an untitled image and a direct
+    /// close while the file loads. Adoption needs the app's document
+    /// list, so this drives a real AppController.
+    private static func exerciseRevert(_ session: EngineSession, work: URL,
+                                       documents: DocumentList) throws {
+        let app = AppController()
+        let directory = work.appendingPathComponent("revert")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let native = directory.appendingPathComponent("keep.xcf")
+        var tracked: [ImageDocument] = []
+        defer {
+            documents.items.removeAll { item in tracked.contains { $0 === item } }
+        }
+
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin() }
+        }
+        func track(_ document: ImageDocument) {
+            tracked.append(document)
+            documents.items.append(document)
+            app.open(document)
+        }
+        func confirm(_ response: NSApplication.ModalResponse, on owner: DocumentWindowController) {
+            wait { owner.window?.attachedSheet != nil }
+            if let sheet = owner.window?.attachedSheet {
+                NSApp.endSheet(sheet, returnCode: response.rawValue)
+            }
+        }
+        let revertItem = NSMenuItem(title: "", action: #selector(DocumentWindowController.revertDocument(_:)), keyEquivalent: "")
+
+        // The saved source: a 64×64 XCF with one stroke near the top.
+        let setup = try session.newImage(width: 64, height: 64)
+        if let layer = try session.layers(setup).first?.id {
+            let stroke = try session.beginStroke(image: setup, drawable: layer,
+                                                 brush: .init(), first: .init(x: 10, y: 10, pressure: 1))
+            try session.endStroke(stroke)
+        }
+        try session.save(setup, to: native.path)
+        try session.closeImage(setup)
+        let savedBytes = try Data(contentsOf: native)
+
+        let image = try session.openImage(path: native.path)
+        let document = try ImageDocument(session: session, image: image,
+                                         name: native.lastPathComponent, openedFrom: native)
+        track(document)
+        guard let controller = app.documents.last else { throw NoWindow() }
+        controller.zoom(to: 150)
+        let window = try XCTUnwrapWindow(controller)
+        let frame = window.frame
+
+        // A second document exercises the drain: its accepted stroke
+        // must land before the reload, and it stays untouched itself.
+        let otherImage = try session.newImage(width: 64, height: 64)
+        let other = try ImageDocument(session: session, image: otherImage, name: "Untitled")
+        track(other)
+        guard let otherController = app.documents.last else { throw NoWindow() }
+        check(!otherController.validateMenuItem(revertItem),
+              "an untitled document cannot revert")
+        otherController.revertDocument(nil)
+        spin(0.15)
+        check(otherController.window?.attachedSheet == nil,
+              "Revert asks nothing when the document has no source")
+
+        document.beginStroke(at: .init(x: 50, y: 50, pressure: 1))
+        document.endStroke()
+        wait { document.pendingWork == 0 && document.hasUnsavedChanges }
+        check(controller.validateMenuItem(revertItem) && revertItem.title == "Revert to Saved…",
+              "Revert is offered on a saved file as Revert to Saved…")
+        controller.revertDocument(nil)
+        confirm(.alertSecondButtonReturn, on: controller)
+        spin(0.2)
+        check(app.documents.contains(where: { $0 === controller }) && app.documents.count == 2 && !controller.revertIsPending
+                && document.hasUnsavedChanges && !document.isClosing
+                && (pixel(session, image, x: 50, y: 50)?[0] ?? 255) < 128,
+              "a cancelled Revert preserves the edits, image and window")
+        check((try? Data(contentsOf: native)) == savedBytes, "a cancelled Revert never touches the source")
+
+        // Accepted input in the other document drains before the load.
+        other.beginStroke(at: .init(x: 30, y: 30, pressure: 1))
+        other.endStroke()
+        controller.revertDocument(nil)
+        confirm(.alertFirstButtonReturn, on: controller)
+        wait { !app.documents.contains(where: { $0 === controller }) }
+        guard let first = app.documents.last else { throw NoWindow() }
+        documents.items.removeAll { $0 === document }
+        tracked.append(first.imageDocument)
+        documents.items.append(first.imageDocument)
+        check(first !== controller && first.imageDocument !== document
+                && first.imageDocument.image != image
+                && first.imageDocument.fileState.nativeURL == native
+                && !first.imageDocument.hasUnsavedChanges
+                && first.imageDocument.undoInfo.undoCount == 0,
+              "a confirmed Revert adopts a clean fresh-history reload of the saved file")
+        wait { (try? session.info(image)) == nil && !window.isVisible }
+        check(controller.closeStarted && (try? session.info(image)) == nil && !window.isVisible,
+              "the discarded document closes without a save prompt and its image is destroyed")
+        check(first.window.map { abs($0.frame.minX - frame.minX) < 1 && abs($0.frame.minY - frame.minY) < 1
+                && $0.frame.size == frame.size } == true
+                && first.canvas.zoomPercent == 150,
+              "the replacement window keeps the old frame and zoom")
+        check((pixel(session, first.imageDocument.image, x: 10, y: 10)?[0] ?? 255) < 128
+                && (pixel(session, first.imageDocument.image, x: 50, y: 50)?[0] ?? 0) > 127,
+              "the reverted image has the saved stroke and none of the discarded edits")
+        check((try? Data(contentsOf: native)) == savedBytes, "a confirmed Revert never writes to the source")
+        wait { other.pendingWork == 0 }
+        check((pixel(session, otherImage, x: 30, y: 30)?[0] ?? 255) < 128
+                && other.image == otherImage && app.documents.contains(where: { $0 === otherController }),
+              "input accepted in another document drains before the load; the document is untouched")
+
+        // A source rewritten on disk loads its new bytes.
+        let rewritten = try session.newImage(width: 32, height: 48)
+        try session.save(rewritten, to: native.path)
+        try session.closeImage(rewritten)
+        first.revertDocument(nil)
+        confirm(.alertFirstButtonReturn, on: first)
+        wait { !app.documents.contains(where: { $0 === first }) }
+        guard let second = app.documents.last else { throw NoWindow() }
+        documents.items.removeAll { $0 === first.imageDocument }
+        tracked.append(second.imageDocument)
+        documents.items.append(second.imageDocument)
+        check(second !== first && second.imageDocument.info.width == 32
+                && second.imageDocument.info.height == 48
+                && second.imageDocument.fileState.nativeURL == native,
+              "Revert reloads the source's new bytes after an external rewrite")
+
+        // An unreadable source keeps the whole document usable.
+        second.imageDocument.beginStroke(at: .init(x: 5, y: 5, pressure: 1))
+        second.imageDocument.endStroke()
+        wait { second.imageDocument.pendingWork == 0 && second.imageDocument.hasUnsavedChanges }
+        try FileManager.default.removeItem(at: native)
+        second.revertDocument(nil)
+        confirm(.alertFirstButtonReturn, on: second)
+        wait { !second.revertIsPending }
+        check(app.documents.last === second && !second.imageDocument.isClosing
+                && second.imageDocument.hasUnsavedChanges
+                && second.window?.isVisible == true
+                && (try? session.info(second.imageDocument.image)) != nil,
+              "a failed Revert keeps the original image, window and unsaved changes")
+        check(!second.statusBar.message.hasPrefix("32 × 48"),
+              "a failed Revert reports its error instead of restoring the status line")
+
+        // An imported original re-imports and keeps imported identity.
+        let png = directory.appendingPathComponent("imported.png")
+        let foreign = try session.newImage(width: 24, height: 24)
+        try session.export(foreign, to: png.path)
+        try session.closeImage(foreign)
+        let imported = try ImageDocument(session: session, image: session.openImage(path: png.path),
+                                         name: png.lastPathComponent, openedFrom: png)
+        track(imported)
+        guard let importedController = app.documents.last else { throw NoWindow() }
+        check(importedController.validateMenuItem(revertItem) && revertItem.title == "Revert…",
+              "an imported document is offered Revert…")
+        importedController.revertDocument(nil)
+        confirm(.alertFirstButtonReturn, on: importedController)
+        wait { !app.documents.contains(where: { $0 === importedController }) }
+        guard let reimported = app.documents.last else { throw NoWindow() }
+        documents.items.removeAll { $0 === imported }
+        tracked.append(reimported.imageDocument)
+        documents.items.append(reimported.imageDocument)
+        check(reimported.imageDocument.fileState.nativeURL == nil
+                && reimported.imageDocument.fileState.importedSourceURL == png
+                && reimported.imageDocument.hasUnsavedChanges,
+              "a re-import keeps the imported identity and unsaved state")
+
+        // A direct close during the load follows file admission: the
+        // close waits for the engine, wins, and the loaded image is
+        // destroyed unadopted.
+        let closingFile = directory.appendingPathComponent("closing.xcf")
+        let setup2 = try session.newImage(width: 32, height: 32)
+        try session.save(setup2, to: closingFile.path)
+        try session.closeImage(setup2)
+        let closingImage = try session.openImage(path: closingFile.path)
+        let closingDoc = try ImageDocument(session: session, image: closingImage,
+                                           name: closingFile.lastPathComponent, openedFrom: closingFile)
+        track(closingDoc)
+        guard let closingController = app.documents.last else { throw NoWindow() }
+        let countBefore = app.documents.count
+        closingDoc.inputQueue.async { usleep(400_000) }
+        closingController.revertDocument(nil)
+        confirm(.alertFirstButtonReturn, on: closingController)
+        wait { closingController.revertIsPending }
+        check(closingController.revertIsPending, "a confirmed Revert marks its pending load")
+        var closedDuringLoad: Bool?
+        closingController.requestClose { closedDuringLoad = $0 }
+        wait { closedDuringLoad != nil }
+        check(closedDuringLoad == true, "a close during the Revert load completes")
+        wait { (try? session.info(closingImage)) == nil
+                && !app.documents.contains(where: { $0 === closingController }) }
+        check(app.documents.count == countBefore - 1,
+              "the closing document leaves and no duplicate window is adopted for it")
+        check(FileManager.default.fileExists(atPath: closingFile.path),
+              "the source file survives a close during the load")
+
+        let survivors = app.documents
+        survivors.forEach { $0.closeDiscardingChanges() }
+        wait { app.documents.isEmpty }
+        check(app.documents.isEmpty, "all documents close cleanly after the revert checks")
     }
 
     private static func exerciseClipboard(_ session: EngineSession, documents: DocumentList) throws {

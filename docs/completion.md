@@ -159,6 +159,31 @@ when a saved destination meets a file nothing loads. EngineSession grew
 3.0.8, including a monitored reread of a rewritten source; the menu
 commands that would call them are not wired yet.
 
+2026-11-08: File ▸ Revert reloads the last saved XCF — or the original
+file an imported image came from, titled Revert to Saved… / Revert… —
+only after a confirmation sheet and a successful engine load. A saved
+file wins over the imported original; an untitled image disables the
+item. The confirmed discard counts as close approval, so no second
+Save prompt appears, while Cancel, an unreadable source, a close that
+wins the load or a Quit leaves the document and its unsaved state
+fully usable. The reload is a file operation on the global engine
+queue: accepted strokes, text and field commits on every document
+drain first, the busy label shows in the status bar, and the count
+holds Quit until the load resolves. Adoption is all or nothing — a
+fresh document opens through the ordinary path, takes the old window's
+frame, zoom and image-center, and only then does the old document
+close and its image drain; a window gone or a close/Quit requested
+during the load destroys the loaded image unadopted on the same queue.
+A re-import keeps imported (unsaved) identity; a native reload is
+clean with fresh history. Recovery follows the same close path: the
+old record is removed and the replacement registers its own. Source
+bytes are only read. Unit tests cover the source/title rules; the
+engine smoke exercise covers cancel, confirmed native reload with
+restored frame/zoom and discarded edits, external rewrite, missing
+source, untitled, re-import identity, cross-document drain and a
+direct close during the load. `swift build` and `swift test` (246
+tests) pass; the engine smoke run and interactive QA were not run in
+this session.
 2026-11-08: the File menu commands are wired. Open as Layers… and Place
 as Link Layer… sit below Open Recent and run through
 `DocumentWindowController`'s single-file panel into
