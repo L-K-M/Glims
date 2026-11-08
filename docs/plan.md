@@ -1367,6 +1367,42 @@ sRGB color setter. All four native runs pass: 830 checks on GIMP 3.2.8,
 undo/redo, the RGB sample and both busy refusals. Independent source
 review found no important issues.
 
+### Pattern fill backend (2026-11-08)
+
+`fill_pattern` is the facade's one additive footer API: it fills the
+selected drawable (active layer, editing mask or selected channel, the
+same target `fill` uses) with a pattern handle, through
+`gimp_drawable_edit_fill` for Selection/full drawable and
+`gimp_drawable_bucket_fill` for SimilarColors, exactly as `glims_fill`
+does for solid color. `GlimsPatternFillSettings` carries struct_size,
+mode, opacity, threshold, sample_merged and antialias — no color fields.
+The pattern handle is revalidated on every call by a narrow
+`lookup_pattern` in resource.c on top of the generic resource admission
+(full UInt64 range check before any native narrowing, kind table,
+membership in this engine's own factory container); a brush or gradient
+handle is NOT_FOUND, a malformed or high-bit one INVALID_ARGUMENT. The
+pattern lives on a private per-call context whose PATTERN property bit is
+defined before the pattern is set, so the shared user context is never
+touched; options and context are released on every path. Inputs are
+validated (finite seed, mode, opacity/threshold in 0...1 — refused, not
+clamped) and `glims_edit_ready` gates the mutation, so an active stroke,
+filter preview or plug-in refuses BUSY with no pixel or undo change. An
+alpha lock alone does not refuse, matching the painting policy; a pixel
+lock does (LOCKED). One native undo step per fill. Observed native
+behavior: opacity 0 succeeds, records the undo step and changes no
+pixels; Select None means no selection, so the whole drawable is filled, while a selection disjoint
+from the drawable succeeds as a no-op with no undo step and no pixel change. An alpha lock is not a
+refusal: the engine enforces it through the drawable's active components, so on an opaque layer the
+fill changes color but not alpha.
+Conformance compares the fill against a `resource_thumbnail` of a stock
+opaque pattern at its native size below 512, tiled across the image, and
+covers selection clipping, layer offset, SimilarColors, undo/redo,
+mask/channel routing, locks, invalid handles/settings and the three BUSY
+states. Swift adds `PatternFillSettings` and `EngineSession.fillPattern`
+plus a queued `ImageDocument.fillPattern(_:at:_:)` that resolves the
+persisted `ResourceIdentity` on the input queue; EngineSmoke exercises
+that path. No chooser UI and no gradient work yet.
+
 Final ICC/native compatibility validation: 894 conformance checks pass on
 3.2.8, 3.2.0 and master; 834 pass on 3.0.8. The added older-engine fixture
 now creates a valid path before expecting UNSUPPORTED; its earlier invented

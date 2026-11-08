@@ -161,6 +161,31 @@ glims_lookup_brush (GlimsEngine *engine, GlimsResourceID id, GimpBrush **out)
   return GLIMS_STATUS_OK;
 }
 
+/* The narrow pattern lookup fill_pattern uses: the generic admission
+ * above (id range before any native narrowing, kind table, membership in
+ * this engine's own factory container) plus the pattern kind itself, so
+ * a brush or gradient handle is NOT_FOUND here. The returned pattern is
+ * borrowed from the factory; the caller passes it to a private context
+ * and never mutates or releases it. */
+GlimsStatus
+glims_lookup_pattern (GlimsEngine *engine, GlimsResourceID id, GimpPattern **out)
+{
+  GimpData   *data;
+  GlimsStatus status;
+
+  *out = NULL;
+
+  status = lookup_resource (engine, id, &data);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+
+  if (kind_of_data (data) != GLIMS_RESOURCE_PATTERN)
+    return GLIMS_STATUS_NOT_FOUND;
+
+  *out = GIMP_PATTERN (data);
+  return GLIMS_STATUS_OK;
+}
+
 GlimsStatus
 glims_resources (GlimsEngine       *engine,
                  uint32_t           kind,
