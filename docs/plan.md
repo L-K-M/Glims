@@ -2185,3 +2185,16 @@ history/dirty state on reads and profile-assignment Undo/Redo appearance.
 No production renderer change was needed. This verifies the in-gamut sRGB
 path; physical monitor calibration, wide-gamut/HDR output, proof profiles,
 proof intents and gamut warnings remain unverified or unimplemented.
+
+After integrating Indexed, one native conformance run failed during the
+linked-file rewrite fixture and later crashed after cascading failures.
+A bounded debugger run did not reproduce the crash and produced no
+backtrace; its exact cause is unverified. The fixture did discard image
+ids after refused closes and continued dependent setup after BUSY.
+Its positive linked-file setup/cleanup now retries only pre-mutation BUSY
+with finite deadlines, reports individual statuses, retains owned ids
+until a real close, and stops dependent tests on setup/cleanup failure.
+Negative BUSY assertions remain single calls. All four suites pass
+1,459 / 1,245 / 1,459 / 1,459 checks. These runs observed zero retries in
+this fixture; controlled slow-loader tests separately verify the native
+BUSY contract. The earlier crash is not presented as a proven new UAF.
