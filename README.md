@@ -64,6 +64,11 @@ scripts/build-adapter.sh      # Builds Glims's C facade
 scripts/build.sh --run        # Bundles the engine and launches the working editor
 ```
 
+An executable SwiftPM builds inside the checkout (`swift run`,
+`.build/debug/Glims`) finds the pinned adapter under `_engine/adapter/` on
+its own once `scripts/build-adapter.sh` has run; `GLIMS_ENGINE_LIBRARY` and
+the `EngineLibraryPath` default still take precedence.
+
 A normal build fails with setup instructions if the engine is missing; it
 never silently produces an editor with disabled commands. To build only the
 interface on a machine without the engine, explicitly use
