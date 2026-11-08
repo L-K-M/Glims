@@ -375,6 +375,14 @@ GlimsStatus glims_guide_put    (GlimsEngine *e, GlimsImageID image,
 GlimsStatus glims_guide_remove (GlimsEngine *e, GlimsImageID image,
                                 GlimsGuideID guide, char **error);
 
+/* layer-source.c */
+GlimsStatus glims_layer_source_info (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                     GlimsLayerSourceInfo *out, char **error);
+/* Rasterizes a genuine editable text/link/vector layer as one native undo
+ * step; an already rasterized instance is a no-op. Readiness and locks
+ * are the caller's. */
+GlimsStatus glims_layer_rasterize   (GimpImage *image, GimpLayer *layer, char **error);
+
 /* resource.c */
 GlimsStatus glims_lookup_gradient      (GlimsEngine *e, GlimsResourceID id,
                                         GimpGradient **out);
