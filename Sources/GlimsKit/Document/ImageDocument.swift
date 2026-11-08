@@ -586,11 +586,11 @@ final class ImageDocument {
     // MARK: Editing
 
     func fill(at point: CGPoint, mode: EngineSession.FillMode, color: NSColor, threshold: Double,
-              sampleMerged: Bool) {
+              sampleMerged: Bool, opacity: Double = 1) {
         guard !refuseWhileEditingUnavailable() else { return }
         runOnPaintTarget { session, image in
             try session.fill(image: image, at: point, mode: mode, color: color,
-                             threshold: threshold, sampleMerged: sampleMerged)
+                             opacity: opacity, threshold: threshold, sampleMerged: sampleMerged)
         }
     }
 

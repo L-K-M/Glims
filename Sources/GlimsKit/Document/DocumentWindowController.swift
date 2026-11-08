@@ -774,6 +774,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         imageDocument.strokePath(path, settings: ToolState.shared.pathLine)
     }
 
+    /// Edit ▸ Fill…: fills the current selection (or the whole drawable) with
+    /// the chosen color at the chosen opacity.
+    @objc func fill(_ sender: Any?) {
+        guard let window else { return }
+        endPendingEdits()
+        FillForm.present(in: imageDocument, on: window)
+    }
+
     /// Edit ▸ Fill Path: fills the active path's area on the current paint
     /// target using the Path tool's foreground color and fill settings.
     @objc func fillPath(_ sender: Any?) {
@@ -805,6 +813,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return canPerformClipboardCommand(menuItem.action)
         case #selector(selectFromPath(_:)), #selector(strokePath(_:)), #selector(fillPath(_:)):
             return imageDocument.activePath != nil && !editingBlocked
+        case #selector(fill(_:)):
+            return !editingBlocked && !previewBusy && imageDocument.activeDrawable != nil
         case #selector(toVectorLayer(_:)):
             // Vector layers arrived in GIMP 3.2; older engines report
             // UNSUPPORTED when the command runs, so the item stays listed.

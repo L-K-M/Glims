@@ -852,6 +852,29 @@ No upstream source, file metadata, dirty state or undo history changes.
 Pinned and cross-version checks plus independent review are recorded in
 the PR before merge. Frontend path controls remain a separate slice.
 
+### Color Fill sheet (2026-11-08)
+
+Edit > Fill opens a native sheet for foreground, background, white, black
+or a custom color and opacity. It fills the selection, or the active
+layer, mask or channel without one, through the existing counted target
+queue. A sheet keeps its document and its own control bindings; cancelling
+or refusing a busy/closed target produces no edit. Native lock failures
+reach the caller. The custom color well releases its own panel interaction
+without hiding an already open panel or another active well.
+
+The original draft's shared binding target failed a two-document native
+regression. Per-sheet retention passes that regression and ten isolated
+pinned-engine checks, including pixels, selection clipping, undo, custom
+color and busy/native refusals. Review found no important issues. The
+expanded checks include independent background color and invalid opacity.
+The integrated four-engine run passes 652 checks on 3.2.8, 3.2.0 and master,
+649 on 3.0.8, before the Paths interface merge. After that integration,
+305 unit tests and 689 interface checks on 3.2.8/3.2.0/master, 678 on
+3.0.8 pass. An actual 50-percent Fill paints the document; cancelling
+Custom after opening its color well closes the sheet's color panel.
+The test app quit without saving. Pattern fill and resource selection
+are a separate slice.
+
 ### Paths interface verification (2026-11-08)
 
 The Paths palette and Edit menu expose Fill Path and To Vector Layer.
