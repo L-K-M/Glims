@@ -50,7 +50,8 @@ typedef enum GlimsStatus {
   GLIMS_STATUS_BUSY             = 4, /* a long operation holds the image */
   GLIMS_STATUS_NOT_RUNNING      = 5,
   GLIMS_STATUS_CANCELLED        = 6, /* the user cancelled, e.g. a plug-in dialog */
-  GLIMS_STATUS_LOCKED           = 7  /* a layer or ancestor protects this edit */
+  GLIMS_STATUS_LOCKED           = 7, /* a layer or ancestor protects this edit */
+  GLIMS_STATUS_UNSUPPORTED      = 8  /* the engine version cannot do this */
 } GlimsStatus;
 
 typedef struct GlimsRect {
@@ -1120,6 +1121,35 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*effect_command)       (GlimsEngine *engine, GlimsImageID image,
                                         GlimsItemID drawable, GlimsEffectID effect,
                                         uint32_t command, char **error);
+
+  /* File > Open as Layers: every layer of the file at `path` lands in
+   * `image` above the selected layer — its own order, offsets relative
+   * to the other imported layers, blend modes, masks and groups kept —
+   * with the imported stack centered on the canvas, as one undo step,
+   * and the imported layers selected. `layers` (may be NULL) receives
+   * up to `capacity` of the added layer ids, top first; `count`
+   * receives how many were added. The image's file identity, imported
+   * file, precision and dirty state change only through the edit
+   * itself, and the temporary load image leaves nothing behind.
+   * Loading runs the engine's file plug-ins, so never call this on the
+   * main thread; BUSY while a stroke, a filter preview or a plug-in
+   * holds the engine. INVALID_ARGUMENT for a non-native path;
+   * CANCELLED when the load is cancelled; a failed load adds nothing. */
+  GlimsStatus  (*image_open_layers)    (GlimsEngine *engine, GlimsImageID image,
+                                        const char *path,
+                                        GlimsItemID *layers, int32_t capacity,
+                                        int32_t *count, char **error);
+  /* File > Place: puts `path` into `image` as a genuine link layer — it
+   * keeps a reference to the source file, re-renders when the file
+   * changes and round-trips through XCF as a link — above the selected
+   * layer, centered on the canvas, as one undo step. `layer` (may be
+   * NULL) receives it. Engines without link layers (before GIMP 3.2)
+   * report UNSUPPORTED and change nothing; the call never degrades to
+   * a raster copy. Same readiness, path, busy and failure rules as
+   * image_open_layers. */
+  GlimsStatus  (*image_place_link)     (GlimsEngine *engine, GlimsImageID image,
+                                        const char *path, GlimsItemID *layer,
+                                        char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

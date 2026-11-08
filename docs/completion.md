@@ -110,3 +110,20 @@ center. The actual canvas in a simulated 2x window failed on the old scale
 and pointer mapping, then passed with the corrected implementation. The
 110 unit tests and 120 pinned-engine interface checks pass. Real Retina
 hardware was not available for an on-screen check.
+
+2026-11-08: facade support for Open as Layers and Place, engine side only.
+Two additive calls (`image_open_layers`, `image_place_link`) route through
+`file_open_layers` and `gimp_image_add_layers`, the path GIMP's own open
+dialog takes, so a file's layers land above the selected layer — or inside
+a selected group — centered on the canvas, in one undo step, with order,
+hierarchy, modes, masks and relative offsets kept and the temporary load
+image unreffed. Place makes a real link layer where the engine has them
+(3.2 and later): file reference kept, live re-render when the source
+changes, saved and reread as a link in XCF. On 3.0 the call returns the
+new UNSUPPORTED status and adds nothing; it never degrades to a raster
+copy. The adapter resolves the file's loader before calling in, because
+the link path's circular-reference check dereferences a NULL procedure
+when a saved destination meets a file nothing loads. EngineSession grew
+`openLayers` and `placeLink`. 603 adapter checks pass on all four engine
+sets, including a monitored reread of a rewritten source; the menu
+commands that would call them are not wired yet.
