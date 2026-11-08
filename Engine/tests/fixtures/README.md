@@ -19,3 +19,9 @@ adapter's render of the XCF to equal GIMP's composite pixel for pixel, and
 an XCF save and reopen to keep pixels and structure. The text layer's pixels
 are stored in the XCF, so the comparison does not depend on installed fonts.
 Regenerate only on purpose, and record the GIMP version here.
+
+`linear-rgb.icc` and `gray.icc` are original LittleCMS-generated profiles
+from `scripts/make-icc-fixtures.py`. The former uses sRGB primaries and
+linear transfer curves; the latter D65 gray with a 2.2 curve. Their creation
+time is fixed and optional profile ID cleared. They test profile assignment,
+conversion, model compatibility and XCF persistence without system profiles.

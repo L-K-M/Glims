@@ -704,6 +704,14 @@ typedef enum GlimsColorTRC {
   GLIMS_COLOR_TRC_PERCEPTUAL = 3
 } GlimsColorTRC;
 
+/* Rendering intents owned by the facade, not native engine enum values. */
+typedef enum GlimsProfileIntent {
+  GLIMS_PROFILE_PERCEPTUAL = 1,
+  GLIMS_PROFILE_RELATIVE_COLORIMETRIC = 2,
+  GLIMS_PROFILE_SATURATION = 3,
+  GLIMS_PROFILE_ABSOLUTE_COLORIMETRIC = 4
+} GlimsProfileIntent;
+
 /* The image's color state. Caller-owned: image_color_info fills the
  * struct in place; the fixed buffers are UTF-8, truncated, and need no
  * release. `component` and `trc` together are the image's precision;
@@ -1362,6 +1370,23 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*resource_resolve)     (GlimsEngine *engine, uint32_t kind,
                                         const char *name, const char *collection,
                                         bool internal, GlimsResourceID *outID,
+                                        char **error);
+  /* Assign an ICC profile without converting pixel component values, or
+   * discard embedded/hidden profiles when path is NULL. Non-NULL paths
+   * must be absolute, nonempty UTF-8 paths to valid ICC profiles compatible
+   * with the image model. A native single undo group, no mutation on refusal;
+   * BUSY during strokes/previews/plugin work. Discarding an already builtin
+   * profile and assigning an equal profile are no-ops. */
+  GlimsStatus (*image_assign_profile) (GlimsEngine *engine, GlimsImageID image,
+                                       const char *path, char **error);
+  /* Convert pixels to preserve appearance in the destination ICC profile.
+   * NULL path chooses the image model/precision's builtin profile. The own
+   * GlimsProfileIntent mapping and explicit black-point compensation apply
+   * only to this conversion. Same path/compatibility, undo and busy rules as
+   * assignment; converting to an equal effective profile is a no-op. */
+  GlimsStatus (*image_convert_profile) (GlimsEngine *engine, GlimsImageID image,
+                                        const char *path, uint32_t intent,
+                                        bool black_point_compensation,
                                         char **error);
 } GlimsEngineAPI;
 

@@ -888,3 +888,21 @@ the corrected history reset verifies white pixels and the original history
 position. Real control actions now verify 50-percent fill pixels and saved
 channel isolation. Vector styling and multi-anchor editing remain later
 work; initial vector creation uses the native context's defaults.
+
+### ICC assignment and conversion (2026-11-08)
+
+Two additive native facade calls assign/discard an ICC profile or convert
+pixels to a selected profile with a facade-owned rendering intent and explicit
+black-point compensation. NULL selects the model/precision's builtin profile;
+assignment discards embedded and hidden profiles. File paths are absolute,
+nonempty UTF-8 and loaded on the engine thread. The core validates model
+compatibility before opening its own undo group. Active strokes and previews
+refuse the call, equal-profile operations add no history, and every owned
+profile is released after the operation. No upstream edits or GTK calls.
+
+The first pinned conformance run passes 841 checks, including changed midtone
+interpretation on assignment (128/64 to 188/137), appearance preservation on
+conversion, undo/redo, XCF round trip, RGB/gray compatibility, invalid files and
+busy refusals. Fixtures are original deterministic LittleCMS profiles generated
+by `scripts/make-icc-fixtures.py`. Cross-engine runs and independent review are
+pending. Swift controls and display/proof transforms remain separate work.
