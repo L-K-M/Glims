@@ -271,6 +271,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private func startPreview(title: String,
                               begin: (@escaping @MainActor (Result<ImageDocument.FilterPreviewStart, Error>) -> Void) -> Void,
                               buildPanel: @escaping @MainActor (Int32, [String: EngineSession.FilterValue]) -> FilterPreviewPanel?) {
+        // A catalog reply may arrive after windowWillClose cancels
+        // previews, while rendering still drains before isClosing flips.
+        guard !closeStarted, !imageDocument.isClosing else { return }
         previewRequest += 1
         let request = previewRequest
         previewStartIsPending = true

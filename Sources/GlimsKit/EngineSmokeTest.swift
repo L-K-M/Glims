@@ -5249,6 +5249,45 @@ enum EngineSmokeTest {
               "the image is destroyed and the effect session goes with it")
         documents.items.removeAll { $0 === pendingDocument }
 
+        // A catalog reply can arrive after the window starts closing,
+        // before render teardown marks the image itself closing. Both a
+        // new filter and an existing effect must refuse that late start.
+        if let gaussian = NativeFilterCatalog.shared.operation(named: "gegl:gaussian-blur") {
+            for existing in [false, true] {
+                let closingImage = try session.newImage(width: 16, height: 16)
+                let drawable = try session.layers(closingImage)[0].id
+                if existing {
+                    let filter = try session.beginFilter(image: closingImage, drawable: drawable,
+                                                         operation: gaussian.name)
+                    try session.commitFilter(filter)
+                }
+                let source = work.appendingPathComponent("late-filter-\(existing).xcf")
+                try session.save(closingImage, to: source.path)
+                let closingDocument = try ImageDocument(session: session, image: closingImage,
+                                                         name: source.lastPathComponent, openedFrom: source)
+                documents.items.append(closingDocument)
+                let closingController = DocumentWindowController(document: closingDocument)
+                closingController.showWindow(nil)
+                closingController.window?.close()
+                check(closingController.closeStarted && !closingDocument.isClosing,
+                      "window closing precedes asynchronous render teardown (existing \(existing))")
+                if existing, let effect = closingDocument.layerEffects[drawable]?.first {
+                    closingController.editEffectParameters(effect.id, on: drawable, operationName: gaussian.name)
+                } else {
+                    closingController.openNativeFilter(gaussian)
+                }
+                check(!closingDocument.filterPreviewIsOpen && closingDocument.pendingWork == 0,
+                      "a late filter start is refused after window closing (existing \(existing))")
+                let deadline = Date().addingTimeInterval(10)
+                while (try? session.info(closingImage)) != nil && Date() < deadline { spin(0.02) }
+                check(closingController.previewPanel == nil && !closingDocument.filterPreviewIsOpen
+                        && (try? session.info(closingImage)) == nil,
+                      "closing leaves no late filter panel or live image (existing \(existing))")
+                closingController.previewPanel?.cancel()
+                documents.items.removeAll { $0 === closingDocument }
+            }
+        }
+
         controller.window?.orderOut(nil)
     }
 
