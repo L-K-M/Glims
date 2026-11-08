@@ -267,6 +267,12 @@ GlimsStatus glims_path_fill        (GlimsEngine *e, GlimsImageID image, GlimsIte
 GlimsStatus glims_path_to_vector_layer (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
                                         const char *name, GlimsItemID *layer, char **error);
 
+/* vector-style.c */
+GlimsStatus glims_vector_layer_style_get (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                          GlimsVectorStyle *style, char **error);
+GlimsStatus glims_vector_layer_style_set (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                          const GlimsVectorStyleChange *change, char **error);
+
 /* edit.c */
 GlimsStatus glims_fill             (GlimsEngine *e, GlimsImageID image, GlimsPoint point,
                                     const GlimsFillSettings *settings, char **error);
