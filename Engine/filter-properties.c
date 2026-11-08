@@ -793,7 +793,7 @@ filter_set_value (GlimsFilter          *session,
 
   /* The same re-apply as glims_filter_set_double: a live preview pushes
    * no undo; the pending commit covers every change as one step. */
-  gimp_drawable_filter_apply (session->filter, NULL);
+  glims_filter_preview_apply (session);
   gimp_image_flush (session->image);
 
   return GLIMS_STATUS_OK;

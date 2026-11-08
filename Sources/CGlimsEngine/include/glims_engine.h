@@ -1150,6 +1150,24 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*image_place_link)     (GlimsEngine *engine, GlimsImageID image,
                                         const char *path, GlimsItemID *layer,
                                         char **error);
+
+  /* Opens a live filter session that edits the committed effect
+   * `effect` of `drawable`, as the layer effects editor's parameter
+   * dialog does: the session's filter_get_property reads the effect's
+   * current parameters and filter_set_property/filter_set_double
+   * preview new ones through the effect's own captured mask at its
+   * stack position. filter_commit writes the parameters back into the
+   * same effect — id, name, blend and opacity state, enabled state and
+   * list position kept — as one filter-modified undo step; filter_abort
+   * restores the effect untouched and pushes no undo. `effect` must be
+   * a committed effect id from drawable_effects — a stale, foreign,
+   * removed or preview id is NOT_FOUND, as is a detached drawable —
+   * and `filter` receives a GlimsFilterID session id, not an effect
+   * id. The image keeps the same readiness rules as effect_change:
+   * BUSY while a stroke, a filter session or a plug-in owns it. */
+  GlimsStatus  (*filter_edit_begin)    (GlimsEngine *engine, GlimsImageID image,
+                                        GlimsItemID drawable, GlimsEffectID effect,
+                                        GlimsFilterID *filter, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
