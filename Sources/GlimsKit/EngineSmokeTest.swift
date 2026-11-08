@@ -4621,7 +4621,7 @@ enum EngineSmokeTest {
         var draggingLocation: NSPoint { .zero }
         var draggedImageLocation: NSPoint { .zero }
         var draggedImage: NSImage? { nil }
-        let draggingPasteboard = NSPasteboard()
+        let draggingPasteboard = NSPasteboard.withUniqueName()
         var draggingSource: Any? { nil }
         var draggingSequenceNumber: Int { 0 }
         var draggingFormation: NSDraggingFormation = .default
@@ -4676,7 +4676,7 @@ enum EngineSmokeTest {
         let first = try session.beginFilter(image: image, drawable: layer, operation: "gegl:color-overlay")
         try session.setFilterProperty(first, "value", to: .color(NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)))
         try session.commitFilter(first)
-        let second = try session.beginFilter(image: image, drawable: layer, operation: "gegl:value-invert")
+        let second = try session.beginFilter(image: image, drawable: layer, operation: "gegl:invert-linear")
         try session.commitFilter(second)
         let third = try session.beginFilter(image: image, drawable: layer, operation: "gegl:gaussian-blur")
         try session.setFilterProperty(third, "std-dev-x", to: .number(8))
@@ -4690,7 +4690,7 @@ enum EngineSmokeTest {
             controller.window?.orderOut(nil)
             return
         }
-        check(stack.map(\.operation) == ["gegl:gaussian-blur", "gegl:value-invert", "gegl:color-overlay"],
+        check(stack.map(\.operation) == ["gegl:gaussian-blur", "gegl:invert-linear", "gegl:color-overlay"],
               "the document caches the committed effects top-first")
         let cyan = pixel(session, image, x: 16, y: 4)
         check((cyan?[0] ?? 255) < 60 && (cyan?[1] ?? 0) > 200,
@@ -4755,7 +4755,7 @@ enum EngineSmokeTest {
             _ = NSApp.sendAction(item.action!, to: item.target, from: item)
             settle()
             try document.reload()
-            check(document.layerEffects[layer]?.last?.operation == "gegl:value-invert",
+            check(document.layerEffects[layer]?.last?.operation == "gegl:invert-linear",
                   "Move to Bottom reorders the effect stack")
             let reordered = pixel(session, image, x: 16, y: 4)
             check((reordered?[0] ?? 0) > 200 && (reordered?[1] ?? 255) < 60,
@@ -4764,7 +4764,7 @@ enum EngineSmokeTest {
             settle()
             try document.reload()
             check(document.layerEffects[layer]?.map(\.operation)
-                    == ["gegl:gaussian-blur", "gegl:value-invert", "gegl:color-overlay"],
+                    == ["gegl:gaussian-blur", "gegl:invert-linear", "gegl:color-overlay"],
                   "one undo restores the effect order")
         } else {
             check(false, "the effect submenu offers Move to Bottom")
@@ -4975,7 +4975,7 @@ enum EngineSmokeTest {
         document.moveLayer(layer, toParent: group.id, atIndex: 0)
         settle()
         let groupFilter = try session.beginFilter(image: image, drawable: group.id,
-                                                  operation: "gegl:value-invert")
+                                                  operation: "gegl:invert-linear")
         try session.commitFilter(groupFilter)
         settle()
         try document.reload()
@@ -4991,6 +4991,7 @@ enum EngineSmokeTest {
         }
         outline.expandItem(groupNode)
         let drag = LayerDragInfo()
+        defer { drag.draggingPasteboard.releaseGlobally() }
         drag.draggingPasteboard.setString("\(dropped)", forType: NSPasteboard.PasteboardType("ch.lkmc.Glims.layerID"))
         check(palette.outlineView(outline, validateDrop: drag, proposedItem: groupNode,
                                   proposedChildIndex: 0) == [],
@@ -5018,6 +5019,7 @@ enum EngineSmokeTest {
                                                    drawable: pendingDocument.activeLayer ?? 0,
                                                    operation: "gegl:gaussian-blur")
         try session.commitFilter(pendingLayer)
+        try session.save(pendingImage, to: pendingNative.path)
         try pendingDocument.reload()
         guard let pendingDrawable = pendingDocument.layerEffects.keys.first,
               let pendingEffect = pendingDocument.layerEffects[pendingDrawable]?.first else {
