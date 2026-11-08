@@ -61,8 +61,20 @@ static gboolean
 call_dispatch (gpointer user_data)
 {
   GlimsCall *call = user_data;
+  /* A dispatch at main depth > 1 means the engine thread sits inside a
+   * nested main loop — a plug-in call or another long operation that
+   * iterates the context, such as a link layer reloading its changed
+   * file. Not every native path raises `busy` itself (the link monitor's
+   * reload runs with no facade call around it), so raise it for this
+   * call's duration: mutation gates refuse while reads and cancellation
+   * remain deliverable. This does not discard or block RPC dispatch. */
+  gboolean   nested = g_main_depth () > 1;
 
+  if (nested)
+    call->engine->busy++;
   call->status = call->func (call->engine, call->data);
+  if (nested)
+    call->engine->busy--;
 
   g_mutex_lock (&call->engine->lock);
   call->done = TRUE;
@@ -822,6 +834,7 @@ open_image_free (gpointer data)
       if (open->guide_moved_handler)
         g_signal_handler_disconnect (open->image, open->guide_moved_handler);
 
+      glims_track_image_links (open->image);
       g_object_unref (open->image);
     }
 

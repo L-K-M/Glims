@@ -21,6 +21,12 @@
 #include "core/gimplayer-new.h"
 #if GIMP_CHECK_VERSION (3, 2, 0)
 #include "core/gimplinklayer.h"
+#if ! GIMP_CHECK_VERSION (3, 3, 0)
+#include "libgimpmath/gimpmath.h"
+#include "core/gimplink.h"
+#include "core/gimplinklayerundo.h"
+#include "core/gimpitemundo.h"
+#endif
 #endif
 #include "core/gimppickable.h"
 #include "core/gimpprojection.h"
@@ -45,6 +51,71 @@
 
 /* The largest render scale the facade accepts (3200%). */
 #define MAX_RENDER_SCALE 32.0
+
+/* GIMP 3.2's link finalizer leaves a pending changed idle with a bare
+ * link pointer (gimplink.c). Master cancels it natively. Register cleanup
+ * on actual object death, not image close: undo records and other owners
+ * can keep a link alive, and cancelling a surviving link's idle would
+ * leave its private source id stale and silence future file changes. */
+#if GIMP_CHECK_VERSION (3, 2, 0) && ! GIMP_CHECK_VERSION (3, 3, 0)
+static void
+link_finalized (gpointer data, GObject *dead_link)
+{
+  (void) data;
+  while (g_source_remove_by_user_data (dead_link))
+    ;
+}
+
+static void
+track_link (GimpLink *link)
+{
+  if (link && ! g_object_get_data (G_OBJECT (link), "glims-link-idle-cleanup"))
+    {
+      g_object_set_data (G_OBJECT (link), "glims-link-idle-cleanup", GINT_TO_POINTER (1));
+      g_object_weak_ref (G_OBJECT (link), link_finalized, NULL);
+    }
+}
+
+static void
+track_link_owners (GimpObject *object, GHashTable *visited)
+{
+  GimpContainer *children = NULL;
+
+  if (! object || ! g_hash_table_add (visited, object))
+    return;
+  if (GIMP_IS_LINK_LAYER (object))
+    track_link (gimp_link_layer_get_link (GIMP_LINK_LAYER (object)));
+  if (GIMP_IS_LINK_LAYER_UNDO (object))
+    track_link (GIMP_LINK_LAYER_UNDO (object)->link);
+  if (GIMP_IS_ITEM_UNDO (object))
+    track_link_owners (GIMP_OBJECT (GIMP_ITEM_UNDO (object)->item), visited);
+  if (GIMP_IS_UNDO_STACK (object))
+    children = GIMP_UNDO_STACK (object)->undos;
+  else if (GIMP_IS_GROUP_LAYER (object))
+    children = gimp_viewable_get_children (GIMP_VIEWABLE (object));
+  if (children)
+    for (gint i = 0; i < gimp_container_get_n_children (children); i++)
+      track_link_owners (gimp_container_get_child_by_index (children, i), visited);
+}
+#endif
+
+void
+glims_track_image_links (GimpImage *image)
+{
+#if GIMP_CHECK_VERSION (3, 2, 0) && ! GIMP_CHECK_VERSION (3, 3, 0)
+  GHashTable *visited = g_hash_table_new (g_direct_hash, g_direct_equal);
+  GList *layers = gimp_image_get_layer_list (image);
+
+  for (GList *iter = layers; iter; iter = iter->next)
+    track_link_owners (iter->data, visited);
+  track_link_owners (GIMP_OBJECT (gimp_image_get_undo_stack (image)), visited);
+  track_link_owners (GIMP_OBJECT (gimp_image_get_redo_stack (image)), visited);
+  g_list_free (layers);
+  g_hash_table_unref (visited);
+#else
+  (void) image;
+#endif
+}
 
 /* ---- Open images ------------------------------------------------------- */
 
@@ -91,6 +162,7 @@ undo_event (GimpImage      *image,
             GimpUndo       *undo,
             GlimsOpenImage *open)
 {
+  glims_track_image_links (image);
   open->history_revision++;
   glims_emit (open->engine, GLIMS_EVENT_UNDO_CHANGED, image, NULL, NULL);
   glims_emit (open->engine, GLIMS_EVENT_LAYERS_CHANGED, image, NULL, NULL);
@@ -154,6 +226,7 @@ glims_adopt_image (GlimsEngine  *engine,
 
   open->image  = image;
   open->engine = engine;
+  glims_track_image_links (image);
   open->history_revision = 1;
   open->projection_update_handler =
     g_signal_connect (gimp_image_get_projection (image), "update",
@@ -290,6 +363,11 @@ glims_image_close (GlimsEngine  *engine,
 {
   if (! glims_lookup_image (engine, id))
     return GLIMS_STATUS_NOT_FOUND;
+
+  /* A monitored link can enter a file plug-in's nested loop without an
+   * app-owned job. Never free its image from that loop. Callers retry. */
+  if (engine->busy > 0)
+    return GLIMS_STATUS_BUSY;
 
   glims_release_image (engine, id);
 
@@ -650,7 +728,12 @@ undo_or_redo (GlimsEngine  *engine,
   if (status != GLIMS_STATUS_OK)
     return status;
 
+  /* Popping an undo or redo can thaw a link layer — a file reload that
+   * runs a load plug-in and its nested main loop — so hold busy for the
+   * duration. */
+  engine->busy++;
   done = undo ? gimp_image_undo (open->image) : gimp_image_redo (open->image);
+  engine->busy--;
   gimp_image_flush (open->image);
 
   return done ? GLIMS_STATUS_OK : GLIMS_STATUS_FAILED;
