@@ -5278,8 +5278,8 @@ test_stroke_brush_resource (void)
 
   /* Two distinct stock file-backed parametric brushes with a real mask:
    * a soft round one and a hard square one. */
-  soft  = find_file_brush ("Hardness 025");
-  block = find_file_brush ("Block 01");
+  soft  = find_file_brush ("2. Hardness 025");
+  block = find_file_brush ("2. Block 01");
   CHECK (soft != 0 && block != 0 && soft != block,
          "two distinct stock file-backed parametric brushes are listed (%llu, %llu)",
          (unsigned long long) soft, (unsigned long long) block);
@@ -5289,7 +5289,7 @@ test_stroke_brush_resource (void)
   CHECK (api->resource_identifiers (engine, soft, &soft_name, &soft_coll, &soft_int, NULL) == GLIMS_STATUS_OK &&
          api->resource_identifiers (engine, block, &block_name, &block_coll, &block_int, NULL) == GLIMS_STATUS_OK &&
          soft_name && block_name && ! soft_int && ! block_int &&
-         strcmp (soft_name, "Hardness 025") == 0 && strcmp (block_name, "Block 01") == 0,
+         strcmp (soft_name, "2. Hardness 025") == 0 && strcmp (block_name, "2. Block 01") == 0,
          "the selected brushes carry their file-backed identities (%s, %s)",
          soft_name ? soft_name : "?", block_name ? block_name : "?");
 
