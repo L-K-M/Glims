@@ -1540,6 +1540,27 @@ typedef struct GlimsEngineAPI {
                                            GlimsItemID layer, const GlimsVectorStyleChange *change,
                                            char **error);
 
+  /* A paint stroke that paints with one specific brush: the resource
+   * `brush` names, a handle from resources() of GLIMS_RESOURCE_BRUSH.
+   * Otherwise exactly stroke_begin(): the same stroke_continue and
+   * stroke_end drive it, one undo step per stroke, the same readiness,
+   * lock and busy rules, and a refused call sets `stroke` to 0 and
+   * changes no image or history. The brush is resolved only here, at
+   * begin: INVALID_ARGUMENT for a zero handle, one outside the native
+   * id range or one that names another resource kind, NOT_FOUND for a
+   * stale handle or a brush this engine's brush factory no longer
+   * holds. The stroke's own paint options define the brush property
+   * locally and hold the selected brush for the whole stroke, so later
+   * changes to the caller's settings or to the shared user context
+   * never retarget it, and neither the user context nor any factory
+   * resource is mutated. Painting stays the engine's own paint core,
+   * so colored brushes keep their native semantics. */
+  GlimsStatus  (*stroke_begin_with_brush_resource) (GlimsEngine *engine, GlimsImageID image,
+                                                    GlimsItemID layer, GlimsResourceID brush,
+                                                    const GlimsBrushSettings *settings,
+                                                    const GlimsStrokePoint *first,
+                                                    GlimsStrokeID *stroke, char **error);
+
   /* Fills the selected drawable (the active layer, its mask while mask
    * editing is on, or a selected channel — the same target `fill` uses)
    * with the pattern `pattern`, tiled from the drawable's origin, as one

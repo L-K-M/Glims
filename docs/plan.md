@@ -856,6 +856,73 @@ pixels and every catalog unchanged after the calls. Verified here with
 warnings); the root owns the engine lock and the desktop, so the
 smoke-test scenario's runtime execution is pending root validation,
 after the root's ICC integration to keep the append-only ABI order.
+### Stroke with a selected brush resource (2026-11-08)
+
+Engine side only, on `feat/brush-resource-strokes`: one additive facade
+slot appended after the table's end, `stroke_begin_with_brush_resource`,
+API version 1 unchanged, no existing struct layout or signature touched
+(no padding repurposed). It takes the opaque `GlimsResourceID` brush plus
+the existing `GlimsBrushSettings` and `GlimsStrokePoint`, and the stroke
+runs through the same `stroke_continue`/`stroke_end`. `stroke_begin` is
+unchanged in behavior, including the inherited default brush resource.
+
+Implementation, all native C:
+
+- `Engine/resource.c` keeps its id validation private but now exposes one
+  narrowly typed internal helper, `glims_lookup_brush()`
+  (`Engine/engine-private.h`), which reuses `lookup_resource()` — so a
+  zero handle or one outside the native gint id range is still refused
+  with INVALID_ARGUMENT before the native id table, and a stale handle or
+  a brush absent from the current engine's own brush factory still
+  reports NOT_FOUND — and then requires `GIMP_IS_BRUSH`, so a live handle
+  of another resource kind is INVALID_ARGUMENT. No duplicated
+  ID-truncation validation anywhere.
+- `Engine/paint.c` splits the old `glims_stroke_begin` body into a static
+  `stroke_begin_common()` taking an optional `GimpBrush *`; all existing
+  guards (image/drawable lookup, settings validation, busy, group
+  refusal, lock checks, clone/heal source, paint-info lookup, undo
+  grouping, start/paint/flush sequence) are untouched, and every refused
+  call now also sets `*out = 0` and mutates no image or history.
+  `make_options()` gained the optional brush: when given, it defines
+  `GIMP_CONTEXT_PROP_BRUSH` locally on the stroke's own paint-options
+  context BEFORE `gimp_context_set_brush()` — an undefined property would
+  make the setter walk up to the parent, which is the shared user context
+  and must never be mutated — so the local definition both pins the brush
+  and shields the stroke from later parent/caller changes; the context
+  then holds the brush strongly (`g_set_object`) for the whole stroke.
+  The shared user context and factory resources are never written, and
+  painting stays GIMP's own paint core (`gimp_brush_core_start` reads the
+  brush from the options' context), so native colored-brush semantics are
+  preserved with no bitmap reimplementation.
+- The brush is resolved exactly once, at begin, on the engine thread.
+- `Engine/engine.c` marshals the entry with a dedicated
+  `GlimsStrokeResourceArgs` whose `brush` field is a typed
+  `GlimsResourceID` (`uint64_t`); the id never travels in an int32-width
+  field of `GlimsArgs`.
+- `Engine/tests/engine-tests.c` gains `test_stroke_brush_resource()`:
+  stock file-backed parametric brushes "Hardness 025" and "Block 01"
+  (not pipes or the clipboard brush) with `pressure_size=false`; the
+  selected brush paints its band and undo restores the exact pixels as
+  one undo step; the two distinct brushes paint differently at the same
+  place; an open resource stroke keeps its brush across an interleaved
+  legacy stroke on another image, and legacy default strokes before and
+  after all resource strokes paint identically (the inherited brush
+  context is unchanged); refusals cover zero, high-bit
+  (`1<<40`, all-ones, `0x80000000`, `(1<<32)|id`), wrong-kind (a pattern
+  handle), stale/unissued `0x7FFFFFFF`, unknown image, missing
+  point/settings/output, non-positive size, pixel LOCKED and plug-in
+  BUSY, each resetting the out stroke to 0 with no undo or pixel change;
+  the brushes' persistent identities are unchanged and still resolve to
+  the same handles.
+
+Compile status (private root, `GLIMS_ADAPTER_ROOT=$PWD/.build/engine-adapters`,
+no `--check`/`--test`, shared `_engine/.lock` was free each time):
+`scripts/build-adapter.sh GIMP_3_2_8`, `GIMP_3_2_0`, `GIMP_3_0_8` and
+`master` all compiled and linked `libglimsengine.dylib` (exports only
+`glims_engine_get_api`) plus the `glims-engine-tests` runner; the only
+warning is the pre-existing `clipboard.c` declaration-after-statement.
+Runtime conformance (`--test`), engine startup, Swift builds and app
+smoke tests were NOT run here: root runtime validation is pending.
 
 ## Later, before any public release
 
