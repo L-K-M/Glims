@@ -12,16 +12,25 @@
  */
 #include "engine-private.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "core/gimp.h"
 #include "core/gimpbrush.h"
 #include "core/gimpcontainer.h"
+#include "core/gimpcontext.h"
 #include "core/gimpdata.h"
 #include "core/gimpdatafactory.h"
 #include "core/gimpgradient.h"
 #include "core/gimpobject.h"
 #include "core/gimppattern.h"
+#include "core/gimptempbuf.h"
+#include "core/gimpviewable.h"
+
+/* The thumbnail box the facade promises (glims_engine.h,
+ * resource_thumbnail): small enough that a preview cannot approach
+ * GIMP_VIEWABLE_MAX_PREVIEW_SIZE on any supported engine. */
+#define THUMBNAIL_MAX_SIZE 512
 
 static GimpDataFactory *
 factory_for_kind (Gimp *gimp, uint32_t kind)
@@ -345,4 +354,222 @@ glims_resource_resolve (GlimsEngine     *engine,
     }
 
   return GLIMS_STATUS_NOT_FOUND;
+}
+
+/* The colors a thumbnail may recolor with: every component finite and
+ * inside 0 ... 1, the same contract GlimsColor documents and the
+ * filter property colors enforce. */
+static gboolean
+color_usable (const GlimsColor *color)
+{
+  gdouble rgba[4] = { color->red, color->green, color->blue, color->alpha };
+  gint    i;
+
+  for (i = 0; i < 4; i++)
+    if (! isfinite (rgba[i]) || rgba[i] < 0.0 || rgba[i] > 1.0)
+      return FALSE;
+
+  return TRUE;
+}
+
+/* Copies the preview's pixels into the facade's owned straight-alpha
+ * RGBA buffer: rows follow the pixbuf's own rowstride, and a
+ * three-channel preview gains an opaque alpha. Returns NULL when the
+ * size cannot be represented or the allocation fails. */
+static uint8_t *
+clone_preview_pixels (GdkPixbuf *pixbuf, size_t *byte_count,
+                      int32_t *out_width, int32_t *out_height)
+{
+  const guchar *source;
+  uint8_t      *pixels;
+  gint          width, height, stride, x, y;
+  gboolean      has_alpha;
+  size_t        bytes;
+
+  width    = gdk_pixbuf_get_width (pixbuf);
+  height   = gdk_pixbuf_get_height (pixbuf);
+  stride   = gdk_pixbuf_get_rowstride (pixbuf);
+  has_alpha = gdk_pixbuf_get_has_alpha (pixbuf);
+  source   = gdk_pixbuf_get_pixels (pixbuf);
+
+  if (width <= 0 || height <= 0 ||
+      (size_t) width > SIZE_MAX / 4 / (size_t) height)
+    return NULL;
+
+  bytes  = (size_t) width * (size_t) height * 4;
+  pixels = g_try_malloc (bytes);
+  if (! pixels)
+    return NULL;
+
+  for (y = 0; y < height; y++)
+    {
+      const guchar *row = source + (gsize) y * (gsize) stride;
+      uint8_t      *dst = pixels + (gsize) y * (size_t) width * 4;
+
+      if (has_alpha)
+        {
+          memcpy (dst, row, (size_t) width * 4);
+        }
+      else
+        {
+          for (x = 0; x < width; x++)
+            {
+              dst[x * 4 + 0] = row[x * 3 + 0];
+              dst[x * 4 + 1] = row[x * 3 + 1];
+              dst[x * 4 + 2] = row[x * 3 + 2];
+              dst[x * 4 + 3] = 255;
+            }
+        }
+    }
+
+  *byte_count = bytes;
+  *out_width  = width;
+  *out_height = height;
+  return pixels;
+}
+
+GlimsStatus
+glims_resource_thumbnail (GlimsEngine       *engine,
+                          GlimsResourceID    id,
+                          int32_t            max_size,
+                          const GlimsColor  *foreground,
+                          const GlimsColor  *background,
+                          GlimsPixelBuffer  *out,
+                          char             **error)
+{
+  GimpData     *data;
+  GimpViewable *viewable;
+  GimpContext  *context;
+  GimpTempBuf  *temp_buf;
+  GdkPixbuf    *pixbuf;
+  GeglColor    *fg_color;
+  GeglColor    *bg_color;
+  GlimsStatus   status;
+  gint          width, height, src_width, src_height;
+  int32_t       thumb_width = 0, thumb_height = 0;
+  size_t        byte_count = 0;
+  uint8_t      *pixels;
+
+  if (out)
+    memset (out, 0, sizeof *out);
+
+  if (! out)
+    {
+      if (error)
+        *error = strdup ("The pixel buffer output is required.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  if (max_size < 1 || max_size > THUMBNAIL_MAX_SIZE)
+    {
+      if (error)
+        *error = strdup ("The maximum size must be between 1 and 512.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  if ((foreground && ! color_usable (foreground)) ||
+      (background && ! color_usable (background)))
+    {
+      if (error)
+        *error = strdup ("The foreground and background colors need "
+                         "finite components inside 0...1.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  status = lookup_resource (engine, id, &data);
+  if (status == GLIMS_STATUS_INVALID_ARGUMENT)
+    {
+      if (error)
+        *error = strdup ("This handle cannot name a resource.");
+      return status;
+    }
+  if (status != GLIMS_STATUS_OK)
+    return status;
+
+  viewable = GIMP_VIEWABLE (data);
+
+  /* Gradients have no native size and fill their request exactly, so
+   * they get the bounded strip the facade documents. Brushes and
+   * patterns fit their source dimensions inside the box without
+   * upscaling, which is also what their native preview does with the
+   * request. */
+  if (kind_of_data (data) == GLIMS_RESOURCE_GRADIENT)
+    {
+      width  = max_size;
+      height = MAX (1, max_size / 2);
+    }
+  else if (gimp_viewable_get_size (viewable, &src_width, &src_height) &&
+           src_width > 0 && src_height > 0)
+    {
+      gdouble scale = MIN ((gdouble) max_size / (gdouble) src_width,
+                           (gdouble) max_size / (gdouble) src_height);
+
+      scale  = MIN (1.0, scale);
+      width  = MAX (1, (gint) ((gdouble) src_width  * scale + 0.5));
+      height = MAX (1, (gint) ((gdouble) src_height * scale + 0.5));
+    }
+  else
+    {
+      width = height = max_size;
+    }
+
+  /* A parentless per-call context carrying explicit colors: the
+   * gradient's foreground/background segments read these, and nothing
+   * global (the user context) is read or changed. The defaults are the
+   * core's own: black foreground, white background. */
+  context  = gimp_context_new (engine->gimp, "Glims resource thumbnail", NULL);
+  fg_color = gegl_color_new (NULL);
+  bg_color = gegl_color_new (NULL);
+  gegl_color_set_rgba_with_space (fg_color,
+                       foreground ? foreground->red   : 0.0,
+                       foreground ? foreground->green : 0.0,
+                       foreground ? foreground->blue  : 0.0,
+                       foreground ? foreground->alpha : 1.0, NULL);
+  gegl_color_set_rgba_with_space (bg_color,
+                       background ? background->red   : 1.0,
+                       background ? background->green : 1.0,
+                       background ? background->blue  : 1.0,
+                       background ? background->alpha : 1.0, NULL);
+  gimp_context_set_foreground (context, fg_color);
+  gimp_context_set_background (context, bg_color);
+
+  /* Fresh, owned preview: gimp_viewable_get_new_preview runs the
+   * class's own renderer on every call, while the cached
+   * gimp_viewable_get_preview path keys on width, height and the
+   * foreground alone and would serve stale gradients when only the
+   * background changes. The TempBuf keeps its own format; the pixbuf
+   * call normalizes it to 8-bit RGB or RGBA. Both objects are owned
+   * here and released below. */
+#if GIMP_CHECK_VERSION (3, 3, 0)
+  temp_buf = gimp_viewable_get_new_preview (viewable, context, width, height, 1, fg_color);
+#else
+  temp_buf = gimp_viewable_get_new_preview (viewable, context, width, height, fg_color);
+#endif
+
+  g_object_unref (bg_color);
+  g_object_unref (fg_color);
+  g_object_unref (context);
+
+  if (! temp_buf)
+    return glims_fail (error, NULL, "This resource has no thumbnail.");
+
+  pixbuf = gimp_temp_buf_create_pixbuf (temp_buf);
+  if (! pixbuf)
+    {
+      gimp_temp_buf_unref (temp_buf);
+      return glims_fail (error, NULL, "Not enough memory for this thumbnail.");
+    }
+
+  pixels = clone_preview_pixels (pixbuf, &byte_count, &thumb_width, &thumb_height);
+  g_object_unref (pixbuf);
+  gimp_temp_buf_unref (temp_buf);
+
+  if (! pixels)
+    return glims_fail (error, NULL, "Not enough memory for this thumbnail.");
+
+  out->bounds     = (GlimsRect) { 0, 0, thumb_width, thumb_height };
+  out->pixels     = pixels;
+  out->byte_count = byte_count;
+
+  return GLIMS_STATUS_OK;
 }

@@ -1094,7 +1094,18 @@ MARSHAL (path_fill, return glims_path_fill (e, a->image, a->item, (GlimsItemID) 
                                             a->error);)
 MARSHAL (path_to_vector_layer, return glims_path_to_vector_layer (e, a->image, a->item, a->string,
                                                                   a->out, a->error);)
+MARSHAL (image_assign_profile, return glims_image_assign_profile (e, a->image, a->string,
+                                                                   a->error);)
+MARSHAL (image_convert_profile, return glims_image_convert_profile (e, a->image, a->string,
+                                                                     (uint32_t) a->width,
+                                                                     a->height != 0, a->error);)
+MARSHAL (image_convert_profile_rasterizing, return glims_image_convert_profile_rasterizing
+            (e, a->image, a->string, (uint32_t) a->width, a->height != 0, a->error);)
 MARSHAL (resources, return glims_resources (e, (uint32_t) a->width, a->out, a->capacity, a->count);)
+MARSHAL (vector_layer_style_get, return glims_vector_layer_style_get (e, a->image, a->item,
+                                                                      (GlimsVectorStyle *) a->in_out, a->error);)
+MARSHAL (vector_layer_style_set, return glims_vector_layer_style_set (e, a->image, a->item,
+                                                                      a->in, a->error);)
 
 /* A path's geometry takes more arguments than GlimsArgs holds. */
 typedef struct
@@ -1144,6 +1155,10 @@ typedef struct
   char            **out_collection;
   bool             *out_internal;
   GlimsResourceID  *out_id;
+  int32_t           max_size;
+  const GlimsColor *foreground;
+  const GlimsColor *background;
+  GlimsPixelBuffer *pixels;
   char            **error;
 } GlimsResourceArgs;
 
@@ -1186,6 +1201,15 @@ stroke_begin_with_brush_resource_on_engine (GlimsEngine *e, gpointer data)
 
   return glims_stroke_begin_with_brush_resource (e, a->image, a->item, a->brush,
                                                  a->brush_settings, a->first, a->out, a->error);
+}
+
+static GlimsStatus
+resource_thumbnail_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsResourceArgs *a = data;
+
+  return glims_resource_thumbnail (e, a->id, a->max_size, a->foreground, a->background,
+                                   a->pixels, a->error);
 }
 
 static GlimsStatus
@@ -1940,6 +1964,31 @@ api_path_to_vector_layer (GlimsEngine *e, GlimsImageID image, GlimsItemID path, 
 }
 
 static GlimsStatus
+api_image_assign_profile (GlimsEngine *e, GlimsImageID image, const char *path, char **error)
+{
+  GlimsArgs a = { .image = image, .string = path, .error = error };
+  return glims_engine_call (e, image_assign_profile_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_convert_profile (GlimsEngine *e, GlimsImageID image, const char *path,
+                           uint32_t intent, bool black_point_compensation, char **error)
+{
+  GlimsArgs a = { .image = image, .string = path, .width = (int32_t) intent,
+                  .height = black_point_compensation, .error = error };
+  return glims_engine_call (e, image_convert_profile_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_convert_profile_rasterizing (GlimsEngine *e, GlimsImageID image, const char *path,
+                                       uint32_t intent, bool black_point_compensation, char **error)
+{
+  GlimsArgs a = { .image = image, .string = path, .width = (int32_t) intent,
+                  .height = black_point_compensation, .error = error };
+  return glims_engine_call (e, image_convert_profile_rasterizing_on_engine, &a);
+}
+
+static GlimsStatus
 api_resources (GlimsEngine *e, uint32_t kind, GlimsResourceInfo *rows, int32_t capacity,
                int32_t *count)
 {
@@ -1963,6 +2012,32 @@ api_resource_resolve (GlimsEngine *e, uint32_t kind, const char *name, const cha
   GlimsResourceArgs a = { .kind = kind, .name = name, .collection = collection,
                           .internal = internal, .out_id = outID, .error = error };
   return glims_engine_call (e, resource_resolve_on_engine, &a);
+}
+
+static GlimsStatus
+api_resource_thumbnail (GlimsEngine *e, GlimsResourceID id, int32_t max_size,
+                        const GlimsColor *foreground, const GlimsColor *background,
+                        GlimsPixelBuffer *out, char **error)
+{
+  GlimsResourceArgs a = { .id = id, .max_size = max_size, .foreground = foreground,
+                          .background = background, .pixels = out, .error = error };
+  return glims_engine_call (e, resource_thumbnail_on_engine, &a);
+}
+
+static GlimsStatus
+api_vector_layer_style_get (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                            GlimsVectorStyle *style, char **error)
+{
+  GlimsArgs a = { .image = image, .item = layer, .in_out = style, .error = error };
+  return glims_engine_call (e, vector_layer_style_get_on_engine, &a);
+}
+
+static GlimsStatus
+api_vector_layer_style_set (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                            const GlimsVectorStyleChange *change, char **error)
+{
+  GlimsArgs a = { .image = image, .item = layer, .in = change, .error = error };
+  return glims_engine_call (e, vector_layer_style_set_on_engine, &a);
 }
 
 static const GlimsEngineAPI api_v1 = {
@@ -2068,6 +2143,12 @@ static const GlimsEngineAPI api_v1 = {
   .resources = api_resources,
   .resource_identifiers = api_resource_identifiers,
   .resource_resolve = api_resource_resolve,
+  .image_assign_profile = api_image_assign_profile,
+  .image_convert_profile = api_image_convert_profile,
+  .image_convert_profile_rasterizing = api_image_convert_profile_rasterizing,
+  .resource_thumbnail = api_resource_thumbnail,
+  .vector_layer_style_get = api_vector_layer_style_get,
+  .vector_layer_style_set = api_vector_layer_style_set,
   .stroke_begin_with_brush_resource = api_stroke_begin_with_brush_resource,
 };
 

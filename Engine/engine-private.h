@@ -274,6 +274,12 @@ GlimsStatus glims_path_fill        (GlimsEngine *e, GlimsImageID image, GlimsIte
 GlimsStatus glims_path_to_vector_layer (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
                                         const char *name, GlimsItemID *layer, char **error);
 
+/* vector-style.c */
+GlimsStatus glims_vector_layer_style_get (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                          GlimsVectorStyle *style, char **error);
+GlimsStatus glims_vector_layer_style_set (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                          const GlimsVectorStyleChange *change, char **error);
+
 /* edit.c */
 GlimsStatus glims_fill             (GlimsEngine *e, GlimsImageID image, GlimsPoint point,
                                     const GlimsFillSettings *settings, char **error);
@@ -338,6 +344,17 @@ GlimsStatus glims_image_convert_mode      (GlimsEngine *e, GlimsImageID image,
 GlimsStatus glims_image_convert_precision (GlimsEngine *e, GlimsImageID image,
                                            uint32_t component, uint32_t trc, char **error);
 
+/* color-profile.c */
+GlimsStatus glims_image_assign_profile (GlimsEngine *e, GlimsImageID image,
+                                        const char *path, char **error);
+GlimsStatus glims_image_convert_profile (GlimsEngine *e, GlimsImageID image,
+                                         const char *path, uint32_t intent,
+                                         bool black_point_compensation, char **error);
+
+GlimsStatus glims_image_convert_profile_rasterizing (GlimsEngine *e, GlimsImageID image,
+                                                     const char *path, uint32_t intent,
+                                                     bool black_point_compensation, char **error);
+
 /* resource.c */
 GlimsStatus glims_resources            (GlimsEngine *e, uint32_t kind,
                                         GlimsResourceInfo *rows, int32_t capacity,
@@ -348,6 +365,10 @@ GlimsStatus glims_resource_identifiers (GlimsEngine *e, GlimsResourceID id,
 GlimsStatus glims_resource_resolve     (GlimsEngine *e, uint32_t kind, const char *name,
                                         const char *collection, bool internal,
                                         GlimsResourceID *outID, char **error);
+GlimsStatus glims_resource_thumbnail   (GlimsEngine *e, GlimsResourceID id, int32_t max_size,
+                                        const GlimsColor *foreground,
+                                        const GlimsColor *background,
+                                        GlimsPixelBuffer *out, char **error);
 /* Resolves a facade handle to a live GimpBrush of this engine's own brush
  * factory, reusing lookup_resource()'s id validation: INVALID_ARGUMENT
  * for 0, out-of-native-range or non-brush handles, NOT_FOUND for stale

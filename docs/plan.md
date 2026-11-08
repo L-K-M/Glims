@@ -757,6 +757,105 @@ After merging Fill, the source-discovered pinned engine passes 708
 interface checks and all 308 unit tests. Independent Mistral Large 4
 review found no important issue. Preview and chooser UI remain separate.
 
+### Resource thumbnails (2026-11-08)
+
+Engine side only, on `feat/resource-previews`: one additive footer slot
+appended after `resource_resolve` (the root's slot 68),
+`resource_thumbnail(engine, id, max_size, foreground, background, out,
+error)`. API version 1 and every existing layout and signature are
+unchanged. It renders a fresh thumbnail of the resource `id` names into
+an owned straight-alpha sRGB RGBA `GlimsPixelBuffer` (released with the
+existing `free_pixels`), fitted into a `max_size` x `max_size` box
+(`max_size` restricted to 1 ... 512): gradients fill exactly
+`max_size` x `max(1, max_size / 2)`, brushes and patterns keep their
+source aspect inside the box without upscaling, matching their native
+preview. `foreground` and `background` are optional explicit colors
+(every component finite inside 0 ... 1, the filter-property
+convention): the foreground recolors mask-only brushes and both feed
+gradients with foreground/background segments; NULL uses the core's
+canonical black foreground and white background. The handle path
+reuses `lookup_resource` exactly (zero and out-of-native-gint-range
+refused before the native id table with "This handle cannot name a
+resource.", stale or foreign NOT_FOUND, fresh re-resolution and
+factory-membership revalidation per call), and the dispatcher carries
+the handle in a typed `uint64_t` `GlimsResourceArgs`. Everything is
+read-only: no image, factory or global context is touched.
+
+The render deliberately avoids the cached preview paths. Verified in
+the pinned sources: `gimp_viewable_get_new_pixbuf`'s default runs the
+cached `gimp_viewable_get_preview`, whose cache key (width, height,
+foreground) omits the background, so same-size gradient thumbnails
+would come back stale when only the background changes. Instead each
+call takes the fresh, owned `gimp_viewable_get_new_preview` (all three
+resource classes override it; it never consults the cache) followed by
+`gimp_temp_buf_create_pixbuf` for format normalization, unrefing the
+TempBuf (`gimp_temp_buf_unref`) and the pixbuf (`g_object_unref`). On
+master (3.3.x) `get_new_preview` takes `scale_factor` before
+`fg_color` (passed as 1); the three released trees take five
+arguments. The per-call `GimpContext` is parentless
+(`gimp_context_new (gimp, ..., NULL)`) and carries explicit per-call
+FG/BG `GeglColor`s, so the user and global contexts are never read or
+changed. The pixbuf's rows are copied rowstride-safe into the owned
+buffer, RGB previews expanded to RGBA with opaque alpha; allocation
+overflow and OOM are checked and `out` is reset on entry and on every
+failure.
+
+Bounded conformance tests (facade only) cover stock brushes, patterns
+and gradients: dimensions, bounds, byte counts, pixel and alpha
+coverage, exact gradient strips at 15 and 1, the same-id same-size
+FG/BG gradient proof (only the background changed, then only the
+foreground, must change the pixels, and identical colors must agree),
+invalid/stale/high-bit handles, bad sizes and colors, missing outputs,
+error text, output resets and five repeated allocate/free rounds.
+Checked here (compile only, private adapter root
+`$PWD/.build/engine-adapters`): `scripts/build-adapter.sh --check` for
+GIMP_3_0_8, GIMP_3_2_0, GIMP_3_2_8 and master; every `Engine/*.c`
+against all four sets' `compile.rsp` flags with `-fsyntax-only`;
+`engine-tests.c` with its `-std=c11 -O2 -Wall -Wextra -Werror` flags;
+the facade header standalone in C11 and C++17; and full
+`scripts/build-adapter.sh` builds per set (compile, link, the
+exports-only check) in the private root. Not run here (the root owns
+the native runtime): `scripts/build-adapter.sh --test` per engine set,
+bundle checks and any Swift build. Pending root runtime validation:
+the four conformance runs, including the fresh-per-call gradient proof
+and the exact gradient strip dimensions.
+
+### Swift resource thumbnail wrapper (2026-11-08)
+
+Session side of the same branch, `feat/resource-previews`: one typed
+`EngineSession` wrapper, `resourceThumbnail(_:maxSize:foreground:background:)`,
+over the facade's `resource_thumbnail` slot, returning an owned
+`ResourceThumbnail` — checked `width`/`height`, a straight-alpha sRGB
+RGBA `Data` of exactly `width * height * 4` bytes, and a CGImage over
+the same bytes with `CGImageAlphaInfo.last`, an sRGB space and a
+`width * 4` row stride, matching `drawableThumbnail`'s straight-alpha
+contract. The opaque `UInt64` handle passes through unnarrowed;
+`foreground`/`background` are optional `NSColor`s converted with the
+existing `color(_:)` helper and documented as opaque in native FG/BG
+contexts (alpha comes from the resource's brush mask or transparent
+gradient stops, never from the colors). The native buffer is freed
+with `free_pixels` on every path, validation and CGImage-construction
+failures included, and the dimensions and byte count are checked with
+overflow-reporting multiplies before the copy; native errors surface
+through the existing `check`/`EngineError` handling. No UI flow calls
+the wrapper; its doc marks it off the main thread, like
+`resources(_:)`. The `--engine-smoke-test` gains
+`exerciseResourceThumbnails`: stock brushes, patterns and gradients of
+each kind through the wrapper (box fit, byte counts, CGImage
+dimensions/row stride and first-pixel readback), exact gradient strips
+at maxSize 15 and 1, stable handles and identity round trips across
+calls, the built-in FG/BG gradient resolved by its exact internal
+identity with the fresh-render proof (same colors agree byte for byte;
+background-only and foreground-only changes re-render; explicit colors
+differ from the defaults and leave the defaults untouched, so no
+global context is mutated), zero/all-high/high-bit ids refused as
+INVALID_ARGUMENT without narrowing, a well-shaped unissued id as
+NOT_FOUND, maxSize 0/-1/513 refused, and an open image's undo state,
+pixels and every catalog unchanged after the calls. Verified here with
+`swift build` and `swift build --build-tests` only (both pass, no new
+warnings); the root owns the engine lock and the desktop, so the
+smoke-test scenario's runtime execution is pending root validation,
+after the root's ICC integration to keep the append-only ABI order.
 ### Stroke with a selected brush resource (2026-11-08)
 
 Engine side only, on `feat/brush-resource-strokes`: one additive facade
@@ -909,6 +1008,37 @@ smoke tests were NOT run here: root runtime validation is pending.
   rebuild, no library relink, no test or smoke run (the root checkout
   serializes desktop tests). Pending: the runtime run of the new smoke
   cases and `swift test` on all four engines in the root checkout.
+- 2026-11-08: two more additive facade calls, engine side only, on
+  `feat/vector-layer-style`. `vector_layer_style_get` /
+  `vector_layer_style_set` read and change a genuine vector layer's
+  native style (GIMP 3.2+; pre-3.2 UNSUPPORTED, nothing mutated) through
+  the layer's own `GimpVectorLayerOptions` — new facade-owned
+  `GlimsVectorStyle` / `GlimsVectorStyleChange` with own cap/join enums
+  and a `properties` bitmask, `struct_size` guards, no raw GIMP types.
+  First slice is solid paint only: enable flags, explicit RGBA fill and
+  stroke colors, antialias, and stroke width plus cap/join/miter — exactly
+  the fields XCF persists in `PROP_VECTOR_LAYER`; opacity, paint mode,
+  unit, dash offset, feather and method are not persisted and are not
+  exposed. A native pattern fill or stroke reports UNSUPPORTED on read
+  and write, never converted (the setter never writes `custom-style`).
+  The setter validates everything before mutating (busy/edit-ready
+  first, then struct and finite RGBA / width / miter / enum guards),
+  treats an all-equal change as a no-op with no undo, and otherwise
+  applies the flagged fields as exactly one native undo group — manual
+  `gimp_image_undo_group_start` + freeze notify + whole-options
+  `gimp_image_undo_push_vector_layer(…, NULL)` snapshot + thaw +
+  `gimp_image_undo_group_end` + refresh + flush, the same sequence as
+  3.2.8+'s `gimp_vector_layer_set`, with `GIMP_UNDO_GROUP_VECTOR` where
+  it exists and `GIMP_UNDO_GROUP_DRAWABLE_MOD` on 3.2.0. Pixel and
+  group-inherited locks refuse with LOCKED; the layer's name, auto-rename
+  policy and path association are untouched. The getter is a borrowed
+  read (no refs taken). Conformance tests cover pixels changed, getter
+  round trip, one undo/redo, no-op/invalid/locked no-history, name and
+  path association with a live path edit, XCF save/reopen of style and
+  name inside a group, and pre-3.2 UNSUPPORTED/unmutated. Checked on
+  this branch: the adapter compiles against all four engine sets with a
+  private `GLIMS_ADAPTER_ROOT`; the runtime conformance run is left to
+  the root checkout.
 
 ## Open decisions
 
@@ -948,6 +1078,37 @@ No upstream source, file metadata, dirty state or undo history changes.
 Pinned and cross-version checks plus independent review are recorded in
 the PR before merge. Frontend path controls remain a separate slice.
 
+The same 3.2.0 loader guard now also retains, until loading finishes, every
+source layer that carries the `gimp-vector-layer-data` qdata. GIMP 3.2.0's
+`xcf-load.c` reads `vdata->modified` after `gimp_layer_from_layer()` has
+unref'd and finalized the original plain layer that owns that data (3.2.8
+snapshots the flag before converting), so the read was a use-after-free:
+depending on heap contents it crashed the load or rasterized the reopened
+vector layer, which made the style facade refuse it with NOT_FOUND. The
+XCF bytes themselves were always correct — `PROP_VECTOR_LAYER` stores
+width/miter as float32 in every 3.2.x, and a 3.2.0-written file reopens
+with 12.3/5.2 intact once the source layer stays alive. Fractional
+persistence is therefore a native guarantee on 3.2.0+ (float32 precision),
+not an adapter addition.
+
+Pinned runtime validation passes 867 native checks after one observed
+sRGB input regression: plain GEGL RGBA setters interpreted the requested
+midtone as linear and produced 188/137/225 instead of 128/64/191. Matching
+sRGB setters now preserve the facade color. The empty native clipboard
+brushes legitimately have transparent masks; the content fixture now
+recognizes their exact internal identities, while file-backed brushes
+still need content. FG/BG gradient selection now uses its exact builtin
+identity instead of scanning a short buffer with the total catalog count.
+
+A separate observed conformance-runner defect called engine functions after
+rejecting a too-small API table. The runner now exits immediately. The
+engine-free `scripts/test-conformance-abi.sh` reproduced the invalid call
+before the guard and passes after it; CI runs this regression. Initial
+independent and follow-up reviews found no important issue. Final native
+runs pass 867 checks on 3.2.8/3.2.0/master and 834 on 3.0.8. The follow-up
+review also identified the existing Clear color mismatch, now tracked in
+a separate fix. Swift integration is recorded in the PR.
+
 ### Color Fill sheet (2026-11-08)
 
 Edit > Fill opens a native sheet for foreground, background, white, black
@@ -985,6 +1146,53 @@ position. Real control actions now verify 50-percent fill pixels and saved
 channel isolation. Vector styling and multi-anchor editing remain later
 work; initial vector creation uses the native context's defaults.
 
+Pinned runtime validation now passes 780 native checks. Native sRGB style
+getters were initially paired with a linear-RGB read; the new midtone
+regression failed with 0.078/0.187/0.462 instead of 0.31/0.47/0.71 while
+rendered bytes correctly stayed 79/120/181. Matching sRGB reads fix the
+round trip. Separate observed no-op failures are fixed by normalizing
+native opaque alpha and tolerating sub-micro-unit float color round trips.
+The stroke-busy fixture now checks history before finishing its actual
+stroke, which legitimately creates an undo entry. Cross-engine runtime
+and independent review of these changes are pending.
+
+### ICC assignment and conversion (2026-11-08)
+
+Two additive native facade calls assign/discard an ICC profile or convert
+pixels to a selected profile with a facade-owned rendering intent and explicit
+black-point compensation. NULL selects the model/precision's builtin profile;
+assignment discards embedded and hidden profiles. File paths are absolute,
+nonempty UTF-8 and loaded on the engine thread. The core validates model
+compatibility before opening its own undo group. Active strokes and previews
+refuse the call, equal-profile operations add no history, and every owned
+profile is released after the operation. No upstream edits or GTK calls.
+
+The first pinned conformance run passes 841 checks, including changed midtone
+interpretation on assignment (128/64 to 188/137), appearance preservation on
+conversion, undo/redo, XCF round trip, RGB/gray compatibility, invalid files and
+busy refusals. Fixtures are original deterministic LittleCMS profiles generated
+by `scripts/make-icc-fixtures.py`. Final native runs pass 843 checks on
+3.2.8/3.2.0/master and 810 on 3.0.8, plus Swift build and 305 unit tests.
+Independent Beam review found no important issues. Its BPC observation was
+verified: RGB/gray forwards the flag to the full native color transform;
+indexed palette conversion ignores intent/BPC. A new regression reproduced
+that unsupported conversion succeeding. The facade now refuses indexed
+conversion before changing the palette profile, while compatible profile
+assignment remains supported. Convert indexed images to RGB first. Swift
+controls and display/proof transforms remain separate work.
+
+Structured-layer safety: a new regression reproduced ordinary profile
+conversion silently rasterizing editable text. The normal entry point now
+returns REQUIRES_RASTERIZE without mutation when conversion would affect
+editable text, vector or linked layers; equal-profile no-ops remain safe.
+The separate image_convert_profile_rasterizing entry point records explicit
+caller consent and keeps the native conversion/rasterization in one undo
+step. Pinned checks verify text content and all three editable layer kinds
+return on undo. Those checks also exposed the layer list reporting native
+link/vector classes after rasterization; it now reports current editability,
+consistent with text layers. Full cross-engine rechecks and UI consent
+coverage follow before merge.
+
 ### Clear color and mutation readiness (2026-11-08)
 
 Three regressions reproduced on the previous implementation: an opaque RGB
@@ -995,3 +1203,32 @@ sRGB color setter. All four native runs pass: 830 checks on GIMP 3.2.8,
 3.2.0 and master, and 797 on 3.0.8, including selection clipping,
 undo/redo, the RGB sample and both busy refusals. Independent source
 review found no important issues.
+
+Final ICC/native compatibility validation: 894 conformance checks pass on
+3.2.8, 3.2.0 and master; 834 pass on 3.0.8. The added older-engine fixture
+now creates a valid path before expecting UNSUPPORTED; its earlier invented
+path id correctly returned NOT_FOUND and was a test error.
+
+New save/reopen and Open as Layers regressions reproduced three 3.2.0
+loader defects: a freed rasterization flag, overwriting edited rasterized
+vector pixels, and imported vector paths retaining a dead loading image.
+The exact-version load guard retains source metadata, restores verified
+modified buffers at native load completion before copying, and converts
+imported paths in place into their destination, as later native releases
+do. One undo/redo preserves imported pixels; resaving retains editable
+geometry and raster edits. No upstream source is changed. The image-lifetime
+criticals are gone; two existing startup g_file_test(NULL) diagnostics remain.
+
+After integration with the merged ICC/vector loader fixes, resource previews
+pass 941 native checks on 3.2.8, 3.2.0 and master, and 881 on 3.0.8. The
+Swift build, 308 unit tests, complete pinned interface smoke and older-table
+ABI refusal regression pass. Native preview and Swift ownership reviews
+found no important issues. Native context colors remain opaque; resource
+alpha is preserved in the straight-alpha output.
+
+Final integrated native vector style runs pass 979 checks on 3.2.8, 3.2.0
+and master, and 884 on 3.0.8. The preserved ICC/load guard fixes keep imported
+paths in their destination and retain raster edits; style changes keep
+fractional float32 XCF width/miter values and avoid empty undo on reapplying
+the displayed values. Native style colors stay opaque sRGB. The sheet is a
+separate interface slice, with independent wrapper/runtime verification.
