@@ -325,6 +325,23 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         stack.addArrangedSubview(checkbox("Pen pressure sets size", brush.pressureSize) { on in
             ToolState.shared.update(tool) { $0.pressureSize = on }
         })
+        stack.addArrangedSubview(presetsRow())
+    }
+
+    /// The Presets… entry: opens the one retained presets panel for the global
+    /// ToolState. The panel captures and applies the current paint tool's
+    /// settings itself; no engine call happens here.
+    private func presetsRow() -> NSView {
+        let button = NSButton(title: "Presets…", target: nil, action: nil)
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: 11)
+        button.toolTip = "Save, rename, update, delete and apply presets of the paint tools' settings"
+        button.setAccessibilityLabel("Presets…")
+        actionBindings.append(ActionBinding(control: button) { _ in
+            PaintToolPresetPanelController.shared.open()
+        })
+        return row("Presets", button, onChange: nil)
     }
 
     /// The brush row: a button with the current choice (name and, once the
