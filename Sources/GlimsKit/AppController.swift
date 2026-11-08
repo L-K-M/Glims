@@ -82,6 +82,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         target: { [weak self] in self?.frontDocument },
         makeContent: { HistoryPaletteController() })
 
+    private lazy var channelsPalette: Palette = PaletteCenter.shared.palette(
+        for: ChannelsPaletteController.definition,
+        target: { [weak self] in self?.frontDocument },
+        makeContent: { ChannelsPaletteController() })
+
     var frontDocument: ImageDocument? {
         (NSApp.mainWindow?.windowController as? DocumentWindowController)?.imageDocument ?? documents.last?.imageDocument
     }
@@ -100,7 +105,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         PaletteGroupDefault([ToolsPaletteController.definition.kind], placement: .topLeading),
         PaletteGroupDefault([ToolOptionsPaletteController.definition.kind],
                             placement: .docked(below: ToolsPaletteController.definition.kind)),
-        PaletteGroupDefault([LayersPaletteController.definition.kind, PathsPaletteController.definition.kind,
+        PaletteGroupDefault([LayersPaletteController.definition.kind, ChannelsPaletteController.definition.kind,
+                             PathsPaletteController.definition.kind,
                              HistoryPaletteController.definition.kind],
                             placement: .topTrailing),
     ]
@@ -381,7 +387,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         PaletteCenter.shared.setDefaultLayout(Self.defaultPaletteLayout)
         // Paths and History before Layers, so Layers is the tab their
         // shared group shows.
-        for palette in [toolsPalette, toolOptionsPalette, pathsPalette, historyPalette, layersPalette]
+        for palette in [toolsPalette, toolOptionsPalette, channelsPalette, pathsPalette, historyPalette, layersPalette]
         where !palette.isPresented {
             palette.showPanel()
         }

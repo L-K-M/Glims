@@ -140,6 +140,9 @@ enum MainMenu {
             .separator(),
             item("From Layer Transparency", #selector(DocumentWindowController.selectFromAlpha(_:))),
             item("From Path", #selector(DocumentWindowController.selectFromPath(_:))),
+            .separator(),
+            item("Save Selection as Channel…", #selector(DocumentWindowController.saveSelectionAsChannel(_:))),
+            item("Quick Mask", #selector(DocumentWindowController.toggleQuickMask(_:))),
         ])
         add(menu, "View", [
             item("Zoom In", #selector(DocumentWindowController.zoomIn(_:)), "+"),

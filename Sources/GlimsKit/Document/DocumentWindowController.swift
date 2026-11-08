@@ -208,6 +208,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             statusBar.message = EngineActivity.shared.label.map { "\($0)…" } ?? "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(imageDocument.info.layerCount) layer\(imageDocument.info.layerCount == 1 ? "" : "s")\(undo)"
         }
         (PaletteCenter.shared.registeredPalette(for: LayersPaletteController.definition.kind))?.retarget()
+        (PaletteCenter.shared.registeredPalette(for: ChannelsPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: PathsPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: HistoryPaletteController.definition.kind))?.retarget()
         // Path shapes arrive with the state; the canvas draws them.
@@ -375,6 +376,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func deleteLayerMask(_ sender: Any?) { imageDocument.deleteMask() }
     @objc func toggleMaskEnabled(_ sender: Any?) { imageDocument.toggleMaskEnabled() }
     @objc func toggleMaskEditing(_ sender: Any?) { imageDocument.toggleMaskEditing() }
+
+    @objc func toggleQuickMask(_ sender: Any?) {
+        imageDocument.setQuickMask(!(imageDocument.quickMaskState?.enabled ?? false))
+    }
+
+    @objc func saveSelectionAsChannel(_ sender: Any?) {
+        guard let window else { return }
+        endPendingEdits()
+        ChannelForms.saveSelection(in: imageDocument, on: window)
+    }
+
+    func editChannelAttributes(_ id: Int32) {
+        guard let window else { return }
+        endPendingEdits()
+        ChannelForms.edit(id, in: imageDocument, on: window)
+    }
     @objc func toggleMaskShowing(_ sender: Any?) { imageDocument.toggleMaskShowing() }
 
     /// Layer ▸ Mask ▸ Mask to Selection ▸ …; the item's tag carries the
@@ -640,6 +657,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
             || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || EngineActivity.shared.isBusy || window?.attachedSheet != nil
         switch menuItem.action {
+        case #selector(toggleQuickMask(_:)):
+            menuItem.state = imageDocument.quickMaskState?.enabled == true ? .on : .off
+            return !editingBlocked && !previewBusy
+        case #selector(saveSelectionAsChannel(_:)):
+            return !editingBlocked && !previewBusy
         case #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)):
             return !imageDocument.isClosing
         case #selector(cut(_:)), #selector(copy(_:)), #selector(copyMerged(_:)),

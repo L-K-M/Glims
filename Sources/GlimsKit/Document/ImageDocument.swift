@@ -1183,7 +1183,7 @@ final class ImageDocument {
             case .closed: return "This image has already closed."
             case .busy: return "Wait for the current image operation to finish."
             case .noLayer: return "There is no layer to work on."
-            case .targetChanged: return "The selected layer or mask changed. Select a paint target again."
+            case .targetChanged: return "The selected layer, mask or channel changed. Select a paint target again."
             }
         }
     }

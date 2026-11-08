@@ -1610,6 +1610,68 @@ enum EngineSmokeTest {
         let bounds = try session.selectionBounds(image: image)
         check(bounds == CGRect(x: 0, y: 0, width: 64, height: 64),
               "turning off a painted Quick Mask converts it into the selection")
+
+        let palette = ChannelsPaletteController()
+        palette.retarget(to: document)
+        guard let channelView = palette.view as? ChannelsPaletteView else {
+            check(false, "the registered Channels controller presents its interactive view")
+            return
+        }
+        channelView.onAction?(.selectChannel(recovered))
+        settle()
+        palette.reload()
+        check(document.activeChannel == recovered && channelView.snapshot.activeChannel == recovered,
+              "the palette's bound channel action updates the engine and target ring snapshot")
+        channelView.onAction?(.setChannelVisible(recovered, true))
+        settle()
+        palette.reload()
+        check((try session.channels(image)).first { $0.id == recovered }?.isVisible == true,
+              "the palette's Eye action changes the real channel overlay")
+        channelView.onAction?(.returnToLayers)
+        settle()
+        palette.reload()
+        check(document.activeDrawable == layer && channelView.snapshot.activeChannel == nil,
+              "the palette's Return to Layers action restores the layer target")
+        channelView.onAction?(.setChannelVisible(recovered, false))
+        settle()
+
+        let windowController = DocumentWindowController(document: document)
+        defer { windowController.window?.orderOut(nil) }
+        func qEvent(repeatKey: Bool = false, flags: NSEvent.ModifierFlags = []) -> NSEvent? {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                windowNumber: windowController.window?.windowNumber ?? 0, context: nil,
+                characters: "q", charactersIgnoringModifiers: "q", isARepeat: repeatKey, keyCode: 12)
+        }
+        if let key = qEvent() {
+            check(windowController.canvas.tools.keyDown(with: key), "the focused canvas accepts Q for Quick Mask")
+            settle()
+            check(document.quickMaskState?.enabled == true, "Q enables the real Quick Mask")
+        } else { check(false, "a Q key event can be created") }
+        if let key = qEvent(repeatKey: true) {
+            _ = windowController.canvas.tools.keyDown(with: key)
+            settle()
+            check(document.quickMaskState?.enabled == true, "holding Q does not repeatedly toggle Quick Mask")
+        }
+        if let key = qEvent(flags: [.command]) {
+            check(!windowController.canvas.tools.keyDown(with: key), "Command-Q stays available to the app's Quit command")
+        }
+        if let key = qEvent() { _ = windowController.canvas.tools.keyDown(with: key) }
+        settle()
+        check(document.quickMaskState?.enabled == false, "pressing Q again turns Quick Mask off")
+
+        let thumbnailGate = DispatchSemaphore(value: 0)
+        document.inputQueue.async { thumbnailGate.wait() }
+        try document.reload()
+        palette.retarget(to: document)
+        check(document.pendingWork > 0, "the Channels palette counts thumbnail reads toward close")
+        palette.retarget(to: nil)
+        var closed = false
+        document.closeImageWhenDrained { closed = true }
+        thumbnailGate.signal()
+        let closeDeadline = Date().addingTimeInterval(3)
+        while !closed && Date() < closeDeadline { spin(0.02) }
+        check(closed && document.pendingWork == 0 && (try? session.info(image)) == nil,
+              "retargeting cancels stale channel thumbnails and close drains their queued reads")
     }
 
     private static func exerciseLayerMasks(_ session: EngineSession, documents: DocumentList) throws {
