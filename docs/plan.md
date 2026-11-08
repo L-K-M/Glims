@@ -1033,6 +1033,32 @@ thumbnail rendering through the panel, keyboard handling and the
 smoke-test scenario are unverified at runtime; pattern/gradient choosers,
 presets and resource management remain later slices.
 
+### Guides interface (2026-11-08)
+
+Image > Guides… opens a per-window management sheet (GuidesSheetController,
+retained by its DocumentWindowController) listing the cached
+ImageDocument.guides by orientation and position. Inline orientation plus
+a strictly parsed integer position feed Add, Move selected, Remove
+selected and Close; each edit goes through the queued
+addGuide/moveGuide/removeGuide as one undo step, so Close is not Cancel
+and the sheet says changes can be undone. Orientation is fixed at
+creation: a move sends the guide's own cached orientation, never a
+reorienting put. Reload/error/close fan out through the window's existing
+onStateChange/onError/windowWillClose hooks; the selected row is preserved
+by guide id across asynchronous reloads and an active field edit is never
+overwritten; write controls disable on the cached busy/closing state and
+refusals show in the sheet. View > Show Guides is a cached per-window
+Boolean (default on) whose checkmark reads the cache; toggling redraws
+only the canvas overlay (drawn from document.guides through the
+CanvasGeometry image/view mapping, clipped to the displayed image) and
+never touches pixels, dirty state, export or print — printing draws an
+immutable PrintSnapshot, not the canvas view. Rulers, snapping and canvas
+guide dragging are later work. Compile-checked here (swift build,
+--build-tests); unit tests cover parsing, range/orientation, menu state,
+row/edit preservation and overlay geometry; the GLIMS_SMOKE_CASE=
+guides-controls scenario is wired but NOT run — root owns the runtime
+matrix against the native-guides libraries.
+
 ## Later, before any public release
 
 - Developer ID signing and notarization for the app, GTK3, Python and every
@@ -1745,6 +1771,36 @@ at the press). Runtime/desktop verification of these scenarios is owned by
 the root harness; here only `swift build` and `swift build --build-tests`
 were run.
 
+Guides controls integration validation: 399 unit tests pass. The actual
+Guides sheet and canvas-overlay scenario passes 28 checks on each of
+GIMP 3.2.8, 3.0.8, 3.2.0 and master. The complete interface suite passes
+963 checks on the pinned engine, including all three resource choosers
+and the native guide cache checks. The first unit run caught an incorrect
+expected sorted row index in its fixture; correcting that expectation
+required no production-code change. The active-field-edit and overlay
+bitmap scenarios both ran successfully. Rulers, grid, snapping and direct
+canvas guide dragging remain separate work.
+
+### Canvas overlay visibility (2026-11-08)
+
+View now offers Show Layer Boundary (off by default) and Show Selection
+Edges (on by default). Both are cached on each canvas and work while
+engine work is busy. The layer boundary draws the cached active layer's
+bounds in image coordinates through the same zoom/backing scale as
+other overlays. Hidden selection edges stop the marching-ants timer;
+showing them restores the unchanged cached contour. These switches never
+change engine pixels, selection, file state or history; printing and
+export use the engine projection rather than canvas drawing.
+
+The focused `canvas-overlays` interface scenario checks menu defaults and
+wiring, bitmap changes/restoration, independent canvas settings,
+unchanged engine pixels/selection/dirty state/history, busy availability
+and drained image cleanup. All 399 unit tests pass, and the focused scenario passes ten checks on
+each of GIMP 3.2.8, 3.0.8, 3.2.0 and master. The full pinned-engine
+interface suite passes 973 checks. An independent Command Code Glyph
+review found no important issues; its minor test-geometry suggestions
+are deferred.
+
 ### Layer source-info and explicit rasterize (2026-11-08)
 
 Backend slice on `feat/layer-source-policy`, engine plus typed Swift
@@ -1961,3 +2017,33 @@ rather than assuming a Python marker or a fixed delay proves completion.
 Independent review of the lifetime change found no important issues.
 Swift targets compile; application-side retry runtime remains part of
 subsequent interface integration.
+
+Guide field refresh regression: undoing a selected guide's move updated
+the list but left its idle position field stale because reselecting the
+same table row does not notify its delegate. The new actual-sheet check
+failed before the fix. Reload now synchronizes the selected guide's input
+fields explicitly while preserving an active text edit. Both Undo/Redo
+field checks and the existing active-edit preservation check pass on the
+pinned engine (30 focused checks). Before this fix, the source-cache
+integration passed 399 unit tests, all-four-engine guide checks and 971
+full pinned interface checks. Follow-up review and matrix are running.
+
+### Profiled display pixels (2026-11-08)
+
+The existing renderer converts the image projection from its effective ICC
+space to 8-bit premultiplied sRGB. The native chain is
+`gimp_image_get_proj_format` / `gimp_image_get_layer_space`, with ICC spaces
+created by `gimp_color_profile_get_space` and `babl_space_from_icc`;
+EngineSession tags the resulting CGImage with sRGB. Quartz performs the
+subsequent conversion to the destination display context. Reference:
+https://developer.apple.com/library/archive/documentation/GraphicsImaging/Conceptual/drawingwithquartz2d/dq_color/dq_color.html
+
+A new independent analytic oracle assigns the existing linear-TRC profile
+with sRGB primaries to opaque and translucent midtones. Expected sRGB
+transfer values are calculated directly, rather than through another native
+render. All four engine suites pass (1,261 / 1,156 / 1,261 / 1,261), including
+premultiplied render bytes, straight-alpha clipboard bytes, unchanged
+history/dirty state on reads and profile-assignment Undo/Redo appearance.
+No production renderer change was needed. This verifies the in-gamut sRGB
+path; physical monitor calibration, wide-gamut/HDR output, proof profiles,
+proof intents and gamut warnings remain unverified or unimplemented.

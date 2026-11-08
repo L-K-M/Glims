@@ -59,6 +59,25 @@ final class EngineCanvasView: NSView {
     /// The current tool's handling of pointer and key events.
     private(set) lazy var tools = CanvasToolController(canvas: self)
 
+    /// View ▸ Show Guides: whether the canvas draws the image's guides.
+    /// Cached per window (the document window controller owns the toggle);
+    /// flipping it is pure view state and just redraws.
+    var showsGuides = true {
+        didSet { needsDisplay = true }
+    }
+    var showsLayerBoundary = false {
+        didSet { needsDisplay = true }
+    }
+    var showsSelectionEdges = true {
+        didSet {
+            needsDisplay = true
+            updateAntsTimer()
+        }
+    }
+    /// Guide overlay lines: a saturated blue with a white underlay, so the
+    /// line reads on light and dark images alike.
+    static let guideColor = NSColor(calibratedRed: 0.05, green: 0.55, blue: 0.95, alpha: 1)
+
     /// The selection outline in image pixels, drawn as marching ants.
     var selectionOutline: [EngineSession.Segment] = [] {
         didSet {
@@ -295,7 +314,7 @@ final class EngineCanvasView: NSView {
     }
 
     private func updateAntsTimer() {
-        let animate = window != nil && !selectionOutline.isEmpty
+        let animate = window != nil && showsSelectionEdges && !selectionOutline.isEmpty
         if animate, antsTimer == nil {
             // Selector-based, so the tick runs as a main-thread method.
             antsTimer = Timer.scheduledTimer(timeInterval: 0.15, target: self, selector: #selector(antsTick),
@@ -341,9 +360,60 @@ final class EngineCanvasView: NSView {
             context.draw(image, in: CGRect(origin: .zero, size: rect.size))
             context.restoreGState()
         }
-        drawSelectionOutline()
+        if showsSelectionEdges { drawSelectionOutline() }
+        if showsLayerBoundary { drawLayerBoundary() }
         drawVisiblePaths()
+        if showsGuides { drawGuidesOverlay() }
         tools.drawOverlay(scale: scale)
+    }
+
+    /// Display-only bounds of the selected layer. Cached layer metadata
+    /// supplies the geometry; this never changes the selection or tiles.
+    private func drawLayerBoundary() {
+        guard let layer = document.layers.first(where: { $0.id == document.activeLayer }) else { return }
+        let rect = layer.bounds
+        guard [rect.minX, rect.minY, rect.width, rect.height].allSatisfy(\.isFinite),
+              rect.width > 0, rect.height > 0 else { return }
+        let path = NSBezierPath(rect: NSRect(x: rect.minX * scale, y: rect.minY * scale,
+                                             width: rect.width * scale, height: rect.height * scale))
+        path.lineWidth = 2
+        NSColor.black.setStroke()
+        path.stroke()
+        path.lineWidth = 1
+        path.setLineDash([4, 4], count: 2, phase: 0)
+        NSColor.yellow.setStroke()
+        path.stroke()
+    }
+
+    /// The image's ordinary guides as full-width/full-height lines in view
+    /// points, clipped to the displayed image. A pure canvas overlay: it
+    /// touches neither the rendered tiles nor any pixel path — printing
+    /// draws an immutable PrintSnapshot rendered from the engine, never
+    /// this view, so guides cannot leak into printed output.
+    private func drawGuidesOverlay() {
+        let guides = document.guides
+        guard !guides.isEmpty else { return }
+        let imageSize = CGSize(width: Double(document.info.width), height: Double(document.info.height))
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: CanvasGeometry.imageViewRect(imageSize: imageSize, zoomPercent: zoomPercent,
+                                                        backingFactor: backingScale)).addClip()
+        for guide in guides {
+            guard let (from, to) = CanvasGeometry.guideLineEndpoints(orientation: guide.orientation,
+                                                                    position: guide.position,
+                                                                    imageSize: imageSize,
+                                                                    zoomPercent: zoomPercent,
+                                                                    backingFactor: backingScale) else { continue }
+            let path = NSBezierPath()
+            path.move(to: from)
+            path.line(to: to)
+            path.lineWidth = 3
+            NSColor.white.setStroke()
+            path.stroke()
+            path.lineWidth = 1
+            Self.guideColor.setStroke()
+            path.stroke()
+        }
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     /// Visible paths as thin lines, as GIMP shows them with any tool. The
