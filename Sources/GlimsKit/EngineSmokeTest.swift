@@ -6035,6 +6035,26 @@ enum EngineSmokeTest {
             check(error.status == Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
                   "a high-bit resource id is refused without narrowing to a live handle")
         }
+        let brushRows = try session.resources(.brush)
+        if let row = brushRows.first {
+            let identity = try session.resourceIdentifiers(row.id)
+            for bad in [
+                EngineSession.ResourceIdentity(name: identity.name + "\u{0}suffix",
+                                               collection: identity.collection, isInternal: identity.isInternal),
+                EngineSession.ResourceIdentity(name: identity.name,
+                                               collection: (identity.collection ?? "") + "\u{0}suffix",
+                                               isInternal: identity.isInternal)
+            ] {
+                do {
+                    _ = try session.resolveResource(bad, kind: .brush)
+                    check(false, "embedded NUL identity text is refused before CString truncation")
+                } catch let error as EngineSession.EngineError {
+                    check(error.status == Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                          "embedded NUL identity text is refused before CString truncation")
+                }
+            }
+        }
+
     }
 }
 

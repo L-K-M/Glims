@@ -1782,8 +1782,8 @@ final class EngineSession: @unchecked Sendable {
     }
 
     /// A handle to one brush, pattern or gradient (GlimsResourceID):
-    /// opaque, and local to the current engine session — a handle carried
-    /// across a restart resolves to nothing. Persisted selections store
+    /// opaque, and local to the current engine session. A number can be
+    /// reused after a restart. Persisted selections store
     /// `ResourceIdentity`, never these ids.
     typealias ResourceID = UInt64
 
@@ -1844,8 +1844,8 @@ final class EngineSession: @unchecked Sendable {
         var isInternal = false
         var error: UnsafeMutablePointer<CChar>?
         let status = api.resource_identifiers(engine, id, &name, &collection, &isInternal, &error)
-        // The engine owns `name` and `collection` wherever it set them;
-        // release them before returning, error paths included.
+        // Own the returned strings until this call finishes, including
+        // any error path that supplied them.
         defer {
             api.free_string(name)
             api.free_string(collection)
@@ -1868,6 +1868,10 @@ final class EngineSession: @unchecked Sendable {
     /// is localized), and there is no name-only fallback for the rest.
     /// Throws NOT_FOUND when no resource of `kind` carries the identity.
     func resolveResource(_ identity: ResourceIdentity, kind: ResourceKind) throws -> ResourceID {
+        guard !identity.name.utf8.contains(0), identity.collection?.utf8.contains(0) != true else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The resource identity contains invalid text.")
+        }
         var handle: ResourceID = 0
         var error: UnsafeMutablePointer<CChar>?
         try withOptionalCString(identity.name) { name in
