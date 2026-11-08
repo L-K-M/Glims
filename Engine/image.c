@@ -650,7 +650,12 @@ undo_or_redo (GlimsEngine  *engine,
   if (status != GLIMS_STATUS_OK)
     return status;
 
+  /* Popping an undo or redo can thaw a link layer — a file reload that
+   * runs a load plug-in and its nested main loop — so hold busy for the
+   * duration. */
+  engine->busy++;
   done = undo ? gimp_image_undo (open->image) : gimp_image_redo (open->image);
+  engine->busy--;
   gimp_image_flush (open->image);
 
   return done ? GLIMS_STATUS_OK : GLIMS_STATUS_FAILED;

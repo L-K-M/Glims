@@ -1449,6 +1449,379 @@ test_layer_restore_source (const char *work)
   api->image_close (engine, image);
 }
 
+/* ---- Busy while a file load runs in a nested main loop -----------------
+ *
+ * The glims-slow-load Python plug-in (installed into the throwaway user
+ * directory before the engine starts, laid out like GIMP's own foggify:
+ * one directory per plug-in, an executable .py inside) registers a loader
+ * for the made-up ".gslow" extension. Its run writes the ENTERED marker,
+ * then waits at most ten seconds for the RELEASE file before returning a
+ * 2x2 image — a controlled pause inside a real load plug-in's nested main
+ * loop, which is exactly the window in which a queued facade mutation
+ * must see the engine as busy.
+ */
+
+static const char slow_load_source[] =
+"#!/usr/bin/env python3\n"
+"import gi\n"
+"gi.require_version('Gimp', '3.0')\n"
+"from gi.repository import Gimp\n"
+"gi.require_version('Gegl', '0.4')\n"
+"from gi.repository import Gegl\n"
+"from gi.repository import GObject\n"
+"from gi.repository import GLib\n"
+"from gi.repository import Gio\n"
+"import os, sys, time\n"
+"\n"
+"def load_slow(procedure, run_mode, file, metadata, flags, config, data):\n"
+"    work = os.environ.get('GLIMS_SLOWLOAD_DIR')\n"
+"    if work:\n"
+"        with open(os.path.join(work, 'slow-load-entered'), 'w') as marker:\n"
+"            marker.write('x')\n"
+"        release = os.path.join(work, 'slow-load-release')\n"
+"        deadline = time.monotonic() + 10.0\n"
+"        while not os.path.exists(release) and time.monotonic() < deadline:\n"
+"            time.sleep(0.02)\n"
+"        with open(os.path.join(work, 'slow-load-done'), 'w') as marker:\n"
+"            marker.write('x')\n"
+"    image = Gimp.Image.new(2, 2, Gimp.ImageBaseType.RGB)\n"
+"    layer = Gimp.Layer.new(image, 'slow', 2, 2, Gimp.ImageType.RGBA_IMAGE,\n"
+"                           100.0, Gimp.LayerMode.NORMAL)\n"
+"    image.insert_layer(layer, None, 0)\n"
+"    Gimp.context_set_foreground(Gegl.Color.new('#336699'))\n"
+"    layer.edit_fill(Gimp.FillType.FOREGROUND)\n"
+"    return Gimp.ValueArray.new_from_values([\n"
+"        GObject.Value(Gimp.PDBStatusType, Gimp.PDBStatusType.SUCCESS),\n"
+"        GObject.Value(Gimp.Image, image),\n"
+"    ])\n"
+"\n"
+"class GlimsSlowLoad(Gimp.PlugIn):\n"
+"    def do_query_procedures(self):\n"
+"        return ['file-glims-slow-load']\n"
+"    def do_create_procedure(self, name):\n"
+"        procedure = Gimp.LoadProcedure.new(self, name,\n"
+"                                           Gimp.PDBProcType.PLUGIN,\n"
+"                                           load_slow, None)\n"
+"        procedure.set_menu_label('Glims slow-load fixture')\n"
+"        procedure.set_documentation('load a .gslow test file',\n"
+"                                    'loads a .gslow test file', name)\n"
+"        procedure.set_mime_types('image/x-glims-slow')\n"
+"        procedure.set_extensions('gslow')\n"
+"        return procedure\n"
+"\n"
+"Gimp.main(GlimsSlowLoad.__gtype__, sys.argv)\n";
+
+/* Installs the fixture under <user_dir>/plug-ins before the engine starts;
+ * the plug-in finds the work directory through GLIMS_SLOWLOAD_DIR. */
+static void
+install_slow_load_plug_in (const char *user_dir)
+{
+  char   path[1100];
+  FILE  *file;
+
+  mkdir (user_dir, 0755);
+  snprintf (path, sizeof path, "%s/plug-ins", user_dir);
+  mkdir (path, 0755);
+  snprintf (path, sizeof path, "%s/plug-ins/glims-slow-load", user_dir);
+  mkdir (path, 0755);
+  snprintf (path, sizeof path, "%s/plug-ins/glims-slow-load/glims-slow-load.py", user_dir);
+  file = fopen (path, "w");
+  if (file)
+    {
+      fputs (slow_load_source, file);
+      fclose (file);
+      chmod (path, 0755);
+    }
+}
+
+static void
+slow_load_marker (const char *work, const char *name, char *out, size_t size)
+{
+  snprintf (out, size, "%s/%s", work, name);
+}
+
+/* Drops the release file so the next load returns immediately; the tests
+ * keep it present except inside a deliberately armed window. */
+static void
+slow_load_release (const char *work)
+{
+  char  path[1100];
+  FILE *file;
+
+  slow_load_marker (work, "slow-load-release", path, sizeof path);
+  file = fopen (path, "w");
+  if (file)
+    fclose (file);
+}
+
+/* Arms the next load: no markers, no release, so the plug-in marks ENTERED
+ * and then parks inside the load until released (ten seconds at most). */
+static void
+slow_load_arm (const char *work)
+{
+  char path[1100];
+
+  slow_load_marker (work, "slow-load-entered", path, sizeof path);
+  unlink (path);
+  slow_load_marker (work, "slow-load-done", path, sizeof path);
+  unlink (path);
+  slow_load_marker (work, "slow-load-release", path, sizeof path);
+  unlink (path);
+}
+
+static int
+slow_load_seen (const char *work, const char *name, double seconds)
+{
+  char   path[1100];
+  double deadline = now_ms () + seconds * 1000.0;
+
+  slow_load_marker (work, name, path, sizeof path);
+  while (now_ms () < deadline)
+    {
+      if (access (path, F_OK) == 0)
+        return 1;
+      usleep (2000);
+    }
+  return 0;
+}
+
+/* An operation whose nested .gslow load is probed from the main thread. */
+typedef struct
+{
+  GlimsImageID image;
+  GlimsItemID  layer;
+  uint64_t     revision;
+  int32_t      position;
+} BusyProbe;
+
+typedef struct
+{
+  GlimsStatus (*run) (BusyProbe *probe);
+  BusyProbe   *probe;
+  GlimsStatus   status;
+  atomic_bool   finished;
+} BusyThread;
+
+static void *
+busy_thread_run (void *data)
+{
+  BusyThread *thread = data;
+
+  thread->status = thread->run (thread->probe);
+  atomic_store (&thread->finished, true);
+  return NULL;
+}
+
+static GlimsStatus
+busy_run_restore (BusyProbe *probe)
+{
+  return api->layer_command (engine, probe->image, probe->layer,
+                             GLIMS_LAYER_RESTORE_SOURCE, NULL, NULL);
+}
+
+static GlimsStatus
+busy_run_undo (BusyProbe *probe)
+{
+  return api->image_undo (engine, probe->image);
+}
+
+static GlimsStatus
+busy_run_history (BusyProbe *probe)
+{
+  return api->image_history_move (engine, probe->image, probe->revision, probe->position, NULL);
+}
+
+/* While ENTERED says a .gslow load sits inside its nested main loop, a
+ * queued fill on `other` must be refused BUSY and change nothing, while a
+ * read and a cancel still reach the engine. `before` is `other`'s render
+ * from before the load started. */
+static void
+check_busy_window (GlimsImageID other, const uint8_t *before, int32_t w, int32_t h,
+                   int32_t depth, const char *what)
+{
+  GlimsFillSettings  fill = { .struct_size = sizeof fill, .mode = GLIMS_FILL_SELECTION,
+                              .color = { 0, 1, 0, 1 }, .opacity = 1 };
+  GlimsImageInfo     info;
+  GlimsStatus        fill_status;
+  uint8_t           *after;
+  char              *error = NULL;
+
+  fill_status = api->fill (engine, other, (GlimsPoint) { 0, 0 }, &fill, &error);
+  CHECK (fill_status == GLIMS_STATUS_BUSY,
+         "%s: a queued fill during the nested load is refused BUSY (%d%s%s)",
+         what, fill_status, error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  CHECK (api->image_info (engine, other, &info) == GLIMS_STATUS_OK,
+         "%s: reads still work during the nested load", what);
+  CHECK (api->procedure_cancel (engine) == GLIMS_STATUS_NOT_FOUND,
+         "%s: cancel delivery still reaches the engine during the nested load", what);
+  CHECK (undo_depth (other) == depth,
+         "%s: the refused fill pushed no undo step (%d -> %d)", what, depth, undo_depth (other));
+  after = render_all (other, &w, &h);
+  CHECK (before && after && memcmp (before, after, (size_t) w * h * 4) == 0,
+         "%s: the refused fill changed no pixels", what);
+  free (after);
+}
+
+/* Runs `run` on a thread, waits for its nested .gslow load to mark
+ * ENTERED, probes the busy window, then releases the load and joins. */
+static void
+probe_busy_during_load (const char *work, GlimsImageID other,
+                        GlimsStatus (*run) (BusyProbe *), BusyProbe *probe,
+                        GlimsStatus expected, const char *what)
+{
+  BusyThread thread = { .run = run, .probe = probe };
+  pthread_t  id;
+  int32_t    depth = undo_depth (other), w = 0, h = 0;
+  uint8_t   *before = render_all (other, &w, &h);
+  int        entered;
+
+  slow_load_arm (work);
+  pthread_create (&id, NULL, busy_thread_run, &thread);
+  entered = slow_load_seen (work, "slow-load-entered", 15);
+  CHECK (entered, "%s: the .gslow load ran inside the operation", what);
+  if (entered)
+    check_busy_window (other, before, w, h, depth, what);
+  free (before);
+  slow_load_release (work);
+  pthread_join (id, NULL);
+  CHECK (thread.status == expected, "%s: the operation completed once released (%d)",
+         what, thread.status);
+}
+
+/* A queued facade mutation must see the engine as busy for the whole
+ * duration of a file load inside a nested main loop: an explicit
+ * RESTORE_SOURCE that thaws a link, an undo or a history move that pops
+ * the rasterize step, and the link monitor's own reload, which no facade
+ * call wraps. The .gslow loader parks until released, so ENTERED proves
+ * the nested load is in flight before the probe runs. */
+static void
+test_busy_during_link_load (const char *work)
+{
+  GlimsImageID     image = 0, other = 0, monitor_image = 0;
+  GlimsItemID      link = 0, monitor_link = 0;
+  GlimsHistoryInfo hinfo = { 0 };
+  BusyProbe        probe = { 0 };
+  char             gslow[1100];
+  FILE            *file;
+  uint8_t         *before = NULL;
+  int32_t          w = 0, h = 0, depth;
+  int              entered;
+
+  if (! supports_link_layers ())
+    {
+      printf ("ok    skipping the link busy tests: the engine has no link layers\n");
+      return;
+    }
+
+  snprintf (gslow, sizeof gslow, "%s/slow-source.gslow", work);
+  file = fopen (gslow, "w");
+  CHECK (file != NULL, "the .gslow fixture file is written");
+  if (! file)
+    return;
+  fputs ("glims slow load fixture\n", file);
+  fclose (file);
+
+  api->image_new (engine, 8, 8, &image, NULL);
+  api->image_new (engine, 8, 8, &other, NULL);
+
+  /* The release marker is still present, so this first load returns at
+   * once; it also proves the fixture plug-in itself works. */
+  CHECK (api->image_place_link (engine, image, gslow, &link, NULL) == GLIMS_STATUS_OK && link != 0,
+         "a link layer on the .gslow file is placed through the slow loader");
+  if (! link)
+    {
+      api->image_close (engine, image);
+      api->image_close (engine, other);
+      return;
+    }
+  CHECK (api->layer_command (engine, image, link, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK,
+         "the .gslow link rasterizes");
+
+  /* Restore thaws the link: the file reloads inside the restore. */
+  probe = (BusyProbe) { .image = image, .layer = link };
+  probe_busy_during_load (work, other, busy_run_restore, &probe,
+                        GLIMS_STATUS_OK, "restore of the link");
+
+  /* Undo of the rasterize pops the same rasterizable undo record, which
+   * thaws the link and reloads the file. */
+  CHECK (api->layer_command (engine, image, link, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK,
+         "the link rasterizes again for the undo probe");
+  probe_busy_during_load (work, other, busy_run_undo, &probe,
+                        GLIMS_STATUS_OK, "undo of the link rasterize");
+
+  /* A history move across the rasterize step thaws it the same way. */
+  CHECK (api->layer_command (engine, image, link, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK,
+         "the link rasterizes for the history probe");
+  CHECK (api->fill (engine, image, (GlimsPoint) { 0, 0 },
+                    &(GlimsFillSettings) { .struct_size = sizeof (GlimsFillSettings),
+                                           .mode = GLIMS_FILL_SELECTION,
+                                           .color = { 1, 0, 0, 1 }, .opacity = 1 },
+                    NULL) == GLIMS_STATUS_OK,
+         "a fill adds a second step over the rasterize");
+  CHECK (api->image_history (engine, image, NULL, 0, &hinfo) == GLIMS_STATUS_OK &&
+         hinfo.current_position >= 2,
+         "the history sits two steps over the rasterize (position %d)", hinfo.current_position);
+  probe.revision = hinfo.revision;
+  probe.position = hinfo.current_position - 2;
+  probe_busy_during_load (work, other, busy_run_history, &probe,
+                        GLIMS_STATUS_OK, "history move across the link thaw");
+
+  /* The link monitor reloads on file change with no facade call around
+   * it: a queued mutation must still see the engine as busy. Keep exactly
+   * one monitored link so one load runs. */
+  CHECK (api->layer_command (engine, image, link, GLIMS_LAYER_RASTERIZE, NULL, NULL) == GLIMS_STATUS_OK,
+         "the first link is frozen so only the monitor link reloads");
+  api->image_new (engine, 8, 8, &monitor_image, NULL);
+  CHECK (api->image_place_link (engine, monitor_image, gslow, &monitor_link, NULL) == GLIMS_STATUS_OK &&
+         monitor_link != 0,
+         "the monitored .gslow link is placed");
+
+  before     = render_all (other, &w, &h);
+  depth      = undo_depth (other);
+  slow_load_arm (work);
+  file = fopen (gslow, "w");
+  CHECK (file != NULL, "the .gslow file is rewritten for the monitor probe");
+  if (file)
+    {
+      fputs ("glims slow load fixture, changed\n", file);
+      fclose (file);
+    }
+  entered = slow_load_seen (work, "slow-load-entered", 15);
+  CHECK (entered, "the link monitor reloaded the changed file");
+  if (entered)
+    check_busy_window (other, before, w, h, depth, "the monitor's reload");
+  free (before);
+  slow_load_release (work);
+  CHECK (slow_load_seen (work, "slow-load-done", 15),
+         "the monitor's reload finished after the release");
+
+  /* Draining the monitor: the rewrite can leave one more emission queued
+   * — idle_changed_source admits a single pending idle, and it fires on
+   * the bare link pointer, which closing the image would leave dangling
+   * (gimp_link_finalize never removes it). Let a queued emission run its
+   * load while the image is still open: a queued idle fires the moment
+   * the engine is idle again, so a bounded wait covers 0-or-1 pending
+   * emissions, and nothing new is monitored afterwards because the test
+   * writes the file no more. */
+  {
+    char marker[1100];
+
+    slow_load_marker (work, "slow-load-entered", marker, sizeof marker);
+    unlink (marker);
+    slow_load_marker (work, "slow-load-done", marker, sizeof marker);
+    unlink (marker);
+    if (slow_load_seen (work, "slow-load-entered", 5) ||
+        slow_load_seen (work, "slow-load-done", 1))
+      CHECK (slow_load_seen (work, "slow-load-done", 15),
+             "the queued monitor emission reloaded before the close");
+  }
+
+  api->image_close (engine, monitor_image);
+  api->image_close (engine, image);
+  api->image_close (engine, other);
+}
+
 static void
 test_transforms (void)
 {
@@ -9573,6 +9946,14 @@ main (int argc, char **argv)
 
   snprintf (user_dir, sizeof user_dir, "%s/user", argv[2]);
   snprintf (cache_dir, sizeof cache_dir, "%s/cache", argv[2]);
+
+  /* The slow-load fixture must be in place before the engine scans its
+   * plug-in path at start. The release marker stays preset: only a test
+   * that arms a load removes it. */
+  install_slow_load_plug_in (user_dir);
+  setenv ("GLIMS_SLOWLOAD_DIR", argv[2], 1);
+  slow_load_release (argv[2]);
+
   config.struct_size     = sizeof config;
   config.user_directory  = user_dir;
   config.cache_directory = cache_dir;
@@ -9622,6 +10003,7 @@ main (int argc, char **argv)
   test_layer_fit_trim ();
   test_layer_source (argv[2]);
   test_layer_restore_source (argv[2]);
+  test_busy_during_link_load (argv[2]);
   test_clipboard ();
   test_clear_srgb_and_readiness (argv[3]);
   test_render_freshness ();
