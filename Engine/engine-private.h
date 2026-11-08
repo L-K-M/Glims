@@ -66,6 +66,9 @@ typedef struct
   gulong     component_active_handler;
   gulong     component_visible_handler;
   gulong     quick_mask_changed_handler;
+  gulong     guide_added_handler;
+  gulong     guide_removed_handler;
+  gulong     guide_moved_handler;
   guint64    history_revision;
 } GlimsOpenImage;
 
@@ -360,6 +363,14 @@ GlimsStatus glims_image_convert_profile (GlimsEngine *e, GlimsImageID image,
 GlimsStatus glims_image_convert_profile_rasterizing (GlimsEngine *e, GlimsImageID image,
                                                      const char *path, uint32_t intent,
                                                      bool black_point_compensation, char **error);
+
+/* guides.c */
+GlimsStatus glims_image_guides (GlimsEngine *e, GlimsImageID image,
+                                GlimsGuideInfo *rows, int32_t capacity, int32_t *count);
+GlimsStatus glims_guide_put    (GlimsEngine *e, GlimsImageID image,
+                                const GlimsGuideInfo *guide, GlimsGuideID *result, char **error);
+GlimsStatus glims_guide_remove (GlimsEngine *e, GlimsImageID image,
+                                GlimsGuideID guide, char **error);
 
 /* resource.c */
 GlimsStatus glims_lookup_gradient      (GlimsEngine *e, GlimsResourceID id,

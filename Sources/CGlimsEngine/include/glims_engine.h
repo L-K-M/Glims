@@ -67,8 +67,10 @@ typedef enum GlimsEventKind {
   GLIMS_EVENT_PROGRESS           = 5, /* text (may be NULL), value, active */
   GLIMS_EVENT_SELECTION_CHANGED  = 6, /* image */
   GLIMS_EVENT_SIZE_CHANGED       = 7, /* image: its width or height changed */
-  GLIMS_EVENT_CHANNELS_CHANGED   = 8  /* image: channel list, selected channel,
+  GLIMS_EVENT_CHANNELS_CHANGED   = 8, /* image: channel list, selected channel,
                                        * components or Quick Mask */
+  GLIMS_EVENT_GUIDES             = 9  /* image: a guide was added, removed or
+                                       * moved; re-read image_guides */
 } GlimsEventKind;
 
 typedef struct GlimsEvent {
@@ -849,6 +851,31 @@ typedef enum GlimsResourceKind {
  * only for the running engine that issued it in this session: a handle
  * carried across a restart resolves to nothing. 0 means none. */
 typedef uint64_t GlimsResourceID;
+
+/* A handle to one of an image's guides, issued by guide_put and reported
+ * by image_guides. It names the guide while the image keeps it, including
+ * across undo and redo of its removal or move; a reopened file always
+ * gets new ids. 0 means none, and guide_put takes it to create. */
+typedef int32_t GlimsGuideID;
+
+/* Which axis an image guide sits on. Facade-owned values mapped to the
+ * engine's orientation constants inside the adapter; the native enum
+ * never crosses this boundary. A guide's orientation is fixed at
+ * creation — guide_put never reorients an existing guide. */
+typedef enum GlimsGuideOrientation {
+  GLIMS_GUIDE_HORIZONTAL = 1,  /* a horizontal line, `position` on the y axis */
+  GLIMS_GUIDE_VERTICAL   = 2   /* a vertical line, `position` on the x axis */
+} GlimsGuideOrientation;
+
+/* One row of the image_guides() list, and the change guide_put()
+ * applies. `position` is in image pixels on the guide's axis: the y
+ * coordinate of a horizontal guide, the x coordinate of a vertical one. */
+typedef struct GlimsGuideInfo {
+  GlimsGuideID id;
+  uint32_t     orientation;  /* GlimsGuideOrientation */
+  int32_t      position;     /* 0 ... image height (horizontal) or
+                              * 0 ... image width (vertical) */
+} GlimsGuideInfo;
 
 /* One row of the resources() list, in the engine's own order. */
 typedef struct GlimsResourceInfo {
@@ -1650,6 +1677,48 @@ typedef struct GlimsEngineAPI {
                                         GlimsPoint from, GlimsPoint to,
                                         const GlimsResourceGradientSettings *settings,
                                         char **error);
+
+  /* Image guides: the ordinary full-image rulers the user drags out,
+   * listed and edited by id. Custom tool-owned guides (such as layer
+   * edge guides some engines create) are never listed and refuse
+   * guide_put and guide_remove. `rows` receives up to `capacity` rows
+   * in the engine's own order, `count` the total; `rows` may be NULL
+   * with `capacity` 0 to only count. INVALID_ARGUMENT for a missing
+   * `count`, a negative `capacity`, or `rows` missing while `capacity`
+   * is positive; NOT_FOUND for an unknown image. A read: allowed at
+   * any time. */
+  GlimsStatus  (*image_guides)          (GlimsEngine *engine, GlimsImageID image,
+                                         GlimsGuideInfo *rows, int32_t capacity,
+                                         int32_t *count);
+  /* With `guide->id` 0, adds a guide of `guide->orientation` at
+   * `guide->position` as one undo step ("Add Horizontal/Vertical
+   * Guide"); `result` (may be NULL) receives its id. With a nonzero
+   * `guide->id`, moves that existing ordinary guide to `guide->position`
+   * as one undo step ("Move Guide"); `guide->orientation` must be the
+   * guide's own — a put that would reorient is refused, not applied.
+   * A move to the position the guide already holds is a no-op that
+   * pushes no undo. Everything is validated before any mutation:
+   * INVALID_ARGUMENT for a missing `guide`, an unknown `orientation`,
+   * a negative or out-of-range `position` (0 ... image height for
+   * horizontal, 0 ... image width for vertical) or a negative `id`;
+   * NOT_FOUND for an unknown image or an `id` that names no ordinary
+   * guide of this image — stale, foreign or custom tool-owned;
+   * BUSY while a stroke, a filter session or a plug-in holds the
+   * image. Guide changes are metadata: they never touch the image's
+   * pixels or its selection, and pixel locks do not refuse them.
+   * GLIMS_EVENT_GUIDES follows each applied change. */
+  GlimsStatus  (*guide_put)             (GlimsEngine *engine, GlimsImageID image,
+                                         const GlimsGuideInfo *guide,
+                                         GlimsGuideID *result, char **error);
+  /* Removes the ordinary guide `guide` names, as one undo step
+   * ("Remove Guide"); undo restores it at its position and
+   * orientation. Same readiness and refusal rules as guide_put:
+   * NOT_FOUND for an unknown image or a stale, foreign or custom
+   * tool-owned id, INVALID_ARGUMENT for `guide` <= 0, BUSY while a
+   * stroke, a filter session or a plug-in holds the image.
+   * GLIMS_EVENT_GUIDES follows. */
+  GlimsStatus  (*guide_remove)          (GlimsEngine *engine, GlimsImageID image,
+                                         GlimsGuideID guide, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

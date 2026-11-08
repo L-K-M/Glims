@@ -34,6 +34,8 @@ final class EngineSession: @unchecked Sendable {
         case selectionChanged(image: Int32)
         case sizeChanged(image: Int32)
         case channelsChanged(image: Int32)
+        /// A guide was added, removed or moved; re-read `guides(_:)`.
+        case guidesChanged(image: Int32)
     }
 
     // MARK: Editing types
@@ -2271,6 +2273,69 @@ final class EngineSession: @unchecked Sendable {
         return kind
     }
 
+    // MARK: Guides
+
+    /// Which axis an image guide sits on (GlimsGuideOrientation). A
+    /// guide's orientation is fixed at creation; `putGuide` never
+    /// reorients an existing guide.
+    enum GuideOrientation: UInt32 {
+        /// A horizontal line; `position` is a y coordinate.
+        case horizontal = 1
+        /// A vertical line; `position` is an x coordinate.
+        case vertical = 2
+    }
+
+    /// One of the image's ordinary guides (GlimsGuideInfo): `position`
+    /// is in image pixels on the guide's axis — y for horizontal, x for
+    /// vertical — inside 0 ... the image's extent on that axis.
+    struct Guide: Equatable {
+        let id: Int32
+        let orientation: GuideOrientation
+        let position: Int32
+    }
+
+    /// The image's ordinary guides in the engine's own order
+    /// (image_guides). Custom tool-owned guides are never listed.
+    func guides(_ image: Int32) throws -> [Guide] {
+        var count: Int32 = 0
+        try check(api.image_guides(engine, image, nil, 0, &count), nil)
+        var rows = [GlimsGuideInfo](repeating: GlimsGuideInfo(), count: Int(count))
+        var filled: Int32 = 0
+        try rows.withUnsafeMutableBufferPointer { buffer in
+            try check(api.image_guides(engine, image, buffer.baseAddress, count, &filled), nil)
+        }
+        return try rows.prefix(Int(min(count, filled))).map { row in
+            guard let orientation = GuideOrientation(rawValue: row.orientation) else {
+                throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                                  message: "The engine returned a guide with an unknown orientation.")
+            }
+            return Guide(id: row.id, orientation: orientation, position: row.position)
+        }
+    }
+
+    /// Adds a guide (`guide.id` 0, returns the new id) or moves the
+    /// ordinary guide `guide.id` names to `guide.position` as one undo
+    /// step each; `guide.orientation` must then be the guide's own — a
+    /// reorienting put is refused. A move to the position the guide
+    /// already holds is a no-op with no undo. BUSY while a stroke, a
+    /// filter session or a plug-in holds the image.
+    @discardableResult
+    func putGuide(_ guide: Guide, image: Int32) throws -> Int32 {
+        var request = GlimsGuideInfo(id: guide.id, orientation: guide.orientation.rawValue,
+                                     position: guide.position)
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.guide_put(engine, image, &request, &result, &error), error)
+        return result
+    }
+
+    /// Removes the ordinary guide `guide` names as one undo step;
+    /// NOT_FOUND for a stale, foreign or custom tool-owned id.
+    func removeGuide(_ guide: Int32, image: Int32) throws {
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.guide_remove(engine, image, guide, &error), error)
+    }
+
     // MARK: Helpers
 
     private func check(_ status: GlimsStatus, _ error: UnsafeMutablePointer<CChar>?) throws {
@@ -2365,6 +2430,8 @@ private let engineEventCallback: GlimsEventCallback = { context, eventPointer in
         relay.deliver(.sizeChanged(image: event.image))
     case UInt32(GLIMS_EVENT_CHANNELS_CHANGED.rawValue):
         relay.deliver(.channelsChanged(image: event.image))
+    case UInt32(GLIMS_EVENT_GUIDES.rawValue):
+        relay.deliver(.guidesChanged(image: event.image))
     case UInt32(GLIMS_EVENT_PROGRESS.rawValue):
         let text = event.text.map { String(cString: $0) } ?? ""
         relay.deliver(.progress(event.active

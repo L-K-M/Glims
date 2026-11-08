@@ -130,6 +130,11 @@ final class ImageDocument {
     var onUserCommand: (() -> Void)?
     /// The selection outline in image pixels, for marching ants.
     private(set) var selectionOutline: [EngineSession.Segment] = []
+    /// The image's ordinary guides, read with the rest of the state.
+    /// Guide changes are metadata — they never touch pixels or the
+    /// selection — so the cache refreshes with `reload` and on the
+    /// deferred guides-changed refresh.
+    private(set) var guides: [EngineSession.Guide] = []
     /// The image's paths, top first.
     private(set) var paths: [EngineSession.PathInfo] = []
     /// The path the Path tool edits and the Paths palette's commands use.
@@ -232,6 +237,7 @@ final class ImageDocument {
         channels = try session.channels(image)
         quickMaskState = try session.quickMask(image)
         colorInfo = try session.colorInfo(image)
+        guides = try session.guides(image)
         mirrorChannelIntents()
         if let pick = pendingTargetPick {
             channels = channels.map { row in
@@ -477,6 +483,8 @@ final class ImageDocument {
         static let selection = PendingRefresh(rawValue: 1 << 1)
         /// Fires the size callback after the reload.
         static let size = PendingRefresh(rawValue: 1 << 2)
+        /// The guides list only; cheaper than a full reload.
+        static let guides = PendingRefresh(rawValue: 1 << 3)
     }
     private var pendingRefresh: PendingRefresh = []
     private var refreshIsScheduled = false
@@ -493,6 +501,8 @@ final class ImageDocument {
             scheduleRefresh(.selection)
         case .sizeChanged(let image) where image == self.image:
             scheduleRefresh([.state, .size])
+        case .guidesChanged(let image) where image == self.image:
+            scheduleRefresh(.guides)
         default:
             break
         }
@@ -517,7 +527,15 @@ final class ImageDocument {
         guard !isClosing, !pending.isEmpty else { return }
         if pending.contains(.state) || pending.contains(.size) { try? reload() }
         if pending.contains(.selection) { refreshSelection() }
+        if pending.contains(.guides) { reloadGuides() }
         if pending.contains(.size) { onSizeChange?() }
+    }
+
+    private func reloadGuides() {
+        guard let fresh = try? session.guides(image) else { return }
+        guard fresh != guides else { return }
+        guides = fresh
+        onStateChange?()
     }
 
     // MARK: Painting
@@ -581,6 +599,39 @@ final class ImageDocument {
     func select(_ command: EngineSession.SelectCommand, radius: Double = 0) {
         guard !refuseWhileEditingUnavailable() else { return }
         run { session, image in try session.select(command, image: image, radius: radius) }
+    }
+
+    // MARK: Guides
+
+    /// Adds a guide at `position` (image pixels on `orientation`'s
+    /// axis, inside 0 ... the image's extent on it) as one undo step.
+    /// Guide changes are metadata: pixels and the selection are never
+    /// touched, and pixel locks do not refuse them.
+    func addGuide(_ orientation: EngineSession.GuideOrientation, at position: Int32) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        run { session, image in
+            _ = try session.putGuide(EngineSession.Guide(id: 0, orientation: orientation,
+                                                         position: position), image: image)
+        }
+    }
+
+    /// Moves `guide` to `position` as one undo step; the guide's own
+    /// orientation stays (a reorientation is refused). A move to the
+    /// position it already holds is a no-op with no undo.
+    func moveGuide(_ guide: EngineSession.Guide, to position: Int32) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        run { session, image in
+            _ = try session.putGuide(EngineSession.Guide(id: guide.id,
+                                                         orientation: guide.orientation,
+                                                         position: position), image: image)
+        }
+    }
+
+    /// Removes `guide` as one undo step; a stale, foreign or custom
+    /// tool-owned id is refused.
+    func removeGuide(_ guide: Int32) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        run { session, image in try session.removeGuide(guide, image: image) }
     }
 
     // MARK: Editing
