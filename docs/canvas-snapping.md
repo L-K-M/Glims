@@ -102,3 +102,15 @@ assertions before correction. Candidate lines now use a fused multiply-add
 and a fixed seven-index neighborhood around the rounded quotient, avoiding
 both cancellation and unbounded enumeration. All 21 planner tests pass.
 No canvas integration or on-screen snapping is claimed by this model slice.
+
+## Integrated controls acceptance
+
+Fractional grid candidates now produce only representable whole-pixel move
+previews, with inexact axis indicators dropped; release keeps that exact
+rectangle. An unavailable capture refuses rather than falling back to a
+new target. The integrated focused controls and full pinned app runs pass,
+including the imported-target and group-collapse fixes from the layer palette.
+The fractional-grid fixture restores its previous Snap To state before later
+cancellation checks. This slice covers ordinary layer Move gestures; snapping
+for other gestures remains separate work. Independent fix review found no
+important remaining issue.
