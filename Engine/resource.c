@@ -186,6 +186,30 @@ glims_lookup_pattern (GlimsEngine *engine, GlimsResourceID id, GimpPattern **out
   return GLIMS_STATUS_OK;
 }
 
+/* The gradient a facade handle names, admitted through the same
+ * range/kind/current-engine-factory checks as lookup_resource() and
+ * then required to be a gradient: a validly shaped brush or pattern id
+ * is NOT_FOUND, never resolved into a foreign kind. The result borrows
+ * the live data for this call only; nothing is cached and nothing is
+ * mutated. */
+GlimsStatus
+glims_lookup_gradient (GlimsEngine *engine, GlimsResourceID id, GimpGradient **out)
+{
+  GimpData   *data;
+  GlimsStatus status;
+
+  *out = NULL;
+
+  status = lookup_resource (engine, id, &data);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  if (kind_of_data (data) != GLIMS_RESOURCE_GRADIENT)
+    return GLIMS_STATUS_NOT_FOUND;
+
+  *out = GIMP_GRADIENT (data);
+  return GLIMS_STATUS_OK;
+}
+
 GlimsStatus
 glims_resources (GlimsEngine       *engine,
                  uint32_t           kind,

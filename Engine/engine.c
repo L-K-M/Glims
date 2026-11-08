@@ -1216,6 +1216,26 @@ resource_thumbnail_on_engine (GlimsEngine *e, gpointer data)
                                    a->pixels, a->error);
 }
 
+/* The resource gradient call keeps the full 64-bit resource handle and
+ * both endpoints besides its settings — more than GlimsArgs holds. */
+typedef struct
+{
+  GlimsImageID                          image;
+  GlimsResourceID                       gradient;
+  GlimsPoint                            from, to;
+  const GlimsResourceGradientSettings  *settings;
+  char                                **error;
+} GlimsGradientResourceArgs;
+
+static GlimsStatus
+gradient_resource_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsGradientResourceArgs *a = data;
+
+  return glims_gradient_resource (e, a->image, a->gradient, a->from, a->to,
+                                  a->settings, a->error);
+}
+
 static GlimsStatus
 procedure_cancel_on_engine (GlimsEngine *e, gpointer data)
 {
@@ -2052,6 +2072,16 @@ api_vector_layer_style_set (GlimsEngine *e, GlimsImageID image, GlimsItemID laye
   return glims_engine_call (e, vector_layer_style_set_on_engine, &a);
 }
 
+static GlimsStatus
+api_gradient_resource (GlimsEngine *e, GlimsImageID image, GlimsResourceID gradient,
+                       GlimsPoint from, GlimsPoint to,
+                       const GlimsResourceGradientSettings *settings, char **error)
+{
+  GlimsGradientResourceArgs a = { .image = image, .gradient = gradient, .from = from, .to = to,
+                                  .settings = settings, .error = error };
+  return glims_engine_call (e, gradient_resource_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -2164,6 +2194,9 @@ static const GlimsEngineAPI api_v1 = {
   .stroke_begin_with_brush_resource = api_stroke_begin_with_brush_resource,
 
   .fill_pattern = api_fill_pattern,
+
+
+  .gradient_resource = api_gradient_resource,
 };
 
 __attribute__ ((visibility ("default")))
