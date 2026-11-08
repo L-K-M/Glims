@@ -98,6 +98,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "canvas-overlays" {
+                try exerciseCanvasOverlays(session, documents: documents)
+                print(failures == 0 ? "PASSED (canvas overlays)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-source" {
                 try exerciseLayerSourceCache(session, documents: documents)
                 print(failures == 0 ? "PASSED (layer source)" : "FAILED: \(failures) failure(s)")
@@ -184,6 +189,7 @@ enum EngineSmokeTest {
             try exerciseVectorStyleForm(session, work: work, documents: documents)
             try exercisePaletteControls(session, documents: documents)
             try exerciseGuidesControls(session, work: work, documents: documents)
+            try exerciseCanvasOverlays(session, documents: documents)
             try exercisePendingEditScope(session, documents: documents)
             try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
             try exercisePlugInCommands(session, documents: documents)
@@ -8183,6 +8189,87 @@ enum EngineSmokeTest {
               "toggling Show Guides back on redraws the overlay in the view bitmap")
         check(pixel(session, imageA, x: 3, y: 12) == pixelOnGuide,
               "the image pixels on the guide are still identical after both toggles")
+    }
+
+    private static func exerciseCanvasOverlays(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 48, height: 32)
+        guard let layer = try session.layers(image).first?.id else {
+            try session.closeImage(image)
+            return check(false, "the overlay fixture has a layer")
+        }
+        try session.moveLayer(layer, image: image, by: CGSize(width: 7, height: 0))
+        try session.select(.rectangle(CGRect(x: 12, y: 8, width: 20, height: 16)), image: image)
+        let document = try ImageDocument(session: session, image: image, name: "Canvas overlays")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        defer {
+            controller.window?.close()
+            documents.items.removeAll { $0 === document }
+            var closed = false
+            document.closeImageWhenDrained { closed = true }
+            let deadline = Date().addingTimeInterval(10)
+            while !closed && Date() < deadline { spin(0.01) }
+            check(closed && (try? session.info(image)) == nil, "the overlay test closes its image")
+        }
+        document.refreshSelection()
+        let canvas = controller.canvas
+        try canvas.renderVisibleTilesNow()
+        func bitmap() -> Data? {
+            guard let rep = canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds) else { return nil }
+            canvas.cacheDisplay(in: canvas.bounds, to: rep)
+            guard let bytes = rep.bitmapData else { return nil }
+            return Data(bytes: bytes, count: rep.bytesPerRow * rep.pixelsHigh)
+        }
+        let boundary = NSMenuItem(title: "Show Layer Boundary",
+                                  action: #selector(DocumentWindowController.toggleLayerBoundary(_:)), keyEquivalent: "")
+        let edges = NSMenuItem(title: "Show Selection Edges",
+                               action: #selector(DocumentWindowController.toggleSelectionEdges(_:)), keyEquivalent: "")
+        check(controller.validateMenuItem(boundary) && boundary.state == .off
+                && controller.validateMenuItem(edges) && edges.state == .on,
+              "layer boundaries start hidden and selection edges start visible")
+        let view = MainMenu.make().items.first { $0.title == "View" }?.submenu
+        check(view?.items.contains { $0.action == boundary.action } == true
+                && view?.items.contains { $0.action == edges.action } == true,
+              "View wires both overlay controls to document actions")
+        let pixels = try session.copyPixels(image, merged: true).pixels
+        let selection = try session.selectionBounds(image: image)
+        let outline = document.selectionOutline
+        let dirty = document.hasUnsavedChanges
+        let undo = document.undoInfo
+        let withEdges = bitmap()
+        controller.toggleSelectionEdges(edges)
+        let withoutEdges = bitmap()
+        check(withEdges != nil && withoutEdges != nil && withEdges != withoutEdges
+                && !canvas.showsSelectionEdges && edges.state == .off,
+              "hiding selection edges removes the marching ants from the view bitmap")
+        controller.toggleLayerBoundary(boundary)
+        let withBoundary = bitmap()
+        let otherCanvas = EngineCanvasView(document: document)
+        check(!otherCanvas.showsLayerBoundary && otherCanvas.showsSelectionEdges,
+              "a separate canvas keeps its default visibility settings")
+        check(withBoundary != nil && withBoundary != withoutEdges
+                && canvas.showsLayerBoundary && boundary.state == .on,
+              "showing the offset layer boundary changes the view bitmap")
+        controller.toggleLayerBoundary(boundary)
+        check(bitmap() == withoutEdges, "hiding the layer boundary restores the view bitmap")
+        controller.toggleSelectionEdges(edges)
+        check(canvas.showsSelectionEdges && edges.state == .on && bitmap() != withoutEdges,
+              "selection edges can be shown again without changing the selection")
+        check(try session.copyPixels(image, merged: true).pixels == pixels
+                && session.selectionBounds(image: image) == selection
+                && document.selectionOutline == outline && document.hasUnsavedChanges == dirty
+                && document.undoInfo == undo,
+              "overlay switches preserve pixels, selection, dirty state and history")
+        let held = DispatchSemaphore(value: 0)
+        let accepted = EngineActivity.shared.perform(label: "Overlay busy check", work: { held.wait() }, completion: {})
+        let canToggle = controller.validateMenuItem(boundary) && controller.validateMenuItem(edges)
+        controller.toggleLayerBoundary(boundary)
+        held.signal()
+        let deadline = Date().addingTimeInterval(10)
+        while EngineActivity.shared.isBusy && Date() < deadline { spin(0.01) }
+        check(accepted && canToggle && canvas.showsLayerBoundary,
+              "view-only overlay switches remain available while engine work is busy")
     }
 
     private static func exerciseLayerSourceCache(_ session: EngineSession, documents: DocumentList) throws {
