@@ -57,6 +57,15 @@ enum EngineSmokeTest {
         return Array(data.prefix(4))
     }
 
+    /// One RGBA pixel of a rendered CGImage (row 0 at the top).
+    private static func argb(_ image: CGImage, x: Int, y: Int) -> [UInt8]? {
+        guard x >= 0, y >= 0, x < image.width, y < image.height,
+              let data = image.dataProvider?.data as Data? else { return nil }
+        let offset = y * image.bytesPerRow + x * 4
+        guard offset + 3 < data.count else { return nil }
+        return Array(data[offset...offset + 3])
+    }
+
     static func run() -> Int32 {
         guard let path = EngineLibrary.configuredPath() else {
             print("FAIL no engine library; set \(EngineLibrary.environmentVariable)")
@@ -92,6 +101,7 @@ enum EngineSmokeTest {
             try exerciseDocument(session, work: work, documents: documents)
             try exerciseFileSafety(session, work: work, documents: documents)
             try exerciseFileAdmission(session, work: work, documents: documents)
+            try exercisePrinting(session, work: work, documents: documents)
             try exerciseClipboard(session, documents: documents)
             try exercisePreviewLifetimes(session, work: work, documents: documents)
             try exerciseDisplayDensity(session, documents: documents)
@@ -200,6 +210,243 @@ enum EngineSmokeTest {
         while (!finished || b.pendingWork > 0 || b.filterPreviewIsOpen) && Date() < deadline { spin(0.01) }
         check(finished && writeError == nil && !b.filterPreviewIsOpen && controller.previewPanel == nil,
               "preview cancellation in another document waits safely for the file operation")
+    }
+
+    /// File ▸ Print… and Page Setup…: a committed composite rendered in
+    /// bounded stripes behind accepted input, the operation's lifecycle,
+    /// and the same close safety file work gets. The panel is replaced
+    /// by AppKit's own PDF write — the same view, print info and page
+    /// layout — so no sheet or printer is involved.
+    private static func exercisePrinting(_ session: EngineSession, work: URL,
+                                         documents: DocumentList) throws {
+        let image = try session.newImage(width: 120, height: 80)
+        let document = try ImageDocument(session: session, image: image, name: "Print")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        let window = try XCTUnwrapWindow(controller)
+        defer {
+            controller.window?.close()
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+        }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+
+        // US Letter paper; the imageable rect is the printer's, margins
+        // included, well inside the sheet.
+        document.printInfo.paperSize = CGSize(width: 612, height: 792)
+        let imageable = document.printInfo.imageablePageBounds
+        check(imageable.minX > 0 && imageable.minY > 0 && imageable.width > 400
+                && imageable.maxX <= 612 && imageable.maxY <= 792,
+              "the document's print info reports the imageable area")
+
+        // Menu wiring: unique selectors; a generic printDocument: would
+        // route nowhere here (the showHelp: interception lesson).
+        let fileMenu = MainMenu.make().items.first { $0.title == "File" }?.submenu
+        let printItem = fileMenu?.items.first { $0.title == "Print…" }
+        let setupItem = fileMenu?.items.first { $0.title == "Page Setup…" }
+        check(printItem?.action == #selector(DocumentWindowController.printGlimsImage(_:))
+                && printItem?.keyEquivalent == "p"
+                && setupItem?.action == #selector(DocumentWindowController.runGlimsPageSetup(_:)),
+              "File offers Page Setup… and Print… on the document's own selectors")
+
+        // Page Setup changes the per-document print info alone.
+        let undoBeforeSetup = document.undoInfo
+        let fileStateBefore = document.fileState
+        controller.pageSetupRunner = { info, _, finish in
+            let changed = (info.copy() as? NSPrintInfo) ?? info
+            changed.orientation = .landscape
+            finish(changed)
+        }
+        controller.runGlimsPageSetup(nil)
+        wait { document.printInfo.orientation == .landscape }
+        check(document.printInfo.orientation == .landscape,
+              "Page Setup stores the sheet's print info on this document")
+        check(document.undoInfo == undoBeforeSetup && document.fileState == fileStateBefore,
+              "Page Setup adds no undo step and keeps file identity")
+        document.printInfo.orientation = .portrait
+
+        // The print sheet is replaced by AppKit's own PDF write — the
+        // same view, print info and pagination, no panel and no printer.
+        let pdfURL = work.appendingPathComponent("printed.pdf")
+        var runnerCalls = 0
+        var runnerFinished = false
+        controller.printJobRunner = { view, info, _, finish in
+            runnerCalls += 1
+            let operation = NSPrintOperation.pdfOperation(with: view, inside: view.bounds,
+                                                          toPath: pdfURL.path, printInfo: info)
+            operation.showsPrintPanel = false
+            operation.showsProgressPanel = false
+            finish(operation.run())
+            runnerFinished = true
+        }
+
+        // Edits accepted but still queued must land in the printed
+        // page: a stroke queues behind a slow input job and Print is
+        // chosen before the stroke reaches the engine.
+        document.inputQueue.async { usleep(300_000) }
+        document.beginStroke(at: .init(x: 20, y: 20, pressure: 1),
+                             brush: EngineSession.Brush(size: 12, opacity: 1, red: 0, green: 0,
+                                                        blue: 0, pressureSize: false))
+        document.endStroke()
+        let printStart = DispatchTime.now()
+        check(printItem?.action.map({ window.tryToPerform($0, with: printItem) }) == true
+                && controller.printJobIsOpen,
+              "Print… routes through the window's responder chain to the document")
+        check(milliseconds(since: printStart) < 100,
+              "Print returns at once; the snapshot renders off the main thread")
+        check(document.pendingWork > 0, "the snapshot render counts like a file write")
+        check(!(printItem.flatMap { controller.validateMenuItem($0) } ?? true),
+              "a second Print is refused while a job is open")
+        controller.printGlimsImage(nil)
+        wait { runnerFinished }
+        check(runnerCalls == 1, "the duplicate Print started no other job")
+        check(!controller.printJobIsOpen, "a finished run releases the operation and its snapshot")
+        check(printItem.map { controller.validateMenuItem($0) } == true,
+              "Print is offered again once the job released")
+
+        // The written PDF: one page the size of the printed view; the
+        // image is centered in it over white paper, stroke included.
+        guard let pdf = CGPDFDocument(pdfURL as CFURL), let page = pdf.page(at: 1) else {
+            check(false, "the print PDF is written")
+            return
+        }
+        check(pdf.numberOfPages == 1, "the image fits on exactly one page")
+        let box = page.getBoxRect(.mediaBox)
+        check(abs(box.width - imageable.width) < 1 && abs(box.height - imageable.height) < 1,
+              "the printed page is the imageable area")
+        let rasterScale = 0.25
+        let rw = Int(box.width * rasterScale), rh = Int(box.height * rasterScale)
+        let raster = CGContext(data: nil, width: rw, height: rh, bitsPerComponent: 8,
+                               bytesPerRow: rw * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                               bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue).rawValue)
+        raster?.scaleBy(x: rasterScale, y: rasterScale)
+        raster?.drawPDFPage(page)
+        guard let pagePixels = raster?.makeImage() else {
+            check(false, "the printed page rasterizes")
+            return
+        }
+        // CGImage row 0 is the page's top; media point (x, y) reads
+        // raster (x*s, rh - 1 - y*s) in the y-up page.
+        func rasterSample(mediaX: Double, mediaY: Double) -> [UInt8]? {
+            argb(pagePixels, x: Int(mediaX * rasterScale),
+                 y: rh - 1 - Int(mediaY * rasterScale))
+        }
+        // The image is centered: 120×80 px fitted to the page gives
+        // fit = width/120; its bottom edge sits at (pageH - h)/2.
+        let fit = box.width / 120, imageH = 80 * fit
+        let imageBottom = (box.height - imageH) / 2
+        // The queued stroke at image (20,20) lands inside the image,
+        // measured from the image's top edge down.
+        let stroke = rasterSample(mediaX: 20 * fit, mediaY: imageBottom + imageH - 20 * fit)
+        check((stroke?.first ?? 255) < 150, "the queued stroke reached the printed page")
+        check((rasterSample(mediaX: box.width / 2, mediaY: imageBottom / 2)?.first ?? 0) > 240,
+              "outside the image prints white, not canvas checks")
+        check((rasterSample(mediaX: 100 * fit, mediaY: imageBottom + 62 * fit)?.first ?? 0) > 200,
+              "the image's own background prints white")
+
+        // The snapshot is the same composite the canvas draws.
+        var snapshotDone = false
+        var snapshot: PrintSnapshot?
+        document.preparePrintSnapshot(pixelSize: CGSize(width: 240, height: 160)) { result in
+            snapshot = try? result.get()
+            snapshotDone = true
+        }
+        wait { snapshotDone }
+        if let snapshot {
+            let snapPixel = argb(snapshot.image, x: 40, y: 40)
+            let live = (try? session.render(image, scale: snapshot.scale,
+                                            area: CGRect(x: 40, y: 40, width: 1, height: 1)))
+                .flatMap { argb($0, x: 0, y: 0) }
+            check(snapPixel != nil && snapPixel == live,
+                  "snapshot pixels equal the committed composite")
+            check((snapPixel?.first ?? 255) < 150, "the queued stroke is in the snapshot")
+        } else { check(false, "the snapshot renders") }
+
+        // Alpha: the transparent half of an imported image stays
+        // transparent in the snapshot, so paper shows through.
+        var transparentPixels: [UInt8] = []
+        for _ in 0..<4 {
+            transparentPixels += [255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0]
+        }
+        let transparentImage = try session.newImage(pixels: ClipboardImage(
+            width: 4, height: 4, pixels: Data(transparentPixels), origin: .zero))
+        let transparent = try ImageDocument(session: session, image: transparentImage, name: "Transparent")
+        documents.items.append(transparent)
+        var alphaDone = false
+        var alphaSnapshot: PrintSnapshot?
+        transparent.preparePrintSnapshot(pixelSize: CGSize(width: 40, height: 40)) { result in
+            alphaSnapshot = try? result.get()
+            alphaDone = true
+        }
+        wait { alphaDone }
+        if let alphaSnapshot {
+            check(argb(alphaSnapshot.image, x: 5, y: 20)?[3] == 255
+                    && argb(alphaSnapshot.image, x: 35, y: 20)?[3] == 0,
+                  "the snapshot keeps composite alpha for white paper")
+        } else { check(false, "the transparent snapshot renders") }
+        transparent.closeImageWhenDrained()
+        documents.items.removeAll { $0 === transparent }
+
+        // Identity: a second run changes neither history nor file
+        // state; the stroke's own step was the only new one.
+        document.inputQueue.sync {}
+        spin()
+        let undoAfterEdits = document.undoInfo
+        let fileStateAfterEdits = document.fileState
+        runnerFinished = false
+        controller.printGlimsImage(nil)
+        wait { runnerFinished }
+        check(runnerCalls == 2 && document.undoInfo == undoAfterEdits
+                && document.fileState == fileStateAfterEdits,
+              "printing adds no undo step and keeps identity and dirty state")
+
+        // A busy engine refuses the job instead of queueing a phantom.
+        var exportDone = false
+        document.export(to: work.appendingPathComponent("while-printing.png")) { _ in exportDone = true }
+        controller.printGlimsImage(nil)
+        wait { !controller.printJobIsOpen }
+        check(runnerCalls == 2 && !controller.statusBar.message.isEmpty,
+              "Print while the engine is busy is refused with a reason")
+        wait { exportDone }
+
+        // Cancelling releases the job like a finished run.
+        controller.printJobRunner = { _, _, _, finish in
+            runnerCalls += 1
+            finish(false)
+        }
+        controller.printGlimsImage(nil)
+        wait { runnerCalls == 3 }
+        check(!controller.printJobIsOpen, "a cancelled run releases the job")
+
+        // A close while the snapshot still renders drops the job; the
+        // deferred close proceeds and the image is destroyed on time.
+        let closingImage = try session.newImage(width: 32, height: 32)
+        let closing = try ImageDocument(session: session, image: closingImage, name: "Close While Printing")
+        documents.items.append(closing)
+        let closingController = DocumentWindowController(document: closing)
+        closingController.showWindow(nil)
+        closingController.printJobRunner = { _, _, _, _ in
+            check(false, "no panel opens over a closing window")
+        }
+        closing.inputQueue.async { usleep(300_000) }
+        closingController.printGlimsImage(nil)
+        check(closingController.printJobIsOpen, "the print job is still in flight")
+        var closed: Bool?
+        closingController.requestClose { closed = $0 }
+        wait { closed != nil || closingController.window?.attachedSheet != nil }
+        if let sheet = closingController.window?.attachedSheet {
+            NSApp.endSheet(sheet, returnCode: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue)
+        }
+        wait { closed != nil }
+        check(closed == true && !closingController.printJobIsOpen,
+              "close during the render drops the job and finishes")
+        wait { (try? session.info(closingImage)) == nil }
+        check((try? session.info(closingImage)) == nil, "the image is destroyed after its queued work")
+        documents.items.removeAll { $0 === closing }
     }
 
     /// Saving/closing must use the same asynchronous queues and sheets as

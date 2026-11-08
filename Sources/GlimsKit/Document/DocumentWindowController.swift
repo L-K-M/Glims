@@ -23,6 +23,19 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var previewStartIsPending = false
     /// An open panel or a start still queued on the input queue.
     private var previewBusy: Bool { previewPanel != nil || previewStartIsPending }
+    /// A print job anywhere between Print… and the end of the run: a
+    /// second Print is refused, and a close asked for during the engine
+    /// render drops the snapshot instead of attaching a sheet.
+    private(set) var printJobIsOpen = false
+    private var activePrintOperation: NSPrintOperation?
+    private var pageLayout: NSPageLayout?
+    /// Substitute for the print-panel sheet (tests); whoever runs the
+    /// job must report back through `printJobDidFinish(printed:)`.
+    var printJobRunner: ((ImagePrintView, NSPrintInfo, NSWindow,
+                         @escaping @MainActor (Bool) -> Void) -> Void)?
+    /// Substitute for the NSPageLayout sheet (tests).
+    var pageSetupRunner: ((NSPrintInfo, NSWindow,
+                          @escaping @MainActor (NSPrintInfo?) -> Void) -> Void)?
     var onClose: ((DocumentWindowController) -> Void)?
     let fileAccessID = UUID()
     var reserveWrite: ((URL) throws -> (() -> Void))?
@@ -642,9 +655,110 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             menuItem.title = menuItem.action == #selector(repeatLastFilter(_:))
                 ? "Last Filter: \(title)" : "Last Filter Settings: \(title)…"
             return !editingBlocked && !previewBusy && imageDocument.canRun(last)
+        case #selector(runGlimsPageSetup(_:)):
+            // Page setup edits only the document's print info; it just
+            // must not compete with another sheet on the same window.
+            return !imageDocument.isClosing && pageLayout == nil && window?.attachedSheet == nil
+        case #selector(printGlimsImage(_:)):
+            return !editingBlocked && !previewBusy && !printJobIsOpen
         default:
             return !editingBlocked
         }
+    }
+
+    // MARK: Printing
+
+    /// File ▸ Page Setup…: edits only this document's page layout —
+    /// paper, orientation and margins. The image, its history and its
+    /// file identity are untouched.
+    @objc func runGlimsPageSetup(_ sender: Any?) {
+        guard let window, !imageDocument.isClosing, pageLayout == nil,
+              window.attachedSheet == nil else { return }
+        if let runner = pageSetupRunner {
+            runner(imageDocument.printInfo, window) { [weak self] newInfo in
+                guard let self, let newInfo else { return }
+                self.imageDocument.printInfo = newInfo
+            }
+            return
+        }
+        let layout = NSPageLayout()
+        pageLayout = layout
+        layout.beginSheet(with: imageDocument.printInfo, modalFor: window, delegate: self,
+                          didEnd: #selector(pageLayoutDidEnd(_:returnCode:contextInfo:)),
+                          contextInfo: nil)
+    }
+
+    @objc private func pageLayoutDidEnd(_ layout: NSPageLayout, returnCode: Int,
+                                        contextInfo: UnsafeMutableRawPointer?) {
+        pageLayout = nil
+        guard returnCode == NSApplication.ModalResponse.OK.rawValue,
+              let newInfo = layout.printInfo else { return }
+        imageDocument.printInfo = newInfo
+    }
+
+    /// File ▸ Print…: renders the committed composite once behind every
+    /// accepted edit, then opens the standard print panel as a sheet.
+    /// The page shows the state Print was chosen at; later edits cannot
+    /// smear across a page the way a live render could.
+    @objc func printGlimsImage(_ sender: Any?) {
+        guard let window, !imageDocument.isClosing, !printJobIsOpen, !previewBusy,
+              !PlugInCommands.isRunning, !imageDocument.isSavingForClose,
+              !imageDocument.isTransferringClipboard else { return }
+        // A copy so later Page Setup changes cannot rewrite a page
+        // that is already rendering.
+        let printInfo = (imageDocument.printInfo.copy() as? NSPrintInfo) ?? imageDocument.printInfo
+        let pixelSize = PrintGeometry.snapshotSize(
+            imagePixels: CGSize(width: imageDocument.info.width, height: imageDocument.info.height),
+            imageablePoints: printInfo.imageablePageBounds.size)
+        printJobIsOpen = true
+        statusBar.message = "Preparing to print…"
+        imageDocument.preparePrintSnapshot(pixelSize: pixelSize) { [weak self] result in
+            self?.printPreparationDidFinish(result, printInfo: printInfo)
+        }
+    }
+
+    private func printPreparationDidFinish(_ result: Result<PrintSnapshot, Error>,
+                                           printInfo: NSPrintInfo) {
+        // A close requested while the engine rendered takes precedence
+        // over showing the panel.
+        guard let window, !imageDocument.isClosing, closeCompletion == nil else {
+            printJobIsOpen = false
+            return
+        }
+        switch result {
+        case .failure(let error):
+            printJobIsOpen = false
+            showStatusError(error.localizedDescription)
+        case .success(let snapshot):
+            let view = ImagePrintView(snapshot: snapshot, printInfo: printInfo,
+                                      title: imageDocument.name)
+            if let runner = printJobRunner {
+                runner(view, printInfo, window) { [weak self] printed in
+                    self?.printJobDidFinish(printed: printed)
+                }
+            } else {
+                let operation = NSPrintOperation(view: view, printInfo: printInfo)
+                operation.jobTitle = imageDocument.name
+                activePrintOperation = operation
+                operation.runModal(for: window, delegate: self,
+                                   didRun: #selector(printOperation(_:didRunToSuccess:contextInfo:)),
+                                   contextInfo: nil)
+            }
+        }
+    }
+
+    @objc private func printOperation(_ operation: NSPrintOperation, didRunToSuccess success: Bool,
+                                      contextInfo: UnsafeMutableRawPointer?) {
+        printJobDidFinish(printed: success)
+    }
+
+    /// The run ended — printed, cancelled or failed — or the job was
+    /// dropped: the operation and its snapshot are released on every
+    /// path. Cancellation stays silent like everywhere on macOS.
+    func printJobDidFinish(printed: Bool) {
+        activePrintOperation = nil
+        printJobIsOpen = false
+        if printed { stateDidChange() }
     }
 
     // MARK: Saving, exporting and closing

@@ -18,6 +18,10 @@ final class ImageDocument {
     private(set) var name: String
     /// The file the image belongs to and whether it needs saving.
     private(set) var fileState: DocumentFileState
+    /// This document's page setup, changed by File ▸ Page Setup and read
+    /// by Print: per document, like an NSDocument's print info. Editing
+    /// it touches neither the image nor the file state.
+    var printInfo = (NSPrintInfo.shared.copy() as? NSPrintInfo) ?? NSPrintInfo()
 
     private(set) var info: EngineSession.ImageInfo
     private(set) var layers: [EngineSession.Layer] = []
@@ -762,6 +766,28 @@ final class ImageDocument {
         fileState.noteSaved(to: url)
         name = url.lastPathComponent
         try? reload()
+    }
+
+    // MARK: Printing
+
+    /// Renders the committed composite into an immutable snapshot of
+    /// `pixelSize`, behind every accepted edit and counted toward close
+    /// like a file write. The render rides the exclusive engine queue in
+    /// stripes, so queued strokes, text and field commits land in the
+    /// snapshot and no single engine call monopolizes its thread.
+    func preparePrintSnapshot(pixelSize: CGSize,
+                              completion: @escaping @MainActor (Result<PrintSnapshot, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
+              !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
+        endPendingUserEdits()
+        let scale = pixelSize.width / Double(info.width)
+        enqueueExclusive(label: "Preparing to print",
+                         rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
+            let result = Result { try PrintSnapshot.render(session: session, image: image,
+                                                           scale: scale, pixelSize: pixelSize) }
+            DispatchQueue.main.async { completion(result) }
+        }
     }
 
     /// Stops taking work and destroys the engine image once everything
