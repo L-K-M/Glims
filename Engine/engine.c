@@ -1094,6 +1094,7 @@ MARSHAL (path_fill, return glims_path_fill (e, a->image, a->item, (GlimsItemID) 
                                             a->error);)
 MARSHAL (path_to_vector_layer, return glims_path_to_vector_layer (e, a->image, a->item, a->string,
                                                                   a->out, a->error);)
+MARSHAL (resources, return glims_resources (e, (uint32_t) a->width, a->out, a->capacity, a->count);)
 
 /* A path's geometry takes more arguments than GlimsArgs holds. */
 typedef struct
@@ -1129,6 +1130,39 @@ path_set_on_engine (GlimsEngine *e, gpointer data)
 
   return glims_path_set (e, a->image, a->path, a->name, a->subpaths_in, a->subpath_capacity,
                          a->points_in, a->point_capacity, a->result, a->error);
+}
+
+/* The resource identity calls take more arguments than GlimsArgs holds. */
+typedef struct
+{
+  GlimsResourceID   id;
+  uint32_t          kind;
+  const char       *name;
+  const char       *collection;
+  bool              internal;
+  char            **out_name;
+  char            **out_collection;
+  bool             *out_internal;
+  GlimsResourceID  *out_id;
+  char            **error;
+} GlimsResourceArgs;
+
+static GlimsStatus
+resource_identifiers_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsResourceArgs *a = data;
+
+  return glims_resource_identifiers (e, a->id, a->out_name, a->out_collection,
+                                     a->out_internal, a->error);
+}
+
+static GlimsStatus
+resource_resolve_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsResourceArgs *a = data;
+
+  return glims_resource_resolve (e, a->kind, a->name, a->collection, a->internal,
+                                 a->out_id, a->error);
 }
 
 static GlimsStatus
@@ -1870,6 +1904,32 @@ api_path_to_vector_layer (GlimsEngine *e, GlimsImageID image, GlimsItemID path, 
   return glims_engine_call (e, path_to_vector_layer_on_engine, &a);
 }
 
+static GlimsStatus
+api_resources (GlimsEngine *e, uint32_t kind, GlimsResourceInfo *rows, int32_t capacity,
+               int32_t *count)
+{
+  GlimsArgs a = { .width = (int32_t) kind, .out = rows, .capacity = capacity, .count = count };
+  return glims_engine_call (e, resources_on_engine, &a);
+}
+
+static GlimsStatus
+api_resource_identifiers (GlimsEngine *e, GlimsResourceID id, char **name, char **collection,
+                          bool *internal, char **error)
+{
+  GlimsResourceArgs a = { .id = id, .out_name = name, .out_collection = collection,
+                          .out_internal = internal, .error = error };
+  return glims_engine_call (e, resource_identifiers_on_engine, &a);
+}
+
+static GlimsStatus
+api_resource_resolve (GlimsEngine *e, uint32_t kind, const char *name, const char *collection,
+                      bool internal, GlimsResourceID *outID, char **error)
+{
+  GlimsResourceArgs a = { .kind = kind, .name = name, .collection = collection,
+                          .internal = internal, .out_id = outID, .error = error };
+  return glims_engine_call (e, resource_resolve_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1970,6 +2030,9 @@ static const GlimsEngineAPI api_v1 = {
   .image_convert_precision = api_image_convert_precision,
   .path_fill = api_path_fill,
   .path_to_vector_layer = api_path_to_vector_layer,
+  .resources = api_resources,
+  .resource_identifiers = api_resource_identifiers,
+  .resource_resolve = api_resource_resolve,
 };
 
 __attribute__ ((visibility ("default")))

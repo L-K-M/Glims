@@ -676,6 +676,59 @@ engine-free placeholder. The remaining work and evidence are tracked in
 the application complete: basic file lifecycle and clipboard workflows,
 and substantial parts of `design.md`, still need implementation and checks.
 
+### Resource enumeration and identity (2026-11-08)
+
+Engine side only, on `feat/resource-catalog`, the first slice of the
+brush/pattern/gradient resource choosers (completion.md item 4): three
+additive facade slots appended after the table's end
+(`resources`, `resource_identifiers`, `resource_resolve`), API version 1
+unchanged and no settings struct touched. New facade-owned types:
+`GlimsResourceKind` (BRUSH=1, PATTERN=2, GRADIENT=3), `GlimsResourceID`
+(= `uint64_t`, an opaque session handle over the native ephemeral
+`gimp_data_get_id` value: zero and out-of-native-gint-range handles are
+refused before the native id table, and each call re-resolves fresh
+through `gimp_data_get_by_id` and revalidates type plus membership in
+this engine's own factory container, since the native id table is
+global), and `GlimsResourceInfo` (`id`, `kind`, `name[256]`).
+`resources()` enumerates names and handles only from
+`gimp_data_factory_get_container` in native order, with the existing
+count/short-buffer conventions and labels truncated only at valid
+UTF-8 boundaries. `resource_identifiers()` hands over the
+`gimp_data_get_identifiers` triplet as owned strings released with
+`free_string`, preserving a NULL collection distinctly from an empty
+one, and reports FAILED with the outputs reset when the identity is
+unusable (a missing or invalid name, or a non-UTF-8 collection).
+`resource_resolve()` matches exactly as `gimp_data_identify` does
+within one kind's factory container: internal resources match without
+their (localized) name, there is no name-only fallback, and unknown
+identities report NOT_FOUND with `outID` reset to 0. Wrong kinds,
+invalid identity text and missing required outputs are
+INVALID_ARGUMENT. Every call is read-only and marshaled onto the
+engine thread like the rest of the facade; nothing mutates factories,
+contexts or files. The native calls (`gimp_data_get_id/get_by_id`,
+`gimp_data_get_identifiers`, `gimp_data_identify`,
+`gimp_data_factory_get_container`, `gimp_container_have`, the
+`GIMP_IS_BRUSH/PATTERN/GRADIENT` checks) were confirmed identical in
+GIMP 3.2.8, 3.2.0, 3.0.8 and master sources; master's `gimpdata.h`
+macro-ization needs no `GimpDataClass` use. Bounded conformance tests
+call through the facade only: counts, rows, short buffers, current
+handles, identity round trips including the internal localized-name
+semantics, the refusal of name-only fallback, cross-kind identities,
+wrong kinds, unissued and out-of-range handles, bad arguments, output
+resets and owned strings freed. All four engine prefixes built by
+`scripts/build-engine.sh` install stock brush, pattern and gradient
+files (47/58/78), and the tests require at least one file-backed and
+one built-in resource per kind, so a built-in-only listing cannot pass.
+Validation: all four private adapter builds and native conformance runs
+pass: 820 checks on 3.2.8, 3.2.0 and master, and 787 on 3.0.8. The
+installed stock files (47/58/78 above) differ from loaded factory totals:
+the pinned runtime lists 58 brushes, 59 patterns and 77 gradients. Added
+high-bit handle regressions prove that a 64-bit handle is rejected before
+narrowing it to a live 32-bit native id. Independent Mistral Large 4
+review found no important issues. Swift build and unit integration are
+recorded in the PR; thumbnails, resource selection and application,
+settings, management and chooser UI remain later slices.
+
 ## Later, before any public release
 
 - Developer ID signing and notarization for the app, GTK3, Python and every
