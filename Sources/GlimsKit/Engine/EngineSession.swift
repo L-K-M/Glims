@@ -21,6 +21,7 @@ final class EngineSession: @unchecked Sendable {
 
         var description: String { message }
         var errorDescription: String? { message }
+        var requiresRasterization: Bool { status == Int32(GLIMS_STATUS_REQUIRES_RASTERIZE.rawValue) }
     }
 
     enum Event: Equatable {
@@ -1509,12 +1510,19 @@ final class EngineSession: @unchecked Sendable {
         }
     }
 
+    /// Ordinary conversion preserves editable layer types. Rasterization
+    /// is admitted only after the caller has obtained explicit consent.
+    enum ProfileConversionPolicy: Equatable {
+        case preserveEditableLayers, rasterizeEditableLayers
+    }
+
     /// Image ▸ Color Profile ▸ Assign…: embed the ICC profile at `path`
     /// without converting pixel component values, or discard the
     /// embedded profile when `path` is nil (image_assign_profile).
     /// One undo group; assigning an equal profile is a no-op. BUSY while
     /// a stroke, a preview or a plug-in holds the image.
     func assignProfile(_ image: Int32, path: String?) throws {
+        try Self.validateProfilePathText(path)
         var error: UnsafeMutablePointer<CChar>?
         try withOptionalCString(path) { path in
             try check(api.image_assign_profile(engine, image, path, &error), error)
@@ -1530,11 +1538,27 @@ final class EngineSession: @unchecked Sendable {
     /// conversion ignores intent and BPC. Same undo, no-op and busy
     /// rules as `assignProfile`.
     func convertProfile(_ image: Int32, path: String?, intent: ProfileIntent,
-                        blackPointCompensation: Bool) throws {
+                        blackPointCompensation: Bool,
+                        policy: ProfileConversionPolicy = .preserveEditableLayers) throws {
+        try Self.validateProfilePathText(path)
         var error: UnsafeMutablePointer<CChar>?
         try withOptionalCString(path) { path in
-            try check(api.image_convert_profile(engine, image, path, intent.rawValue,
-                                               blackPointCompensation, &error), error)
+            switch policy {
+            case .preserveEditableLayers:
+                try check(api.image_convert_profile(engine, image, path, intent.rawValue,
+                                                   blackPointCompensation, &error), error)
+            case .rasterizeEditableLayers:
+                try check(api.image_convert_profile_rasterizing(engine, image, path, intent.rawValue,
+                                                               blackPointCompensation, &error), error)
+            }
+        }
+    }
+
+    /// File paths must reach the C facade without CString truncation.
+    private static func validateProfilePathText(_ path: String?) throws {
+        guard path?.utf8.contains(0) != true else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The profile path contains invalid text.")
         }
     }
 

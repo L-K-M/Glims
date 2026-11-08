@@ -990,6 +990,7 @@ final class ImageDocument {
     /// — assignment stays allowed on them.
     func convertProfile(path: String?, intent: EngineSession.ProfileIntent,
                         blackPointCompensation: Bool,
+                        policy: EngineSession.ProfileConversionPolicy = .preserveEditableLayers,
                         completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
@@ -1005,7 +1006,7 @@ final class ImageDocument {
         }) { [session, image] in
             let result = Result {
                 try session.convertProfile(image, path: path, intent: intent,
-                                           blackPointCompensation: blackPointCompensation)
+                                           blackPointCompensation: blackPointCompensation, policy: policy)
             }
             DispatchQueue.main.async {
                 if !self.isClosing { try? self.reload() }

@@ -100,6 +100,9 @@ enum ProfileForm {
     /// validity are the engine's to check off the main thread. Returns
     /// the absolute path to pass on, or a user-facing reason.
     static func validatedICCPath(_ raw: String) -> Result<String, InputError> {
+        guard !raw.utf8.contains(0) else {
+            return .failure(InputError(message: "The profile path contains invalid text."))
+        }
         let path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if path.isEmpty {
             return .failure(InputError(message: "Choose an ICC profile file (.icc or .icm)."))
@@ -250,13 +253,51 @@ enum ProfileForm {
                     if case .failure(let error) = result { document.onError?(error.localizedDescription) }
                 }
             case .convert:
-                document.convertProfile(path: path, intent: captured.intent,
-                                        blackPointCompensation: captured.blackPointCompensation) { result in
-                    if case .failure(let error) = result { document.onError?(error.localizedDescription) }
+                convert(captured, document: document, on: window, policy: .preserveEditableLayers)
+            }
+        }
+    }
+
+    private static func convert(_ settings: Settings, document: ImageDocument, on window: NSWindow,
+                                policy: EngineSession.ProfileConversionPolicy) {
+        document.convertProfile(path: profilePath(settings), intent: settings.intent,
+                                blackPointCompensation: settings.blackPointCompensation,
+                                policy: policy) { result in
+            guard case .failure(let error) = result else { return }
+            guard policy == .preserveEditableLayers,
+                  let engineError = error as? EngineSession.EngineError,
+                  engineError.requiresRasterization else {
+                document.onError?(error.localizedDescription)
+                return
+            }
+            // The result arrives before the exclusive job's counters and
+            // engine-wide gate drain. Wait before admitting another action
+            // or showing a sheet; closing may have been requested meanwhile.
+            EngineActivity.shared.whenIdle {
+                guard !document.isClosing else { return }
+                guard document.acceptsEdits, window.attachedSheet == nil else {
+                    document.onError?(ImageDocument.DocumentError.busy.localizedDescription)
+                    return
+                }
+                let confirmation = NSAlert()
+                confirmation.messageText = "Rasterize editable layers?"
+                confirmation.informativeText = "Converting this profile will turn editable text, vector, and linked layers into pixel layers. You can undo the conversion."
+                confirmation.addButton(withTitle: "Rasterize and Convert")
+                confirmation.addButton(withTitle: "Cancel")
+                confirmation.beginSheetModal(for: window) { response in
+                    guard response == .alertFirstButtonReturn else { return }
+                    guard document.acceptsEdits else {
+                        document.onError?(document.isClosing
+                            ? ImageDocument.DocumentError.closed.localizedDescription
+                            : ImageDocument.DocumentError.busy.localizedDescription)
+                        return
+                    }
+                    convert(settings, document: document, on: window, policy: .rasterizeEditableLayers)
                 }
             }
         }
     }
+
 }
 
 /// The per-sheet control binding, retained by the sheet's completion

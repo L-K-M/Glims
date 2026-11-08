@@ -1491,6 +1491,109 @@ enum EngineSmokeTest {
                 && second.colorInfo.profileLabel == "Glims Linear RGB Fixture"
                 && second.undoInfo.undoCount == secondUndo + 1,
               "the surviving sheet applies to its own captured document")
+
+        // The typed facade must reject NUL before withCString can select
+        // the valid file prefix instead of the path the caller supplied.
+        for convert in [false, true] {
+            var refused = false
+            do {
+                if convert {
+                    try session.convertProfile(secondImage, path: rgbICC + "\0.other.icc",
+                                               intent: .perceptual, blackPointCompensation: true)
+                } else {
+                    try session.assignProfile(secondImage, path: rgbICC + "\0.other.icc")
+                }
+            } catch { refused = true }
+            check(refused && (try? session.undoInfo(secondImage).undoCount) == second.undoInfo.undoCount,
+                  "typed \(convert ? "conversion" : "assignment") refuses a NUL path without mutation")
+        }
+
+        // Native profile conversion rasterizes structured layers. The
+        // ordinary document operation must refuse it without mutation;
+        // only an accepted, separate confirmation may use the explicit
+        // rasterizing entry point. Both stages capture this document.
+        let textImage = try session.newImage(width: 96, height: 64)
+        var textSettings = EngineSession.TextSettings()
+        textSettings.size = 24
+        let textID = try session.addTextLayer(image: textImage, text: "Editable",
+                                             settings: textSettings, at: CGPoint(x: 3, y: 3))
+        try session.assignProfile(textImage, path: rgbICC)
+        let textDocument = try ImageDocument(session: session, image: textImage, name: "Profile consent")
+        documents.items.append(textDocument)
+        let textController = DocumentWindowController(document: textDocument)
+        textController.showWindow(nil)
+        let textWindow = try XCTUnwrapWindow(textController)
+        var consentErrors: [String] = []
+        textDocument.onError = { consentErrors.append($0) }
+        defer {
+            if let sheet = textWindow.attachedSheet { textWindow.endSheet(sheet, returnCode: .alertSecondButtonReturn) }
+            documents.items.removeAll { $0 === textDocument }
+            textDocument.closeImageWhenDrained()
+            textWindow.close()
+        }
+        func editableText() -> Bool {
+            textDocument.layers.contains { $0.id == textID && $0.kind == .text }
+                && (try? session.textLayer(image: textImage, layer: textID).text) == "Editable"
+        }
+        func openRasterizeConfirmation() -> NSWindow? {
+            textController.convertColorProfile(nil)
+            guard let form = textWindow.attachedSheet else { return nil }
+            textWindow.endSheet(form, returnCode: .alertFirstButtonReturn)
+            wait {
+                textWindow.attachedSheet.map {
+                    views($0.contentView, as: NSTextField.self).contains { $0.stringValue == "Rasterize editable layers?" }
+                } == true && textDocument.pendingWork == 0 && !EngineActivity.shared.isBusy
+            }
+            return textWindow.attachedSheet
+        }
+        let textUndo = textDocument.undoInfo.undoCount
+        var confirmation = openRasterizeConfirmation()
+        check(confirmation != nil && editableText() && textDocument.undoInfo.undoCount == textUndo
+                && textDocument.colorInfo.hasEmbeddedProfile,
+              "conversion asks before rasterizing editable text and changes nothing")
+        if let confirmation { textWindow.endSheet(confirmation, returnCode: .alertSecondButtonReturn) }
+        spin()
+        check(editableText() && textDocument.undoInfo.undoCount == textUndo
+                && textDocument.pendingWork == 0 && !EngineActivity.shared.isBusy,
+              "cancelling profile rasterization preserves text, profile and history")
+
+        confirmation = openRasterizeConfirmation()
+        if let confirmation { textWindow.endSheet(confirmation, returnCode: .alertFirstButtonReturn) }
+        wait { textDocument.pendingWork == 0 && !EngineActivity.shared.isBusy && textWindow.attachedSheet == nil }
+        spin()
+        check(textDocument.layers.contains { $0.id == textID && $0.kind == .pixel }
+                && !textDocument.colorInfo.hasEmbeddedProfile && textDocument.undoInfo.undoCount == textUndo + 1,
+              "Rasterize and Convert applies the captured destination as one undo step")
+        textDocument.undo()
+        wait { textDocument.pendingWork == 0 }
+        spin()
+        check(editableText() && textDocument.colorInfo.hasEmbeddedProfile
+                && textDocument.undoInfo.undoCount == textUndo,
+              "undo profile conversion restores the original editable text and profile")
+
+        confirmation = openRasterizeConfirmation()
+        let consentGate = DispatchSemaphore(value: 0)
+        let heldForConsent = EngineActivity.shared.perform(label: "Other profile work", work: { consentGate.wait() }, completion: {})
+        let consentErrorsBefore = consentErrors.count
+        if let confirmation { textWindow.endSheet(confirmation, returnCode: .alertFirstButtonReturn) }
+        wait { consentErrors.count > consentErrorsBefore }
+        check(heldForConsent && editableText() && textDocument.undoInfo.undoCount == textUndo
+                && textDocument.pendingWork == 0,
+              "rasterization approval rechecks the engine gate before changing text")
+        consentGate.signal()
+        wait { !EngineActivity.shared.isBusy }
+
+        textDocument.inputQueue.async { usleep(400_000) }
+        textController.convertColorProfile(nil)
+        if let form = textWindow.attachedSheet { textWindow.endSheet(form, returnCode: .alertFirstButtonReturn) }
+        wait { textDocument.pendingWork > 0 }
+        check(textDocument.pendingWork > 0, "profile conversion is counted while accepted input drains")
+        var textClosed = false
+        textDocument.closeImageWhenDrained { textClosed = true }
+        wait { textClosed && textDocument.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(textClosed && (try? session.info(textImage)) == nil && textWindow.attachedSheet == nil,
+              "closing a queued conversion suppresses a late rasterization confirmation and destroys the image")
     }
 
     /// File ▸ Print… and Page Setup…: a committed composite rendered in

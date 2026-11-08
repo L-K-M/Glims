@@ -87,6 +87,12 @@ final class ProfileControlsTests: XCTestCase {
 
     // MARK: ICC path validation — strings only, no file reads
 
+    func testICCPathsRejectEmbeddedNULBeforeCStringConversion() {
+        guard case .failure = ProfileForm.validatedICCPath("/tmp/real.icc\u{0}tail.icc") else {
+            return XCTFail("an ICC path must not silently truncate to another file")
+        }
+    }
+
     func testAnEmptyICCPathIsRefused() {
         if case .failure(let reason) = ProfileForm.validatedICCPath("   ") {
             XCTAssertFalse(reason.message.isEmpty)
