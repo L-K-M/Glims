@@ -665,6 +665,51 @@ typedef enum GlimsEffectCommand {
   GLIMS_EFFECT_TO_BOTTOM = 6
 } GlimsEffectCommand;
 
+/* The image's color model, as image_color_info reports it and
+ * image_convert_mode takes. Facade-owned values only; the engine's own
+ * enum never crosses this boundary. */
+typedef enum GlimsColorMode {
+  GLIMS_COLOR_MODE_UNKNOWN   = 0,
+  GLIMS_COLOR_MODE_RGB       = 1,
+  GLIMS_COLOR_MODE_GRAYSCALE = 2,
+  GLIMS_COLOR_MODE_INDEXED   = 3
+} GlimsColorMode;
+
+/* The component type of the image's precision. */
+typedef enum GlimsColorComponent {
+  GLIMS_COLOR_COMPONENT_UNKNOWN = 0,
+  GLIMS_COLOR_COMPONENT_U8      = 1,
+  GLIMS_COLOR_COMPONENT_U16     = 2,
+  GLIMS_COLOR_COMPONENT_U32     = 3,
+  GLIMS_COLOR_COMPONENT_HALF    = 4,
+  GLIMS_COLOR_COMPONENT_FLOAT   = 5,
+  GLIMS_COLOR_COMPONENT_DOUBLE  = 6
+} GlimsColorComponent;
+
+/* The transfer curve of the image's precision. */
+typedef enum GlimsColorTRC {
+  GLIMS_COLOR_TRC_UNKNOWN    = 0,
+  GLIMS_COLOR_TRC_LINEAR     = 1,
+  GLIMS_COLOR_TRC_NONLINEAR  = 2,
+  GLIMS_COLOR_TRC_PERCEPTUAL = 3
+} GlimsColorTRC;
+
+/* The image's color state. Caller-owned: image_color_info fills the
+ * struct in place; the fixed buffers are UTF-8, truncated, and need no
+ * release. `component` and `trc` together are the image's precision;
+ * GlimsImageInfo.precision keeps reporting it as the engine's nick
+ * string (e.g. "u8-perceptual"). `profile_label` is the effective
+ * profile's label — the image's own when it has one, the engine's
+ * builtin fallback otherwise — and `profile_embedded` says whether an
+ * ICC profile travels with the image (and so with its files). */
+typedef struct GlimsColorInfo {
+  uint32_t mode;             /* GlimsColorMode */
+  uint32_t component;        /* GlimsColorComponent */
+  uint32_t trc;              /* GlimsColorTRC */
+  bool     profile_embedded;
+  char     profile_label[256];  /* UTF-8, truncated; "" when none */
+} GlimsColorInfo;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -1168,6 +1213,34 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*filter_edit_begin)    (GlimsEngine *engine, GlimsImageID image,
                                         GlimsItemID drawable, GlimsEffectID effect,
                                         GlimsFilterID *filter, char **error);
+
+  /* Image color state and conversions. image_color_info is a read and
+   * always allowed, also during a stroke, a preview or a plug-in. The
+   * conversions follow the same readiness rules as the other edits —
+   * BUSY while a stroke, a filter session or a plug-in owns the image
+   * — and validate everything before mutating: each call is one engine
+   * core conversion with its own undo group, so one undo step, never a
+   * partial change. A request that would change nothing is a no-op that
+   * pushes no undo. Both preserve the file identity and the layers,
+   * masks and channels, mark the image dirty as usual, and fire the
+   * engine's own UNDO_CHANGED / LAYERS_CHANGED / CHANNELS_CHANGED events.
+   *
+   * image_convert_mode takes a GlimsColorMode and supports RGB and
+   * grayscale, including from indexed; conversion TO indexed is
+   * UNSUPPORTED for now (palette and dither policy need a later slice),
+   * while an indexed image's info still reports accurately.
+   * image_convert_precision takes a GlimsColorComponent and a
+   * GlimsColorTRC, converts with no dithering, and supports the
+   * combinations the engine accepts: every component/TRC pair for RGB
+   * and grayscale images, and only u8 non-linear for indexed
+   * (UNSUPPORTED otherwise). Unknown enum values are
+   * INVALID_ARGUMENT; an unknown image NOT_FOUND. */
+  GlimsStatus  (*image_color_info)        (GlimsEngine *engine, GlimsImageID image,
+                                           GlimsColorInfo *info);
+  GlimsStatus  (*image_convert_mode)      (GlimsEngine *engine, GlimsImageID image,
+                                           uint32_t mode, char **error);
+  GlimsStatus  (*image_convert_precision) (GlimsEngine *engine, GlimsImageID image,
+                                           uint32_t component, uint32_t trc, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

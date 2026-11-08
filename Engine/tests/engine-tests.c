@@ -3451,6 +3451,273 @@ count_differences (const uint8_t *a, const uint8_t *b, size_t bytes)
   return n;
 }
 
+/* Image color state (mode, precision, effective profile) and the
+ * undoable mode and precision conversions, through the facade only. */
+static void
+test_color_state (const char *fixtures, const char *work)
+{
+  char               indexed_png[1024], profiled_png[1024], xcf[1024];
+  GlimsImageID       image = 0, reopened = 0, indexed = 0;
+  GlimsItemID        layer = 0;
+  GlimsColorInfo     info;
+  GlimsImageInfo     basic;
+  GlimsComponentState comp;
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+  GlimsStrokePoint   point = { 4, 4, 1.0, 0.0, 0.0, 0 };
+  GlimsStrokeID      stroke = 0;
+  GlimsFilterID      filter = 0;
+  GlimsFillSettings  red = { .struct_size = sizeof red, .mode = GLIMS_FILL_SELECTION,
+                             .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  uint8_t            pixel[4];
+  uint8_t           *before_pixels = NULL, *after_pixels = NULL;
+  int32_t            w1 = 0, h1 = 0, w2 = 0, h2 = 0, before;
+  char              *error = NULL;
+
+  snprintf (indexed_png, sizeof indexed_png, "%s/indexed.png", fixtures);
+  snprintf (profiled_png, sizeof profiled_png, "%s/profiled.png", fixtures);
+  snprintf (xcf, sizeof xcf, "%s/color-state.xcf", work);
+
+  api->image_new (engine, 32, 24, &image, NULL);
+
+  /* A fresh image is 8-bit non-linear RGB with the engine's builtin sRGB
+   * as its effective profile and no profile embedded; the old
+   * GlimsImageInfo precision string stays the engine's nick. */
+  CHECK (api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.mode == GLIMS_COLOR_MODE_RGB &&
+         info.component == GLIMS_COLOR_COMPONENT_U8 &&
+         info.trc == GLIMS_COLOR_TRC_NONLINEAR &&
+         ! info.profile_embedded &&
+         strcmp (info.profile_label, "GIMP built-in sRGB") == 0,
+         "a fresh image reports RGB u8 non-linear, builtin sRGB, not embedded (%u,%u,%u,\"%s\",%d)",
+         info.mode, info.component, info.trc, info.profile_label, info.profile_embedded);
+  CHECK (api->image_info (engine, image, &basic) == GLIMS_STATUS_OK &&
+         strcmp (basic.precision, "u8-non-linear") == 0,
+         "image_info keeps the precision nick string (%s)", basic.precision);
+
+  /* Bad ids, a NULL out and invalid enums fail without touching anything. */
+  before = undo_depth (image);
+  CHECK (api->image_color_info (engine, 9999, &info) == GLIMS_STATUS_NOT_FOUND &&
+         api->image_color_info (engine, image, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_convert_mode (engine, 9999, GLIMS_COLOR_MODE_GRAYSCALE, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->image_convert_mode (engine, image, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_convert_mode (engine, image, 99, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_convert_precision (engine, image, 99, GLIMS_COLOR_TRC_LINEAR, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_convert_precision (engine, image, GLIMS_COLOR_COMPONENT_U8, 99, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.mode == GLIMS_COLOR_MODE_RGB && undo_depth (image) == before,
+         "bad ids, null out and invalid enums are refused with no mutation");
+
+  /* Conversion TO indexed is unsupported for now. */
+  CHECK (api->image_convert_mode (engine, image, GLIMS_COLOR_MODE_INDEXED, &error) == GLIMS_STATUS_UNSUPPORTED &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.mode == GLIMS_COLOR_MODE_RGB && undo_depth (image) == before,
+         "converting TO indexed is UNSUPPORTED with no mutation%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* No-ops change nothing and push no undo. */
+  CHECK (api->image_convert_mode (engine, image, GLIMS_COLOR_MODE_RGB, NULL) == GLIMS_STATUS_OK &&
+         api->image_convert_precision (engine, image, GLIMS_COLOR_COMPONENT_U8,
+                                       GLIMS_COLOR_TRC_NONLINEAR, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "mode and precision no-ops return OK and add no undo");
+
+  /* A red layer gives the conversions pixels to preserve. */
+  layer = first_layer (image);
+  CHECK (api->fill (engine, image, (GlimsPoint) { 0, 0 }, &red, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 0 && pixel[3] == 255,
+         "the red layer renders red");
+  before = undo_depth (image);
+  before_pixels = render_all (image, &w1, &h1);
+
+  /* RGB -> grayscale -> RGB, each one undo step, structure preserved. */
+  CHECK (api->image_convert_mode (engine, image, GLIMS_COLOR_MODE_GRAYSCALE, &error) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "convert to grayscale is one undo step%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.mode == GLIMS_COLOR_MODE_GRAYSCALE && info.component == GLIMS_COLOR_COMPONENT_U8 &&
+         info.trc == GLIMS_COLOR_TRC_NONLINEAR && ! info.profile_embedded &&
+         strstr (info.profile_label, "Grayscale") != NULL,
+         "grayscale info: mode gray, u8 non-linear, builtin gray profile (\"%s\")", info.profile_label);
+  CHECK (api->image_components (engine, image, &comp) == GLIMS_STATUS_OK &&
+         comp.mode == GLIMS_COMPONENT_MODE_GRAY,
+         "the component state follows the mode");
+  CHECK (api->image_info (engine, image, &basic) == GLIMS_STATUS_OK &&
+         basic.width == 32 && basic.height == 24 && basic.layer_count == 1 && basic.dirty,
+         "size, layer count and dirty state survive the mode conversion");
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == pixel[1] && pixel[1] == pixel[2] && pixel[3] == 255,
+         "the converted pixel renders gray (%d,%d,%d,%d)", pixel[0], pixel[1], pixel[2], pixel[3]);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK && info.mode == GLIMS_COLOR_MODE_RGB &&
+         api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK && info.mode == GLIMS_COLOR_MODE_GRAYSCALE,
+         "undo and redo walk the mode conversion");
+  CHECK (api->image_convert_mode (engine, image, GLIMS_COLOR_MODE_RGB, NULL) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK && info.mode == GLIMS_COLOR_MODE_RGB,
+         "back to RGB");
+
+  /* Precision changes, including linear vs non-linear TRC. */
+  free (before_pixels);
+  before_pixels = render_all (image, &w1, &h1);
+  before = undo_depth (image);
+  CHECK (api->image_convert_precision (engine, image, GLIMS_COLOR_COMPONENT_U16,
+                                       GLIMS_COLOR_TRC_NONLINEAR, NULL) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.component == GLIMS_COLOR_COMPONENT_U16 && info.trc == GLIMS_COLOR_TRC_NONLINEAR &&
+         api->image_info (engine, image, &basic) == GLIMS_STATUS_OK &&
+         strcmp (basic.precision, "u16-non-linear") == 0 && undo_depth (image) == before + 1,
+         "u16 non-linear precision, one undo step (%s)", basic.precision);
+  CHECK (api->image_convert_precision (engine, image, GLIMS_COLOR_COMPONENT_U16,
+                                       GLIMS_COLOR_TRC_LINEAR, NULL) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK && info.trc == GLIMS_COLOR_TRC_LINEAR,
+         "the TRC changes to linear independently of the component");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK && info.trc == GLIMS_COLOR_TRC_NONLINEAR &&
+         api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK && info.trc == GLIMS_COLOR_TRC_LINEAR,
+         "undo and redo walk the TRC change");
+  CHECK (api->image_convert_precision (engine, image, GLIMS_COLOR_COMPONENT_FLOAT,
+                                       GLIMS_COLOR_TRC_PERCEPTUAL, NULL) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.component == GLIMS_COLOR_COMPONENT_FLOAT && info.trc == GLIMS_COLOR_TRC_PERCEPTUAL &&
+         api->image_info (engine, image, &basic) == GLIMS_STATUS_OK &&
+         strcmp (basic.precision, "float-perceptual") == 0,
+         "float perceptual precision (%s)", basic.precision);
+  after_pixels = render_all (image, &w2, &h2);
+  CHECK (before_pixels && after_pixels && w1 == w2 && h1 == h2 &&
+         count_differences (before_pixels, after_pixels, (size_t) w1 * h1 * 4) == 0,
+         "u8 -> u16 -> float keeps every pixel (%d differ)",
+         before_pixels && after_pixels ? count_differences (before_pixels, after_pixels, (size_t) w1 * h1 * 4) : -1);
+  CHECK (api->image_convert_precision (engine, image, GLIMS_COLOR_COMPONENT_U8,
+                                       GLIMS_COLOR_TRC_NONLINEAR, NULL) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.component == GLIMS_COLOR_COMPONENT_U8 && info.trc == GLIMS_COLOR_TRC_NONLINEAR,
+         "back to u8 non-linear");
+
+  /* An XCF round trip keeps the color state. */
+  CHECK (api->image_convert_mode (engine, image, GLIMS_COLOR_MODE_GRAYSCALE, NULL) == GLIMS_STATUS_OK &&
+         api->image_convert_precision (engine, image, GLIMS_COLOR_COMPONENT_U16,
+                                       GLIMS_COLOR_TRC_LINEAR, NULL) == GLIMS_STATUS_OK &&
+         api->image_save (engine, image, xcf, &error) == GLIMS_STATUS_OK && file_size (xcf) > 0,
+         "save the gray u16-linear image%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_open (engine, xcf, &reopened, &error) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, reopened, &info) == GLIMS_STATUS_OK &&
+         info.mode == GLIMS_COLOR_MODE_GRAYSCALE && info.component == GLIMS_COLOR_COMPONENT_U16 &&
+         info.trc == GLIMS_COLOR_TRC_LINEAR && ! info.profile_embedded &&
+         strstr (info.profile_label, "Grayscale") != NULL &&
+         api->image_info (engine, reopened, &basic) == GLIMS_STATUS_OK &&
+         basic.width == 32 && basic.height == 24 && basic.layer_count == 1 &&
+         strcmp (basic.precision, "u16-linear") == 0,
+         "the reopened XCF keeps mode, precision, profile and structure (%u,%u,%u,\"%s\",\"%s\")",
+         info.mode, info.component, info.trc, info.profile_label, basic.precision);
+  api->free_string (error);
+  error = NULL;
+  api->image_close (engine, reopened);
+  reopened = 0;
+  CHECK (api->image_convert_mode (engine, image, GLIMS_COLOR_MODE_RGB, NULL) == GLIMS_STATUS_OK &&
+         api->image_convert_precision (engine, image, GLIMS_COLOR_COMPONENT_U8,
+                                       GLIMS_COLOR_TRC_NONLINEAR, NULL) == GLIMS_STATUS_OK,
+         "back to RGB u8 for the busy checks");
+
+  /* Conversions refuse while a stroke or a preview holds the image;
+   * reads keep working. */
+  before = undo_depth (image);
+  CHECK (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK,
+         "a stroke begins for the busy checks");
+  CHECK (api->image_convert_mode (engine, image, GLIMS_COLOR_MODE_GRAYSCALE, NULL) == GLIMS_STATUS_BUSY &&
+         api->image_convert_precision (engine, image, GLIMS_COLOR_COMPONENT_U16,
+                                       GLIMS_COLOR_TRC_LINEAR, NULL) == GLIMS_STATUS_BUSY &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK && info.mode == GLIMS_COLOR_MODE_RGB &&
+         undo_depth (image) == before,
+         "conversions report BUSY during a stroke; info still reads, nothing changed");
+  CHECK (api->stroke_end (engine, stroke) == GLIMS_STATUS_OK,
+         "the refusals left the stroke alive");
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK &&
+         api->image_convert_mode (engine, image, GLIMS_COLOR_MODE_GRAYSCALE, NULL) == GLIMS_STATUS_BUSY &&
+         api->image_convert_precision (engine, image, GLIMS_COLOR_COMPONENT_DOUBLE,
+                                       GLIMS_COLOR_TRC_LINEAR, NULL) == GLIMS_STATUS_BUSY &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+         "conversions report BUSY during a preview; info still reads, abort works");
+
+  /* An indexed image reports accurately; precision changes on it are
+   * unsupported, and converting it to RGB works. */
+  CHECK (api->image_open (engine, indexed_png, &indexed, &error) == GLIMS_STATUS_OK,
+         "open the indexed PNG fixture%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  if (indexed)
+    {
+      before = undo_depth (indexed);
+      CHECK (api->image_color_info (engine, indexed, &info) == GLIMS_STATUS_OK &&
+             info.mode == GLIMS_COLOR_MODE_INDEXED && info.component == GLIMS_COLOR_COMPONENT_U8 &&
+             info.trc == GLIMS_COLOR_TRC_NONLINEAR,
+             "the indexed image reports indexed u8 non-linear (%u,%u,%u)",
+             info.mode, info.component, info.trc);
+      CHECK (api->image_convert_precision (engine, indexed, GLIMS_COLOR_COMPONENT_U16,
+                                           GLIMS_COLOR_TRC_NONLINEAR, NULL) == GLIMS_STATUS_UNSUPPORTED &&
+             api->image_convert_mode (engine, indexed, GLIMS_COLOR_MODE_INDEXED, NULL) == GLIMS_STATUS_UNSUPPORTED &&
+             undo_depth (indexed) == before &&
+             api->image_color_info (engine, indexed, &info) == GLIMS_STATUS_OK &&
+             info.mode == GLIMS_COLOR_MODE_INDEXED,
+             "indexed refuses precision changes and indexed conversion with no mutation");
+      CHECK (api->image_convert_mode (engine, indexed, GLIMS_COLOR_MODE_RGB, NULL) == GLIMS_STATUS_OK &&
+             api->image_color_info (engine, indexed, &info) == GLIMS_STATUS_OK &&
+             info.mode == GLIMS_COLOR_MODE_RGB && undo_depth (indexed) == before + 1,
+             "converting FROM indexed to RGB works as one undo step");
+      api->image_close (engine, indexed);
+      indexed = 0;
+    }
+
+  /* A closed image refuses everything. */
+  CHECK (api->image_close (engine, image) == GLIMS_STATUS_OK &&
+         api->image_color_info (engine, image, &info) == GLIMS_STATUS_NOT_FOUND &&
+         api->image_convert_mode (engine, image, GLIMS_COLOR_MODE_GRAYSCALE, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->image_convert_precision (engine, image, GLIMS_COLOR_COMPONENT_U8,
+                                       GLIMS_COLOR_TRC_LINEAR, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a closed image reports NOT_FOUND");
+
+  /* Reading metadata must not consume an image-owned profile. Repeated
+   * reloads and a save/reopen must preserve the custom embedded profile. */
+  image = 0;
+  CHECK (api->image_open (engine, profiled_png, &image, NULL) == GLIMS_STATUS_OK,
+         "the custom-profile PNG opens");
+  if (image)
+    {
+      int valid = 1;
+      int i;
+
+      free (before_pixels);
+      before_pixels = render_all (image, &w1, &h1);
+      for (i = 0; i < 10; i++)
+        valid = api->image_color_info (engine, image, &info) == GLIMS_STATUS_OK &&
+                info.profile_embedded && strcmp (info.profile_label, "Glims Profile Fixture") == 0 && valid;
+      CHECK (valid, "repeated color metadata reads preserve the embedded profile");
+      free (after_pixels);
+      after_pixels = render_all (image, &w2, &h2);
+      CHECK (before_pixels && after_pixels && w1 == w2 && h1 == h2 &&
+             count_differences (before_pixels, after_pixels, (size_t) w1 * h1 * 4) == 0,
+             "reading color metadata never changes the rendered pixels");
+      CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+             api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK &&
+             api->image_color_info (engine, reopened, &info) == GLIMS_STATUS_OK &&
+             info.profile_embedded && strcmp (info.profile_label, "Glims Profile Fixture") == 0,
+             "the custom embedded profile survives XCF after repeated reads");
+      if (reopened) api->image_close (engine, reopened);
+      api->image_close (engine, image);
+    }
+
+  free (before_pixels);
+  free (after_pixels);
+}
+
 /* ---- Tests ------------------------------------------------------------- */
 
 static void
@@ -4933,6 +5200,7 @@ main (int argc, char **argv)
   test_drawable_effects (argv[2]);
   test_filter_edit_history_gate ();
   test_filter_edit (argv[2]);
+  test_color_state (argv[3], argv[2]);
   test_qmask_name_fixture (argv[3]);
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));

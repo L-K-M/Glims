@@ -1083,6 +1083,13 @@ MARSHAL (image_place_link, return glims_image_place_link (e, a->image, a->string
                                                           a->out, a->error);)
 MARSHAL (filter_edit_begin, return glims_filter_edit_begin (e, a->image, a->item, a->effect,
                                                             a->out, a->error);)
+MARSHAL (image_color_info, return glims_image_color_info (e, a->image, a->out);)
+MARSHAL (image_convert_mode, return glims_image_convert_mode (e, a->image, (uint32_t) a->width,
+                                                              a->error);)
+MARSHAL (image_convert_precision, return glims_image_convert_precision (e, a->image,
+                                                                       (uint32_t) a->width,
+                                                                       (uint32_t) a->height,
+                                                                       a->error);)
 
 /* A path's geometry takes more arguments than GlimsArgs holds. */
 typedef struct
@@ -1820,6 +1827,29 @@ api_filter_edit_begin (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
   return glims_engine_call (e, filter_edit_begin_on_engine, &a);
 }
 
+static GlimsStatus
+api_image_color_info (GlimsEngine *e, GlimsImageID image, GlimsColorInfo *info)
+{
+  GlimsArgs a = { .image = image, .out = info };
+  return glims_engine_call (e, image_color_info_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_convert_mode (GlimsEngine *e, GlimsImageID image, uint32_t mode, char **error)
+{
+  GlimsArgs a = { .image = image, .width = (int32_t) mode, .error = error };
+  return glims_engine_call (e, image_convert_mode_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_convert_precision (GlimsEngine *e, GlimsImageID image, uint32_t component,
+                             uint32_t trc, char **error)
+{
+  GlimsArgs a = { .image = image, .width = (int32_t) component, .height = (int32_t) trc,
+                  .error = error };
+  return glims_engine_call (e, image_convert_precision_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1915,6 +1945,9 @@ static const GlimsEngineAPI api_v1 = {
   .image_open_layers = api_image_open_layers,
   .image_place_link = api_image_place_link,
   .filter_edit_begin = api_filter_edit_begin,
+  .image_color_info = api_image_color_info,
+  .image_convert_mode = api_image_convert_mode,
+  .image_convert_precision = api_image_convert_precision,
 };
 
 __attribute__ ((visibility ("default")))
