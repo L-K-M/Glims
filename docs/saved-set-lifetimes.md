@@ -33,3 +33,8 @@ the same manager but do not yet have dedicated lifetime fixtures. Initial
 store checks alone begin in a dirty fixture; structural bookkeeping also has
 the stronger Undo-to-clean savepoint checks. This change does not expose a
 saved-set command or provide Undo for explicit set definition edits.
+
+The baseline was recompiled with its matching producer checkout headers
+(`--producer-checkout`), avoiding mixed private struct definitions when the
+adapter adds its manager pointer. It still reproduces the same fourteen
+failures; fixed-producer builds use this checkout's matching headers.

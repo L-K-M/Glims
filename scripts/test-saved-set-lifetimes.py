@@ -91,8 +91,10 @@ def check_producer(producer: Path) -> dict[str, object]:
     return paths
 
 
-def build(producer: Path, out: Path) -> Path:
+def build(producer: Path, out: Path, producer_checkout: Path) -> Path:
     paths = check_producer(producer)
+    if not (producer_checkout / "Engine/engine-private.h").is_file():
+        fail(f"matching producer private headers missing from {producer_checkout}")
     out.mkdir(parents=True, exist_ok=True)
     obj = out / "saved-set-lifetime-tests.o"
     binary = out / "saved-set-lifetime-tests"
@@ -102,7 +104,8 @@ def build(producer: Path, out: Path) -> Path:
     # scripts/build-adapter.sh compiles Engine/*.c.
     compile_cmd = [
         "xcrun", "clang", f"@{paths['compile_rsp']}",
-        "-I", str(FACADE_INCLUDE), "-I", str(ENGINE_DIR),
+        "-I", str(producer_checkout / "Sources/CGlimsEngine/include"),
+        "-I", str(producer_checkout / "Engine"),
         "-std=c11", "-O2", "-Wall", "-Wextra",
         "-Werror=implicit-function-declaration",
         "-c", str(SOURCE), "-o", str(obj),
@@ -165,6 +168,8 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_producer(p: argparse.ArgumentParser, required: bool) -> None:
+        p.add_argument("--producer-checkout", type=Path, default=REPO_ROOT,
+                       help="source checkout matching producer objects/private headers")
         p.add_argument("--producer", type=Path, required=required,
                        default=None,
                        help="producer prefix containing obj/, compile.rsp, objects.rsp, "
@@ -192,11 +197,11 @@ def main() -> None:
 
     args = parser.parse_args()
     if args.command == "build":
-        build(args.producer or default_producer(REPO_ROOT, args.ref), args.out)
+        build(args.producer or default_producer(REPO_ROOT, args.ref), args.out, args.producer_checkout)
     elif args.command == "run":
         sys.exit(run(args.binary, args.work, args.timeout))
     elif args.command == "all":
-        binary = build(args.producer or default_producer(REPO_ROOT, args.ref), args.out)
+        binary = build(args.producer or default_producer(REPO_ROOT, args.ref), args.out, args.producer_checkout)
         sys.exit(run(binary, args.work, args.timeout))
 
 
