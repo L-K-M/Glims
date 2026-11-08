@@ -20,6 +20,19 @@ CLEAN_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 
 die() { echo "!! $*" >&2; exit 1; }
 
+# Fixture work directories are deleted before use. Accept only a pinned,
+# single-component engine ref before forming any install or work path.
+require_engine_ref() {
+  local requested="$1" known_ref
+  case "$requested" in
+    ""|.|..|*[!A-Za-z0-9_.-]*) die "invalid engine ref: $requested" ;;
+  esac
+  for known_ref in $GIMP_REFS; do
+    [[ "$requested" == "$known_ref" ]] && return 0
+  done
+  die "$requested is not listed in ENGINE_SETS in scripts/engine.env."
+}
+
 # sanitize_environment: drop caller settings that would silently change what
 # gets built or which repository git touches (compiler and linker flags, SDK
 # and install redirections, Python and pkg-config overrides, DYLD_*, GIT_*).

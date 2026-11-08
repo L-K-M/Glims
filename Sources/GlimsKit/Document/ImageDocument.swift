@@ -92,6 +92,9 @@ final class ImageDocument {
     /// Called after the image's size changed (crop, canvas size, undo).
     var onSizeChange: (() -> Void)?
 
+    /// The identity this open document's recovery record is filed under.
+    let recoveryID = UUID()
+
     nonisolated let inputQueue = DispatchQueue(label: "ch.lkmc.Glims.document.input", qos: .userInteractive)
     private nonisolated let clipboardQueue = DispatchQueue(label: "ch.lkmc.Glims.document.clipboard", qos: .userInitiated)
     nonisolated let longQueue = DispatchQueue(label: "ch.lkmc.Glims.document.long", qos: .userInitiated)
@@ -1014,10 +1017,12 @@ final class ImageDocument {
         }
     }
 
-    func saveCopy(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
+    /// `label` names the engine-wide activity while the copy is written;
+    /// a recovery pass labels its background copy as such.
+    func saveCopy(to url: URL, label: String = "Saving a copy", completion: @escaping @MainActor (Error?) -> Void) {
         guard !isClosing else { return completion(DocumentError.closed) }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning else { return completion(DocumentError.busy) }
-        enqueueExclusive(label: "Saving a copy", rejected: { completion(DocumentError.busy) }) { [session, image] in
+        enqueueExclusive(label: label, rejected: { completion(DocumentError.busy) }) { [session, image] in
             let result: Error?
             do { try session.saveCopy(image, to: url.path); result = nil } catch { result = error }
             DispatchQueue.main.async { completion(result) }

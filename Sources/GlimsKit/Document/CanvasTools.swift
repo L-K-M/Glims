@@ -41,6 +41,14 @@ final class CanvasToolController {
     /// pixels) in view.
     var onZoom: ((_ zoomIn: Bool, _ point: CGPoint) -> Void)?
 
+    /// Pointer gestures commit on release; crop and transform previews
+    /// commit on Return. A background file operation must wait for these
+    /// edits rather than blocking their eventual commit.
+    var hasPendingInteraction: Bool {
+        dragTool != nil || pendingCrop != nil || textEditor != nil
+            || transformSession.map { !$0.isIdentity } == true
+    }
+
     init(canvas: EngineCanvasView) {
         self.canvas = canvas
         // The Transform tool's box shows as soon as the tool is picked, and
