@@ -1272,6 +1272,327 @@ test_path_vector_layer (const char *work)
   api->image_close (engine, image);
 }
 
+/* A genuine vector layer's native style (GIMP 3.2+): reading it, changing
+ * fill and stroke as exactly one undo step with real pixel changes, getter
+ * round trip, undo/redo, no-op and refused or invalid calls leaving no
+ * history, the explicit name and the same path association preserved, a
+ * live path edit re-rendering, an XCF round trip of style and name inside
+ * a group, and on a pre-3.2 engine UNSUPPORTED with nothing mutated. */
+static void
+test_vector_layer_style (const char *work)
+{
+  GlimsImageID           image = 0, reopened = 0;
+  GlimsItemID            path = 0, vector = 0, layer, group = 0;
+  GlimsSubpath           square[1] = { { .count = 4, .closed = true } };
+  GlimsPathPoint         points[4] = { corner (20, 20), corner (80, 20), corner (80, 80), corner (20, 80) };
+  GlimsPathPoint         moved[4]  = { corner (30, 30), corner (90, 30), corner (90, 90), corner (30, 90) };
+  GlimsLayerInfo         rows[4];
+  GlimsPathInfo          prows[2];
+  GlimsFillSettings      red_bg = { .struct_size = sizeof red_bg, .mode = GLIMS_FILL_SELECTION,
+                                    .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  GlimsVectorStyle       initial = { .struct_size = sizeof initial };
+  GlimsVectorStyle       style   = { .struct_size = sizeof style };
+  GlimsVectorStyle       after   = { .struct_size = sizeof after };
+  GlimsVectorStyleChange change  = { .struct_size = sizeof change };
+  GlimsVectorStyleChange noop    = { .struct_size = sizeof noop };
+  GlimsVectorStyleChange bad     = { .struct_size = sizeof bad };
+  GlimsStrokeID          stroke = 0;
+  GlimsFilterID          filter = 0;
+  GlimsBrushSettings     brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+  GlimsStrokePoint       point = { 5, 5, 1.0, 0.0, 0.0, 0 };
+  int32_t                count = 0, pcount = 0, before;
+  uint8_t                px[4];
+  GlimsStatus            status;
+  char                   xcf[1024], *error = NULL;
+  int                    vectors = supports_vector_layers ();
+
+  api->image_new (engine, 200, 120, &image, NULL);
+  layer = first_layer (image);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &red_bg, NULL);
+  CHECK (api->path_set (engine, image, 0, "Shape", square, 1, points, 4, &path, &error) == GLIMS_STATUS_OK &&
+         path != 0,
+         "the square path is added%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* Guards that hold on every engine. */
+  before = undo_depth (image);
+  CHECK (api->vector_layer_style_get (engine, 9999, layer, &style, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->vector_layer_style_set (engine, 9999, layer, &change, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->vector_layer_style_set (engine, image, layer, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before,
+         "an unknown image is NOT_FOUND and a NULL change INVALID_ARGUMENT, no undo");
+
+  status = api->path_to_vector_layer (engine, image, path, "Vector", &vector, &error);
+  if (! vectors)
+    {
+      api->free_string (error);
+      error = NULL;
+      before = undo_depth (image);
+      render_pixel (image, 50, 50, px);
+      CHECK (status == GLIMS_STATUS_UNSUPPORTED &&
+             api->vector_layer_style_get (engine, image, layer, &style, &error) == GLIMS_STATUS_UNSUPPORTED &&
+             error != NULL &&
+             api->vector_layer_style_set (engine, image, layer, &change, &error) == GLIMS_STATUS_UNSUPPORTED &&
+             undo_depth (image) == before && layer_count (image) == 1 &&
+             (render_pixel (image, 50, 50, px), px[0] > 200 && px[1] < 60),
+             "a pre-3.2 engine reports UNSUPPORTED and mutates nothing (%s)",
+             error ? error : "");
+      api->free_string (error);
+      api->image_close (engine, image);
+      return;
+    }
+  api->free_string (error);
+  error = NULL;
+  CHECK (status == GLIMS_STATUS_OK && vector > 0, "the vector layer exists");
+
+  CHECK (api->vector_layer_style_get (engine, image, 9999, &style, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->vector_layer_style_get (engine, image, layer, &style, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->vector_layer_style_set (engine, image, 9999, &change, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->vector_layer_style_set (engine, image, layer, &change, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an id that is not a genuine vector layer is NOT_FOUND for get and set");
+
+  /* Busy is checked first: an open stroke or filter preview refuses. */
+  before = undo_depth (image);
+  CHECK (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK &&
+         api->vector_layer_style_set (engine, image, vector, &change, NULL) == GLIMS_STATUS_BUSY &&
+         undo_depth (image) == before,
+         "a style change during an open stroke is BUSY, no undo");
+  if (stroke) api->stroke_end (engine, stroke);
+  before = undo_depth (image);
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK &&
+         api->vector_layer_style_set (engine, image, vector, &change, NULL) == GLIMS_STATUS_BUSY &&
+         api->filter_abort (engine, filter) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "a style change during a filter preview is BUSY, no undo");
+
+  CHECK (api->vector_layer_style_get (engine, image, vector, &initial, &error) == GLIMS_STATUS_OK &&
+         initial.enable_fill && initial.enable_stroke && initial.stroke_width > 0,
+         "the default style reads back (fill %d, stroke %d, width %.1f)%s%s",
+         initial.enable_fill, initial.enable_stroke, initial.stroke_width,
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  render_pixel (image, 50, 50, px);
+  CHECK (px[0] > 200 && px[1] > 200 && px[2] > 200,
+         "the default fill shows inside the path (%d,%d,%d,%d)", px[0], px[1], px[2], px[3]);
+  render_pixel (image, 20, 50, px);
+  CHECK (px[0] < 60 && px[1] < 60 && px[2] < 60,
+         "the default stroke shows on the path edge (%d,%d,%d,%d)", px[0], px[1], px[2], px[3]);
+
+  /* One style change: green fill, red 12 px stroke, round cap, bevel join,
+   * miter 5, no antialias — exactly one undo step, with real pixels. */
+  before = undo_depth (image);
+  change.properties = GLIMS_VECTOR_STYLE_FILL_COLOR | GLIMS_VECTOR_STYLE_STROKE_COLOR |
+                      GLIMS_VECTOR_STYLE_STROKE_WIDTH | GLIMS_VECTOR_STYLE_STROKE_CAP |
+                      GLIMS_VECTOR_STYLE_STROKE_JOIN | GLIMS_VECTOR_STYLE_STROKE_MITER |
+                      GLIMS_VECTOR_STYLE_FILL_ANTIALIAS | GLIMS_VECTOR_STYLE_STROKE_ANTIALIAS;
+  change.fill_color         = (GlimsColor) { 0, 1, 0, 1 };
+  change.stroke_color       = (GlimsColor) { 1, 0, 0, 1 };
+  change.stroke_width       = 12;
+  change.stroke_cap         = GLIMS_VECTOR_CAP_ROUND;
+  change.stroke_join        = GLIMS_VECTOR_JOIN_BEVEL;
+  change.stroke_miter_limit = 5;
+  change.fill_antialias     = false;
+  change.stroke_antialias   = false;
+  status = api->vector_layer_style_set (engine, image, vector, &change, &error);
+  CHECK (status == GLIMS_STATUS_OK && undo_depth (image) == before + 1,
+         "one style change is one undo step%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  render_pixel (image, 50, 50, px);
+  CHECK (px[1] > 200 && px[0] < 60 && px[2] < 60,
+         "the fill pixels changed to green (%d,%d,%d,%d)", px[0], px[1], px[2], px[3]);
+  render_pixel (image, 20, 50, px);
+  CHECK (px[0] > 200 && px[1] < 60 && px[2] < 60,
+         "the stroke pixels changed to red on the edge (%d,%d,%d,%d)", px[0], px[1], px[2], px[3]);
+
+  CHECK (api->vector_layer_style_get (engine, image, vector, &after, NULL) == GLIMS_STATUS_OK &&
+         after.enable_fill && after.enable_stroke &&
+         after.fill_color.green > 0.99 && after.fill_color.red < 0.01 &&
+         after.stroke_color.red > 0.99 && after.stroke_color.green < 0.01 &&
+         after.stroke_width == 12 && after.stroke_cap == GLIMS_VECTOR_CAP_ROUND &&
+         after.stroke_join == GLIMS_VECTOR_JOIN_BEVEL && after.stroke_miter_limit == 5 &&
+         ! after.fill_antialias && ! after.stroke_antialias,
+         "the getter round-trips the set style (w %.1f, cap %u, join %u, miter %.1f)",
+         after.stroke_width, after.stroke_cap, after.stroke_join, after.stroke_miter_limit);
+
+  CHECK (api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK && count == 2 &&
+         rows[0].id == vector && strcmp (rows[0].name, "Vector") == 0 &&
+         api->paths (engine, image, prows, 2, &pcount) == GLIMS_STATUS_OK && pcount == 1 &&
+         prows[0].id == path,
+         "the style change keeps the explicit name and the same path association");
+
+  /* One undo/redo: the single step restores and reapplies the style. */
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == before &&
+         api->vector_layer_style_get (engine, image, vector, &style, NULL) == GLIMS_STATUS_OK &&
+         style.stroke_width == initial.stroke_width && style.stroke_cap == initial.stroke_cap &&
+         style.fill_color.red == initial.fill_color.red && style.fill_color.green == initial.fill_color.green,
+         "undo restores the previous style as the single step (w %.1f -> %.1f)",
+         initial.stroke_width, style.stroke_width);
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == before + 1 &&
+         api->vector_layer_style_get (engine, image, vector, &after, NULL) == GLIMS_STATUS_OK &&
+         after.stroke_width == 12 && after.stroke_cap == GLIMS_VECTOR_CAP_ROUND,
+         "redo reapplies the style (w %.1f)", after.stroke_width);
+
+  /* A no-op change succeeds without an undo step. */
+  noop.properties = GLIMS_VECTOR_STYLE_ENABLE_FILL | GLIMS_VECTOR_STYLE_FILL_COLOR |
+                    GLIMS_VECTOR_STYLE_FILL_ANTIALIAS | GLIMS_VECTOR_STYLE_ENABLE_STROKE |
+                    GLIMS_VECTOR_STYLE_STROKE_COLOR | GLIMS_VECTOR_STYLE_STROKE_ANTIALIAS |
+                    GLIMS_VECTOR_STYLE_STROKE_WIDTH | GLIMS_VECTOR_STYLE_STROKE_CAP |
+                    GLIMS_VECTOR_STYLE_STROKE_JOIN | GLIMS_VECTOR_STYLE_STROKE_MITER;
+  noop.enable_fill          = after.enable_fill;
+  noop.fill_color           = after.fill_color;
+  noop.fill_antialias       = after.fill_antialias;
+  noop.enable_stroke        = after.enable_stroke;
+  noop.stroke_color         = after.stroke_color;
+  noop.stroke_antialias     = after.stroke_antialias;
+  noop.stroke_width         = after.stroke_width;
+  noop.stroke_cap           = after.stroke_cap;
+  noop.stroke_join          = after.stroke_join;
+  noop.stroke_miter_limit   = after.stroke_miter_limit;
+  before = undo_depth (image);
+  CHECK (api->vector_layer_style_set (engine, image, vector, &noop, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "a change that alters nothing is a no-op with no undo step (%d -> %d; fill %.17g %.17g %.17g %.17g; stroke %.17g %.17g %.17g %.17g)",
+         before, undo_depth (image), after.fill_color.red, after.fill_color.green,
+         after.fill_color.blue, after.fill_color.alpha, after.stroke_color.red,
+         after.stroke_color.green, after.stroke_color.blue, after.stroke_color.alpha);
+
+  /* Native context colors are opaque. An ignored alpha component must
+   * not manufacture an undo step when both effective colors are equal. */
+  noop.properties = GLIMS_VECTOR_STYLE_FILL_COLOR | GLIMS_VECTOR_STYLE_STROKE_COLOR;
+  noop.fill_color.alpha = 0.5;
+  noop.stroke_color.alpha = 0.5;
+  before = undo_depth (image);
+  CHECK (api->vector_layer_style_set (engine, image, vector, &noop, NULL) == GLIMS_STATUS_OK &&
+         api->vector_layer_style_get (engine, image, vector, &style, NULL) == GLIMS_STATUS_OK &&
+         style.fill_color.alpha == 1 && style.stroke_color.alpha == 1 && undo_depth (image) == before,
+         "opaque native colors normalize ignored alpha before no-op detection");
+
+  /* Repeating a UI color with non-binary components is also a no-op
+   * after the native context's float color-space round trip. */
+  before = undo_depth (image);
+  bad.properties = GLIMS_VECTOR_STYLE_FILL_COLOR;
+  bad.fill_color = (GlimsColor) { 0.31, 0.47, 0.71, 1 };
+  status = api->vector_layer_style_set (engine, image, vector, &bad, NULL);
+  api->vector_layer_style_get (engine, image, vector, &style, NULL);
+  render_pixel (image, 50, 50, px);
+  CHECK (fabs (style.fill_color.red - 0.31) <= 1e-6 &&
+         fabs (style.fill_color.green - 0.47) <= 1e-6 && fabs (style.fill_color.blue - 0.71) <= 1e-6 &&
+         abs ((int) px[0] - 79) <= 1 && abs ((int) px[1] - 120) <= 1 && abs ((int) px[2] - 181) <= 1,
+         "vector style colors read back as sRGB and match rendered midtones (%.6f %.6f %.6f; %u,%u,%u)",
+         style.fill_color.red, style.fill_color.green, style.fill_color.blue, px[0], px[1], px[2]);
+  CHECK (status == GLIMS_STATUS_OK &&
+         api->vector_layer_style_set (engine, image, vector, &bad, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "repeating the same non-binary color adds only the first style undo");
+  while (undo_depth (image) > before)
+    if (api->image_undo (engine, image) != GLIMS_STATUS_OK) break;
+
+  /* Invalid changes are refused before any mutation. */
+  before = undo_depth (image);
+  bad.properties = GLIMS_VECTOR_STYLE_FILL_COLOR;
+  bad.fill_color = (GlimsColor) { NAN, 0, 0, 1 };
+  CHECK (api->vector_layer_style_set (engine, image, vector, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a non-finite fill color is refused");
+  bad.properties = GLIMS_VECTOR_STYLE_STROKE_COLOR;
+  bad.stroke_color = (GlimsColor) { 0, 0, 0, INFINITY };
+  CHECK (api->vector_layer_style_set (engine, image, vector, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a non-finite stroke alpha is refused");
+  bad.properties = GLIMS_VECTOR_STYLE_STROKE_WIDTH;
+  bad.stroke_width = 0;
+  CHECK (api->vector_layer_style_set (engine, image, vector, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a zero width is refused");
+  bad.stroke_width = 2001;
+  CHECK (api->vector_layer_style_set (engine, image, vector, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a width over 2000 is refused");
+  bad.stroke_width = NAN;
+  CHECK (api->vector_layer_style_set (engine, image, vector, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a non-finite width is refused");
+  bad.properties = GLIMS_VECTOR_STYLE_STROKE_CAP;
+  bad.stroke_cap = 99;
+  CHECK (api->vector_layer_style_set (engine, image, vector, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown cap style is refused");
+  bad.properties = (uint32_t) 1 << 30;
+  CHECK (api->vector_layer_style_set (engine, image, vector, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown property bit is refused");
+  CHECK (undo_depth (image) == before,
+         "refused invalid changes add no undo history");
+
+  /* Pixel locks refuse: the layer's own and one inherited from a group. */
+  api->set_layer_locks (engine, image, vector, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL);
+  before = undo_depth (image);
+  CHECK (api->vector_layer_style_set (engine, image, vector, &change, NULL) == GLIMS_STATUS_LOCKED &&
+         undo_depth (image) == before,
+         "the layer's own pixel lock refuses the style change, no undo");
+  api->set_layer_locks (engine, image, vector, GLIMS_LOCK_PIXELS, 0, NULL);
+  CHECK (api->create_group (engine, image, 0, 0, "Style group", &group, NULL) == GLIMS_STATUS_OK &&
+         api->reparent_layer (engine, image, vector, group, 0, NULL) == GLIMS_STATUS_OK,
+         "the vector layer moves into a group");
+  api->set_layer_locks (engine, image, group, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL);
+  before = undo_depth (image);
+  CHECK (api->vector_layer_style_set (engine, image, vector, &change, NULL) == GLIMS_STATUS_LOCKED &&
+         undo_depth (image) == before,
+         "an inherited group pixel lock refuses the style change, no undo");
+  api->set_layer_locks (engine, image, group, GLIMS_LOCK_PIXELS, 0, NULL);
+
+  /* A live path edit still re-renders the styled layer, name preserved. */
+  CHECK (api->path_set (engine, image, path, NULL, square, 1, moved, 4, NULL, NULL) == GLIMS_STATUS_OK &&
+         (render_pixel (image, 22, 22, px), px[0] > 200 && px[1] < 60) &&
+         (render_pixel (image, 50, 50, px), px[1] > 200 && px[0] < 60) &&
+         api->image_layers (engine, image, rows, 4, &count) == GLIMS_STATUS_OK && count == 3 &&
+         rows[1].id == vector && strcmp (rows[1].name, "Vector") == 0,
+         "a live path edit re-renders the styled layer and keeps the name (22,22 bg %d,%d; 50,50 fill %d,%d; %s)",
+         px[0], px[1], px[0], px[1], rows[1].name);
+
+  bad = (GlimsVectorStyleChange) { .struct_size = sizeof bad,
+          .properties = GLIMS_VECTOR_STYLE_STROKE_WIDTH | GLIMS_VECTOR_STYLE_STROKE_MITER,
+          .stroke_width = 12.3, .stroke_miter_limit = 5.2 };
+  CHECK (api->vector_layer_style_set (engine, image, vector, &bad, NULL) == GLIMS_STATUS_OK,
+         "fractional width and miter are set before the XCF round trip");
+
+  /* An XCF round trip keeps the style, the name and the group. */
+  snprintf (xcf, sizeof xcf, "%s/vector-style.xcf", work);
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, reopened, rows, 4, &count) == GLIMS_STATUS_OK && count == 3 &&
+         rows[0].kind == GLIMS_LAYER_GROUP && rows[1].kind == GLIMS_LAYER_VECTOR &&
+         rows[1].parent == rows[0].id && strcmp (rows[1].name, "Vector") == 0,
+         "XCF reopen keeps the vector layer VECTOR, named, inside the group (%s)", rows[1].name);
+  CHECK (api->vector_layer_style_get (engine, reopened, rows[1].id, &style, &error) == GLIMS_STATUS_OK &&
+         style.enable_fill && style.enable_stroke &&
+         style.fill_color.green > 0.99 && style.fill_color.red < 0.01 &&
+         style.stroke_color.red > 0.99 && style.stroke_color.green < 0.01 &&
+         fabs (style.stroke_width - 12.3) < 1e-5 && style.stroke_cap == GLIMS_VECTOR_CAP_ROUND &&
+         style.stroke_join == GLIMS_VECTOR_JOIN_BEVEL && fabs (style.stroke_miter_limit - 5.2) < 1e-5 &&
+         ! style.fill_antialias && ! style.stroke_antialias,
+         "XCF reopen preserves the style (w %.1f, cap %u, join %u, miter %.1f)%s%s",
+         style.stroke_width, style.stroke_cap, style.stroke_join, style.stroke_miter_limit,
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  render_pixel (reopened, 50, 50, px);
+  CHECK (px[1] > 200 && px[0] < 60,
+         "the reopened vector layer renders the saved style (%d,%d,%d,%d)", px[0], px[1], px[2], px[3]);
+  before = undo_depth (reopened);
+  CHECK (api->vector_layer_style_set (engine, reopened, rows[1].id, &bad, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (reopened) == before,
+         "reapplying displayed fractional width and miter after XCF is a no-op");
+  bad.stroke_width = 14.3;
+  before = undo_depth (reopened);
+  CHECK (api->vector_layer_style_set (engine, reopened, rows[1].id, &bad, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (reopened) == before + 1 &&
+         api->image_layers (engine, reopened, rows, 4, &count) == GLIMS_STATUS_OK &&
+         !strcmp (rows[1].name, "Vector") && rows[1].kind == GLIMS_LAYER_VECTOR &&
+         api->paths (engine, reopened, prows, 2, &pcount) == GLIMS_STATUS_OK && pcount == 1,
+         "style editing after XCF is one undo and preserves the named vector and path");
+  if (reopened)
+    api->image_close (engine, reopened);
+
+  api->image_close (engine, image);
+}
+
+
 /* An intentionally rasterized vector layer (its pixels were edited, so the
  * XCF stores the rasterization flag together with the edited buffer) must
  * reopen as PIXEL with those edited pixels, while a genuine vector layer in
@@ -7282,6 +7603,8 @@ main (int argc, char **argv)
   test_paths (argv[2]);
   test_path_fill (argv[2]);
   test_path_vector_layer (argv[2]);
+  test_vector_layer_style (argv[2]);
+
   test_vector_rasterized_roundtrip (argv[2]);
   test_vector_rasterized_open_layers (argv[2]);
   test_deleted_items ();
