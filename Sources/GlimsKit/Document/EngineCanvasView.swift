@@ -308,13 +308,7 @@ final class EngineCanvasView: NSView {
 
     private func drawSelectionOutline() {
         guard !selectionOutline.isEmpty else { return }
-        let path = NSBezierPath()
-        // Half a point inward of pixel corners keeps a 1 pt line crisp.
-        for segment in selectionOutline {
-            path.move(to: NSPoint(x: segment.from.x * scale + 0.5, y: segment.from.y * scale + 0.5))
-            path.line(to: NSPoint(x: segment.to.x * scale + 0.5, y: segment.to.y * scale + 0.5))
-        }
-        Self.strokeMarchingAnts(path, phase: antsPhase)
+        Self.strokeMarchingAnts(SelectionContour.outlinePath(for: selectionOutline, scale: scale), phase: antsPhase)
     }
 
     override func draw(_ dirtyRect: NSRect) {
