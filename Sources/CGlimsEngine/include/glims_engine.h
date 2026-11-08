@@ -40,6 +40,7 @@ typedef int32_t GlimsImageID;
 typedef int32_t GlimsItemID;
 typedef int32_t GlimsStrokeID;
 typedef int32_t GlimsFilterID;
+typedef int32_t GlimsEffectID;
 
 typedef enum GlimsStatus {
   GLIMS_STATUS_OK               = 0,
@@ -49,7 +50,8 @@ typedef enum GlimsStatus {
   GLIMS_STATUS_BUSY             = 4, /* a long operation holds the image */
   GLIMS_STATUS_NOT_RUNNING      = 5,
   GLIMS_STATUS_CANCELLED        = 6, /* the user cancelled, e.g. a plug-in dialog */
-  GLIMS_STATUS_LOCKED           = 7  /* a layer or ancestor protects this edit */
+  GLIMS_STATUS_LOCKED           = 7, /* a layer or ancestor protects this edit */
+  GLIMS_STATUS_UNSUPPORTED      = 8  /* the engine version cannot do this */
 } GlimsStatus;
 
 typedef struct GlimsRect {
@@ -612,6 +614,57 @@ typedef struct GlimsQuickMaskState {
   GlimsColor  color;     /* overlay color; alpha is its opacity */
 } GlimsQuickMaskState;
 
+/* One row of a drawable's committed filter stack, top first — the order
+ * the engine's own layer effects editor shows, in which the top effect
+ * is applied last. `id` is the engine's drawable-filter id: stable for
+ * the filter's life while the image is open, including across undo and
+ * redo of a removal or reorder; a reopened file always gets new ids.
+ * Only committed effects are listed — a live filter_begin preview is
+ * not one, and neither is an effect that is merely held by the undo
+ * stack. Drawables that cannot keep effects (layer masks, the Quick
+ * Mask's channel, and channels on engines whose XCF does not serialize
+ * them) report an empty list. */
+typedef struct GlimsEffectInfo {
+  GlimsEffectID id;
+  char          name[256];      /* UTF-8, truncated; the operation's
+                                 * default title unless renamed */
+  char          operation[128]; /* e.g. "gegl:value-invert" */
+  bool          enabled;        /* the effect's on/off switch; a disabled
+                                 * effect stays on the stack but does
+                                 * not change the drawable */
+  double        opacity;        /* 0 ... 1 */
+} GlimsEffectInfo;
+
+/* Which fields of GlimsEffectChange apply. */
+typedef enum GlimsEffectProperty {
+  GLIMS_EFFECT_NAME    = 1 << 0,
+  GLIMS_EFFECT_ENABLED = 1 << 1,
+  GLIMS_EFFECT_OPACITY = 1 << 2
+} GlimsEffectProperty;
+
+typedef struct GlimsEffectChange {
+  uint32_t struct_size;  /* sizeof (GlimsEffectChange) */
+  uint32_t properties;   /* GlimsEffectProperty bits */
+  char     name[256];    /* UTF-8; empty restores the operation's default name */
+  bool     enabled;
+  double   opacity;      /* 0 ... 1 */
+} GlimsEffectChange;
+
+typedef enum GlimsEffectCommand {
+  GLIMS_EFFECT_REMOVE    = 1,  /* drop the effect from the stack; undo
+                                * restores it with its id and position */
+  GLIMS_EFFECT_MERGE     = 2,  /* bake the effect into the drawable's
+                                * pixels and drop it; other effects stay
+                                * non-destructive. INVALID_ARGUMENT on
+                                * layers whose pixels are structured
+                                * content (groups, text, link and vector
+                                * layers), and on disabled effects */
+  GLIMS_EFFECT_RAISE     = 3,  /* one step toward the top of the stack */
+  GLIMS_EFFECT_LOWER     = 4,  /* one step toward the bottom */
+  GLIMS_EFFECT_TO_TOP    = 5,
+  GLIMS_EFFECT_TO_BOTTOM = 6
+} GlimsEffectCommand;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -1044,6 +1097,59 @@ typedef struct GlimsEngineAPI {
    * overlay over the unselected area, as the core projects it. */
   GlimsStatus  (*image_set_quick_mask) (GlimsEngine *engine, GlimsImageID image,
                                         bool enabled, char **error);
+  /* The drawable's committed non-destructive effects, top first as the
+   * layer effects editor shows them; `count` receives the total. `rows`
+   * may be NULL with `capacity` 0 to only count. */
+  GlimsStatus  (*drawable_effects)     (GlimsEngine *engine, GlimsImageID image,
+                                        GlimsItemID drawable, GlimsEffectInfo *rows,
+                                        int32_t capacity, int32_t *count);
+  /* Changes an effect's name, enabled state or opacity, as one undo
+   * step no matter how many of the flagged properties actually differ.
+   * Setting values the effect already holds changes nothing and pushes
+   * no undo. */
+  GlimsStatus  (*effect_change)        (GlimsEngine *engine, GlimsImageID image,
+                                        GlimsItemID drawable, GlimsEffectID effect,
+                                        const GlimsEffectChange *change, char **error);
+  /* Runs one GlimsEffectCommand on the effect, as one undo step. The
+   * effect id must name a committed effect of `drawable` — a stale,
+   * foreign or preview id is NOT_FOUND and changes nothing. Move
+   * commands that are already satisfied are no-ops that push no undo;
+   * other invalid commands and errors leave everything untouched.
+   * MERGE keeps the drawable's other effects non-destructive but is
+   * refused where the drawable's pixels are structured content or its
+   * content is locked. */
+  GlimsStatus  (*effect_command)       (GlimsEngine *engine, GlimsImageID image,
+                                        GlimsItemID drawable, GlimsEffectID effect,
+                                        uint32_t command, char **error);
+
+  /* File > Open as Layers: every layer of the file at `path` lands in
+   * `image` above the selected layer — its own order, offsets relative
+   * to the other imported layers, blend modes, masks and groups kept —
+   * with the imported stack centered on the canvas, as one undo step,
+   * and the imported layers selected. `layers` (may be NULL) receives
+   * up to `capacity` of the added layer ids, top first; `count`
+   * receives how many were added. The image's file identity, imported
+   * file, precision and dirty state change only through the edit
+   * itself, and the temporary load image leaves nothing behind.
+   * Loading runs the engine's file plug-ins, so never call this on the
+   * main thread; BUSY while a stroke, a filter preview or a plug-in
+   * holds the engine. INVALID_ARGUMENT for a non-native path;
+   * CANCELLED when the load is cancelled; a failed load adds nothing. */
+  GlimsStatus  (*image_open_layers)    (GlimsEngine *engine, GlimsImageID image,
+                                        const char *path,
+                                        GlimsItemID *layers, int32_t capacity,
+                                        int32_t *count, char **error);
+  /* File > Place: puts `path` into `image` as a genuine link layer — it
+   * keeps a reference to the source file, re-renders when the file
+   * changes and round-trips through XCF as a link — above the selected
+   * layer, centered on the canvas, as one undo step. `layer` (may be
+   * NULL) receives it. Engines without link layers (before GIMP 3.2)
+   * report UNSUPPORTED and change nothing; the call never degrades to
+   * a raster copy. Same readiness, path, busy and failure rules as
+   * image_open_layers. */
+  GlimsStatus  (*image_place_link)     (GlimsEngine *engine, GlimsImageID image,
+                                        const char *path, GlimsItemID *layer,
+                                        char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

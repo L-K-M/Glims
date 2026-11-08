@@ -2346,6 +2346,416 @@ test_drawable_filters (const char *work)
   api->image_close (engine, image);
 }
 
+/* The committed effects on a drawable — the filters test_drawable_filters
+ * leaves non-destructive — listed, edited and reordered through
+ * drawable_effects, effect_change and effect_command. Two effects that do
+ * not commute (an invert and a brightness lift) make every stack change
+ * visible in rendered pixels: inverting then lifting is not lifting then
+ * inverting. Each mutation is one undo step, undo and redo restore both
+ * the pixels and the stack, and the state survives an XCF round trip. */
+static void
+test_drawable_effects (const char *work)
+{
+  GlimsImageID        image = 0, reopened = 0, other = 0;
+  GlimsItemID         layer = 0, layer2 = 0, mask = 0, group = 0, text = 0, foreign = 0;
+  GlimsFilterID       session = 0;
+  GlimsStrokeID       stroke = 0;
+  GlimsEffectID       invert_id = 0, bright_id = 0, foreign_fx = 0;
+  GlimsEffectInfo     rows[4];
+  GlimsEffectChange   change;
+  GlimsFillSettings   red = { .struct_size = sizeof red, .mode = GLIMS_FILL_SELECTION,
+                              .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  GlimsBrushSettings  brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 6.0);
+  GlimsStrokePoint    point = { 4, 4, 1.0, 0.0, 0.0, 0 };
+  GlimsTextSettings   tset = { .struct_size = sizeof tset, .size = 12,
+                               .color = { 0, 0, 0, 1 }, .justify = GLIMS_JUSTIFY_LEFT,
+                               .antialias = true };
+  int32_t             count = 0, before;
+  uint8_t             pixel[4];
+  char                xcf[1024];
+  char               *error = NULL;
+
+  api->image_new (engine, 32, 24, &image, NULL);
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer, NULL);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &red, NULL);
+
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 0,
+         "a fresh layer has no effects");
+  CHECK (api->drawable_effects (engine, image, layer, NULL, 0, &count) == GLIMS_STATUS_OK &&
+         count == 0,
+         "a count-only call works");
+  CHECK (api->drawable_effects (engine, image, layer, rows, -1, &count) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->drawable_effects (engine, image, layer, NULL, 2, &count) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->drawable_effects (engine, image, layer, rows, 2, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->drawable_effects (engine, image, 9999, rows, 2, &count) == GLIMS_STATUS_NOT_FOUND &&
+         api->drawable_effects (engine, 9999, layer, rows, 2, &count) == GLIMS_STATUS_NOT_FOUND,
+         "bad arguments and ids refuse");
+
+  /* A live preview is on the stack but is not a committed effect. */
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &session, NULL) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 0,
+         "an open preview does not list as an effect");
+  api->filter_abort (engine, session);
+  session = 0;
+
+  /* Invert commits non-destructively; a brighter lift stacks on top of it.
+   * The list reads top first, so the newer effect leads. */
+  before = undo_depth (image);
+  CHECK (api->filter_begin (engine, image, layer, "gegl:invert-linear", &session, NULL) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "the invert commits as one undo step");
+  session = 0;
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && rows[0].id > 0 &&
+         strcmp (rows[0].name, "Invert") == 0 &&
+         strcmp (rows[0].operation, "gegl:invert-linear") == 0 &&
+         rows[0].enabled && rows[0].opacity == 1.0,
+         "the effect reads its id, name, operation, state and opacity (\"%s\" %s)",
+         rows[0].name, rows[0].operation);
+  invert_id = rows[0].id;
+
+  CHECK (api->filter_begin (engine, image, layer, "gegl:brightness-contrast", &session, NULL) == GLIMS_STATUS_OK &&
+         api->filter_set_double (engine, session, "brightness", 0.2) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK,
+         "a brighter second effect commits");
+  session = 0;
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id != invert_id && rows[1].id == invert_id &&
+         strcmp (rows[0].operation, "gegl:brightness-contrast") == 0 &&
+         rows[1].enabled && rows[1].opacity == 1.0,
+         "the newer effect tops the list (%s over %s)", rows[0].operation, rows[1].operation);
+  bright_id = rows[0].id;
+  CHECK (api->drawable_effects (engine, image, layer, rows, 1, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id == bright_id,
+         "a short buffer truncates rows but keeps the full count");
+
+  /* Bottom first: invert the red layer to cyan, then lift it — a pale
+   * cyan. Raising the invert lifts first, then inverts — a dark cyan. */
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 100 && pixel[0] < 150 && pixel[1] > 225 && pixel[2] > 225,
+         "invert-then-lift renders a pale cyan (%d,%d,%d)", pixel[0], pixel[1], pixel[2]);
+
+  before = undo_depth (image);
+  CHECK (api->effect_command (engine, image, layer, invert_id, GLIMS_EFFECT_RAISE, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         rows[0].id == invert_id && rows[1].id == bright_id,
+         "raising the invert swaps the stack in one undo step");
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 30 && pixel[1] > 200 && pixel[1] < 245 && pixel[2] > 200 && pixel[2] < 245,
+         "lift-then-invert renders a dark cyan (%d,%d,%d)", pixel[0], pixel[1], pixel[2]);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         rows[0].id == bright_id && rows[1].id == invert_id &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 100 && pixel[0] < 150 && pixel[1] > 225,
+         "undo restores both the order and the pixels");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         rows[0].id == invert_id &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 30 && pixel[1] > 200 && pixel[1] < 245,
+         "redo applies the raise again");
+
+  /* Moves that are already satisfied are free of charge. */
+  before = undo_depth (image);
+  CHECK (api->effect_command (engine, image, layer, invert_id, GLIMS_EFFECT_TO_TOP, NULL) == GLIMS_STATUS_OK &&
+         api->effect_command (engine, image, layer, bright_id, GLIMS_EFFECT_LOWER, NULL) == GLIMS_STATUS_OK &&
+         api->effect_command (engine, image, layer, bright_id, GLIMS_EFFECT_TO_BOTTOM, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "already-satisfied moves leave no undo step");
+  CHECK (api->effect_command (engine, image, layer, invert_id, GLIMS_EFFECT_TO_BOTTOM, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         rows[0].id == bright_id && rows[1].id == invert_id,
+         "a real move still costs one step");
+  api->image_undo (engine, image);   /* invert back on top */
+
+  /* Disabling the bottom lift leaves the invert alone: pure cyan. */
+  change = (GlimsEffectChange) { .struct_size = sizeof change,
+                                 .properties = GLIMS_EFFECT_ENABLED,
+                                 .enabled = false };
+  before = undo_depth (image);
+  CHECK (api->effect_change (engine, image, layer, bright_id, &change, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         ! rows[1].enabled,
+         "disabling the lift is one undo step");
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 30 && pixel[1] > 225 && pixel[2] > 225,
+         "the disabled lift drops out of the render (%d,%d,%d)", pixel[0], pixel[1], pixel[2]);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         rows[1].enabled &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[1] > 200 && pixel[1] < 245,
+         "undo re-enables it and restores the pixels");
+  api->image_redo (engine, image);
+  api->image_undo (engine, image);   /* land back on both enabled */
+
+  /* Half-opacity invert over the lifted red lands on middle gray; a
+   * rename rides in the same undo step. */
+  change = (GlimsEffectChange) { .struct_size = sizeof change,
+                                 .properties = GLIMS_EFFECT_NAME | GLIMS_EFFECT_OPACITY,
+                                 .opacity = 0.5 };
+  strcpy (change.name, "Half Invert");
+  before = undo_depth (image);
+  CHECK (api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         strcmp (rows[0].name, "Half Invert") == 0 && rows[0].opacity == 0.5,
+         "rename and opacity share one undo step");
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] > 160 && pixel[0] < 215 &&
+         abs (pixel[0] - pixel[1]) < 15 && abs (pixel[1] - pixel[2]) < 15,
+         "the half-strength invert renders a middle gray (%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2]);
+
+  snprintf (xcf, sizeof xcf, "%s/effects.xcf", work);
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK,
+         "the effects save and reopen");
+  if (reopened)
+    {
+      GlimsLayerInfo rrow;
+
+      CHECK (api->image_layers (engine, reopened, &rrow, 1, &count) == GLIMS_STATUS_OK &&
+             api->drawable_effects (engine, reopened, rrow.id, rows, 4, &count) == GLIMS_STATUS_OK &&
+             count == 2 &&
+             strcmp (rows[0].name, "Half Invert") == 0 && rows[0].enabled &&
+             rows[0].opacity == 0.5 && strcmp (rows[0].operation, "gegl:invert-linear") == 0 &&
+             strcmp (rows[1].operation, "gegl:brightness-contrast") == 0 &&
+             rows[1].enabled && rows[1].opacity == 1.0,
+             "the XCF round trip keeps the stack's order and state (%d)", count);
+      api->image_close (engine, reopened);
+      reopened = 0;
+    }
+
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         strcmp (rows[0].name, "Invert") == 0 && rows[0].opacity == 1.0 &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 30 && pixel[1] > 200 && pixel[1] < 245,
+         "undo restores the default name, full strength and the pixels");
+  api->image_redo (engine, image);
+  api->image_undo (engine, image);
+
+  /* A change that asks for the current state costs nothing. */
+  change = (GlimsEffectChange) { .struct_size = sizeof change,
+                                 .properties = GLIMS_EFFECT_ENABLED | GLIMS_EFFECT_OPACITY,
+                                 .enabled = true, .opacity = 1.0 };
+  before = undo_depth (image);
+  CHECK (api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "restating the current state adds no undo step");
+  change = (GlimsEffectChange) { .struct_size = sizeof change,
+                                 .properties = GLIMS_EFFECT_OPACITY,
+                                 .opacity = NAN };
+  CHECK (api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before,
+         "a non-finite opacity refuses without a step");
+  change.opacity = 1.5;
+  CHECK (api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an out-of-range opacity refuses");
+  change = (GlimsEffectChange) { .struct_size = 4, .properties = GLIMS_EFFECT_ENABLED };
+  CHECK (api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->effect_change (engine, image, layer, invert_id, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a bad change struct refuses");
+  change = (GlimsEffectChange) { .struct_size = sizeof change, .properties = 1 << 6 };
+  CHECK (api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "unknown property bits refuse");
+  CHECK (api->effect_command (engine, image, layer, invert_id, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->effect_command (engine, image, layer, invert_id, 99, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "unknown commands refuse");
+  CHECK (undo_depth (image) == before, "refusals leave history alone");
+
+  /* Removing the bottom effect leaves the invert on the plain red: cyan.
+   * Undo brings the same effect back in the same place. */
+  before = undo_depth (image);
+  CHECK (api->effect_command (engine, image, layer, bright_id, GLIMS_EFFECT_REMOVE, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && rows[0].id == invert_id,
+         "removing the lift is one undo step");
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 30 && pixel[1] > 225 && pixel[2] > 225,
+         "the invert alone renders cyan (%d,%d,%d)", pixel[0], pixel[1], pixel[2]);
+  change = (GlimsEffectChange) { .struct_size = sizeof change,
+                                 .properties = GLIMS_EFFECT_ENABLED,
+                                 .enabled = false };
+  CHECK (api->effect_change (engine, image, layer, bright_id, &change, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->effect_command (engine, image, layer, bright_id, GLIMS_EFFECT_RAISE, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "the removed effect's id is dead even while undo holds it");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id == invert_id && rows[1].id == bright_id &&
+         rows[1].enabled && rows[1].opacity == 1.0 &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 30 && pixel[1] > 200 && pixel[1] < 245,
+         "undo restores the effect with its id, state and place");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK && count == 1,
+         "redo removes it again");
+  api->image_undo (engine, image);
+
+  /* Merging the bottom effect bakes it into the pixels: the composite
+   * stays identical because it was applied first anyway, the stack keeps
+   * the invert, and undo restores both pixels and the whole stack. */
+  before = undo_depth (image);
+  CHECK (api->effect_command (engine, image, layer, bright_id, GLIMS_EFFECT_MERGE, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && rows[0].id == invert_id,
+         "merging the bottom effect is one undo step");
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 30 && pixel[1] > 200 && pixel[1] < 245 && pixel[2] > 200 && pixel[2] < 245,
+         "the merged composite is unchanged (%d,%d,%d)", pixel[0], pixel[1], pixel[2]);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id == invert_id && rows[1].id == bright_id &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] < 30 && pixel[1] > 200 && pixel[1] < 245,
+         "undo restores the pixels and the stack");
+  api->image_redo (engine, image);
+
+  /* Merging the last effect empties the stack; undo brings it back. */
+  CHECK (api->effect_command (engine, image, layer, invert_id, GLIMS_EFFECT_MERGE, NULL) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 0,
+         "merging the last effect empties the stack");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && rows[0].id == invert_id,
+         "undo restores the merged effect");
+  api->image_undo (engine, image);   /* unmerge the lift too */
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id == invert_id && rows[1].id == bright_id,
+         "both effects are back");
+
+  /* Wrong drawables, foreign effects and stale ids all refuse. */
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer2, NULL);
+  api->layer_mask_add (engine, image, layer, GLIMS_MASK_WHITE, true, &mask, NULL);
+  CHECK (api->drawable_effects (engine, image, mask, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 0,
+         "a layer mask lists no committed effects");
+  CHECK (api->drawable_effects (engine, image, layer2, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 0,
+         "the untouched layer lists none");
+  change = (GlimsEffectChange) { .struct_size = sizeof change,
+                                 .properties = GLIMS_EFFECT_ENABLED,
+                                 .enabled = false };
+  CHECK (api->effect_change (engine, image, layer2, invert_id, &change, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->effect_change (engine, image, mask, invert_id, &change, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->effect_change (engine, image, layer, 9999, &change, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->effect_command (engine, image, layer2, invert_id, GLIMS_EFFECT_RAISE, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->effect_command (engine, image, layer, 9999, GLIMS_EFFECT_REMOVE, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "foreign drawables and unknown effect ids refuse");
+  api->image_new (engine, 8, 8, &other, NULL);
+  foreign = first_layer (other);
+  api->filter_begin (engine, other, foreign, "gegl:invert-linear", &session, NULL);
+  api->filter_commit (engine, session, NULL);
+  session = 0;
+  CHECK (api->drawable_effects (engine, other, foreign, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1,
+         "the other image keeps its own effect");
+  foreign_fx = rows[0].id;
+  CHECK (api->effect_command (engine, image, layer, foreign_fx, GLIMS_EFFECT_REMOVE, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->effect_change (engine, image, layer, foreign_fx, &change, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->effect_command (engine, image, foreign, invert_id, GLIMS_EFFECT_RAISE, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "another image's effect and drawable refuse here");
+  api->image_close (engine, other);
+  other = 0;
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id == invert_id && rows[1].id == bright_id,
+         "the refusals changed nothing");
+
+  /* Writes block while a stroke or a filter preview owns the image; the
+   * read stays available. */
+  CHECK (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK &&
+         api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_BUSY &&
+         api->effect_command (engine, image, layer, invert_id, GLIMS_EFFECT_RAISE, NULL) == GLIMS_STATUS_BUSY &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2,
+         "effect writes report BUSY during a stroke while the list still reads");
+  api->stroke_end (engine, stroke);
+  stroke = 0;
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &session, NULL) == GLIMS_STATUS_OK &&
+         api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_BUSY &&
+         api->effect_command (engine, image, layer, invert_id, GLIMS_EFFECT_RAISE, NULL) == GLIMS_STATUS_BUSY &&
+         api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id == invert_id,
+         "effect writes report BUSY during a preview while the list still reads");
+  api->filter_abort (engine, session);
+  session = 0;
+
+  /* A pixel lock protects merge but not metadata edits. */
+  CHECK (api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL) == GLIMS_STATUS_OK &&
+         api->effect_command (engine, image, layer, bright_id, GLIMS_EFFECT_MERGE, NULL) == GLIMS_STATUS_LOCKED &&
+         api->effect_change (engine, image, layer, invert_id, &change, NULL) == GLIMS_STATUS_OK &&
+         api->effect_command (engine, image, layer, invert_id, GLIMS_EFFECT_LOWER, NULL) == GLIMS_STATUS_OK &&
+         api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, 0, NULL) == GLIMS_STATUS_OK,
+         "a pixel lock refuses merge while edits and moves still work");
+  api->image_undo (engine, image);   /* the lower */
+  api->image_undo (engine, image);   /* the enable-change */
+  CHECK (api->drawable_effects (engine, image, layer, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 2 && rows[0].id == invert_id && rows[1].enabled,
+         "the lock test leaves the stack as it was");
+
+  /* Groups and text hold structured content: merge refuses it while
+   * remove and reorder stay legal metadata work. */
+  api->create_group (engine, image, 0, 0, "Group", &group, NULL);
+  CHECK (api->filter_begin (engine, image, group, "gegl:invert-linear", &session, NULL) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, group, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1,
+         "a group layer takes an effect");
+  session = 0;
+  before = undo_depth (image);
+  CHECK (api->effect_command (engine, image, group, rows[0].id, GLIMS_EFFECT_MERGE, &error) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before &&
+         api->drawable_effects (engine, image, group, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1,
+         "merge refuses a group's structured pixels%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->effect_command (engine, image, group, rows[0].id, GLIMS_EFFECT_REMOVE, NULL) == GLIMS_STATUS_OK &&
+         api->drawable_effects (engine, image, group, rows, 4, &count) == GLIMS_STATUS_OK &&
+         count == 0,
+         "removing a group's effect is allowed");
+
+  strcpy (tset.font, "Sans-serif");
+  if (api->text_layer_new (engine, image, "Hi", &tset, (GlimsPoint) { 2, 2 }, &text, NULL) == GLIMS_STATUS_OK &&
+      api->filter_begin (engine, image, text, "gegl:invert-linear", &session, NULL) == GLIMS_STATUS_OK &&
+      api->filter_commit (engine, session, NULL) == GLIMS_STATUS_OK)
+    {
+      session = 0;
+      before = undo_depth (image);
+      CHECK (api->drawable_effects (engine, image, text, rows, 4, &count) == GLIMS_STATUS_OK &&
+             count == 1 && rows[0].enabled,
+             "the text layer lists its committed effect");
+      CHECK (api->effect_command (engine, image, text, rows[0].id, GLIMS_EFFECT_MERGE, &error) == GLIMS_STATUS_INVALID_ARGUMENT,
+             "merge refuses a text layer's editable content%s%s",
+             error ? ": " : "", error ? error : "");
+      CHECK (undo_depth (image) == before &&
+             api->drawable_effects (engine, image, text, rows, 4, &count) == GLIMS_STATUS_OK &&
+             count == 1 && rows[0].enabled,
+             "the refused merge changed nothing");
+      api->free_string (error);
+      error = NULL;
+      api->layer_command (engine, image, text, GLIMS_LAYER_DELETE, NULL, NULL);
+    }
+  else
+    {
+      CHECK (false, "a text layer with a committed effect is required here");
+    }
+
+  api->image_close (engine, image);
+}
+
 /* The qmask-name.xcf fixture (fixtures/README.md): written by GIMP 3.0.8
  * while its Quick Mask was on. The engine finds the mask's channel by
  * the reserved name "Qmask" — any channel added to or renamed to it
@@ -3613,6 +4023,455 @@ test_clipboard (void)
   api->image_close (engine, image);
 }
 
+static int
+supports_link_layers (void)
+{
+  int major = 0, minor = 0;
+  sscanf (api->engine_version (engine), "%d.%d", &major, &minor);
+  return major > 3 || (major == 3 && minor >= 2);
+}
+
+/* File > Open as Layers: the GIMP-made fixture lands in an open image
+ * with its whole tree — order, groups, modes, masks, offsets — in one
+ * undo step, above the selected layer; File > Place makes a link layer
+ * on engines that have them. */
+static void
+test_place (const char *fixtures, const char *work)
+{
+  char           xcf[1024], png[1024], missing[1024], junk[1024];
+  char           link_src[1024], placed_xcf[1024], dest_xcf[1024];
+  GlimsImageID   dest = 0, scratch = 0, src = 0, reopened = 0, again = 0;
+  GlimsLayerInfo rows[16], source_rows[16], after[16];
+  GlimsItemID    added[8] = { 0 }, placed = 0, group = 0;
+  GlimsItemID    layer = 0;
+  GlimsStrokeID  stroke = 0;
+  GlimsFilterID  filter = 0;
+  GlimsStrokePoint point = { 4, 4, 1.0, 0.0, 0.0, 0 };
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+  GlimsFillSettings  red = { .struct_size = sizeof red, .mode = GLIMS_FILL_SELECTION,
+                             .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  GlimsFillSettings  blue = { .struct_size = sizeof blue, .mode = GLIMS_FILL_SELECTION,
+                              .color = { 0, 0, 1, 1 }, .opacity = 1 };
+  GlimsImageInfo info;
+  GlimsLayerChange rename = { .struct_size = sizeof rename, .properties = GLIMS_LAYER_NAME,
+                              .name = "Base" };
+  int32_t        count = 0, n = 0, src_count = 0, before, i;
+  int            dx = 0, dy = 0, offsets_ok = 1, links;
+  uint8_t       *pixels = NULL, *reference = NULL;
+  uint8_t        corner[4] = { 0 };
+  int32_t        w1, h1, w2, h2;
+  char          *error = NULL;
+  FILE          *file;
+  BackgroundRun  run = { 0 };
+  pthread_t      thread;
+  GlimsStatus    status;
+
+  snprintf (xcf, sizeof xcf, "%s/composite.xcf", fixtures);
+  snprintf (png, sizeof png, "%s/composite.png", fixtures);
+  snprintf (missing, sizeof missing, "%s/no-such-file.png", work);
+  snprintf (junk, sizeof junk, "%s/not-an-image.txt", work);
+  snprintf (link_src, sizeof link_src, "%s/link-source.png", work);
+  snprintf (placed_xcf, sizeof placed_xcf, "%s/placed.xcf", work);
+  snprintf (dest_xcf, sizeof dest_xcf, "%s/place-dest.xcf", work);
+
+  links = supports_link_layers ();
+  file  = fopen (junk, "w");
+  if (file)
+    {
+      fputs ("this is not an image\n", file);
+      fclose (file);
+    }
+
+  /* The fixture's own layer tree, to compare against the import. */
+  CHECK (api->image_open (engine, xcf, &src, &error) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, src, source_rows, 16, &src_count) == GLIMS_STATUS_OK && src_count == 5,
+         "the fixture's 5-layer tree is readable%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->image_close (engine, src);
+  src = 0;
+  if (src_count != 5)
+    return;
+
+  CHECK (api->image_new (engine, 320, 240, &dest, NULL) == GLIMS_STATUS_OK, "destination image 320x240");
+  layer = first_layer (dest);
+  CHECK (api->layer_change (engine, dest, layer, &rename, NULL) == GLIMS_STATUS_OK,
+         "the destination layer is renamed to tell it from the imported one");
+  before = undo_depth (dest);
+
+  /* Above the only selected layer, at the top level, as one step. */
+  CHECK (api->image_open_layers (engine, dest, xcf, added, 8, &n, &error) == GLIMS_STATUS_OK && n == 3,
+         "open the fixture as layers: %d top-level items added%s%s", n, error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (n == 3 && added[0] > 0 && added[1] > 0 && added[2] > 0,
+         "the call returns the top-level layer ids");
+  CHECK (undo_depth (dest) == before + 1, "the whole import is one undo step (%d -> %d)",
+         before, undo_depth (dest));
+  CHECK (api->image_info (engine, dest, &info) == GLIMS_STATUS_OK && info.dirty &&
+         info.width == 320 && info.height == 240 && info.layer_count == 6,
+         "the image stays 320x240, gains 5 rows and is marked dirty");
+
+  count = 0;
+  CHECK (api->image_layers (engine, dest, rows, 16, &count) == GLIMS_STATUS_OK && count == 6,
+         "the destination now has %d layers", count);
+  if (count == 6)
+    {
+      int shape = 1;
+
+      for (i = 0; i < 5 && shape; i++)
+        if (strcmp (rows[i].name, source_rows[i].name) != 0 || rows[i].kind != source_rows[i].kind ||
+            rows[i].depth != source_rows[i].depth || strcmp (rows[i].mode, source_rows[i].mode) != 0 ||
+            rows[i].visible != source_rows[i].visible || rows[i].has_mask != source_rows[i].has_mask ||
+            rows[i].opacity != source_rows[i].opacity)
+          shape = 0;
+      /* Parents: 0 stays 0, a source parent maps to its imported id. */
+      for (i = 0; i < 5 && shape; i++)
+        {
+          GlimsItemID parent = 0;
+          int         j;
+
+          if (source_rows[i].parent != 0)
+            for (j = 0; j < 5; j++)
+              if (source_rows[j].id == source_rows[i].parent)
+                parent = added[j];
+          if (rows[i].parent != parent)
+            shape = 0;
+        }
+      CHECK (shape, "the imported stack keeps order, names, kinds, groups, modes, masks and opacity");
+      CHECK (strcmp (rows[5].name, "Base") == 0 && rows[5].parent == 0,
+             "the imported stack sits above the destination's own layer");
+      CHECK (rows[0].id == added[0] && rows[1].id == added[1] && rows[4].id == added[2],
+             "the returned ids are the imported top-level layers");
+      CHECK (rows[0].selected && rows[1].selected && rows[4].selected && ! rows[5].selected,
+             "the imported layers are selected, the old one is not");
+
+      dx = rows[0].bounds.x - source_rows[0].bounds.x;
+      dy = rows[0].bounds.y - source_rows[0].bounds.y;
+      for (i = 1; i < 5; i++)
+        if (rows[i].bounds.x - source_rows[i].bounds.x != dx ||
+            rows[i].bounds.y - source_rows[i].bounds.y != dy ||
+            rows[i].bounds.width != source_rows[i].bounds.width ||
+            rows[i].bounds.height != source_rows[i].bounds.height)
+          offsets_ok = 0;
+      CHECK (offsets_ok, "every layer keeps its size and offset relative to the others (moved %+d,%+d)",
+             dx, dy);
+    }
+
+  pixels = render_all (dest, &w1, &h1);
+  CHECK (pixels && w1 == 320 && h1 == 240, "the imported image renders");
+  free (pixels);
+  CHECK (api->image_undo (engine, dest) == GLIMS_STATUS_OK && layer_count (dest) == 1,
+         "undo removes all five imported rows at once");
+  CHECK (api->image_redo (engine, dest) == GLIMS_STATUS_OK && layer_count (dest) == 6,
+         "redo restores them");
+
+  /* Inserting above a chosen layer: with the bottom layer selected the
+   * stack lands between it and the top layer. */
+  CHECK (api->image_layers (engine, dest, rows, 16, &count) == GLIMS_STATUS_OK && count == 6 &&
+         api->layer_select (engine, dest, rows[5].id) == GLIMS_STATUS_OK,
+         "the destination's own layer is selected again");
+  {
+    GlimsStatus s = api->image_open_layers (engine, dest, xcf, NULL, 0, &n, &error);
+
+    CHECK (s == GLIMS_STATUS_OK && n == 3, "a second import runs (%d, n=%d)%s%s",
+           s, n, error ? ": " : "", error ? error : "");
+  }
+  api->image_layers (engine, dest, rows, 16, &count);
+  /* Duplicate names get the engine's "#1" suffix; the group keeps its
+   * children. */
+  CHECK (count == 11 && strcmp (rows[5].name, "Glims #1") == 0 &&
+         strcmp (rows[6].name, "Shapes #1") == 0 && rows[7].parent == rows[6].id &&
+         rows[7].depth == 1 && strcmp (rows[9].name, "Background #1") == 0 &&
+         strcmp (rows[10].name, "Base") == 0,
+         "a second import with the bottom layer selected lands directly above it");
+  api->free_string (error);
+  error = NULL;
+  api->image_undo (engine, dest);
+  api->image_undo (engine, dest);
+
+  /* With a group selected, the import becomes its children. */
+  CHECK (api->create_group (engine, dest, 0, 0, "Holder", &group, NULL) == GLIMS_STATUS_OK && group > 0,
+         "a group to open into");
+  CHECK (api->layer_select (engine, dest, group) == GLIMS_STATUS_OK,
+         "the group is selected");
+  CHECK (api->image_open_layers (engine, dest, xcf, added, 8, &n, &error) == GLIMS_STATUS_OK && n == 3 &&
+         api->image_layers (engine, dest, rows, 16, &count) == GLIMS_STATUS_OK && count == 7 &&
+         rows[0].id == group && strcmp (rows[0].name, "Holder") == 0 &&
+         rows[1].depth == 1 && rows[1].parent == group && strcmp (rows[1].name, "Glims") == 0 &&
+         rows[2].depth == 1 && rows[2].parent == group && strcmp (rows[2].name, "Shapes") == 0 &&
+         rows[3].depth == 2 && rows[4].depth == 2 && rows[3].parent == rows[2].id &&
+         strcmp (rows[5].name, "Background") == 0 && rows[5].depth == 1 && rows[5].parent == group &&
+         strcmp (rows[6].name, "Base") == 0 && rows[6].depth == 0 && rows[6].parent == 0,
+         "with a group selected, the imported stack lands inside it, top first%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->image_close (engine, dest);
+  dest = 0;
+
+  /* A non-XCF single-layer file imports as one layer named after it. */
+  CHECK (api->image_new (engine, 320, 240, &dest, NULL) == GLIMS_STATUS_OK, "destination for a PNG import");
+  CHECK (api->image_open_layers (engine, dest, png, NULL, 0, &n, &error) == GLIMS_STATUS_OK && n == 1 &&
+         api->image_layers (engine, dest, rows, 16, &count) == GLIMS_STATUS_OK && count == 2 &&
+         strcmp (rows[0].name, "composite.png") == 0 && rows[0].kind == GLIMS_LAYER_PIXEL &&
+         rows[0].bounds.width == 320 && rows[0].bounds.height == 240,
+         "the PNG imports as one pixel layer named after the file%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_open (engine, png, &src, NULL) == GLIMS_STATUS_OK && src > 0,
+         "the same PNG opens as an image for reference");
+  pixels    = render_all (dest, &w1, &h1);
+  reference = src ? render_all (src, &w2, &h2) : NULL;
+  CHECK (pixels && reference && w1 == w2 && h1 == h2 &&
+         count_differences (pixels, reference, (size_t) w1 * h1 * 4) == 0,
+         "the imported PNG renders exactly as the file does");
+  free (pixels);
+  free (reference);
+  api->image_close (engine, src);
+  src = 0;
+
+  /* The destination's identity is untouched: it still saves its own
+   * composite, and saving doesn't undo the import. */
+  CHECK (api->image_save (engine, dest, dest_xcf, &error) == GLIMS_STATUS_OK && file_size (dest_xcf) > 0,
+         "the destination saves to its own XCF after the import%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_open (engine, dest_xcf, &reopened, &error) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, reopened, after, 16, &count) == GLIMS_STATUS_OK && count == 2 &&
+         strcmp (after[0].name, "composite.png") == 0 && strcmp (after[1].name, "Background") == 0,
+         "the saved file holds the destination's layers, not the source image's%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->image_close (engine, reopened);
+  reopened = 0;
+
+  /* Refusals change nothing: no rows added, no undo step. */
+  before = undo_depth (dest);
+  CHECK (api->image_open_layers (engine, dest, missing, NULL, 0, &n, &error) == GLIMS_STATUS_FAILED &&
+         error && api->image_info (engine, dest, &info) == GLIMS_STATUS_OK && info.layer_count == 2 &&
+         undo_depth (dest) == before,
+         "a missing file fails cleanly: %s", error ? error : "(no message)");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_open_layers (engine, dest, junk, NULL, 0, &n, &error) == GLIMS_STATUS_FAILED &&
+         error && api->image_info (engine, dest, &info) == GLIMS_STATUS_OK && info.layer_count == 2 &&
+         undo_depth (dest) == before,
+         "a file that is not an image fails cleanly: %s", error ? error : "(no message)");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_open_layers (engine, dest, "https://example.com/a.png", NULL, 0, &n, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "a non-native path is refused before loading: %s", error ? error : "(no message)");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_open_layers (engine, dest, NULL, NULL, 0, &n, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_open_layers (engine, dest, png, NULL, 0, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_open_layers (engine, dest, png, NULL, -1, &n, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_open_layers (engine, dest, png, NULL, 4, &n, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_open_layers (engine, -1234, png, NULL, 0, &n, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "invalid arguments and unknown images are reported");
+
+  /* Busy states: an open stroke, a filter preview and a plug-in run. */
+  CHECK (api->stroke_begin (engine, dest, first_layer (dest), &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK,
+         "a stroke starts");
+  CHECK (api->image_open_layers (engine, dest, png, NULL, 0, &n, &error) == GLIMS_STATUS_BUSY && error &&
+         api->image_info (engine, dest, &info) == GLIMS_STATUS_OK && info.layer_count == 2 &&
+         undo_depth (dest) == before,
+         "open-as-layers refuses an active stroke (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->stroke_end (engine, stroke) == GLIMS_STATUS_OK, "the stroke still ends cleanly");
+  stroke = 0;
+  api->image_undo (engine, dest);
+
+  CHECK (api->filter_begin (engine, dest, first_layer (dest), "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK,
+         "a filter preview opens");
+  CHECK (api->image_open_layers (engine, dest, png, NULL, 0, &n, &error) == GLIMS_STATUS_BUSY && error &&
+         api->image_info (engine, dest, &info) == GLIMS_STATUS_OK && info.layer_count == 2,
+         "open-as-layers refuses a live filter preview (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK, "the preview still aborts cleanly");
+  filter = 0;
+
+  CHECK (api->image_new (engine, 6000, 4000, &scratch, NULL) == GLIMS_STATUS_OK, "a big image keeps a plug-in busy");
+  run.image = scratch;
+  run.name  = "plug-in-checkerboard";
+  atomic_store (&progress_active, false);
+  pthread_create (&thread, NULL, background_run, &run);
+  wait_for_progress (&run);
+  status = GLIMS_STATUS_OK;
+  {
+    int was_running = ! atomic_load (&run.finished);
+
+    if (was_running)
+      status = api->image_open_layers (engine, dest, png, NULL, 0, &n, NULL);
+    pthread_join (thread, NULL);
+    CHECK (! was_running || status == GLIMS_STATUS_BUSY,
+           "while a plug-in runs, open-as-layers reports BUSY (%d)", status);
+  }
+  CHECK (api->image_info (engine, dest, &info) == GLIMS_STATUS_OK && info.layer_count == 2,
+         "the refused calls left the destination unchanged");
+  api->image_close (engine, scratch);
+  scratch = 0;
+
+  /* File > Place: a real link layer that keeps its file reference. */
+  CHECK (api->image_new (engine, 64, 64, &src, NULL) == GLIMS_STATUS_OK &&
+         api->fill (engine, src, (GlimsPoint) { 0, 0 }, &red, NULL) == GLIMS_STATUS_OK &&
+         api->image_export (engine, src, link_src, &error) == GLIMS_STATUS_OK && file_size (link_src) > 8,
+         "a 64x64 red PNG is written for placing%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->image_close (engine, src);
+  src = 0;
+
+  /* The link goes on top of the PNG import; keep a pixel outside its
+   * bounds to compare after placing. */
+  {
+    uint8_t px[4] = { 0 };
+
+    api->image_render (engine, dest, 1.0, (GlimsRect) { 10, 10, 1, 1 }, px, 4);
+    memcpy (corner, px, 4);
+  }
+  before = undo_depth (dest);
+  status = api->image_place_link (engine, dest, link_src, &placed, &error);
+  if (! links)
+    {
+      CHECK (status == GLIMS_STATUS_UNSUPPORTED && error && placed == 0 &&
+             api->image_info (engine, dest, &info) == GLIMS_STATUS_OK && info.layer_count == 2 &&
+             undo_depth (dest) == before,
+             "this engine has no link layers: Place reports UNSUPPORTED and adds nothing (%s)",
+             error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (api->image_layers (engine, dest, rows, 16, &count) == GLIMS_STATUS_OK &&
+             count == 2 && rows[0].kind != GLIMS_LAYER_LINK && rows[1].kind != GLIMS_LAYER_LINK,
+             "no link or substitute layer appears");
+    }
+  else
+    {
+      int tries;
+
+      CHECK (status == GLIMS_STATUS_OK && placed > 0,
+             "Place puts the PNG in as a link layer%s%s", error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (undo_depth (dest) == before + 1, "placing a link is one undo step");
+      CHECK (api->image_layers (engine, dest, rows, 16, &count) == GLIMS_STATUS_OK && count == 3 &&
+             rows[0].id == placed && rows[0].kind == GLIMS_LAYER_LINK &&
+             strcmp (rows[0].name, "link-source.png") == 0 &&
+             rows[0].bounds.x == 128 && rows[0].bounds.y == 88 &&
+             rows[0].bounds.width == 64 && rows[0].bounds.height == 64,
+             "the link layer is genuine, named after the file and centered");
+      CHECK (rows[0].selected && ! rows[1].selected, "the placed layer is selected");
+      {
+        uint8_t px[4] = { 0 };
+
+        api->image_render (engine, dest, 1.0, (GlimsRect) { 160, 120, 1, 1 }, px, 4);
+        CHECK (px[0] > 200 && px[1] < 50 && px[2] < 50 && px[3] == 255,
+               "the link renders the file's pixels in the middle of the canvas (%d,%d,%d,%d)",
+               px[0], px[1], px[2], px[3]);
+        api->image_render (engine, dest, 1.0, (GlimsRect) { 10, 10, 1, 1 }, px, 4);
+        CHECK (memcmp (px, corner, 4) == 0, "outside its bounds the composite is unchanged");
+      }
+      CHECK (api->image_undo (engine, dest) == GLIMS_STATUS_OK && layer_count (dest) == 2 &&
+             api->image_redo (engine, dest) == GLIMS_STATUS_OK && layer_count (dest) == 3,
+             "placing is a normal undo step");
+      CHECK (api->image_layers (engine, dest, rows, 16, &count) == GLIMS_STATUS_OK &&
+             rows[0].kind == GLIMS_LAYER_LINK, "redo restores the link kind, not a copy");
+
+      CHECK (api->image_save (engine, dest, placed_xcf, &error) == GLIMS_STATUS_OK && file_size (placed_xcf) > 0,
+             "the image with the link layer saves%s%s", error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (api->image_open (engine, placed_xcf, &reopened, &error) == GLIMS_STATUS_OK &&
+             api->image_layers (engine, reopened, after, 16, &count) == GLIMS_STATUS_OK && count == 3 &&
+             after[0].kind == GLIMS_LAYER_LINK && strcmp (after[0].name, "link-source.png") == 0,
+             "the XCF round trip keeps a real link layer%s%s", error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (red_at (reopened, 160, 120) > 200,
+             "the reopened link layer still renders the file");
+
+      /* Overwrite the source: the monitor reloads the link in place. */
+      CHECK (api->image_new (engine, 64, 64, &src, NULL) == GLIMS_STATUS_OK &&
+             api->fill (engine, src, (GlimsPoint) { 0, 0 }, &blue, NULL) == GLIMS_STATUS_OK &&
+             api->image_export (engine, src, link_src, &error) == GLIMS_STATUS_OK,
+             "the source file is rewritten blue%s%s", error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      api->image_close (engine, src);
+      src = 0;
+      tries = 0;
+      while (tries < 100)
+        {
+          int r = red_at (reopened, 160, 120);
+          int b = 0;
+          uint8_t px[4];
+
+          if (api->image_render (engine, reopened, 1.0, (GlimsRect) { 160, 120, 1, 1 }, px, 4) == GLIMS_STATUS_OK)
+            b = px[2];
+          if (r < 50 && b > 200)
+            break;
+          usleep (100 * 1000);
+          tries++;
+        }
+      CHECK (tries < 100, "the monitored link layer rereads the rewritten source (%d00 ms)", tries);
+
+      /* And a fresh open rereads it too: the stored buffer never wins. */
+      CHECK (api->image_open (engine, placed_xcf, &again, NULL) == GLIMS_STATUS_OK && again > 0,
+             "the saved link reopens again");
+      tries = 0;
+      while (tries < 100)
+        {
+          uint8_t px[4] = { 0 };
+
+          if (api->image_render (engine, again, 1.0, (GlimsRect) { 160, 120, 1, 1 }, px, 4) == GLIMS_STATUS_OK &&
+              px[2] > 200 && px[0] < 50)
+            break;
+          usleep (100 * 1000);
+          tries++;
+        }
+      CHECK (tries < 100, "a reopened link rereads the current file, not the stored buffer (%d00 ms)", tries);
+      api->image_close (engine, again);
+      again = 0;
+      api->image_close (engine, reopened);
+      reopened = 0;
+
+      /* Missing and invalid sources fail without touching the image. */
+      before = undo_depth (dest);
+      CHECK (api->image_place_link (engine, dest, missing, &placed, &error) == GLIMS_STATUS_FAILED &&
+             error && placed == 0 && api->image_info (engine, dest, &info) == GLIMS_STATUS_OK &&
+             info.layer_count == 3 && undo_depth (dest) == before,
+             "placing a missing file fails cleanly (%s)", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (api->image_place_link (engine, dest, junk, &placed, &error) != GLIMS_STATUS_OK &&
+             placed == 0 && api->image_info (engine, dest, &info) == GLIMS_STATUS_OK &&
+             info.layer_count == 3 && undo_depth (dest) == before,
+             "placing a file that is not an image fails cleanly (%s)", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (api->image_place_link (engine, dest, "https://example.com/a.png", &placed, &error) ==
+             GLIMS_STATUS_INVALID_ARGUMENT && placed == 0,
+             "placing a non-native path is refused before loading");
+      api->free_string (error);
+      error = NULL;
+      CHECK (api->image_place_link (engine, dest, NULL, &placed, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+             api->image_place_link (engine, -1234, link_src, &placed, NULL) == GLIMS_STATUS_NOT_FOUND,
+             "place reports invalid arguments and unknown images");
+      CHECK (api->image_layers (engine, dest, rows, 16, &count) == GLIMS_STATUS_OK &&
+             count == 3 && rows[0].kind == GLIMS_LAYER_LINK,
+             "the failures left the placed link layer alone");
+    }
+
+  api->image_close (engine, dest);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -3674,6 +4533,7 @@ main (int argc, char **argv)
       CHECK (api->image_close (engine, image) == GLIMS_STATUS_NOT_FOUND, "closing twice is reported");
     }
   test_fixture (argv[3], argv[2]);
+  test_place (argv[3], argv[2]);
   test_text_layers (argv[2]);
   test_paths (argv[2]);
   test_deleted_items ();
@@ -3691,6 +4551,7 @@ main (int argc, char **argv)
   test_matrix_transform ();
   test_channels (argv[2]);
   test_drawable_filters (argv[2]);
+  test_drawable_effects (argv[2]);
   test_qmask_name_fixture (argv[3]);
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));

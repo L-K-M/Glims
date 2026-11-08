@@ -195,6 +195,11 @@ glims_filter_begin (GlimsEngine    *engine,
                                                 session->operation, NULL);
   }
 
+  /* A live preview sits on the drawable's stack but is not a committed
+   * effect: mark it temporary, as the engine's tools do with their
+   * editing filters — XCF skips temporary filters, and drawable_effects
+   * counts only committed ones. Commit flips the flag back. */
+  gimp_drawable_filter_set_temporary (session->filter, TRUE);
   gimp_drawable_filter_apply (session->filter, NULL);
   gimp_drawable_filter_set_preview (session->filter, TRUE);
   gimp_image_flush (open->image);
@@ -274,9 +279,13 @@ glims_filter_commit (GlimsEngine    *engine,
     return glims_fail (error, NULL, "The filter could not be applied.");
 
   if (session->non_destructive)
-    gimp_image_undo_push_filter_add (session->image,
-                                     gimp_object_get_name (GIMP_OBJECT (filter)),
-                                     session->drawable, filter);
+    {
+      /* Committed now: no longer a temporary preview. */
+      gimp_drawable_filter_set_temporary (filter, FALSE);
+      gimp_image_undo_push_filter_add (session->image,
+                                       gimp_object_get_name (GIMP_OBJECT (filter)),
+                                       session->drawable, filter);
+    }
 
   gimp_drawable_update (session->drawable, 0, 0, -1, -1);
   gimp_image_flush (session->image);

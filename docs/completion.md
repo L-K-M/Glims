@@ -123,3 +123,20 @@ in place. A second Print during a job is refused, a close requested while
 the snapshot renders drops the job, and printing never adds an undo step or
 touches file identity. On-screen panel and physical-printer behavior were
 not exercised.
+
+2026-11-08: facade support for Open as Layers and Place, engine side only.
+Two additive calls (`image_open_layers`, `image_place_link`) route through
+`file_open_layers` and `gimp_image_add_layers`, the path GIMP's own open
+dialog takes, so a file's layers land above the selected layer — or inside
+a selected group — centered on the canvas, in one undo step, with order,
+hierarchy, modes, masks and relative offsets kept and the temporary load
+image unreffed. Place makes a real link layer where the engine has them
+(3.2 and later): file reference kept, live re-render when the source
+changes, saved and reread as a link in XCF. On 3.0 the call returns the
+new UNSUPPORTED status and adds nothing; it never degrades to a raster
+copy. The adapter resolves the file's loader before calling in, because
+the link path's circular-reference check dereferences a NULL procedure
+when a saved destination meets a file nothing loads. EngineSession grew
+`openLayers` and `placeLink`. 603 adapter checks pass on 3.2.0, 3.2.8 and master; 585 pass on
+3.0.8, including a monitored reread of a rewritten source; the menu
+commands that would call them are not wired yet.

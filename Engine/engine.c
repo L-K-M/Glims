@@ -939,6 +939,7 @@ typedef struct
 {
   GlimsImageID      image;
   GlimsItemID       item;
+  GlimsEffectID     effect;
   int32_t           width, height;
   const char       *string;
   double            number;
@@ -1070,6 +1071,16 @@ MARSHAL (channel_to_selection, return glims_channel_to_selection (e, a->image, a
 MARSHAL (image_quick_mask, return glims_image_quick_mask (e, a->image, a->out);)
 MARSHAL (image_set_quick_mask, return glims_image_set_quick_mask (e, a->image, a->width != 0,
                                                                   a->error);)
+MARSHAL (drawable_effects, return glims_drawable_effects (e, a->image, a->item, a->out,
+                                                          a->capacity, a->count);)
+MARSHAL (effect_change, return glims_effect_change (e, a->image, a->item, a->effect,
+                                                    a->in, a->error);)
+MARSHAL (effect_command, return glims_effect_command (e, a->image, a->item, a->effect,
+                                                      (uint32_t) a->width, a->error);)
+MARSHAL (image_open_layers, return glims_image_open_layers (e, a->image, a->string, a->out,
+                                                            a->capacity, a->count, a->error);)
+MARSHAL (image_place_link, return glims_image_place_link (e, a->image, a->string,
+                                                          a->out, a->error);)
 
 /* A path's geometry takes more arguments than GlimsArgs holds. */
 typedef struct
@@ -1754,6 +1765,50 @@ api_image_set_quick_mask (GlimsEngine *e, GlimsImageID image, bool enabled, char
   return glims_engine_call (e, image_set_quick_mask_on_engine, &a);
 }
 
+static GlimsStatus
+api_drawable_effects (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
+                      GlimsEffectInfo *rows, int32_t capacity, int32_t *count)
+{
+  GlimsArgs a = { .image = image, .item = drawable, .out = rows,
+                  .capacity = capacity, .count = count };
+  return glims_engine_call (e, drawable_effects_on_engine, &a);
+}
+
+static GlimsStatus
+api_effect_change (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
+                   GlimsEffectID effect, const GlimsEffectChange *change, char **error)
+{
+  GlimsArgs a = { .image = image, .item = drawable, .effect = effect,
+                  .in = change, .error = error };
+  return glims_engine_call (e, effect_change_on_engine, &a);
+}
+
+static GlimsStatus
+api_effect_command (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
+                    GlimsEffectID effect, uint32_t command, char **error)
+{
+  GlimsArgs a = { .image = image, .item = drawable, .effect = effect,
+                  .width = (int32_t) command, .error = error };
+  return glims_engine_call (e, effect_command_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_open_layers (GlimsEngine *e, GlimsImageID image, const char *path,
+                       GlimsItemID *layers, int32_t capacity, int32_t *count, char **error)
+{
+  GlimsArgs a = { .image = image, .string = path, .out = layers,
+                  .capacity = capacity, .count = count, .error = error };
+  return glims_engine_call (e, image_open_layers_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_place_link (GlimsEngine *e, GlimsImageID image, const char *path,
+                      GlimsItemID *layer, char **error)
+{
+  GlimsArgs a = { .image = image, .string = path, .out = layer, .error = error };
+  return glims_engine_call (e, image_place_link_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -1843,6 +1898,11 @@ static const GlimsEngineAPI api_v1 = {
   .channel_to_selection = api_channel_to_selection,
   .image_quick_mask = api_image_quick_mask,
   .image_set_quick_mask = api_image_set_quick_mask,
+  .drawable_effects = api_drawable_effects,
+  .effect_change = api_effect_change,
+  .effect_command = api_effect_command,
+  .image_open_layers = api_image_open_layers,
+  .image_place_link = api_image_place_link,
 };
 
 __attribute__ ((visibility ("default")))
