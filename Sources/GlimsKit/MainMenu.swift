@@ -152,6 +152,8 @@ enum MainMenu {
                 item("Flip Horizontal", #selector(DocumentWindowController.flipLayerHorizontally(_:))),
                 item("Flip Vertical", #selector(DocumentWindowController.flipLayerVertically(_:))),
             ]),
+            item("Layer to Image Size", #selector(DocumentWindowController.layerToImageSize(_:))),
+            item("Trim Layer to Content", #selector(DocumentWindowController.trimLayerToContent(_:))),
             .separator(),
             item("Merge Down", #selector(DocumentWindowController.mergeDown(_:))),
         ])

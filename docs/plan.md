@@ -1647,3 +1647,13 @@ restores the position the guide was removed at (65), not an earlier
 one — fixed in the test, not the adapter. Custom-guide exclusion has
 no facade-reachable creation path, so it is covered by the `is_custom`
 filter in code and code review only.
+
+Integration validation after the layer-boundary commands merged: native
+conformance passes 1,212 / 1,117 / 1,212 / 1,212 checks on GIMP 3.2.8,
+3.0.8, 3.2.0 and master. The compiled `native-guides` interface scenario
+passes ten checks on each engine: queued creation/move/removal, undo,
+unchanged rendered pixels, busy refusal, deferred cache refresh while
+the input worker is occupied, and close completion. All 369 unit tests
+passed before the unrelated layer-boundary integration; the combined
+Guides interface will receive its own unit and window checks. The
+independent backend review found no important issues.
