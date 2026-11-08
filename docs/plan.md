@@ -2329,3 +2329,116 @@ coordinates are checked for finite, native-integer range before conversion.
 The 3.2.0 suite still logs two startup GLib filename assertions before the
 checks, as recorded in its log; it reports zero failed checks. Swift document
 queue execution and user-facing Stroke Selection controls remain to verify.
+
+### Floating-selection / Paste Into backend (2026-11-08)
+
+Backend slice on `feat/floating-selection`: no UI, no ImageDocument,
+cache, menu or controller changes, and the normal Paste path
+(`image_paste_pixels`, independent new layer) is untouched. Three
+append-only facade footer slots follow the canonical `selection_stroke`
+(slot 117): `image_floating_selection` (slot 118, the size-versioned
+`GlimsFloatingState` read: active flag, floating layer id, target id and
+own `GlimsFloatingTargetKind` target kind), `image_paste_into`
+(slot 119) and `floating_command` (slot 120, a `GlimsFloatingCommand`:
+ANCHOR / TO_LAYER / DISCARD with an explicit `expected` floating id).
+API version 1 unchanged — purely additive, so `struct_size` grows with
+the table and `abi.c`'s assert stands; no existing struct layout or ABI
+order changed and no native raw enum, layout or pointer crosses the
+facade: the new enums map to the engine's named constants
+(`GIMP_PASTE_TYPE_FLOATING_INTO`, the `GimpLayerMask`/`GimpChannel`/
+`GimpLayer` classes, `floating_sel_*`) inside `Engine/floating.c` only.
+
+Source contracts, verified identical in all four engine trees
+(GIMP_3_0_8, GIMP_3_2_0, GIMP_3_2_8, master): `gimp_edit_paste` with
+`GIMP_PASTE_TYPE_FLOATING_INTO` wraps the paste in exactly one "Paste"
+undo group, attaches through `floating_sel_attach` and — unlike
+`FLOATING` — never clears the image selection; with no viewport (the
+PDB passes -1,-1,-1,-1) it centers the floating layer on the target's
+bounds intersected with the selection (`gimp_item_mask_intersect`). The
+caller's straight-alpha R'G'B'A u8 pixels go into a private per-call
+`GeglBuffer` + `GimpBuffer` (`gimp_buffer_new(..., copy_pixels=TRUE)`,
+so no caller memory is retained and no color profile is attached — core
+converts to the target's format-with-alpha and precision), the returned
+`GList` is a caller-owned container released with `g_list_free` (objects
+belong to the image), and the temporary context is a private
+`gimp_context_new` child of the user context. Resolution verbs are the
+core's own one-undo operations: `floating_sel_anchor` ("Anchor Floating
+Selection"), `floating_sel_to_layer` ("Floating Selection to Layer",
+which fails before its undo group opens for mask/channel-attached
+floating selections) and `gimp_image_remove_layer(..., TRUE, ...)`
+("Remove Floating Selection"). XCF saves and reloads the attachment
+natively (`xcf-save.c`/`xcf-load.c` `floating_sel_attach`), so
+persistence needs no adapter code.
+
+Admission in `glims_image_paste_into`, all before any native call, so
+every refusal changes no pixels, pushes no undo and resets its outputs:
+INVALID_ARGUMENT for missing pixels, a byte count that is not exactly
+width*height*4 (shared `glims_pixel_bytes` overflow guard), bad
+dimensions or out-of-range offsets; NOT_FOUND for an unknown image or a
+stale/foreign/detached target (`glims_lookup_drawable`); FAILED with an
+actionable message when a floating selection already exists — core's
+`floating_sel_attach` would silently anchor it inside the "Paste" group
+— when there is no selection (`gimp_channel_is_empty`; Select All counts
+as a full, non-empty selection, as core treats it) or it does not
+intersect the target, when the target is the selection mask itself, a
+layer group, or not a channel of the image's channel list, or when the
+core paste fails; LOCKED for a content-locked target or ancestor group
+(core would silently downgrade to NEW_LAYER — never done here);
+REQUIRES_RASTERIZE for a genuine editable text/link/vector layer target
+(new `glims_layer_editable_source_kind` in layer-source.c; plain pixel
+layers and already rasterized instances are accepted); BUSY via
+`glims_edit_ready`. `floating_command` requires the `expected` id to be
+the actually active floating layer of the image: 0 is INVALID_ARGUMENT,
+a stale/foreign/mismatching id NOT_FOUND, no floating selection NOT_FOUND
+— never a fallback to whichever floating selection is active; an unknown
+command is INVALID_ARGUMENT; TO_LAYER on a mask/channel attachment is
+FAILED with the engine's error and no mutation.
+
+Session side: `EngineSession.FloatingTargetKind` /
+`FloatingState` / `FloatingCommand` and the wrappers
+`floatingSelection(_:)`, `pasteInto(_:target:pixels:)` (reusing
+`ClipboardImage`, like `pastePixels`) and
+`floatingCommand(_:image:expected:)` over the three slots, with
+`struct_size` set and unknown target kinds refused. No queued document
+wrapper yet — that is the UI slice.
+
+Facade-only conformance adds `test_floating_selection` (engine-tests.c,
+no engine headers): the read's validation and inactive answer; every
+admission refusal (no/disjoint selection, existing float, unknown
+image, stale/foreign target, group, locked, editable text before and
+after rasterize, bad buffers, BUSY under an open stroke and filter)
+with no pixel/history/state change and reset outputs; a real Paste Into
+with pixel oracles (opaque payload pixel inside the selection, selection
+clip outside it, transparent payload pixel, untouched far outside), the
+floating row found by exact id at the centered bounds, the selection
+unchanged; paste and anchor/discard/to-layer each exactly one undo and
+redo restoring the exact composite and floating state (same ids across
+undo); stale/zero/foreign `expected` never falling back; mask and channel
+attachments with kind layer-mask/channel and actionable to-layer
+refusals; an XCF round trip preserving the attachment by kind and target
+identity ("Background" row) rather than the runtime id, compositing
+identically, anchor working after reload; and the normal-Paste
+regression (independent new layer, no floating state, selection
+unchanged). Not covered: painting/copying while a floating selection is
+active (the fs layer is the forced selected drawable — a later slice),
+per-pixel (non-bounds) selection∩target disjointness, and any on-screen
+result.
+
+Checks actually run on this branch: `swift build -j 2` and
+`swift build -j 2 --build-tests` pass; `clang -fsyntax-only` with the
+existing adapter flags (each `_engine/adapter/<ref>/compile.rsp` passed
+as `@file`, plus `-I Sources/CGlimsEngine/include -I Engine` and the two
+`GLIMS_ENGINE_*_PATH` defines, `-fvisibility=hidden -Wall
+-Werror=implicit-function-declaration`, exactly as `build-adapter.sh`
+compiles) is clean for `Engine/floating.c`, `Engine/engine.c`,
+`Engine/clipboard.c` and `Engine/layer-source.c` on all four refs
+(GIMP_3_2_8, GIMP_3_2_0, GIMP_3_0_8, master); `Engine/floating.c` is
+additionally clean under `-Wall -Wextra -Werror` on all four;
+`Engine/tests/engine-tests.c` and `Sources/CGlimsEngine/abi.c` pass
+`-std=c11 -O2 -Wall -Wextra -Werror -fsyntax-only -I
+Sources/CGlimsEngine/include`. NOT run here (the shared engine/adapter
+lock belongs to the root job): `build-adapter.sh --test` conformance
+(including the new `test_floating_selection`), any adapter
+compile/link, `swift test`, the app's `--engine-smoke-test`, the engine
+matrix, `scripts/test-conformance-abi.sh` and any on-screen check — no
+runtime behavior of the new slots was executed in this slice.

@@ -1004,6 +1004,35 @@ typedef struct GlimsResourceInfo {
                               * character boundary */
 } GlimsResourceInfo;
 
+/* What a floating selection (a Paste Into result before it resolves) is
+ * attached to. Facade-owned values mapped to the engine's own classes
+ * inside the adapter; the native classes never cross this boundary. */
+typedef enum GlimsFloatingTargetKind {
+  GLIMS_FLOATING_TARGET_LAYER      = 1,  /* a layer (a plain pixel layer or an already rasterized text/link/vector instance) */
+  GLIMS_FLOATING_TARGET_LAYER_MASK = 2,  /* a layer's mask */
+  GLIMS_FLOATING_TARGET_CHANNEL    = 3   /* a saved channel (or the Quick Mask's channel) */
+} GlimsFloatingTargetKind;
+
+/* The image's floating-selection state, as image_floating_selection
+ * reports it. Size-versioned: the caller sets `struct_size` to
+ * sizeof (GlimsFloatingState) before a call and the adapter refuses a
+ * smaller one. */
+typedef struct GlimsFloatingState {
+  uint32_t     struct_size;   /* sizeof (GlimsFloatingState) */
+  bool         active;       /* a floating selection exists */
+  GlimsItemID  floating;     /* the floating layer's id; 0 when !active */
+  GlimsItemID  target;       /* the drawable it is attached to; 0 when !active */
+  uint32_t     target_kind;  /* GlimsFloatingTargetKind; 0 when !active */
+} GlimsFloatingState;
+
+/* How floating_command resolves a floating selection. Facade-owned
+ * values; the native verbs are mapped inside the adapter only. */
+typedef enum GlimsFloatingCommand {
+  GLIMS_FLOATING_ANCHOR   = 1,  /* merge the floating layer into its target */
+  GLIMS_FLOATING_TO_LAYER = 2,  /* detach it as an independent layer */
+  GLIMS_FLOATING_DISCARD  = 3   /* remove it without merging */
+} GlimsFloatingCommand;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -1970,6 +1999,77 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*selection_stroke) (GlimsEngine *engine, GlimsImageID image,
                                     GlimsItemID drawable, GlimsResourceID brush,
                                     const GlimsBrushSettings *settings, char **error);
+
+  /* The image's floating-selection state (a GlimsFloatingState): a plain
+   * read of the current engine state, allowed at any time, also while a
+   * stroke, a filter session or a plug-in holds the image; it mutates
+   * nothing. `out` is validated by its struct_size before it is written:
+   * INVALID_ARGUMENT for a missing `out` or one whose struct_size is too
+   * small; NOT_FOUND for an unknown image — stale or closed. With no
+   * floating selection, `out` reports active=false and zero ids. */
+  GlimsStatus  (*image_floating_selection) (GlimsEngine *engine, GlimsImageID image,
+                                             GlimsFloatingState *out);
+
+  /* Pastes the caller's straight-alpha 8-bit sRGB RGBA `pixels` INTO the
+   * existing selection of `image`, attached to `target`, through the
+   * engine's own gimp_edit_paste with GIMP_PASTE_TYPE_FLOATING_INTO: the
+   * result is a floating selection — one layer, exactly one undo step
+   * ("Paste") — whose preview is clipped to the selection while the
+   * target's own pixels stay unchanged until a floating_command resolves
+   * it. The selection itself is never modified or cleared. `target` 0
+   * means the image's selected drawable (the same accessor the engine's
+   * own Paste uses); an explicit id must name an attached layer, layer
+   * mask or saved channel of this image. `result` (may be NULL) receives
+   * the floating layer's id. `pixels` is only read during this
+   * synchronous call.
+   *
+   * Everything is validated before any native call, so every refusal
+   * changes no pixels, pushes no undo and leaves the floating state
+   * alone: INVALID_ARGUMENT for missing pixels, a `byte_count` that is
+   * not exactly bounds.width * bounds.height * 4, non-positive or
+   * over-maximum dimensions, or an out-of-range `bounds` offset;
+   * NOT_FOUND for an unknown image, or a `target` id that is stale,
+   * foreign, detached or names no drawable of the image; FAILED with
+   * `error` when a floating selection already exists (the engine's
+   * attach would silently anchor it inside the "Paste" undo group —
+   * refused instead), when there is no selection or it does not
+   * intersect the target, when the target is a layer group, the
+   * selection mask itself or not a channel of the image's channel list,
+   * or when the core paste fails; LOCKED when the target's — or an
+   * ancestor group's — pixels are locked (the engine would silently
+   * downgrade to a new layer, which this call never does); and
+   * REQUIRES_RASTERIZE for a genuine editable text, link or vector layer
+   * target — an actionable refusal asking for explicit rasterize consent
+   * (GLIMS_LAYER_RASTERIZE); plain pixel layers and already rasterized
+   * instances are accepted. BUSY while a stroke, a filter session or a
+   * plug-in holds the image. The pixels are copied into a private
+   * per-call buffer (nothing of the caller's is retained, no color
+   * profile is attached) and the returned layer list is released. The
+   * floating layer is placed centered on the target's bounds intersected
+   * with the selection, exactly as the engine's own Paste Into does. */
+  GlimsStatus  (*image_paste_into) (GlimsEngine *engine, GlimsImageID image, GlimsItemID target,
+                                    GlimsRect bounds, const uint8_t *pixels, size_t byte_count,
+                                    GlimsItemID *result, char **error);
+
+  /* Resolves the image's floating selection with `command` (a
+   * GlimsFloatingCommand), each exactly one native undo step: ANCHOR
+   * merges the floating layer into its attached target ("Anchor Floating
+   * Selection"), TO_LAYER detaches it as an independent layer ("Floating
+   * Selection to Layer"; `result` receives its id, the same as
+   * `expected`) and DISCARD removes it without merging ("Remove Floating
+   * Selection"). `expected` must name the floating selection that is
+   * actually active in `image`, as image_floating_selection reports it:
+   * 0 is INVALID_ARGUMENT and a stale, foreign or otherwise non-matching
+   * id is NOT_FOUND — neither ever falls back to whichever floating
+   * selection happens to be active. NOT_FOUND also when the image has no
+   * floating selection at all, or is unknown; INVALID_ARGUMENT for an
+   * unknown `command`; FAILED with `error` for TO_LAYER on a floating
+   * selection attached to a layer mask or channel (the engine refuses
+   * those) — with no mutation. BUSY while a stroke, a filter session or
+   * a plug-in holds the image. Refusals change no pixels, push no undo
+   * and leave the floating selection active. */
+  GlimsStatus  (*floating_command) (GlimsEngine *engine, GlimsImageID image, GlimsItemID expected,
+                                    uint32_t command, GlimsItemID *result, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
