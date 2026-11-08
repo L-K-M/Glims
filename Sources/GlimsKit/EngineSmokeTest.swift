@@ -108,11 +108,6 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (indexed wrapper)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
-            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "canvas-overlays" {
-                try exerciseCanvasOverlays(session, documents: documents)
-                print(failures == 0 ? "PASSED (canvas overlays)" : "FAILED: \(failures) failure(s)")
-                return failures == 0 ? 0 : 1
-            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-source" {
                 try exerciseLayerSourceCache(session, documents: documents)
                 print(failures == 0 ? "PASSED (layer source)" : "FAILED: \(failures) failure(s)")
@@ -169,13 +164,27 @@ enum EngineSmokeTest {
                 return failures == 0 ? 0 : 1
             }
 
+
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "canvas-overlays" {
+                try exerciseCanvasOverlays(session, documents: documents)
+                print(failures == 0 ? "PASSED (canvas overlays)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "indexed-controls" {
+                try exerciseIndexedControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (indexed controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "path-anchors" {
                 try exercisePathAnchors(session, documents: documents)
                 print(failures == 0 ? "PASSED (path anchors)" : "FAILED: \(failures) failure(s)")
+
                 return failures == 0 ? 0 : 1
             }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
                 check(false, "unknown engine smoke case: \(selected)")
+
                 return 1
             }
             try exerciseDocument(session, work: work, documents: documents)
@@ -210,6 +219,9 @@ enum EngineSmokeTest {
             try exercisePaletteControls(session, documents: documents)
             try exerciseGuidesControls(session, work: work, documents: documents)
             try exercisePixelRulers(session, work: work, documents: documents)
+
+
+            try exerciseIndexedControls(session, work: work, documents: documents)
 
             try exerciseCanvasOverlays(session, documents: documents)
             try exercisePendingEditScope(session, documents: documents)
@@ -8623,6 +8635,531 @@ enum EngineSmokeTest {
         while EngineActivity.shared.isBusy && Date() < deadline { spin(0.01) }
         check(accepted && canToggle && canvas.showsLayerBoundary,
               "view-only overlay switches remain available while engine work is busy")
+    }
+
+    /// Image ▸ Mode ▸ Indexed… end to end through the actual policy sheet:
+    /// the cached menu gates and checkmark (already indexed, busy, preview,
+    /// attached sheet, u8-non-linear precision, no groups), the sheet's own
+    /// palette/dither controls queried by accessibility label, Generated and
+    /// Custom conversions pinned against independent session pixel/mode/undo
+    /// oracles, Cancel and invalid custom input changing nothing, Dither
+    /// text consent (Back / Cancel mutate nothing, explicit confirm
+    /// rasterizes and undo restores), BUSY refusal, the exclusive count and
+    /// the global accepted-input drain, two documents keeping their captured
+    /// owner across a retarget, and late close safety while accepted work
+    /// remains counted and drained.
+    private static func exerciseIndexedControls(_ session: EngineSession, work: URL,
+                                                documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(15)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func ok(_ result: Result<Void, Error>?) -> Bool {
+            if case .success? = result { return true }
+            return false
+        }
+        func failed(_ result: Result<Void, Error>?) -> Bool {
+            if case .failure? = result { return true }
+            return false
+        }
+        func views<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
+            guard let root else { return [] }
+            return ((root as? T).map { [$0] } ?? []) + root.subviews.flatMap { views($0, as: type) }
+        }
+        func button(_ root: NSView?, _ label: String) -> NSButton? {
+            views(root, as: NSButton.self).first { $0.accessibilityLabel() == label }
+        }
+        // The form's own action row, scoped so the consent region's Cancel
+        // does not shadow it in label queries.
+        func formButton(_ root: NSView?, _ label: String) -> NSButton? {
+            guard let actions = views(root, as: NSStackView.self)
+                .first(where: { $0.accessibilityLabel() == "Indexed actions" }) else { return nil }
+            return views(actions, as: NSButton.self).first { $0.accessibilityLabel() == label }
+        }
+        func popup(_ root: NSView?, _ label: String) -> NSPopUpButton? {
+            views(root, as: NSPopUpButton.self).first { $0.accessibilityLabel() == label }
+        }
+        func field(_ root: NSView?, _ label: String) -> NSTextField? {
+            views(root, as: NSTextField.self).first { $0.isEditable && $0.accessibilityLabel() == label }
+        }
+        func checkbox(_ root: NSView?, _ label: String) -> NSButton? {
+            views(root, as: NSButton.self).first { $0.accessibilityLabel() == label }
+        }
+        func message(_ root: NSView?) -> NSTextField? {
+            views(root, as: NSTextField.self)
+                .first { !$0.isEditable && $0.accessibilityLabel() == "Indexed conversion message" }
+        }
+        func customText(_ root: NSView?) -> NSTextView? {
+            views(root, as: NSTextView.self).first { $0.accessibilityLabel() == "Custom palette colors" }
+        }
+        func confirmation(_ root: NSView?) -> NSBox? {
+            views(root, as: NSBox.self).first { $0.accessibilityLabel() == "Rasterization confirmation" }
+        }
+        func select(_ popup: NSPopUpButton?, _ title: String) {
+            popup?.selectItem(withTitle: title)
+            if let popup, let action = popup.action { NSApp.sendAction(action, to: popup.target, from: popup) }
+        }
+        func openSheet(_ controller: DocumentWindowController) -> NSWindow? {
+            controller.convertImageToIndexed(nil)
+            return controller.window?.attachedSheet
+        }
+        func indexedItem() -> NSMenuItem {
+            NSMenuItem(title: "Indexed…", action: #selector(DocumentWindowController.convertImageToIndexed(_:)),
+                       keyEquivalent: "")
+        }
+        // Independent session oracles — never mirrors of the cached state.
+        func nativeMode(_ image: Int32) -> EngineSession.ColorMode? { try? session.colorInfo(image).mode }
+        func nativeUndoCount(_ image: Int32) -> Int { (try? session.undoInfo(image).undoCount) ?? -1 }
+        func nativeLayerKind(_ image: Int32, _ id: Int32) -> EngineSession.LayerKind? {
+            try? session.layers(image).first(where: { $0.id == id })?.kind
+        }
+
+        // A red image gives the conversions pixels to judge.
+        let image = try session.newImage(width: 32, height: 24)
+        try session.select(.all, image: image)
+        try session.fill(image: image, at: .zero, mode: .selection, color: .red)
+        let document = try ImageDocument(session: session, image: image, name: "Indexed")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        defer {
+            if let sheet = controller.window?.attachedSheet { controller.window?.endSheet(sheet) }
+            documents.items.removeAll { $0 === document }
+            document.closeImageWhenDrained()
+            controller.window?.close()
+        }
+
+        // Cached menu gates: enabled and unchecked on an RGB u8 flat image.
+        var item = indexedItem()
+        check(controller.validateMenuItem(item) && item.state == .off && item.toolTip == nil,
+              "Indexed… validates enabled and unchecked on an RGB u8 flat image")
+
+        // A filter preview owns the image: the item is unavailable meanwhile.
+        controller.gaussianBlur(nil)
+        wait { controller.previewPanel != nil }
+        item = indexedItem()
+        check(!controller.validateMenuItem(item), "Indexed… is disabled while a filter preview is open")
+        controller.cancelOperation(nil)
+        wait { !document.filterPreviewIsOpen }
+
+        // The sheet opens through the actual action and disables the item.
+        var sheet = openSheet(controller)
+        check(sheet != nil && controller.indexedSheet != nil, "Indexed… opens the policy sheet on its window")
+        item = indexedItem()
+        check(!controller.validateMenuItem(item), "Indexed… is disabled while its sheet is attached")
+
+        // The palette and dither popups carry the form's choices; every
+        // control is reachable by its accessibility label.
+        let content = sheet?.contentView
+        check(popup(content, "Palette")?.itemTitles == ["Generated", "Web", "Monochrome", "Custom"],
+              "the Palette popup offers Generated/Web/Monochrome/Custom")
+        check(popup(content, "Dithering")?.itemTitles == ["None", "FS", "Reduced Bleeding", "Ordered"],
+              "the Dithering popup offers None/FS/Reduced Bleeding/Ordered")
+        check(field(content, "Maximum colors") != nil && customText(content) != nil
+                && checkbox(content, "Remove unused colors") != nil
+                && checkbox(content, "Dither transparency") != nil && checkbox(content, "Dither text") != nil
+                && formButton(content, "Convert") != nil && formButton(content, "Cancel") != nil,
+              "every form control is reachable by its accessibility label")
+        check(checkbox(content, "Remove unused colors")?.isEnabled == false
+                && field(content, "Maximum colors")?.isEnabled == true
+                && customText(content)?.isEditable == false,
+              "Generated enables only the maximum-colors field")
+        select(popup(content, "Palette"), "Web")
+        check(checkbox(content, "Remove unused colors")?.isEnabled == true
+                && field(content, "Maximum colors")?.isEnabled == false,
+              "Web enables Remove unused colors and disables the color count")
+        select(popup(content, "Palette"), "Custom")
+        check(customText(content)?.isEditable == true && checkbox(content, "Remove unused colors")?.isEnabled == true,
+              "Custom enables the palette text and Remove unused colors")
+        select(popup(content, "Palette"), "Generated")
+
+        // Cancel queues nothing and mutates nothing.
+        var undoBefore = document.undoInfo.undoCount
+        formButton(content, "Cancel")?.performClick(nil)
+        spin()
+        check(controller.window?.attachedSheet == nil && controller.indexedSheet == nil,
+              "Cancel closes the sheet")
+        check(document.undoInfo.undoCount == undoBefore && document.pendingWork == 0
+                && document.colorInfo.mode == .rgb,
+              "Cancel changes nothing")
+
+        // An invalid custom palette: inline error, no mutation, no close.
+        sheet = openSheet(controller)
+        let invalidContent = sheet?.contentView
+        select(popup(invalidContent, "Palette"), "Custom")
+        customText(invalidContent)?.string = "#FFF\n#GGGGGG"
+        formButton(invalidContent, "Convert")?.performClick(nil)
+        spin()
+        check(controller.window?.attachedSheet === sheet,
+              "an invalid custom palette keeps the sheet open")
+        check(!(message(invalidContent)?.stringValue ?? "").isEmpty,
+              "an invalid custom palette shows an inline error")
+        check(document.undoInfo.undoCount == undoBefore && document.pendingWork == 0
+                && document.colorInfo.mode == .rgb,
+              "an invalid custom palette mutates nothing")
+
+        // A valid custom palette (blank line allowed): converts, pins the
+        // native mode, pixels and one undo step, then closes the sheet.
+        customText(invalidContent)?.string = "#FF0000\n\n#00FF00"
+        var depth = try session.undoInfo(image).undoCount
+        formButton(invalidContent, "Convert")?.performClick(nil)
+        wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(nativeMode(image) == .indexed,
+              "the custom conversion makes the engine image indexed (session oracle)")
+        check(document.colorInfo.mode == .indexed, "the reload caches the indexed mode")
+        check(nativeUndoCount(image) == depth + 1, "the custom conversion is one undo step")
+        check(pixel(session, image, x: 8, y: 8) == [255, 0, 0, 255],
+              "the red pixel quantizes to the custom #FF0000 entry (\(pixel(session, image, x: 8, y: 8) ?? []))")
+        check(controller.window?.attachedSheet == nil && controller.indexedSheet == nil,
+              "a successful conversion closes the sheet")
+        item = indexedItem()
+        check(!controller.validateMenuItem(item) && item.state == .on,
+              "the item is checked and disabled once the image is indexed")
+        document.undo()
+        wait { document.pendingWork == 0 }
+        spin()
+        check(nativeMode(image) == .rgb
+                && pixel(session, image, x: 8, y: 8) == [255, 0, 0, 255],
+              "undo restores RGB and the original pixels")
+        check(controller.validateMenuItem(indexedItem()) , "the item validates again after undo")
+
+        // Reject malformed numeric text instead of silently parsing a prefix.
+        sheet = openSheet(controller)
+        let malformedContent = sheet?.contentView
+        depth = nativeUndoCount(image)
+        field(malformedContent, "Maximum colors")?.stringValue = "12px"
+        formButton(malformedContent, "Convert")?.performClick(nil)
+        wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(nativeMode(image) == .rgb && nativeUndoCount(image) == depth
+                && controller.window?.attachedSheet === sheet
+                && !(message(malformedContent)?.stringValue ?? "").isEmpty,
+              "a malformed maximum-color count is refused visibly without conversion")
+        // Keep subsequent checks independent when this regression fails.
+        if nativeMode(image) == .indexed {
+            document.undo()
+            wait { document.pendingWork == 0 }
+            spin()
+        } else {
+            formButton(malformedContent, "Cancel")?.performClick(nil)
+            spin()
+        }
+
+        // Generated with a checked maximum color count.
+        sheet = openSheet(controller)
+        let genContent = sheet?.contentView
+        field(genContent, "Maximum colors")?.stringValue = "16"
+        depth = try session.undoInfo(image).undoCount
+        formButton(genContent, "Convert")?.performClick(nil)
+        wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(nativeMode(image) == .indexed
+                && nativeUndoCount(image) == depth + 1
+                && pixel(session, image, x: 8, y: 8) == [255, 0, 0, 255],
+              "the generated conversion pins native mode, pixels and one undo step")
+        check(controller.window?.attachedSheet == nil, "the generated conversion closes the sheet")
+        document.undo()
+        wait { document.pendingWork == 0 }
+        spin()
+        check(nativeMode(image) == .rgb, "undo restores RGB after the generated conversion")
+
+        // BUSY: a typed call refuses without queueing, and Apply in an open
+        // sheet shows the refusal inline and keeps the sheet open.
+        sheet = openSheet(controller)
+        let busyContent = sheet?.contentView
+        let gate = DispatchSemaphore(value: 0)
+        let held = EngineActivity.shared.perform(label: "Holding the engine", work: { gate.wait() },
+                                                 completion: {})
+        check(held, "the controlled admission pause takes the engine gate")
+        item = indexedItem()
+        check(!controller.validateMenuItem(item), "Indexed… is disabled while the engine is busy")
+        var busySettings = EngineSession.IndexedSettings()
+        busySettings.palette = .generated
+        var busyResult: Result<Void, Error>?
+        document.convertToIndexed(settings: busySettings) { busyResult = $0 }
+        spin()
+        check(failed(busyResult) && document.pendingWork == 0 && document.colorInfo.mode == .rgb,
+              "a typed conversion refuses while the engine is busy without queueing (\(busyResult as Any))")
+        // Dispatch a stale action directly; a disabled button correctly
+        // ignores performClick and cannot exercise the action's guard.
+        if let convert = formButton(busyContent, "Convert"), let action = convert.action {
+            NSApp.sendAction(action, to: convert.target, from: convert)
+        }
+        spin()
+        check(!(message(busyContent)?.stringValue ?? "").isEmpty
+                && controller.window?.attachedSheet === sheet
+                && formButton(busyContent, "Convert")?.isEnabled == false,
+              "Apply while busy shows an inline error, disables Convert and keeps the sheet open")
+        check(document.colorInfo.mode == .rgb && document.undoInfo.undoCount == depth,
+              "the busy Apply mutates nothing")
+        formButton(busyContent, "Cancel")?.performClick(nil)
+        spin()
+        gate.signal()
+        wait { !EngineActivity.shared.isBusy }
+
+        // The exclusive count and the global accepted-input drain: another
+        // document's accepted input lands first and its later edits refuse.
+        let otherImage = try session.newImage(width: 16, height: 16)
+        let other = try ImageDocument(session: session, image: otherImage, name: "Indexed other")
+        documents.items.append(other)
+        defer {
+            documents.items.removeAll { $0 === other }
+            other.closeImageWhenDrained()
+        }
+        let inputGate = DispatchSemaphore(value: 0)
+        other.inputQueue.async { inputGate.wait() }
+        other.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
+        other.endStroke()
+        sheet = openSheet(controller)
+        let drainContent = sheet?.contentView
+        let drainSheet = controller.indexedSheet
+        depth = try session.undoInfo(image).undoCount
+        formButton(drainContent, "Convert")?.performClick(nil)
+        check(document.pendingWork > 0 && EngineActivity.shared.isBusy,
+              "the conversion is counted while accepted input drains")
+        other.beginStroke(at: .init(x: 4, y: 4, pressure: 1))
+        check(!other.strokeIsActive, "the other document's edits refuse behind the conversion gate")
+        if other.strokeIsActive { other.endStroke() }
+        inputGate.signal()
+        wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(ok(drainSheet?.lastResult) && nativeMode(image) == .indexed
+                && nativeUndoCount(image) == depth + 1,
+              "the conversion completes behind the other document's accepted input as one undo step")
+        check((pixel(session, otherImage, x: 8, y: 8)?[0] ?? 255) < 128,
+              "the accepted stroke in the other document survived the drain")
+        document.undo()
+        wait { document.pendingWork == 0 }
+        spin()
+        check(nativeMode(image) == .rgb, "undo restores RGB after the drained conversion")
+
+        // Editable text with Dither text off: converts and stays editable.
+        let textImage = try session.newImage(width: 96, height: 64)
+        var textSettings = EngineSession.TextSettings()
+        textSettings.size = 24
+        let textID = try session.addTextLayer(image: textImage, text: "Editable",
+                                             settings: textSettings, at: CGPoint(x: 3, y: 3))
+        let textDocument = try ImageDocument(session: session, image: textImage, name: "Indexed text")
+        documents.items.append(textDocument)
+        let textController = DocumentWindowController(document: textDocument)
+        textController.showWindow(nil)
+        defer {
+            if let open = textController.window?.attachedSheet { textController.window?.endSheet(open) }
+            documents.items.removeAll { $0 === textDocument }
+            textDocument.closeImageWhenDrained()
+            textController.window?.close()
+        }
+        func textIsEditable() -> Bool {
+            (try? session.layers(textImage).first(where: { $0.id == textID })?.kind == .text) == true
+                && (try? session.textLayer(image: textImage, layer: textID).text) == "Editable"
+        }
+        sheet = openSheet(textController)
+        var textContent = sheet?.contentView
+        check(checkbox(textContent, "Dither text")?.state == .off, "Dither text is off by default")
+        var textDepth = try session.undoInfo(textImage).undoCount
+        formButton(textContent, "Convert")?.performClick(nil)
+        wait { textDocument.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(nativeMode(textImage) == .indexed && textIsEditable()
+                && nativeUndoCount(textImage) == textDepth + 1,
+              "with Dither text off the text layer stays editable after one undo-step conversion")
+        textDocument.undo()
+        wait { textDocument.pendingWork == 0 }
+        spin()
+        check(nativeMode(textImage) == .rgb && textIsEditable(),
+              "undo restores RGB with the editable text")
+
+        // Dither text on: the rasterization refusal opens the inline
+        // confirmation region in the SAME sheet; nothing mutates yet.
+        sheet = openSheet(textController)
+        textContent = sheet?.contentView
+        checkbox(textContent, "Dither text")?.state = .on
+        formButton(textContent, "Convert")?.performClick(nil)
+        wait { textDocument.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        var consentBox = confirmation(textContent)
+        check(consentBox != nil && consentBox?.isHidden == false,
+              "a rasterization refusal opens the inline confirmation region in the same sheet")
+        check(button(consentBox, "Rasterize and Convert") != nil && button(consentBox, "Back") != nil
+                && button(consentBox, "Cancel") != nil,
+              "the confirmation offers Rasterize and Convert / Back / Cancel")
+        textContent?.layoutSubtreeIfNeeded()
+        let visibleConsent = button(confirmation(textContent)?.contentView, "Rasterize and Convert")
+        check(visibleConsent?.isHiddenOrHasHiddenAncestor == false
+                && visibleConsent?.visibleRect.isEmpty == false,
+              "the rasterization confirmation button occupies visible sheet space")
+        check(nativeMode(textImage) == .rgb && textIsEditable()
+                && nativeUndoCount(textImage) == textDepth,
+              "the consent step mutates nothing")
+        check(field(textContent, "Maximum colors")?.isEnabled == false
+                && formButton(textContent, "Cancel")?.isEnabled == false,
+              "the fields stay disabled and the form Cancel is not offered while consent is pending")
+
+        // Back returns to the form; still no mutation.
+        button(consentBox, "Back")?.performClick(nil)
+        spin()
+        check(confirmation(textContent)?.isHidden == true && field(textContent, "Maximum colors")?.isEnabled == true,
+              "Back returns to the editable form")
+        check(nativeMode(textImage) == .rgb && textIsEditable(),
+              "Back mutates nothing")
+
+        // Consent again, then Cancel: the sheet closes with no mutation.
+        formButton(textContent, "Convert")?.performClick(nil)
+        wait { textDocument.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        consentBox = confirmation(textContent)
+        button(consentBox, "Cancel")?.performClick(nil)
+        spin()
+        check(textController.window?.attachedSheet == nil, "consent Cancel closes the sheet")
+        check(nativeMode(textImage) == .rgb && textIsEditable()
+                && nativeUndoCount(textImage) == textDepth && textDocument.pendingWork == 0,
+              "consent Cancel mutates nothing")
+
+        // Explicit confirm: allowRasterize on the captured document and the
+        // captured settings; accepted work disables the controls and offers
+        // no Cancel; undo restores the editable text.
+        sheet = openSheet(textController)
+        textContent = sheet?.contentView
+        checkbox(textContent, "Dither text")?.state = .on
+        formButton(textContent, "Convert")?.performClick(nil)
+        wait { textDocument.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        consentBox = confirmation(textContent)
+        textDocument.inputQueue.async { usleep(400_000) }
+        button(consentBox, "Rasterize and Convert")?.performClick(nil)
+        check(textDocument.pendingWork > 0
+                && field(textContent, "Maximum colors")?.isEnabled == false
+                && formButton(textContent, "Cancel")?.isEnabled == false
+                && confirmation(textContent)?.isHidden == true,
+              "accepted work disables the mutating controls and offers no Cancel")
+        wait { textDocument.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(nativeMode(textImage) == .indexed
+                && nativeLayerKind(textImage, textID) == .pixel
+                && nativeUndoCount(textImage) == textDepth + 1,
+              "the confirmed conversion rasterizes the text as one undo step (session oracles)")
+        check(textController.window?.attachedSheet == nil, "success after consent closes the sheet")
+        textDocument.undo()
+        wait { textDocument.pendingWork == 0 }
+        spin()
+        check(nativeMode(textImage) == .rgb && textIsEditable(),
+              "undo restores RGB and the editable text after the consented conversion")
+
+        // Two documents keep their captured owner across a retarget: B
+        // frontmost, A's sheet still converts A only.
+        let imageA = try session.newImage(width: 24, height: 16)
+        let imageB = try session.newImage(width: 24, height: 16)
+        try session.select(.all, image: imageA)
+        try session.fill(image: imageA, at: .zero, mode: .selection, color: .blue)
+        try session.select(.all, image: imageB)
+        try session.fill(image: imageB, at: .zero, mode: .selection, color: .red)
+        let docA = try ImageDocument(session: session, image: imageA, name: "Indexed A")
+        let docB = try ImageDocument(session: session, image: imageB, name: "Indexed B")
+        documents.items += [docA, docB]
+        let controllerA = DocumentWindowController(document: docA)
+        let controllerB = DocumentWindowController(document: docB)
+        controllerA.showWindow(nil)
+        controllerB.showWindow(nil)
+        defer {
+            for (c, d) in [(controllerA, docA), (controllerB, docB)] {
+                if let open = c.window?.attachedSheet { c.window?.endSheet(open) }
+                c.window?.close()
+                documents.items.removeAll { $0 === d }
+                d.closeImageWhenDrained()
+            }
+        }
+        let sheetA = openSheet(controllerA)
+        let sheetB = openSheet(controllerB)
+        check(sheetA != nil && sheetB != nil && sheetA !== sheetB && controllerA.indexedSheet !== controllerB.indexedSheet,
+              "two documents open independent Indexed sheets owned by their windows")
+        controllerB.window?.orderFront(nil)
+        spin(0.05)
+        formButton(sheetA?.contentView, "Convert")?.performClick(nil)
+        wait { docA.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(nativeMode(imageA) == .indexed && nativeMode(imageB) == .rgb,
+              "A's sheet converts its captured document A while frontmost B stays RGB")
+        let bDepth = docB.undoInfo.undoCount
+        formButton(sheetB?.contentView, "Cancel")?.performClick(nil)
+        spin()
+        check(nativeMode(imageB) == .rgb && docB.pendingWork == 0
+                && docB.undoInfo.undoCount == bDepth,
+              "B's cancelled sheet changes nothing")
+
+        // Native eligibility gates from cached state: u16 precision and a
+        // layer group disable the item and say why; the action refuses too.
+        let precImage = try session.newImage(width: 16, height: 16)
+        try session.convertPrecision(precImage, component: .u16, trc: .nonlinear)
+        let precDocument = try ImageDocument(session: session, image: precImage, name: "Indexed u16")
+        documents.items.append(precDocument)
+        let precController = DocumentWindowController(document: precDocument)
+        precController.showWindow(nil)
+        defer {
+            documents.items.removeAll { $0 === precDocument }
+            precDocument.closeImageWhenDrained()
+            precController.window?.close()
+        }
+        item = indexedItem()
+        check(!precController.validateMenuItem(item) && item.toolTip?.contains("8-bit non-linear") == true,
+              "Indexed… is disabled with a precision explanation on a u16 image")
+        var precErrors: [String] = []
+        let oldPrecError = precDocument.onError
+        precDocument.onError = { precErrors.append($0); oldPrecError?($0) }
+        defer { precDocument.onError = oldPrecError }
+        precController.convertImageToIndexed(nil)
+        spin()
+        check(precController.window?.attachedSheet == nil && !precErrors.isEmpty
+                && (try? session.colorInfo(precImage).mode) == .rgb,
+              "the action itself refuses a u16 image without opening the sheet or mutating")
+        precDocument.onError = oldPrecError
+
+        let groupImage = try session.newImage(width: 16, height: 16)
+        _ = try session.createGroup(image: groupImage, index: 0)
+        let groupDocument = try ImageDocument(session: session, image: groupImage, name: "Indexed group")
+        documents.items.append(groupDocument)
+        let groupController = DocumentWindowController(document: groupDocument)
+        groupController.showWindow(nil)
+        defer {
+            documents.items.removeAll { $0 === groupDocument }
+            groupDocument.closeImageWhenDrained()
+            groupController.window?.close()
+        }
+        item = indexedItem()
+        check(!groupController.validateMenuItem(item) && item.toolTip?.contains("group") == true,
+              "Indexed… is disabled with a group explanation on a grouped image")
+
+        // Late close safety: accepted work stays counted while the input
+        // drains; ending the sheet invalidates the controller, the late
+        // completion still lands exactly once, and the image is destroyed
+        // only after the drain.
+        let closingImage = try session.newImage(width: 16, height: 16)
+        let closing = try ImageDocument(session: session, image: closingImage, name: "Indexed closing")
+        documents.items.append(closing)
+        let closingController = DocumentWindowController(document: closing)
+        closingController.showWindow(nil)
+        defer {
+            documents.items.removeAll { $0 === closing }
+            closing.closeImageWhenDrained()
+            closingController.window?.close()
+        }
+        closing.inputQueue.async { usleep(400_000) }
+        let closingSheet = openSheet(closingController)
+        let closingSheetRef = closingController.indexedSheet
+        formButton(closingSheet?.contentView, "Convert")?.performClick(nil)
+        wait { closing.pendingWork > 0 && EngineActivity.shared.isBusy }
+        check(closing.pendingWork > 0, "the queued conversion is counted behind the closing document's input drain")
+        var closed = false
+        closing.closeImageWhenDrained { closed = true }
+        if let closingSheet { closingController.window?.endSheet(closingSheet) }
+        spin()
+        check(closingController.indexedSheet == nil, "ending the sheet releases the window's reference")
+        wait { closed && closing.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        spin()
+        check(closed && (try? session.info(closingImage)) == nil,
+              "the close destroys the image only after the accepted conversion drained")
+        check(ok(closingSheetRef?.lastResult),
+              "the late completion still lands exactly once after invalidation (\(closingSheetRef?.lastResult as Any))")
     }
 
     private static func exerciseLayerSourceCache(_ session: EngineSession, documents: DocumentList) throws {
