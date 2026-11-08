@@ -271,11 +271,11 @@ final class PaintToolPresetTests: XCTestCase {
             let store = PaintToolPresetStore(defaults: defaults)
             // Accepted boundaries (UI sliders 1...500 px and 0...100%, engine size > 0).
             _ = try store.create(tool: .paintbrush, name: "edges",
-                                 settings: Self.settings(size: 500, opacity: 0, hardness: 0,
+                                 settings: Self.settings(size: 10_000, opacity: 0, hardness: 0,
                                                          rate: 0, flow: 100, exposure: 100))
-            _ = try store.create(tool: .pencil, name: "small", settings: Self.settings(size: 0.5, opacity: 1, hardness: 1))
+            _ = try store.create(tool: .pencil, name: "small", settings: Self.settings(size: 1, opacity: 1, hardness: 1))
             // Rejected sizes.
-            for bad in [0.0, -3.0, 500.5, .nan, .infinity] {
+            for bad in [0.0, 0.5, -3.0, 10_000.5, .nan, .infinity] {
                 assertPresetError({ try store.create(tool: .airbrush, name: "s\(bad)", settings: Self.settings(size: bad)) }) {
                     switch $0 {
                     case .sizeOutOfRange(let v): return v == bad && bad.isFinite
@@ -356,10 +356,10 @@ final class PaintToolPresetTests: XCTestCase {
                 return false
             }
             // Out-of-range size in stored bytes.
-            let badSize = Data(#"{"schemaVersion":1,"presets":[{"id":\#(id),"tool":"paintbrush","name":"x","settings":{"size":9999,"opacity":1,"pressureSize":true,"tones":"midtones","antiErase":false}}]}"#.utf8)
+            let badSize = Data(#"{"schemaVersion":1,"presets":[{"id":\#(id),"tool":"paintbrush","name":"x","settings":{"size":10001,"opacity":1,"pressureSize":true,"tones":"midtones","antiErase":false}}]}"#.utf8)
             defaults.set(badSize, forKey: PaintToolPresetStore.presetsKey)
             assertPresetError({ _ = try store.load() }) {
-                if case .sizeOutOfRange(let v) = $0 { return v == 9999 }
+                if case .sizeOutOfRange(let v) = $0 { return v == 10001 }
                 return false
             }
             XCTAssertEqual(store.storedData, badSize, "rejected documents are never rewritten")
@@ -490,7 +490,7 @@ final class PaintToolPresetTests: XCTestCase {
             let store = PaintToolPresetStore(defaults: defaults)
             _ = try store.create(tool: .paintbrush, name: "A", settings: Self.settings())
             XCTAssertNotNil(store.storedData)
-            store.reset()
+            try store.reset()
             XCTAssertNil(store.storedData)
             XCTAssertEqual(try store.load(), [])
         }
@@ -531,53 +531,66 @@ final class PaintToolPresetTests: XCTestCase {
         }
     }
 
-    func testUnknownFieldsSurviveRewritesUnderTheSameSchema() throws {
+    func testUnreadableStorageAndDuplicateIdentifiersStayUntouched() throws {
         try withDefaults { defaults in
-            let seed = Data(#"""
-            {
-                "schemaVersion": 1,
-                "futureTopLevel": {"flag": true, "list": [1, "two", null]},
-                "presets": [{
-                    "id": "3F2504E0-4F89-41D3-9A0C-0305E82C3301",
-                    "tool": "paintbrush",
-                    "name": "Old",
-                    "futurePresetField": {"keep": "me"},
-                    "settings": {"size": 10, "opacity": 1, "pressureSize": true,
-                                 "tones": "midtones", "antiErase": false}
-                }]
-            }
-            """#.utf8)
-            defaults.set(seed, forKey: PaintToolPresetStore.presetsKey)
             let store = PaintToolPresetStore(defaults: defaults)
+            defaults.set("unexpected property-list value", forKey: PaintToolPresetStore.presetsKey)
+            XCTAssertThrowsError(try store.load())
+            XCTAssertThrowsError(try store.create(tool: .paintbrush, name: "new", settings: Self.settings()))
+            XCTAssertEqual(defaults.string(forKey: PaintToolPresetStore.presetsKey), "unexpected property-list value")
 
-            let loaded = try store.load()
-            XCTAssertEqual(loaded.count, 1)
-            XCTAssertEqual(loaded[0].name, "Old")
-            XCTAssertEqual(loaded[0].unknownFields["futurePresetField"], .object(["keep": .string("me")]),
-                           "a preset keeps the keys this schema does not know")
+            let preset = try PaintToolPreset(tool: .paintbrush, name: "one", settings: Self.settings())
+            let encoded = String(decoding: try JSONEncoder().encode(preset), as: UTF8.self)
+            let duplicate = Data("{\"schemaVersion\":1,\"presets\":[\(encoded),\(encoded)]}".utf8)
+            defaults.set(duplicate, forKey: PaintToolPresetStore.presetsKey)
+            XCTAssertThrowsError(try store.load())
+            XCTAssertThrowsError(try store.rename(id: preset.id, to: "renamed"))
+            XCTAssertEqual(store.storedData, duplicate)
+            let second = try PaintToolPreset(tool: .paintbrush, name: "one", settings: Self.settings())
+            let secondJSON = String(decoding: try JSONEncoder().encode(second), as: UTF8.self)
+            let duplicateName = Data("{\"schemaVersion\":1,\"presets\":[\(encoded),\(secondJSON)]}".utf8)
+            defaults.set(duplicateName, forKey: PaintToolPresetStore.presetsKey)
+            XCTAssertThrowsError(try store.load())
+            XCTAssertThrowsError(try store.create(tool: .eraser, name: "new", settings: Self.settings()))
+            XCTAssertEqual(store.storedData, duplicateName)
 
-            // A create rewrites the document; unknown fields must survive.
-            _ = try store.create(tool: .eraser, name: "New", settings: Self.settings())
-            var doc = try XCTUnwrap(try jsonObject(try XCTUnwrap(store.storedData)) as? [String: Any])
-            let top = try XCTUnwrap(doc["futureTopLevel"] as? [String: Any])
-            XCTAssertEqual(top["flag"] as? Bool, true)
-            let list = try XCTUnwrap(top["list"] as? [Any])
-            XCTAssertEqual(list.count, 3, "the unknown array keeps every element verbatim")
-            XCTAssertEqual(list[0] as? Int, 1)
-            XCTAssertEqual(list[1] as? String, "two")
-            XCTAssertTrue(list[2] is NSNull)
-            let presets = try XCTUnwrap(doc["presets"] as? [[String: Any]])
-            XCTAssertEqual(presets.count, 2)
-            XCTAssertEqual(presets[0]["futurePresetField"] as? [String: String], ["keep": "me"])
-            XCTAssertNil(presets[1]["futurePresetField"])
-
-            // A rename of the preset carrying the unknown field keeps it.
-            try store.rename(id: loaded[0].id, to: "Old renamed")
-            doc = try XCTUnwrap(try jsonObject(try XCTUnwrap(store.storedData)) as? [String: Any])
-            let renamed = try XCTUnwrap(try XCTUnwrap(doc["presets"] as? [[String: Any]]).first)
-            XCTAssertEqual(renamed["name"] as? String, "Old renamed")
-            XCTAssertEqual(renamed["futurePresetField"] as? [String: String], ["keep": "me"])
-            XCTAssertNotNil(doc["futureTopLevel"])
+            let corrupt = Data("not JSON".utf8)
+            defaults.set(corrupt, forKey: PaintToolPresetStore.presetsKey)
+            XCTAssertThrowsError(try store.reset())
+            XCTAssertEqual(store.storedData, corrupt)
         }
     }
+
+    func testUnknownNestedFieldsCannotBeErasedByMutation() throws {
+        try withDefaults { defaults in
+            let store = PaintToolPresetStore(defaults: defaults)
+            let preset = try PaintToolPreset(tool: .paintbrush, name: "one", settings: Self.settings(),
+                                             brushResource: Self.brushResource("known"),
+                                             foregroundColor: Self.color(red: 0.4))
+            let value = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(preset)) as? [String: Any])
+            for target in ["preset", "settings", "brushResource", "identity", "foregroundColor", "envelope"] {
+                var row = value
+                var envelope: [String: Any] = ["schemaVersion": 1]
+                let future: [String: Any] = ["futureField": NSNumber(value: Int64(9_007_199_254_740_993))]
+                if target == "preset" { row.merge(future) { _, new in new } }
+                else if target == "identity" {
+                    var resource = try XCTUnwrap(row["brushResource"] as? [String: Any])
+                    var identity = try XCTUnwrap(resource["identity"] as? [String: Any])
+                    identity.merge(future) { _, new in new }
+                    resource["identity"] = identity; row["brushResource"] = resource
+                } else if target == "envelope" { envelope.merge(future) { _, new in new } }
+                else {
+                    var nested = try XCTUnwrap(row[target] as? [String: Any])
+                    nested.merge(future) { _, new in new }; row[target] = nested
+                }
+                envelope["presets"] = [row]
+                let data = try JSONSerialization.data(withJSONObject: envelope, options: .sortedKeys)
+                defaults.set(data, forKey: PaintToolPresetStore.presetsKey)
+                XCTAssertThrowsError(try store.load(), target)
+                XCTAssertThrowsError(try store.rename(id: preset.id, to: "renamed"), target)
+                XCTAssertEqual(store.storedData, data, target)
+            }
+        }
+    }
+
 }

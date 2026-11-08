@@ -60,8 +60,7 @@ final class PaintToolPresetStore {
             let old = presets[index]
             presets[index] = try PaintToolPreset(id: old.id, tool: old.tool, name: name,
                                                  settings: old.settings, brushResource: old.brushResource,
-                                                 foregroundColor: old.foregroundColor,
-                                                 unknownFields: old.unknownFields)
+                                                 foregroundColor: old.foregroundColor)
         }
     }
 
@@ -75,8 +74,7 @@ final class PaintToolPresetStore {
             let old = presets[index]
             presets[index] = try PaintToolPreset(id: old.id, tool: old.tool, name: old.name,
                                                  settings: settings, brushResource: brushResource,
-                                                 foregroundColor: foregroundColor,
-                                                 unknownFields: old.unknownFields)
+                                                 foregroundColor: foregroundColor)
         }
     }
 
@@ -88,7 +86,8 @@ final class PaintToolPresetStore {
     }
 
     /// Removes every stored preset.
-    func reset() {
+    func reset() throws {
+        _ = try document()
         defaults.removeObject(forKey: Self.presetsKey)
     }
 
@@ -100,12 +99,12 @@ final class PaintToolPresetStore {
         let current = try document()
         var presets = current.presets
         try change(&presets)
-        try Self.validateUniqueNames(presets)
+        try Self.validateCollection(presets)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data: Data
         do {
-            data = try encoder.encode(PresetDocument(presets: presets, unknownFields: current.unknownFields))
+            data = try encoder.encode(PresetDocument(presets: presets))
         } catch {
             throw PaintToolPresetError.malformed("the preset document could not be encoded: \(error)")
         }
@@ -116,11 +115,16 @@ final class PaintToolPresetStore {
     /// present bytes must be a readable document of the supported schema
     /// version, otherwise the error says why and nothing is written.
     private func document() throws -> PresetDocument {
-        guard let data = defaults.data(forKey: Self.presetsKey) else {
-            return PresetDocument(presets: [], unknownFields: [:])
+        guard let stored = defaults.object(forKey: Self.presetsKey) else {
+            return PresetDocument(presets: [])
+        }
+        guard let data = stored as? Data else {
+            throw PaintToolPresetError.malformed("the stored value is not a preset data document")
         }
         do {
-            return try JSONDecoder().decode(PresetDocument.self, from: data)
+            let document = try JSONDecoder().decode(PresetDocument.self, from: data)
+            try Self.validateCollection(document.presets)
+            return document
         } catch let error as PaintToolPresetError {
             throw error
         } catch {
@@ -130,15 +134,19 @@ final class PaintToolPresetStore {
 
     /// Names must be unique within a tool; exact match on the stored
     /// (trimmed) name.
-    private static func validateUniqueNames(_ presets: [PaintToolPreset]) throws {
-        var seen: [(name: String, tool: ToolID)] = []
+    private static func validateCollection(_ presets: [PaintToolPreset]) throws {
+        var ids = Set<UUID>()
+        var names: [ToolID: Set<String>] = [:]
         for preset in presets {
-            if seen.contains(where: { $0.name == preset.name && $0.tool == preset.tool }) {
+            guard ids.insert(preset.id).inserted else {
+                throw PaintToolPresetError.malformed("duplicate preset identifier \(preset.id)")
+            }
+            guard names[preset.tool, default: []].insert(preset.name).inserted else {
                 throw PaintToolPresetError.duplicateName(preset.name, tool: preset.tool)
             }
-            seen.append((preset.name, preset.tool))
         }
     }
+
 }
 
 private extension Array where Element == PaintToolPreset {
@@ -150,52 +158,28 @@ private extension Array where Element == PaintToolPreset {
     }
 }
 
-/// The persisted envelope: a schema version plus the preset array plus the
-/// top-level keys this version does not know, kept verbatim so a rewrite
-/// under the same schema never erases them.
+/// Strict schema-one envelope. Unknown fields require a compatible reader;
+/// every failure leaves the original bytes untouched.
 private struct PresetDocument: Codable {
-    var presets: [PaintToolPreset]
-    var unknownFields: [String: JSONValue]
+    let schemaVersion: Int
+    let presets: [PaintToolPreset]
 
-    static let schemaVersionKey = "schemaVersion"
-    static let presetsKey = "presets"
-
-    init(presets: [PaintToolPreset], unknownFields: [String: JSONValue]) {
+    init(presets: [PaintToolPreset]) {
+        self.schemaVersion = PaintToolPresetStore.schemaVersion
         self.presets = presets
-        self.unknownFields = unknownFields
     }
+
+    enum CodingKeys: String, CodingKey { case schemaVersion, presets }
 
     init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: AnyCodingKey.self)
-        let versionKey = AnyCodingKey(stringValue: Self.schemaVersionKey)!
-        guard container.contains(versionKey) else {
-            throw PaintToolPresetError.missingSchemaVersion
-        }
-        let version = try container.decode(Int.self, forKey: versionKey)
-        guard version == PaintToolPresetStore.schemaVersion else {
-            throw PaintToolPresetError.unsupportedSchemaVersion(found: version,
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.schemaVersion) else { throw PaintToolPresetError.missingSchemaVersion }
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        guard schemaVersion == PaintToolPresetStore.schemaVersion else {
+            throw PaintToolPresetError.unsupportedSchemaVersion(found: schemaVersion,
                                                                 supported: PaintToolPresetStore.schemaVersion)
         }
-        let presetsKey = AnyCodingKey(stringValue: Self.presetsKey)!
-        guard container.contains(presetsKey) else {
-            throw PaintToolPresetError.malformed("the preset document has no \"\(Self.presetsKey)\" array")
-        }
-        presets = try container.decode([PaintToolPreset].self, forKey: presetsKey)
-        var unknown: [String: JSONValue] = [:]
-        for key in container.allKeys
-            where key.stringValue != Self.schemaVersionKey && key.stringValue != Self.presetsKey {
-            unknown[key.stringValue] = try container.decode(JSONValue.self, forKey: key)
-        }
-        unknownFields = unknown
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: AnyCodingKey.self)
-        try container.encode(PaintToolPresetStore.schemaVersion, forKey: AnyCodingKey(stringValue: Self.schemaVersionKey)!)
-        try container.encode(presets, forKey: AnyCodingKey(stringValue: Self.presetsKey)!)
-        for (key, value) in unknownFields
-            where key != Self.schemaVersionKey && key != Self.presetsKey {
-            try container.encode(value, forKey: AnyCodingKey(stringValue: key)!)
-        }
+        try rejectUnknownPresetKeys(decoder, allowed: ["schemaVersion", "presets"])
+        presets = try container.decode([PaintToolPreset].self, forKey: .presets)
     }
 }

@@ -104,33 +104,16 @@ struct PaintToolPreset: Identifiable, Equatable {
     /// The optional captured foreground color.
     let foregroundColor: SRGBColor?
 
-    /// Keys this schema version does not know, decoded verbatim and encoded
-    /// back, so a rewrite under the same schema never erases fields a future
-    /// version added (docs/paint-tool-presets.md). Persistence-only: not
-    /// part of equality and never set by the value initializer.
-    private(set) var unknownFields: [String: JSONValue] = [:]
-
-    /// Creates a preset, validating everything. `name` is stored trimmed.
+    /// Creates a validated immutable snapshot. Schema extensions require
+    /// a new version; this version never rewrites fields it cannot read.
     init(id: UUID = UUID(), tool: ToolID, name: String, settings: Settings,
          brushResource: BrushResource? = nil, foregroundColor: SRGBColor? = nil) throws {
-        try self.init(id: id, tool: tool, name: name, settings: settings,
-                      brushResource: brushResource, foregroundColor: foregroundColor,
-                      unknownFields: [:])
-    }
-
-    /// The full initializer; the store passes a decoded preset's
-    /// `unknownFields` through rename/replace so they survive.
-    init(id: UUID, tool: ToolID, name: String, settings: Settings,
-         brushResource: BrushResource? = nil, foregroundColor: SRGBColor? = nil,
-         unknownFields: [String: JSONValue]) throws {
-        guard tool.paintTool != nil else { throw PaintToolPresetError.nonPaintTool(tool) }
         self.id = id
         self.tool = tool
         self.name = Self.trimmed(name)
         self.settings = settings
         self.brushResource = brushResource
         self.foregroundColor = foregroundColor
-        self.unknownFields = unknownFields
         try validate()
     }
 
@@ -154,8 +137,7 @@ struct PaintToolPreset: Identifiable, Equatable {
         try foregroundColor?.validate()
     }
 
-    /// Equality over the semantic value only; `unknownFields` is persistence
-    /// bookkeeping and does not distinguish two presets.
+    /// Equality over the complete saved value.
     static func == (lhs: PaintToolPreset, rhs: PaintToolPreset) -> Bool {
         lhs.id == rhs.id && lhs.tool == rhs.tool && lhs.name == rhs.name
             && lhs.settings == rhs.settings && lhs.brushResource == rhs.brushResource
@@ -167,7 +149,7 @@ struct PaintToolPreset: Identifiable, Equatable {
 
 /// A coding key that accepts any string, used to read the keys a schema
 /// version does not know.
-struct AnyCodingKey: CodingKey {
+struct PresetCodingKey: CodingKey {
     var stringValue: String
     var intValue: Int?
 
@@ -182,80 +164,40 @@ struct AnyCodingKey: CodingKey {
     }
 }
 
-/// Any JSON value, kept verbatim so a rewrite under the same schema can
-/// encode back fields this version does not know (docs/paint-tool-presets.md).
-enum JSONValue: Equatable {
-    case null
-    case bool(Bool)
-    case number(Double)
-    case string(String)
-    case array([JSONValue])
-    case object([String: JSONValue])
-}
-
-extension JSONValue: Codable {
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if container.decodeNil() {
-            self = .null
-        } else if let value = try? container.decode(Bool.self) {
-            self = .bool(value)
-        } else if let value = try? container.decode(Double.self) {
-            self = .number(value)
-        } else if let value = try? container.decode(String.self) {
-            self = .string(value)
-        } else if let value = try? container.decode([JSONValue].self) {
-            self = .array(value)
-        } else if let value = try? container.decode([String: JSONValue].self) {
-            self = .object(value)
-        } else {
-            throw DecodingError.typeMismatch(JSONValue.self,
-                DecodingError.Context(codingPath: decoder.codingPath,
-                                     debugDescription: "not a JSON value"))
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        switch self {
-        case .null: try container.encodeNil()
-        case .bool(let value): try container.encode(value)
-        case .number(let value): try container.encode(value)
-        case .string(let value): try container.encode(value)
-        case .array(let value): try container.encode(value)
-        case .object(let value): try container.encode(value)
-        }
+/// Reject extensions at every object boundary before decoding values.
+/// Unknown data, including numeric precision this version cannot represent,
+/// stays in the original stored bytes until a compatible version reads it.
+func rejectUnknownPresetKeys(_ decoder: Decoder, allowed: Set<String>) throws {
+    let container = try decoder.container(keyedBy: PresetCodingKey.self)
+    let unknown = container.allKeys.map(\.stringValue).filter { !allowed.contains($0) }.sorted()
+    guard unknown.isEmpty else {
+        let path = decoder.codingPath.map(\.stringValue).joined(separator: ".")
+        throw PaintToolPresetError.malformed("unsupported fields in \(path.isEmpty ? "document" : path): \(unknown.joined(separator: ", ")). Use a compatible Glims version")
     }
 }
 
 extension PaintToolPreset {
     private static let knownKeys: Set<String> = ["id", "tool", "name", "settings", "brushResource", "foregroundColor"]
 
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case id, tool, name, settings, brushResource, foregroundColor
     }
 }
 
 extension PaintToolPreset: Codable {
     init(from decoder: Decoder) throws {
+        try rejectUnknownPresetKeys(decoder, allowed: Self.knownKeys)
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let toolTag = try container.decode(String.self, forKey: .tool)
         guard let tool = ToolID(rawValue: toolTag) else {
             throw PaintToolPresetError.unknownToolTag(toolTag)
-        }
-        // Capture the keys this schema version does not know, verbatim.
-        let all = try decoder.container(keyedBy: AnyCodingKey.self)
-        var unknown: [String: JSONValue] = [:]
-        for key in all.allKeys where !Self.knownKeys.contains(key.stringValue) {
-            unknown[key.stringValue] = try all.decode(JSONValue.self, forKey: key)
         }
         try self.init(id: try container.decode(UUID.self, forKey: .id),
                       tool: tool,
                       name: try container.decode(String.self, forKey: .name),
                       settings: try container.decode(Settings.self, forKey: .settings),
                       brushResource: try container.decodeIfPresent(BrushResource.self, forKey: .brushResource),
-                      foregroundColor: try container.decodeIfPresent(SRGBColor.self, forKey: .foregroundColor),
-                      unknownFields: unknown)
+                      foregroundColor: try container.decodeIfPresent(SRGBColor.self, forKey: .foregroundColor))
     }
 
     func encode(to encoder: Encoder) throws {
@@ -266,10 +208,7 @@ extension PaintToolPreset: Codable {
         try container.encode(settings, forKey: .settings)
         try container.encodeIfPresent(brushResource, forKey: .brushResource)
         try container.encodeIfPresent(foregroundColor, forKey: .foregroundColor)
-        var all = encoder.container(keyedBy: AnyCodingKey.self)
-        for (key, value) in unknownFields where !Self.knownKeys.contains(key) {
-            try all.encode(value, forKey: AnyCodingKey(stringValue: key)!)
-        }
+
     }
 }
 
@@ -281,11 +220,12 @@ extension PaintToolPreset.BrushResource {
 }
 
 extension PaintToolPreset.Settings: Codable {
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case size, opacity, pressureSize, hardness, rate, flow, exposure, tones, antiErase
     }
 
     init(from decoder: Decoder) throws {
+        try rejectUnknownPresetKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(size: try container.decode(Double.self, forKey: .size),
                   opacity: try container.decode(Double.self, forKey: .opacity),
@@ -334,17 +274,20 @@ extension PaintToolPreset.ToneRange: Codable {
 }
 
 extension PaintToolPreset.BrushResource: Codable {
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case kind, identity
     }
 
     init(from decoder: Decoder) throws {
+        try rejectUnknownPresetKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let tag = try container.decode(String.self, forKey: .kind)
         guard let kind = Kind(rawValue: tag) else {
             throw PaintToolPresetError.invalidResourceKind(tag)
         }
-        self.init(kind: kind, identity: try container.decode(EngineSession.ResourceIdentity.self, forKey: .identity))
+        let identityDecoder = try container.superDecoder(forKey: .identity)
+        try rejectUnknownPresetKeys(identityDecoder, allowed: ["name", "collection", "isInternal"])
+        self.init(kind: kind, identity: try EngineSession.ResourceIdentity(from: identityDecoder))
         try validate()
     }
 
@@ -367,11 +310,12 @@ extension PaintToolPreset.BrushResource: Codable {
 }
 
 extension PaintToolPreset.SRGBColor: Codable {
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case red, green, blue
     }
 
     init(from decoder: Decoder) throws {
+        try rejectUnknownPresetKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(red: try container.decode(Double.self, forKey: .red),
                   green: try container.decode(Double.self, forKey: .green),
@@ -390,16 +334,14 @@ extension PaintToolPreset.SRGBColor: Codable {
 
 /// The accepted numeric limits, taken from the existing UI and native
 /// sources (docs/paint-tool-presets.md lists the exact references):
-/// the Tool Options sliders (`ToolPalettes.swift`, `addPaintRows`:
-/// Size 1...500 px, the rest 0...100%), the facade's field comments
+/// native brush-size accepts 1...10,000 px; the facade's field comments
 /// (`glims_engine.h`, `GlimsBrushSettings`: opacity, hardness and the sRGB
 /// components 0...1, rate/flow/exposure 0...100), and the engine's own
 /// check (`Engine/paint.c`, `stroke_begin_common`: `size > 0.0`, opacity
 /// clamped to 0...1).
 enum PaintToolPresetLimits {
-    /// Brush diameter in image pixels; the engine refuses `size <= 0`, the
-    /// Tool Options slider offers 1...500.
-    static let maxSize: Double = 500
+    /// Native brush-size range, shared by all supported engine versions.
+    static let maxSize: Double = 10_000
     /// Opacity, hardness and each sRGB component.
     static let unitInterval: ClosedRange<Double> = 0...1
     /// Rate, flow and exposure.
@@ -409,7 +351,7 @@ enum PaintToolPresetLimits {
 
     static func validateSize(_ value: Double) throws {
         guard value.isFinite else { throw PaintToolPresetError.nonFinite(field: "settings.size") }
-        guard value > 0, value <= maxSize else {
+        guard value >= 1, value <= maxSize else {
             throw PaintToolPresetError.sizeOutOfRange(value)
         }
     }
@@ -439,7 +381,7 @@ enum PaintToolPresetLimits {
 
 /// Every way a preset value or a stored preset document can be invalid.
 /// Messages are meant to be shown to the user as-is.
-enum PaintToolPresetError: Error, Equatable, CustomStringConvertible {
+enum PaintToolPresetError: Error, LocalizedError, Equatable, CustomStringConvertible {
     /// A persisted `tool` tag that is not a `ToolID` at all.
     case unknownToolTag(String)
     /// A `ToolID` that is not a paint tool (no `paintTool`).
@@ -471,6 +413,8 @@ enum PaintToolPresetError: Error, Equatable, CustomStringConvertible {
     /// The stored bytes are not a readable document.
     case malformed(String)
 
+    var errorDescription: String? { description }
+
     var description: String {
         switch self {
         case .unknownToolTag(let tag):
@@ -492,7 +436,7 @@ enum PaintToolPresetError: Error, Equatable, CustomStringConvertible {
         case .outOfRange(let field, let value, let range):
             return "The preset field \(field) must be between \(range.lowerBound) and \(range.upperBound) (got \(value))."
         case .sizeOutOfRange(let value):
-            return "The brush size must be greater than 0 and at most \(PaintToolPresetLimits.maxSize) px (got \(value))."
+            return "The brush size must be at least 1 and at most \(PaintToolPresetLimits.maxSize) px (got \(value))."
         case .invalidResourceKind(let tag):
             return "A paint tool preset can only reference a brush resource, not \"\(tag)\"."
         case .invalidResourceIdentity(let reason):
