@@ -356,6 +356,10 @@ GlimsStatus glims_image_convert_mode      (GlimsEngine *e, GlimsImageID image,
                                            uint32_t mode, char **error);
 GlimsStatus glims_image_convert_precision (GlimsEngine *e, GlimsImageID image,
                                            uint32_t component, uint32_t trc, char **error);
+GlimsStatus glims_image_convert_indexed   (GlimsEngine *e, GlimsImageID image,
+                                           const GlimsIndexedSettings *settings,
+                                           const GlimsColor *colors, int32_t color_count,
+                                           char **error);
 
 /* color-profile.c */
 GlimsStatus glims_image_assign_profile (GlimsEngine *e, GlimsImageID image,
