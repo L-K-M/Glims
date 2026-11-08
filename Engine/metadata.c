@@ -257,7 +257,7 @@ glims_image_metadata_values (GlimsEngine *engine,
                                                       tag, &gerror);
       if (gerror)
         {
-          GlimsStatus status = glims_fail (error, gerror,
+          GlimsStatus status = glims_fail (error, g_steal_pointer (&gerror),
                                            "The engine could not read the tag.");
           g_clear_error (&gerror);
           return status;
@@ -270,6 +270,18 @@ glims_image_metadata_values (GlimsEngine *engine,
   g_strfreev (values);
 
   return GLIMS_STATUS_OK;
+}
+
+/* Expected values are count-bounded facade input, not necessarily a strv. */
+static gboolean
+metadata_values_match (gchar **actual, const char *const *expected, int32_t count)
+{
+  if ((actual ? g_strv_length (actual) : 0) != (guint) count)
+    return FALSE;
+  for (int32_t i = 0; i < count; i++)
+    if (strcmp (actual[i], expected[i]))
+      return FALSE;
+  return TRUE;
 }
 
 /* Compare complete native metadata before trusting the engine's XML
@@ -301,6 +313,19 @@ metadata_equal_native (GimpMetadata *left, GimpMetadata *right)
           equal = ! strcmp (a[index], b[index]);
           if (! equal || domain == 2)
             continue;
+          if (domain == 1)
+            {
+              gchar **values_a = gexiv2_metadata_try_get_tag_multiple (GEXIV2_METADATA (left), a[index], &failure);
+              gchar **values_b = NULL;
+              if (! failure)
+                values_b = gexiv2_metadata_try_get_tag_multiple (GEXIV2_METADATA (right), b[index], &failure);
+              equal = ! failure && metadata_values_match (values_a,
+                        (const char *const *) values_b, values_b ? (int32_t) g_strv_length (values_b) : 0);
+              g_clear_error (&failure);
+              g_strfreev (values_a);
+              g_strfreev (values_b);
+              if (! equal) break;
+            }
           /* Core normalizes these image facts and can store the same
            * number with a different EXIF integer width on duplication. */
           if (domain == 0 && metadata_tag_protected (a[index]))
@@ -378,7 +403,7 @@ glims_image_metadata_edit (GlimsEngine        *engine,
   GimpMetadata   *current, *copy;
   GError         *gerror = NULL;
   const gchar    *type;
-  gboolean        is_xmp, is_container, present, noop = FALSE, ok;
+  gboolean        is_xmp, is_container, present, noop = FALSE, ok, supports_multiple = FALSE;
   GlimsStatus     status;
   int32_t         i, n = 0;
   gchar         **current_values = NULL;
@@ -481,7 +506,7 @@ glims_image_metadata_edit (GlimsEngine        *engine,
   present = gexiv2_metadata_try_has_tag (GEXIV2_METADATA (copy), tag, &gerror);
   if (gerror)
     {
-      status = glims_fail (error, gerror, "The engine could not inspect the tag.");
+      status = glims_fail (error, g_steal_pointer (&gerror), "The engine could not inspect the tag.");
       g_clear_error (&gerror);
       g_object_unref (copy);
       return status;
@@ -501,18 +526,18 @@ glims_image_metadata_edit (GlimsEngine        *engine,
    * requested values (the native multiple setter would do exactly
    * that), so more than one value requires native multi-value support:
    * repeatable Iptc tags and Xmp Bag/Seq/Alt — never any Exif tag. */
-  if (operation == GLIMS_METADATA_SET && count > 1)
+  if (operation == GLIMS_METADATA_SET)
     {
-      gboolean multi = gexiv2_metadata_try_tag_supports_multiple_values (
+      supports_multiple = gexiv2_metadata_try_tag_supports_multiple_values (
         GEXIV2_METADATA (copy), tag, &gerror);
       if (gerror)
         {
-          status = glims_fail (error, gerror, "The engine could not inspect the tag.");
+          status = glims_fail (error, g_steal_pointer (&gerror), "The engine could not inspect the tag.");
           g_clear_error (&gerror);
           g_object_unref (copy);
           return status;
         }
-      if (! multi)
+      if (count > 1 && ! supports_multiple)
         {
           g_object_unref (copy);
           if (error)
@@ -538,7 +563,7 @@ glims_image_metadata_edit (GlimsEngine        *engine,
           GEXIV2_METADATA (current), tag, &gerror);
       if (gerror)
         {
-          status = glims_fail (error, gerror, "The engine could not read the tag.");
+          status = glims_fail (error, g_steal_pointer (&gerror), "The engine could not read the tag.");
           g_clear_error (&gerror);
           g_strfreev (current_values);
           g_object_unref (copy);
@@ -568,9 +593,22 @@ glims_image_metadata_edit (GlimsEngine        *engine,
 
   /* Apply on the PRIVATE copy only; the original metadata is untouched
    * on every path below until the single native setter. */
+  /* The native IPTC scalar setter appends entries. Replacing a facade
+   * value vector must remove the old private entries first, including
+   * when the replacement contains just one value. */
+  if (operation == GLIMS_METADATA_SET && present && g_str_has_prefix (tag, "Iptc."))
+    {
+      ok = gexiv2_metadata_try_clear_tag (GEXIV2_METADATA (copy), tag, &gerror);
+      if (! ok || gerror)
+        {
+          status = glims_fail (error, g_steal_pointer (&gerror), "The old metadata values could not be replaced.");
+          g_object_unref (copy);
+          return status;
+        }
+    }
   if (operation == GLIMS_METADATA_REMOVE)
     ok = gexiv2_metadata_try_clear_tag (GEXIV2_METADATA (copy), tag, &gerror);
-  else if (is_container || count > 1)
+  else if (is_container || supports_multiple || count > 1)
     {
       /* The facade input is count-bounded. GExiv2 consumes a strv, so
        * supply our own terminator rather than reading past the caller's
@@ -587,11 +625,36 @@ glims_image_metadata_edit (GlimsEngine        *engine,
                                              values[0], &gerror);
   if (! ok || gerror)
     {
-      status = glims_fail (error, gerror,
+      status = glims_fail (error, g_steal_pointer (&gerror),
                            "The engine could not apply the metadata change.");
       g_clear_error (&gerror);
       g_object_unref (copy);
       return status;
+    }
+
+  /* Native setters can accept an empty list member but omit it. Verify
+   * complete arrays and text before trusting success; numeric scalar tags
+   * retain the native canonicalization behavior. No image mutation has
+   * happened yet, so an unrepresentable request is refused atomically. */
+  if (operation == GLIMS_METADATA_SET &&
+      (is_container || supports_multiple || count > 1 ||
+       ! g_strcmp0 (type, "Ascii") || ! g_strcmp0 (type, "String") || ! g_strcmp0 (type, "XmpText")))
+    {
+      gchar **actual = gexiv2_metadata_try_get_tag_multiple (GEXIV2_METADATA (copy), tag, &gerror);
+      gboolean exact = ! gerror && metadata_values_match (actual, values, count);
+      g_strfreev (actual);
+      if (gerror)
+        {
+          status = glims_fail (error, g_steal_pointer (&gerror), "The metadata change could not be verified.");
+          g_object_unref (copy);
+          return status;
+        }
+      if (! exact)
+        {
+          g_object_unref (copy);
+          if (error) *error = strdup ("The engine cannot preserve this value list exactly; no metadata was changed.");
+          return GLIMS_STATUS_UNSUPPORTED;
+        }
     }
 
   /* Canonical native values can make an apparent string edit a no-op. */

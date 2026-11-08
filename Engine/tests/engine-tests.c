@@ -10702,6 +10702,73 @@ test_image_metadata (const char *work)
          "a closed image refuses value reads");
   CHECK (api->image_metadata_edit (engine, image, "Exif.Image.Artist", GLIMS_METADATA_SET, artist, 1, NULL) == GLIMS_STATUS_NOT_FOUND,
          "a closed image refuses edits");
+
+  /* Repeatable text is an ordered value vector, including empty members.
+   * A native representation limit may refuse it, never report success
+   * after silently dropping entries. Each case uses isolated image state. */
+  {
+    GlimsImageID target = 0;
+    const char *const seed_values[] = { "retained" };
+    const char *const requested[] = { "line1\nline2", "dup", "dup", "" };
+    const char *const supported[] = { "line1\nline2", "dup", "dup" };
+    const char *const single[] = { "only" };
+    const char *const empty_value[] = { "" };
+    int32_t baseline;
+    GlimsStatus written;
+    char *write_error = NULL;
+    char **readback;
+    int32_t read_count = 0;
+
+    CHECK (api->image_new (engine, 8, 8, &target, NULL) == GLIMS_STATUS_OK,
+           "the repeated-value fixture image opens");
+    CHECK (api->image_metadata_edit (engine, target, "Iptc.Application2.Keywords",
+                                      GLIMS_METADATA_SET, seed_values, 1, NULL) == GLIMS_STATUS_OK,
+           "the repeated-value fixture starts with one retained keyword");
+    baseline = undo_depth (target);
+    written = api->image_metadata_edit (engine, target, "Iptc.Application2.Keywords",
+                                        GLIMS_METADATA_SET, requested, 4, &write_error);
+    readback = metadata_values (target, "Iptc.Application2.Keywords", &read_count);
+    CHECK ((written == GLIMS_STATUS_OK && values_equal (readback, read_count, requested, 4)) ||
+           (written == GLIMS_STATUS_UNSUPPORTED && undo_depth (target) == baseline &&
+            values_equal (readback, read_count, seed_values, 1)),
+           "an empty repeated member is preserved exactly or refused atomically (status %d, count %d)%s%s",
+           written, read_count, write_error ? ": " : "", write_error ? write_error : "");
+    api->free_metadata_strings (readback);
+    api->free_string (write_error);
+    write_error = NULL;
+    api->image_close (engine, target);
+
+    CHECK (api->image_new (engine, 8, 8, &target, NULL) == GLIMS_STATUS_OK,
+           "the supported-vector fixture image opens");
+    baseline = undo_depth (target);
+    written = api->image_metadata_edit (engine, target, "Iptc.Application2.Keywords",
+                                        GLIMS_METADATA_SET, supported, 3, NULL);
+    readback = metadata_values (target, "Iptc.Application2.Keywords", &read_count);
+    CHECK (written == GLIMS_STATUS_OK && undo_depth (target) == baseline + 1 &&
+           values_equal (readback, read_count, supported, 3),
+           "nonempty repeated values retain newlines, duplicates and order as one undo");
+    api->free_metadata_strings (readback);
+    baseline = undo_depth (target);
+    written = api->image_metadata_edit (engine, target, "Iptc.Application2.Keywords",
+                                        GLIMS_METADATA_SET, single, 1, NULL);
+    readback = metadata_values (target, "Iptc.Application2.Keywords", &read_count);
+    CHECK (written == GLIMS_STATUS_OK && undo_depth (target) == baseline + 1 &&
+           values_equal (readback, read_count, single, 1),
+           "setting one repeated value replaces the whole previous vector (count %d)", read_count);
+    api->free_metadata_strings (readback);
+    baseline = undo_depth (target);
+    written = api->image_metadata_edit (engine, target, "Iptc.Application2.Keywords",
+                                        GLIMS_METADATA_SET, empty_value, 1, &write_error);
+    readback = metadata_values (target, "Iptc.Application2.Keywords", &read_count);
+    CHECK ((written == GLIMS_STATUS_OK && values_equal (readback, read_count, empty_value, 1)) ||
+           (written == GLIMS_STATUS_UNSUPPORTED && undo_depth (target) == baseline &&
+            values_equal (readback, read_count, single, 1)),
+           "one empty text value is preserved or refused without changing the old value (status %d, count %d)",
+           written, read_count);
+    api->free_metadata_strings (readback);
+    api->free_string (write_error);
+    api->image_close (engine, target);
+  }
 }
 
 /* ---- Tag descriptor (slot 128) ------------------------------------------
@@ -13467,7 +13534,21 @@ test_place (const char *fixtures, const char *work)
       /* And a fresh open rereads it too: the stored buffer never wins. */
       {
         char *open_error = NULL;
-        GlimsStatus open_status = api->image_open (engine, placed_xcf, &again, &open_error);
+        GlimsStatus open_status;
+        int busy_attempts = 0;
+        /* Multiple live links reload this source independently. One blue
+         * composite does not mean every monitored reload has released the
+         * engine. BUSY is the documented admission response, not a failed
+         * file read: wait for it, but preserve every other failure. */
+        do
+          {
+            api->free_string (open_error);
+            open_error = NULL;
+            open_status = api->image_open (engine, placed_xcf, &again, &open_error);
+            if (open_status != GLIMS_STATUS_BUSY) break;
+            usleep (100 * 1000);
+          }
+        while (++busy_attempts < 100);
         CHECK (open_status == GLIMS_STATUS_OK && again > 0,
                "the saved link reopens again (status %d, image %d, error %s)",
                open_status, again, open_error ? open_error : "none");

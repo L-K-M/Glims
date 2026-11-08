@@ -100,6 +100,7 @@ void             glims_emit              (GlimsEngine *engine, GlimsEventKind ki
                                           const gchar *text);
 void             glims_emit_progress     (GlimsEngine *engine, gboolean active,
                                           gdouble value, const gchar *text);
+/* Consumes gerror. Transfer a caller-owned variable with g_steal_pointer. */
 GlimsStatus      glims_fail              (char **error, GError *gerror, const gchar *fallback);
 GlimsOpenImage * glims_lookup_image      (GlimsEngine *engine, GlimsImageID id);
 GlimsStatus      glims_adopt_image       (GlimsEngine *engine, GimpImage *image, GlimsImageID *id);
