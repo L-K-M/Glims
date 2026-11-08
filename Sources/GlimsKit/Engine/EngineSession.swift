@@ -258,6 +258,11 @@ final class EngineSession: @unchecked Sendable {
         var tones: Tones = .midtones
         var antiErase = false
         var source: Source?
+        /// Persist the selected brush's identity, never a session-local
+        /// handle. The stroke resolves it on the engine worker so a stale
+        /// or removed resource fails explicitly instead of painting with
+        /// a different brush after an engine restart.
+        var resource: ResourceIdentity?
     }
 
     // MARK: Selection types
@@ -610,7 +615,13 @@ final class EngineSession: @unchecked Sendable {
         var point = Self.point(first)
         var stroke: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
-        try check(api.stroke_begin(engine, image, drawable, &settings, &point, &stroke, &error), error)
+        if let identity = brush.resource {
+            let resource = try resolveResource(identity, kind: .brush)
+            try check(api.stroke_begin_with_brush_resource(engine, image, drawable, resource,
+                                                          &settings, &point, &stroke, &error), error)
+        } else {
+            try check(api.stroke_begin(engine, image, drawable, &settings, &point, &stroke, &error), error)
+        }
         return stroke
     }
 
