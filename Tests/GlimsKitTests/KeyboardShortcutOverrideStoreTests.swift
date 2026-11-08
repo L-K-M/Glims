@@ -356,6 +356,19 @@ final class KeyboardShortcutOverrideStoreTests: XCTestCase {
         }
     }
 
+    func testTypedAssignmentRejectsUnknownModifierBitsBeforeWriting() throws {
+        for raw in [ShortcutModifiers.command.rawValue | (1 << 10), Int.min | ShortcutModifiers.command.rawValue] {
+            try withDefaults { defaults in
+                let store = KeyboardShortcutOverrideStore(defaults: defaults)
+                let key = try XCTUnwrap(ShortcutKey(input: "k"))
+                let bad = KeyboardShortcut(key: key, modifiers: ShortcutModifiers(rawValue: raw))
+                XCTAssertThrowsError(try store.assign(bad, to: "edit.undo", catalog: catalog()))
+                XCTAssertNil(store.storedData, "typed invalid bits must not create an unreadable document")
+                XCTAssertThrowsError(try CommandShortcutEntry(id: "bad.base", base: bad))
+            }
+        }
+    }
+
     // MARK: - Reset validation
 
     func testResetCannotRestoreADefaultTakenByAnotherOverride() throws {

@@ -244,6 +244,9 @@ struct CommandShortcutEntry: Hashable {
         guard !id.contains(where: { $0.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) }) else {
             throw KeyboardShortcutError.invalidCommandID(id)
         }
+        if let base, !base.modifiers.usesOnlyKnownBits {
+            throw KeyboardShortcutError.unknownModifierBits(base.modifiers.rawValue)
+        }
         self.id = id
         self.base = base
     }
@@ -324,6 +327,9 @@ struct KeyboardShortcutCatalog: Hashable {
     /// required, and a macOS reservation can only be claimed by the command
     /// that owns it as its factory base.
     private static func validateOverride(_ shortcut: KeyboardShortcut, for entry: CommandShortcutEntry) throws {
+        guard shortcut.modifiers.usesOnlyKnownBits else {
+            throw KeyboardShortcutError.unknownModifierBits(shortcut.modifiers.rawValue)
+        }
         guard shortcut.hasCommandOrControl else {
             throw KeyboardShortcutError.missingCommandOrControl(shortcut, command: entry.id)
         }

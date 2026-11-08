@@ -120,3 +120,10 @@ Reset and Reset All now require the catalog, and every mutation validates
 before writing. All 38 focused model/store tests pass. UserDefaults does
 not expose write failures or a crash-durability acknowledgment; those are
 not guarantees of this store. No menus or settings UI use it yet.
+
+Typed-modifier follow-up: source review found that typed assignments could
+carry unknown bits even though decoding rejected them. Positive unknown
+bits and a negative modifier value reproduced six failing assertions across
+assignment, unchanged storage and base catalog construction. Both catalog
+entry construction and override application now validate the same known-bit
+mask. All 39 focused tests pass after the fix.
