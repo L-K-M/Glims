@@ -224,14 +224,19 @@ enum EngineSmokeTest {
 
                 return failures == 0 ? 0 : 1
             }
-            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "guide-dragging" {
-                try exerciseGuideDragging(session, work: work, documents: documents)
-                print(failures == 0 ? "PASSED (guide dragging)" : "FAILED: \(failures) failure(s)")
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "floating-controls" {
+                try exerciseFloatingControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (floating controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "snapping" {
                 try exerciseSnapping(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (snapping)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "guide-dragging" {
+                try exerciseGuideDragging(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (guide dragging)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
@@ -274,6 +279,7 @@ enum EngineSmokeTest {
             try exercisePixelRulers(session, work: work, documents: documents)
             try exerciseGuideDragging(session, work: work, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)
+            try exerciseFloatingControls(session, work: work, documents: documents)
 
             try exerciseStrokeSelectionControls(session, work: work, documents: documents)
 
@@ -5038,11 +5044,11 @@ enum EngineSmokeTest {
         windowB.orderOut(nil)
     }
 
-    private static func buttons(in view: NSView) -> [NSButton] {
+    static func buttons(in view: NSView) -> [NSButton] {
         ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(buttons)
     }
 
-    private static func descendant<View: NSView>(of view: NSView, as type: View.Type,
+    static func descendant<View: NSView>(of view: NSView, as type: View.Type,
                                                    matching predicate: (View) -> Bool = { _ in true }) -> View? {
         if let match = view as? View, predicate(match) { return match }
         for child in view.subviews {

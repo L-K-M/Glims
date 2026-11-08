@@ -1200,6 +1200,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return !editingBlocked && !previewBusy
         case #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)):
             return !imageDocument.isClosing
+        case #selector(pasteInto(_:)):
+            // The tooltip explains the cached refusal: an active floating
+            // selection, a missing/locked/structured target, a pending
+            // target change or a busy preview — never an engine read.
+            let readiness = imageDocument.pasteIntoReadiness
+            menuItem.toolTip = readiness.allowed ? nil : readiness.reason
+            return canPerformClipboardCommand(menuItem.action)
         case #selector(cut(_:)), #selector(copy(_:)), #selector(copyMerged(_:)),
              #selector(paste(_:)), #selector(pasteInPlace(_:)), #selector(deleteBackward(_:)):
             return canPerformClipboardCommand(menuItem.action)

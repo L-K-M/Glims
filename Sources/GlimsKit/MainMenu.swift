@@ -46,6 +46,7 @@ enum MainMenu {
             item("Copy Merged", #selector(DocumentWindowController.copyMerged(_:)), "C"),
             item("Paste", #selector(DocumentWindowController.paste(_:)), "v"),
             item("Paste in Place", #selector(DocumentWindowController.pasteInPlace(_:)), "V"),
+            item("Paste Into", #selector(DocumentWindowController.pasteInto(_:))),
             item("Paste as New Image", #selector(AppController.pasteAsNewImage(_:))),
             clearItem(),
             .separator(),
