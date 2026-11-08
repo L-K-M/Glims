@@ -5654,6 +5654,61 @@ test_procedures (void)
 }
 
 static void
+test_clear_srgb_and_readiness (const char *fixtures)
+{
+  GlimsImageID image = 0;
+  GlimsItemID layer;
+  GlimsFilterID filter = 0;
+  GlimsStrokeID stroke = 0;
+  GlimsColor midtone = { .5, .25, .75, 1 };
+  GlimsSelectOptions options = { .struct_size = sizeof options, .antialias = false };
+  GlimsPoint corners[] = { { 0, 0 }, { 1, 1 } };
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 1);
+  GlimsStrokePoint point = { 1, 0, 1, 0, 0, 0 };
+  uint8_t inside[4], outside[4];
+  int32_t depth;
+  char file[1024];
+
+  /* The generated RGB PNG has no alpha channel. Clear therefore uses
+   * the background color instead of making selected pixels transparent. */
+  snprintf (file, sizeof file, "%s/profiled.png", fixtures);
+  CHECK (api->image_open (engine, file, &image, NULL) == GLIMS_STATUS_OK,
+         "the opaque RGB Clear color fixture opens");
+  layer = first_layer (image);
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, corners, 2, &options) == GLIMS_STATUS_OK,
+         "Clear's fixture selects only the first RGB pixel");
+  depth = undo_depth (image);
+  CHECK (api->image_clear (engine, image, &midtone, NULL) == GLIMS_STATUS_OK && undo_depth (image) == depth + 1,
+         "Clear with a background color adds one undo step");
+  render_pixel (image, 0, 0, inside);
+  render_pixel (image, 1, 0, outside);
+  CHECK (abs ((int)inside[0] - 128) <= 1 && abs ((int)inside[1] - 64) <= 1 &&
+         abs ((int)inside[2] - 191) <= 1 && inside[3] == 255,
+         "Clear interprets its background as sRGB midtones (%u,%u,%u,%u)",
+         inside[0], inside[1], inside[2], inside[3]);
+  CHECK (outside[0] == 0 && outside[1] == 255 && outside[2] == 0 && outside[3] == 255,
+         "Clear preserves the RGB pixel outside the selection");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         (render_pixel (image, 0, 0, inside), inside[0] == 255 && inside[1] == 0 && inside[2] == 0) &&
+         api->image_redo (engine, image) == GLIMS_STATUS_OK,
+         "Clear's sRGB background change undoes and redoes");
+
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK,
+         "a native preview holds the Clear target");
+  depth = undo_depth (image);
+  CHECK (api->image_clear (engine, image, &midtone, NULL) == GLIMS_STATUS_BUSY && undo_depth (image) == depth,
+         "Clear refuses a native preview without adding history");
+  if (filter) api->filter_abort (engine, filter);
+  CHECK (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK,
+         "an active stroke holds the Clear target");
+  depth = undo_depth (image);
+  CHECK (api->image_clear (engine, image, &midtone, NULL) == GLIMS_STATUS_BUSY && undo_depth (image) == depth,
+         "Clear refuses an active stroke before editing");
+  if (stroke) api->stroke_end (engine, stroke);
+  api->image_close (engine, image);
+}
+
+static void
 test_clipboard (void)
 {
   GlimsImageID image = 0;
@@ -6243,6 +6298,7 @@ main (int argc, char **argv)
   test_selections ();
   test_editing ();
   test_clipboard ();
+  test_clear_srgb_and_readiness (argv[3]);
   test_render_freshness ();
   test_transforms ();
   test_matrix_transform ();

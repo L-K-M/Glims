@@ -144,7 +144,8 @@ glims_image_clear (GlimsEngine *engine, GlimsImageID id, const GlimsColor *backg
   GlimsStatus status;
   uint32_t locks = GLIMS_LOCK_PIXELS;
   if (! open) return GLIMS_STATUS_NOT_FOUND;
-  if (engine->busy > 0) return GLIMS_STATUS_BUSY;
+  status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
   drawable = selected_drawable (open->image);
   if (! drawable || GIMP_IS_GROUP_LAYER (drawable))
     return glims_fail (error, NULL, "Select a pixel layer to clear.");
@@ -160,8 +161,8 @@ glims_image_clear (GlimsEngine *engine, GlimsImageID id, const GlimsColor *backg
   if (background)
     {
       GeglColor *color = gegl_color_new (NULL);
-      gegl_color_set_rgba (color, CLAMP (background->red, 0, 1), CLAMP (background->green, 0, 1),
-                           CLAMP (background->blue, 0, 1), CLAMP (background->alpha, 0, 1));
+      gegl_color_set_rgba_with_space (color, CLAMP (background->red, 0, 1), CLAMP (background->green, 0, 1),
+                                      CLAMP (background->blue, 0, 1), CLAMP (background->alpha, 0, 1), NULL);
       gimp_context_set_background (context, color);
       g_object_unref (color);
     }
