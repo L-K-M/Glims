@@ -409,6 +409,8 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
                 || menuItem.tag == Int(EngineSession.LayerCommand.trimToContent.rawValue) {
                 guard let active = document.activeLayer else { return false }
                 return document.layers.first(where: { $0.id == active })?.kind == .pixel
+                    && document.layerLocks[active]?.effective
+                        .isDisjoint(with: [.pixels, .position]) != false
             }
             return menuItem.tag == Int(EngineSession.LayerCommand.new.rawValue) || document.activeLayer != nil
         case #selector(newLayerGroup(_:)):
