@@ -1,4 +1,5 @@
 import XCTest
+import Darwin
 @testable import GlimsKit
 
 /// Engine discovery for source builds: a SwiftPM executable inside a
@@ -167,6 +168,71 @@ final class EngineLibraryTests: XCTestCase {
         // Even an app bundle inside .build is shipped code, not a source build.
         try makeFile(".build/debug/Glims.app/Contents/MacOS/Glims", in: root)
         XCTAssertNil(discover(root.appendingPathComponent(".build/debug/Glims.app/Contents/MacOS/Glims")))
+        for app in ["GLIMS.APP/Contents", "Glims.App/CONTENTS", "Glims.app/contents"] {
+            let layout = ".build/debug/\(app)/MacOS/Glims"
+            try makeFile(layout, in: root)
+            XCTAssertNil(discover(root.appendingPathComponent(layout)), app)
+        }
+    }
+
+    func testSourceMarkersAndAdapterMustBeRegularFiles() throws {
+        for relative in ["Package.swift", "scripts/engine.env",
+                         "_engine/adapter/GIMP_3_2_8/\(EngineLibrary.fileName)"] {
+            let root = try makeCheckout(name: UUID().uuidString)
+            try makeFile(".build/debug/Glims", in: root)
+            let file = root.appendingPathComponent(relative)
+            try files.removeItem(at: file)
+            try files.createDirectory(at: file, withIntermediateDirectories: false)
+            XCTAssertNil(discover(root.appendingPathComponent(".build/debug/Glims")), relative)
+        }
+    }
+
+    func testSourceRegularFilesMayBeSymlinks() throws {
+        let root = try makeCheckout()
+        try makeFile(".build/debug/Glims", in: root)
+        for relative in ["Package.swift", "scripts/engine.env",
+                         "_engine/adapter/GIMP_3_2_8/\(EngineLibrary.fileName)"] {
+            let file = root.appendingPathComponent(relative)
+            let target = file.appendingPathExtension("real")
+            try files.moveItem(at: file, to: target)
+            try files.createSymbolicLink(at: file, withDestinationURL: target)
+        }
+        XCTAssertEqual(discover(root.appendingPathComponent(".build/debug/Glims")), adapterPath(in: root))
+    }
+
+    func testEnginePinFIFOIsRefusedWithoutWaitingForAWriter() throws {
+        let root = try makeCheckout()
+        try makeFile(".build/debug/Glims", in: root)
+        let env = root.appendingPathComponent("scripts/engine.env")
+        try files.removeItem(at: env)
+        XCTAssertEqual(mkfifo(env.path, 0o600), 0)
+        // Keep both ends open so the old reader cannot block in open().
+        // A delayed, finite write releases its read even on the red run.
+        let descriptor = open(env.path, O_RDWR | O_NONBLOCK)
+        XCTAssertGreaterThanOrEqual(descriptor, 0)
+        let data = Data(defaultEngineEnv.utf8)
+        let writerFinished = expectation(description: "FIFO cleanup")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
+            data.withUnsafeBytes { _ = Darwin.write(descriptor, $0.baseAddress, $0.count) }
+            Darwin.close(descriptor)
+            writerFinished.fulfill()
+        }
+        let start = Date()
+        XCTAssertNil(discover(root.appendingPathComponent(".build/debug/Glims")))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.25)
+        wait(for: [writerFinished], timeout: 2)
+    }
+
+    func testMultilineAndTrailingShellSyntaxAreNotEngineAssignments() throws {
+        for text in [
+            "ENGINE_SETS=GIMP_3_2_8:B:C\nOTHER='\nENGINE_SETS=master:B:C\n'\n",
+            "ENGINE_SETS=\"GIMP_3_2_8:B:C\"; ENGINE_SETS=master:B:C\n",
+        ] {
+            let root = try makeCheckout(name: UUID().uuidString, engineEnv: text,
+                                        adapterRefs: ["GIMP_3_2_8", "master"])
+            try makeFile(".build/debug/Glims", in: root)
+            XCTAssertNil(discover(root.appendingPathComponent(".build/debug/Glims")))
+        }
     }
 
     func testExecutablesOutsideABuildTreeAreNotSearched() throws {

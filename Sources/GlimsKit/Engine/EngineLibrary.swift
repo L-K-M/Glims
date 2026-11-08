@@ -56,9 +56,9 @@ enum EngineLibrary {
         let resolved = executable.resolvingSymlinksInPath()
         let components = resolved.pathComponents
         let insideBundle = components.indices.contains { index in
-            components[index].hasSuffix(".app")
+            components[index].lowercased().hasSuffix(".app")
                 && index + 1 < components.count
-                && components[index + 1] == "Contents"
+                && components[index + 1].lowercased() == "contents"
         }
         guard !insideBundle else { return nil }
 
@@ -78,33 +78,43 @@ enum EngineLibrary {
     /// The pinned adapter inside the checkout at `root`, or nil when the
     /// checkout layout or the adapter itself is missing.
     private static func sourceCheckoutAdapter(root: URL) -> String? {
-        let manager = FileManager.default
         let engineEnv = root.appendingPathComponent("scripts/engine.env")
-        guard manager.fileExists(atPath: root.appendingPathComponent("Package.swift").path),
-              manager.fileExists(atPath: engineEnv.path),
+        guard isRegularFile(root.appendingPathComponent("Package.swift")),
+              isRegularFile(engineEnv),
               let ref = pinnedEngineRef(in: engineEnv) else { return nil }
         let adapter = root.appendingPathComponent("_engine/adapter/\(ref)/\(fileName)")
-        return manager.fileExists(atPath: adapter.path) ? adapter.path : nil
+        return isRegularFile(adapter) ? adapter.path : nil
+    }
+
+    private static func isRegularFile(_ url: URL) -> Bool {
+        (try? url.resolvingSymlinksInPath().resourceValues(forKeys: [.isRegularFileKey]))?
+            .isRegularFile == true
     }
 
     /// The GIMP ref of the first `ENGINE_SETS` entry in `scripts/engine.env`,
     /// parsed as data — the file is never sourced and nothing is expanded.
-    /// Like a shell sourcing the file, the last assignment wins; a single or
-    /// double quoted value is accepted, anything else malformed returns nil.
+    /// The supported subset is one literal assignment per line, optionally
+    /// quoted and followed by a comment. Reject multiline values and shell
+    /// syntax rather than mistaking their contents for pin assignments.
+    /// Within that subset, the last assignment wins.
     private static func pinnedEngineRef(in engineEnv: URL) -> String? {
         guard let text = try? String(contentsOf: engineEnv, encoding: .utf8) else { return nil }
         var raw: String?
         for line in text.components(separatedBy: .newlines) {
             let assignment = line.trimmingCharacters(in: .whitespaces)
-            if assignment.hasPrefix("ENGINE_SETS=") {
-                raw = String(assignment.dropFirst("ENGINE_SETS=".count))
-            }
+            guard !assignment.isEmpty, !assignment.hasPrefix("#"),
+                  let equal = assignment.firstIndex(of: "=") else { continue }
+            let key = String(assignment[..<equal])
+            guard key.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil else { continue }
+            let pattern = #"^[A-Za-z_][A-Za-z0-9_]*=(?:"([^"]*)"|'([^']*)'|([^ \t#'"]*))[ \t]*(?:#.*)?$"#
+            guard let expression = try? NSRegularExpression(pattern: pattern),
+                  let match = expression.firstMatch(in: assignment,
+                      range: NSRange(assignment.startIndex..., in: assignment)) else { return nil }
+            guard key == "ENGINE_SETS" else { continue }
+            raw = (1...3).compactMap { Range(match.range(at: $0), in: assignment) }
+                .first.map { String(assignment[$0]) }
         }
-        guard var value = raw?.trimmingCharacters(in: .whitespaces) else { return nil }
-        if let quote = value.first, quote == "\"" || quote == "'" {
-            guard let close = value.dropFirst().firstIndex(of: quote) else { return nil }
-            value = String(value[value.index(after: value.startIndex)..<close])
-        }
+        guard let value = raw else { return nil }
         guard let firstSet = value.split(whereSeparator: { $0.isWhitespace }).first else { return nil }
         let ref = String(firstSet.prefix(while: { $0 != ":" }))
         return isSafeEngineRef(ref) ? ref : nil
