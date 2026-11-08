@@ -35,6 +35,7 @@ static atomic_int            progress_ends;
 static atomic_bool           progress_active;
 static atomic_int            selection_events;
 static atomic_int            size_events;
+static atomic_int            channels_events;
 
 #define CHECK(condition, ...)                       \
   do {                                              \
@@ -71,6 +72,8 @@ on_event (void *context, const GlimsEvent *event)
     atomic_fetch_add (&size_events, 1);
   else if (event->kind == GLIMS_EVENT_SELECTION_CHANGED)
     atomic_fetch_add (&selection_events, 1);
+  else if (event->kind == GLIMS_EVENT_CHANNELS_CHANGED)
+    atomic_fetch_add (&channels_events, 1);
   else if (event->kind == GLIMS_EVENT_PROGRESS)
     {
       if (event->active && ! atomic_exchange (&progress_active, true))
@@ -1628,6 +1631,809 @@ test_layer_masks (const char *work)
   api->image_close (engine, image);
 }
 
+/* Components, saved channels and the Quick Mask: enumeration, save,
+ * rename, attribute, duplicate, delete and select, channel-only editing
+ * with the layer untouched, channel to selection, the components'
+ * effect on the composite, undo accounting, wrong ids, BUSY refusals,
+ * thumbnails, Quick Mask toggling and painting, and an XCF round trip. */
+static void
+test_channels (const char *work)
+{
+  GlimsImageID        image = 0, other = 0, reopened = 0;
+  GlimsItemID         layer = 0, saved = 0, saved2 = 0, dup = 0, mask = 0, qm = 0;
+  GlimsComponentState comp;
+  GlimsChannelInfo    rows[8];
+  GlimsChannelChange  change = { 0 };
+  GlimsQuickMaskState qstate;
+  GlimsRect           bounds;
+  GlimsPixelBuffer    copied = { 0 };
+  GlimsSelectOptions  rect_opt = { .struct_size = sizeof rect_opt,
+                                   .operation = GLIMS_SELECT_REPLACE };
+  GlimsFillSettings   red = { .struct_size = sizeof red, .mode = GLIMS_FILL_SELECTION,
+                              .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  GlimsFillSettings   black = { .struct_size = sizeof black, .mode = GLIMS_FILL_SELECTION,
+                                .color = { 0, 0, 0, 1 }, .opacity = 1 };
+  GlimsFillSettings   white = { .struct_size = sizeof white, .mode = GLIMS_FILL_SELECTION,
+                                .color = { 1, 1, 1, 1 }, .opacity = 1 };
+  GlimsBrushSettings  brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+  GlimsStrokePoint    point = { 16, 12, 1.0, 0.0, 0.0, 0 };
+  GlimsStrokeID       stroke = 0;
+  GlimsFilterID       filter = 0;
+  bool                empty = true;
+  int32_t             count = 0, before, w = 0, h = 0;
+  uint8_t             pixel[4];
+  uint8_t             thumb[256 * 256 * 4];
+  char                xcf[1024];
+  char               *error = NULL;
+  int                 events;
+
+  api->image_new (engine, 32, 24, &image, NULL);
+  layer = first_layer (image);
+
+  /* Components of a fresh RGB image: red, green and blue. Alpha joins
+   * once a layer can carry transparency. */
+  CHECK (api->image_components (engine, image, &comp) == GLIMS_STATUS_OK &&
+         comp.mode == GLIMS_COMPONENT_MODE_RGB &&
+         comp.supported == (GLIMS_COMPONENT_RED | GLIMS_COMPONENT_GREEN | GLIMS_COMPONENT_BLUE) &&
+         comp.active == comp.supported && comp.visible == comp.supported,
+         "a new RGB image reports R,G,B components, all active and visible (%x,%x,%x)",
+         comp.supported, comp.active, comp.visible);
+  CHECK (api->image_components (engine, 9999, &comp) == GLIMS_STATUS_NOT_FOUND &&
+         api->image_components (engine, image, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_channels (engine, image, rows, -1, &count) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_channels (engine, image, rows, 8, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_quick_mask (engine, image, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "component, channel and Quick Mask calls refuse bad arguments");
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer, NULL);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &red, NULL);
+  CHECK (api->image_components (engine, image, &comp) == GLIMS_STATUS_OK &&
+         comp.supported == (GLIMS_COMPONENT_RED | GLIMS_COMPONENT_GREEN |
+                          GLIMS_COMPONENT_BLUE | GLIMS_COMPONENT_ALPHA),
+         "alpha joins the components once a layer has it");
+
+  /* The components' visibility feeds the composite: hiding red turns the
+   * red layer black. */
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 0, "the red layer renders red");
+  CHECK (api->image_set_components (engine, image, 0, 0,
+                                    GLIMS_COMPONENT_RED, 0, NULL) == GLIMS_STATUS_OK &&
+         api->image_components (engine, image, &comp) == GLIMS_STATUS_OK &&
+         ! (comp.visible & GLIMS_COMPONENT_RED) &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 0 && pixel[3] == 255,
+         "hiding the red component drops it from the composite (%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2]);
+  CHECK (api->image_set_components (engine, image, 0, 0,
+                                    GLIMS_COMPONENT_RED, GLIMS_COMPONENT_RED, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255,
+         "restoring red brings the layer back");
+
+  /* Active masks change without an undo step; unknown bits and
+   * components the model lacks are refused. */
+  before = undo_depth (image);
+  CHECK (api->image_set_components (engine, image,
+                                    GLIMS_COMPONENT_BLUE | GLIMS_COMPONENT_GREEN, 0, 0, 0,
+                                    NULL) == GLIMS_STATUS_OK &&
+         api->image_components (engine, image, &comp) == GLIMS_STATUS_OK &&
+         comp.active == (comp.supported & ~(GLIMS_COMPONENT_BLUE | GLIMS_COMPONENT_GREEN)) &&
+         undo_depth (image) == before,
+         "component active masks change without an undo step");
+  api->image_set_components (engine, image, comp.supported, comp.supported, 0, 0, NULL);
+  CHECK (api->image_set_components (engine, image, GLIMS_COMPONENT_GRAY, 0, 0, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_set_components (engine, image, 64, 0, 0, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "components the model lacks and unknown bits are refused");
+
+  /* Save to Channel copies the selection into a new, invisible, selected
+   * channel as one undo step. */
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 8, 8 }, { 24, 20 } }, 2, &rect_opt);
+  before = undo_depth (image);
+  CHECK (api->channel_from_selection (engine, image, "Saved", &saved, &error) == GLIMS_STATUS_OK &&
+         saved > 0 && undo_depth (image) == before + 1,
+         "Save to Channel adds a channel as one undo step%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_channels (engine, image, rows, 8, &count) == GLIMS_STATUS_OK &&
+         count == 1 && rows[0].id == saved && rows[0].selected && ! rows[0].visible &&
+         ! rows[0].quick_mask && strcmp (rows[0].name, "Saved") == 0,
+         "the saved channel reads selected, invisible and named (%s)", rows[0].name);
+  CHECK (api->image_channels (engine, image, NULL, 0, &count) == GLIMS_STATUS_OK && count == 1,
+         "a NULL list still reports the channel count");
+
+  /* The channel's own pixels: bright coverage inside the selection. */
+  CHECK (api->drawable_thumbnail (engine, image, saved, 16, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_OK &&
+         w == 16 && h == 12 &&
+         thumb[(6 * w + 8) * 4] > 200 && thumb[(6 * w + 8) * 4 + 3] == 255 &&
+         thumb[(1 * w + 1) * 4] < 60,
+         "the channel thumbnails its coverage, inside bright, outside dark (%d,%d)",
+         thumb[(1 * w + 1) * 4], thumb[(6 * w + 8) * 4]);
+
+  /* Channel to selection, each combine mode, on two saved channels. The
+   * second covers the first's right half and beyond. */
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 16, 8 }, { 30, 20 } }, 2, &rect_opt);
+  api->channel_from_selection (engine, image, "Second", &saved2, NULL);
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  CHECK (api->channel_to_selection (engine, image, saved, GLIMS_SELECT_REPLACE, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 8, 8, 16, 12),
+         "channel to selection replaces the selection");
+  CHECK (api->channel_to_selection (engine, image, saved2, GLIMS_SELECT_ADD, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         rect_equals (bounds, 8, 8, 22, 12),
+         "adding a second channel unions the bounds");
+  CHECK (api->channel_to_selection (engine, image, saved2, GLIMS_SELECT_SUBTRACT, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         rect_equals (bounds, 8, 8, 8, 12),
+         "subtracting keeps only the first channel's left half");
+  CHECK (api->channel_to_selection (engine, image, saved2, GLIMS_SELECT_INTERSECT, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && empty,
+         "intersecting the disjoint remainder is empty");
+  CHECK (api->channel_to_selection (engine, image, saved, 4, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown combine operation is refused");
+
+  /* A selected channel is the edit target: copy reads its coverage,
+   * fills and clears write it, the layer below is untouched. */
+  CHECK (api->channel_command (engine, image, saved, GLIMS_CHANNEL_SELECT, NULL, NULL) == GLIMS_STATUS_OK,
+         "selecting the channel makes it the edit target");
+  api->channel_to_selection (engine, image, saved, GLIMS_SELECT_REPLACE, NULL);
+  CHECK (api->image_copy_pixels (engine, image, false, &copied, NULL) == GLIMS_STATUS_OK &&
+         copied.bounds.width == 16 && copied.bounds.height == 12 &&
+         copied.pixels[0] == 255 && copied.pixels[1] == 255 && copied.pixels[3] == 255,
+         "Copy reads the selected channel's coverage, not the red layer (%d,%d,%d)",
+         copied.pixels[0], copied.pixels[1], copied.pixels[2]);
+  api->free_pixels (copied.pixels);
+  copied.pixels = NULL;
+  CHECK (api->fill (engine, image, (GlimsPoint) { 0, 0 }, &black, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 0 &&
+         api->channel_to_selection (engine, image, saved, GLIMS_SELECT_REPLACE, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && empty,
+         "a fill paints the channel's coverage and leaves the layer red");
+  api->image_undo (engine, image);   /* channel to selection */
+  api->image_undo (engine, image);   /* the fill: coverage restored */
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  CHECK (api->image_clear (engine, image, NULL, NULL) == GLIMS_STATUS_OK &&
+         api->channel_to_selection (engine, image, saved, GLIMS_SELECT_REPLACE, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 0, 0, 32, 24),
+         "Clear fills the channel with coverage, selecting everything");
+  api->image_undo (engine, image);   /* channel to selection */
+  api->image_undo (engine, image);   /* the clear */
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  api->channel_to_selection (engine, image, saved, GLIMS_SELECT_REPLACE, NULL);
+
+  /* A stroke on the channel's id writes the channel, not the layer. */
+  CHECK (stroke_line (image, saved, &brush, 8, 14, 24, 14, NULL) == GLIMS_STATUS_OK &&
+         api->drawable_thumbnail (engine, image, saved, 16, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_OK &&
+         thumb[(7 * w + 8) * 4] < 100 &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 0,
+         "a stroke on the channel id paints the channel, not the layer");
+  api->image_undo (engine, image);   /* the stroke */
+
+  /* Selecting the layers again makes them the target once more. */
+  CHECK (api->channel_command (engine, image, 0, GLIMS_CHANNEL_SELECT, NULL, NULL) == GLIMS_STATUS_OK &&
+         api->fill (engine, image, (GlimsPoint) { 0, 0 }, &white, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 255,
+         "deselecting the channel returns fills to the layer");
+  api->image_undo (engine, image);   /* the layer fill */
+  api->channel_command (engine, image, saved, GLIMS_CHANNEL_SELECT, NULL, NULL);
+
+  /* Channel attributes: name, overlay visibility and color. New
+   * channels append to the list's end; find rows by id. */
+  change.struct_size = sizeof change;
+  change.properties  = GLIMS_CHANNEL_NAME;
+  strcpy (change.name, "Renamed");
+  before = undo_depth (image);
+  CHECK (api->channel_change (engine, image, saved, &change, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "renaming a channel is one undo step");
+  {
+    bool renamed = false;
+
+    api->image_channels (engine, image, rows, 8, &count);
+    for (int32_t i = 0; i < count && i < 8; i++)
+      renamed |= rows[i].id == saved && strcmp (rows[i].name, "Renamed") == 0;
+    CHECK (renamed, "the row carries the new name");
+  }
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK, "the rename step exists");
+  {
+    bool named = false;
+
+    api->image_channels (engine, image, rows, 8, &count);
+    for (int32_t i = 0; i < count && i < 8; i++)
+      named |= rows[i].id == saved && strcmp (rows[i].name, "Saved") == 0;
+    CHECK (named, "the rename undoes");
+  }
+  memset (&change, 0, sizeof change);
+  change.struct_size = sizeof change;
+  change.properties  = GLIMS_CHANNEL_VISIBLE | GLIMS_CHANNEL_COLOR | GLIMS_CHANNEL_OPACITY;
+  change.visible     = true;
+  change.color       = (GlimsColor) { 0, 0, 1, 0.6 };
+  change.opacity     = 0.6;
+  /* A visible channel composites its color over the masked-out region
+   * (the channel inherits show_masked from the selection): where the
+   * coverage is low the overlay tints, where it covers the composite is
+   * untouched. */
+  CHECK (api->channel_change (engine, image, saved, &change, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 4, 4, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[2] > 0 && pixel[0] < 255 &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0,
+         "a visible channel tints the composite over its masked-out area (%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2]);
+  {
+    bool attrs = false;
+
+    api->image_channels (engine, image, rows, 8, &count);
+    for (int32_t i = 0; i < count && i < 8; i++)
+      attrs |= rows[i].id == saved && rows[i].visible &&
+               rows[i].opacity > 0.5 && rows[i].opacity < 0.7 &&
+               rows[i].color.blue > 0.9;
+    CHECK (attrs, "the row reports visibility, opacity and color");
+  }
+  memset (&change, 0, sizeof change);
+  change.struct_size = sizeof change;
+  change.properties  = GLIMS_CHANNEL_VISIBLE;
+  change.visible     = false;
+  CHECK (api->channel_change (engine, image, saved, &change, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 4, 4, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[2] == 0,
+         "hiding the channel restores the composite");
+  memset (&change, 0, sizeof change);
+  CHECK (api->channel_change (engine, image, saved, &change, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->channel_change (engine, image, saved, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "channel changes refuse an empty struct and a NULL change");
+  change.struct_size = sizeof change;
+  change.properties  = 16;
+  CHECK (api->channel_change (engine, image, saved, &change, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "channel changes refuse unknown property bits");
+
+  /* Duplicate copies coverage and selects the copy; delete removes as
+   * one undo step each. */
+  before = undo_depth (image);
+  CHECK (api->channel_command (engine, image, saved, GLIMS_CHANNEL_DUPLICATE, &dup, NULL) == GLIMS_STATUS_OK &&
+         dup > 0 && undo_depth (image) == before + 1 &&
+         api->image_channels (engine, image, rows, 8, &count) == GLIMS_STATUS_OK && count == 3,
+         "duplicating a channel is one undo step");
+  {
+    bool selected = false, old_unselected = true;
+
+    for (int32_t i = 0; i < count && i < 8; i++)
+      {
+        if (rows[i].id == dup)
+          selected = rows[i].selected;
+        else
+          old_unselected &= ! rows[i].selected;
+      }
+    CHECK (selected && old_unselected,
+           "the copy is added selected, the rest unselected");
+  }
+  CHECK (api->drawable_thumbnail (engine, image, dup, 16, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_OK &&
+         thumb[(6 * w + 8) * 4] > 200,
+         "the copy carries the channel's coverage");
+  CHECK (api->channel_command (engine, image, dup, GLIMS_CHANNEL_DELETE, NULL, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 2 &&
+         api->image_channels (engine, image, rows, 8, &count) == GLIMS_STATUS_OK && count == 2,
+         "deleting a channel is one undo step");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_channels (engine, image, rows, 8, &count) == GLIMS_STATUS_OK && count == 3 &&
+         api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_channels (engine, image, rows, 8, &count) == GLIMS_STATUS_OK && count == 2,
+         "undo restores the deleted channel, then the duplicate's add");
+  api->channel_command (engine, image, saved, GLIMS_CHANNEL_SELECT, NULL, NULL);
+
+  /* Component changes unselect the channel, back to layers — but only
+   * when a flag actually changes, so deactivate alpha first. */
+  {
+    bool still_selected = false;
+
+    api->image_set_components (engine, image,
+                               GLIMS_COMPONENT_ALPHA, 0, 0, 0, NULL);
+    api->image_channels (engine, image, rows, 8, &count);
+    for (int32_t i = 0; i < count && i < 8; i++)
+      still_selected |= rows[i].selected;
+    api->image_set_components (engine, image,
+                               GLIMS_COMPONENT_ALPHA, GLIMS_COMPONENT_ALPHA, 0, 0, NULL);
+    CHECK (! still_selected, "changing components unselects the channel, back to layers");
+  }
+  api->channel_command (engine, image, saved, GLIMS_CHANNEL_SELECT, NULL, NULL);
+
+  /* Wrong ids: layers, layer masks, foreign channels, unknown ids. */
+  change.properties = GLIMS_CHANNEL_VISIBLE;
+  api->layer_mask_add (engine, image, layer, GLIMS_MASK_WHITE, false, &mask, NULL);
+  api->image_new (engine, 8, 8, &other, NULL);
+  CHECK (api->channel_to_selection (engine, image, layer, GLIMS_SELECT_REPLACE, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->channel_to_selection (engine, image, mask, GLIMS_SELECT_REPLACE, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->channel_change (engine, image, layer, &change, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->channel_command (engine, image, layer, GLIMS_CHANNEL_DELETE, NULL, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->channel_command (engine, image, 7777, GLIMS_CHANNEL_SELECT, NULL, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->channel_from_selection (engine, 9999, "x", NULL, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "layer, mask, unknown and foreign ids are refused");
+  {
+    GlimsItemID fchan = 0;
+    api->select_command (engine, other, GLIMS_SELECT_ALL, 0, NULL);
+    api->channel_from_selection (engine, other, "Foreign", &fchan, NULL);
+    CHECK (api->channel_command (engine, image, fchan, GLIMS_CHANNEL_DELETE, NULL, NULL) == GLIMS_STATUS_NOT_FOUND &&
+           api->channel_to_selection (engine, image, fchan, GLIMS_SELECT_REPLACE, NULL) == GLIMS_STATUS_NOT_FOUND,
+           "a foreign channel id is refused");
+  }
+  api->image_close (engine, other);
+  other = 0;
+
+  /* Channels take filters too; commit policies live in
+   * test_drawable_filters. */
+  CHECK (api->filter_begin (engine, image, saved, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK &&
+         filter > 0 && api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+         "a filter session opens on a channel and aborts cleanly");
+  filter = 0;
+
+  /* Mutations report BUSY during a stroke or a preview; reads and
+   * selection stay allowed. */
+  CHECK (api->stroke_begin (engine, image, layer, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK,
+         "a stroke begins for the busy checks");
+  CHECK (api->channel_from_selection (engine, image, "x", NULL, NULL) == GLIMS_STATUS_BUSY &&
+         api->channel_change (engine, image, saved, &change, NULL) == GLIMS_STATUS_BUSY &&
+         api->channel_command (engine, image, saved, GLIMS_CHANNEL_DUPLICATE, NULL, NULL) == GLIMS_STATUS_BUSY &&
+         api->channel_command (engine, image, saved, GLIMS_CHANNEL_DELETE, NULL, NULL) == GLIMS_STATUS_BUSY &&
+         api->channel_to_selection (engine, image, saved, GLIMS_SELECT_REPLACE, NULL) == GLIMS_STATUS_BUSY &&
+         api->image_set_components (engine, image, GLIMS_COMPONENT_ALPHA, 0, 0, 0, NULL) == GLIMS_STATUS_BUSY &&
+         api->image_set_quick_mask (engine, image, true, NULL) == GLIMS_STATUS_BUSY,
+         "channel and component writes report BUSY during a stroke");
+  CHECK (api->image_channels (engine, image, rows, 8, &count) == GLIMS_STATUS_OK &&
+         api->image_components (engine, image, &comp) == GLIMS_STATUS_OK &&
+         api->image_quick_mask (engine, image, &qstate) == GLIMS_STATUS_OK &&
+         api->channel_command (engine, image, saved, GLIMS_CHANNEL_SELECT, NULL, NULL) == GLIMS_STATUS_OK,
+         "reads and channel selection still work during the stroke");
+  CHECK (api->stroke_end (engine, stroke) == GLIMS_STATUS_OK,
+         "the refusals left the stroke alive");
+  CHECK (api->filter_begin (engine, image, layer, "gegl:gaussian-blur", &filter, NULL) == GLIMS_STATUS_OK &&
+         api->channel_from_selection (engine, image, "x", NULL, NULL) == GLIMS_STATUS_BUSY &&
+         api->image_set_quick_mask (engine, image, true, NULL) == GLIMS_STATUS_BUSY &&
+         api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+         "channel changes report BUSY during a preview, and abort works");
+
+  /* XCF keeps the saved channels and their coverage. */
+  snprintf (xcf, sizeof xcf, "%s/channels.xcf", work);
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK &&
+         api->image_channels (engine, reopened, rows, 8, &count) == GLIMS_STATUS_OK &&
+         count == 2,
+         "an XCF round trip keeps the channels (%d)", count);
+  {
+    bool found = false;
+
+    for (int32_t i = 0; i < count && i < 8; i++)
+      if (strcmp (rows[i].name, "Saved") == 0 &&
+          api->drawable_thumbnail (engine, reopened, rows[i].id, 16, thumb,
+                                   sizeof thumb, &w, &h) == GLIMS_STATUS_OK)
+        found = thumb[(6 * w + 8) * 4] > 200;
+    CHECK (found, "the channels keep their names and their coverage");
+  }
+  api->image_close (engine, reopened);
+  reopened = 0;
+
+  /* The Quick Mask moves the selection into its own channel and selects
+   * it; while on, the selection itself is empty. */
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 8, 8 }, { 24, 20 } }, 2, &rect_opt);
+  CHECK (api->image_quick_mask (engine, image, &qstate) == GLIMS_STATUS_OK &&
+         ! qstate.enabled && qstate.channel == 0,
+         "the Quick Mask starts off with no channel");
+  before = undo_depth (image);
+  CHECK (api->image_set_quick_mask (engine, image, true, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 &&
+         api->image_quick_mask (engine, image, &qstate) == GLIMS_STATUS_OK &&
+         qstate.enabled && qstate.channel > 0 &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && empty,
+         "enabling the Quick Mask moves the selection into its channel");
+  qm = qstate.channel;
+  {
+    bool qm_row = false;
+
+    api->image_channels (engine, image, rows, 8, &count);
+    for (int32_t i = 0; i < count && i < 8; i++)
+      qm_row |= rows[i].id == qm && rows[i].quick_mask && rows[i].selected;
+    CHECK (count == 3 && qm_row,
+           "the Quick Mask's channel lists as selected with its flag");
+  }
+  CHECK (api->drawable_thumbnail (engine, image, qm, 16, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_OK &&
+         thumb[(6 * w + 8) * 4] > 200 && thumb[(1 * w + 1) * 4] < 60,
+         "the Quick Mask channel holds the selection's coverage");
+  CHECK (api->channel_command (engine, image, qm, GLIMS_CHANNEL_DELETE, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "the Quick Mask's channel cannot be deleted");
+
+  /* Painting the Quick Mask channel narrows the selection it becomes. */
+  CHECK (stroke_line (image, qm, &brush, 10, 6, 10, 22, NULL) == GLIMS_STATUS_OK,
+         "painting the Quick Mask channel works");
+  CHECK (api->image_set_quick_mask (engine, image, false, NULL) == GLIMS_STATUS_OK &&
+         api->image_quick_mask (engine, image, &qstate) == GLIMS_STATUS_OK &&
+         ! qstate.enabled && qstate.channel == 0 &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && bounds.x > 8 && bounds.width < 16,
+         "disabling the Quick Mask turns the painted mask into the selection");
+  /* The previously selected channel comes back as the edit target. */
+  {
+    bool restored = false;
+
+    api->image_channels (engine, image, rows, 8, &count);
+    for (int32_t i = 0; i < count && i < 8; i++)
+      restored |= rows[i].id == saved && rows[i].selected;
+    CHECK (count == 2 && restored,
+           "disabling restores the saved channel as the edit target");
+  }
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_quick_mask (engine, image, &qstate) == GLIMS_STATUS_OK &&
+         ! qstate.enabled &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 8, 8, 16, 12),
+         "undoing the toggle, the stroke and the mask restores the selection");
+  CHECK (api->image_set_quick_mask (engine, image, true, NULL) == GLIMS_STATUS_OK &&
+         api->image_set_quick_mask (engine, image, true, NULL) == GLIMS_STATUS_OK &&
+         api->image_set_quick_mask (engine, image, false, NULL) == GLIMS_STATUS_OK,
+         "re-toggling to the same state adds nothing");
+
+  /* The engine finds the Quick Mask's channel by the reserved name
+   * "Qmask", not by identity: adding or renaming a channel to it turns
+   * the mask on, and renaming the mask's channel away strands the mode.
+   * The name is refused for ordinary channels before anything mutates. */
+  {
+    GlimsItemID reserved = 0;
+
+    before = undo_depth (image);
+    CHECK (api->channel_from_selection (engine, image, "Qmask", &reserved, &error) == GLIMS_STATUS_INVALID_ARGUMENT &&
+           reserved == 0 && error &&
+           api->image_channels (engine, image, rows, 8, &count) == GLIMS_STATUS_OK && count == 2 &&
+           api->image_quick_mask (engine, image, &qstate) == GLIMS_STATUS_OK && ! qstate.enabled &&
+           undo_depth (image) == before,
+           "the reserved name refuses Save to Channel without side effects (%s)",
+           error ? error : "");
+    api->free_string (error);
+    error = NULL;
+    CHECK (api->channel_from_selection (engine, image, "Qmask ", &reserved, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+           reserved == 0 &&
+           api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+           ! empty && rect_equals (bounds, 8, 8, 16, 12),
+           "trailing space still names the reserved channel, selection untouched");
+
+    memset (&change, 0, sizeof change);
+    change.struct_size = sizeof change;
+    change.properties  = GLIMS_CHANNEL_NAME;
+    strcpy (change.name, "Qmask");
+    CHECK (api->channel_change (engine, image, saved, &change, &error) == GLIMS_STATUS_INVALID_ARGUMENT &&
+           error && undo_depth (image) == before,
+           "renaming an ordinary channel to the reserved name is refused (%s)", error ? error : "");
+    api->free_string (error);
+    error = NULL;
+  }
+  {
+    bool kept = false;
+
+    api->image_channels (engine, image, rows, 8, &count);
+    for (int32_t i = 0; i < count && i < 8; i++)
+      kept |= rows[i].id == saved && strcmp (rows[i].name, "Saved") == 0;
+    CHECK (kept, "the refused rename keeps the old name");
+  }
+
+  /* While the mask is on its channel cannot be renamed away; an ordinary
+   * channel keeps renaming freely. */
+  CHECK (api->image_set_quick_mask (engine, image, true, NULL) == GLIMS_STATUS_OK &&
+         api->image_quick_mask (engine, image, &qstate) == GLIMS_STATUS_OK &&
+         qstate.enabled && qstate.channel > 0,
+         "the Quick Mask turns on for the rename guards");
+  qm = qstate.channel;
+  before = undo_depth (image);
+  strcpy (change.name, "Elsewhere");
+  CHECK (api->channel_change (engine, image, qm, &change, &error) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         error && undo_depth (image) == before,
+         "renaming the live Quick Mask channel is refused (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  {
+    bool named = false;
+
+    api->image_channels (engine, image, rows, 8, &count);
+    for (int32_t i = 0; i < count && i < 8; i++)
+      named |= rows[i].id == qm && strcmp (rows[i].name, "Qmask") == 0 && rows[i].quick_mask;
+    CHECK (named && count == 3,
+           "the mask channel keeps the reserved name and stays the mask (%d)", count);
+  }
+  strcpy (change.name, "Qmask");
+  CHECK (api->channel_change (engine, image, qm, &change, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before,
+         "renaming the mask channel to its own name is a no-op");
+  CHECK (api->channel_change (engine, image, saved, &change, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "the reserved name stays refused for ordinary channels while the mask is on");
+  CHECK (api->channel_from_selection (engine, image, "Qmask", NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "and for a new channel while the mask is on");
+  strcpy (change.name, "Moved");
+  CHECK (api->channel_change (engine, image, saved, &change, NULL) == GLIMS_STATUS_OK,
+         "an ordinary channel still renames freely");
+  api->image_undo (engine, image);   /* the rename */
+  CHECK (api->image_set_quick_mask (engine, image, false, NULL) == GLIMS_STATUS_OK,
+         "the mask turns back off after the guards");
+
+  /* Toggling the Quick Mask and the component changes reported
+   * CHANNELS_CHANGED along the way. */
+  events = atomic_load (&channels_events);
+  CHECK (events > 0, "CHANNELS_CHANGED events arrived (%d)", events);
+
+  api->image_close (engine, image);
+}
+
+/* Filters on drawables that are not plain layers: a live preview opens
+ * and cancels on a layer mask, a saved channel and the Quick Mask's
+ * channel; Apply commits each as one undo step. How the pixels last —
+ * merged or non-destructive — is the engine's versioning call (layers
+ * and 3.2.6+ channels keep the filter, layer masks, the Quick Mask and
+ * earlier channels merge); either way the result has to survive undo,
+ * redo and an XCF round trip. */
+static void
+test_drawable_filters (const char *work)
+{
+  GlimsImageID        image = 0, reopened = 0, other = 0;
+  GlimsItemID         layer = 0, mask = 0, saved = 0, qm = 0, foreign = 0;
+  GlimsFilterID       filter = 0;
+  GlimsQuickMaskState qstate;
+  GlimsChannelInfo    rows[8];
+  GlimsSelectOptions  rect_opt = { .struct_size = sizeof rect_opt,
+                                   .operation = GLIMS_SELECT_REPLACE };
+  GlimsFillSettings   red = { .struct_size = sizeof red, .mode = GLIMS_FILL_SELECTION,
+                              .color = { 1, 0, 0, 1 }, .opacity = 1 };
+  GlimsRect           bounds;
+  bool                empty = true;
+  int32_t             count = 0, before, w = 0, h = 0;
+  uint8_t             pixel[4];
+  uint8_t             thumb[256 * 256 * 4];
+  char                xcf[1024];
+
+  api->image_new (engine, 32, 24, &image, NULL);
+  api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &layer, NULL);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &red, NULL);
+  api->layer_mask_add (engine, image, layer, GLIMS_MASK_WHITE, true, &mask, NULL);
+
+  /* A mask filter cancels without touching coverage or history. */
+  before = undo_depth (image);
+  CHECK (api->filter_begin (engine, image, mask, "gegl:value-invert", &filter, NULL) == GLIMS_STATUS_OK &&
+         filter > 0,
+         "a filter session opens on a layer mask");
+  CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before &&
+         api->drawable_thumbnail (engine, image, mask, 16, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_OK &&
+         thumb[(6 * w + 8) * 4] > 200,
+         "aborting leaves the mask and history alone (%d)", thumb[(6 * w + 8) * 4]);
+  filter = 0;
+
+  /* Apply merges the operation into the mask's pixels: white coverage
+   * becomes black, the layer drops out of the composite, one undo step. */
+  CHECK (api->filter_begin (engine, image, mask, "gegl:value-invert", &filter, NULL) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, filter, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "a mask filter commits as one undo step (%d -> %d)", before, undo_depth (image));
+  filter = 0;
+  CHECK (api->drawable_thumbnail (engine, image, mask, 16, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_OK &&
+         thumb[(6 * w + 8) * 4] < 60,
+         "the committed mask is black, not white (%d)", thumb[(6 * w + 8) * 4]);
+  CHECK (api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 255 && pixel[2] == 255,
+         "the masked red layer falls out of the composite (%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2]);
+  CHECK (api->drawable_thumbnail (engine, image, layer, 16, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_OK &&
+         thumb[(6 * w + 8) * 4] > 200 && thumb[(6 * w + 8) * 4 + 1] < 60,
+         "the layer's own pixels stayed red");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 0,
+         "undo restores the white mask and the red composite");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 255,
+         "redo merges the inversion again");
+
+  /* The merged mask survives an XCF round trip. */
+  snprintf (xcf, sizeof xcf, "%s/mask-filter.xcf", work);
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, reopened, 1.0, (GlimsRect) { 16, 12, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&
+         pixel[0] == 255 && pixel[1] == 255 && pixel[2] == 255,
+         "the filtered mask persists through save and reopen");
+  api->image_close (engine, reopened);
+  reopened = 0;
+
+  /* A saved channel keeps its filtered coverage through undo and through
+   * XCF — merged into its buffer where channel effects don't serialize
+   * (before 3.2.6), a serialized non-destructive effect after. */
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 8, 8 }, { 24, 20 } }, 2, &rect_opt);
+  CHECK (api->channel_from_selection (engine, image, "Filtered", &saved, NULL) == GLIMS_STATUS_OK &&
+         api->drawable_thumbnail (engine, image, saved, 16, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_OK &&
+         thumb[(6 * w + 8) * 4] > 200 && thumb[(1 * w + 1) * 4] < 60,
+         "the channel starts bright inside the selection and dark outside");
+  /* A filter works inside the image's selection, on any drawable:
+   * select everything so the whole channel is filtered. */
+  api->select_command (engine, image, GLIMS_SELECT_ALL, 0, NULL);
+  before = undo_depth (image);
+  CHECK (api->filter_begin (engine, image, saved, "gegl:value-invert", &filter, NULL) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, filter, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "a channel filter commits as one undo step (%d -> %d)", before, undo_depth (image));
+  filter = 0;
+  CHECK (api->drawable_thumbnail (engine, image, saved, 16, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_OK &&
+         thumb[(6 * w + 8) * 4] < 60 && thumb[(1 * w + 1) * 4] > 200,
+         "the committed channel's coverage inverted (%d,%d)",
+         thumb[(6 * w + 8) * 4], thumb[(1 * w + 1) * 4]);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_thumbnail (engine, image, saved, 16, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_OK &&
+         thumb[(6 * w + 8) * 4] > 200,
+         "undo restores the channel's coverage");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->drawable_thumbnail (engine, image, saved, 16, thumb, sizeof thumb, &w, &h) == GLIMS_STATUS_OK &&
+         thumb[(6 * w + 8) * 4] < 60,
+         "redo inverts it again");
+
+  snprintf (xcf, sizeof xcf, "%s/channel-filter.xcf", work);
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK,
+         "the filtered channel saves and reopens");
+  {
+    bool inverted = false;
+
+    count = 0;
+    api->image_channels (engine, reopened, rows, 8, &count);
+    for (int32_t i = 0; i < count && i < 8; i++)
+      if (strcmp (rows[i].name, "Filtered") == 0 &&
+          api->drawable_thumbnail (engine, reopened, rows[i].id, 16, thumb,
+                                   sizeof thumb, &w, &h) == GLIMS_STATUS_OK)
+        inverted = thumb[(6 * w + 8) * 4] < 60 && thumb[(1 * w + 1) * 4] > 200;
+    CHECK (inverted, "the inverted coverage survives the XCF round trip");
+  }
+  api->image_close (engine, reopened);
+  reopened = 0;
+
+  /* The Quick Mask's channel takes a filter too; Apply merges it so
+   * exiting the mask cannot leave a live effect behind. The inverted
+   * mask becomes the selection's complement. */
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 8, 8 }, { 24, 20 } }, 2, &rect_opt);
+  CHECK (api->image_set_quick_mask (engine, image, true, NULL) == GLIMS_STATUS_OK &&
+         api->image_quick_mask (engine, image, &qstate) == GLIMS_STATUS_OK &&
+         qstate.enabled && qstate.channel > 0,
+         "the Quick Mask turns on for its filter");
+  qm = qstate.channel;
+  before = undo_depth (image);
+  CHECK (api->filter_begin (engine, image, qm, "gegl:value-invert", &filter, NULL) == GLIMS_STATUS_OK &&
+         api->filter_commit (engine, filter, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "a Quick Mask filter commits as one undo step (%d -> %d)", before, undo_depth (image));
+  filter = 0;
+  CHECK (api->image_set_quick_mask (engine, image, false, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 0, 0, 32, 24),
+         "exiting turns the inverted mask into the complement selection (%d,%d %dx%d)",
+         bounds.x, bounds.y, bounds.width, bounds.height);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&   /* the mask's exit */
+         api->image_undo (engine, image) == GLIMS_STATUS_OK &&   /* the merged filter */
+         api->image_quick_mask (engine, image, &qstate) == GLIMS_STATUS_OK && qstate.enabled &&
+         api->image_set_quick_mask (engine, image, false, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 8, 8, 16, 12),
+         "undoing exit and merge restores the original mask (%d,%d %dx%d)",
+         bounds.x, bounds.y, bounds.width, bounds.height);
+
+  /* Unknown, detached and foreign ids stay refused; no facade call hands
+   * out the image's selection mask. */
+  CHECK (api->filter_begin (engine, image, 9999, "gegl:value-invert", &filter, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->filter_begin (engine, 9999, mask, "gegl:value-invert", &filter, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "unknown drawable and image ids refuse");
+  api->image_new (engine, 8, 8, &other, NULL);
+  foreign = first_layer (other);
+  CHECK (api->filter_begin (engine, image, foreign, "gegl:value-invert", &filter, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "a foreign image's drawable refuses");
+  api->image_close (engine, other);
+  other = 0;
+  CHECK (api->channel_command (engine, image, saved, GLIMS_CHANNEL_DELETE, NULL, NULL) == GLIMS_STATUS_OK,
+         "delete the filtered channel");
+  CHECK (api->filter_begin (engine, image, saved, "gegl:value-invert", &filter, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "the deleted channel stays unreachable while undo holds it");
+  api->image_undo (engine, image);   /* the delete */
+
+  api->image_close (engine, image);
+}
+
+/* The qmask-name.xcf fixture (fixtures/README.md): written by GIMP 3.0.8
+ * while its Quick Mask was on. The engine finds the mask's channel by
+ * the reserved name "Qmask" — any channel added to or renamed to it
+ * becomes the mask — so the stored channel resumes as the live mask on
+ * open, and the rename guards treat it like a mask the facade made. */
+static void
+test_qmask_name_fixture (const char *fixtures)
+{
+  GlimsImageID        image = 0;
+  GlimsItemID         qm = 0, saved = 0;
+  GlimsQuickMaskState qstate;
+  GlimsChannelInfo    rows[8];
+  GlimsChannelChange  change = { .struct_size = sizeof change,
+                                 .properties = GLIMS_CHANNEL_NAME };
+  GlimsRect           bounds;
+  bool                empty = true;
+  int32_t             count = 0, i;
+  char                path[1024];
+  char               *error = NULL;
+
+  snprintf (path, sizeof path, "%s/qmask-name.xcf", fixtures);
+  CHECK (api->image_open (engine, path, &image, &error) == GLIMS_STATUS_OK && image > 0,
+         "the Quick Mask name fixture opens%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  if (! image)
+    return;
+
+  CHECK (api->image_quick_mask (engine, image, &qstate) == GLIMS_STATUS_OK &&
+         qstate.enabled && qstate.channel > 0,
+         "the stored Qmask channel resumes as the live mask on open");
+  qm = qstate.channel;
+  {
+    bool qm_row = false, saved_row = false, other_row = false;
+
+    api->image_channels (engine, image, rows, 8, &count);
+    for (i = 0; i < count && i < 8; i++)
+      {
+        if (rows[i].id == qm)
+          qm_row = rows[i].quick_mask && strcmp (rows[i].name, "Qmask") == 0;
+        else if (strcmp (rows[i].name, "Saved") == 0)
+          {
+            saved_row = true;
+            saved     = rows[i].id;
+          }
+        else if (strcmp (rows[i].name, "Other") == 0)
+          other_row = true;
+      }
+    CHECK (count == 3 && qm_row && saved_row && other_row,
+           "the rows read the live mask and the two ordinary channels (%d)", count);
+  }
+
+  strcpy (change.name, "Elsewhere");
+  CHECK (api->channel_change (engine, image, qm, &change, &error) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         error,
+         "renaming the adopted mask channel is refused (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  strcpy (change.name, "Qmask");
+  CHECK (saved > 0 &&
+         api->channel_change (engine, image, saved, &change, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an ordinary channel cannot take the reserved name");
+  {
+    bool named = false;
+
+    api->image_channels (engine, image, rows, 8, &count);
+    for (i = 0; i < count && i < 8; i++)
+      named |= rows[i].id == qm && strcmp (rows[i].name, "Qmask") == 0 && rows[i].quick_mask;
+    CHECK (named && count == 3, "the refused renames changed nothing");
+  }
+
+  /* Exiting converts the fixture's mask to its selection; a normal
+   * toggle still works afterwards. */
+  CHECK (api->image_set_quick_mask (engine, image, false, NULL) == GLIMS_STATUS_OK &&
+         api->image_channels (engine, image, rows, 8, &count) == GLIMS_STATUS_OK && count == 2 &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 10, 8, 20, 16),
+         "exiting turns the stored mask into its selection (%d,%d %dx%d)",
+         bounds.x, bounds.y, bounds.width, bounds.height);
+  CHECK (api->image_set_quick_mask (engine, image, true, NULL) == GLIMS_STATUS_OK &&
+         api->image_set_quick_mask (engine, image, false, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 10, 8, 20, 16),
+         "the mask toggles cleanly on a file that arrived with the reserved name");
+
+  api->image_close (engine, image);
+}
+
 /* A deleted item lives on in the undo stack until the undo is dropped,
  * still under its id. Calls must not reach it: an edit would change what
  * undoing the delete brings back, outside any undo step. */
@@ -2883,6 +3689,9 @@ main (int argc, char **argv)
   test_render_freshness ();
   test_transforms ();
   test_matrix_transform ();
+  test_channels (argv[2]);
+  test_drawable_filters (argv[2]);
+  test_qmask_name_fixture (argv[3]);
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 
