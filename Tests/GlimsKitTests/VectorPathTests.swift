@@ -86,4 +86,59 @@ final class VectorPathTests: XCTestCase {
         XCTAssertEqual(outline.boundingBoxOfPath, CGRect(x: 0, y: 0, width: 200, height: 160))
         XCTAssertTrue(outline.contains(CGPoint(x: 100, y: 40)), "the closed triangle encloses its middle")
     }
+
+    func testMovingASetMovesAnchorsAndHandlesAcrossSubpaths() {
+        var path = VectorPath(subpaths: [
+            .init(anchors: [.init(CGPoint(x: 0, y: 0)),
+                            .init(point: CGPoint(x: 10, y: 0),
+                                  handleIn: CGPoint(x: 5, y: 0), handleOut: CGPoint(x: 15, y: 0))]),
+            .init(anchors: [.init(CGPoint(x: 100, y: 100))], isClosed: true),
+        ])
+        let set: Set<Index> = [Index(subpath: 0, anchor: 1), Index(subpath: 1, anchor: 0)]
+        path.moveAnchors(set, by: CGSize(width: 3, height: -2))
+
+        let moved = path[Index(subpath: 0, anchor: 1)]
+        XCTAssertEqual(moved.point, CGPoint(x: 13, y: -2))
+        XCTAssertEqual(moved.handleIn, CGPoint(x: 8, y: -2))
+        XCTAssertEqual(moved.handleOut, CGPoint(x: 18, y: -2))
+        XCTAssertEqual(path[Index(subpath: 1, anchor: 0)].point, CGPoint(x: 103, y: 98))
+        XCTAssertEqual(path[Index(subpath: 0, anchor: 0)].point, CGPoint(x: 0, y: 0),
+                       "an anchor outside the set stays put")
+        XCTAssertTrue(path.subpaths[1].isClosed, "moving does not change closings")
+
+        path.moveAnchors([Index(subpath: 9, anchor: 0), Index(subpath: 0, anchor: 7)],
+                        by: CGSize(width: 1, height: 1))
+        XCTAssertEqual(path.anchorCount, 3, "indices naming no anchor are ignored")
+    }
+
+    func testRemovingASetDescendsAcrossSubpathsAndDropsAndOpens() {
+        var path = VectorPath(subpaths: [
+            .init(anchors: [.init(CGPoint(x: 0, y: 0)), .init(CGPoint(x: 10, y: 0)), .init(CGPoint(x: 20, y: 0))],
+                  isClosed: true),
+            .init(anchors: [.init(CGPoint(x: 100, y: 0))]),
+            .init(anchors: [.init(CGPoint(x: 200, y: 0)), .init(CGPoint(x: 210, y: 0))], isClosed: true),
+        ])
+        let set: Set<Index> = [Index(subpath: 0, anchor: 0), Index(subpath: 0, anchor: 2),
+                               Index(subpath: 1, anchor: 0), Index(subpath: 2, anchor: 1)]
+        path.removeAnchors(set)
+
+        XCTAssertEqual(path.subpaths.count, 2, "the emptied middle subpath dropped away")
+        XCTAssertEqual(path.subpaths[0].anchors.map(\.point), [CGPoint(x: 10, y: 0)])
+        XCTAssertFalse(path.subpaths[0].isClosed, "a closed subpath left with one anchor opens")
+        XCTAssertEqual(path.subpaths[1].anchors.map(\.point), [CGPoint(x: 200, y: 0)],
+                       "the later subpath shifted down by the dropped one")
+        XCTAssertFalse(path.subpaths[1].isClosed)
+
+        path.removeAnchors([Index(subpath: 5, anchor: 0)])
+        XCTAssertEqual(path.subpaths.count, 2, "indices naming no anchor are ignored")
+        path.removeAnchors([Index(subpath: 0, anchor: 0), Index(subpath: 1, anchor: 0)])
+        XCTAssertTrue(path.isEmpty, "removing every anchor empties the path")
+    }
+
+    func testPruningKeepsOnlyTheIndicesThatStillExist() {
+        let path = triangle()
+        let pruned = path.pruned([Index(subpath: 0, anchor: 1), Index(subpath: 0, anchor: 9),
+                                  Index(subpath: 4, anchor: 0)])
+        XCTAssertEqual(pruned, [Index(subpath: 0, anchor: 1)])
+    }
 }
