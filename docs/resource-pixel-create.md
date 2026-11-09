@@ -163,22 +163,29 @@ before returning. It returns the positive handle, which existing read
 APIs (`resources`, `resourceIdentifiers`, `resolveResource`,
 `resourceThumbnail`) consume unchanged.
 
-## What was BUILT versus NOT RUN
+## Acceptance checks
 
-Built and compile-checked here:
+The native adapter and general conformance suites pass on all four supported
+engines. The standalone resource harness also passes on every engine,
+including creation, exact saved GBR/PAT bytes, caller-buffer ownership,
+identifiers/thumbnails, global busy refusals, unchanged image/history and
+native clipboard state, and persistence after a fresh engine process.
 
-- `swift build -j 2` — PASS (25.85 s, pre-existing warnings only).
-- `swift build -j 2 --build-tests` — PASS (includes the new
-  `ResourceCreationInputTests`).
-- Source verification of every native name/behavior above against the
-  pinned `GIMP_3_2_8` tree (read-only).
+The original helper draft did not compile natively because its move call
+omitted an argument. After that correction, fault injection reproduced nine
+failures from a wrong gradient status and deletion of preexisting collision
+sentinels. Cleanup now requires successful staging creation or promotion;
+gradient creation returns UNSUPPORTED. The configured-folder chooser also
+releases its expected mkdir error when the directory already exists.
 
-NOT run (out of scope for this slice; the shared engine/runtime owner is
-Root): no native compiler invocation, no `build-adapter.sh`, no engine
-startup, no runtime/native tests, no GUI, no relink. The adapter C code
-is therefore compile-UNVERIFIED; the Swift unit tests were compiled but
-not executed (`swift test` was not run — only the two build commands
-above are the allowed actual verification).
+Independent source review found one more output-contract error: dispatch
+without an engine bypassed the implementation's output reset. A real facade
+test reproduced that failure; the public bridge now clears the handle before
+dispatch. The final four-engine runs include this regression. Swift units
+and build checks pass; the PR records current integration counts.
+
+This is a backend and wrapper. Creation controls, duplicate/rename/delete,
+selection capture and gradient creation are separate work.
 
 ## Documented native test procedure (for Root to run later)
 
@@ -231,15 +238,11 @@ WORK_DIR FIXTURES_DIR` with a throwaway `HOME`/`GIMP3_DIRECTORY`):
    directory with a valid GBR inside: after a factory refresh it must
    NOT appear in `resources()`).
 
-## Genuine acceptance gaps
+## Remaining scope and limits
 
-- The C adapter (`Engine/resource-create.c`, bridge) is not compiled or
-  run here; first native compile may surface include/signature issues —
-  Root owns `build-adapter.sh --test`.
-- Swift unit tests were compiled, not executed.
-- Behavior on the other three engine sets (3.2.0, 3.0.8, master) is
-  source-expected to match (same APIs) but unverified; the 3.0.8 set
-  predates some core refactors, so Root should run the procedure there
-  too.
-- No claim is made about crash mid-save atomicity beyond the actual
-  cleanup steps listed above.
+The tests use isolated configured writable folders. They do not establish
+atomicity against arbitrary concurrent external filesystem changes or cover
+every save/stream-close failure. The checked save precedes publication,
+failed collisions preserve preexisting paths, and only paths acquired by
+this call are cleanup candidates. Source review and the runtime matrix do
+not replace final integrated app/bundle verification.
