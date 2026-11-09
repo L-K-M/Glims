@@ -16,7 +16,7 @@ counts, NULL/invalid-UTF-8/empty fields, duplicate case-folded languages and a
 bad terminator before publishing the result. No native pretty-string parsing
 or language/text reconstruction occurs in the frontend.
 
-Validation:833 unit tests pass. All four real140-slot adapters pass their
+Validation:838 unit tests pass after integration with merged view rotation. All four real140-slot adapters pass their
 existing native suites (1917 checks on3.2.8,3.2.0 andmaster;1703 on3.0.8).
 A public-header-only harness passes30 checks on every engine: known maps and
 Unicode, refusal output clearing, reads during actual stroke/filter sessions,
