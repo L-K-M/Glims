@@ -263,10 +263,11 @@ final class PathTool {
             return true
         }
         syncWithDocument()
-        // With several paths selected, Delete/Return/Escape are consumed
+        // With several paths selected, Delete/Return/Escape/arrows are consumed
         // without editing anything — no anchor removal, no new subpath.
         if document.hasMultipleSelectedPaths,
-           Self.deleteKeys.contains(keyCode) || Self.returnKeys.contains(keyCode) || keyCode == Self.escapeKey {
+           Self.deleteKeys.contains(keyCode) || Self.returnKeys.contains(keyCode) || keyCode == Self.escapeKey
+            || CanvasKeyboardPolicy.Arrow(keyCode: keyCode) != nil {
             return true
         }
         if Self.returnKeys.contains(keyCode) || keyCode == Self.escapeKey {

@@ -107,6 +107,14 @@ extension EngineSmokeTest {
                 && doc.hasMultipleSelectedChannels,
               "two selected channels: no single target, channel target still active")
 
+        let channelPalette = ChannelsPaletteController()
+        channelPalette.retarget(to: doc)
+        if let body = channelPalette.view as? ChannelsPaletteView {
+            check(body.channelRows.filter(\.isSelected).map(\.channelID).sorted() == [c1, c2].sorted()
+                    && body.channelRows.allSatisfy { !$0.isTarget },
+                  "both recalled channel rows are highlighted without claiming one paint target")
+        } else { check(false, "channel palette has its row view") }
+
         // Recall, path kind: exact order; no active path while two are
         // selected, the older path still alive and unselected.
         check(succeeded(recall(pathSet, .path)), "path recall succeeds")
@@ -186,6 +194,28 @@ extension EngineSmokeTest {
         // disable.
         check(succeeded(recall(pathSet, .path)), "recall the 2-path set")
         settle()
+        // Remove unrelated layer/channel ambiguity so arrows could otherwise
+        // move a real paint target; cancellation of opposite arrows must not
+        // hide a mutation, so inspect history and bounds after EACH event.
+        try session.selectItems([bg], kind: .layer, image: image)
+        try session.selectItems([], kind: .channel, image: image)
+        try doc.reload()
+        let previousTool = ToolState.shared.current
+        ToolState.shared.select(.path)
+        defer { ToolState.shared.select(previousTool) }
+        let arrowBounds = doc.layers.map(\.bounds)
+        let arrowUndo = doc.undoInfo.undoCount
+        for (code, text) in [(123, "\u{F702}"), (124, "\u{F703}"), (125, "\u{F701}"), (126, "\u{F700}")] {
+            if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                           windowNumber: controller.window!.windowNumber, context: nil,
+                                           characters: text, charactersIgnoringModifiers: text,
+                                           isARepeat: false, keyCode: UInt16(code)) {
+                controller.canvas.keyDown(with: event)
+                settle()
+                check(doc.layers.map(\.bounds) == arrowBounds && doc.undoInfo.undoCount == arrowUndo,
+                      "arrow \(code) under multiple paths does not move the paint layer")
+            } else { check(false, "arrow event builds") }
+        }
         let pathCountBefore = doc.paths.count
         let shapesBefore = doc.pathShapes
         let pathUndoBefore = doc.undoInfo.undoCount
@@ -200,6 +230,14 @@ extension EngineSmokeTest {
               "Delete under a 2-path selection edits nothing")
         let palette = PathsPaletteController()
         palette.retarget(to: doc)
+        let inspectionTable = NSTableView()
+        let displayedSelections = doc.paths.indices.compactMap { index -> Int32? in
+            let row = palette.tableView(inspectionTable, viewFor: nil, row: index)
+                as? PathsPaletteController.SelectionRow
+            return row?.isNativeSelected == true ? doc.paths[index].id : nil
+        }
+        check(displayedSelections.sorted() == [p1, p2].sorted(),
+              "both recalled path rows show selection while the older path does not")
         func commandEnabled(_ command: PathsPaletteController.Command) -> Bool {
             guard let item = palette.paletteMenu?.items.first(where: { $0.tag == command.rawValue }) else {
                 return false
@@ -251,11 +289,43 @@ extension EngineSmokeTest {
         check(doc.selectedPathIDs == [p2, p1] && doc.activeDrawable == floatingDrawable
                 && doc.floatingState.isActive,
               "path recall keeps the floating drawable state")
+        let floatingUndoBeforeArrows = doc.undoInfo.undoCount
+        for (code, text) in [(123, "\u{F702}"), (124, "\u{F703}"), (125, "\u{F701}"), (126, "\u{F700}")] {
+            if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                           windowNumber: controller.window!.windowNumber, context: nil,
+                                           characters: text, charactersIgnoringModifiers: text,
+                                           isARepeat: false, keyCode: UInt16(code)) {
+                controller.canvas.keyDown(with: event)
+                settle()
+                check(doc.floatingState.isActive && doc.activeDrawable == floatingDrawable
+                        && doc.undoInfo.undoCount == floatingUndoBeforeArrows,
+                      "arrow \(code) under multiple paths does not nudge or anchor the floating selection")
+            } else { check(false, "floating arrow event builds") }
+        }
         var anchored: Result<Void, Error>?
         doc.resolveFloatingSelection(.anchor) { anchored = $0 }
         wait { anchored != nil }
         settle()
         check(!doc.floatingState.isActive, "the floating selection anchored")
+
+        // Stroke finalization must not rely on a window callback. A
+        // headless document still ends its stroke before native recall.
+        let headlessImage = try session.newImage(width: 16, height: 16)
+        let headless = try ImageDocument(session: session, image: headlessImage, name: "Headless recall")
+        guard let headlessLayer = headless.activeLayer else { check(false, "headless layer exists"); return }
+        let headlessSet = try session.editItemSet(headlessImage, .create, kind: .layer,
+                                                 name: "Headless", members: [headlessLayer])
+        headless.beginStroke(at: .init(x: 4, y: 4, pressure: 1))
+        check(headless.strokeIsActive, "the headless recall fixture has an active stroke")
+        var headlessResult: Result<Void, Error>?
+        headless.recallItemSet(token: headlessSet, kind: .layer) { headlessResult = $0 }
+        wait { headlessResult != nil }
+        check(headlessResult.map(succeeded) == true && !headless.strokeIsActive,
+              "recall finalizes a stroke without a window callback")
+        var headlessClosed = false
+        headless.closeImageWhenDrained { headlessClosed = true }
+        wait { headlessClosed }
+        check((try? session.info(headlessImage)) == nil, "the headless recall fixture closes")
 
         // MARK: Close drain: the accepted recall is counted, its
         // completion runs exactly once; a recall after close fails

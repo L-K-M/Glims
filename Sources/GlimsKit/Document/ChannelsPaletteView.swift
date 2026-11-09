@@ -251,6 +251,9 @@ final class ChannelsPaletteView: NSView {
                 needsDisplay = true
             }
         }
+        /// All selected rows remain visible even when the paint target is
+        /// ambiguous. The thumbnail ring still means exactly one target.
+        var isSelected = false { didSet { needsDisplay = true } }
         /// Reports the toggle; returns whether the palette took it.
         var onEye: ((Int32, Bool) -> Bool)?
         /// Reports a pick of this row's channel.
@@ -328,7 +331,7 @@ final class ChannelsPaletteView: NSView {
 
         override func draw(_ dirtyRect: NSRect) {
             super.draw(dirtyRect)
-            guard isTarget else { return }
+            guard isSelected || isTarget else { return }
             NSColor.selectedContentBackgroundColor.withAlphaComponent(0.2).setFill()
             NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 3, yRadius: 3).fill()
         }
@@ -539,6 +542,7 @@ final class ChannelsPaletteView: NSView {
             let row = ChannelRow(channel: channel, canEdit: canEdit, canPick: canPick)
             row.thumbnail.thumbnail = thumbnails[channel.id]
             row.isTarget = channel.id == active
+            row.isSelected = channel.isSelected
             row.onEye = { [weak self] in self?.setChannel($0, visible: $1) ?? false }
             row.onPick = { [weak self] in self?.pickChannel($0) }
             listStack.addArrangedSubview(row)

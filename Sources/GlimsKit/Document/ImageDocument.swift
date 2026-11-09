@@ -1348,6 +1348,7 @@ final class ImageDocument {
         guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
         if kind != .path, refuseWhileFloatingActive() { return completion(.failure(DocumentError.busy)) }
         endPendingUserEdits()
+        if strokeIsActive { endStroke() }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         let work: (EngineSession, Int32) throws -> Void = { session, image in
             let members = try session.itemSetMembers(image, token: token)

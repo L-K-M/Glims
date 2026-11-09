@@ -132,6 +132,7 @@ enum SavedSetControlsLogic {
     static func recallAdmission(kind: EngineSession.ItemSetKind, row: Row?,
                                 existingIDs: Set<Int32>) -> Result<[Int32], Rejection> {
         guard let row else { return .failure(Rejection(message: "Select a saved set to recall.")) }
+        guard row.kind == kind else { return .failure(Rejection(message: "The selected set has a different kind.")) }
         guard !row.members.isEmpty else {
             return .failure(Rejection(message: "The selected set is empty; there is nothing to recall."))
         }
@@ -296,12 +297,17 @@ final class SavedSetPanelController: NSWindowController, NSTableViewDataSource, 
         let nameRow = NSStackView(views: [NSTextField(labelWithString: "Name:"), nameField])
         nameRow.orientation = .horizontal
         nameRow.spacing = 8
-        let buttonRow = NSStackView(views: [newButton, replaceButton, renameButton,
-                                             deleteButton, recallButton, closeButton])
-        buttonRow.orientation = .horizontal
-        buttonRow.spacing = 6
-        let stack = NSStackView(views: [topRow, scroll, nameRow, buttonRow, noteLabel, messageLabel])
+        let selectionRow = NSStackView(views: [newButton, replaceButton])
+        let actionRow = NSStackView(views: [renameButton, deleteButton, recallButton, closeButton])
+        for row in [selectionRow, actionRow] {
+            row.orientation = .horizontal
+            row.spacing = 8
+        }
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.heightAnchor.constraint(equalToConstant: 150).isActive = true
+        let stack = NSStackView(views: [topRow, scroll, nameRow, selectionRow, actionRow, noteLabel, messageLabel])
         stack.orientation = .vertical
+        stack.alignment = .leading
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -311,9 +317,12 @@ final class SavedSetPanelController: NSWindowController, NSTableViewDataSource, 
             stack.leadingAnchor.constraint(equalTo: panel.contentView!.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: panel.contentView!.trailingAnchor),
             stack.topAnchor.constraint(equalTo: panel.contentView!.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: panel.contentView!.bottomAnchor),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: panel.contentView!.bottomAnchor),
+            scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24),
+            noteLabel.widthAnchor.constraint(equalTo: scroll.widthAnchor),
+            messageLabel.widthAnchor.constraint(equalTo: scroll.widthAnchor),
         ])
-        panel.contentView!.setFrameSize(stack.fittingSize)
+        panel.setContentSize(NSSize(width: 520, height: 390))
         panel.minSize = panel.frame.size
         panel.initialFirstResponder = nameField
     }

@@ -191,11 +191,11 @@ final class SavedSetControlsTests: XCTestCase {
             return XCTFail("a member no longer in the image refuses")
         }
         XCTAssertTrue(missing.message.contains("no longer"))
-        // A channel set refuses against layer ids: kinds never mix.
+        // A layer row cannot be recalled as channels: kinds never mix.
         guard case .failure = Logic.recallAdmission(kind: .channel,
-                                                    row: row(4, .channel, "C", members: [3, 5]),
+                                                    row: row(4, .layer, "L", members: [3, 5]),
                                                     existingIDs: [1, 3, 5]) else {
-            return XCTFail("a channel set must not recall against layer ids")
+            return XCTFail("a layer set must not recall as channels")
         }
         guard case .failure(let empty) = Logic.recallAdmission(kind: .layer,
                                                                row: row(9, .layer, "E", members: []),

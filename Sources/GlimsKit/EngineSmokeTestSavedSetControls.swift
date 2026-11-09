@@ -173,6 +173,19 @@ extension EngineSmokeTest {
                 && button(panelWindow, "Recall saved set") != nil
                 && button(panelWindow, "Close saved sets panel") != nil,
               "the panel shows all management buttons with accessibility labels")
+        panelWindow.contentView?.layoutSubtreeIfNeeded()
+        if let content = panelWindow.contentView {
+            for label in ["New from selection", "Replace with selection", "Rename saved set",
+                          "Delete saved set", "Recall saved set", "Close saved sets panel"] {
+                let control = button(panelWindow, label)
+                let bounds = control.map { $0.convert($0.bounds, to: content) } ?? .zero
+                check(control != nil && bounds.width > 20 && bounds.height > 10
+                        && content.bounds.contains(bounds), "\(label) is fully inside the visible panel")
+            }
+            let visibleTable = tableView.enclosingScrollView.map { $0.convert($0.bounds, to: content) } ?? .zero
+            check(visibleTable.height >= 130 && content.bounds.contains(visibleTable),
+                  "the saved-set list has a visible scrollable viewport")
+        }
         check(button(panelWindow, "Replace with selection")?.isEnabled == false
                 && button(panelWindow, "Recall saved set")?.isEnabled == false,
               "row-bound buttons disable with no selection")
