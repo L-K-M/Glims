@@ -69,6 +69,17 @@ final class ImageAdjustMenuTests: XCTestCase {
         }
     }
 
+    func testDedicatedBrightnessContrastAppearsWithoutAdmittingOtherConfigs() {
+        let menu = MainMenu.make()
+        let brightness = operation("gimp:brightness-contrast", support: .needsConfig)
+        let curves = operation("gimp:curves", support: .needsConfig)
+        NativeFilterMenus.install(operations + [brightness, curves], in: menu)
+        XCTAssertEqual(nativeNames(adjust(menu)), ["gimp:brightness-contrast", "gimp:threshold", "gegl:invert-gamma", "gegl:invert-linear"])
+        XCTAssertEqual(adjust(menu).items.first?.title, "Brightness/Contrast…")
+        XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(brightness))
+        XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(curves))
+    }
+
     func testExactNativeTitlesUseExistingCommandAndFilterCopies() {
         let menu = MainMenu.make()
         NativeFilterMenus.install(operations + [operation("gegl:threshold"), operation("gegl:brightness-contrast")], in: menu)

@@ -595,9 +595,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// start is identical from there.
     private func startEffectPreview(title: String, effect: Int32, drawable: Int32,
                                     properties: [EngineSession.FilterProperty],
+                                    operation: String? = nil,
                                     buildPanel: @escaping @MainActor (Int32, [String: EngineSession.FilterValue]) -> FilterPreviewPanel?) {
         startPreview(title: title, begin: { [imageDocument] completion in
             imageDocument.beginEffectPreview(effect: effect, on: drawable, properties: properties,
+                                             operation: operation,
                                              completion: completion)
         }, buildPanel: buildPanel)
     }
@@ -611,12 +613,19 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         guard !previewBusy, !imageDocument.isClosing, !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
               !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
         guard let operation = NativeFilterCatalog.shared.operation(named: operationName),
-              operation.support == .supported else {
+              NativeFilterMenuLayout.supportsParameterEditor(operation) else {
             statusBar.message = "This filter's parameters cannot be edited here yet."
             return
         }
         endPendingEdits()
         statusBar.message = "\(operation.title)…"
+        if NativeFilterMenuLayout.usesBrightnessContrastEditor(operation) {
+            startEffectPreview(title: operation.title, effect: effect, drawable: drawable,
+                               properties: [], operation: operation.name) { [imageDocument] filter, values in
+                BrightnessContrastPanel(document: imageDocument, filter: filter, initialValues: values)
+            }
+            return
+        }
         NativeFilterCatalog.shared.properties(for: operation, using: imageDocument.session) { [weak self] properties in
             guard let self, !self.imageDocument.isClosing else { return }
             guard let properties else {
@@ -874,6 +883,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
               !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
         if operation.name == "gegl:bump-map" && operation.support == .needsAuxInput {
             return openFilterSourceChooser(operation)
+        }
+        if NativeFilterMenuLayout.usesBrightnessContrastEditor(operation) {
+            endPendingEdits()
+            startFilterPreview(title: operation.title, operation: operation.name) { [imageDocument] filter, values in
+                BrightnessContrastPanel(document: imageDocument, filter: filter, initialValues: values)
+            }
+            return
         }
         guard operation.support == .supported else {
             if let reason = NativeFilterMenuLayout.unavailableReason(operation.support) {
@@ -1904,7 +1920,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // Auxiliary-input and config operations stay listed but can't
             // open a form yet; their titles carry the reason.
             guard let command = menuItem.representedObject as? NativeFilterCommand,
-                  (command.operation.support == .supported || NativeFilterMenuLayout.usesSourceChooser(command.operation)) else { return false }
+                  (NativeFilterMenuLayout.supportsParameterEditor(command.operation)
+                    || NativeFilterMenuLayout.usesSourceChooser(command.operation)) else { return false }
             guard !editingBlocked, !previewBusy, imageDocument.activeLayer != nil else { return false }
             if NativeFilterMenuLayout.usesSourceChooser(command.operation), let target = imageDocument.activeLayer {
                 return imageDocument.bumpMapRefusal(target: target) == nil

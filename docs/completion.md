@@ -63,6 +63,8 @@ bundle with the native and Swift build outputs inaccessible.
       explicit placement and editable filter settings.
 - [x] Bump Map height-map chooser with immutable same-image snapshots,
       pixel Apply/Undo/Redo and native source validation (#126).
+- [x] Native Brightness/Contrast paired controls and committed-effect editing,
+      with immutable settings, Undo and XCF preservation (current candidate).
 - [ ] Remaining custom filter forms/config editors and other auxiliary inputs.
 - [x] Path fill, vector layers and vector style controls.
 - [x] Multi-anchor path editing with group move/delete and Undo.

@@ -666,6 +666,13 @@ typedef struct GlimsFilterValue {
   GlimsColor color;        /* COLOR: finite components inside 0...1 */
 } GlimsFilterValue;
 
+/* Own normalized settings, independent of native config object layouts. */
+typedef struct GlimsBrightnessContrastSettings {
+  uint32_t struct_size;
+  double brightness;        /* finite -1..1; default 0 */
+  double contrast;          /* finite -1..1; default 0 */
+} GlimsBrightnessContrastSettings;
+
 /* A layer's mask flags: ENABLED gates the mask's effect on the
  * composite; EDITING makes the mask the target of painting, fills and
  * gradients while its layer is the only selected one; SHOWING displays
@@ -2902,6 +2909,20 @@ typedef struct GlimsEngineAPI {
                                            GlimsItemID target, const char *operation,
                                            GlimsItemID source, GlimsFilterID *out,
                                            char **error);
+  /* Slots148-149: settings of a live gimp:brightness-contrast preview only.
+   * Set validates the complete pair before replacing its immutable config;
+   * preview changes add no Undo. Apply/Cancel use the existing lifecycle.
+   * A same-value Set is an OK no-op. Other operations are UNSUPPORTED.
+   * Get requires struct_size >= sizeof(GlimsBrightnessContrastSettings);
+   * fields are reset on failure when the supplied sized output is valid. */
+  GlimsStatus (*filter_brightness_contrast_get) (GlimsEngine *engine,
+                                               GlimsFilterID filter,
+                                               GlimsBrightnessContrastSettings *out,
+                                               char **error);
+  GlimsStatus (*filter_brightness_contrast_set) (GlimsEngine *engine,
+                                               GlimsFilterID filter,
+                                               const GlimsBrightnessContrastSettings *settings,
+                                               char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

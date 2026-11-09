@@ -3654,6 +3654,25 @@ final class ImageDocument {
     /// overtaking them. The completion runs on the main actor before the
     /// job counts down, so a stale completion that aborts the session it
     /// just created still keeps the close drain waiting.
+    private nonisolated static func previewValues(_ filter: Int32, operation: String?,
+                                                  properties: [EngineSession.FilterProperty],
+                                                  session: EngineSession) throws -> [String: EngineSession.FilterValue] {
+        if operation == "gimp:brightness-contrast" {
+            do {
+                let settings = try session.brightnessContrastSettings(filter)
+                return ["brightness": .number(settings.brightness), "contrast": .number(settings.contrast)]
+            } catch {
+                try? session.abortFilter(filter)
+                throw error
+            }
+        }
+        var values: [String: EngineSession.FilterValue] = [:]
+        for property in properties where property.kind.isEditable {
+            values[property.name] = try? session.filterProperty(filter, property.name)
+        }
+        return values
+    }
+
     func beginFilterPreview(operation: String, properties: [EngineSession.FilterProperty],
                             completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
@@ -3670,10 +3689,7 @@ final class ImageDocument {
             let result = Result<FilterPreviewStart, Error> {
                 try self.requirePaintTarget()
                 let filter = try session.beginFilter(image: image, drawable: drawable, operation: operation)
-                var values: [String: EngineSession.FilterValue] = [:]
-                for property in properties where property.kind.isEditable {
-                    values[property.name] = try? session.filterProperty(filter, property.name)
-                }
+                let values = try Self.previewValues(filter, operation: operation, properties: properties, session: session)
                 return FilterPreviewStart(filter: filter, values: values)
             }
             DispatchQueue.main.async {
@@ -3692,6 +3708,7 @@ final class ImageDocument {
     /// still keeps the close drain waiting.
     func beginEffectPreview(effect: Int32, on drawable: Int32,
                             properties: [EngineSession.FilterProperty],
+                            operation: String? = nil,
                             completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard canChangeEffect(effect, on: drawable) else {
@@ -3702,10 +3719,7 @@ final class ImageDocument {
         inputQueue.async { [session, image] in
             let result = Result<FilterPreviewStart, Error> {
                 let filter = try session.beginEditingEffect(effect, on: drawable, image: image)
-                var values: [String: EngineSession.FilterValue] = [:]
-                for property in properties where property.kind.isEditable {
-                    values[property.name] = try? session.filterProperty(filter, property.name)
-                }
+                let values = try Self.previewValues(filter, operation: operation, properties: properties, session: session)
                 return FilterPreviewStart(filter: filter, values: values)
             }
             DispatchQueue.main.async {
@@ -3748,6 +3762,20 @@ final class ImageDocument {
         enqueue(on: inputQueue) { [session] in
             let result = Result { try session.setFilterProperty(filter, property, to: value) }
             DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func setBrightnessContrast(_ filter: Int32, _ settings: EngineSession.BrightnessContrastSettings,
+                               completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if refuseWhileEditingUnavailable(forPreviewWork: true) { return completion(.failure(DocumentError.busy)) }
+        pendingWork += 1
+        inputQueue.async { [session] in
+            let result = Result { try session.setBrightnessContrastSettings(filter, to: settings) }
+            DispatchQueue.main.async {
+                completion(result)
+                self.jobDidFinish(input: false)
+            }
         }
     }
 

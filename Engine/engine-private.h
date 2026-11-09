@@ -280,6 +280,10 @@ GlimsStatus glims_filter_edit_begin(GlimsEngine *e, GlimsImageID image, GlimsIte
                                     GlimsEffectID effect, GlimsFilterID *out, char **error);
 void        glims_filter_preview_apply (GlimsFilter *session);
 GlimsStatus glims_filter_set_double(GlimsEngine *e, GlimsFilterID id, const char *property, double value);
+GlimsStatus glims_filter_brightness_contrast_get (GlimsEngine *, GlimsFilterID,
+                                                 GlimsBrightnessContrastSettings *, char **);
+GlimsStatus glims_filter_brightness_contrast_set (GlimsEngine *, GlimsFilterID,
+                                                 const GlimsBrightnessContrastSettings *, char **);
 GlimsStatus glims_filter_commit    (GlimsEngine *e, GlimsFilterID id, char **error);
 GlimsStatus glims_filter_abort     (GlimsEngine *e, GlimsFilterID id);
 void        glims_filters_free     (gpointer filter);

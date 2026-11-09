@@ -311,6 +311,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (batch delete)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brightness-contrast" {
+                try exerciseBrightnessContrast(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (brightness contrast)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "filter-sources" {
                 try exerciseFilterSources(session, documents: documents)
                 print(failures == 0 ? "PASSED (filter sources)" : "FAILED: \(failures) failures")
@@ -468,6 +473,7 @@ enum EngineSmokeTest {
             try exerciseBatchDuplicate(session, documents: documents)
             try exerciseBatchDelete(session, documents: documents)
             try exerciseFilterSources(session, documents: documents)
+            try exerciseBrightnessContrast(session, work: work, documents: documents)
             try exerciseSelectionDrag(session, documents: documents)
             try exerciseImageAdjust(session, work: work, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)
@@ -5173,8 +5179,14 @@ enum EngineSmokeTest {
         controllerB.showWindow(nil)
         let windowB = try XCTUnwrapWindow(controllerB)
         func settle() {
-            documentA.inputQueue.sync {}
-            documentB.inputQueue.sync {}
+            // A queued edit completes on the main actor after its native job.
+            // Wait for that completion instead of assuming one50ms turn is enough.
+            let deadline = Date().addingTimeInterval(5)
+            repeat {
+                documentA.inputQueue.sync {}
+                documentB.inputQueue.sync {}
+                spin(0.01)
+            } while (documentA.pendingWork > 0 || documentB.pendingWork > 0) && Date() < deadline
             spin()
         }
 
@@ -5251,6 +5263,9 @@ enum EngineSmokeTest {
 
         check(fieldA.currentEditor() == nil && fieldA.stringValue == "150",
               "a layer pick commits the field edit in its own window")
+        if nameFieldA?.currentEditor() != nil || !documentA.layers.contains(where: { $0.name == "Renamed A" }) {
+            print("     rename diagnostic: field=\(nameFieldA?.stringValue ?? "missing"), editing=\(nameFieldA?.currentEditor() != nil), cached=\(documentA.layers.map(\.name)), native=\((try? session.layers(documentA.image).map(\.name)) ?? []), pending=\(documentA.pendingWork)")
+        }
         check(nameFieldA?.currentEditor() == nil && documentA.layers.contains { $0.name == "Renamed A" },
               "a layer pick commits a rename in a palette aimed at its document")
         check(controllerA.canvas.tools.textEditor == nil,
