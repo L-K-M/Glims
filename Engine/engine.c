@@ -745,10 +745,22 @@ static void
 engine_shutdown (GlimsEngine *engine)
 {
   Gimp *gimp = engine->gimp;
+  GimpRc *edit_config = GIMP_RC (gimp->edit_config);
 
   g_hash_table_remove_all (engine->filters);
   g_hash_table_remove_all (engine->strokes);
   g_hash_table_remove_all (engine->images);
+
+  /* Saving constructs a default RC that needs the live user context.
+   * Stop future autosaves and flush the exact pending source before
+   * gimp_exit() clears that context. Do not dispatch unrelated work. */
+  gimp_rc_set_autosave (edit_config, FALSE);
+  if (edit_config->save_idle_id)
+    {
+      g_source_remove (edit_config->save_idle_id);
+      edit_config->save_idle_id = 0;
+      gimp_rc_save (edit_config);
+    }
 
   gimp_exit (gimp, TRUE);
 
