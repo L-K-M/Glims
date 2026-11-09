@@ -118,7 +118,7 @@ read_all (const char *path, uint8_t **buf, size_t *len)
       fclose (f);
       return -1;
     }
-  data = malloc (size > 0 ? (size_t) size : 1);
+  data = malloc ((size_t) size + 1);
   if (! data)
     {
       fclose (f);
@@ -131,6 +131,7 @@ read_all (const char *path, uint8_t **buf, size_t *len)
       return -1;
     }
   fclose (f);
+  data[size] = '\0';
   *buf = data;
   *len = (size_t) size;
   return 0;
