@@ -2830,6 +2830,73 @@ final class EngineSession: @unchecked Sendable {
         }
     }
 
+    /// The facade's own value kind of a metadata tag
+    /// (GlimsMetadataValueKind): how many values the tag holds natively.
+    /// The native type names never cross the boundary as enums.
+    enum MetadataValueKind: UInt32, CaseIterable {
+        case single = 1, repeatable, bag, seq, alt, langAlt
+    }
+
+    /// The type/format policy bits of a tag descriptor
+    /// (GlimsMetadataFormatPolicy). They say only whether the tag's type
+    /// and format admit a SET or a REMOVE at all — an actual
+    /// `editMetadata` can still refuse (BUSY, copy preservation, native
+    /// validation), so a set bit never promises a write succeeds.
+    struct MetadataFormatPolicy: OptionSet {
+        let rawValue: UInt32
+        static let supportsSet = MetadataFormatPolicy(rawValue: GLIMS_METADATA_FORMAT_SUPPORTS_SET.rawValue)
+        static let supportsRemove = MetadataFormatPolicy(rawValue: GLIMS_METADATA_FORMAT_SUPPORTS_REMOVE.rawValue)
+    }
+
+    /// A read-only descriptor of one registered metadata tag, decoded
+    /// from `GlimsMetadataTagInfo` (slot 128). The bounded strings are
+    /// already valid UTF-8 and NUL-terminated by the adapter.
+    struct MetadataTagInfo: Equatable {
+        var present: Bool
+        var supportsMultiple: Bool
+        var valueKind: MetadataValueKind
+        var formatPolicy: MetadataFormatPolicy
+        var label: String
+        var description: String
+        var typeName: String
+    }
+
+    /// The read-only descriptor of the single `tag`
+    /// (image_metadata_tag_info, slot 128): presence on the image,
+    /// native multiple-value support, the facade value kind, the
+    /// type/format policy bits and the bounded native label, description
+    /// and type name. A plain read with the same rules as
+    /// `metadataValues`: allowed at any time, also while a stroke, a
+    /// filter session or a plug-in holds the image; it never creates
+    /// metadata and never mutates the image or its history.
+    /// INVALID_ARGUMENT for a malformed tag (embedded NULs are rejected
+    /// here, like every metadata input) or an undersized out struct;
+    /// NOT_FOUND for an unknown image or an unregistered tag.
+    func metadataTagInfo(_ image: Int32, tag: String) throws -> MetadataTagInfo {
+        try Self.validateMetadataStrings(tag: tag, values: [])
+        var out = GlimsMetadataTagInfo()
+        out.struct_size = UInt32(MemoryLayout<GlimsMetadataTagInfo>.size)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_metadata_tag_info(engine, image, tag, &out, &error), error)
+        return try Self.decodeMetadataTagInfo(from: out)
+    }
+
+    /// Decodes a facade `GlimsMetadataTagInfo`. An unknown value kind
+    /// throws — it is never coerced to an unrelated kind.
+    static func decodeMetadataTagInfo(from out: GlimsMetadataTagInfo) throws -> MetadataTagInfo {
+        guard let valueKind = MetadataValueKind(rawValue: out.value_kind) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The engine returned a metadata value kind this build does not know.")
+        }
+        return MetadataTagInfo(present: out.present,
+                               supportsMultiple: out.supports_multiple,
+                               valueKind: valueKind,
+                               formatPolicy: MetadataFormatPolicy(rawValue: out.format_policy),
+                               label: Self.string(out.label),
+                               description: Self.string(out.description),
+                               typeName: Self.string(out.type_name))
+    }
+
     /// C strings cannot represent embedded NULs; reject them before any
     /// bridge allocation or native call can silently shorten the request.
     static func validateMetadataStrings(tag: String, values: [String]) throws {
