@@ -105,6 +105,16 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-language-controls" {
+                try exerciseMetadataLanguageControls(session, documents: documents)
+                print(failures == 0 ? "PASSED (metadata language controls)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-language-edit" {
+                try exerciseMetadataLanguageEdit(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (metadata language edit)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-language-read" {
                 try exerciseMetadataLanguages(session)
                 print(failures == 0 ? "PASSED (metadata language bridge)" : "FAILED: \(failures) failure(s)")
@@ -316,6 +326,16 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (resource duplicate controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "option-scroll" {
+                try exerciseOptionScroll(session, documents: documents)
+                print(failures == 0 ? "PASSED (Option scroll)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "trackpad-navigation" {
+                try exerciseTrackpadNavigation(session, documents: documents)
+                print(failures == 0 ? "PASSED (trackpad navigation)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "canvas-rotation" {
                 try exerciseCanvasRotation(session, documents: documents)
                 print(failures == 0 ? "PASSED (canvas rotation)" : "FAILED: \(failures) failures")
@@ -405,6 +425,8 @@ enum EngineSmokeTest {
             try exerciseViewOverlays(session, work: work, documents: documents)
             try exerciseDisplayDestination(session, work: work, documents: documents)
             try exerciseCanvasRotation(session, documents: documents)
+            try exerciseTrackpadNavigation(session, documents: documents)
+            try exerciseOptionScroll(session, documents: documents)
             try exerciseDocumentPlacement(session, documents: documents)
             try exerciseGradientCreateControls(session, work: work, documents: documents)
             try exerciseItemSetRecall(session, work: work, documents: documents)

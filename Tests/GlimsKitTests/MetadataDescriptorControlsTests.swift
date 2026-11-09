@@ -90,7 +90,7 @@ final class MetadataDescriptorControlsTests: XCTestCase {
         XCTAssertFalse(gates.canAddValue)
         XCTAssertTrue(gates.isReadOnly)
         XCTAssertEqual(gates.refusal, MetadataSheetLogic.langAltReadOnlyReason)
-        XCTAssertTrue(gates.refusal?.contains("read-only") == true)
+        XCTAssertTrue(gates.refusal?.contains("Edit Language") == true)
     }
 
     func testLangAltStaysReadOnlyEvenIfPolicyBitsWereSet() {
