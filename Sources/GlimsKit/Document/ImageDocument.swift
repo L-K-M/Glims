@@ -924,7 +924,10 @@ final class ImageDocument {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         pendingWork += 1
         let label = "Creating \(kind.singular) “\(name)”"
-        let accepted = EngineActivity.shared.perform(label: label) { [session, image] in
+        enqueueExclusive(label: label, rejected: {
+            self.jobDidFinish(input: false)
+            completion(.failure(DocumentError.busy))
+        }) { [session, image] in
             let result: Result<CreatedResource, Error> = Result {
                 // Fresh native check on the worker: the actual root
                 // selection, including soft coverage below the ants
@@ -954,18 +957,14 @@ final class ImageDocument {
                 return CreatedResource(id: id, name: identity?.name ?? name, kind: kind)
             }
             DispatchQueue.main.async {
-                if case .failure(let error) = result { self.onError?(String(describing: error)) }
-                completion(result)
-                // This main block was queued during `work`, so it runs
-                // before the activity's own completion below: pendingWork
-                // stays counted through the deferred completion stage.
+                EngineActivity.shared.whenIdle {
+                    // The extra count covers this deferred completion,
+                    // including callbacks that request window closure.
+                    defer { self.jobDidFinish(input: false) }
+                    if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                    completion(result)
+                }
             }
-        } completion: {
-            self.jobDidFinish(input: false)
-        }
-        if !accepted {
-            jobDidFinish(input: false)
-            completion(.failure(DocumentError.busy))
         }
     }
 

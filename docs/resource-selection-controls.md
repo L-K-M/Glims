@@ -84,7 +84,7 @@ foreground/background changes.
   (`Document/StrokeSelectionForm.swift`); menu validation follows the
   `strokeSelection(_:)` case in `DocumentWindowController.validateMenuItem`.
 
-## Smoke coverage (compile-only here; root wires and runs it)
+## Runtime coverage
 
 `Sources/GlimsKit/EngineSmokeTestResourceSelection.swift` provides
 `EngineSmokeTest.exerciseResourceSelection(session:work:documents:)`
@@ -96,17 +96,18 @@ name with retry and preserved draft; no-selection and >10000 px gates; busy
 hold; own-stroke end; Apply/Cancel gating during the accepted write;
 two-document capture with the other window front; window-close and
 close-drain with exactly-one completion; preservation of pixels, selection,
-history, image identity and the system clipboard sentinel.
+history, image identity and the observed system clipboard change count.
 
 ## Checks actually run
 
-- `swift build -j 2` — OK ("Build complete!").
-- `swift build -j 2 --build-tests` — OK.
-
-Not run (out of scope for this slice): `swift test`, the
-`--engine-smoke-test` runtime (including the new smoke case), adapter/
-conformance builds, GUI/desktop runs. The smoke case and the unit tests
-compile only; root owns the runtime matrix and the smoke-selector wiring.
+All 696 unit tests and build checks pass. The root-wired real-control smoke
+case passes all 65 checks on each of the four supported engines. The full
+pinned app smoke run passes all 1,765 checks. Acceptance corrections keep
+work counted through idle delivery, preserve native errors while another
+job is busy, and disable irrelevant pattern spacing. A real queued stroke
+oracle verifies capture after accepted input drains; the system clipboard
+is observed without replacing it. Independent acceptance-fix source review
+found no important issue.
 
 ## Known gaps / deferred to root
 

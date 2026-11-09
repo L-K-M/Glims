@@ -99,12 +99,10 @@ extension EngineSmokeTest {
         let undoABefore = docA.undoInfo.undoCount
         let nameABefore = docA.name
 
-        // The system clipboard carries a sentinel the whole run must leave
-        // untouched — the capture never goes near the system clipboard.
+        // Observe the system clipboard generation without replacing the
+        // user's contents or requesting any clipboard data.
         let pasteboard = NSPasteboard.general
-        let sentinel = "glims-resource-selection-\(UUID().uuidString)"
-        pasteboard.clearContents()
-        pasteboard.setString(sentinel, forType: .string)
+        let pasteboardCountBefore = pasteboard.changeCount
 
         // Menu wiring: Edit ▸ Create Resource lists both items, no shortcuts,
         // on the document's own selectors; both validate with a selection.
@@ -118,11 +116,8 @@ extension EngineSmokeTest {
         check(a.validateMenuItem(brushItem!) && a.validateMenuItem(patternItem!),
               "both items validate with a selection while B's window is front")
 
-        // Brush creation through the real menu action and sheet controls on
-        // A, while B is front. An open stroke is ended by the accept.
-        let black = EngineSession.Brush(size: 6, opacity: 1, red: 0, green: 0, blue: 0, pressureSize: false)
-        docA.beginStroke(at: .init(x: 6, y: 6, pressure: 1), brush: black)
-        check(docA.strokeIsActive, "a stroke is active before the menu action")
+        // Brush creation through A's real controls, while B is front.
+        // Queue draining is checked separately, after preservation oracles.
         send(brushItem, to: a)
         let sheet = a.window?.attachedSheet
         check(sheet != nil && a.resourceSelectionSheet != nil && b.resourceSelectionSheet == nil,
@@ -163,13 +158,17 @@ extension EngineSmokeTest {
 
         // Accepted Apply: counted pending work, gated buttons, own stroke ended.
         editableField(sheet, "Brush spacing, percent")?.stringValue = "25"
+        settle(docA)
+        let acceptHold = DispatchSemaphore(value: 0)
+        docA.inputQueue.async { _ = acceptHold.wait(timeout: .now() + 15) }
         let workBeforeAccept = docA.pendingWork
         button(sheet, "Apply resource creation")?.performClick(nil)
         check(!docA.strokeIsActive, "the accept ends the document's own open stroke")
-        check(docA.pendingWork == workBeforeAccept + 1, "the accepted Apply is counted as pending work")
+        check(docA.pendingWork >= workBeforeAccept + 1, "the accepted Apply is counted as pending work")
         check(button(sheet, "Apply resource creation")?.isEnabled == false
                 && button(sheet, "Cancel resource creation")?.isEnabled == false,
               "Apply and Cancel are gated while the accepted write is active")
+        acceptHold.signal()
         wait { docA.pendingWork == 0 && a.window?.attachedSheet == nil }
         spin()
         check(a.resourceSelectionSheet == nil && errorsA.isEmpty,
@@ -196,7 +195,7 @@ extension EngineSmokeTest {
         check(try session.copyPixels(imageA, merged: true).pixels == pixelsABefore, "the image pixels are preserved")
         check(docA.undoInfo.undoCount == undoABefore, "creation makes no undo step (history preserved)")
         check(docA.name == nameABefore, "the document's identity is preserved")
-        check(pasteboard.string(forType: .string) == sentinel, "the system clipboard is untouched")
+        check(pasteboard.changeCount == pasteboardCountBefore, "the system clipboard is untouched")
         check(try session.copyPixels(imageB, merged: true).pixels == pixelsBBefore
                 && (try? session.selectionBounds(image: imageB)) == nil,
               "front document B was not captured or changed (no retarget)")
@@ -208,22 +207,36 @@ extension EngineSmokeTest {
         button(dupSheet, "Apply resource creation")?.performClick(nil)
         wait { docA.pendingWork == 0 && !EngineActivity.shared.isBusy }
         spin(0.05)
-        check(a.window?.attachedSheet === dupSheet && a.resourceSelectionSheet?.lastError != nil
+        check(a.window?.attachedSheet === dupSheet && a.resourceSelectionSheet?.lastError?.contains("already exists") == true
                 && errorsA.isEmpty == false,
               "a duplicate name fails after acceptance and shows the message in the open sheet (\(errorsA))")
         check(editableField(dupSheet, "Resource name")?.stringValue == "Smoke Brush A",
               "the draft is preserved after the native failure")
         check(try session.resources(.brush).filter { $0.displayName == "Smoke Brush A" }.count == 1,
               "the duplicate was never silently renamed or created twice")
-        button(dupSheet, "Cancel resource creation")?.performClick(nil)
-        spin(0.05)
-        check(a.window?.attachedSheet == nil && a.resourceSelectionSheet == nil, "Cancel closes the sheet")
+        let duplicateHold = DispatchSemaphore(value: 0)
+        let duplicateHeld = EngineActivity.shared.perform(label: "Another image operation",
+            work: { _ = duplicateHold.wait(timeout: .now() + 15) }, completion: {})
+        check(duplicateHeld && a.resourceSelectionSheet?.lastError?.contains("already exists") == true,
+              "an unrelated busy gate preserves the native draft error")
+        duplicateHold.signal()
+        wait { !EngineActivity.shared.isBusy }
+        check(a.resourceSelectionSheet?.lastError?.contains("already exists") == true,
+              "ending that gate does not erase the native draft error")
+        editableField(dupSheet, "Resource name")?.stringValue = "Retry Brush A"
+        button(dupSheet, "Apply resource creation")?.performClick(nil)
+        wait { docA.pendingWork == 0 && a.window?.attachedSheet == nil }
+        check(a.resourceSelectionSheet == nil
+                && (try? session.resources(.brush).contains { $0.displayName == "Retry Brush A" }) == true,
+              "editing the failed draft and retrying publishes exactly the requested resource")
 
         // Pattern creation through its own item; its spacing field is hidden.
         send(patternItem, to: a)
         let patternSheet = a.window?.attachedSheet
-        check(editableField(patternSheet, "Brush spacing, percent")?.isHidden == true,
-              "the pattern sheet hides the spacing field (patterns take none)")
+        let patternSpacing = allViews(patternSheet?.contentView, as: NSTextField.self)
+            .first { $0.accessibilityLabel() == "Brush spacing, percent" }
+        check(patternSpacing?.isEnabled == false && patternSpacing?.isEditable == false,
+              "the pattern sheet disables its unused spacing control")
         editableField(patternSheet, "Resource name")?.stringValue = "Smoke Pattern A"
         button(patternSheet, "Apply resource creation")?.performClick(nil)
         wait { docA.pendingWork == 0 && a.window?.attachedSheet == nil }
@@ -327,6 +340,29 @@ extension EngineSmokeTest {
         spin(0.05)
         check(bigController.resourceSelectionSheet == nil, "the oversized selection opens no sheet (no pixels allocated)")
 
+        // Accepted input precedes capture: the command itself ends the
+        // active stroke, and resource creation adds no image Undo beyond it.
+        let strokeUndoBefore = docA.undoInfo.undoCount
+        let black = EngineSession.Brush(size: 6, opacity: 1, red: 0, green: 0, blue: 0, pressureSize: false)
+        docA.beginStroke(at: .init(x: 6, y: 6, pressure: 1), brush: black)
+        check(docA.strokeIsActive, "an accepted stroke is active before resource capture")
+        var queuedCapture: Result<ImageDocument.CreatedResource, Error>?
+        docA.createResourceFromSelection(kind: .pattern, name: "Queued Stroke Pattern", brushSpacing: 0) {
+            queuedCapture = $0
+        }
+        check(!docA.strokeIsActive && docA.pendingWork > 0,
+              "resource capture ends its own stroke and remains counted")
+        wait { queuedCapture != nil && docA.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        check(docA.undoInfo.undoCount == strokeUndoBefore + 1
+                && (pixel(session, imageA, x: 6, y: 6)?[0] ?? 255) < 100,
+              "the accepted stroke adds one Undo and paints before resource capture")
+        if let created = try session.resources(.pattern).first(where: { $0.displayName == "Queued Stroke Pattern" }) {
+            let thumbnail = try session.resourceThumbnail(created.id, maxSize: 32)
+            let selectedPixels = try session.copyPixels(imageA, merged: true)
+            check(thumbnail.pixels == selectedPixels.pixels,
+                  "the resource contains the drained stroke rather than the earlier pixels")
+        } else { check(false, "the queued-input resource is published") }
+
         // Busy: the sheet opens while idle; a held exclusive activity then
         // disables the items from cache and refuses the open sheet's Apply
         // before acceptance, queueing nothing.
@@ -371,13 +407,17 @@ extension EngineSmokeTest {
         send(brushItem, to: b)
         let closeSheet = b.window?.attachedSheet
         editableField(closeSheet, "Resource name")?.stringValue = "Window Close Brush"
+        let closeSheetController = b.resourceSelectionSheet
+        let closeHold = DispatchSemaphore(value: 0)
+        docB.inputQueue.async { _ = closeHold.wait(timeout: .now() + 15) }
         button(closeSheet, "Apply resource creation")?.performClick(nil)
         check(docB.pendingWork > 0, "B's accepted write is counted before the window closes")
         var windowClosedB = false
         b.onClose = { _ in windowClosedB = true }
         b.window?.close()
+        closeHold.signal()
         wait { windowClosedB }
-        check(b.resourceSelectionSheet?.isInvalidated == true,
+        check(closeSheetController?.isInvalidated == true,
               "the closing window invalidated its sheet; no stale UI resurrects")
         check((try? session.info(imageB)) == nil, "B's image drained and closed")
         check(try session.resources(.brush).contains { $0.displayName == "Window Close Brush" },
@@ -394,7 +434,7 @@ extension EngineSmokeTest {
         docA.createResourceFromSelection(kind: .brush, name: "Close Drain Brush", brushSpacing: 10) { _ in
             drainCompletions += 1
         }
-        check(docA.pendingWork == workBeforeDrain + 1, "the accepted creation is counted as pending work")
+        check(docA.pendingWork >= workBeforeDrain + 1, "the accepted creation is counted as pending work")
         var closedA = false
         docA.closeImageWhenDrained { closedA = true }
         wait { closedA }

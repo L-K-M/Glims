@@ -247,8 +247,11 @@ final class ResourceSelectionSheetController: NSObject {
         nameField.stringValue = kind == .brush ? "Brush from Selection" : "Pattern from Selection"
         spacingField.setAccessibilityLabel("Brush spacing, percent")
         spacingField.widthAnchor.constraint(equalToConstant: 64).isActive = true
-        // Patterns take no brush spacing: the field is hidden, not reflowed.
-        spacingField.isHidden = kind != .brush
+        // Keep the layout stable while making the unused pattern option
+        // explicit. NSGridView can reset a content view's hidden state.
+        spacingField.isEnabled = kind == .brush
+        spacingField.isEditable = kind == .brush
+        if kind != .brush { spacingField.stringValue = "Not used" }
         scopeLabel.setAccessibilityLabel("Create resource scope")
         scopeLabel.stringValue = ResourceSelectionFormValidation.scopeExplanation(kind: kind,
                                                                                  documentName: document.name)
@@ -301,11 +304,13 @@ final class ResourceSelectionSheetController: NSObject {
     /// gate's reason stays visible when no inline error overrides it.
     private func updateControlStates() {
         let accepting = phase == .accepting
-        applyButton.isEnabled = !isInvalidated && !accepting && phase == .editing
-        cancelButton.isEnabled = !isInvalidated && !accepting
         let reason = document.createResourceRefusal(kind: kind)
+        applyButton.isEnabled = !isInvalidated && !accepting && phase == .editing && reason == nil
+        cancelButton.isEnabled = !isInvalidated && !accepting
         if let reason {
-            if phase == .editing { refuse(reason) }
+            // A temporary gate must not replace a draft's native or local
+            // error, or clearing that gate would erase the useful error.
+            if phase == .editing && (lastError == nil || lastError == displayedGateReason) { refuse(reason) }
             displayedGateReason = reason
         } else if let previous = displayedGateReason {
             displayedGateReason = nil
@@ -378,6 +383,7 @@ final class ResourceSelectionSheetController: NSObject {
         }
         guard case .success(let name) = nameResult,
               case .success(let spacing) = spacingResult else { return }
+        clearMessage()
         phase = ResourceSelectionFormValidation.applyTransition(phase, locallyValid: true)
         updateControlStates()
         let capturedKind = kind
