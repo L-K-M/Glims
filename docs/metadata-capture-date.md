@@ -21,11 +21,12 @@ late callbacks cannot reopen closed UI. A document-version change blocks
 stale Apply while retaining the fields until the editor is closed.
 
 The model/policy suite passes16 focused tests and the full unit suite
-passes931. On the pinned engine19 real-window checks pass for actual nested
+passes931. On every supported engine19 real-window checks pass for actual nested
 sheets, calendar refusal, last-field Apply, captured documents, offset and
 subsecond preservation, Undo/Redo, XCF, malformed sources, absent scalars,
 native refusal/retry, a held counted write during document close and stale
 Apply. The close fixture holds its queue until after close admission; it
-cannot pass merely because a timeout released the write first. Other-engine,
-legacy metadata-control and final self-contained bundle checks remain open.
-Independent source review has no important production findings.
+cannot pass merely because a timeout released the write first. Legacy metadata value, descriptor and language control suites also pass.
+The self-contained147-slot bundle passes1,917 native and2,437 app checks;
+its merged source is PR132. Independent source review has no important
+production findings. Final combined adjustment-bundle verification is separate.

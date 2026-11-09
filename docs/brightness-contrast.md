@@ -37,6 +37,7 @@ The expanded reply-order checks first reproduced two submitted-edit failures
 and then two actual field-editor failures. A refused pair now immediately
 stops being the base of later writes. Shared field-draft preservation keeps
 text and selection entered after the last display/submission when a delayed
-reply refreshes accepted values. Twenty actual-window checks pass on the
-pinned engine; the expanded other-engine and final bundle checks remain open.
+reply refreshes accepted values. Twenty actual-window checks pass on each
+supported engine. The verified Brightness/Contrast bundle passes 1,917
+native and 2,457 app checks with the build trees inaccessible.
 The unchanged native module retains its177-per-engine evidence.
