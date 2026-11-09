@@ -184,6 +184,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                  : ZoomLadder.zoomOut(from: self.canvas.zoomPercent))
             self.center(on: point)
         }
+        // Trackpad pinch/rotate view navigation, anchored at the pointer.
+        // The closures capture THIS controller weakly, so the callbacks act
+        // on the owning window's document even when another document is
+        // frontmost.
+        canvas.onTrackpadZoom = { [weak self] percent, anchor in
+            self?.applyTrackpadNavigation(zoomPercent: percent, rotationDegrees: nil, anchorWindowPoint: anchor)
+        }
+        canvas.onTrackpadRotate = { [weak self] degrees, anchor in
+            self?.applyTrackpadNavigation(zoomPercent: nil, rotationDegrees: degrees, anchorWindowPoint: anchor)
+        }
         statusBar.onZoomIn = { [weak self] in self?.zoom(to: ZoomLadder.zoomIn(from: self?.canvas.zoomPercent ?? 100)) }
         statusBar.onZoomOut = { [weak self] in self?.zoom(to: ZoomLadder.zoomOut(from: self?.canvas.zoomPercent ?? 100)) }
         statusBar.onZoomReset = { [weak self] in self?.zoom(to: ZoomLadder.actualPixels) }
@@ -348,6 +358,38 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         invalidateRulers()
         stateDidChange()
         return true
+    }
+
+    /// One trackpad navigation step (pinch zoom and/or view rotation),
+    /// anchored at the pointer: the image pixel under the gesture stays
+    /// under it. View-only — no engine call and no image, history, dirty or
+    /// settings change, and no engine-busy gate; only the close guard and
+    /// the canvas's own interaction guards apply, so a late event after
+    /// close is ignored.
+    ///
+    /// The pointer's viewport offset (event window point converted to the
+    /// clip, minus the clip's bounds origin) and the image point under the
+    /// pointer are captured BEFORE any geometry change. The zoom/rotation
+    /// is then applied through the existing `zoom(to:)`/`setViewRotation`
+    /// methods; the captured image point times the NEW canvas scale is
+    /// converted to the rotation host and the clip scrolls to
+    /// (host point - saved viewport offset), clamped by
+    /// `constrainBoundsRect` (which centre-pins when the clamp bites).
+    func applyTrackpadNavigation(zoomPercent: Int?, rotationDegrees: Double?, anchorWindowPoint: CGPoint) {
+        guard !closeStarted, !imageDocument.isClosing else { return }
+        let clip = scrollView.contentView
+        let inClip = clip.convert(anchorWindowPoint, from: nil)
+        let viewportOffset = CGPoint(x: inClip.x - clip.bounds.origin.x, y: inClip.y - clip.bounds.origin.y)
+        let imagePoint = canvas.imagePoint(at: canvas.convert(anchorWindowPoint, from: nil))
+        guard imagePoint.x.isFinite, imagePoint.y.isFinite else { return }
+        if let zoomPercent { zoom(to: ZoomLadder.clamped(zoomPercent)) }
+        if let rotationDegrees { _ = setViewRotation(degrees: rotationDegrees) }
+        let hostPoint = rotationView.convert(CGPoint(x: imagePoint.x * canvas.scale, y: imagePoint.y * canvas.scale),
+                                              from: canvas)
+        let target = CGRect(x: hostPoint.x - viewportOffset.x, y: hostPoint.y - viewportOffset.y,
+                            width: clip.bounds.width, height: clip.bounds.height)
+        clip.scroll(to: clip.constrainBoundsRect(target).origin)
+        scrollView.reflectScrolledClipView(clip)
     }
 
     /// Classic title and status: `name @ 100% (RGB, u8-non-linear)`.
