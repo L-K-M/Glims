@@ -267,6 +267,21 @@ final class EngineCanvasView: NSView {
         return tiles.values.first?.colorSpace?.copyICCData() as Data?
     }
 
+    /// Test seam: read-only view of the existing single in-flight tile
+    /// admission, so the smoke can prove a render request is pending without
+    /// touching the queue. No behavior change, no native call.
+    var hasPendingRender: Bool { renderInFlight }
+
+    /// Test seam: enqueues a barrier closure onto the existing private serial
+    /// render queue, ordered after work already queued and before anything
+    /// queued later. The smoke uses it to gate tile execution
+    /// deterministically; normal rendering never calls it. The closure runs
+    /// off the main actor, so it must not touch AppKit or view state — it may
+    /// only dispatch a callback to main and wait on a semaphore.
+    func enqueueRenderBarrier(_ barrier: @escaping @Sendable () -> Void) {
+        renderQueue.async { barrier() }
+    }
+
     private func store(_ image: CGImage, for key: TileKey) {
         tiles[key] = image
         staleTiles.remove(key)

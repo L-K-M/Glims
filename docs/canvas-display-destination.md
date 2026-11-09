@@ -89,12 +89,69 @@ proofing, gamut warnings, transform/profile cache or destination UI.
   smoke assert which destination the view actually snapshotted.
 - `EngineCanvasView.cachedTileICCData()` returns one cached tile's ICC tag
   so the smoke can prove the exact tag on rendered `CGImage`s.
+- `EngineCanvasView.hasPendingRender` is a read-only view of the existing
+  single `renderInFlight` admission — no native call, no behavior change —
+  so the smoke can prove a render request is pending.
+- `EngineCanvasView.enqueueRenderBarrier(_:)` enqueues one closure onto the
+  existing private serial `renderQueue`, ordered after already-queued work
+  and before later work. The smoke uses exactly two such barriers as
+  semaphore gates; the closure runs off the main actor, touches no AppKit
+  or view state, and only dispatches an "entered" callback to main and waits
+  on its semaphore. Normal rendering never calls it; the queue itself is
+  not exposed.
+
+## What the modular smoke proves, and how
+
+- **Deterministic old-profile rejection.** After the initial automatic
+  rendering fully settles (condition-polled `renderedTileCount > 0 &&
+  !hasPendingRender` on both windows, so no unrelated old queued result can
+  contaminate the fixture), gate1 is queued and its Main-delivered entered
+  callback is awaited (condition-polled; fixed sleeps are not used). With
+  the owning window still at profile A, `imageDidChange` + `setNeedsRender`
+  value-capture the old-profile tile request behind gate1 (`hasPendingRender`
+  asserted). gate2 is queued after that request. The actual window is then
+  switched to profile B while gate1 is still closed: the owning snapshot is
+  B and the completed cache is 0 immediately. Releasing gate1 lets the old
+  render execute and enqueue its completion to Main; the serial queue then
+  reaches gate2, whose entered callback is enqueued to Main after that
+  completion — so entered2 proves the old completion ran while fresh work is
+  still blocked. At that point the cache is still 0 (the stale generation
+  did not repopulate it), the destination is B, and `hasPendingRender` shows
+  the fresh request queued behind gate2. Releasing gate2 and awaiting
+  quiescence shows fresh tiles tagged with the exact new ICC. This checks
+  both the synchronous cache clearing and the stale old-profile rejection
+  deterministically, never by just waiting for any tile.
+- **Center/density.** On the 1200x900 image in an actual 400x320 viewport
+  moved to a genuinely nonzero offset (400,300) (asserted established, not
+  clamped), `CanvasGeometry.imageCenter` computed with the actual clip-view
+  bounds and the old backing factor gives about (600,460); after a simulated
+  backing density 1→2 the center recomputed with the new actual bounds and
+  factor is preserved (small tolerance), zoom stays 100, the cache count and
+  its ICC tag are unchanged, and the scroll offset moved as needed. Window B
+  stays independent throughout.
+- **Fresh native read-only.** `session.info(imageA)`, `session.undoInfo(imageA)`
+  and `session.copyPixels(imageA, merged:)` are read freshly before and
+  again after all rendering; the comparison uses the native dirty flag,
+  undo/redo counts and pixels — not the cached `doc.undoInfo` /
+  `hasUnsavedChanges` — and proves rendering changed none of them.
+- **Guaranteed teardown.** The smoke installs its two gates and owned
+  canvas/window/document lists up front; a single `defer` signals BOTH gates
+  unconditionally FIRST (before any drain/close, so a thrown check or early
+  return cannot strand a barrier), then `stopRendering` +
+  `closeImageWhenDrained` for each owned canvas/document with a
+  condition-waited Main completion, closes the owned windows and removes the
+  owned documents from `DocumentList`. Partial fixture creation is handled
+  (only what was appended is torn down), no unrelated windows/docs are
+  touched, and no native calls happen after an image close.
 
 ## Verification status
 
 Compile-only in this slice: `swift build -j2` and
 `swift build --build-tests -j2` were run in this worktree. The pure unit
 tests and the modular `exerciseDisplayDestination` smoke were **written but
-not executed** (this task runs no tests/app/engine); the Root executes them.
-Physical monitor calibration, LUT/device accuracy, HDR/EDR and per-call
-transform performance are explicitly **not** established by this slice.
+not executed** (this task runs no tests/app/engine; the shared smoke
+dispatcher wiring in `EngineSmokeTest.swift` is Root-owned and was not run
+here). The Root executes them. Physical monitor calibration, LUT/device
+accuracy, HDR/EDR and per-call transform performance are explicitly **not**
+established by this slice. The nil-window-colorSpace fallback path remains
+an unrun runtime uncertainty that the Root decides on.
