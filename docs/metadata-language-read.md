@@ -131,3 +131,14 @@ is not acceptance.
   in map order with `xml:lang` qualifiers.
 - Admission policy: `/tmp/glims-completion/metadata-language-admission-audit.md`
   (audited Main d600117; UNRUN proposals there remain proposals).
+
+
+Root corrected partial-frame cleanup, duplicate Alt container admission and
+explicit bounds on XML names/namespaces and language-key size. Native tests
+now compare independent language maps by key rather than property order,
+seed large strings before formatting, compare nullable vectors safely and
+reset oversized fixture metadata before the final positive read. The original
+350-line implementation had compile-only coverage; Root's first runtime run
+exposed fixture errors and those earlier compile claims do not imply runtime
+acceptance. Depth, namespace and injected native failures need targeted tests
+before the typed reader is exposed publicly or used for writing.

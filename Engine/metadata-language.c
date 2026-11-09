@@ -21,7 +21,7 @@ typedef struct
 {
   char *name;      /* expanded "uri" '\001' "local" */
   GHashTable *own; /* this element's own xmlns declarations */
-  int role; guint attrs;     /* non-xmlns attributes */
+  int role; guint attrs, children;     /* non-xmlns attributes */
   char *lang;      /* ROLE_LI: xml:lang value */
   GString *text;
 } LangAltFrame;
@@ -43,9 +43,9 @@ langalt_frame_free (gpointer data)
 {
   LangAltFrame *f = data;
   g_free (f->name);
-  g_hash_table_unref (f->own);
+  if (f->own) g_hash_table_unref (f->own);
   g_free (f->lang);
-  g_string_free (f->text, TRUE);
+  if (f->text) g_string_free (f->text, TRUE);
   g_free (f);
 }
 static void
@@ -83,6 +83,15 @@ langalt_start (GMarkupParseContext *context, const gchar *name,
   int first_attr = -1, role = ROLE_NONE;
   guint i;
   (void) context;
+  /* A short packet can repeat very long namespace names many times.
+   * Bound expanded-name work as well as packet bytes and tree depth. */
+  if (strlen (name) > 512)
+    { langalt_frame_free (frame); langalt_reject (error, "An XML name exceeds the bound."); return; }
+  for (i = 0; attr_names[i]; i++)
+    if (strlen (attr_names[i]) > 512 ||
+        ((! strcmp (attr_names[i], "xmlns") || g_str_has_prefix (attr_names[i], "xmlns:")) &&
+         strlen (attr_values[i]) > 4096))
+      { langalt_frame_free (frame); langalt_reject (error, "An XML namespace exceeds the bound."); return; }
   if (state->stack->len >= LANGALT_MAX_DEPTH)
     reject = "The XMP packet nests deeper than the reader's bound.";
   else
@@ -104,7 +113,10 @@ langalt_start (GMarkupParseContext *context, const gchar *name,
           else { state->found = TRUE; role = ROLE_PROP; }
         }
       else if (parent && parent->role == ROLE_PROP && ! strcmp (frame->name, state->rdf_alt))
-        role = ROLE_ALT;
+        {
+          if (parent->children++) reject = "The property has more than one rdf:Alt container.";
+          else role = ROLE_ALT;
+        }
       else if (parent && parent->role == ROLE_ALT && ! strcmp (frame->name, state->rdf_li))
         role = ROLE_LI;
       else if (parent && parent->role != ROLE_NONE)
@@ -148,7 +160,7 @@ langalt_end (GMarkupParseContext *context, const gchar *name,
   (void) context; (void) name;
   if (frame->role == ROLE_LI)
     {
-      if (! frame->lang || ! *frame->lang || ! g_utf8_validate (frame->lang, -1, NULL) ||
+      if (! frame->lang || ! *frame->lang || strlen (frame->lang) > 255 || ! g_utf8_validate (frame->lang, -1, NULL) ||
           ! g_utf8_validate (text, (gssize) length, NULL) || length == 0 ||
           memchr (text, '\0', length))
         reject = "An rdf:li entry is empty, not valid UTF-8 or holds a NUL.";

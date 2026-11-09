@@ -140,7 +140,14 @@ seed (Probe *probe, const char *root, const char *const *values, int count)
 }
 
 /* Runs the reader and checks a successful result against the independently
- * expected pairs (count + exact language and text, in order). */
+ * expected map (count + exact language spelling and text). */
+static gboolean
+vectors_equal (gchar **left, gchar **right)
+{
+  return (! left || ! right) ? left == right
+    : g_strv_equal ((const gchar * const *) left, (const gchar * const *) right);
+}
+
 static void
 expect_pairs (Probe *probe, const char *root,
               const char *const *expected_lang, const char *const *expected_text,
@@ -167,11 +174,18 @@ expect_pairs (Probe *probe, const char *root,
   if (out && out->len == (guint) count)
     for (int i = 0; i < count; i++)
       {
-        GlimsMetadataLanguagePair *pair = g_ptr_array_index (out, (guint) i);
+        GlimsMetadataLanguagePair *pair = NULL;
+        guint matches = 0, j;
 
-        CHECK (pair && ! strcmp (pair->language, expected_lang[i]) &&
-               ! strcmp (pair->text, expected_text[i]),
-               "%s: pair %d is (%s, %s)", label, i, expected_lang[i], expected_text[i]);
+        for (j = 0; j < out->len; j++)
+          {
+            GlimsMetadataLanguagePair *candidate = g_ptr_array_index (out, j);
+            if (candidate && ! strcmp (candidate->language, expected_lang[i]))
+              { pair = candidate; matches++; }
+          }
+        CHECK (matches == 1 && pair && ! strcmp (pair->text, expected_text[i]),
+               "%s: language %s has exact text (got %s; expected %s)", label,
+               expected_lang[i], pair ? pair->text : "<missing>", expected_text[i]);
       }
   if (out)
     g_ptr_array_unref (out);
@@ -181,8 +195,7 @@ expect_pairs (Probe *probe, const char *root,
   CHECK ((before.packet == NULL) == (after.packet == NULL) &&
          (! before.packet || ! strcmp (before.packet, after.packet)),
          "%s: generated packet unchanged", label);
-  CHECK (g_strv_equal ((const gchar * const *) before.vector,
-                       (const gchar * const *) after.vector),
+  CHECK (vectors_equal (before.vector, after.vector),
          "%s: native vector unchanged", label);
   CHECK (gimp_image_get_metadata (probe->image) == metadata, "%s: metadata object unchanged",
          label);
@@ -222,8 +235,7 @@ expect_refusal (Probe *probe, const char *root, GlimsStatus expected, const char
   snapshot_take (probe, root, &after);
   CHECK ((before.packet == NULL) == (after.packet == NULL) &&
          (! before.packet || ! strcmp (before.packet, after.packet)) &&
-         g_strv_equal ((const gchar * const *) before.vector,
-                       (const gchar * const *) after.vector) &&
+         vectors_equal (before.vector, after.vector) &&
          gimp_image_get_metadata (probe->image) == metadata &&
          gimp_undo_stack_get_depth (gimp_image_get_undo_stack (probe->image)) == undo &&
          gimp_undo_stack_get_depth (gimp_image_get_redo_stack (probe->image)) == redo &&
@@ -274,8 +286,8 @@ run_all (GlimsEngine *engine, gpointer data)
   {
     const char *values[] = { "lang=\"x-default\" Hello", "lang=\"fr\" Salut",
                              "lang=\"de\" Hallo" };
-    const char *langs[] = { "x-default", "de", "fr" };
-    const char *texts[] = { "Hello", "Hallo", "Salut" };
+    const char *langs[] = { "x-default", "fr", "de" };
+    const char *texts[] = { "Hello", "Salut", "Hallo" };
 
     FIXTURE (seed (probe, "Xmp.dc.title", values, 3), "[seed] title");
     expect_pairs (probe, "Xmp.dc.title", langs, texts, 3, "[basic] x-default/fr/de");
@@ -296,7 +308,7 @@ run_all (GlimsEngine *engine, gpointer data)
     const char *values[] = { "lang=\"x-default\" A & B <t> \"q\" 'x'",
                              "lang=\"fr\"  pad\nd\xc3\xa9j\xc3\xa0 \xf0\x9f\x98\x80  " };
     const char *langs[] = { "x-default", "fr" };
-    const char *texts[] = { "A & B <t> \"q\" 'x'", "  pad\nd\xc3\xa9j\xc3\xa0 \xf0\x9f\x98\x80  " };
+    const char *texts[] = { "A & B <t> \"q\" 'x'", " pad\nd\xc3\xa9j\xc3\xa0 \xf0\x9f\x98\x80  " };
 
     FIXTURE (seed (probe, "Xmp.dc.rights", values, 2), "[seed] rights");
     expect_pairs (probe, "Xmp.dc.rights", langs, texts, 2, "[exact] special text");
@@ -369,11 +381,15 @@ run_all (GlimsEngine *engine, gpointer data)
   /* Text aggregate bound: two 600 KiB entries exceed the 1 MiB aggregate. */
   {
     char *big = g_malloc0 (600 * 1024);
-    char *v0 = g_strdup_printf ("lang=\"x-default\" %s", big);
-    char *v1 = g_strdup_printf ("lang=\"fr\" %s", big);
-    const char *values[] = { v0, v1 };
+    char *v0, *v1;
+    const char *values[2];
 
     memset (big, 'x', 600 * 1024 - 1);
+    v0 = g_strdup_printf ("lang=\"x-default\" %s", big);
+    v1 = g_strdup_printf ("lang=\"fr\" %s", big);
+    values[0] = v0;
+    values[1] = v1;
+
     FIXTURE (seed (probe, "Xmp.dc.description", values, 2), "[seed] aggregate");
     expect_refusal (probe, "Xmp.dc.description", GLIMS_STATUS_UNSUPPORTED,
                     "[text-bound] UNSUPPORTED");
@@ -385,22 +401,27 @@ run_all (GlimsEngine *engine, gpointer data)
   /* Packet bound: one 3 MiB entry exceeds the 2 MiB packet bound. */
   {
     char *big = g_malloc0 (3 * 1024 * 1024);
-    char *v0 = g_strdup_printf ("lang=\"x-default\" %s", big);
-    const char *values[] = { v0 };
+    char *v0;
+    const char *values[1];
 
     memset (big, 'y', 3 * 1024 * 1024 - 1);
+    v0 = g_strdup_printf ("lang=\"x-default\" %s", big);
+    values[0] = v0;
+
     FIXTURE (seed (probe, "Xmp.dc.rights", values, 1), "[seed] packet bound");
     expect_refusal (probe, "Xmp.dc.rights", GLIMS_STATUS_UNSUPPORTED, "[packet-bound] UNSUPPORTED");
     g_free (big);
     g_free (v0);
   }
 
-  /* A good read after all refusals still succeeds. */
+  /* A good read after all refusals still succeeds. Reset the fixture:
+   * the size bound applies to the entire packet, including other tags. */
+  gimp_image_set_metadata (probe->image, NULL, FALSE);
   {
     const char *values[] = { "lang=\"x-default\" Hello", "lang=\"fr\" Salut",
                              "lang=\"de\" Hallo" };
-    const char *langs[] = { "x-default", "de", "fr" };
-    const char *texts[] = { "Hello", "Hallo", "Salut" };
+    const char *langs[] = { "x-default", "fr", "de" };
+    const char *texts[] = { "Hello", "Salut", "Hallo" };
 
     FIXTURE (seed (probe, "Xmp.dc.title", values, 3), "[seed] title again");
     expect_pairs (probe, "Xmp.dc.title", langs, texts, 3, "[final] x-default/fr/de");
