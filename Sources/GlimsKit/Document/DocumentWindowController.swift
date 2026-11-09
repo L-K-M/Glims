@@ -29,6 +29,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// open, so two documents keep independent sheets — no global binding,
     /// no retarget to the front window. nil while none is open.
     private(set) var resourceSelectionSheet: ResourceSelectionSheetController?
+    /// Edit ▸ Create Resource ▸ Gradient…'s sheet, retained by this window
+    /// for its lifetime and capturing this window's document at open, so
+    /// two documents keep independent sheets — no global binding, no
+    /// retarget to the front window. nil while none is open.
+    private(set) var gradientCreateSheet: GradientCreateSheetController?
     /// View ▸ Saved Sets…'s non-modal panel, retained by this window and
     /// capturing this window's document at open — no retarget to the front
     /// window. nil while none is open.
@@ -141,6 +146,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             self?.guidesSheet?.showError(message)
             self?.strokeSelectionSheet?.showError(message)
             self?.resourceSelectionSheet?.showError(message)
+            self?.gradientCreateSheet?.showError(message)
             self?.savedSetPanel?.showError(message)
 
             self?.gridSheet?.showError(message)
@@ -348,6 +354,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         guidesSheet?.commitFieldEdit()
         strokeSelectionSheet?.commitFieldEdit()
         resourceSelectionSheet?.commitFieldEdit()
+        gradientCreateSheet?.commitFieldEdit()
         savedSetPanel?.commitFieldEdit()
 
         gridSheet?.commitFieldEdit()
@@ -403,6 +410,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         guidesSheet?.documentStateDidChange()
         strokeSelectionSheet?.documentStateDidChange()
         resourceSelectionSheet?.documentStateDidChange()
+        gradientCreateSheet?.documentStateDidChange()
         savedSetPanel?.documentStateDidChange()
 
         gridSheet?.documentStateDidChange()
@@ -1248,6 +1256,32 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    /// Edit ▸ Create Resource ▸ Gradient….
+    @objc func createGradient(_ sender: Any?) {
+        presentGradientCreateSheet()
+    }
+
+    /// Opens this document's create-gradient sheet. The sheet captures
+    /// this window's document at open; the open gate reads only the cached
+    /// document state — never the selection, the target or the engine —
+    /// and refuses with a reason, never a native call on the main thread.
+    private func presentGradientCreateSheet() {
+        guard let window, !imageDocument.isClosing, window.attachedSheet == nil,
+              gradientCreateSheet == nil else { return }
+        if let reason = imageDocument.createGradientRefusal() {
+            imageDocument.onError?(reason)
+            NSSound.beep()
+            return
+        }
+        let sheet = GradientCreateSheetController(document: imageDocument, hostWindow: window)
+        gradientCreateSheet = sheet
+        window.beginSheet(sheet.panel) { [weak self, weak sheet] _ in
+            guard let self, let sheet, self.gradientCreateSheet === sheet else { return }
+            sheet.invalidate()
+            self.gradientCreateSheet = nil
+        }
+    }
+
     /// Edit ▸ Fill Path: fills the active path's area on the current paint
     /// target using the Path tool's foreground color and fill settings.
     @objc func fillPath(_ sender: Any?) {
@@ -1411,6 +1445,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let kind: EngineSession.ResourceKind =
                 menuItem.action == #selector(createBrushFromSelection(_:)) ? .brush : .pattern
             if let reason = imageDocument.createResourceRefusal(kind: kind) {
+                menuItem.toolTip = reason
+                return false
+            }
+            menuItem.toolTip = nil
+            return !editingBlocked && !previewBusy
+        case #selector(createGradient(_:)):
+            // Cached gate only — no native call while a menu validates.
+            // The gradient catalog is global: no selection, target or
+            // file-state gate applies. The refusal reason becomes the
+            // item's tool tip.
+            if let reason = imageDocument.createGradientRefusal() {
                 menuItem.toolTip = reason
                 return false
             }
@@ -2202,6 +2247,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         guidesSheet?.invalidate()
         strokeSelectionSheet?.invalidate()
         resourceSelectionSheet?.invalidate()
+        gradientCreateSheet?.invalidate()
+        if let panel = gradientCreateSheet?.panel, window?.attachedSheet === panel {
+            window?.endSheet(panel)
+        }
+        gradientCreateSheet = nil
         savedSetPanel?.invalidate()
         savedSetPanel?.window?.orderOut(nil)
         savedSetPanel = nil
