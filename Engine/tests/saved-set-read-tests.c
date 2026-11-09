@@ -589,10 +589,21 @@ run_all (GlimsEngine *engine, gpointer data)
     if (idx >= 0)
       {
         len = strlen (rows[idx].display_name);
-        CHECK (len <= 255 && g_utf8_validate (rows[idx].display_name, -1, NULL) &&
-               (len == 0 || ((unsigned char) rows[idx].display_name[len - 1] & 0xC0) != 0x80),
+        CHECK (len <= 255 && len < strlen (long_name) &&
+               g_utf8_validate (rows[idx].display_name, -1, NULL) &&
+               memcmp (rows[idx].display_name, long_name, len) == 0,
                "[truncation] display name bounded, valid UTF-8, char-boundary truncated (%zu bytes)", len);
-        CHECK (rows[idx].token == token_long, "[truncation] same set keeps its token");
+        /* Phase 8 performed an Undo restoring this whole kind's definitions;
+         * tokens deliberately expire across that replacement. Reacquire the
+         * current token, then prove subsequent plain reads keep it stable. */
+        uint64_t expired_long = token_long;
+        token_long = rows[idx].token;
+        count = -1;
+        status = members_of (probe, probe->image_id, expired_long, ids, 8, &count);
+        CHECK (status == GLIMS_STATUS_NOT_FOUND && count == 0,
+               "[truncation] the pre-Undo token expired instead of retargeting");
+        CHECK (token_long != 0 && token_long != expired_long,
+               "[truncation] restored definition has a fresh token");
         count = -1;
         status = members_of (probe, probe->image_id, token_long, ids, 8, &count);
         CHECK (status == GLIMS_STATUS_OK && count == 1 &&
@@ -604,7 +615,7 @@ run_all (GlimsEngine *engine, gpointer data)
   /* ---------- Phase 10: read invariants ---------------------------------- */
 
   {
-    GList *selected_before = gimp_image_get_selected_layers (image);
+    GList *selected_before = g_list_copy (gimp_image_get_selected_layers (image));
     guint n_selected = g_list_length (selected_before);
 
     s0 = capture_state (image);
@@ -617,7 +628,7 @@ run_all (GlimsEngine *engine, gpointer data)
     {
       GList *selected_after = gimp_image_get_selected_layers (image);
       CHECK (g_list_length (selected_after) == n_selected, "[invariants] selection unchanged by reads");
-      g_list_free (selected_after);
+      /* Borrowed image-owned list: never free it. */
     }
     g_list_free (selected_before);
   }

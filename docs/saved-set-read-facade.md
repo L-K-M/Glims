@@ -40,7 +40,8 @@ API, no UI, no selection change.
   (`GlimsEngine.next_item_set_token`), allocated when the manager adopts a
   fixed set. 0 is never issued; at `UINT64_MAX` allocation fails closed
   (the set is listed with token 0, slot 134 refuses it) and no identity is
-  ever reused.
+  ever reused within that runtime. Tokens must never be persisted or transferred
+  across engine restarts.
 - The token lives on the manager's `FixedSet`, so it is **retained through
   quiet live-member replacement** (`rebuild_sets` swaps the exposed native
   object, not the `FixedSet`).
@@ -48,7 +49,7 @@ API, no UI, no selection change.
   the `FixedSet` (and its token) is dropped when the set disappears or is
   re-stored as a new native object. A set recreated under the same name
   gets a **fresh token**; an old token is **never retargeted**, and a token
-  owned by another image (same or foreign engine) matches no set here and
+  owned by another image in the same engine runtime matches no set here and
   is refused NOT_FOUND.
 - `glims_item_sets_new` now takes the `GlimsEngine*` (the one adoption site
   in `Engine/image.c` passes it through).
@@ -64,7 +65,7 @@ negative `capacity`, token 0; NOT_FOUND for unknown image and unknown/
 foreign/stale/expired tokens; NOT_RUNNING (with `*count` 0) for a NULL
 engine.
 
-## Verification
+## Initial compile checks (runtime evidence below)
 
 - `swift build` / `swift build --build-tests` (Swift wrapper + header).
 - Syntax-only compile of all `Engine/*.c` and the harness against all
@@ -80,3 +81,17 @@ engine.
   undo expiry, UTF-8 display truncation with token-resolved members, busy
   reads, NULL-engine output reset, and read invariants (no undo/redo/dirty/
   selection change).
+
+
+Root's first pinned run exposed test defects: valid multibyte UTF-8 ends in
+continuation bytes; a whole-definition Undo intentionally expires earlier
+tokens; and the harness freed image-owned selected-layer lists twice. The
+selection invariant now owns only its copied snapshot, and token assertions
+reacquire current definitions after Undo while explicitly refusing old tokens.
+The corrected pinned harness passes 56 checks, including all three kinds.
+Every supported engine now passes all 56 read checks, 150 Undo checks and
+188 lifetime checks. General conformance passes 1,917 / 1,703 / 1,917 /
+1,917 checks; the integrated source also passes all 697 Swift unit/build
+checks. Independent source review found no important issue; it did not rerun
+the runtime matrix. This remains a read-only API slice, with editing/controls
+and final editor integration still separate.

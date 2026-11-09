@@ -497,8 +497,7 @@ find_set_by_token (GlimsItemSets *manager, uint64_t token)
     {
       FixedSet *set = g_ptr_array_index (manager->sets, i);
       /* Tokens are unique per engine, so a token owned by another image of
-       * this engine — or issued by a foreign engine — simply matches no
-       * set here and is refused by the caller as NOT_FOUND. */
+       * this engine simply matches no set here and is refused by the caller as NOT_FOUND. */
       if (set->token != 0 && set->token == token)
         return set;
     }
