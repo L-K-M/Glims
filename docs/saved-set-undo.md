@@ -156,5 +156,8 @@ Collection overhead is estimated, as in the native core.
 All four engines pass 155 Undo checks, 146 public edit checks and general
 conformance totals 1,917 / 1,703 / 1,917 / 1,917. The small-step fixture stays
 under the nonzero limit, while the oversized step expires; the successful
-edit remains applied and dirty. Independent review of this memory change
-is pending. This supersedes the earlier 150-check Undo total.
+edit remains applied and dirty. Independent source review of both complete files found no important issue.
+Relay inspection identified nested GUI-size accumulator resets; Root corrected
+those with per-item local counters. Recursive detached group/child payloads
+can still be conservatively counted twice; this is an estimator, not exact
+allocator measurement. This supersedes the earlier 150-check Undo total.

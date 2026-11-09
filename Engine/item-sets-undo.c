@@ -89,7 +89,11 @@ snapshot_memsize (const GlimsSetSnapshot *snap, GHashTable *counted, gint64 *gui
         {
           GimpItem *item = g_ptr_array_index (def->members, j);
           if (! gimp_item_is_attached (item) && g_hash_table_add (counted, item))
-            size += gimp_object_get_memsize (GIMP_OBJECT (item), gui_size);
+            {
+              gint64 item_gui_size = 0;
+              size += gimp_object_get_memsize (GIMP_OBJECT (item), &item_gui_size);
+              *gui_size += item_gui_size;
+            }
         }
     }
   return size;
