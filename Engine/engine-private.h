@@ -56,6 +56,18 @@ typedef struct GlimsItemSets GlimsItemSets;
 GlimsItemSets * glims_item_sets_new  (GimpImage *image);
 void            glims_item_sets_free (GlimsItemSets *manager);
 
+/* item-sets-undo.c: atomic native undo steps for explicit saved-set edits.
+ * Engine-internal commands (no facade slot); run on the engine thread.
+ * Each mutating command pushes exactly one GimpUndo with owned before/after
+ * snapshots; no-op and refused (frozen/error) calls change nothing. */
+GlimsStatus glims_item_sets_create  (GimpImage *image, GType kind, const char *name,
+                                     GimpItem *const *members, size_t member_count, char **error);
+GlimsStatus glims_item_sets_replace (GimpImage *image, GType kind, const char *name,
+                                     GimpItem *const *members, size_t member_count, char **error);
+GlimsStatus glims_item_sets_rename  (GimpImage *image, GType kind, const char *name,
+                                     const char *new_name, char **error);
+GlimsStatus glims_item_sets_remove  (GimpImage *image, GType kind, const char *name, char **error);
+
 /* An image the app holds open. */
 typedef struct
 {

@@ -6,6 +6,7 @@
  */
 #include "engine-private.h"
 
+#include "core/core-enums.h"
 #include "core/gimpcontainer.h"
 #include "core/gimpchannel.h"
 #include "core/gimpimage.h"
@@ -13,6 +14,7 @@
 #include "core/gimpitemlist.h"
 #include "core/gimplayer.h"
 #include "core/gimpobject.h"
+#include "core/gimpundo.h"
 #if GIMP_CHECK_VERSION (3, 2, 0)
 #include "path/gimppath.h"
 #else
@@ -46,6 +48,7 @@ struct GlimsItemSets
   GPtrArray *sets;                /* FixedSet* */
   GPtrArray *watches;             /* ContainerWatch* */
   gulong     sets_changed;
+  gulong     undo_event;
   gboolean   rebuilding;
 };
 
@@ -178,6 +181,32 @@ sets_changed (GimpImage *image, GType kind, GlimsItemSets *manager)
     sync_definitions (manager, kind);
 }
 
+/* Undo/redo pops and stack expiry/purge can change which members are live
+ * (a saved-set undo restores definitions; a layer undo detaches or
+ * reattaches members; expiry finalizes them). Rebuild the replacements so
+ * exposed membership is again exactly the live members; the mirror keeps
+ * detached-but-alive members weakly known for Undo and drops finalized
+ * ones. Quiet: store/unlink add no undo step and no dirty flag. */
+static void
+undo_event (GimpImage *image, GimpUndoEvent event, GimpUndo *undo, GlimsItemSets *manager)
+{
+  (void) image;
+  (void) undo;
+  switch (event)
+    {
+    case GIMP_UNDO_EVENT_UNDO:
+    case GIMP_UNDO_EVENT_REDO:
+    case GIMP_UNDO_EVENT_UNDO_EXPIRED:
+    case GIMP_UNDO_EVENT_REDO_EXPIRED:
+    case GIMP_UNDO_EVENT_UNDO_FREE:
+      rebuild_sets (manager);
+      break;
+
+    default:
+      break;
+    }
+}
+
 static void
 container_changed (GimpContainer *container, GimpObject *item, GlimsItemSets *manager)
 {
@@ -298,6 +327,7 @@ glims_item_sets_new (GimpImage *image)
   watch_container (manager, gimp_image_get_channels (image));
   watch_container (manager, gimp_image_get_paths (image));
   manager->sets_changed = g_signal_connect (image, "item-sets-changed", G_CALLBACK (sets_changed), manager);
+  manager->undo_event = g_signal_connect (image, "undo-event", G_CALLBACK (undo_event), manager);
   return manager;
 }
 
@@ -307,6 +337,7 @@ glims_item_sets_free (GlimsItemSets *manager)
   if (! manager)
     return;
   g_signal_handler_disconnect (manager->image, manager->sets_changed);
+  g_signal_handler_disconnect (manager->image, manager->undo_event);
   g_ptr_array_unref (manager->watches);
   g_ptr_array_unref (manager->sets);
   g_free (manager);
