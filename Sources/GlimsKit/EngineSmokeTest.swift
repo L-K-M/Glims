@@ -276,6 +276,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (menu shortcuts)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "image-adjust" {
+                try exerciseImageAdjust(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (image adjust)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "selection-drag" {
                 try exerciseSelectionDrag(session, documents: documents)
                 print(failures == 0 ? "PASSED (selection drag)" : "FAILED: \(failures) failure(s)")
@@ -458,6 +463,7 @@ enum EngineSmokeTest {
             try exerciseBatchDelete(session, documents: documents)
             try exerciseFilterSources(session, documents: documents)
             try exerciseSelectionDrag(session, documents: documents)
+            try exerciseImageAdjust(session, work: work, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)
             try exerciseFloatingMove(session, work: work, documents: documents)
             try exerciseFloatSelectedPixels(session, work: work, documents: documents)
