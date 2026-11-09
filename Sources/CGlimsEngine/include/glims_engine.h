@@ -1176,7 +1176,9 @@ typedef struct GlimsEngineAPI {
                                     GlimsImageInfo *info);
   /* Renders the composited image at `scale` (1.0 = one image pixel per
    * output pixel). `area` is in scaled pixel coordinates. Writes
-   * area.width * area.height pixels of premultiplied 8-bit sRGB RGBA. */
+   * area.width * area.height pixels of premultiplied 8-bit sRGB RGBA.
+   * Supported scale: 2^-20 ... 32. Unscaled request edges must be within
+   * +/- 2^26 pixels to bound GEGL sampling arithmetic. */
   GlimsStatus  (*image_render)     (GlimsEngine *engine, GlimsImageID image,
                                     double scale, GlimsRect area,
                                     uint8_t *pixels, size_t stride);
@@ -2526,7 +2528,8 @@ typedef struct GlimsEngineAPI {
    * native profile construction during this synchronous call; no pointer
    * into it is retained afterwards. NULL or zero `destination_icc_length`
    * is INVALID_ARGUMENT, as are lengths above the adapter's ICC cap
-   * (16 MiB) and any non-finite or out-of-range scale, area, stride or
+   * (16 MiB) and any non-finite or out-of-range scale (2^-20 ... 32),
+   * unscaled request edges outside +/-2^26, area, stride or
    * total output size above the adapter's pixel-buffer cap
    * (512 MiB, GLIMS_MAX_PIXEL_BUFFER_BYTES). Malformed ICC data is FAILED
    * with `error`; a valid but non-RGB ICC profile is UNSUPPORTED. There

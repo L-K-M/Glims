@@ -72,7 +72,7 @@ glims_image_render_to_profile (GlimsEngine   *engine,
   const Babl         *proj_format;
   const Babl         *proj_space;
   const Babl         *src_format;   /* straight float, the projection's own space */
-  const Babl         *dest_plain;   /* "R G B A float"; the transform re-tags the space */
+  const Babl         *dest_plain;   /* "R'G'B'A float"; the transform re-tags the space */
   const Babl         *dest_space;
   const Babl         *premul_src;
   const Babl         *premul_dst;
@@ -124,11 +124,11 @@ glims_image_render_to_profile (GlimsEngine   *engine,
     case GIMP_RGB:
     case GIMP_INDEXED: /* an indexed image's projection is RGB */
       gray = FALSE;
-      src_encoding = "R G B A float";
+      src_encoding = "R'G'B'A float";
       break;
     case GIMP_GRAY:
       gray = TRUE;
-      src_encoding = "Y A float";
+      src_encoding = "Y'A float";
       break;
     default:
       if (error)
@@ -196,7 +196,7 @@ glims_image_render_to_profile (GlimsEngine   *engine,
    * straight float out, alpha preserved. When the babl fish cannot serve
    * the pair, the constructor falls back to LCMS — either way malformed
    * or unsupported combinations already failed above or return NULL here. */
-  dest_plain = babl_format ("R G B A float");
+  dest_plain = babl_format ("R'G'B'A float");
   transform = gimp_color_transform_new (src_profile, babl_format (src_encoding),
                                         dest_profile, dest_plain,
                                         DISPLAY_RENDER_INTENT,
@@ -211,7 +211,7 @@ glims_image_render_to_profile (GlimsEngine   *engine,
 
   /* Premultiply exactly once, inside the destination space, with babl's
    * own straight->premultiplied u8 conversion. */
-  premul_src = babl_format_with_space ("R G B A float", dest_space);
+  premul_src = babl_format_with_space ("R'G'B'A float", dest_space);
   premul_dst = babl_format_with_space ("R'aG'aB'aA u8", dest_space);
   if (premul_src && premul_dst)
     premul_fish = babl_fish (premul_src, premul_dst);
@@ -227,7 +227,7 @@ glims_image_render_to_profile (GlimsEngine   *engine,
    * gegl's gint stride. */
   row_src = (uint64_t) area.width * (gray ? 8u : 16u);
   row_dst = (uint64_t) area.width * 16u;
-  if (row_src > GLIMS_RENDER_TEMP_CHUNK_BYTES || row_dst > GLIMS_RENDER_TEMP_CHUNK_BYTES ||
+  if (row_src + row_dst > GLIMS_RENDER_TEMP_CHUNK_BYTES ||
       row_src > G_MAXINT32 || row_dst > G_MAXINT32)
     {
       status = GLIMS_STATUS_INVALID_ARGUMENT;
@@ -238,6 +238,10 @@ glims_image_render_to_profile (GlimsEngine   *engine,
     chunk_rows = 1;
   if (chunk_rows > (size_t) area.height)
     chunk_rows = (size_t) area.height;
+  /* GEGL converts one-column reads using stack scratch proportional to
+   * height, so bound its calls independently of our own heap-scratch cap. */
+  if (area.width == 1 && chunk_rows > 256)
+    chunk_rows = 256;
   tmp_src = g_malloc (chunk_rows * (size_t) row_src);
   tmp_dst = g_malloc (chunk_rows * (size_t) row_dst);
 
@@ -257,6 +261,14 @@ glims_image_render_to_profile (GlimsEngine   *engine,
       /* Read straight float in the projection's own space (encoding-only
        * conversion), transform straight, then premultiply into the
        * caller's rows at the caller's stride. */
+      /* A final single-pixel chunk can take GEGL's hot-pixel shortcut
+       * even when the whole request was larger. Validate that chunk too. */
+      if (scale == 1.0 && rect.width == 1 && rect.height == 1)
+        {
+          GlimsRect single = { rect.x, rect.y, 1, 1 };
+          status = glims_projection_prepare_read (open, scale, single, &buffer);
+          if (status != GLIMS_STATUS_OK) goto out;
+        }
       gegl_buffer_get (buffer, &rect, scale, src_format,
                        tmp_src, (gint) row_src, GEGL_ABYSS_NONE);
       gimp_color_transform_process_pixels (transform, src_format, tmp_src,

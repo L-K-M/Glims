@@ -507,43 +507,55 @@ final class EngineSession: @unchecked Sendable {
     /// the fallback policy: when no usable destination exists, call
     /// `render(_:scale:area:)` (sRGB) instead — the native call never
     /// falls back to sRGB silently.
+    static func destinationRenderLayout(scale: Double, area: CGRect, iccByteCount: Int)
+        throws -> (rect: GlimsRect, stride: Int, bytes: Int) {
+        guard scale.isFinite, scale >= 1.0 / 1_048_576, scale <= 32,
+              iccByteCount > 0, iccByteCount <= maxDestinationICCBytes else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The render request is out of range.")
+        }
+        let x = area.origin.x, y = area.origin.y
+        let width = area.size.width, height = area.size.height
+        guard x.isFinite, y.isFinite, width.isFinite, height.isFinite,
+              x.rounded() == x, y.rounded() == y,
+              width.rounded() == width, height.rounded() == height,
+              x >= Double(Int32.min), x <= Double(Int32.max),
+              y >= Double(Int32.min), y <= Double(Int32.max),
+              width >= 1, height >= 1,
+              width <= Double(Int32.max), height <= Double(Int32.max),
+              x + width <= Double(Int32.max), y + height <= Double(Int32.max) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The render area is not a finite integral rectangle in range.")
+        }
+        let samplingScale = Double(Float(scale))
+        guard [x, y, x + width, y + height].allSatisfy({ abs($0 / samplingScale) <= 67_108_864 }) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The render area exceeds the engine's sampling range.")
+        }
+        let stride = Int(width) * 4  // width is bounded by Int32, on macOS 64-bit
+        // Divide the byte cap before multiplying: two Int32 dimensions times
+        // four can overflow Int64 even though each dimension is in range.
+        guard stride <= Int(Int32.max), Int(height) <= maxRenderBufferBytes / stride else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The render output buffer would exceed the adapter limit.")
+        }
+        return (GlimsRect(x: Int32(x), y: Int32(y), width: Int32(width), height: Int32(height)),
+                stride, stride * Int(height))
+    }
+
     func render(_ image: Int32, scale: Double, area: CGRect, destinationICC: Data) throws -> CGImage {
-        // Build the matching RGB space from the exact ICC bytes up front;
-        // malformed or non-RGB data is rejected here, never guessed.
+        let layout = try Self.destinationRenderLayout(scale: scale, area: area,
+                                                      iccByteCount: destinationICC.count)
+        // Parse ICC only after its byte cap and the output bounds are checked.
         guard let space = CGColorSpace(iccData: destinationICC as CFData), space.model == .rgb else {
             throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                               message: "The destination ICC data is not a usable RGB color profile.")
         }
-        guard scale.isFinite, scale > 0,
-              destinationICC.count > 0, destinationICC.count <= Self.maxDestinationICCBytes else {
-            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
-                              message: "The render request is out of range.")
+        let rect = layout.rect, stride = layout.stride
+        guard let data = NSMutableData(length: layout.bytes) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The render output buffer could not be allocated.")
         }
-        let minX = area.minX, minY = area.minY, width = area.width, height = area.height
-        guard minX.isFinite, minY.isFinite, width.isFinite, height.isFinite,
-              minX.rounded() == minX, minY.rounded() == minY,
-              width.rounded() == width, height.rounded() == height,
-              minX >= Double(Int32.min), minX <= Double(Int32.max),
-              minY >= Double(Int32.min), minY <= Double(Int32.max),
-              width >= 1, height >= 1,
-              minX + width <= Double(Int32.max), minY + height <= Double(Int32.max),
-              width <= Double(Int32.max), height <= Double(Int32.max) else {
-            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
-                              message: "The render area is not a finite integral rectangle in range.")
-        }
-        let rect = GlimsRect(x: Int32(minX), y: Int32(minY),
-                             width: Int32(width), height: Int32(height))
-        // Overflow-checked stride and byte count before any allocation or
-        // narrowing to the C API.
-        let stride64 = Int64(rect.width) * 4
-        let count64 = stride64 * Int64(rect.height)
-        guard stride64 <= Int64(Int.max), count64 <= Int64(Int.max),
-              count64 <= Int64(Self.maxRenderBufferBytes) else {
-            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
-                              message: "The render output buffer would exceed the adapter limit.")
-        }
-        let stride = Int(stride64)
-        let data = NSMutableData(length: Int(count64))!
         var error: UnsafeMutablePointer<CChar>?
         try destinationICC.withUnsafeBytes { icc in
             try check(api.image_render_to_profile(engine, image, scale, rect,
