@@ -143,7 +143,7 @@ main (int argc, char **argv)
   GlimsImageInfo   info_before, info_after;
   GlimsUndoInfo    undo_before, undo_after;
   uint8_t          out[TW * TH * 4 + 64];
-  uint8_t          guard_out[TH * 16];
+  uint8_t          guard_out[TH * 32];
   GlimsRect        full = { 0, 0, TW, TH };
   int              i;
 
@@ -204,7 +204,7 @@ main (int argc, char **argv)
    *   against info_before/undo_before right after the refusal block) */
   memset (guard_out, 0xAA, sizeof guard_out);
   {
-    GlimsStatus status = api->image_render (engine, image, 1.0, full, guard_out, 16);
+    GlimsStatus status = api->image_render (engine, image, 1.0, full, guard_out, 32);
     int ok = status == GLIMS_STATUS_OK;
     for (i = 0; ok && i < TH; i++)
       {
@@ -212,15 +212,15 @@ main (int argc, char **argv)
         for (p = 0; p < TW; p++)
           {
             const uint8_t *src = test_pixels + (i * TW + p) * 4;
-            const uint8_t *dst = guard_out + i * 16 + p * 4;
+            const uint8_t *dst = guard_out + i * 32 + p * 4;
             ok = abs (dst[0] - expect_premul (src[0], src[3])) <= 1 &&
                  abs (dst[1] - expect_premul (src[1], src[3])) <= 1 &&
                  abs (dst[2] - expect_premul (src[2], src[3])) <= 1 &&
                  dst[3] == src[3];
           }
-        /* stride 16, width 4: bytes 16..31 of each row are guard bytes */
-        ok = ok && guard_out[i * 16 + TW * 4] == 0xAA &&
-             guard_out[i * 16 + 15] == 0xAA;
+        /* stride 32, width 4: bytes 16..31 are row padding. */
+        for (int padding = TW * 4; padding < 32; padding++)
+          ok = ok && guard_out[i * 32 + padding] == 0xAA;
       }
     CHECK (ok, "image_render still returns premultiplied sRGB u8, stride respected, guards intact");
   }
@@ -231,7 +231,7 @@ main (int argc, char **argv)
   {
     GlimsStatus status = api->image_render_to_profile (engine, image, 1.0, full,
                                                        (const uint8_t *) linear_icc, linear_len,
-                                                       guard_out, 16, &error);
+                                                       guard_out, 32, &error);
     int ok = status == GLIMS_STATUS_OK;
     take_error (error); error = NULL;
     for (i = 0; ok && i < TH; i++)
@@ -240,7 +240,7 @@ main (int argc, char **argv)
         for (p = 0; p < TW; p++)
           {
             const uint8_t *src = test_pixels + (i * TW + p) * 4;
-            const uint8_t *dst = guard_out + i * 16 + p * 4;
+            const uint8_t *dst = guard_out + i * 32 + p * 4;
             double a = src[3] / 255.0;
             int er = (int) lround (srgb_decode (src[0] / 255.0) * 255.0 * a);
             int eg = (int) lround (srgb_decode (src[1] / 255.0) * 255.0 * a);
@@ -250,8 +250,8 @@ main (int argc, char **argv)
             ok = abs (dst[0] - er) <= 2 && abs (dst[1] - eg) <= 2 &&
                  abs (dst[2] - eb) <= 2 && dst[3] == src[3];
           }
-        ok = ok && guard_out[i * 16 + TW * 4] == 0xAA &&
-             guard_out[i * 16 + 15] == 0xAA;
+        for (int padding = TW * 4; padding < 32; padding++)
+          ok = ok && guard_out[i * 32 + padding] == 0xAA;
       }
     CHECK (ok, "render_to_profile(linear-rgb) matches independent sRGB-EOTF+premultiply oracle");
   }
@@ -295,6 +295,17 @@ main (int argc, char **argv)
                                        (const uint8_t *) linear_icc, linear_len, out, TW * 4, &error);
     take_error (error); error = NULL;
     CHECK (s == GLIMS_STATUS_INVALID_ARGUMENT, "scale 0 refused INVALID_ARGUMENT (got %d)", (int) s);
+    s = api->image_render_to_profile (engine, image, 1e-300, (GlimsRect) { 1, 0, 2, 2 },
+                                       (const uint8_t *) linear_icc, linear_len, out, 8, &error);
+    take_error (error); error = NULL;
+    CHECK (s == GLIMS_STATUS_INVALID_ARGUMENT, "underflow-scale refused before GEGL sampling (got %d)", (int) s);
+    s = api->image_render (engine, image, 1e-300, (GlimsRect) { 1, 0, 2, 2 }, out, 8);
+    CHECK (s == GLIMS_STATUS_INVALID_ARGUMENT, "legacy renderer also refuses underflow-scale (got %d)", (int) s);
+    s = api->image_render_to_profile (engine, image, 0.5, (GlimsRect) { 67108864, 0, 1, 1 },
+                                       (const uint8_t *) linear_icc, linear_len, out, 4, &error);
+    take_error (error); error = NULL;
+    CHECK (s == GLIMS_STATUS_INVALID_ARGUMENT, "unsafe divided coordinates refuse before GEGL sampling (got %d)", (int) s);
+
   }
 
   /* Renders and refusals so far must have changed nothing. */
@@ -362,6 +373,50 @@ main (int argc, char **argv)
       CHECK (ok, "grayscale source renders to RGB destination with equal channels (got %d)", (int) s);
     }
     api->image_close (engine, gray_image);
+  }
+
+  /* A narrow request spans two full 256-row chunks and one cached pixel.
+   * Warm the old final pixel, mutate the projection, then read the entire
+   * column through both APIs: no stale final-row cache and no tall-stack call. */
+  {
+    uint8_t white[513 * 4], column[513 * 4];
+    GlimsImageID narrow = 0;
+    memset (white, 255, sizeof white);
+    GlimsStatus s = api->image_from_pixels (engine, 1, 513, white, sizeof white, &narrow, &error);
+    take_error (error); error = NULL;
+    CHECK (s == GLIMS_STATUS_OK && narrow != 0, "narrow-column fixture creates");
+    if (s == GLIMS_STATUS_OK && narrow != 0)
+      {
+        GlimsLayerInfo layer;
+        int32_t count = 0;
+        s = api->image_layers (engine, narrow, &layer, 1, &count);
+        CHECK (s == GLIMS_STATUS_OK && count == 1, "narrow-column fixture owns one layer");
+        if (s == GLIMS_STATUS_OK && count == 1)
+          {
+            s = api->image_render (engine, narrow, 1.0, (GlimsRect) { 0, 512, 1, 1 }, column, 4);
+            CHECK (s == GLIMS_STATUS_OK && column[3] == 255, "final column pixel is cached before mutation");
+            GlimsLayerChange change = { 0 };
+            change.struct_size = sizeof change;
+            change.properties = GLIMS_LAYER_OPACITY;
+            change.opacity = 0;
+            s = api->layer_change (engine, narrow, layer.id, &change, &error);
+            take_error (error); error = NULL;
+            CHECK (s == GLIMS_STATUS_OK, "narrow-column projection mutation succeeds");
+            memset (column, 0xAA, sizeof column);
+            s = api->image_render_to_profile (engine, narrow, 1.0, (GlimsRect) { 0, 0, 1, 513 },
+                                              (const uint8_t *) linear_icc, linear_len, column, 4, &error);
+            take_error (error); error = NULL;
+            int ok = s == GLIMS_STATUS_OK;
+            for (int p = 0; ok && p < 513 * 4; p++) ok = column[p] == 0;
+            CHECK (ok, "profile narrow-column chunks include fresh transparent final pixel");
+            memset (column, 0xAA, sizeof column);
+            s = api->image_render (engine, narrow, 1.0, (GlimsRect) { 0, 0, 1, 513 }, column, 4);
+            ok = s == GLIMS_STATUS_OK;
+            for (int p = 0; ok && p < 513 * 4; p++) ok = column[p] == 0;
+            CHECK (ok, "legacy narrow-column chunks include fresh transparent final pixel");
+          }
+        api->image_close (engine, narrow);
+      }
   }
 
   /* --- Read-only invariants: the remaining renders changed no state --- */

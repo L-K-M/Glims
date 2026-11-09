@@ -46,12 +46,12 @@ GlimsStatus (*image_render_to_profile) (GlimsEngine *engine, GlimsImageID image,
 ## Native path (Engine/display-render.c)
 
 1. Shared preparation via `glims_projection_prepare_read`.
-2. Source encoding chosen from the image's base type — `R G B A float` for
-   RGB and indexed (an indexed image's projection is RGB), `Y A float` for
+2. Source encoding chosen from the image's base type — `R'G'B'A float` for
+   RGB and indexed (an indexed image's projection is RGB), `Y'A float` for
    grayscale — built **in the projection's own babl space**
    (`babl_format_get_space` of `gimp_projectable_get_format`), so the
-   `gegl_buffer_get` read only re-encodes (premultiplied → straight,
-   source precision → float) and never converts color space. The
+   `gegl_buffer_get` read re-encodes (premultiplied → straight,
+   source component encoding → float32) and never converts color space. The
    projection format is validated honestly (4 alpha-carrying components
    for RGB/indexed, 2 for gray); anything else is UNSUPPORTED.
 3. Source profile: `gimp_image_get_color_profile`, falling back to
@@ -71,7 +71,7 @@ GlimsStatus (*image_render_to_profile) (GlimsEngine *engine, GlimsImageID image,
    the projection's own (`layer_space` is derived from it), so no second
    conversion runs. Nonlinear ICC math never sees associated components.
 6. Premultiplication happens exactly once, after the transform, via a babl
-   fish inside the destination space (`R G B A float` → `R'aG'aB'aA u8`),
+   fish inside the destination space (`R'G'B'A float` → `R'aG'aB'aA u8`),
    row by row into the caller's stride. Alpha 0, partial and opaque pixels
    are deterministic (straight color through the transform, alpha
    unchanged, one premultiply; zero alpha → 0,0,0,0).
@@ -123,33 +123,43 @@ alpha 0/partial/opaque and the identity case, old-renderer regression),
 stride guard bytes, all refusal cases, NOT_FOUND, and dirty/undo
 invariants. The script never rebuilds or replaces a library.
 
-## What was checked in this slice, and what was NOT
+## Verification status
 
-Checked (this worktree, branch `feat/display-destination-render`):
-- `xcrun clang -fsyntax-only` with each ref's existing
-  `_engine/adapter/<ref>/compile.rsp` flags plus the facade/Engine include
-  paths and the exact `GLIMS_ENGINE_TYPELIB_PATH`/`GLIMS_ENGINE_BIN_PATH`
-  defines from `scripts/build-adapter.sh`, for the changed production C
-  (`Engine/image.c`, `Engine/display-render.c`, `Engine/engine.c`) across
-  all four refs (GIMP_3_2_8, GIMP_3_2_0, master, GIMP_3_0_8); the new test
-  source with plain facade-include flags; `swift build -j2` and
-  `swift build --build-tests -j2`.
+Initial helper source syntax and Swift compile checks passed, but concrete
+acceptance defects remained. The Root corrections and runtime results below
+supersede that initial compile-only report. AppKit destination selection,
+wide-gamut/LUT/device accuracy, performance, proofing and HDR remain separate.
 
-NOT run (no native runtime grant in this slice; Root executes later):
-- the standalone slot-132 harness and its pixel oracles — pixel
-  correctness is therefore NOT established here; compilation is not
-  evidence of engine behavior;
-- the full engine matrix (`scripts/engine-matrix.sh`), conformance tests,
-  `--engine-smoke-test`, performance: no transform cache exists yet, so
-  per-call profile/transform creation cost is unmeasured — Root measures;
-- LUT/matrix-profile parity between the babl-fish and LCMS branches of
-  `gimp_color_transform_new` is not claimed; behavior for exotic profiles
-  may differ between branches and is only bounded by the explicit
-  FAILED/UNSUPPORTED refusals;
-- physical display calibration, HDR/EDR, and any AppKit window/screen
-  destination selection are later slices.
+## Root acceptance corrections
 
-Remaining acceptance gaps owned by Root: runtime execution of the new
-harness on all four engine sets, performance measurement of the per-call
-transform creation, AppKit destination snapshot/invalidation wiring, and
-all `resource_duplicate` acceptance gaps (untouched here).
+The initial helper was compile-only and was not accepted as functional.
+Root corrected unregistered spaced Babl encoding names, row-padding tests
+that read beyond their buffer, standardized negative CGRect acceptance,
+Int64 output-product overflow, ICC parsing before its cap, and combined
+scratch exceeding its 16-MiB promise. All color stages now use canonical
+profile-TRC straight float encodings consistently, then premultiply in the
+same destination space. This is a float32 intermediate, not a promise to
+preserve every bit of a float64 source.
+
+Four pure Swift bounds tests pass. The first pinned native run passes 20
+checks, including independent sRGB EOTF/alpha and identity/grayscale pixel
+oracles. Source review verified the other inspected fixes, but the relay
+found that validating our own divided casts did not protect GEGL's later
+float-scale/signed-factor sampling from extremely small scales. Both render
+paths now require scale 2^-20 ... 32 and unscaled request edges within
++/-2^26 pixels (far beyond GIMP's maximum image dimension), before sampling.
+Swift mirrors this. Native one-column reads are split into at most 256-row
+calls, including the old renderer, and final single-pixel chunks validate
+fresh tiles explicitly. Tests cover the tiny-scale refusals and a 513-row
+column whose final cached pixel is invalidated by a real projection change.
+
+The extended native matrix passes 29 checks on every engine, plus general
+conformance counts 1,917 / 1,703 / 1,917 / 1,917. Those tests include the
+actual tiny-scale refusals and fresh final 1x1 pixels in 513-row columns. Wide-gamut/LUT/profile-device parity,
+per-call transform performance, AppKit destination selection/cache invalidation,
+soft proof, gamut warnings and HDR have not been established by this API slice.
+
+All 697 unit/build checks pass at the final Root acceptance source. The four
+engine suites pass all 29 display checks and 1,917 / 1,703 / 1,917 / 1,917
+general checks. The accepted scale/coordinate policy and narrow-column caps
+address the relay's remaining sampling issue; Root owns those final fixes.
