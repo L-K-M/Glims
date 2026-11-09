@@ -10,6 +10,16 @@ import CoreGraphics
 /// pixel) is therefore the percent alone, while view points also divide
 /// by the window's backing factor.
 enum CanvasGeometry {
+    /// Every tile intersecting a nonempty half-open interval. Viewports
+    /// have fractional device-pixel edges after scrolling or rotation.
+    static func tileIndexRange(minimum: Double, maximum: Double, tileSize: Int) -> ClosedRange<Int>? {
+        guard tileSize > 0, minimum.isFinite, maximum.isFinite, minimum < maximum,
+              let first = Int(exactly: floor(minimum / Double(tileSize))),
+              let last = Int(exactly: ceil(maximum / Double(tileSize)) - 1),
+              first <= last else { return nil }
+        return first...last
+    }
+
     /// Device pixels per image pixel at `zoomPercent`. Backing-independent,
     /// so the same zoom renders the same tiles on every screen.
     static func renderScale(zoomPercent: Int) -> Double {
@@ -53,7 +63,14 @@ enum CanvasGeometry {
     /// The image pixel under a view point.
     static func imagePoint(viewPoint: CGPoint, zoomPercent: Int, backingFactor: Double) -> CGPoint {
         let scale = pointScale(zoomPercent: zoomPercent, backingFactor: backingFactor)
-        return CGPoint(x: viewPoint.x / scale, y: viewPoint.y / scale)
+        // Affine view conversion can return 11.99999999999999 for an
+        // exact pixel edge. Preserve genuine subpixel input, but remove
+        // numerical noise before native selections expand fractional bounds.
+        func stable(_ value: Double) -> Double {
+            let integer = value.rounded()
+            return abs(value - integer) < 1e-7 ? integer : value
+        }
+        return CGPoint(x: stable(viewPoint.x / scale), y: stable(viewPoint.y / scale))
     }
 
     /// The inverse: where an image pixel lands in view points.

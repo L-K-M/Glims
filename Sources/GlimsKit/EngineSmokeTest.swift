@@ -311,6 +311,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (resource duplicate controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "canvas-rotation" {
+                try exerciseCanvasRotation(session, documents: documents)
+                print(failures == 0 ? "PASSED (canvas rotation)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "gradient-create-controls" {
                 try exerciseGradientCreateControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (gradient create controls)" : "FAILED: \(failures) failures")
@@ -394,6 +399,7 @@ enum EngineSmokeTest {
             try exerciseResourceDuplicateControls(session, work: work, documents: documents)
             try exerciseViewOverlays(session, work: work, documents: documents)
             try exerciseDisplayDestination(session, work: work, documents: documents)
+            try exerciseCanvasRotation(session, documents: documents)
             try exerciseDocumentPlacement(session, documents: documents)
             try exerciseGradientCreateControls(session, work: work, documents: documents)
             try exerciseItemSetRecall(session, work: work, documents: documents)

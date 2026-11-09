@@ -7,6 +7,33 @@ import XCTest
 /// up in device pixels, and a backing change keeps the image pixel under
 /// the viewport centre within the scrollable range.
 final class CanvasGeometryTests: XCTestCase {
+    func testVisibleTilesIncludeFractionalSliversAndRespectExclusiveEdges() {
+        XCTAssertEqual(CanvasGeometry.tileIndexRange(minimum: 0, maximum: 0.5, tileSize: 256), 0...0)
+        XCTAssertEqual(CanvasGeometry.tileIndexRange(minimum: 256, maximum: 256.5, tileSize: 256), 1...1)
+        XCTAssertEqual(CanvasGeometry.tileIndexRange(minimum: 255.75, maximum: 256.25, tileSize: 256), 0...1)
+        XCTAssertEqual(CanvasGeometry.tileIndexRange(minimum: 0, maximum: 256, tileSize: 256), 0...0)
+        XCTAssertEqual(CanvasGeometry.tileIndexRange(minimum: 256, maximum: 512, tileSize: 256), 1...1)
+        XCTAssertNil(CanvasGeometry.tileIndexRange(minimum: 1, maximum: 1, tileSize: 256))
+        XCTAssertNil(CanvasGeometry.tileIndexRange(minimum: .nan, maximum: 2, tileSize: 256))
+        XCTAssertNil(CanvasGeometry.tileIndexRange(minimum: 0, maximum: .infinity, tileSize: 256))
+        XCTAssertNil(CanvasGeometry.tileIndexRange(minimum: 0, maximum: 2, tileSize: 0))
+        XCTAssertNil(CanvasGeometry.tileIndexRange(minimum: Double.greatestFiniteMagnitude / 2,
+                                                  maximum: Double.greatestFiniteMagnitude, tileSize: 256))
+    }
+    func testImagePointRemovesAffineNoiseWithoutQuantizingSubpixels() {
+        for zoom in [25, 100, 150, 3200] {
+            for backing in [1.0, 2.0] {
+                let scale = CanvasGeometry.pointScale(zoomPercent: zoom, backingFactor: backing)
+                let point = CanvasGeometry.imagePoint(viewPoint: CGPoint(x: (12 - 1e-12) * scale, y: (42 + 1e-12) * scale),
+                                                       zoomPercent: zoom, backingFactor: backing)
+                XCTAssertEqual(point, CGPoint(x: 12, y: 42))
+                let fractional = CanvasGeometry.imagePoint(viewPoint: CGPoint(x: 12.000001 * scale, y: -13.25 * scale),
+                                                            zoomPercent: zoom, backingFactor: backing)
+                XCTAssertEqual(fractional.x, 12.000001, accuracy: 1e-12)
+                XCTAssertEqual(fractional.y, -13.25, accuracy: 1e-12)
+            }
+        }
+    }
     private static let accuracy = 1e-9
 
     // MARK: Zoom, point and device mapping at 1x and 2x
