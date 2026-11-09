@@ -483,6 +483,9 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
                 ToolState.shared.selectOptions.cornerRadius = value
             })
         }
+        if tool == .rectangleSelect || tool == .ellipseSelect {
+            stack.addArrangedSubview(hint("While dragging, Shift keeps equal sides and Option draws from the center. Escape cancels."))
+        }
         if tool == .magicWand || tool == .selectByColor {
             stack.addArrangedSubview(slider("Threshold", 0...255, options.threshold * 255, unit: "") { value in
                 ToolState.shared.selectOptions.threshold = value / 255

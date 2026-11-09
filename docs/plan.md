@@ -3367,3 +3367,17 @@ harness passes228 checks on all four engines; the actual chooser/editor
 passes20 per engine. The self-contained bundle passes1,917 native and2,370
 app checks, and871 unit tests pass. Native/UI source reviews have no
 important remaining finding.
+
+
+### Selection drag modifiers (2026-11-09)
+
+Rectangle and Ellipse Select now share one finite image-space calculation
+for live preview and commit. Shift keeps equal sides, Option draws about
+the press point, and modifier-only events update stationary previews.
+The press-time selection operation remains captured. Escape cancels
+rectangle, ellipse or lasso drags without mutation, even with modifiers
+held. Tool Options shows the hint. See `selection-modifiers.md`.
+The baseline reproduced six ignored-modifier failures; the corrected
+workflow passes21 real-window checks on all four supported engines and909
+unit tests. Independent source review has no important findings. Final
+integrated bundle validation remains open.
