@@ -5,6 +5,9 @@ final class CurvesPanel: FilterPreviewPanel, NSTextFieldDelegate {
     typealias Settings = EngineSession.CurvesSettings
     typealias Patch = CurvesDraft.Patch
     let graph = CurvesGraphView()
+    let histogramView = InputHistogramView()
+    private let histogramLogButton = NSButton(checkboxWithTitle: "Log scale", target: nil, action: nil)
+    private var inputHistogram: FilterInputHistogram?
     let channelPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let trcPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let modePopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -40,11 +43,14 @@ final class CurvesPanel: FilterPreviewPanel, NSTextFieldDelegate {
         panel.title = "Curves"
         panel.isFloatingPanel = true
         super.init(document: document, panel: panel, filter: filter)
+        inputHistogram = FilterInputHistogram(document: document, filter: filter, view: histogramView,
+                                               isActive: { [weak self] in self?.filter == filter })
         formatter.numberStyle = .decimal
         formatter.usesGroupingSeparator = false
         formatter.maximumFractionDigits = 8
         buildContent(panel)
         display()
+        inputHistogram?.refreshIfNeeded()
         panel.center()
     }
     @available(*, unavailable)
@@ -72,6 +78,15 @@ final class CurvesPanel: FilterPreviewPanel, NSTextFieldDelegate {
         let top = NSStackView(views: [NSTextField(labelWithString: "Channel:"), channelPopup,
                                      NSTextField(labelWithString: "Curve:"), trcPopup])
         top.spacing = 8
+        histogramLogButton.target = self
+        histogramLogButton.action = #selector(histogramScaleChanged(_:))
+        let refresh = NSButton(title: "Refresh", target: self, action: #selector(refreshHistogram(_:)))
+        let histogramOptions = NSStackView(views: [NSTextField(labelWithString: "Input histogram"), histogramLogButton, refresh])
+        histogramOptions.spacing = 8
+        histogramView.translatesAutoresizingMaskIntoConstraints = false
+        histogramView.widthAnchor.constraint(equalToConstant: 480).isActive = true
+        histogramView.heightAnchor.constraint(equalToConstant: 110).isActive = true
+        histogramView.toolTip = "Before filters; weighted by the selection and source transparency."
         graph.translatesAutoresizingMaskIntoConstraints = false
         graph.widthAnchor.constraint(equalToConstant: 480).isActive = true
         graph.heightAnchor.constraint(equalToConstant: 250).isActive = true
@@ -122,7 +137,7 @@ final class CurvesPanel: FilterPreviewPanel, NSTextFieldDelegate {
         apply.keyEquivalent = "\r"
         let buttons = NSStackView(views: [countLabel, NSView(), cancel, apply])
         buttons.spacing = 8
-        let stack = NSStackView(views: [top, graph, numeric, tools, help, statusField, buttons])
+        let stack = NSStackView(views: [top, histogramOptions, histogramView, graph, numeric, tools, help, statusField, buttons])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -143,6 +158,8 @@ final class CurvesPanel: FilterPreviewPanel, NSTextFieldDelegate {
         // Mode conversion samples the last accepted native table.
         modePopup.isEnabled = store.pending.isEmpty
         if !graph.isInteracting { graph.state = state }
+        let channels: [EngineSession.HistogramChannel] = [.value, .red, .green, .blue, .alpha]
+        inputHistogram?.show(channel: channels[Int(channel.rawValue) - 1], trc: store.settings.trc)
         displayFields()
     }
     private func displayFields() {
@@ -282,6 +299,7 @@ final class CurvesPanel: FilterPreviewPanel, NSTextFieldDelegate {
             guard let self, self.filter == filter else { return }
             self.store.receive(request, result: result)
             self.displayPreservingDrafts()
+            if self.store.pending.isEmpty { self.inputHistogram?.refreshIfNeeded() }
             if request == self.latestRequest && !self.localError {
                 switch result {
                 case .success: self.showError("")
@@ -290,6 +308,8 @@ final class CurvesPanel: FilterPreviewPanel, NSTextFieldDelegate {
             }
         }
     }
+    @objc func refreshHistogram(_ sender: Any?) { inputHistogram?.refresh() }
+    @objc func histogramScaleChanged(_ sender: NSButton) { histogramView.logarithmic = sender.state == .on }
     @objc override func commit() {
         guard endFields() else { return }
         super.commit()

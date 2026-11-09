@@ -61,10 +61,11 @@ before the guard was added. The expanded dedicated harness passes147 checks on e
 The general adapter suites pass1917 checks on3.2/master and1703 on3.0.8.
 972 unit tests pass. 32 actual-form checks pass on every engine, including graph keyboard edits,
 Escape, Freehand painting, channel reset and transfer-curve changes. The
-first self-contained release passed1917 native and2574 app checks with build
-trees inaccessible. CI exposed a Swift6.2 tuple conversion that the local
-compiler accepted; the explicit Double conversion is being rebuilt and
-checked on the final head. Final combined release acceptance remains open.
+final self-contained release passed1917 native and2574 app checks with build
+trees inaccessible. Hosted Xcode26 CI passes after an explicit Double
+conversion for Swift6.2. PR136 is merged; the promoted Main app passes74
+focused checks with its candidate checkout and source/build inputs blocked.
+Final whole-editor acceptance remains open.
 
 Native XCF deserialization does not preserve the identity shortcut flag.
 Normalized rendered-file checks therefore do not prove arbitrary raw HDR

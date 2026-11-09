@@ -16,4 +16,9 @@ GlimsStatus glims_levels_config_set          (GeglNode *node,
                                               const GlimsLevelsSettings *settings,
                                               gboolean *changed, char **error);
 
+/* Native Auto changes a private clone and returns complete authoritative values. */
+GlimsStatus glims_levels_config_auto (GeglNode *node, GimpHistogram *histogram,
+                                     gboolean is_color, GlimsLevelsSettings *out,
+                                     gboolean *changed, char **error);
+
 #endif /* GLIMS_LEVELS_CONFIG_H */

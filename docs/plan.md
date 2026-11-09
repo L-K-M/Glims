@@ -3487,3 +3487,12 @@ graph/numeric form and native immutable replacement are under acceptance; see
 `curves.md`. Levels and Curves share exact native TRC binding installation.
 Main #135 has merged captured batch Fit; its accepted bundle passes1917 native
 and2542 app checks. This checkpoint does not close the remaining completion ledger.
+
+
+2026-11-10 input histogram/Auto candidate: facade v1 appends161..163 for
+owned source histograms and native Levels input stretching. Levels and
+Curves share the histogram view, captured read controller and transfer-curve
+reply fencing. Auto waits for acknowledged fields and keeps Cancel available.
+Each engine passes78 native and19 form checks;977 units and existing
+Levels/Curves focused regressions pass. See `input-histogram.md`. Final
+self-contained bundle and CI remain pending; the broader ledger stays open.

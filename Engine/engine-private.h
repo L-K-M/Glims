@@ -294,6 +294,7 @@ GlimsStatus glims_filter_hue_saturation_set (GlimsEngine *, GlimsFilterID,
                                             const GlimsHueSaturationSettings *, char **);
 GlimsStatus glims_filter_levels_get (GlimsEngine *, GlimsFilterID, GlimsLevelsSettings *, char **);
 GlimsStatus glims_filter_levels_set (GlimsEngine *, GlimsFilterID, const GlimsLevelsSettings *, char **);
+GlimsStatus glims_filter_levels_auto (GlimsEngine *, GlimsFilterID, GlimsLevelsSettings *, char **);
 GlimsStatus glims_filter_curves_get (GlimsEngine *, GlimsFilterID, GlimsCurvesSnapshot *, char **);
 GlimsStatus glims_filter_curves_edit (GlimsEngine *, GlimsFilterID, const GlimsCurveEdit *, GlimsCurvesSnapshot *, char **);
 GlimsStatus glims_filter_curves_set_trc (GlimsEngine *, GlimsFilterID, uint32_t, GlimsCurvesSnapshot *, char **);

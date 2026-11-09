@@ -790,6 +790,31 @@ typedef struct GlimsCurveEdit {
   const double *samples;
 } GlimsCurveEdit;
 
+/* Input histogram channels, independent of native enum ordering. */
+typedef enum GlimsHistogramChannelFlag {
+  GLIMS_HISTOGRAM_VALUE = 1u << 0,
+  GLIMS_HISTOGRAM_RED = 1u << 1,
+  GLIMS_HISTOGRAM_GREEN = 1u << 2,
+  GLIMS_HISTOGRAM_BLUE = 1u << 3,
+  GLIMS_HISTOGRAM_ALPHA = 1u << 4,
+  GLIMS_HISTOGRAM_LUMINANCE = 1u << 5
+} GlimsHistogramChannelFlag;
+
+#define GLIMS_HISTOGRAM_MAX_BINS 4096u
+
+typedef struct GlimsHistogramSnapshot {
+  uint32_t struct_size;
+  uint32_t trc;              /* owned GlimsColorTRC from the filter config */
+  uint32_t bin_count;        /* native256(u8)/1024(other);0 for no intersection */
+  uint32_t channels;         /* GlimsHistogramChannelFlag bitset */
+  double *value;
+  double *red;
+  double *green;
+  double *blue;
+  double *alpha;
+  double *luminance;
+} GlimsHistogramSnapshot;
+
 /* A layer's mask flags: ENABLED gates the mask's effect on the
  * composite; EDITING makes the mask the target of painting, fills and
  * gradients while its layer is the only selected one; SHOWING displays
@@ -3106,6 +3131,26 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*filter_curves_set_trc) (GlimsEngine *engine, GlimsFilterID filter,
                                        uint32_t trc, GlimsCurvesSnapshot *out,
                                        char **error);
+  /* Slots161..163: captured Levels/Curves input histogram and Levels Auto.
+   * Histogram reads pre-filter drawable pixels, in the config TRC, weighted
+   * by the image selection and source alpha. It excludes layer-mask/opacity
+   * composition. Bins contain actual finite fractional/signed native weights;
+   * out-of-range source alpha is not silently normalized. Absent channel
+   * pointers are NULL; present channels own bin_count doubles (NULL if zero).
+   * Requires a live attached filter session, no engine busy operation. Reads
+   * remain available under pixel locks; Auto obeys ordinary edit admission.
+   * Snapshot Out starts zeroed except struct_size; Free needs no engine and
+   * preserves size/future tail. Get failures clear owned fields without any
+   * image/history mutation. Caller frees a successful snapshot before reuse.
+   * Auto uses the same fresh input histogram and native0.006-tail stretch:
+   * RGB resets Value and stretches RGB; gray stretches Value. It preserves
+   * alpha/TRC/clamps/native cursor/base settings. Its authoritative full
+   * Levels result is generated/validated before immutable installation. */
+  GlimsStatus (*filter_input_histogram) (GlimsEngine *engine, GlimsFilterID filter,
+                                        GlimsHistogramSnapshot *out, char **error);
+  void (*free_histogram_snapshot) (GlimsHistogramSnapshot *snapshot);
+  GlimsStatus (*filter_levels_auto) (GlimsEngine *engine, GlimsFilterID filter,
+                                    GlimsLevelsSettings *out, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

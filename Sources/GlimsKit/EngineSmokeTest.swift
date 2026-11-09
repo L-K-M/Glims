@@ -316,6 +316,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (batch delete)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "input-histogram" {
+                try exerciseInputHistogram(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (input histogram)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "curves" {
                 try exerciseCurves(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (curves)" : "FAILED: \(failures) failure(s)")
@@ -501,6 +506,7 @@ enum EngineSmokeTest {
             try exerciseFilterSources(session, documents: documents)
             try exerciseBrightnessContrast(session, work: work, documents: documents)
             try exerciseColorBalance(session, work: work, documents: documents)
+            try exerciseInputHistogram(session, work: work, documents: documents)
             try exerciseCurves(session, work: work, documents: documents)
             try exerciseLevels(session, work: work, documents: documents)
             try exerciseHueSaturation(session, work: work, documents: documents)

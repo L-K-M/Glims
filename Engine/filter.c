@@ -22,6 +22,7 @@
 #include "hue-saturation-config.h"
 #include "levels-config.h"
 #include "curves-config.h"
+#include "filter-histogram.h"
 
 #include <math.h>
 #include <string.h>
@@ -761,6 +762,35 @@ glims_filter_curves_set_trc (GlimsEngine *engine, GlimsFilterID id, uint32_t trc
   if (status != GLIMS_STATUS_OK) return status;
   session = g_hash_table_lookup (engine->filters, GINT_TO_POINTER (id));
   status = glims_curves_config_set_trc (session->operation, trc, out, &changed, error);
+  if (status == GLIMS_STATUS_OK && changed) {
+    glims_filter_preview_apply (session);
+    gimp_image_flush (session->image);
+  }
+  return status;
+}
+
+GlimsStatus
+glims_filter_levels_auto (GlimsEngine *engine, GlimsFilterID id,
+                          GlimsLevelsSettings *out, char **error)
+{
+  GlimsFilter *session;
+  GimpHistogram *histogram = NULL;
+  uint32_t trc;
+  gboolean changed = FALSE;
+  GlimsStatus status;
+  if (!out || out->struct_size < sizeof *out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  out->trc = out->clamp_input = out->clamp_output = 0;
+  out->value = out->red = out->green = out->blue = out->alpha = (GlimsLevelsChannel) {0};
+  status = glims_filter_check_edit (engine, id, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  session = g_hash_table_lookup (engine->filters, GINT_TO_POINTER (id));
+  if (!glims_levels_config_is_operation (session->operation)) return GLIMS_STATUS_UNSUPPORTED;
+  status = glims_filter_input_histogram_native (engine, id, &histogram, &session, &trc, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = glims_levels_config_auto (session->operation, histogram,
+                                     gimp_drawable_is_rgb (session->drawable), out,
+                                     &changed, error);
+  g_object_unref (histogram);
   if (status == GLIMS_STATUS_OK && changed) {
     glims_filter_preview_apply (session);
     gimp_image_flush (session->image);
