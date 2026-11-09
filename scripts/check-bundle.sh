@@ -2,13 +2,15 @@
 # Checks that an app bundle with an engine (scripts/build-app.sh --engine)
 # runs on its own: the conformance tests against the bundled adapter and the
 # app's --engine-smoke-test run under a sandbox profile that denies every
-# read of _engine/ and _deps/, as on a Mac without the build trees.
+# read of _engine/, _deps/ and Swift build outputs, as on a Mac without
+# the build trees. SwiftPM resource bundles must resolve inside the app.
 #
 #   scripts/check-bundle.sh [APP]   # default: dist/Glims.app
 #
 # Writes only to a temporary folder; HOME points there too.
 # GLIMS_ADAPTER_ROOT selects the matching conformance runner when the app was
 # built with isolated adapter outputs; use the same value for both commands.
+# GLIMS_BUILD_DIR likewise identifies a custom Swift build directory.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,7 +21,7 @@ ADAPTER_ROOT="${GLIMS_ADAPTER_ROOT:-$ROOT/_engine/adapter}"
 [[ "$ADAPTER_ROOT" == /* ]] || { echo "error: GLIMS_ADAPTER_ROOT must be an absolute directory." >&2; exit 2; }
 # Resolve shared worktree symlinks and escape profile strings. Isolated
 # adapter outputs are development inputs too, and must stay inaccessible.
-PROFILE="$(python3 - "$APP" "$ROOT/_engine" "$ROOT/_deps" "$ADAPTER_ROOT" <<'PY_PROFILE'
+PROFILE="$(python3 - "$APP" "$ROOT/_engine" "$ROOT/_deps" "$ADAPTER_ROOT" "$ROOT/.build" "${GLIMS_BUILD_DIR:-$ROOT/.build}" <<'PY_PROFILE'
 import json
 from pathlib import Path
 import sys

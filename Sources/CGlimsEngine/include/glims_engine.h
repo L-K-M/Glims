@@ -1126,6 +1126,42 @@ typedef struct GlimsMetadataTagInfo {
   char     type_name[GLIMS_METADATA_TAG_INFO_TYPE_NAME_CAPACITY];    /* native type name, UTF-8, bounded */
 } GlimsMetadataTagInfo;
 
+/* Saved sets (the engine's stored item sets), READ-ONLY. The facade lists
+ * the FIXED (non-pattern) sets only, of three kinds, and resolves members
+ * through an opaque identity token — never through a name, a pointer or
+ * a native type. All values here are the facade's own; no GType, struct
+ * layout or raw pointer ever crosses this boundary. */
+typedef enum GlimsItemSetKind {
+  GLIMS_ITEM_SET_LAYER   = 1,
+  GLIMS_ITEM_SET_CHANNEL = 2,
+  GLIMS_ITEM_SET_PATH    = 3
+} GlimsItemSetKind;
+
+/* One row of image_item_sets (slot 133). */
+typedef struct GlimsItemSetInfo {
+  uint64_t token;             /* opaque stable identity of this set within
+                               * the engine; 0 is never issued. Tokens are
+                               * NOT names: a set recreated under the same
+                               * name gets a new token, and an expired
+                               * token is never retargeted. */
+  uint32_t kind;              /* GlimsItemSetKind */
+  int32_t  member_count;      /* LIVE members: members currently attached to
+                               * this image right now (deleted or detached
+                               * weak members are not counted) */
+  char     display_name[256]; /* UTF-8, truncated at a character boundary for
+                               * display only; the name is never the identity
+                               * — resolve members through `token` */
+} GlimsItemSetInfo;
+
+/* One edit operation of image_item_set_edit (slot 135); see the slot's
+ * comment below for the per-op argument contract. Facade-owned. */
+typedef enum GlimsItemSetEditOp {
+  GLIMS_ITEM_SET_EDIT_CREATE  = 1,
+  GLIMS_ITEM_SET_EDIT_REPLACE = 2,
+  GLIMS_ITEM_SET_EDIT_RENAME  = 3,
+  GLIMS_ITEM_SET_EDIT_REMOVE  = 4
+} GlimsItemSetEditOp;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -1149,7 +1185,9 @@ typedef struct GlimsEngineAPI {
                                     GlimsImageInfo *info);
   /* Renders the composited image at `scale` (1.0 = one image pixel per
    * output pixel). `area` is in scaled pixel coordinates. Writes
-   * area.width * area.height pixels of premultiplied 8-bit sRGB RGBA. */
+   * area.width * area.height pixels of premultiplied 8-bit sRGB RGBA.
+   * Supported scale: 2^-20 ... 32. Unscaled request edges must be within
+   * +/- 2^26 pixels to bound GEGL sampling arithmetic. */
   GlimsStatus  (*image_render)     (GlimsEngine *engine, GlimsImageID image,
                                     double scale, GlimsRect area,
                                     uint8_t *pixels, size_t stride);
@@ -2429,6 +2467,182 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*adjustment_layer_new) (GlimsEngine *engine, GlimsImageID image,
       GlimsItemID parent, int32_t index, const char *operation, const char *name,
       GlimsItemID *layer, GlimsEffectID *effect, char **error);
+
+  /* Duplicates ONE saved brush, pattern or gradient (slot 131): the
+   * current resource `sourceID` names is copied through the engine's
+   * own per-class copy (gimp_data_duplicate), given the requested
+   * `name`, saved to the engine's configured writable data folder with
+   * its native subclass extension (.gbr/.vbr/.gih/.pat/.ggr as the
+   * core decides) and published to the factory of its own kind, with
+   * the new handle in `outID`. The source determines its own kind; no
+   * `kind` argument. The call takes no image: it changes no image, no
+   * undo history, no selection, no context and no clipboard, and the
+   * source itself is never renamed, saved, deleted or dirtied.
+   *
+   * The source need not be writable: a built-in read-only resource is
+   * duplicatable when the engine's own capability check allows it and
+   * the private copy is saveable. A resource whose class has no native
+   * copy (or an empty native pipe) reports UNSUPPORTED with a reason.
+   *
+   * `name` follows exactly resource_create_pixels's label contract:
+   * nonempty valid UTF-8, no embedded NUL, no Unicode control
+   * characters, at most 255 UTF-8 bytes. A resource of the source's
+   * own kind already carrying this exact name is refused (FAILED)
+   * before any filesystem mutation — never silently uniquified.
+   *
+   * BUSY while the engine is busy or ANY stroke or filter session is
+   * active, not just on one image. `outID` is set to 0 first and again
+   * on EVERY failure (including a missing output, engine-null
+   * dispatch rejection, and every refusal); on success it is the new
+   * resource's positive opaque handle, distinct from `sourceID`, and
+   * usable with resources(), resource_identifiers(), resource_resolve(),
+   * resource_thumbnail() and the brush/pattern/gradient consumers like
+   * any catalog handle. INVALID_ARGUMENT for a missing `outID`, an
+   * invalid `name`, or a `sourceID` of 0 or outside the issued handle
+   * range (high bits set, or above the native id maximum — such a
+   * value can never name a resource); NOT_FOUND for a validly shaped
+   * handle that no longer resolves: stale, or issued by another
+   * engine, or no longer a member of this engine's current factory;
+   * UNSUPPORTED when the native class cannot be duplicated or the
+   * private copy cannot be saved; FAILED with `error` on a name
+   * collision or a checked persistence failure (a failed save never
+   * reports success). */
+  GlimsStatus  (*resource_duplicate) (GlimsEngine *engine, GlimsResourceID sourceID,
+                                      const char *name, GlimsResourceID *outID,
+                                      char **error);
+
+  /* Slot 132: like image_render, but the pixels are converted into the
+   * EXACT RGB destination ICC profile `destination_icc` names instead of
+   * sRGB. Renders the composited image at `scale` (1.0 = one image pixel
+   * per output pixel), `area` in scaled pixel coordinates, exactly as
+   * image_render does (same lazy projection reads and area handling), and
+   * writes area.width * area.height pixels of PREMULTIPLIED 8-bit RGBA in
+   * the destination profile's own RGB space; `stride` is the output row
+   * stride in bytes and must be at least area.width * 4. The returned
+   * buffer must be tagged with a color space built from these same ICC
+   * bytes; image_render's sRGB output must never be retagged instead.
+   *
+   * The source side uses the image's actual working space: its effective
+   * color profile (the image's own, or the engine's builtin fallback for
+   * its model) and the projection's own format and precision. Pixels are
+   * read unassociated at source precision and color-transformed
+   * straight, then premultiplied once for the output; alpha 0, partial
+   * and full alpha are handled deterministically. Grayscale images render
+   * through their gray source format and profile; an indexed image's
+   * RGB projection is handled like RGB. The transform policy is fixed:
+   * relative colorimetric SDR, no proofing, no gamut flags, no user
+   * settings.
+   *
+   * `destination_icc` is immutable caller-owned memory, copied by the
+   * native profile construction during this synchronous call; no pointer
+   * into it is retained afterwards. NULL or zero `destination_icc_length`
+   * is INVALID_ARGUMENT, as are lengths above the adapter's ICC cap
+   * (16 MiB) and any non-finite or out-of-range scale (2^-20 ... 32),
+   * unscaled request edges outside +/-2^26, area, stride or
+   * total output size above the adapter's pixel-buffer cap
+   * (512 MiB, GLIMS_MAX_PIXEL_BUFFER_BYTES). Malformed ICC data is FAILED
+   * with `error`; a valid but non-RGB ICC profile is UNSUPPORTED. There
+   * is never a silent sRGB fallback inside this call: the caller chooses
+   * the fallback (typically image_render) outside. Native profile,
+   * transform and temporary buffers are created, used and released per
+   * call on the engine thread; nothing is cached and no image, profile,
+   * history, dirty or pixel state is read-write touched — this is a read
+   * like image_render and is allowed while the image is not write-ready.
+   * NOT_FOUND for an unknown image, exactly like image_render. */
+  GlimsStatus  (*image_render_to_profile) (GlimsEngine *engine, GlimsImageID image,
+                                           double scale, GlimsRect area,
+                                           const uint8_t *destination_icc, size_t destination_icc_length,
+                                           uint8_t *pixels, size_t stride, char **error);
+
+  /* Slot 133: the image's FIXED saved sets (stored item sets), read-only.
+   * Lists every non-pattern stored set of every kind (layers, channels,
+   * paths), in the engine's stored-list order per kind, kinds in
+   * GlimsItemSetKind order. Fills up to `capacity` rows; `count` receives
+   * the total. `rows` may be NULL with capacity 0 for a count-only read.
+   *
+   * This is a plain read, like image_layers: allowed at any time, also
+   * while a stroke, a filter preview or a plug-in holds the image (no
+   * busy gate), and it never changes the selection, the image, its
+   * history, its dirty flag or any pixel; it holds no new strong
+   * reference beyond the call. Pattern sets are computed definitions and
+   * are never listed.
+   *
+   * Each row's `token` is the set's stable opaque identity within this
+   * engine (allocated from a per-engine monotonic counter, never reused):
+   * it stays the same across quiet live-member rebuilds of the same set,
+   * and it EXPIRES when the set is explicitly removed or replaced through
+   * an undoable edit — an expired token is never retargeted, and a set
+   * recreated under the same name gets a fresh token. `display_name` is
+   * display-only and may be truncated; only `token` resolves members
+   * (slot 134). `member_count` is the LIVE attached member count.
+   *
+   * INVALID_ARGUMENT for a NULL `count` or a negative `capacity` (with a
+   * non-NULL `count`, `*count` is reset to 0 first, as on every failure);
+   * NOT_FOUND for an unknown image. On every failure `*count` is 0 and no
+   * row is written. */
+  GlimsStatus  (*image_item_sets) (GlimsEngine *engine, GlimsImageID image,
+                                   GlimsItemSetInfo *rows, int32_t capacity,
+                                   int32_t *count);
+  /* Slot 134: the CURRENT ATTACHED member ids of the one saved set that
+   * `token` names in this image (as listed by slot 133). Fills up to
+   * `capacity` ids in the set's stored membership order; `count` receives
+   * the total live count. `members` may be NULL with capacity 0 for a
+   * count-only read. Members are the ids of items currently attached to
+   * this image only: weak members that were deleted or detached are
+   * skipped, and an empty set reports count 0. The read captures the
+   * image id and the token only — no pointer, no name lookup, no strong
+   * retention beyond the call.
+   *
+   * Plain read, like slot 133: allowed while the image is busy, no
+   * selection/mutation/dirty/history change. The token is resolved only
+   * within this image's own sets: a token issued for another image (or
+   * by another engine) is refused, and so is a stale or expired token —
+   * never retargeted to a same-named set.
+   *
+   * INVALID_ARGUMENT for token 0 (never issued), a NULL `count` or a
+   * negative `capacity` (`*count` reset to 0 first when it is non-NULL);
+   * NOT_FOUND for an unknown image or a token that names no live set of
+   * this image. On every failure `*count` is 0 and no id is written. */
+  GlimsStatus  (*image_item_set_members) (GlimsEngine *engine, GlimsImageID image,
+                                          uint64_t token, GlimsItemID *members,
+                                          int32_t capacity, int32_t *count);
+  /* Slot 135: ONE undoable edit of one of the image's fixed saved sets.
+   * `operation` is a GlimsItemSetEditOp, `kind` a GlimsItemSetKind; both are
+   * the facade's own enums, unknown values are INVALID_ARGUMENT.
+   * CREATE (token 0) takes the full new `name` and the EXPLICIT `members`
+   * (`count` 0 with `members` NULL is an empty set). REPLACE, RENAME and
+   * REMOVE take the CURRENT `token` of a set of this image and kind, as
+   * listed by slot 133: a foreign, stale or expired token is NOT_FOUND and
+   * never retargeted — the set is never resolved through a name or the
+   * display label. Field relevance is strict: REPLACE passes only `members`
+   * (`name` NULL), RENAME only the desired full `name` (count 0), REMOVE
+   * neither; any other combination, `count` < 0 or `members` NULL with
+   * `count` > 0 is INVALID_ARGUMENT. `name` is the FULL name: nonempty
+   * valid UTF-8, no control characters, at most 255 bytes, as a
+   * NUL-terminated C string (an embedded NUL cannot be expressed here).
+   * Members are item ids, each > 0 (0 never means "the current selection"),
+   * currently attached to this image, of the set's kind, and unique.
+   * This is a WRITE: it requires edit readiness (BUSY while a stroke, filter
+   * preview or plug-in holds the image) and refuses before any mutation when
+   * the undo stack is frozen; every refused or failed call preserves state,
+   * history and the dirty flag exactly. A successful mutating call is one
+   * native undo step and dirties the image (native stack limits may expire
+   * the new step immediately — the edit stays applied, as with other native
+   * commands). A no-op (identical REPLACE members, same-name RENAME) returns
+   * OK with no undo step and no dirty change.
+   * `outToken` (may be NULL) is reset to 0 before dispatch and on every
+   * failure. On success CREATE/REPLACE/RENAME receive the resulting set's
+   * token — fresh after a mutation (the old token expires for good), the
+   * current one after a no-op; REMOVE receives 0. At token-counter
+   * exhaustion (UINT64_MAX) CREATE/REPLACE/RENAME are refused (FAILED,
+   * outToken 0) in preflight before ANY mutation. NOT_FOUND for an unknown
+   * image or a token this image+kind does not own; NOT_RUNNING for a NULL
+   * engine. On every failure nothing is mutated. */
+  GlimsStatus  (*image_item_set_edit) (GlimsEngine *engine, GlimsImageID image,
+                                       uint32_t operation, uint32_t kind,
+                                       uint64_t token, const char *name,
+                                       const GlimsItemID *members, int32_t count,
+                                       uint64_t *outToken, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

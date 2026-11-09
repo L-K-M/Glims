@@ -100,6 +100,12 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
     private let table = BrushChooserTableView()
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let retryButton = NSButton(title: "Retry", target: nil, action: nil)
+    private let duplicateButton = NSButton(title: "Duplicate…", target: nil, action: nil)
+    /// The shared Duplicate… form while open; the panel owns its lifecycle
+    /// and invalidates it on dismissal.
+    private var duplicateForm: ResourceDuplicateFormController?
+    /// A highlight to restore after a duplicate-triggered catalog reload.
+    private var shouldRestoreSelection = false
 
     init(document: ImageDocument?, model: BrushChooserModel) {
         self.sourceDocument = document
@@ -152,7 +158,10 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
         retryButton.target = self
         retryButton.action = #selector(load)
         retryButton.isHidden = true
-        let buttons = NSStackView(views: [retryButton, cancel, choose])
+        duplicateButton.target = self
+        duplicateButton.action = #selector(duplicate(_:))
+        duplicateButton.setAccessibilityLabel("Duplicate brush")
+        let buttons = NSStackView(views: [retryButton, duplicateButton, cancel, choose])
         buttons.spacing = 8
         buttons.orientation = .horizontal
 
@@ -251,9 +260,21 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
             dismiss()
             return
         }
+        let keep = model.selection
         guard model.deliver(generation: generation, rows: rows, thumbnails: [:],
                             resolvedCurrent: resolvedCurrent, resolutionError: resolutionError,
                             error: error) else { return }
+        // A duplicate-triggered reload keeps the explicit highlight when its
+        // row survives the fresh catalog.
+        if shouldRestoreSelection {
+            shouldRestoreSelection = false
+            switch keep {
+            case .none, .nativeDefault:
+                model.select(keep)
+            case .resource(let id):
+                if model.rows.contains(where: { $0.id == id }) { model.select(keep) }
+            }
+        }
         BrushChooser.shared.noteMissing(model.capturedTool, model.missingIdentity)
         // Prime the lazy thumbnail queue: the resolved current brush first
         // (the Tool Options button shows its preview), then only the
@@ -360,6 +381,7 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
 
     private func refresh() {
         reloadTable(scrollToSelection: true)
+        updateDuplicateButton()
         switch model.state {
         case .loading:
             statusLabel.stringValue = "Loading brushes…"
@@ -459,8 +481,52 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
         } else if visibleRows.indices.contains(row - 1) {
             model.select(.resource(visibleRows[row - 1].id))
         }
+        updateDuplicateButton()
         // A hidden or temporarily deselected row is not a new choice.
         // Default is selected explicitly through row zero above.
+    }
+
+    // MARK: Duplicate…
+
+    /// The duplicatable source of a Duplicate… right now: the highlighted
+    /// catalog row's identity, native handle and kind. The Default row (and
+    /// no highlight) is not a saved resource and is refused with a reason.
+    private func duplicateSource() -> ResourceDuplicateValidation.Source? {
+        guard case .resource(let id) = model.selection,
+              let row = model.rows.first(where: { $0.id == id }) else { return nil }
+        return ResourceDuplicateValidation.Source(kind: .brush, id: row.id, identity: row.identity)
+    }
+
+    private func updateDuplicateButton() {
+        let source = duplicateSource()
+        duplicateButton.isEnabled = !isClosed && source != nil
+        duplicateButton.toolTip = ResourceDuplicateValidation.sourceRefusal(source, kind: .brush)
+            ?? "Duplicate the selected brush under a new name"
+    }
+
+    /// Opens the shared Duplicate… form, capturing the document and the
+    /// source NOW: later highlight, tool or front-window changes cannot
+    /// alter them.
+    @objc private func duplicate(_ sender: Any?) {
+        guard !isClosed, let document = sourceDocument, !document.isClosing else { return }
+        if let form = duplicateForm, !form.isInvalidated {
+            form.show()
+            return
+        }
+        guard let source = duplicateSource() else { return }
+        let form = ResourceDuplicateFormController(document: document, source: source, hostWindow: window)
+        form.onSucceeded = { [weak self] _ in self?.reloadAfterDuplicate() }
+        form.onClosed = { [weak self] in self?.duplicateForm = nil }
+        duplicateForm = form
+        form.show()
+    }
+
+    /// After a successful duplicate: refetch the catalog off the main
+    /// thread, keeping the current highlight; the new item is NOT chosen.
+    func reloadAfterDuplicate() {
+        guard !isClosed else { return }
+        shouldRestoreSelection = true
+        load()
     }
 
     // MARK: Search
@@ -512,8 +578,12 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
     func dismiss() {
         guard !isClosed else { return }
         isClosed = true
-        // Late native results must not restore this stale view.
+        // Late native results must not restore this stale view; the open
+        // Duplicate… form is invalidated with the panel (its accepted work,
+        // if any, still drains on the document).
         model.invalidate()
+        duplicateForm?.invalidate()
+        duplicateForm = nil
         window?.orderOut(nil)
         BrushChooser.shared.didClose(self)
     }

@@ -55,6 +55,14 @@ final class EngineCanvasView: NSView {
     private var renderInFlight = false
     /// Bumped on zoom changes; results of an older generation are dropped.
     private var generation = 0
+    /// The current display destination: an immutable main-actor snapshot of
+    /// the owning window's actual backing color space, refreshed on window,
+    /// backing and screen-profile changes. Read-only seam for tests.
+    private(set) var destination = CanvasDisplayDestination.srgbFallback
+    /// Destination observer tokens for the owning window and its associated
+    /// screen; swapped on window changes and removed on detach/close. The
+    /// blocks hold `self` weakly, so no observer retain cycle.
+    private var destinationObservers: [NSObjectProtocol] = []
 
     /// The current tool's handling of pointer and key events.
     private(set) lazy var tools = CanvasToolController(canvas: self)
@@ -198,8 +206,15 @@ final class EngineCanvasView: NSView {
         renderInFlight = true
         let area = deviceRect(for: key)
         let session = document.session, image = document.image, scale = deviceScale, generation = generation
+        // The immutable destination snapshot travels with the queued tile;
+        // a destination change bumps the generation, so this result is
+        // discarded on arrival instead of repopulating the cleared cache.
+        let destination = self.destination
         renderQueue.async {
-            let result = Result { try session.render(image, scale: scale, area: area) }
+            let result = Result {
+                try CanvasDisplayDestination.render(session, image: image, scale: scale, area: area,
+                                                    destination: destination)
+            }
             DispatchQueue.main.async {
                 self.renderInFlight = false
                 if generation == self.generation, !self.renderingStopped {
@@ -222,22 +237,49 @@ final class EngineCanvasView: NSView {
     /// Drains any in-flight read before the engine image is destroyed.
     func stopRendering(completion: @escaping @MainActor () -> Void) {
         renderingStopped = true
+        removeDestinationObservers()
         antsTimer?.invalidate()
         antsTimer = nil
         renderQueue.async { DispatchQueue.main.async { completion() } }
     }
 
     /// Renders every visible tile synchronously; used by the engine smoke
-    /// test. Returns how many tiles were rendered.
+    /// test. Returns how many tiles were rendered. Follows the same
+    /// destination policy as the queued path.
     @discardableResult
     func renderVisibleTilesNow() throws -> Int {
+        refreshDisplayDestination()
         var count = 0
         while let key = nextTileToRender() {
-            store(try document.session.render(document.image, scale: deviceScale, area: deviceRect(for: key)), for: key)
+            store(try CanvasDisplayDestination.render(document.session, image: document.image,
+                                                       scale: deviceScale, area: deviceRect(for: key),
+                                                       destination: destination), for: key)
             count += 1
         }
         needsDisplay = true
         return count
+    }
+
+    /// Test seam: the ICC bytes of one cached tile, when any. Every tile
+    /// cached since the last destination change carries the destination it
+    /// was rendered into, exactly tagged on its `CGImage`.
+    func cachedTileICCData() -> Data? {
+        return tiles.values.first?.colorSpace?.copyICCData() as Data?
+    }
+
+    /// Test seam: read-only view of the existing single in-flight tile
+    /// admission, so the smoke can prove a render request is pending without
+    /// touching the queue. No behavior change, no native call.
+    var hasPendingRender: Bool { renderInFlight }
+
+    /// Test seam: enqueues a barrier closure onto the existing private serial
+    /// render queue, ordered after work already queued and before anything
+    /// queued later. The smoke uses it to gate tile execution
+    /// deterministically; normal rendering never calls it. The closure runs
+    /// off the main actor, so it must not touch AppKit or view state — it may
+    /// only dispatch a callback to main and wait on a semaphore.
+    func enqueueRenderBarrier(_ barrier: @escaping @Sendable () -> Void) {
+        renderQueue.async { barrier() }
     }
 
     private func store(_ image: CGImage, for key: TileKey) {
@@ -295,6 +337,7 @@ final class EngineCanvasView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        swapDestinationObservers()
         backingDidChange()
         updateAntsTimer()
     }
@@ -304,13 +347,69 @@ final class EngineCanvasView: NSView {
         backingDidChange()
     }
 
+    // MARK: Display destination
+
+    /// Re-snapshots the owning window's actual backing destination. An ICC
+    /// identity change clears every completed tile (and the stale/failed
+    /// bookkeeping) and bumps the generation, so in-flight renders for the
+    /// old profile are discarded on arrival; identical ICC bytes keep the
+    /// cache and the existing center/zoom semantics. Idempotent, so the
+    /// view callbacks and the notifications may both fire.
+    private func refreshDisplayDestination() {
+        let updated = CanvasDisplayDestination.snapshot(window: window)
+        guard updated.invalidatesCache(comparedTo: destination) else { return }
+        destination = updated
+        generation += 1
+        tiles.removeAll()
+        staleTiles.removeAll()
+        failedTiles.removeAll()
+        needsDisplay = true
+    }
+
+    /// (Re)registers the destination observers for the current owning
+    /// window and its specifically associated screen: the window's backing
+    /// properties (which carry the old/new color space per TN2313), screen
+    /// moves, and the screen's profile change. Tokens are swapped on window
+    /// changes and removed on detach/close; blocks capture self weakly.
+    private func swapDestinationObservers() {
+        removeDestinationObservers()
+        guard let window else { return }
+        window.displaysWhenScreenProfileChanges = true
+        let center = NotificationCenter.default
+        destinationObservers = [
+            center.addObserver(forName: NSWindow.didChangeBackingPropertiesNotification, object: window,
+                               queue: .main) { [weak self] _ in self?.destinationDidChange() },
+            center.addObserver(forName: NSWindow.didChangeScreenNotification, object: window,
+                               queue: .main) { [weak self] _ in self?.destinationDidChange() },
+            center.addObserver(forName: NSScreen.colorSpaceDidChangeNotification, object: nil,
+                               queue: .main) { [weak self] note in
+                guard let screen = note.object as? NSScreen, screen === self?.window?.screen else { return }
+                self?.destinationDidChange()
+            },
+        ]
+    }
+
+    private func removeDestinationObservers() {
+        for token in destinationObservers { NotificationCenter.default.removeObserver(token) }
+        destinationObservers.removeAll()
+    }
+
+    /// A backing color-space, screen or profile change arrived: re-read the
+    /// actual window snapshot and schedule fresh tiles with it.
+    private func destinationDidChange() {
+        refreshDisplayDestination()
+        setNeedsRender()
+    }
+
     /// The window or its screen changed: keep the zoom percent, drop the
     /// renders scheduled under the old layout, rebuild the frame and the
     /// overlays at the current backing factor, hold the image pixel that
     /// sat under the viewport centre and request fresh renders. Tiles are
     /// rendered at a backing-independent scale, so the cache survives and
-    /// only the in-flight generation is invalidated.
+    /// only the in-flight generation is invalidated. A destination ICC
+    /// change additionally clears the completed cache (refresh first).
     private func backingDidChange() {
+        refreshDisplayDestination()
         generation += 1
         let viewport = enclosingScrollView?.contentView.bounds ?? .zero
         let center = CanvasGeometry.imageCenter(scrollOffset: viewport.origin, viewportSize: viewport.size,

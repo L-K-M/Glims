@@ -29,6 +29,9 @@ final class ResourcePickerController {
     private var loadInFlight = false
     /// Guards the single whenIdle re-pump of the thumbnail queue.
     private var thumbnailPumpScheduled = false
+    /// A highlight to restore after a forced reload (a duplicate published
+    /// a new resource), when its row still exists in the fresh catalog.
+    private var shouldRestoreSelection = false
 
     /// When true, an already-ready catalog is not loaded again (the
     /// embedded pattern picker loads once per sheet); a fresh chooser
@@ -110,6 +113,20 @@ final class ResourcePickerController {
         }
     }
 
+    /// Forces a fresh catalog read even when `loadOnlyOnce` is set (the
+    /// embedded pattern picker loads once per sheet) — e.g. after a
+    /// duplicate publishes a new resource — preserving the highlighted row
+    /// when it still exists in the fresh catalog. A refresh failure lands
+    /// in the model's error state, separate from the successful publish.
+    func reloadCatalog() {
+        guard !isClosed, !loadInFlight else { return }
+        shouldRestoreSelection = true
+        let onlyOnce = loadOnlyOnce
+        loadOnlyOnce = false
+        load()
+        loadOnlyOnce = onlyOnce
+    }
+
     private func deliver(generation: Int, rows: [ResourceRow],
                          resolvedCurrent: EngineSession.ResourceID?,
                          resolutionError: EngineSession.EngineError?, error: String?) {
@@ -119,8 +136,18 @@ final class ResourcePickerController {
             onAbandoned?()
             return
         }
+        // Rows remain selectable during refresh. Capture the latest choice
+        // here, before deliver resets it from the original committed identity.
+        let keep = model.selection
         guard model.deliver(generation: generation, rows: rows, resolvedCurrent: resolvedCurrent,
                             resolutionError: resolutionError, error: error) else { return }
+        // A forced reload keeps the user's explicit highlight when its row
+        // survives the fresh catalog; reloadTable's updatingTable guard
+        // suppresses the programmatic selection callback.
+        if shouldRestoreSelection {
+            shouldRestoreSelection = false
+            if keep == nil || model.rows.contains(where: { $0.id == keep }) { model.select(keep) }
+        }
         // Prime the lazy thumbnail queue: the resolved current resource
         // first, then only the initial visible batch — the rest render as
         // rows scroll into view.

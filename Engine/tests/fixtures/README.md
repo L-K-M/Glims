@@ -25,3 +25,53 @@ from `scripts/make-icc-fixtures.py`. The former uses sRGB primaries and
 linear transfer curves; the latter D65 gray with a 2.2 curve. Their creation
 time is fixed and optional profile ID cleared. They test profile assignment,
 conversion, model compatibility and XCF persistence without system profiles.
+Their bytes and mtimes are preserved (baseline recorded for the wide-gamut
+display test task in `/tmp/glims-completion/wide-gamut-display-tests-original-icc.json`).
+
+`wide-linear-rgb.icc` is an original LittleCMS-generated RGB matrix profile
+created only by `python3 scripts/make-wide-icc-fixture.py` (a separate script;
+it never regenerates or alters `gray.icc`/`linear-rgb.icc`). It uses explicit
+wide primaries, D65 white and a linear TRC:
+- Red   (.708, .292)
+- Green (.170, .797)
+- Blue  (.131, .046)
+- White (.3127, .3290), luminance normalized (Y=1)
+- TRC: linear (gamma 1.0)
+This is a physical wide-primary set chosen so saturated channels lie outside
+the sRGB gamut. Header date (2026-11-08 00:00:00 UTC) and profile ID (cleared)
+are fixed for deterministic bytes. Created with the project LCMS at
+`_deps/macports/lib/liblcms2.dylib` / `include/lcms2.h`; no network, no
+downloaded assets, no engine.
+
+`Engine/tests/display-render-tests.c` uses this fixture through the public
+facade only (`image_from_pixels`, `image_assign_profile`,
+`image_render_to_profile`), on a separate image, without touching the original
+29 display cases. It checks: wide->same-wide direct premultiplied output
+(including saturated R/G/B outside sRGB, alpha 0/partial/opaque and mixtures),
+stride/prefix/suffix/row-padding guards, and post-assignment dirty/undo/redo
+invariance (profile assignment is intentionally one state change). A
+sensitivity oracle derives RGB->XYZ matrices from literal xyY primaries and
+white, computes `inv(M_sRGB) * M_wide`, and shows wide primaries map outside
+linear sRGB (clipping is not recoverable). A nonidentity wide->`linear-rgb.icc`
+destination oracle uses that same independent arithmetic (no `cmsDoTransform`,
+no production transform, no renderer-under-test, no LCMS transform output):
+straight source samples -> matrix -> clamp to u8 contract -> premultiply alpha
+-> quantize. Same D65 source/destination means PCS chromatic adaptation
+cancels; ICC coefficient quantization/rounding tolerance is kept tight (<=2
+u8), far below clipping loss. The mixed in-gamut sample differs materially
+from identity premultiplication.
+
+Root acceptance preserves every pixel assertion (a prior loop overwrote
+its aggregate result) and uses two-dimensional matrix indexing throughout.
+All four engines pass 40 display checks. A negative control forces ONLY the
+wide identity request through the real legacy sRGB-u8 render, unpremultiplies
+and imports those clipped bytes, then renders back to wide RGB. It fails
+exactly the wide identity assertion. Run that intentional failure with
+`GLIMS_DISPLAY_TEST_SRGB_INTERMEDIATE=1`; ordinary runs leave it disabled.
+The narrow-destination oracle proves conversion rather than relabelling;
+wide identity plus this negative control proves sensitivity to lost gamut.
+
+The generator and facade runner compile strictly, original fixture bytes and
+nanosecond mtimes remain unchanged, and no production code/API changes.
+These checks cover an 8-bit wide-source fixture and SDR output, not LUT,
+physical-display, higher-precision source or HDR accuracy.

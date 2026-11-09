@@ -51,6 +51,10 @@
 
 /* The largest render scale the facade accepts (3200%). */
 #define MAX_RENDER_SCALE 32.0
+/* Bound GEGL's float scale and signed sampling-factor/coordinate arithmetic.
+ * This still covers images far beyond GIMP's 524288-pixel dimension limit. */
+#define MIN_RENDER_SCALE (1.0 / 1048576.0)
+#define MAX_RENDER_SAMPLE_COORD 67108864.0
 
 /* GIMP 3.2's link finalizer leaves a pending changed idle with a bare
  * link pointer (gimplink.c). Master cancels it natively. Register cleanup
@@ -228,7 +232,7 @@ glims_adopt_image (GlimsEngine  *engine,
 
   open->image  = image;
   open->engine = engine;
-  open->item_sets = glims_item_sets_new (image);
+  open->item_sets = glims_item_sets_new (engine, image);
   glims_track_image_links (image);
   open->history_revision = 1;
   open->projection_update_handler =
@@ -527,35 +531,45 @@ validate_area (GeglBuffer *buffer,
   if (! validate)
     return;
 
-  full.x      = (gint) floor (area.x / scale);
-  full.y      = (gint) floor (area.y / scale);
-  full.width  = (gint) ceil ((area.x + area.width) / scale) - full.x;
-  full.height = (gint) ceil ((area.y + area.height) / scale) - full.y;
-  if (! gegl_rectangle_intersect (&full, &full, extent))
-    return;
+  /* Intersect in floating point before narrowing. Tiny positive scales
+   * can produce infinite divided edges; the buffer extent remains bounded. */
+  double left = MAX (floor ((double) area.x / scale), (double) extent->x);
+  double top = MAX (floor ((double) area.y / scale), (double) extent->y);
+  double right = MIN (ceil (((double) area.x + area.width) / scale),
+                      (double) extent->x + extent->width);
+  double bottom = MIN (ceil (((double) area.y + area.height) / scale),
+                       (double) extent->y + extent->height);
+  if (! (right > left && bottom > top)) return;
+  full.x = (gint) left;
+  full.y = (gint) top;
+  full.width = (gint) (right - left);
+  full.height = (gint) (bottom - top);
 
   /* Renders the invalid parts of the area, synchronously, as GIMP's chunk
    * renderer does. */
   gimp_tile_handler_validate_validate (validate, buffer, &full, TRUE, FALSE);
 }
 
+/* Shared by both renderers (glims_image_render, display-render.c):
+ * validates `scale` and `area`, then prepares the projection buffer for
+ * one synchronous read of `area` at `scale`. */
 GlimsStatus
-glims_image_render (GlimsEngine  *engine,
-                    GlimsImageID  id,
-                    double        scale,
-                    GlimsRect     area,
-                    uint8_t      *pixels,
-                    size_t        stride)
+glims_projection_prepare_read (GlimsOpenImage  *open,
+                               double           scale,
+                               GlimsRect        area,
+                               GeglBuffer     **buffer_out)
 {
-  GlimsOpenImage *open = glims_lookup_image (engine, id);
   GimpProjection *projection;
   GeglBuffer     *buffer;
-  GeglRectangle   rect = { area.x, area.y, area.width, area.height };
 
-  if (! open)
-    return GLIMS_STATUS_NOT_FOUND;
-  if (! pixels || ! (scale > 0.0) || scale > MAX_RENDER_SCALE ||
-      area.width < 1 || area.height < 1 || stride < (size_t) area.width * 4)
+  if (! (scale >= MIN_RENDER_SCALE) || scale > MAX_RENDER_SCALE ||
+      area.width < 1 || area.height < 1)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  double sampling_scale = (double) (float) scale;
+  if (fabs ((double) area.x / sampling_scale) > MAX_RENDER_SAMPLE_COORD ||
+      fabs ((double) area.y / sampling_scale) > MAX_RENDER_SAMPLE_COORD ||
+      fabs (((double) area.x + area.width) / sampling_scale) > MAX_RENDER_SAMPLE_COORD ||
+      fabs (((double) area.y + area.height) / sampling_scale) > MAX_RENDER_SAMPLE_COORD)
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
   /* Hand pending updates to the projection as invalid tiles without
@@ -588,10 +602,49 @@ glims_image_render (GlimsEngine  *engine,
   if (scale != 1.0 || (area.width == 1 && area.height == 1))
     validate_area (buffer, scale, area);
 
+  *buffer_out = buffer;
+  return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_image_render (GlimsEngine  *engine,
+                    GlimsImageID  id,
+                    double        scale,
+                    GlimsRect     area,
+                    uint8_t      *pixels,
+                    size_t        stride)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GeglBuffer     *buffer;
+  GeglRectangle   rect = { area.x, area.y, area.width, area.height };
+  GlimsStatus     status;
+
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+  if (! pixels)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  status = glims_projection_prepare_read (open, scale, area, &buffer);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  if (stride < (size_t) area.width * 4)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
   /* Babl converts from the image's working space to sRGB. Display profiles
    * are not applied yet. */
-  gegl_buffer_get (buffer, &rect, scale, babl_format ("R'aG'aB'aA u8"),
-                   pixels, (gint) stride, GEGL_ABYSS_NONE);
+  /* GEGL's special one-column conversion uses stack scratch proportional
+   * to its height. Bound each such call, including the legacy renderer. */
+  for (gint row = 0; row < area.height; )
+    {
+      gint rows = area.width == 1 ? MIN (256, area.height - row) : area.height;
+      rect.y = area.y + row;
+      rect.height = rows;
+      if (scale == 1.0 && area.width == 1 && rows == 1)
+        validate_area (buffer, scale, (GlimsRect) { area.x, rect.y, 1, 1 });
+      gegl_buffer_get (buffer, &rect, scale, babl_format ("R'aG'aB'aA u8"),
+                       pixels + (size_t) row * stride, (gint) stride, GEGL_ABYSS_NONE);
+      row += rows;
+    }
 
   return GLIMS_STATUS_OK;
 }

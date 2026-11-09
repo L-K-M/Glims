@@ -68,9 +68,10 @@ factory_for_kind (Gimp *gimp, uint32_t kind)
 /* The label contract: nonempty, valid UTF-8, at most 255 bytes, and no
  * control character anywhere. An embedded NUL cannot arrive through a
  * C string (the Swift side rejects it before the bridge); strlen() sees
- * only up to the first NUL, which is what the native writers use. */
-static gboolean
-valid_resource_name (const char *name)
+ * only up to the first NUL, which is what the native writers use.
+ * Shared with resource-duplicate.c (glims_valid_resource_name). */
+gboolean
+glims_valid_resource_name (const char *name)
 {
   const gchar *p;
   size_t       length;
@@ -115,9 +116,10 @@ valid_pixels (int32_t width, int32_t height, const uint8_t *pixels,
 
 /* Exact name collision against the current factory membership; the
  * loader factories run with unique-names=TRUE, so adding a duplicate
- * would silently uniquify — refused here instead, before any write. */
-static gboolean
-name_taken (GimpContainer *container, const gchar *name)
+ * would silently uniquify — refused here instead, before any write.
+ * Shared with resource-duplicate.c (glims_resource_name_taken). */
+gboolean
+glims_resource_name_taken (GimpContainer *container, const gchar *name)
 {
   gint n = gimp_container_get_n_children (container);
   gint i;
@@ -287,144 +289,100 @@ pattern_from_pixels (const gchar *name, int32_t width, int32_t height,
   return pattern;
 }
 
+/* ---- Checked persistence, shared with resource-duplicate.c ------------ */
+
 GlimsStatus
-glims_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
-                              int32_t width, int32_t height,
-                              const uint8_t *pixels, size_t byte_count,
-                              uint32_t brush_spacing, GlimsResourceID *outID,
-                              char **error)
+glims_resource_staging_begin (GimpDataFactory      *factory,
+                              const gchar          *extension,
+                              GlimsResourceStaging *staging,
+                              char                **error)
 {
-  GimpDataFactory *factory;
-  GimpContainer   *container;
-  GimpData        *data       = NULL;
-  GFile           *save_dir   = NULL;
-  GFile           *staging_dir  = NULL;
-  GFile           *staging_file = NULL;
-  GFile           *final_file   = NULL;
-  GError          *gerror     = NULL;
-  gchar           *uuid       = NULL;
-  gchar           *staging_name = NULL;
-  gchar           *final_name   = NULL;
-  const gchar     *extension;
-  uint64_t         bytes = 0;
-  gboolean         published = FALSE;
-  gboolean         staging_created = FALSE;
-  gboolean         promoted = FALSE;
-  GlimsStatus      status    = GLIMS_STATUS_FAILED;
+  GError *gerror = NULL;
 
-  if (outID)
-    *outID = 0;
+  memset (staging, 0, sizeof *staging);
+  staging->extension = extension;
 
-  /* Admission, all before any mutation. */
-  if (! outID)
+  staging->save_dir = choose_save_dir (factory, &gerror);
+  if (! staging->save_dir)
     {
-      if (error)
-        *error = strdup ("The id output is required.");
-      return GLIMS_STATUS_INVALID_ARGUMENT;
-    }
-
-  if (kind == GLIMS_RESOURCE_GRADIENT)
-    {
-      if (error)
-        *error = strdup ("Creating a gradient from pixels is not supported.");
-      return GLIMS_STATUS_UNSUPPORTED;
-    }
-  if (kind != GLIMS_RESOURCE_BRUSH && kind != GLIMS_RESOURCE_PATTERN)
-    {
-      if (error)
-        *error = strdup ("Unknown resource kind.");
-      return GLIMS_STATUS_INVALID_ARGUMENT;
-    }
-
-  if (! valid_resource_name (name))
-    {
-      if (error)
-        *error = strdup ("The resource name must be nonempty UTF-8 without control "
-                         "characters, at most 255 bytes.");
-      return GLIMS_STATUS_INVALID_ARGUMENT;
-    }
-
-  if (! valid_pixels (width, height, pixels, byte_count, &bytes))
-    {
-      if (error)
-        *error = strdup ("The dimensions must be 1 ... 10000 and the pixel buffer "
-                         "exactly width * height * 4 bytes.");
-      return GLIMS_STATUS_INVALID_ARGUMENT;
-    }
-
-  if (kind == GLIMS_RESOURCE_BRUSH
-        ? (brush_spacing < BRUSH_SPACING_MIN || brush_spacing > BRUSH_SPACING_MAX)
-        : brush_spacing != 0)
-    {
-      if (error)
-        *error = strdup (kind == GLIMS_RESOURCE_BRUSH
-                           ? "The brush spacing must be 1 ... 1000."
-                           : "Patterns take no brush spacing (0).");
-      return GLIMS_STATUS_INVALID_ARGUMENT;
-    }
-
-  /* No image argument: refuse the engine-global busy flag and ANY
-   * active stroke or filter session, on any image. */
-  if (e->busy > 0 ||
-      g_hash_table_size (e->strokes) > 0 ||
-      g_hash_table_size (e->filters) > 0)
-    return GLIMS_STATUS_BUSY;
-
-  factory   = factory_for_kind (e->gimp, kind);
-  container = gimp_data_factory_get_container (factory);
-
-  if (name_taken (container, name))
-    return glims_fail (error, NULL, "A resource with this name already exists.");
-
-  extension = (kind == GLIMS_RESOURCE_BRUSH) ? GIMP_BRUSH_FILE_EXTENSION
-                                              : GIMP_PATTERN_FILE_EXTENSION;
-
-  save_dir = choose_save_dir (factory, &gerror);
-  if (! save_dir)
-    {
-      status = glims_fail (error, g_steal_pointer (&gerror),
-                           "No writable data folder is available for this resource kind.");
-      goto cleanup;
+      return glims_fail (error, g_steal_pointer (&gerror),
+                         "No writable data folder is available for this resource kind.");
     }
 
   /* Stage in a unique hidden subdirectory: the native loader skips
    * hidden entries before recursing, so nothing staged here is ever
    * loaded as a catalog resource. */
-  uuid         = g_uuid_string_random ();
-  staging_name = g_strdup_printf (".glims-stage-%s", uuid);
-  staging_dir  = g_file_get_child (save_dir, staging_name);
-  if (! g_file_make_directory (staging_dir, NULL, &gerror))
+  staging->uuid = g_uuid_string_random ();
+  {
+    gchar *staging_name = g_strdup_printf (".glims-stage-%s", staging->uuid);
+    staging->staging_dir = g_file_get_child (staging->save_dir, staging_name);
+    g_free (staging_name);
+  }
+  if (! g_file_make_directory (staging->staging_dir, NULL, &gerror))
     {
-      status = glims_fail (error, g_steal_pointer (&gerror),
-                           "The staging directory could not be created.");
-      goto cleanup;
+      glims_resource_staging_cleanup (staging, FALSE);
+      return glims_fail (error, g_steal_pointer (&gerror),
+                         "The staging directory could not be created.");
     }
-  staging_created = TRUE;
+  staging->staging_created = TRUE;
 
   {
     gchar *staging_file_name = g_strdup_printf ("staging%s", extension);
-    staging_file = g_file_get_child (staging_dir, staging_file_name);
+    staging->staging_file = g_file_get_child (staging->staging_dir, staging_file_name);
     g_free (staging_file_name);
   }
 
-  /* Build the private resource from the owned pixels. */
-  if (kind == GLIMS_RESOURCE_BRUSH)
-    data = GIMP_DATA (load_brush_from_pixels (e->gimp, staging_file, name,
-                                              width, height, brush_spacing,
-                                              pixels, bytes, &gerror));
-  else
-    data = GIMP_DATA (pattern_from_pixels (name, width, height, pixels, bytes));
+  return GLIMS_STATUS_OK;
+}
 
-  if (! data)
+void
+glims_resource_staging_cleanup (GlimsResourceStaging *staging,
+                                gboolean              keep_final)
+{
+  /* A generated pathname is not ownership. Only a successful mkdir or
+   * move grants cleanup ownership; collisions must preserve their files.
+   * A published success keeps its final file. */
+  if (staging->staging_file)
     {
-      status = glims_fail (error, g_steal_pointer (&gerror),
-                           "The resource could not be built from these pixels.");
-      goto cleanup;
+      if (staging->staging_created)
+        g_file_delete (staging->staging_file, NULL, NULL);
+      g_object_unref (staging->staging_file);
     }
+  if (staging->staging_dir)
+    {
+      if (staging->staging_created)
+        g_file_delete (staging->staging_dir, NULL, NULL);
+      g_object_unref (staging->staging_dir);
+    }
+  if (staging->final_file)
+    {
+      if (staging->promoted && ! keep_final)
+        g_file_delete (staging->final_file, NULL, NULL);
+      g_object_unref (staging->final_file);
+    }
+  if (staging->save_dir)
+    g_object_unref (staging->save_dir);
+  g_free (staging->uuid);
+  memset (staging, 0, sizeof *staging);
+}
+
+GlimsStatus
+glims_resource_save_and_publish (GimpDataFactory      *factory,
+                                 GimpData             *data,
+                                 const gchar          *name,
+                                 GlimsResourceStaging *staging,
+                                 GlimsResourceID      *outID,
+                                 char                **error)
+{
+  GimpContainer *container = gimp_data_factory_get_container (factory);
+  GError        *gerror    = NULL;
+  gchar         *final_name = NULL;
+  gboolean       published  = FALSE;
+  GlimsStatus    status     = GLIMS_STATUS_FAILED;
 
   /* Associate the staging file and require the result writable before
    * saving. */
-  gimp_data_set_file (data, staging_file, TRUE, TRUE);
+  gimp_data_set_file (data, staging->staging_file, TRUE, TRUE);
   if (! gimp_data_is_writable (data))
     {
       status = glims_fail (error, NULL, "The staged resource file is not writable.");
@@ -443,21 +401,21 @@ glims_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
   /* Promote to a unique UUID final filename with the native extension:
    * a real rename only (no copy fallback), and no overwrite — an
    * existing target fails instead of being replaced. */
-  final_name = g_strdup_printf ("%s%s", uuid, extension);
-  final_file = g_file_get_child (save_dir, final_name);
-  if (! g_file_move (staging_file, final_file, G_FILE_COPY_NO_FALLBACK_FOR_MOVE,
+  final_name = g_strdup_printf ("%s%s", staging->uuid, staging->extension);
+  staging->final_file = g_file_get_child (staging->save_dir, final_name);
+  if (! g_file_move (staging->staging_file, staging->final_file,
+                     G_FILE_COPY_NO_FALLBACK_FOR_MOVE,
                      NULL, NULL, NULL, &gerror))
     {
       status = glims_fail (error, g_steal_pointer (&gerror),
                            "The saved resource could not be promoted to its final name.");
       goto cleanup;
     }
-
-  promoted = TRUE;
+  staging->promoted = TRUE;
 
   /* Reassociate the data to the final path and validate writable
    * again before publishing to the factory. */
-  gimp_data_set_file (data, final_file, TRUE, TRUE);
+  gimp_data_set_file (data, staging->final_file, TRUE, TRUE);
   if (! gimp_data_is_writable (data))
     {
       status = glims_fail (error, NULL, "The saved resource file is not writable.");
@@ -466,7 +424,7 @@ glims_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
 
   /* Publish: the unique-names container must keep the exact name, and
    * the membership and the native id must verify before returning. */
-  if (name_taken (container, name))
+  if (glims_resource_name_taken (container, name))
     {
       status = glims_fail (error, NULL, "A resource with this name already exists.");
       goto cleanup;
@@ -509,32 +467,114 @@ cleanup:
         gimp_container_remove (container, GIMP_OBJECT (data));
       g_object_unref (data);
     }
-  /* A generated pathname is not ownership. Only a successful mkdir or
-   * move grants cleanup ownership; collisions must preserve their files.
-   * A published success keeps its final file. */
-  if (staging_file)
-    {
-      if (staging_created)
-        g_file_delete (staging_file, NULL, NULL);
-      g_object_unref (staging_file);
-    }
-  if (staging_dir)
-    {
-      if (staging_created)
-        g_file_delete (staging_dir, NULL, NULL);
-      g_object_unref (staging_dir);
-    }
-  if (final_file)
-    {
-      if (promoted && status != GLIMS_STATUS_OK)
-        g_file_delete (final_file, NULL, NULL);
-      g_object_unref (final_file);
-    }
-  if (save_dir)
-    g_object_unref (save_dir);
   g_free (final_name);
-  g_free (staging_name);
-  g_free (uuid);
+  glims_resource_staging_cleanup (staging, status == GLIMS_STATUS_OK);
 
   return status;
+}
+
+GlimsStatus
+glims_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
+                              int32_t width, int32_t height,
+                              const uint8_t *pixels, size_t byte_count,
+                              uint32_t brush_spacing, GlimsResourceID *outID,
+                              char **error)
+{
+  GimpDataFactory      *factory;
+  GimpContainer        *container;
+  GimpData             *data = NULL;
+  GError               *gerror = NULL;
+  GlimsResourceStaging  staging;
+  const gchar          *extension;
+  uint64_t              bytes = 0;
+  GlimsStatus           status;
+
+  if (outID)
+    *outID = 0;
+
+  /* Admission, all before any mutation. */
+  if (! outID)
+    {
+      if (error)
+        *error = strdup ("The id output is required.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  if (kind == GLIMS_RESOURCE_GRADIENT)
+    {
+      if (error)
+        *error = strdup ("Creating a gradient from pixels is not supported.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+  if (kind != GLIMS_RESOURCE_BRUSH && kind != GLIMS_RESOURCE_PATTERN)
+    {
+      if (error)
+        *error = strdup ("Unknown resource kind.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  if (! glims_valid_resource_name (name))
+    {
+      if (error)
+        *error = strdup ("The resource name must be nonempty UTF-8 without control "
+                         "characters, at most 255 bytes.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  if (! valid_pixels (width, height, pixels, byte_count, &bytes))
+    {
+      if (error)
+        *error = strdup ("The dimensions must be 1 ... 10000 and the pixel buffer "
+                         "exactly width * height * 4 bytes.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  if (kind == GLIMS_RESOURCE_BRUSH
+        ? (brush_spacing < BRUSH_SPACING_MIN || brush_spacing > BRUSH_SPACING_MAX)
+        : brush_spacing != 0)
+    {
+      if (error)
+        *error = strdup (kind == GLIMS_RESOURCE_BRUSH
+                           ? "The brush spacing must be 1 ... 1000."
+                           : "Patterns take no brush spacing (0).");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  /* No image argument: refuse the engine-global busy flag and ANY
+   * active stroke or filter session, on any image. */
+  if (e->busy > 0 ||
+      g_hash_table_size (e->strokes) > 0 ||
+      g_hash_table_size (e->filters) > 0)
+    return GLIMS_STATUS_BUSY;
+
+  factory   = factory_for_kind (e->gimp, kind);
+  container = gimp_data_factory_get_container (factory);
+
+  if (glims_resource_name_taken (container, name))
+    return glims_fail (error, NULL, "A resource with this name already exists.");
+
+  extension = (kind == GLIMS_RESOURCE_BRUSH) ? GIMP_BRUSH_FILE_EXTENSION
+                                              : GIMP_PATTERN_FILE_EXTENSION;
+
+  status = glims_resource_staging_begin (factory, extension, &staging, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+
+  /* Build the private resource from the owned pixels; the staging file
+   * is the loader's identity/error context only, never opened by it. */
+  if (kind == GLIMS_RESOURCE_BRUSH)
+    data = GIMP_DATA (load_brush_from_pixels (e->gimp, staging.staging_file, name,
+                                              width, height, brush_spacing,
+                                              pixels, bytes, &gerror));
+  else
+    data = GIMP_DATA (pattern_from_pixels (name, width, height, pixels, bytes));
+
+  if (! data)
+    {
+      glims_resource_staging_cleanup (&staging, FALSE);
+      return glims_fail (error, g_steal_pointer (&gerror),
+                         "The resource could not be built from these pixels.");
+    }
+
+  return glims_resource_save_and_publish (factory, data, name, &staging, outID, error);
 }
