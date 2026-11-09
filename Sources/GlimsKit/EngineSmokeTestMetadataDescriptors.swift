@@ -149,7 +149,8 @@ extension EngineSmokeTest {
                     && button(sheet, "Remove metadata tag")?.isEnabled == false
                     && button(sheet, "Add metadata value")?.isEnabled == false,
                   "LangAlt gates every write off before a failed native edit")
-            check((label(sheet, "Metadata note")?.stringValue ?? "").contains("language-alternative") == true,
+            let languageNote = label(sheet, "Metadata note")?.stringValue ?? ""
+            check(languageNote.contains(MetadataSheetLogic.langAltNote) && languageNote.contains("read-only"),
                   "the read-only reason is shown for LangAlt")
             check(textView(sheet, "Selected metadata value editor")?.isEditable == false,
                   "the editor is read-only for LangAlt")
