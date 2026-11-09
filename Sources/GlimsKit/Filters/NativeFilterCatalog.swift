@@ -186,6 +186,7 @@ enum NativeFilterMenus {
     /// each gets. Operations the engine does not list are simply omitted,
     /// and the support gates stay — a gated operation never appears here.
     private static let adjustOperations: [(name: String, title: String)] = [
+        ("gimp:brightness-contrast", "Brightness/Contrast"),
         ("gimp:threshold", "Threshold"),
         ("gegl:invert-gamma", "Invert Perceptual"),
         ("gegl:invert-linear", "Invert Linear"),
@@ -242,7 +243,7 @@ enum NativeFilterMenus {
         removeGenerated(from: adjust)
         let items = adjustOperations.compactMap { entry -> NSMenuItem? in
             guard let operation = operations.first(where: { $0.name == entry.name }),
-                  operation.support == .supported else { return nil }
+                  NativeFilterMenuLayout.supportsParameterEditor(operation) else { return nil }
             return tagged(commandItem(operation, title: "\(entry.title)…"))
         }
         merge(items, into: adjust)
