@@ -188,7 +188,7 @@ final class CurvesGraphView: NSView {
                 next.samples[i] = min(1, max(0, previous.value + (p.y - previous.value) * fraction))
             }
         } else { next.samples[index] = p.y }
-        lastSample = (index, p.y)
+        lastSample = (index, Double(p.y))
         if next.samples != state.samples { next.identity = false; replaceLocally(next) }
     }
     override func keyDown(with event: NSEvent) {
