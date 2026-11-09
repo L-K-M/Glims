@@ -476,6 +476,14 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
                     : "Select ordinary pixel layers for a batch. \(verb) groups or editable sources individually."
                 return layerBatchAdmission(document)
             }
+            if command == .fitToImage {
+                menuItem.title = document.hasMultipleSelectedLayers ? "Layers to Image Size" : "Layer to Image Size"
+                if document.hasMultipleSelectedLayers {
+                    let reason = document.fitSelectedLayersRefusal()
+                    menuItem.toolTip = reason
+                    return reason == nil
+                }
+            }
             // While more than one layer is selected, every single-layer
             // command but New Layer is disabled with the reason; New
             // Layer creates and selects a fresh row, which is safe.

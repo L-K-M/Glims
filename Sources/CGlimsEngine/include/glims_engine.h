@@ -3009,6 +3009,16 @@ typedef struct GlimsEngineAPI {
                                    GlimsLevelsSettings *out, char **error);
   GlimsStatus (*filter_levels_set) (GlimsEngine *engine, GlimsFilterID filter,
                                    const GlimsLevelsSettings *settings, char **error);
+  /* Slot156: resize every explicitly captured pixel-behaving layer to the
+   * image bounds with transparent fill, including its native layer mask.
+   * Requires 1..256 distinct positive IDs. All sources, locks, attachment,
+   * readiness and Undo admission are checked before the first mutation.
+   * Editable sources and groups are UNSUPPORTED; no implicit rasterization.
+   * Ordered native selection/tree order are preserved. An all-no-op batch
+   * adds no history; otherwise one outer native Undo covers the batch. */
+  GlimsStatus (*image_fit_layers_to_image) (GlimsEngine *engine, GlimsImageID image,
+                                           const GlimsItemID *layers, int32_t count,
+                                           char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

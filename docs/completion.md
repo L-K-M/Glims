@@ -58,6 +58,8 @@ bundle with the native and Swift build outputs inaccessible.
       ordered selection restoration, Command-J and Layers palette controls (#122).
 - [x] Captured ordinary pixel-layer batch deletion as one native Undo, with
       ordered selection restoration and mask/effect admission guards (#125).
+- [x] Captured pixel-layer batch Fit to Image with native masks, one Undo,
+      exact selection preservation and whole-request admission (candidate).
 - [ ] Remaining batch operations and consistent gesture-time rasterize/revert policy.
 - [x] Adjustment layer creation as an empty pass-through group with a filter,
       explicit placement and editable filter settings.

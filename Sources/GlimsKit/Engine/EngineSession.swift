@@ -3710,6 +3710,20 @@ final class EngineSession: @unchecked Sendable {
         try check(status, error)
     }
 
+    /// Resize the complete captured vector as one native Undo operation.
+    func fitLayersToImage(_ image: Int32, layers: [Int32]) throws {
+        guard (1...256).contains(layers.count), layers.allSatisfy({ $0 > 0 }),
+              Set(layers).count == layers.count else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Select between 1 and 256 different layers to resize.")
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        let status = layers.withUnsafeBufferPointer { input in
+            api.image_fit_layers_to_image(engine, image, input.baseAddress, Int32(input.count), &error)
+        }
+        try check(status, error)
+    }
+
     /// Changes ONE existing language key of a registered XMP LangAlt
     /// root property `tag` (image_metadata_edit_language): the key must
     /// already exist in the map under the exact `language` spelling

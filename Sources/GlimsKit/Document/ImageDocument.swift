@@ -1884,6 +1884,47 @@ final class ImageDocument {
         }, completion: completion)
     }
 
+    /// Cached admission only; menu validation never reads the native engine.
+    func fitSelectedLayersRefusal() -> String? {
+        guard acceptsEdits else {
+            return isClosing ? DocumentError.closed.localizedDescription : DocumentError.busy.localizedDescription
+        }
+        if targetCommandIsPending { return DocumentError.busy.localizedDescription }
+        if let reason = FloatingControlsLogic.resolveFirstGate(floatingState) { return reason }
+        return fitLayerTargetsRefusal(ids: selectedLayerIDs)
+    }
+
+    private func fitLayerTargetsRefusal(ids: [Int32]) -> String? {
+        if isMaskTargetActive { return "Finish mask editing before resizing layers." }
+        if isChannelTargetActive { return "Return to Layers before resizing; the current channel cannot take that edit." }
+        let kinds = Dictionary(layers.map { ($0.id, $0.kind) }, uniquingKeysWith: { first, _ in first })
+        return LayerFitPolicy.refusal(ids: ids, kinds: kinds, locks: layerLocks)
+    }
+
+    /// Capture every ordered id before finishing field edits or a stroke can
+    /// change the cached selection. Native code preflights this same vector.
+    func fitSelectedLayers(completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !refuseWhileEditingUnavailable() else {
+            return completion(.failure(isClosing ? DocumentError.closed : DocumentError.busy))
+        }
+        guard !refuseWhileTargetPending(), !refuseWhileFloatingActive() else {
+            return completion(.failure(DocumentError.busy))
+        }
+        let captured = selectedLayerIDs
+        if let reason = fitLayerTargetsRefusal(ids: captured) {
+            onError?(reason)
+            NSSound.beep()
+            return completion(.failure(EngineSession.EngineError(
+                status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: reason)))
+        }
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueueTargetCommand({ session, image in
+            try session.fitLayersToImage(image, layers: captured)
+        }, completion: completion)
+    }
+
     /// The menu commands act on the layer the engine selects when they
     /// run — layer 0, the adapter's "selected layer at execution" — so a
     /// creation or pick queued ahead of them is what they hit, not the
@@ -1891,12 +1932,13 @@ final class ImageDocument {
     /// layer explicitly instead.
     func layerCommand(_ command: EngineSession.LayerCommand) {
         if command == .delete && hasMultipleSelectedLayers { return deleteSelectedLayers() }
+        if command == .fitToImage && hasMultipleSelectedLayers { return fitSelectedLayers() }
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
         endPendingUserEdits()
         // Other single-layer commands refuse a multi-selection instead
-        // of silently editing its primary. Captured batch Delete takes
-        // its dedicated route above; New Layer selects its fresh row.
+        // of silently editing its primary. Captured batch Delete and Fit
+        // take dedicated routes above; New Layer selects its fresh row.
         if LayerSelectionPolicy.gates(command) {
             guard !refuseSingleLayerCommand(LayerSelectionPolicy.actionTitle(for: command)) else { return }
         }

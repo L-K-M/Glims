@@ -1815,7 +1815,20 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             menuItem.toolTip = admission.reason
             return admission.allowed && !editingBlocked && !previewBusy
                 && !imageDocument.targetCommandIsPending && !imageDocument.floatingState.isActive
-        case #selector(layerToImageSize(_:)), #selector(trimLayerToContent(_:)):
+        case #selector(layerToImageSize(_:)):
+            menuItem.title = imageDocument.hasMultipleSelectedLayers ? "Layers to Image Size" : "Layer to Image Size"
+            if imageDocument.hasMultipleSelectedLayers {
+                let reason = imageDocument.fitSelectedLayersRefusal()
+                menuItem.toolTip = reason
+                return reason == nil && !editingBlocked && !previewBusy
+            }
+            menuItem.toolTip = nil
+            guard let layer = activeLayerInfo, layer.kind == .pixel,
+                  !editingBlocked, !previewBusy else { return false }
+            guard singleLayerItemAllowed(menuItem, action: menuItem.title) else { return false }
+            return imageDocument.layerLocks[layer.id]?.effective
+                .isDisjoint(with: [.pixels, .position]) != false
+        case #selector(trimLayerToContent(_:)):
             // Pixel layers only, from the cached list: the engine
             // refuses groups and editable text, link and vector layers,
             // so those never offer the item. Cached effective pixel and

@@ -253,7 +253,7 @@ extension EngineSmokeTest {
         documentA.fill(at: CGPoint(x: 8, y: 8), mode: .similarColors, color: .red, threshold: 0.2, sampleMerged: false)
         documentA.layerCommand(.duplicate)
         documentA.layerCommand(.raise)
-        documentA.layerCommand(.fitToImage)
+        documentA.layerCommand(.trimToContent)
         documentA.moveActiveLayer(by: CGSize(width: 4, height: 4))
         documentA.transformActiveLayer(.flipHorizontal)
         documentA.applyMask()
@@ -297,6 +297,8 @@ extension EngineSmokeTest {
         }
         check(layerItem("Duplicate Layer").map { controllerA.validateMenuItem($0) } == true,
               "Layer ▸ Duplicate Layers admits the selected ordinary pixel layers")
+        check(layerItem("Layer to Image Size").map { controllerA.validateMenuItem($0) && $0.title == "Layers to Image Size" } == true,
+              "Layer ▸ Layers to Image Size admits the complete selected pixel-layer vector")
         check(layerItem("Layer Properties…").map { controllerA.validateMenuItem($0) } == false,
               "Layer ▸ Properties validates disabled")
         check(layerItem("New Layer").map { controllerA.validateMenuItem($0) } == true,
