@@ -1072,6 +1072,60 @@ typedef enum GlimsMetadataEdit {
   GLIMS_METADATA_REMOVE = 2   /* erase the tag */
 } GlimsMetadataEdit;
 
+/* How many values one registered tag holds natively, as
+ * image_metadata_tag_info classifies it. Facade-owned values; the native
+ * type names never cross this boundary as enums — the native type name
+ * itself is reported as the bounded `type_name` string of
+ * GlimsMetadataTagInfo. */
+typedef enum GlimsMetadataValueKind {
+  GLIMS_METADATA_VALUE_SINGLE     = 1, /* one value: every Exif tag, non-repeatable Iptc, XmpText */
+  GLIMS_METADATA_VALUE_REPEATABLE = 2, /* repeatable Iptc: many values, no container */
+  GLIMS_METADATA_VALUE_BAG        = 3, /* XmpBag: unordered array */
+  GLIMS_METADATA_VALUE_SEQ        = 4, /* XmpSeq: ordered array */
+  GLIMS_METADATA_VALUE_ALT        = 5, /* XmpAlt: unordered alternatives */
+  GLIMS_METADATA_VALUE_LANG_ALT   = 6  /* LangAlt: xml:lang-qualified alternatives */
+} GlimsMetadataValueKind;
+
+/* The TYPE/FORMAT policy of one tag, as image_metadata_tag_info reports
+ * it in GlimsMetadataTagInfo.format_policy. These bits mirror exactly
+ * the refusals image_metadata_edit makes before any mutation: a tag the
+ * native setter rewrites from the image's own state and a LangAlt tag
+ * refuse both operations (no bits); an XMP container (Bag/Seq/Alt) the
+ * image does not hold cannot be SET (a new container needs a chosen
+ * array type) but REMOVE stays allowed as a no-op. The bits express
+ * TYPE/FORMAT POLICY ONLY: an actual edit can still refuse with BUSY,
+ * LOCKED, a copy-preservation guard or other native validation, so a set
+ * bit never promises a write will succeed. */
+typedef enum GlimsMetadataFormatPolicy {
+  GLIMS_METADATA_FORMAT_SUPPORTS_SET    = 1 << 0,
+  GLIMS_METADATA_FORMAT_SUPPORTS_REMOVE = 1 << 1
+} GlimsMetadataFormatPolicy;
+
+/* Capacities, including the NUL terminator, of GlimsMetadataTagInfo's
+ * bounded UTF-8 strings. The adapter truncates them at most to
+ * capacity - 1 bytes, never inside a multi-byte UTF-8 character, and
+ * always NUL-terminates; native bytes that are not valid UTF-8 are
+ * refused, never copied. */
+#define GLIMS_METADATA_TAG_INFO_LABEL_CAPACITY       256u
+#define GLIMS_METADATA_TAG_INFO_DESCRIPTION_CAPACITY 512u
+#define GLIMS_METADATA_TAG_INFO_TYPE_NAME_CAPACITY   64u
+
+/* A READ-ONLY descriptor of one registered metadata tag, as
+ * image_metadata_tag_info reports it (slot 128). Set struct_size to
+ * sizeof (GlimsMetadataTagInfo) before the call; the adapter refuses a
+ * NULL or smaller struct before writing anything and resets the struct
+ * to a safe all-zero descriptor on every later failure. */
+typedef struct GlimsMetadataTagInfo {
+  uint32_t struct_size;       /* sizeof (GlimsMetadataTagInfo) */
+  bool     present;           /* the image's metadata currently holds the tag */
+  bool     supports_multiple; /* the tag can hold several values natively */
+  uint32_t value_kind;        /* GlimsMetadataValueKind */
+  uint32_t format_policy;     /* GlimsMetadataFormatPolicy bits; policy only, see above */
+  char     label[GLIMS_METADATA_TAG_INFO_LABEL_CAPACITY];            /* native tag label, UTF-8, bounded */
+  char     description[GLIMS_METADATA_TAG_INFO_DESCRIPTION_CAPACITY];/* native tag description, UTF-8, bounded */
+  char     type_name[GLIMS_METADATA_TAG_INFO_TYPE_NAME_CAPACITY];    /* native type name, UTF-8, bounded */
+} GlimsMetadataTagInfo;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -2211,22 +2265,22 @@ typedef struct GlimsEngineAPI {
                                         GlimsItemID *ids, int32_t capacity,
                                         int32_t *count);
 
-  /* Image metadata (EXIF/IPTC/XMP), slots 124-127. All tags are named by
+  /* Image metadata (EXIF/IPTC/XMP), slots 124-128. All tags are named by
    * their native dotted string ("Exif.Photo.DateTimeOriginal",
    * "Iptc.Application2.Keywords", "Xmp.xmp.CreatorTool", …); only
    * Glims-owned enums and UTF-8 strings cross this boundary, never the
    * engine's enums, structs or XML.
    *
-   * The three reads are plain reads of the borrowed image metadata:
-   * allowed at any time, also while a stroke, a filter session or a
-   * plug-in holds the image, and they never create metadata or mutate
-   * the image or its history. The two string-vector results are OWNED by
-   * the caller: a NULL-terminated array of `count` NUL-terminated UTF-8
-   * strings (never truncated), released with free_metadata_strings.
-   * An image with no metadata, or no tag of the asked domain, yields an
-   * honest EMPTY owned vector: a valid array whose first entry is NULL
-   * with `count` 0 — never a NULL `result` on success. On every failure
-   * `result` is set to NULL and `count` to 0.
+   * The reads (slots 124, 125 and 128) are plain reads of the borrowed
+   * image metadata: allowed at any time, also while a stroke, a filter
+   * session or a plug-in holds the image, and they never create metadata
+   * or mutate the image or its history. The two string-vector results
+   * are OWNED by the caller: a NULL-terminated array of `count`
+   * NUL-terminated UTF-8 strings (never truncated), released with
+   * free_metadata_strings. An image with no metadata, or no tag of the
+   * asked domain, yields an honest EMPTY owned vector: a valid array
+   * whose first entry is NULL with `count` 0 — never a NULL `result` on
+   * success. On every failure `result` is set to NULL and `count` to 0.
    *
    * INVALID_ARGUMENT for a missing `result`/`count`, an unknown `domain`,
    * or a `tag` that is NULL, empty, not valid UTF-8 or carries no
@@ -2294,6 +2348,76 @@ typedef struct GlimsEngineAPI {
    * image_metadata_values (slot 127); NULL is allowed. Never use
    * free_string on these. */
   void         (*free_metadata_strings) (char **strings);
+
+  /* A READ-ONLY descriptor of the single registered `tag` (slot 128):
+   * whether the image's metadata holds it, whether the tag supports
+   * multiple values natively, its GlimsMetadataValueKind, its
+   * GlimsMetadataFormatPolicy bits and its bounded native label,
+   * description and type name in `outInfo`.
+   *
+   * Like the other metadata reads this is a plain read: allowed at any
+   * time, also while a stroke, a filter preview or a plug-in holds the
+   * image (no busy gate), and it never creates metadata, never installs
+   * anything on the image and never mutates the image, its metadata, its
+   * history or its pixels — an image with no metadata is still a pure
+   * query (a private empty metadata object answers presence and
+   * multiple-value questions and is released inside the call).
+   *
+   * Set outInfo->struct_size to sizeof (GlimsMetadataTagInfo) before the
+   * call. INVALID_ARGUMENT for a NULL `outInfo`, a struct_size smaller
+   * than sizeof (GlimsMetadataTagInfo) — refused before anything is
+   * written — or a `tag` that is NULL, empty, not valid UTF-8 or carries
+   * no "Exif."/"Iptc."/"Xmp." prefix; NOT_FOUND for an unknown image, and
+   * for a well-formed but unregistered `tag` (the native registry
+   * decides); FAILED with the native message when a native read itself
+   * fails, or when a native registry string is not valid UTF-8 (invalid
+   * native bytes are never copied). On every failure the struct is
+   * reset to a safe all-zero descriptor (when its size check passed) and
+   * no write goes past the caller's declared struct size. The requested
+   * `tag` string itself is never truncated; only label, description and
+   * type_name are bounded, UTF-8-safe truncated and NUL-terminated.
+   * format_policy is TYPE/FORMAT POLICY ONLY — an actual
+   * image_metadata_edit can still refuse (BUSY, LOCKED, copy
+   * preservation, native validation); a set bit never promises a write
+   * succeeds. */
+  GlimsStatus  (*image_metadata_tag_info) (GlimsEngine *engine, GlimsImageID image,
+                                           const char *tag, GlimsMetadataTagInfo *outInfo,
+                                           char **error);
+
+  /* Creates ONE saved bitmap resource from owned pixels and publishes it
+   * to the engine's own resource catalog (slot 129): a bitmap brush
+   * (resourceKind GLIMS_RESOURCE_BRUSH) or a pattern
+   * (GLIMS_RESOURCE_PATTERN) built from `pixels`, written to the
+   * engine's configured writable data folder and added to the factory,
+   * with its new handle in `outID`. The call takes no image: it changes
+   * no image, no undo history, no context and no clipboard.
+   *
+   * `name` is the resource label: nonempty valid UTF-8 with no embedded
+   * NUL and no control characters, at most 255 UTF-8 bytes so it fits
+   * the native 256-byte label; a resource of the same `kind` already
+   * carrying this exact name is refused (FAILED), never silently
+   * uniquified. `width` and `height` are 1 ... 10000 each (the native
+   * resource dimension bound). `pixels` (`constRGBAbytes`) holds exactly
+   * `byte_count` = width * height * 4 straight-alpha R'G'B'A u8 bytes,
+   * checked with overflow-safe arithmetic before anything is mutated;
+   * a NULL `pixels` or a mismatched `byte_count` is INVALID_ARGUMENT.
+   * `brushSpacing` is 1 ... 1000 for a brush and must be 0 for a
+   * pattern. GLIMS_RESOURCE_GRADIENT is UNSUPPORTED (no pixel-to-
+   * gradient conversion exists); any other `kind` is
+   * INVALID_ARGUMENT.
+   *
+   * BUSY while the engine is busy or ANY stroke or filter session is
+   * active, not just on one image. `outID` is set to 0 first and again
+   * on EVERY failure (including a missing output or error path); on
+   * success it is the new resource's positive opaque handle, usable
+   * with resources(), resource_identifiers(), resource_resolve(),
+   * resource_thumbnail(), stroke_begin_with_brush_resource() and
+   * fill_pattern() like any catalog handle. */
+  GlimsStatus  (*resource_create_pixels) (GlimsEngine *engine, uint32_t kind,
+                                          const char *name, int32_t width, int32_t height,
+                                          const uint8_t *pixels, size_t byte_count,
+                                          uint32_t brush_spacing, GlimsResourceID *outID,
+                                          char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

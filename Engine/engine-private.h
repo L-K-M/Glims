@@ -450,6 +450,10 @@ GlimsStatus glims_image_metadata_edit   (GlimsEngine *e, GlimsImageID image, con
                                          uint32_t operation, const char *const *values,
                                          int32_t count, char **error);
 void        glims_free_metadata_strings (char **strings);
+/* READ-ONLY descriptor of one registered tag (slot 128); a plain read
+ * with no edit-readiness gate, never creates or installs metadata. */
+GlimsStatus glims_image_metadata_tag_info (GlimsEngine *e, GlimsImageID image, const char *tag,
+                                           GlimsMetadataTagInfo *outInfo, char **error);
 
 /* layer-source.c */
 GlimsStatus glims_layer_source_info (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
@@ -495,5 +499,20 @@ GlimsStatus glims_lookup_brush         (GlimsEngine *e, GlimsResourceID id, Gimp
  * resource admission plus the pattern kind. Borrowed reference; the
  * caller never mutates or releases it. */
 GlimsStatus glims_lookup_pattern       (GlimsEngine *e, GlimsResourceID id, GimpPattern **out);
+
+/* resource-create.c */
+/* Creates one saved bitmap brush or pattern from owned straight-alpha
+ * RGBA pixels (facade slot 129, resource_create_pixels): validates every
+ * input before any mutation, builds a private resource, saves it with a
+ * checked gimp_data_save into a unique hidden staging subdirectory of
+ * the chosen writable save folder, promotes it to a unique UUID final
+ * file, reassociates it, and only then publishes it to the factory
+ * after an exact-name membership check. `outID` is zeroed first and on
+ * every failure. No image, history, context or clipboard is touched. */
+GlimsStatus glims_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
+                                           int32_t width, int32_t height,
+                                           const uint8_t *pixels, size_t byte_count,
+                                           uint32_t brush_spacing, GlimsResourceID *outID,
+                                           char **error);
 
 #endif /* GLIMS_ENGINE_PRIVATE_H */
