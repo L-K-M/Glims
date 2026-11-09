@@ -493,6 +493,89 @@ final class EngineSession: @unchecked Sendable {
                        intent: .defaultIntent)!
     }
 
+    /// Adapter caps mirrored from the facade (glims_engine.h, slot 132):
+    /// the largest destination ICC blob and the largest output buffer the
+    /// native call accepts.
+    private static let maxDestinationICCBytes = 16 * 1024 * 1024
+    private static let maxRenderBufferBytes = 512 * 1024 * 1024
+
+    /// Renders `area` (in scaled pixels) of the composited image at `scale`
+    /// converted into the exact RGB destination ICC profile
+    /// `destinationICC`, as premultiplied 8-bit RGBA. The returned
+    /// `CGImage` is tagged with a color space built from those exact ICC
+    /// bytes, so Quartz must not reinterpret the pixels. The caller owns
+    /// the fallback policy: when no usable destination exists, call
+    /// `render(_:scale:area:)` (sRGB) instead — the native call never
+    /// falls back to sRGB silently.
+    static func destinationRenderLayout(scale: Double, area: CGRect, iccByteCount: Int)
+        throws -> (rect: GlimsRect, stride: Int, bytes: Int) {
+        guard scale.isFinite, scale >= 1.0 / 1_048_576, scale <= 32,
+              iccByteCount > 0, iccByteCount <= maxDestinationICCBytes else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The render request is out of range.")
+        }
+        let x = area.origin.x, y = area.origin.y
+        let width = area.size.width, height = area.size.height
+        guard x.isFinite, y.isFinite, width.isFinite, height.isFinite,
+              x.rounded() == x, y.rounded() == y,
+              width.rounded() == width, height.rounded() == height,
+              x >= Double(Int32.min), x <= Double(Int32.max),
+              y >= Double(Int32.min), y <= Double(Int32.max),
+              width >= 1, height >= 1,
+              width <= Double(Int32.max), height <= Double(Int32.max),
+              x + width <= Double(Int32.max), y + height <= Double(Int32.max) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The render area is not a finite integral rectangle in range.")
+        }
+        let samplingScale = Double(Float(scale))
+        guard [x, y, x + width, y + height].allSatisfy({ abs($0 / samplingScale) <= 67_108_864 }) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The render area exceeds the engine's sampling range.")
+        }
+        let stride = Int(width) * 4  // width is bounded by Int32, on macOS 64-bit
+        // Divide the byte cap before multiplying: two Int32 dimensions times
+        // four can overflow Int64 even though each dimension is in range.
+        guard stride <= Int(Int32.max), Int(height) <= maxRenderBufferBytes / stride else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The render output buffer would exceed the adapter limit.")
+        }
+        return (GlimsRect(x: Int32(x), y: Int32(y), width: Int32(width), height: Int32(height)),
+                stride, stride * Int(height))
+    }
+
+    func render(_ image: Int32, scale: Double, area: CGRect, destinationICC: Data) throws -> CGImage {
+        let layout = try Self.destinationRenderLayout(scale: scale, area: area,
+                                                      iccByteCount: destinationICC.count)
+        // Parse ICC only after its byte cap and the output bounds are checked.
+        guard let space = CGColorSpace(iccData: destinationICC as CFData), space.model == .rgb else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "The destination ICC data is not a usable RGB color profile.")
+        }
+        let rect = layout.rect, stride = layout.stride
+        guard let data = NSMutableData(length: layout.bytes) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The render output buffer could not be allocated.")
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try destinationICC.withUnsafeBytes { icc in
+            try check(api.image_render_to_profile(engine, image, scale, rect,
+                                                  icc.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                                                  destinationICC.count,
+                                                  data.mutableBytes.assumingMemoryBound(to: UInt8.self),
+                                                  stride, &error), error)
+        }
+
+        // `data` owns the bytes for the provider's (and so the image's)
+        // whole lifetime, exactly as in render(_:scale:area:).
+        let provider = CGDataProvider(data: data)!
+        return CGImage(width: Int(rect.width), height: Int(rect.height),
+                       bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: stride,
+                       space: space,
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: false,
+                       intent: .defaultIntent)!
+    }
+
     func save(_ image: Int32, to path: String) throws {
         var error: UnsafeMutablePointer<CChar>?
         try check(api.image_save(engine, image, path, &error), error)
@@ -2643,12 +2726,30 @@ final class EngineSession: @unchecked Sendable {
     /// label including its NUL terminator.
     static let resourceNameMaxUTF8Bytes = 255
 
+    /// Validates one resource label (resource_create_pixels slot 129 and
+    /// resource_duplicate slot 131 share this contract): nonempty UTF-8,
+    /// no embedded NUL, at most 255 UTF-8 bytes (the native 256-byte label
+    /// including its NUL terminator), and no Unicode control characters
+    /// (general category Cc, exactly what the native side rejects with
+    /// g_unichar_iscntrl). Throws INVALID_ARGUMENT.
+    static func validateResourceName(_ name: String) throws {
+        let utf8 = Array(name.utf8)
+        guard !utf8.isEmpty, !utf8.contains(0), utf8.count <= resourceNameMaxUTF8Bytes else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The resource name must be nonempty UTF-8 without an "
+                              + "embedded NUL, at most \(resourceNameMaxUTF8Bytes) bytes.")
+        }
+        if name.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The resource name must not contain control characters.")
+        }
+    }
+
     /// Validates one resource-creation request (resource_create_pixels,
     /// slot 129) before any bridge allocation or native call, so a
     /// malformed request never reaches the engine: the kind (only brush
     /// and pattern; a gradient is UNSUPPORTED, anything else cannot be
-    /// expressed here), the label (nonempty UTF-8, no embedded NUL, no
-    /// control characters, at most 255 UTF-8 bytes), the dimensions
+    /// expressed here), the label (validateResourceName), the dimensions
     /// (1 ... 10000 with the exact overflow-checked width * height * 4
     /// byte count) and the brush spacing (1 ... 1000 for a brush, 0 for
     /// a pattern). Throws EngineError with the matching facade status.
@@ -2664,14 +2765,7 @@ final class EngineSession: @unchecked Sendable {
             throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                               message: "Creating a gradient from pixels is not supported.")
         }
-        let utf8 = Array(name.utf8)
-        guard !utf8.isEmpty, !utf8.contains(0), utf8.count <= resourceNameMaxUTF8Bytes else {
-            throw invalid("The resource name must be nonempty UTF-8 without an embedded NUL, "
-                          + "at most \(resourceNameMaxUTF8Bytes) bytes.")
-        }
-        if name.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) {
-            throw invalid("The resource name must not contain control characters.")
-        }
+        try validateResourceName(name)
         guard width >= 1, height >= 1,
               width <= resourceMaxDimension, height <= resourceMaxDimension else {
             throw invalid("The resource dimensions must be 1 ... \(resourceMaxDimension).")
@@ -2729,6 +2823,39 @@ final class EngineSession: @unchecked Sendable {
                                                      bytes.bindMemory(to: UInt8.self).baseAddress,
                                                      bytes.count, brushSpacing, &handle, &error), error)
             }
+        }
+        guard handle > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine created no resource handle.")
+        }
+        return handle
+    }
+
+    /// Duplicates the saved resource `id` names as a new saved resource of
+    /// the same kind under `name` (resource_duplicate, slot 131) and
+    /// returns the new handle, distinct from `id`. The source determines
+    /// its own kind — a built-in read-only resource may be duplicated when
+    /// the engine supports it. The call takes no image and changes no
+    /// image, undo history, selection, context or clipboard, and the
+    /// source itself is never renamed, saved, deleted or dirtied.
+    ///
+    /// `name` is validated (validateResourceName) before the RPC; the
+    /// UInt64 handles pass through the bridge unchanged. BUSY while the
+    /// engine is busy or any stroke or filter session is active; FAILED
+    /// on an exact same-kind name collision (never silently renamed) or a
+    /// checked persistence failure; UNSUPPORTED when the engine cannot
+    /// duplicate the source's kind; INVALID_ARGUMENT for an invalid name
+    /// or a handle of 0 / outside the issued range; NOT_FOUND for a
+    /// stale or foreign handle. The returned handle works with
+    /// resources(_:), resourceIdentifiers(_:), resolveResource(_:kind:),
+    /// resourceThumbnail(_:) and the brush/pattern/gradient consumers.
+    /// Call this off the main thread, like the other catalog work.
+    func duplicateResource(_ id: ResourceID, name: String) throws -> ResourceID {
+        try Self.validateResourceName(name)
+        var handle: ResourceID = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try name.withCString { cName in
+            try check(api.resource_duplicate(engine, id, cName, &handle, &error), error)
         }
         guard handle > 0 else {
             throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
