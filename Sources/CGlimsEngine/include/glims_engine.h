@@ -2779,6 +2779,39 @@ typedef struct GlimsEngineAPI {
    * sentinel pair, freeing both strings of every pair and the array
    * itself. Never use free_string on these. */
   void (*metadata_languages_free) (GlimsMetadataLanguageValue *values);
+  /* Slot 141: changes ONE existing language key of the registered XMP
+   * LangAlt root property `root` (plain "Xmp.<group>.<property>"),
+   * replacing its exact rdf:li text with `text`. The key must already
+   * exist in the map, with the exact `language` spelling reported by
+   * image_metadata_languages (slot 139); `text` must be nonempty valid
+   * UTF-8 with no embedded NUL. No frontend copy or normalization
+   * fiddling: the engine runs the sealed preflight (detached copy,
+   * normalization, unrelated-tag and roundtrip preservation) and refuses
+   * a copy that cannot survive Undo and save.
+   *
+   * Every refusal leaves the image, its metadata, its history and its
+   * pixels untouched. An exact no-op — the key already holds `text` —
+   * returns OK with NO undo, NO history and NO readiness gate, even
+   * while a stroke, a filter preview or a plug-in holds the image. A
+   * changed edit checks stroke/preview/plug-in readiness first (BUSY)
+   * and then applies exactly one native setter, which pushes exactly one
+   * undo step.
+   *
+   * INVALID_ARGUMENT for a NULL `root`, `language` or `text`, an empty
+   * or non-UTF-8 `language`/`text`, or a `root` that is not a plain XMP
+   * LangAlt property; NOT_FOUND for an unknown image, an image with no
+   * metadata, an absent or unregistered root or a missing exact
+   * `language` key; UNSUPPORTED for an ambiguous or non-preservable
+   * representation; FAILED with the native message when a native
+   * operation itself fails; BUSY while a stroke, a filter preview or a
+   * plug-in holds the image (a changed edit only). On every failure
+   * `error` follows the usual free_string rule.
+   *
+   * The generic image_metadata_edit (slot 126) SET/REMOVE stay
+   * UNSUPPORTED for LangAlt tags; slots 139/140 remain read-only. */
+  GlimsStatus (*image_metadata_edit_language) (GlimsEngine *engine, GlimsImageID image,
+                                               const char *root, const char *language,
+                                               const char *text, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
