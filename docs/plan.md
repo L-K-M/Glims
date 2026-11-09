@@ -3406,6 +3406,25 @@ checks pass on each supported engine, including independent pixel formulas.
 Other custom adjustment editors remain separate implementation work.
 
 
+### AOM license text discovery (2026-11-09)
+
+The AOM 3.15.1 Git fetch has no MacPorts source archive. The bundler now
+requires its original LICENSE from a verified source commit, checking the
+reviewed SHA-256 on every cache read. It can use the matching MacPorts Git
+worktree or a bounded, immutable upstream LICENSE request with redirects
+refused. Unknown versions, missing text and mismatched bytes stop bundling.
+The notice records the source URL and digest alongside the original text.
+
+The focused offline suite passes10 checks; all24 packaging tests pass. A
+real upstream request and repeated cache read produced the expected1,316
+bytes, and actual core-source notices with a controlled AOM ownership entry
+include those bytes without a missing-text placeholder. Independent source
+review found and verified a redirect-body bound fix. The full self-contained
+bundle contains the original AOM text and passes1,917 native and2,418 app
+checks with build trees inaccessible. Corresponding-source delivery,
+remaining components and signed public distribution remain separate work.
+
+
 ### Typed capture-date metadata (2026-11-09 candidate)
 
 The descriptor-gated DateTimeOriginal action opens a six-field local
