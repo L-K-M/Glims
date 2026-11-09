@@ -29,10 +29,16 @@
  *   - Every read and every refusal leaves the generated packet, the native
  *     value vector, the metadata object pointer, the undo/redo stack depths
  *     and the dirty flag unchanged (read-only, no undo).
+ *   - An injected-packet suite arms a test-only wrapper of
+ *     gexiv2_metadata_try_generate_xmp_packet (defined in this harness
+ *     object so the standalone binary binds it before libgexiv2, falling
+ *     back to the real symbol through dlsym(RTLD_NEXT)) only around the
+ *     reader call; snapshots keep the real generator.
  */
 #include "engine-private.h"
 #include "metadata-language.h"
 
+#include <dlfcn.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -245,6 +251,120 @@ expect_refusal (Probe *probe, const char *root, GlimsStatus expected, const char
   snapshot_free (&after);
 }
 
+/* ---- injected-packet fault/namespace suite -------------------------------
+ * One test-only wrapper of gexiv2_metadata_try_generate_xmp_packet (the
+ * exact public GExiv2 signature) is defined in this harness object, so the
+ * standalone binary binds the reader's call — and every intra-image
+ * reference — here before libgexiv2. While disarmed it forwards to the real
+ * generator resolved once through dlsym(RTLD_NEXT); inject_arm() serves one
+ * controlled packet (or one controlled GError) for the duration of a single
+ * glims_metadata_language_read call. Never linked into the adapter or any
+ * shared producer. */
+typedef gchar *(*GeneratePacket) (GExiv2Metadata *, GExiv2XmpFormatFlags,
+                                  guint32, GError **);
+
+static const gchar *injected_packet;
+static const gchar *injected_gerror;
+
+static GeneratePacket
+real_generate (void)
+{
+  static GeneratePacket real;
+  if (! real)
+    real = (GeneratePacket) dlsym (RTLD_NEXT,
+                                   "gexiv2_metadata_try_generate_xmp_packet");
+  return real;
+}
+
+gchar *
+gexiv2_metadata_try_generate_xmp_packet (GExiv2Metadata *self,
+                                         GExiv2XmpFormatFlags xmp_format_flags,
+                                         guint32 padding, GError **error)
+{
+  GeneratePacket real;
+  if (injected_packet || injected_gerror)
+    {
+      if (injected_gerror)
+        g_set_error_literal (error, g_quark_from_static_string ("glims-metadata-fault"),
+                             1, injected_gerror);
+      return g_strdup (injected_packet);
+    }
+  real = real_generate ();
+  if (! real)
+    {
+      g_set_error_literal (error, g_quark_from_static_string ("glims-metadata-fault"), 1,
+                           "test shim could not resolve the real packet generator");
+      return NULL;
+    }
+  return real (self, xmp_format_flags, padding, error);
+}
+
+static void
+inject_arm (const gchar *packet, const gchar *gerror_message)
+{
+  injected_packet = packet;
+  injected_gerror = gerror_message;
+}
+
+/* Runs the reader once under the armed shim; the arm is cleared straight
+ * after the call, whatever the outcome. Asserts the exact status, the
+ * *out/owned-error contract (the one known pair on OK) and the full
+ * before/after packet/vector/metadata/undo/dirty invariance taken through
+ * the real generator. */
+static void
+expect_injected (Probe *probe, const char *root, const char *packet,
+                 const char *gerror, GlimsStatus expected,
+                 const char *expect_lang, const char *expect_text, const char *label)
+{
+  GPtrArray *out = (GPtrArray *) 0x1;
+  char *error = NULL;
+  GlimsStatus status;
+  Snapshot before, after;
+  GimpMetadata *metadata = gimp_image_get_metadata (probe->image);
+  gint undo, redo;
+  gint dirty;
+
+  snapshot_take (probe, root, &before);
+  undo = gimp_undo_stack_get_depth (gimp_image_get_undo_stack (probe->image));
+  redo = gimp_undo_stack_get_depth (gimp_image_get_redo_stack (probe->image));
+  dirty = gimp_image_is_dirty (probe->image);
+
+  inject_arm (packet, gerror);
+  status = glims_metadata_language_read (metadata, root, &out, &error);
+  inject_arm (NULL, NULL);
+
+  CHECK (status == expected, "%s: status %d (got %d, error %s)", label, (int) expected,
+         (int) status, error ? error : "none");
+  if (expected == GLIMS_STATUS_OK)
+    {
+      GlimsMetadataLanguagePair *pair =
+        out && out->len == 1 ? g_ptr_array_index (out, 0) : NULL;
+      CHECK (pair && ! strcmp (pair->language, expect_lang) &&
+             ! strcmp (pair->text, expect_text),
+             "%s: exact pair %s=%s", label, expect_lang, expect_text);
+    }
+  else
+    {
+      CHECK (out == NULL, "%s: *out reset to NULL", label);
+      CHECK (error != NULL, "%s: owned error message", label);
+    }
+  if (out)
+    g_ptr_array_unref (out);
+  free (error);
+
+  snapshot_take (probe, root, &after);
+  CHECK ((before.packet == NULL) == (after.packet == NULL) &&
+         (! before.packet || ! strcmp (before.packet, after.packet)) &&
+         vectors_equal (before.vector, after.vector) &&
+         gimp_image_get_metadata (probe->image) == metadata &&
+         gimp_undo_stack_get_depth (gimp_image_get_undo_stack (probe->image)) == undo &&
+         gimp_undo_stack_get_depth (gimp_image_get_redo_stack (probe->image)) == redo &&
+         gimp_image_is_dirty (probe->image) == dirty,
+         "%s: packet/vector/metadata/undo/dirty unchanged", label);
+  snapshot_free (&before);
+  snapshot_free (&after);
+}
+
 static GlimsStatus
 run_all (GlimsEngine *engine, gpointer data)
 {
@@ -257,6 +377,9 @@ run_all (GlimsEngine *engine, gpointer data)
   error = NULL;
   probe->image = glims_lookup_image (engine, probe->image_id)->image;
   FIXTURE (probe->image != NULL, "[setup] image looked up");
+  FIXTURE (real_generate () != NULL &&
+           real_generate () != gexiv2_metadata_try_generate_xmp_packet,
+           "[setup] RTLD_NEXT resolves the real generator");
 
   /* NULL required pointers. */
   {
@@ -426,6 +549,116 @@ run_all (GlimsEngine *engine, gpointer data)
     FIXTURE (seed (probe, "Xmp.dc.title", values, 3), "[seed] title again");
     expect_pairs (probe, "Xmp.dc.title", langs, texts, 3, "[final] x-default/fr/de");
   }
+
+  /* Injected-packet fault/namespace suite: each scenario arms the shim
+   * only around the reader call and is checked against the real seeded
+   * vector (the one-element baseline "lang=\"x-default\" Base"). Statuses
+   * follow the sealed contract: semantic refusals carry the reader's
+   * LANGALT_ERROR domain (UNSUPPORTED); GMarkup and native errors do not
+   * (FAILED). */
+  {
+    const char *one[] = { "lang=\"x-default\" Base" };
+    FIXTURE (seed (probe, "Xmp.dc.title", one, 1), "[inject] seeded x-default=Base");
+  }
+
+#define PKT(body) \
+  "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF" \
+  " xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">" \
+  "<rdf:Description>" body "</rdf:Description></rdf:RDF></x:xmpmeta>"
+#define TITLE(body) \
+  "<dc:title xmlns:dc=\"http://purl.org/dc/elements/1.1/\">" body "</dc:title>"
+#define ALT(body) "<rdf:Alt>" body "</rdf:Alt>"
+#define LI(lang, txt) "<rdf:li xml:lang=\"" lang "\">" txt "</rdf:li>"
+
+  /* Prefix aliases bound to the same URIs expand identically; the only
+   * injectable acceptance, checked against the real baseline vector. */
+  expect_injected (probe, "Xmp.dc.title",
+    "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><y:RDF xmlns:y=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><y:Description><zz:title xmlns:zz=\"http://purl.org/dc/elements/1.1/\"><y:Alt><y:li xml:lang=\"x-default\">Base</y:li></y:Alt></zz:title></y:Description></y:RDF></x:xmpmeta>",
+    NULL, GLIMS_STATUS_OK, "x-default", "Base", "[aliases] OK");
+  /* Same local name under the wrong URI never matches the target. */
+  expect_injected (probe, "Xmp.dc.title",
+    PKT ("<dc:title xmlns:dc=\"http://example.com/not-dc/\">"
+         ALT (LI ("x-default", "Base")) "</dc:title>"),
+    NULL, GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[wrong-uri] UNSUPPORTED");
+  /* xmlns redeclaration on the container shadows rdf: the Alt expands to
+   * the shadow URI and the nesting guard refuses it. */
+  expect_injected (probe, "Xmp.dc.title",
+    PKT (TITLE ("<rdf:Alt xmlns:rdf=\"http://example.com/shadow/\">"
+                LI ("x-default", "Base") "</rdf:Alt>")),
+    NULL, GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[shadow] UNSUPPORTED");
+  /* One property, two rdf:Alt containers: refused by cardinality. */
+  expect_injected (probe, "Xmp.dc.title",
+    PKT (TITLE (ALT (LI ("x-default", "Base")) ALT (LI ("fr", "X")))),
+    NULL, GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[second-alt] UNSUPPORTED");
+  /* Qualifiers beyond xml:lang on the li or on the container are refused;
+   * non-whitespace text inside a container is mixed content. */
+  expect_injected (probe, "Xmp.dc.title",
+    PKT (TITLE (ALT ("<rdf:li xml:lang=\"x-default\" rdf:dummy=\"q\">Base</rdf:li>"))),
+    NULL, GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[li-qualifier] UNSUPPORTED");
+  expect_injected (probe, "Xmp.dc.title",
+    PKT (TITLE ("<rdf:Alt rdf:ID=\"q\">" LI ("x-default", "Base") "</rdf:Alt>")),
+    NULL, GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[alt-qualifier] UNSUPPORTED");
+  expect_injected (probe, "Xmp.dc.title",
+    PKT (TITLE ("oops" ALT (LI ("x-default", "Base")))),
+    NULL, GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[mixed] UNSUPPORTED");
+  /* Nesting past the 32-deep bound is refused; the partial frame freed
+   * there is still fully zeroed, so cleanup must stay quiet. */
+  {
+    GString *deep =
+      g_string_new ("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><d:e xmlns:d=\"urn:d\">");
+    for (int i = 0; i < 32; i++)
+      g_string_append (deep, "<d:e>");
+    for (int i = 0; i < 33; i++)
+      g_string_append (deep, "</d:e>");
+    expect_injected (probe, "Xmp.dc.title", deep->str, NULL,
+                     GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[depth] UNSUPPORTED");
+    g_string_free (deep, TRUE);
+  }
+  /* An undeclared prefix is a semantic refusal (LANGALT_ERROR domain):
+   * UNSUPPORTED. A well-formedness failure is a GMarkup error outside
+   * that domain: FAILED ("The XMP packet could not be parsed."). */
+  expect_injected (probe, "Xmp.dc.title",
+    PKT ("<zz:title>" ALT (LI ("x-default", "Base")) "</zz:title>"),
+    NULL, GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[undeclared] UNSUPPORTED");
+  expect_injected (probe, "Xmp.dc.title",
+    "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF",
+    NULL, GLIMS_STATUS_FAILED, NULL, NULL, "[malformed] FAILED");
+  /* Case-folded duplicate language keys are refused even though the
+   * native map cannot produce them. */
+  expect_injected (probe, "Xmp.dc.title",
+    PKT (TITLE (ALT (LI ("en-US", "A") LI ("EN-us", "B")))),
+    NULL, GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[dup-lang] UNSUPPORTED");
+  /* Bounds: namespace URI over 4096, XML name over 512, language key over
+   * 255. */
+  {
+    gchar *uri = g_strnfill (4097, 'u');
+    gchar *pkt = g_strdup_printf (PKT ("<d:e xmlns:d=\"%s\"></d:e>"), uri);
+    expect_injected (probe, "Xmp.dc.title", pkt, NULL,
+                     GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[ns-bound] UNSUPPORTED");
+    g_free (uri);
+    g_free (pkt);
+  }
+  {
+    gchar *nm = g_strnfill (511, 'e');
+    gchar *pkt = g_strdup_printf (PKT ("<d:%s xmlns:d=\"urn:d\"></d:%s>"), nm, nm);
+    expect_injected (probe, "Xmp.dc.title", pkt, NULL,
+                     GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[name-bound] UNSUPPORTED");
+    g_free (nm);
+    g_free (pkt);
+  }
+  {
+    gchar *lg = g_strnfill (256, 'q');
+    gchar *pkt = g_strdup_printf (
+      PKT (TITLE (ALT ("<rdf:li xml:lang=\"%s\">v</rdf:li>"))), lg);
+    expect_injected (probe, "Xmp.dc.title", pkt, NULL,
+                     GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[lang-bound] UNSUPPORTED");
+    g_free (lg);
+    g_free (pkt);
+  }
+  /* A native generator GError is a native failure: FAILED with an owned
+   * message through glims_fail. */
+  expect_injected (probe, "Xmp.dc.title", NULL, "injected generator failure",
+                   GLIMS_STATUS_FAILED, NULL, NULL, "[gen-error] FAILED");
 
   result = api->image_close (engine, probe->image_id);
   free (error);

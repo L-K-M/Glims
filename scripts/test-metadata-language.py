@@ -159,6 +159,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     env["HOME"] = str(work / "home")
     env["XDG_CACHE_HOME"] = str(work / "cache")
     env["GIMP3_DIRECTORY"] = str(work / "user")
+    if args.fatal_criticals:
+        env["G_DEBUG"] = "fatal-criticals"
     cmd = [str(binary), str(work)]
     print(f"==> run (throwaway HOME={env['HOME']}, XDG_CACHE_HOME={env['XDG_CACHE_HOME']}, "
           f"GIMP3_DIRECTORY={env['GIMP3_DIRECTORY']})")
@@ -198,6 +200,9 @@ def main() -> None:
                        help="throwaway work dir for HOME/cache/GIMP settings")
     p_run.add_argument("--timeout", type=int, default=900,
                        help="seconds before the harness is killed (default: 900)")
+    p_run.add_argument("--fatal-criticals", action="store_true",
+                       help="also set G_DEBUG=fatal-criticals for the run "
+                            "(e.g. to prove refusal cleanup stays quiet)")
 
     args = parser.parse_args()
     if args.command == "syntax":

@@ -114,10 +114,22 @@ all-empty map, comma ambiguity in a later text, and the pair (257),
 aggregate-text (1.2 MiB) and packet (3 MiB) bound overflows. Every read
 and refusal is checked for unchanged generated packet, native vector,
 metadata object pointer, undo/redo depth and dirty flag (read-only, no
-undo). Native-error injection (DYLD_INSERT_LIBRARIES interpose, as in
-scripts/test-metadata-error.py) is not wired into this driver yet and is
-UNRUN. Nothing in this change was executed against an engine; compilation
-is not acceptance.
+undo). Native-error injection is wired in: the harness defines a
+test-only `gexiv2_metadata_try_generate_xmp_packet` wrapper (exact
+public signature) linked into the standalone binary before libgexiv2 —
+disarmed it forwards to the real symbol resolved through
+`dlsym(RTLD_NEXT)` (asserted as a fixture); armed only around one reader
+call it serves a controlled packet or GError. Over a `lang="x-default"
+Base` seed it covers: property/RDF prefix aliases (the only acceptable
+injected packet, verified against the real baseline vector),
+same-local-name wrong URI, xmlns shadowing, >32-deep nesting
+(partial-frame cleanup), a second `rdf:Alt`, li/container qualifiers and
+mixed content, undeclared prefix (UNSUPPORTED, LANGALT_ERROR domain)
+versus malformed XML (FAILED, GMarkupError), case-folded duplicate
+keys, the namespace-URI 4096 / XML-name 512 / language-key 255 bounds,
+and an injected generator GError (FAILED). `run --fatal-criticals` sets
+`G_DEBUG=fatal-criticals`. All of this remains UNRUN; nothing in this
+change was executed against an engine; compilation is not acceptance.
 
 ## Source evidence
 
