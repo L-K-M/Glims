@@ -87,6 +87,15 @@ final class NativeFilterCommand: NSObject {
 /// first key with a GIMP Filters menu name picks the category, the rest
 /// land in "Other".
 struct NativeFilterMenuLayout: Equatable {
+    static func usesBrightnessContrastEditor(_ operation: EngineSession.FilterOperation) -> Bool {
+        operation.name == "gimp:brightness-contrast" && operation.support == .needsConfig
+    }
+
+    static func supportsParameterEditor(_ operation: EngineSession.FilterOperation?) -> Bool {
+        guard let operation else { return false }
+        return operation.support == .supported || usesBrightnessContrastEditor(operation)
+    }
+
     struct Section: Equatable {
         let title: String
         let entries: [EngineSession.FilterOperation]
@@ -143,6 +152,7 @@ struct NativeFilterMenuLayout: Equatable {
     /// The item's menu title: `Title…` when it opens a form, `Title
     /// (reason)` when it cannot run yet.
     static func itemTitle(_ operation: EngineSession.FilterOperation) -> String {
+        if usesBrightnessContrastEditor(operation) { return "\(operation.title)…" }
         if usesSourceChooser(operation) { return "\(operation.title)…" }
         if let reason = unavailableReason(operation.support) {
             return "\(operation.title) (\(reason))"
@@ -244,7 +254,8 @@ enum NativeFilterMenus {
                               action: #selector(DocumentWindowController.runNativeFilter(_:)),
                               keyEquivalent: "")
         item.representedObject = NativeFilterCommand(operation)
-        if !NativeFilterMenuLayout.usesSourceChooser(operation),
+        if !NativeFilterMenuLayout.supportsParameterEditor(operation),
+           !NativeFilterMenuLayout.usesSourceChooser(operation),
            let reason = NativeFilterMenuLayout.unavailableReason(operation.support) {
             item.toolTip = "\(operation.title) \(reason) — not supported yet."
         } else {
