@@ -63,9 +63,10 @@ metadata and never mutate the image or its history.
    handling.
 2. Refuse, before any mutation, the tags `gimp_image_set_metadata`
    rewrites from the image's own state (see Normalization below) and
-   XMP `LangAlt` tags: UNSUPPORTED with an actionable message. A new
-   (absent) XMP `XmpBag`/`XmpSeq`/`XmpAlt` tag is also UNSUPPORTED: a
-   plain string vector cannot choose a container type faithfully.
+   language-alternative (XMP LangAlt) tags: UNSUPPORTED with an
+   actionable message. A new (absent) XMP `XmpBag`/`XmpSeq`/`XmpAlt`
+   tag is also UNSUPPORTED: a plain string vector cannot choose a
+   container type faithfully.
    SET with `count > 1` requires native multi-value support
    (`gexiv2_metadata_try_tag_supports_multiple_values`: repeatable IPTC,
    XMP Bag/Seq/Alt; never any EXIF tag) — otherwise INVALID_ARGUMENT,
@@ -94,12 +95,13 @@ metadata and never mutate the image or its history.
    (`app/core/gimpimageundo.c` swaps a duplicate back with
    `push_undo` FALSE, NULL included).
 
-Multivalue and duplicates: reads return the full vector in native order
+ Multivalue and duplicates: reads return the full vector in native order
 with duplicates kept; SET on a multi-value tag stores every entry in
 order — arrays are never flattened or deduplicated. Language
-alternatives: reads of XMP LangAlt tags return the alternative texts
-without their `xml:lang` qualifiers (native string-vector behavior,
-documented); edits of LangAlt tags are UNSUPPORTED rather than lossy.
+alternatives (XMP LangAlt): reads return the native labeled fragments
+(for example `lang="fr" Salut`), not plain text and not a lossless
+language/value structure; separators between fragments can be
+ambiguous. Edits of LangAlt tags are UNSUPPORTED rather than lossy.
 Unknown-to-us metadata stays opaque inside the core object — the edit
 path duplicates the whole native object, it never reconstructs it from
 known tags, so untargeted tags, arrays and alternatives survive edits
@@ -184,9 +186,11 @@ what the sources above state.
 
 ## Known limits / untested cases
 
-- LangAlt reads drop `xml:lang` qualifiers (native string vector); edits
-  of LangAlt are refused UNSUPPORTED — not covered by a positive
-  round-trip test because the facade cannot create them.
+- Language-alternative (XMP LangAlt) reads return the native labeled
+  fragments, not plain text and not a lossless language/value structure
+  (separators can be ambiguous). Edits of LangAlt are refused
+  UNSUPPORTED — not covered by a positive round-trip test because the
+  facade cannot create them.
 - New XMP Bag/Seq/Alt tags cannot be created through this API
   (UNSUPPORTED); editing an existing container is implemented but not
   exercised by the conformance test (no fixture carries one).

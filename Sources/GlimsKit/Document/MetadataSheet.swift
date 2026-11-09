@@ -100,13 +100,11 @@ enum MetadataSheetLogic {
     static let protectedNote = "This tag is read-only: the engine rewrites it from the image's own "
         + "state on every metadata change, so edits to it are refused."
 
-    /// XMP language-alternative (LangAlt) reads return the alternative
-    /// texts without their `xml:lang` qualifiers (the read API is
-    /// text-only); their edits are refused UNSUPPORTED rather than
-    /// lossy. The sheet explains this instead of synthesizing language
-    /// values.
-    static let langAltNote = "XMP language-alternative tags read as plain text without their "
-        + "language qualifiers; the engine refuses edits to them."
+    /// Language-alternative (XMP LangAlt) values are read as the native
+    /// labeled fragments, not as plain text or a lossless language/value
+    /// structure. Edits are refused; the sheet shows them read-only.
+    static let langAltNote = "This text can have different versions for different languages. "
+        + "Glims shows it for reading only and can't safely change it yet."
 
     // MARK: Descriptor-driven gates (facade slot 128 policy)
 
@@ -127,12 +125,11 @@ enum MetadataSheetLogic {
         let refusal: String?
     }
 
-    /// The read-only reason for XMP language-alternative tags: they read as
-    /// plain text without their `xml:lang` qualifiers, so the sheet shows
-    /// them read-only BEFORE any native edit could fail — qualifiers are
-    /// never invented and the texts are never flattened into a setter.
-    static let langAltReadOnlyReason = "XMP language-alternative tags are read-only here: their "
-        + "language qualifiers cannot be represented faithfully, so the engine refuses edits to them."
+    /// The read-only reason for language-alternative tags: Glims can show
+    /// them but cannot safely change them yet, so the controls stay
+    /// read-only.
+    static let langAltReadOnlyReason = "This text can have different versions for different languages. "
+        + "Glims shows it for reading only and can't safely change it yet."
 
     /// Computes the descriptor gates for the selected tag. Fails closed:
     /// without a successfully read descriptor AND values list for the same

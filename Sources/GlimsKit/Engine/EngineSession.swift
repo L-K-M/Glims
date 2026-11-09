@@ -3318,8 +3318,9 @@ final class EngineSession: @unchecked Sendable {
     /// native order with duplicates kept — never flattened. A plain read
     /// with the same rules as `metadataTags`. A registered tag that is
     /// absent returns an empty array; an unregistered tag throws
-    /// NOT_FOUND. Language-alternative (Xmp LangAlt) tags report their
-    /// alternative texts without the xml:lang qualifiers.
+    /// NOT_FOUND. Language-alternative (XMP LangAlt) tags return the
+    /// native labeled fragments, not plain text and not a lossless
+    /// language/value structure.
     func metadataValues(_ image: Int32, tag: String) throws -> [String] {
         try Self.validateMetadataStrings(tag: tag, values: [])
         var result: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
