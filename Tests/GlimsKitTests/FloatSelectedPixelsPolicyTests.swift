@@ -120,7 +120,7 @@ final class FloatSelectedPixelsPolicyTests: XCTestCase {
 
     func testFloatTooltipsStateCutVsCopyAndSelectionClear() {
         XCTAssertTrue(FloatingControlsLogic.floatMoveTooltip.contains("Cut"))
-        XCTAssertTrue(FloatingControlsLogic.floatMoveTooltip.contains("transparent hole"))
+        XCTAssertTrue(FloatingControlsLogic.floatMoveTooltip.contains("pixels are cleared"))
         XCTAssertTrue(FloatingControlsLogic.floatMoveTooltip.contains("selection is cleared"))
         XCTAssertTrue(FloatingControlsLogic.floatCopyTooltip.contains("copy"))
         XCTAssertTrue(FloatingControlsLogic.floatCopyTooltip.contains("unchanged"))

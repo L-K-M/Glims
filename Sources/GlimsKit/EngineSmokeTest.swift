@@ -831,10 +831,19 @@ enum EngineSmokeTest {
             check(reopenedLayers.contains { $0.kind == .link },
                   "the saved copy keeps the link layer")
             let blueSource = try session.newImage(width: 24, height: 24)
-            try session.select(.all, image: blueSource)
-            try session.fill(image: blueSource, at: .zero, mode: .selection, color: .blue)
-            try session.export(blueSource, to: linkPNG.path)
-            try session.closeImage(blueSource)
+            var linkSetupPhase = "select the replacement source"
+            do {
+                try session.select(.all, image: blueSource)
+                linkSetupPhase = "fill the replacement source"
+                try session.fill(image: blueSource, at: .zero, mode: .selection, color: .blue)
+                linkSetupPhase = "export the replacement source"
+                try session.export(blueSource, to: linkPNG.path)
+                linkSetupPhase = "close the replacement source"
+                try session.closeImage(blueSource)
+            } catch {
+                print("     link refresh setup failed while trying to \(linkSetupPhase): \(error)")
+                throw error
+            }
             var updated = false
             let updateDeadline = Date().addingTimeInterval(10)
             while Date() < updateDeadline {

@@ -40,7 +40,7 @@ Swift in `Sources/GlimsKit`, its smoke case and its tests, plus this doc.
   target, the owning layer's pixel lock); COPY is non-destructive and
   checks no locks — the native anchor rechecks them at resolution time.
 - **Tooltips** state cut-vs-copy and the selection clear: MOVE "cuts the
-  selected pixels out of the target … transparent hole … selection is
+  selected pixels out of the target … pixels are cleared … selection is
   cleared"; COPY "a copy … target is unchanged … selection is cleared".
   Both modes clear the selection mask (the engine owns that); MOVE cuts
   the source, COPY preserves it.
@@ -50,9 +50,9 @@ Swift in `Sources/GlimsKit`, its smoke case and its tests, plus this doc.
 - **Existing FS bar reused**: a float result is an ordinary floating
   selection, so the Layers palette's Anchor / New Layer / Discard footer,
   the floating row label and the resolve-first gates behave exactly as for
-  Paste Into. No move gesture and no auto-anchor were added: while a
-  floating selection is active, target switches and layer moves refuse
-  resolve-first like the other structural commands.
+  Paste Into. Existing floating selections move through the separate
+  captured-gesture implementation in `floating-selection-move.md`.
+  Automatic anchoring on target/tool switches remains separate work.
 - **Ordinary Copy/Paste and the multi-selection gates are untouched**:
   Copy/Cut/Paste validation still goes through
   `canPerformClipboardCommand`, Paste Into keeps its explicit-target gate,
@@ -84,13 +84,16 @@ owner lock gate, and the tooltips' cut-vs-copy + selection-clear copy.
 
 ## Checks actually run
 
-- `swift build -j 2` — OK ("Build complete!").
-- `swift build --build-tests -j 2` — OK.
+- Integrated unit suite: 666 tests pass; build passes.
+- Focused real-engine controls: 64 checks pass on each supported engine.
+- Combined pinned-engine app: 1,700 checks pass, including the floating
+  move, snapping, multi-selection and shortcut controls.
+- Completed independent acceptance-fix review found no important issue.
 
-Not run (out of scope for this slice; root owns the runtime matrix):
-`swift test`, the `--engine-smoke-test` runtime (including
-`GLIMS_SMOKE_CASE=float-selected-pixels`), adapter/conformance builds, GUI/
-desktop runs. The smoke case and the pure tests compile only.
+A full run once returned BUSY during the link-refresh fixture's direct
+native setup. The isolated case and phase-instrumented full rerun pass;
+the exact refusing call was not reproduced. Phase diagnostics are retained.
+This is not evidence of a production admission failure.
 
 ## Soft-selection acceptance
 
@@ -103,4 +106,10 @@ independent. Initial document loading refreshes both caches.
 Fixture corrections use an alpha-capable source for transparent cuts, refill
 the source before the independent COPY case, and keep the accepted stroke
 inside its selection. The corrected focused pinned run and all eight policy
-tests pass. Full parent integration and the engine matrix remain pending.
+tests pass. Parent integration, all four focused runs and the combined
+pinned run pass. The final editor bundle and whole-editor matrix remain
+separate verification.
+
+MOVE copy describes clearing without promising transparency: the native
+Background has no alpha, so cutting clears it to the background color.
+The alpha-capable source fixture separately verifies transparent cuts.

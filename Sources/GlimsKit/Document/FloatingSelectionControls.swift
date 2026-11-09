@@ -52,7 +52,7 @@ enum FloatingControlsLogic {
     /// the selection — stated, never silently.
     static let floatMoveTooltip =
         "Cut the selected pixels out of the target and float them as a floating selection. "
-        + "The target keeps a transparent hole where they were, and the selection is cleared."
+        + "Those pixels are cleared from the target, and the selection is cleared."
     /// Float a Copy (COPY) tooltip: non-destructive, and the selection is
     /// still cleared.
     static let floatCopyTooltip =
