@@ -7,7 +7,7 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked
 
-These entries describe the merged implementation as of 2026-11-08. The
+These entries describe the merged implementation as of 2026-11-09 (`25df6af`). The
 whole editor remains in progress; each checked entry covers the stated
 behavior, not every adjacent feature in `design.md`.
 
@@ -43,8 +43,10 @@ behavior, not every adjacent feature in `design.md`.
 
 - [x] Layer to Image Size and Trim Layer to Content, with pixel-only policy.
 - [x] Explicit Rasterize Layer and Restore Layer Source controls.
-- [ ] Palette multi-selection, saved sets and consistent gesture-time
-      rasterize/revert policy. The exact-selection backend is merged.
+- [x] Layer-palette multi-selection with exact native selections and explicit
+      single-layer command gates.
+- [ ] Saved-set controls and Undo, batch editing and consistent gesture-time
+      rasterize/revert policy. Weak saved-set identity ownership is checked.
 - [ ] Adjustment layers/groups, remaining custom filter forms and filter inputs.
 - [x] Path fill, vector layers and vector style controls.
 - [x] Multi-anchor path editing with group move/delete and Undo.
@@ -58,14 +60,19 @@ behavior, not every adjacent feature in `design.md`.
 - [x] Native guides with undo/XCF persistence, per-document management
       sheets and a per-window Show Guides overlay toggle.
 - [x] Pixel rulers, grid controls/overlay and canvas guide dragging.
-- [ ] Snapping, view rotation, trackpad/modifier behavior and initial fit
-      that avoids palettes.
+- [x] Per-window snap toggles and captured canvas-gesture snapping to
+      guides, grid and canvas.
+- [ ] Remaining snapping interactions, view rotation, trackpad/modifier
+      behavior and initial fit that avoids palettes.
 - [x] Stroke Selection and explicit Paste Into/Anchor/New Layer/Discard.
-- [ ] Moving selected/floating pixels, automatic anchoring policy and
-      resource creation from selections.
-- [ ] Image metadata editing, remaining Image Adjust commands,
-      layer-boundary/selection-edge/proof view toggles, complete menu and
-      keyboard coverage and shortcut customization.
+- [x] Float Selected Pixels (move/copy), existing floating-selection drag
+      and arrow nudges with captured target validation.
+- [ ] Interaction-specific automatic anchoring and resource creation controls
+      from selections. A blanket tool-switch anchor policy is unsupported.
+- [x] Shortcut customization and menu integration using immutable defaults.
+- [ ] Image metadata editing controls (value preservation and native descriptor
+      backend merged), remaining Image Adjust commands, layer-boundary/
+      selection-edge/proof view toggles and complete menu/keyboard coverage.
 - [ ] Recorder and semantic command replay.
 - [ ] Full accessibility/focus, appearance and English-copy audit.
 - [ ] Public distribution checks from `plan.md`: corresponding sources,
@@ -386,3 +393,26 @@ progress; snapping has a checked pure planner but no merged gesture UI yet.
 The assembled app at 4ba46ee includes its engine and later controls, but
 has not had a new self-contained bundle check; it is an intermediate build.
 Final combined bundle and real editing verification remain open.
+
+
+2026-11-09 integration checkpoint: #75 (layer multi-selection), #76 (canvas
+snapping), #78/#83 (shortcut customization/menu routing), #79 (native error
+ownership), #80/#82 (metadata value/descriptor backend), #84 (weak saved-set
+lifetimes), and #87 (Float Selected Pixels, also integrating existing floating
+moves from #85) are merged. The ordinary app is an editor rather than the
+initial engine-free placeholder, but the final completion gate remains open.
+
+Open reviewed slices are tracked in #81/#86 (metadata controls), #88/#92
+(resource creation and selection controls), #89 (paint-target view boundary),
+#90 (native floating interaction policy) and #91 (adjustment group backend).
+Their separate local acceptance runs are not final integrated-bundle evidence.
+The updated metadata UI head passes 701 unit/build checks, 45 existing controls,
+24 descriptors and four injected-failure checks on every engine, and 1,769
+full pinned app checks. The resource UI head passes 696 units, 65 focused
+checks on every engine and 1,765 full pinned checks. Native adjustment creation
+passes 95 standalone checks on every engine. Exact-head hosted CI and merge
+state remain per-PR gates; the visible checkboxes describe merged main only.
+
+The intermediate dist/Glims.app is not the final verified revision. Final
+engine/runtime matrices, self-contained packaging and real editing/file
+workflows must run again after the remaining feature integrations.
