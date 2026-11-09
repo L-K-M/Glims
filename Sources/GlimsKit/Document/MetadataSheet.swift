@@ -102,9 +102,9 @@ enum MetadataSheetLogic {
 
     /// Language-alternative (XMP LangAlt) values are read as the native
     /// labeled fragments, not as plain text or a lossless language/value
-    /// structure. Edits are refused; the sheet shows them read-only.
+    /// structure. Whole-tag edits are refused; a separate typed editor changes one existing language.
     static let langAltNote = "This text can have different versions for different languages. "
-        + "Language alternatives are read-only."
+        + "Choose Edit Language to change an existing language; languages cannot be added or removed here."
 
     // MARK: Descriptor-driven gates (facade slot 128 policy)
 
@@ -126,10 +126,10 @@ enum MetadataSheetLogic {
     }
 
     /// The read-only reason for language-alternative tags: Glims can show
-    /// them but cannot safely change them yet, so the controls stay
-    /// read-only.
+    /// them; whole-tag controls stay read-only while Edit Language opens
+    /// the typed single-language editor.
     static let langAltReadOnlyReason = "This text can have different versions for different languages. "
-        + "Language alternatives are read-only."
+        + "Choose Edit Language to change an existing language; languages cannot be added or removed here."
 
     /// Computes the descriptor gates for the selected tag. Fails closed:
     /// without a successfully read descriptor AND values list for the same
@@ -290,6 +290,8 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     private let applyButton = NSButton(title: "Apply", target: nil, action: nil)
     private let removeTagButton = NSButton(title: "Remove Tag", target: nil, action: nil)
     private let closeButton = NSButton(title: "Close", target: nil, action: nil)
+    private let editLanguageButton = NSButton(title: "Edit Language…", target: nil, action: nil)
+    private(set) var languageEditor: MetadataLanguageEditorController?
     private let noteLabel = NSTextField(labelWithString: "")
     private let messageLabel = NSTextField(labelWithString: "")
     private let descriptorTitleLabel = NSTextField(labelWithString: "")
@@ -447,6 +449,9 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         applyButton.setAccessibilityLabel("Apply metadata values")
         removeTagButton.setAccessibilityLabel("Remove metadata tag")
         closeButton.setAccessibilityLabel("Close metadata sheet")
+        editLanguageButton.setAccessibilityLabel("Edit metadata language")
+        editLanguageButton.target = self
+        editLanguageButton.action = #selector(editLanguage(_:))
         noteLabel.setAccessibilityLabel("Metadata note")
         messageLabel.setAccessibilityLabel("Metadata message")
         hintLabel.setAccessibilityLabel("Metadata hint")
@@ -516,7 +521,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         middleRow.orientation = .horizontal
         middleRow.spacing = 8
         let buttonRow = NSStackView(views: [addValueButton, removeValueButton, applyButton,
-                                             removeTagButton, closeButton])
+                                             removeTagButton, editLanguageButton, closeButton])
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
         let stack = NSStackView(views: [hintLabel, topRow, middleRow, descriptorBox, buttonRow,
@@ -664,6 +669,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     /// only the control gates otherwise — the draft is never clobbered.
     func documentStateDidChange() {
         guard !isInvalidated else { return }
+        languageEditor?.documentStateDidChange()
         if lastDocumentStateVersion != document.stateVersion, !isApplying {
             lastDocumentStateVersion = document.stateVersion
             loadTags()
@@ -690,6 +696,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     /// the editor's text lands in the draft before any queued write.
     func commitFieldEdit() {
         panel.endEditing(for: nil)
+        languageEditor?.commitFieldEdit()
     }
 
     /// Close cleanup: no later callback may update or reopen the sheet.
@@ -698,6 +705,8 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     func invalidate() {
         guard !isInvalidated else { return }
         isInvalidated = true
+        languageEditor?.invalidate()
+        languageEditor = nil
         tagLoadGeneration += 1
         valuesGeneration += 1
         descriptorGeneration += 1
@@ -773,6 +782,9 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         applyButton.isEnabled = canWrite && hasSelection && gates.canSet
         removeTagButton.isEnabled = canWrite && hasSelection && gates.canRemove
         closeButton.isEnabled = !isInvalidated
+        editLanguageButton.isHidden = tagDescriptor?.valueKind != .langAlt
+        editLanguageButton.isEnabled = canNavigate && descriptorKnown && valuesReady
+            && tagDescriptor?.valueKind == .langAlt && languageEditor == nil && !document.isClosing
         updateDescriptorDisplay()
         if let tag = selectedTag, descriptorKnown, tagDescriptor?.valueKind == .langAlt {
             // LangAlt is visibly read-only from the descriptor itself,
@@ -1014,6 +1026,27 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
                 self.updateControlStates()
             }
         }
+    }
+
+    /// Opens a typed editor for this captured tag and document. The raw
+    /// value-list editor keeps its conservative whole-tag write gates.
+    @objc private func editLanguage(_ sender: Any?) {
+        guard !isInvalidated, !isApplying, languageEditor == nil,
+              !descriptorIsLoading, valuesReady, tagDescriptor?.valueKind == .langAlt,
+              let tag = selectedTag, !document.isClosing else { return }
+        let editor = MetadataLanguageEditorController(document: document, tag: tag)
+        languageEditor = editor
+        editor.onClose = { [weak self, weak editor] in
+            guard let self, self.languageEditor === editor else { return }
+            self.languageEditor = nil
+            if !self.isInvalidated {
+                self.loadValues(for: tag)
+                self.loadDescriptor(for: tag)
+                self.updateControlStates()
+            }
+        }
+        editor.present(on: panel)
+        updateControlStates()
     }
 
     /// Remove Tag: the explicit selected tag only — never a stale row

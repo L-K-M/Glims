@@ -7,11 +7,14 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-These entries describe main `ef1ff97`, including merged PRs #96–#114,
-and the per-window view rotation candidate (#115). Initial placement, gradient
-creation and the read-only metadata parser are merged. The rotation candidate
-still needs its exact-head hosted CI gate. The whole editor remains in progress;
-each checked entry covers its stated behavior.
+These entries include merged main `f442676` (PRs through #118): per-window
+rotation, typed language reads, metadata-copy preservation and the public
+single-language writer are merged. The release built from the preservation
+revision passed1,917 native and2,237 app checks with build trees inaccessible.
+The language controls and trackpad navigation are separate candidates with
+passing real-window cases on all four engines; combined release validation
+remains pending. The whole editor remains in progress; each checked
+entry covers its stated behavior.
 
 - [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
       fail before packaging. Hosted CI explicitly builds only the interface.
@@ -78,7 +81,7 @@ each checked entry covers its stated behavior.
       guides, grid and canvas.
 - [x] Initial New/Open document placement and fitting around visible palettes.
 - [x] Per-window view rotation with projected rulers, fit/zoom/centering, real selection/paint/Undo,
-      angle forms, guide drags and Hand panning (current candidate).
+      angle forms, guide drags and Hand panning (merged #115).
 - [ ] Remaining snapping interactions and trackpad/modifier behavior.
 - [x] Stroke Selection and explicit Paste Into/Anchor/New Layer/Discard.
 - [x] Float Selected Pixels (move/copy), existing floating-selection drag
@@ -455,3 +458,12 @@ bundle passes 1,917 native and 2,038 app checks with native and Swift build
 outputs denied. Fourteen packaging tests pass. Independent integration
 review found no important issue. Exact-head hosted CI remains pending;
 these results do not close the broader unchecked work above.
+
+2026-11-09 metadata API checkpoint: PR118 adds the owned single-existing-language
+writer and counted document wrappers. Each of all four native engines passes
+39 public edit/Undo/no-op/busy/save/reopen checks and13 native Undo-admission
+checks. A reproduced plug-in-left Undo-disabled state now refuses changed
+metadata edits in both writers while allowing exact no-ops. Hosted CI passed.
+Dedicated language controls pass14 real-window checks and counted-document
+work passes13 checks perengine. The trackpad candidate passes22 window checks
+perengine. Combined release validation remains pending.

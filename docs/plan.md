@@ -3257,3 +3257,15 @@ pointer anchoring, two-document capture, busy/stroke/close guards and native
 state invariance. The first run exposed AppKit angle quantization; relative
 rotation now reads the controller's canonical Double angle. Physical hardware gestures and
 wheel/modifier behavior are not certified by these tests.
+
+### Single-language metadata controls candidate (2026-11-09)
+
+Image → Metadata offers Edit Language for a descriptor-confirmed language
+alternative. The typed form uses exact existing keys from the owned engine
+map, keeps separate local drafts, and applies only the selected key through
+the counted document queue. Native refusals retain the draft. Closing a form
+invalidates late callbacks while accepted edits still drain; host close
+dismisses the child form. The public native API is merged in118, with39 public
+and13 Undo-admission checks perengine. The real form passes14 controls checks
+and13 counted document checks on every supported engine, including a host-close
+regression that now explicitly ends and releases the metadata sheet.
