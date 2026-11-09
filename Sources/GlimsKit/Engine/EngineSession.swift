@@ -1339,6 +1339,27 @@ final class EngineSession: @unchecked Sendable {
         return group
     }
 
+    /// Creates a committed pass-through group with one filter using its
+    /// native default parameters. Group and effect share one Undo step;
+    /// edit the returned effect through the ordinary preview lifecycle.
+    func createAdjustmentLayer(image: Int32, parent: Int32 = 0, index: Int32,
+                               operation: String, name: String? = nil) throws
+        -> (layer: Int32, effect: Int32) {
+        guard !operation.isEmpty, !operation.utf8.contains(0),
+              name.map({ !$0.isEmpty && !$0.utf8.contains(0) }) ?? true else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The adjustment name or operation contains invalid text.")
+        }
+        var layer: Int32 = 0
+        var effect: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try withOptionalCString(name) { name in
+            try check(api.adjustment_layer_new(engine, image, parent, index,
+                                                operation, name, &layer, &effect, &error), error)
+        }
+        return (layer, effect)
+    }
+
     /// Moves `item` to `index` among `newParent`'s children (`newParent`
     /// 0: the image's top level) as one undo step; undo and redo restore
     /// the exact position. `index` counts the children as they are after

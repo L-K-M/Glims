@@ -2418,6 +2418,17 @@ typedef struct GlimsEngineAPI {
                                           const uint8_t *pixels, size_t byte_count,
                                           uint32_t brush_spacing, GlimsResourceID *outID,
                                           char **error);
+  /* Slot 130: add an empty pass-through group with one default-parameter
+   * non-destructive filter, as one native undo group. Creation is committed;
+   * edit its returned effect through the existing filter-edit lifecycle.
+   * Explicit parent/index; NULL name uses the native group name. Outputs
+   * are reset on failure. No active stroke/preview/floating selection.
+   * Only allowed one-input operations with generic parameters are accepted;
+   * custom native configuration objects require a separate creation flow.
+   * Indexed images are UNSUPPORTED; convert to RGB/grayscale first. */
+  GlimsStatus (*adjustment_layer_new) (GlimsEngine *engine, GlimsImageID image,
+      GlimsItemID parent, int32_t index, const char *operation, const char *name,
+      GlimsItemID *layer, GlimsEffectID *effect, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

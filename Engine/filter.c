@@ -397,6 +397,7 @@ glims_filter_preview_apply (GlimsFilter *session)
     }
   else
     gimp_drawable_filter_apply (session->filter, NULL);
+  glims_adjustment_projection_changed (session->image);
 }
 
 GlimsStatus
@@ -506,6 +507,7 @@ glims_filter_commit (GlimsEngine    *engine,
       g_clear_object (&session->existing);
       gimp_drawable_filters_changed (session->drawable);
       gimp_drawable_update (session->drawable, 0, 0, -1, -1);
+      glims_adjustment_projection_changed (session->image);
       gimp_image_flush (session->image);
 
       g_hash_table_remove (engine->filters, GINT_TO_POINTER (id));

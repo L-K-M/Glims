@@ -2362,6 +2362,35 @@ api_free_metadata_strings (char **strings)
   glims_free_metadata_strings (strings);
 }
 
+typedef struct {
+  GlimsImageID image;
+  GlimsItemID parent;
+  int32_t index;
+  const char *operation, *name;
+  GlimsItemID *layer;
+  GlimsEffectID *effect;
+  char **error;
+} GlimsAdjustmentArgs;
+
+static GlimsStatus
+adjustment_layer_new_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsAdjustmentArgs *a = data;
+  return glims_adjustment_layer_new (e, a->image, a->parent, a->index,
+                                     a->operation, a->name, a->layer, a->effect, a->error);
+}
+
+static GlimsStatus
+api_adjustment_layer_new (GlimsEngine *e, GlimsImageID image, GlimsItemID parent,
+    int32_t index, const char *operation, const char *name,
+    GlimsItemID *layer, GlimsEffectID *effect, char **error)
+{
+  if (layer) *layer = 0;
+  if (effect) *effect = 0;
+  GlimsAdjustmentArgs a = { image, parent, index, operation, name, layer, effect, error };
+  return glims_engine_call (e, adjustment_layer_new_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -2497,6 +2526,7 @@ static const GlimsEngineAPI api_v1 = {
   .free_metadata_strings = api_free_metadata_strings,
   .image_metadata_tag_info = api_image_metadata_tag_info,
   .resource_create_pixels = api_resource_create_pixels,
+  .adjustment_layer_new = api_adjustment_layer_new,
 };
 
 __attribute__ ((visibility ("default")))
