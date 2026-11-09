@@ -71,6 +71,24 @@ final class EngineCanvasView: NSView {
     /// view-only until the release commits exactly one guide action.
     private(set) lazy var guideDrag = GuideDragController(canvas: self)
 
+    /// Trackpad pinch: publishes a new integer zoom percent, anchored at
+    /// the event's window point. Set by the owning window controller,
+    /// whose closure captures the controller weakly.
+    var onTrackpadZoom: ((Int, CGPoint) -> Void)?
+    /// Trackpad rotate: applies an absolute view rotation in canvas
+    /// degrees (positive = clockwise, the flipped canvas's positive
+    /// frameRotation), anchored the same way.
+    var onTrackpadRotate: ((Double, CGPoint) -> Void)?
+    /// The controller owns the exact view angle. NSView.frameRotation's
+    /// getter rounds through AppKit's affine representation, which must
+    /// not accumulate into the next relative gesture message.
+    var trackpadRotationDegrees: (() -> Double)?
+    /// One pinch gesture's fractional zoom; rebased on .began and whenever
+    /// the view's integer zoom changed outside the gesture.
+    private var zoomGesture = TrackpadNavigationLogic.ZoomAccumulator(publishedPercent: ZoomLadder.actualPixels)
+    /// Relative rotation is rebased from the current view for every event.
+    private var rotationGesture = TrackpadNavigationLogic.RotationAccumulator(baseDegrees: 0)
+
     /// View ▸ Show Guides: whether the canvas draws the image's guides.
     /// Cached per window (the document window controller owns the toggle);
     /// flipping it is pure view state and just redraws.
@@ -752,5 +770,82 @@ final class EngineCanvasView: NSView {
 
     override func keyUp(with event: NSEvent) {
         if !tools.keyUp(with: event) { super.keyUp(with: event) }
+    }
+
+    // MARK: Trackpad pinch and rotate (view-only navigation)
+
+    /// The guards for trackpad view navigation: the event must belong to
+    /// this canvas's visible owning window, and no interaction the
+    /// navigation must not disturb may be pending. Engine work (a running
+    /// plug-in, a filter preview) does NOT block view-only navigation.
+    private func trackpadNavigationAllowed(for event: NSEvent) -> Bool {
+        guard let window, window.isVisible, event.windowNumber == window.windowNumber,
+              !document.isClosing, !tools.hasPendingInteraction,
+              !guideDrag.isActive, !document.strokeIsActive else { return false }
+        return true
+    }
+
+    /// Drops any half-finished gesture state (guards failed, unmatched
+    /// window): both accumulators restart from the view's current zoom
+    /// and rotation.
+    private func resetTrackpadGestures() {
+        zoomGesture.rebase(to: zoomPercent)
+        rotationGesture.rebase(to: trackpadRotationDegrees?() ?? Double(frameRotation))
+    }
+
+    /// Trackpad pinch-zoom. Per Apple's Event Overview the magnification is
+    /// relative per message (new zoom = current * (1 + magnification)), so
+    /// the fractional percent accumulates and is published as an integer
+    /// only when it changes; .cancelled clears without a new delta, .ended
+    /// may apply its delta and then clears.
+    override func magnify(with event: NSEvent) {
+        guard trackpadNavigationAllowed(for: event) else { resetTrackpadGestures(); return }
+        let point = event.locationInWindow
+        guard point.x.isFinite, point.y.isFinite else { return }
+        if event.phase == .began || zoomGesture.publishedPercent != zoomPercent {
+            // A new gesture, or the zoom changed outside it (menu, status
+            // bar): rebase. An own publication matches zoomPercent, so the
+            // fractional remainder is not dropped.
+            zoomGesture.rebase(to: zoomPercent)
+        }
+        switch event.phase {
+        case .cancelled:
+            zoomGesture.clear()
+        case .ended:
+            if let percent = zoomGesture.apply(magnification: Double(event.magnification)) {
+                onTrackpadZoom?(percent, point)
+            }
+            zoomGesture.clear()
+        default:
+            if let percent = zoomGesture.apply(magnification: Double(event.magnification)) {
+                onTrackpadZoom?(percent, point)
+            }
+        }
+    }
+
+    /// Trackpad rotate. A positive event rotation is counterclockwise, so
+    /// the canvas delta is MINUS it (the flipped canvas's positive
+    /// frameRotation is clockwise).
+    override func rotate(with event: NSEvent) {
+        guard trackpadNavigationAllowed(for: event) else { resetTrackpadGestures(); return }
+        let point = event.locationInWindow
+        guard point.x.isFinite, point.y.isFinite else { return }
+        // Rotation events are relative. Read the current angle even for a
+        // phase-none event or a menu change between events; the view also
+        // normalizes angles, so retaining an old absolute base would drift.
+        rotationGesture.rebase(to: trackpadRotationDegrees?() ?? Double(frameRotation))
+        switch event.phase {
+        case .cancelled:
+            rotationGesture.cancel()
+        case .ended:
+            if let degrees = rotationGesture.apply(eventRotationDegrees: Double(event.rotation)) {
+                onTrackpadRotate?(degrees, point)
+            }
+            rotationGesture.finish()
+        default:
+            if let degrees = rotationGesture.apply(eventRotationDegrees: Double(event.rotation)) {
+                onTrackpadRotate?(degrees, point)
+            }
+        }
     }
 }
