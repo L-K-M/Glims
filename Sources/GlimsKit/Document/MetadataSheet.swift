@@ -104,7 +104,7 @@ enum MetadataSheetLogic {
     /// labeled fragments, not as plain text or a lossless language/value
     /// structure. Edits are refused; the sheet shows them read-only.
     static let langAltNote = "This text can have different versions for different languages. "
-        + "Glims shows it for reading only and can't safely change it yet."
+        + "Language alternatives are read-only."
 
     // MARK: Descriptor-driven gates (facade slot 128 policy)
 
@@ -129,7 +129,7 @@ enum MetadataSheetLogic {
     /// them but cannot safely change them yet, so the controls stay
     /// read-only.
     static let langAltReadOnlyReason = "This text can have different versions for different languages. "
-        + "Glims shows it for reading only and can't safely change it yet."
+        + "Language alternatives are read-only."
 
     /// Computes the descriptor gates for the selected tag. Fails closed:
     /// without a successfully read descriptor AND values list for the same
