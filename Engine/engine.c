@@ -2346,6 +2346,7 @@ api_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
                             const uint8_t *pixels, size_t byte_count,
                             uint32_t brush_spacing, GlimsResourceID *outID, char **error)
 {
+  if (outID) *outID = 0;
   GlimsResourceCreateArgs a = { .kind = kind, .name = name, .width = width, .height = height,
                                 .pixels = pixels, .byte_count = byte_count,
                                 .brush_spacing = brush_spacing, .out_id = outID, .error = error };

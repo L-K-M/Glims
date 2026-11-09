@@ -800,6 +800,13 @@ phase_create (void)
   GlimsFilterID      filter = 0;
   GlimsUndoInfo      undo_a, undo_b;
 
+  id = 123;
+  CHECK (api->resource_create_pixels (NULL, GLIMS_RESOURCE_BRUSH, "not-running",
+                                      SRC_W, SRC_H, SOURCE_PIXELS, SRC_BYTES, 25, &id, &err)
+         == GLIMS_STATUS_NOT_RUNNING && id == 0,
+         "a call without a running engine clears its prefilled output handle");
+  if (err) api->free_string (err), err = NULL;
+
   CHECK (start_engine (), "engine started on the isolated directories");
   if (! engine)
     return 1;

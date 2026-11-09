@@ -170,12 +170,12 @@ choose_save_dir (GimpDataFactory *factory, GError **error)
                 g_set_error (error, GIMP_DATA_ERROR, 0,
                              "The configured writable data folder could not be created "
                              "or is not a directory.");
-              g_clear_error (&mkdir_error);
             }
           else
             {
               writable_dir = g_object_ref (dir);
             }
+          g_clear_error (&mkdir_error);
         }
 
       if (! writable_dir && ! found_any)
@@ -308,6 +308,8 @@ glims_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
   const gchar     *extension;
   uint64_t         bytes = 0;
   gboolean         published = FALSE;
+  gboolean         staging_created = FALSE;
+  gboolean         promoted = FALSE;
   GlimsStatus      status    = GLIMS_STATUS_FAILED;
 
   if (outID)
@@ -322,8 +324,11 @@ glims_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
     }
 
   if (kind == GLIMS_RESOURCE_GRADIENT)
-    return glims_fail (error, NULL,
-                       "Creating a gradient from pixels is not supported.");
+    {
+      if (error)
+        *error = strdup ("Creating a gradient from pixels is not supported.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
   if (kind != GLIMS_RESOURCE_BRUSH && kind != GLIMS_RESOURCE_PATTERN)
     {
       if (error)
@@ -394,6 +399,7 @@ glims_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
                            "The staging directory could not be created.");
       goto cleanup;
     }
+  staging_created = TRUE;
 
   {
     gchar *staging_file_name = g_strdup_printf ("staging%s", extension);
@@ -446,6 +452,8 @@ glims_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
                            "The saved resource could not be promoted to its final name.");
       goto cleanup;
     }
+
+  promoted = TRUE;
 
   /* Reassociate the data to the final path and validate writable
    * again before publishing to the factory. */
@@ -501,21 +509,24 @@ cleanup:
         gimp_container_remove (container, GIMP_OBJECT (data));
       g_object_unref (data);
     }
-  /* Only this call's own staging and final paths, and the final file
-   * only on failure: a success keeps it. */
+  /* A generated pathname is not ownership. Only a successful mkdir or
+   * move grants cleanup ownership; collisions must preserve their files.
+   * A published success keeps its final file. */
   if (staging_file)
     {
-      g_file_delete (staging_file, NULL, NULL);
+      if (staging_created)
+        g_file_delete (staging_file, NULL, NULL);
       g_object_unref (staging_file);
     }
   if (staging_dir)
     {
-      g_file_delete (staging_dir, NULL, NULL);
+      if (staging_created)
+        g_file_delete (staging_dir, NULL, NULL);
       g_object_unref (staging_dir);
     }
   if (final_file)
     {
-      if (status != GLIMS_STATUS_OK)
+      if (promoted && status != GLIMS_STATUS_OK)
         g_file_delete (final_file, NULL, NULL);
       g_object_unref (final_file);
     }

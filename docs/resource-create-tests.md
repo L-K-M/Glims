@@ -139,27 +139,15 @@ create still works in the restarted engine.
   and `g_file_move()` directly once per creation, so dyld interposition
   sees exactly the staging mkdir and the staged-to-final move.
 
-## What was actually checked when this file was written
+## Acceptance results
 
-- Source reading only: the facade contract in
-  `Sources/CGlimsEngine/include/glims_engine.h`, `Engine/resource-create.c`
-  (read-only), `Engine/resource.c`, `Engine/engine.c`, the native
-  contract note, the GBR/PAT headers and savers in the pinned
-  `GIMP_3_2_8` tree, and the `metadata-error-*` / `test-metadata-error.py`
-  style this harness adapts.
-- `python3 -m py_compile scripts/test-resource-create.py` and
-  `python3 scripts/test-resource-create.py --help` (no compile, no start).
-- Read-only exercise of the script's pure parsing helpers (no build/run
-  mode): `default_ref()` resolves to `GIMP_3_2_8`, the producer files
-  `_engine/adapter/GIMP_3_2_8/{libglimsengine.dylib,compile.rsp,link.rsp}`
-  exist, `read_rsp` recovers 62 compile / 55 link arguments, and the shim
-  library filter selects exactly `libglib-2.0/libgobject-2.0/libgio-2.0`
-  from the producer's `link.rsp` while excluding libgimp entries.
-- NOT run here (root owns native execution): no compiler invocation, no
-  adapter build, no engine start, no harness run, no GUI. The two C
-  files are therefore compile- and runtime-UNVERIFIED; the expected
-  baseline-RED oracles are the staging-sentinel deletion, the
-  final-sentinel deletion and the gradient `FAILED`-vs-`UNSUPPORTED`
-  mismatch, all of which must turn GREEN once root fixes production.
-  First native compile may surface minor C issues for root to fix in
-  these test files only.
+Root compiled and ran both native phases on every supported engine. The
+first run reproduced nine expected failures: wrong gradient status and
+staging/final collision sentinel deletions. After the ownership/status fixes,
+all checks passed on every engine, including fresh-process persistence.
+
+A later source review found a missing output reset when a NULL engine makes
+dispatch return NOT_RUNNING. The added facade check failed once before the
+bridge fix. Final general native suites and both harness phases pass on all
+four engines with that regression included. Python syntax and help checks
+also pass. App controls and final self-contained bundle checks are separate.
