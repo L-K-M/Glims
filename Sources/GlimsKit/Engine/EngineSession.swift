@@ -2615,6 +2615,107 @@ final class EngineSession: @unchecked Sendable {
         return ResourceThumbnail(width: width, height: height, pixels: pixels, image: image)
     }
 
+    /// The dimension bound of a created resource: the native brush and
+    /// pattern maximum, 10000 px in either dimension.
+    static let resourceMaxDimension = 10_000
+    /// The resource label bound in UTF-8 bytes: the native 256-byte
+    /// label including its NUL terminator.
+    static let resourceNameMaxUTF8Bytes = 255
+
+    /// Validates one resource-creation request (resource_create_pixels,
+    /// slot 129) before any bridge allocation or native call, so a
+    /// malformed request never reaches the engine: the kind (only brush
+    /// and pattern; a gradient is UNSUPPORTED, anything else cannot be
+    /// expressed here), the label (nonempty UTF-8, no embedded NUL, no
+    /// control characters, at most 255 UTF-8 bytes), the dimensions
+    /// (1 ... 10000 with the exact overflow-checked width * height * 4
+    /// byte count) and the brush spacing (1 ... 1000 for a brush, 0 for
+    /// a pattern). Throws EngineError with the matching facade status.
+    static func validateResourceCreation(kind: ResourceKind, name: String, width: Int, height: Int,
+                                         byteCount: Int, brushSpacing: UInt32) throws {
+        func invalid(_ message: String) -> EngineError {
+            EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: message)
+        }
+        switch kind {
+        case .brush, .pattern:
+            break
+        case .gradient:
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "Creating a gradient from pixels is not supported.")
+        }
+        let utf8 = Array(name.utf8)
+        guard !utf8.isEmpty, !utf8.contains(0), utf8.count <= resourceNameMaxUTF8Bytes else {
+            throw invalid("The resource name must be nonempty UTF-8 without an embedded NUL, "
+                          + "at most \(resourceNameMaxUTF8Bytes) bytes.")
+        }
+        if name.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) {
+            throw invalid("The resource name must not contain control characters.")
+        }
+        guard width >= 1, height >= 1,
+              width <= resourceMaxDimension, height <= resourceMaxDimension else {
+            throw invalid("The resource dimensions must be 1 ... \(resourceMaxDimension).")
+        }
+        let (pixelCount, pixelOverflow) = width.multipliedReportingOverflow(by: height)
+        let (expectedBytes, byteOverflow) = pixelCount.multipliedReportingOverflow(by: 4)
+        guard !pixelOverflow, !byteOverflow, expectedBytes == byteCount else {
+            throw invalid("The pixel buffer must be exactly width * height * 4 bytes.")
+        }
+        switch kind {
+        case .brush:
+            guard brushSpacing >= 1, brushSpacing <= 1000 else {
+                throw invalid("The brush spacing must be 1 ... 1000.")
+            }
+        case .pattern:
+            guard brushSpacing == 0 else {
+                throw invalid("Patterns take no brush spacing (0).")
+            }
+        case .gradient:
+            break // refused above
+        }
+    }
+
+    /// Creates one saved bitmap resource from `pixels` and returns its
+    /// handle (resource_create_pixels, slot 129): a bitmap brush or a
+    /// pattern, saved to the engine's configured writable data folder and
+    /// published to the engine's catalog. `pixels` is a ClipboardImage's
+    /// owned straight-alpha RGBA buffer, passed only for the duration of
+    /// the synchronous engine call — like pastePixels — and every typed
+    /// input is validated (validateResourceCreation) before the RPC.
+    ///
+    /// BUSY while the engine is busy or any stroke or filter session is
+    /// active; FAILED when a resource of the same kind already carries
+    /// `name` (never silently renamed); UNSUPPORTED for a gradient; the
+    /// handle output is zero on every failure. The returned handle works
+    /// with resources(_:), resourceIdentifiers(_:), resolveResource(_:kind:),
+    /// resourceThumbnail(_:) and the brush/pattern consumers, like any
+    /// catalog handle. Call this off the main thread, like the other
+    /// catalog work.
+    func createResource(kind: ResourceKind, name: String, pixels: ClipboardImage,
+                        brushSpacing: UInt32) throws -> ResourceID {
+        let byteCount = try ClipboardImage.byteCount(width: pixels.width, height: pixels.height)
+        guard pixels.pixels.count == byteCount else {
+            throw ClipboardImage.TransferError.invalidImage
+        }
+        try Self.validateResourceCreation(kind: kind, name: name, width: pixels.width,
+                                          height: pixels.height, byteCount: byteCount,
+                                          brushSpacing: brushSpacing)
+        var handle: ResourceID = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try pixels.pixels.withUnsafeBytes { bytes in
+            try name.withCString { cName in
+                try check(api.resource_create_pixels(engine, kind.rawValue, cName,
+                                                     Int32(pixels.width), Int32(pixels.height),
+                                                     bytes.bindMemory(to: UInt8.self).baseAddress,
+                                                     bytes.count, brushSpacing, &handle, &error), error)
+            }
+        }
+        guard handle > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine created no resource handle.")
+        }
+        return handle
+    }
+
     /// The facade kind of an engine row; unknown kind values never reach
     /// the interface.
     private static func resourceKind(_ raw: UInt32) throws -> ResourceKind {

@@ -1268,6 +1268,31 @@ resource_thumbnail_on_engine (GlimsEngine *e, gpointer data)
                                    a->pixels, a->error);
 }
 
+/* resource_create_pixels carries the pixel pointer with its byte count
+ * and a full 64-bit out handle, so it gets its own args struct; the id
+ * never travels in one of GlimsArgs' 32-bit fields. */
+typedef struct
+{
+  uint32_t          kind;
+  const char       *name;
+  int32_t           width, height;
+  const uint8_t    *pixels;
+  size_t            byte_count;
+  uint32_t          brush_spacing;
+  GlimsResourceID  *out_id;
+  char            **error;
+} GlimsResourceCreateArgs;
+
+static GlimsStatus
+resource_create_pixels_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsResourceCreateArgs *a = data;
+
+  return glims_resource_create_pixels (e, a->kind, a->name, a->width, a->height,
+                                       a->pixels, a->byte_count, a->brush_spacing,
+                                       a->out_id, a->error);
+}
+
 /* The resource gradient call keeps the full 64-bit resource handle and
  * both endpoints besides its settings — more than GlimsArgs holds. */
 typedef struct
@@ -2315,6 +2340,18 @@ api_image_metadata_tag_info (GlimsEngine *e, GlimsImageID image, const char *tag
   return glims_engine_call (e, image_metadata_tag_info_on_engine, &a);
 }
 
+static GlimsStatus
+api_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
+                            int32_t width, int32_t height,
+                            const uint8_t *pixels, size_t byte_count,
+                            uint32_t brush_spacing, GlimsResourceID *outID, char **error)
+{
+  GlimsResourceCreateArgs a = { .kind = kind, .name = name, .width = width, .height = height,
+                                .pixels = pixels, .byte_count = byte_count,
+                                .brush_spacing = brush_spacing, .out_id = outID, .error = error };
+  return glims_engine_call (e, resource_create_pixels_on_engine, &a);
+}
+
 /* No engine state is involved: free directly, like free_string. */
 static void
 api_free_metadata_strings (char **strings)
@@ -2456,6 +2493,7 @@ static const GlimsEngineAPI api_v1 = {
   .image_metadata_edit = api_image_metadata_edit,
   .free_metadata_strings = api_free_metadata_strings,
   .image_metadata_tag_info = api_image_metadata_tag_info,
+  .resource_create_pixels = api_resource_create_pixels,
 };
 
 __attribute__ ((visibility ("default")))
