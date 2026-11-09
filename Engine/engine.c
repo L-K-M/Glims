@@ -2747,6 +2747,106 @@ static GlimsStatus api_filter_brightness_contrast_set (GlimsEngine *e, GlimsFilt
   return glims_engine_call (e, filter_brightness_contrast_set_on_engine, &a);
 }
 
+typedef struct {
+  GlimsFilterID filter;
+  GlimsColorBalanceSettings *out;
+  const GlimsColorBalanceSettings *settings;
+  char **error;
+} GlimsColorBalanceArgs;
+static GlimsStatus filter_color_balance_get_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsColorBalanceArgs *a = data;
+  return glims_filter_color_balance_get (e, a->filter, a->out, a->error);
+}
+static GlimsStatus filter_color_balance_set_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsColorBalanceArgs *a = data;
+  return glims_filter_color_balance_set (e, a->filter, a->settings, a->error);
+}
+static GlimsStatus api_filter_color_balance_get (GlimsEngine *e, GlimsFilterID filter,
+                                                GlimsColorBalanceSettings *out, char **error)
+{
+  if (out && out->struct_size >= sizeof *out) {
+    out->preserve_luminosity = 0;
+    out->shadows = out->midtones = out->highlights = (GlimsColorBalanceRange) {0};
+  }
+  GlimsColorBalanceArgs a = { .filter = filter, .out = out, .error = error };
+  return glims_engine_call (e, filter_color_balance_get_on_engine, &a);
+}
+static GlimsStatus api_filter_color_balance_set (GlimsEngine *e, GlimsFilterID filter,
+                                                const GlimsColorBalanceSettings *settings, char **error)
+{
+  GlimsColorBalanceArgs a = { .filter = filter, .settings = settings, .error = error };
+  return glims_engine_call (e, filter_color_balance_set_on_engine, &a);
+}
+
+typedef struct {
+  GlimsFilterID filter;
+  GlimsHueSaturationSettings *out;
+  const GlimsHueSaturationSettings *settings;
+  char **error;
+} GlimsHueSaturationArgs;
+static GlimsStatus filter_hue_saturation_get_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsHueSaturationArgs *a = data;
+  return glims_filter_hue_saturation_get (e, a->filter, a->out, a->error);
+}
+static GlimsStatus filter_hue_saturation_set_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsHueSaturationArgs *a = data;
+  return glims_filter_hue_saturation_set (e, a->filter, a->settings, a->error);
+}
+static GlimsStatus api_filter_hue_saturation_get (GlimsEngine *e, GlimsFilterID filter,
+                                                GlimsHueSaturationSettings *out, char **error)
+{
+  if (out && out->struct_size >= sizeof *out) {
+    out->overlap = 0;
+    out->master = out->red = out->yellow = out->green = out->cyan = out->blue = out->magenta =
+      (GlimsHueSaturationRange) {0};
+  }
+  GlimsHueSaturationArgs a = { .filter = filter, .out = out, .error = error };
+  return glims_engine_call (e, filter_hue_saturation_get_on_engine, &a);
+}
+static GlimsStatus api_filter_hue_saturation_set (GlimsEngine *e, GlimsFilterID filter,
+                                                const GlimsHueSaturationSettings *settings, char **error)
+{
+  GlimsHueSaturationArgs a = { .filter = filter, .settings = settings, .error = error };
+  return glims_engine_call (e, filter_hue_saturation_set_on_engine, &a);
+}
+
+typedef struct {
+  GlimsFilterID filter;
+  GlimsLevelsSettings *out;
+  const GlimsLevelsSettings *settings;
+  char **error;
+} GlimsLevelsArgs;
+static GlimsStatus filter_levels_get_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsLevelsArgs *a = data;
+  return glims_filter_levels_get (e, a->filter, a->out, a->error);
+}
+static GlimsStatus filter_levels_set_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsLevelsArgs *a = data;
+  return glims_filter_levels_set (e, a->filter, a->settings, a->error);
+}
+static GlimsStatus api_filter_levels_get (GlimsEngine *e, GlimsFilterID filter,
+                                                GlimsLevelsSettings *out, char **error)
+{
+  if (out && out->struct_size >= sizeof *out) {
+    out->trc = out->clamp_input = out->clamp_output = 0;
+    out->value = out->red = out->green = out->blue = out->alpha = (GlimsLevelsChannel) {0};
+  }
+  GlimsLevelsArgs a = { .filter = filter, .out = out, .error = error };
+  return glims_engine_call (e, filter_levels_get_on_engine, &a);
+}
+static GlimsStatus api_filter_levels_set (GlimsEngine *e, GlimsFilterID filter,
+                                                const GlimsLevelsSettings *settings, char **error)
+{
+  GlimsLevelsArgs a = { .filter = filter, .settings = settings, .error = error };
+  return glims_engine_call (e, filter_levels_set_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -2902,6 +3002,12 @@ static const GlimsEngineAPI api_v1 = {
   .filter_begin_with_source = api_filter_begin_with_source,
   .filter_brightness_contrast_get = api_filter_brightness_contrast_get,
   .filter_brightness_contrast_set = api_filter_brightness_contrast_set,
+  .filter_color_balance_get = api_filter_color_balance_get,
+  .filter_color_balance_set = api_filter_color_balance_set,
+  .filter_hue_saturation_get = api_filter_hue_saturation_get,
+  .filter_hue_saturation_set = api_filter_hue_saturation_set,
+  .filter_levels_get = api_filter_levels_get,
+  .filter_levels_set = api_filter_levels_set,
 };
 
 __attribute__ ((visibility ("default")))

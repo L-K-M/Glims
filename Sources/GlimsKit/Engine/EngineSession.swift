@@ -962,6 +962,195 @@ final class EngineSession: @unchecked Sendable {
         try check(status, error)
     }
 
+    struct ColorBalanceSettings: Equatable {
+        struct Range: Equatable {
+            var cyanRed: Double = 0
+            var magentaGreen: Double = 0
+            var yellowBlue: Double = 0
+
+            var isValid: Bool {
+                [cyanRed, magentaGreen, yellowBlue].allSatisfy { $0.isFinite && (-1...1).contains($0) }
+            }
+        }
+        var shadows = Range()
+        var midtones = Range()
+        var highlights = Range()
+        var preserveLuminosity = true
+
+        var isValid: Bool { shadows.isValid && midtones.isValid && highlights.isValid }
+    }
+
+    func colorBalanceSettings(_ filter: Int32) throws -> ColorBalanceSettings {
+        var raw = GlimsColorBalanceSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsColorBalanceSettings>.size)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_color_balance_get(engine, filter, &raw, &error)
+        try check(status, error)
+        func range(_ value: GlimsColorBalanceRange) -> ColorBalanceSettings.Range {
+            .init(cyanRed: value.cyan_red, magentaGreen: value.magenta_green, yellowBlue: value.yellow_blue)
+        }
+        let value = ColorBalanceSettings(shadows: range(raw.shadows), midtones: range(raw.midtones),
+                                        highlights: range(raw.highlights), preserveLuminosity: raw.preserve_luminosity == 1)
+        guard value.isValid, raw.preserve_luminosity <= 1 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The color balance settings could not be read.")
+        }
+        return value
+    }
+
+    func setColorBalanceSettings(_ filter: Int32, to value: ColorBalanceSettings) throws {
+        guard value.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: "Color balance corrections must be between −1 and 1.")
+        }
+        func range(_ value: ColorBalanceSettings.Range) -> GlimsColorBalanceRange {
+            .init(cyan_red: value.cyanRed, magenta_green: value.magentaGreen, yellow_blue: value.yellowBlue)
+        }
+        var raw = GlimsColorBalanceSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsColorBalanceSettings>.size)
+        raw.preserve_luminosity = value.preserveLuminosity ? 1 : 0
+        raw.shadows = range(value.shadows); raw.midtones = range(value.midtones); raw.highlights = range(value.highlights)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_color_balance_set(engine, filter, &raw, &error)
+        try check(status, error)
+    }
+
+    /// Complete Levels values; the channel shown by a form is not native state.
+    struct LevelsSettings: Equatable {
+        struct Channel: Equatable {
+            var lowInput: Double = 0
+            var highInput: Double = 1
+            var gamma: Double = 1
+            var lowOutput: Double = 0
+            var highOutput: Double = 1
+
+            var isValid: Bool {
+                [lowInput, highInput, lowOutput, highOutput].allSatisfy {
+                    $0.isFinite && (0...1).contains($0)
+                } && gamma.isFinite && (0.1...10).contains(gamma)
+            }
+        }
+
+        var trc: ColorTRC = .linear
+        var clampInput = false
+        var clampOutput = false
+        var value = Channel()
+        var red = Channel()
+        var green = Channel()
+        var blue = Channel()
+        var alpha = Channel()
+
+        var isValid: Bool {
+            // Equal or inverted endpoints are valid native mappings.
+            [ColorTRC.linear, .nonlinear, .perceptual].contains(trc) &&
+                [value, red, green, blue, alpha].allSatisfy { $0.isValid }
+        }
+    }
+
+    func levelsSettings(_ filter: Int32) throws -> LevelsSettings {
+        var raw = GlimsLevelsSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsLevelsSettings>.size)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_levels_get(engine, filter, &raw, &error)
+        try check(status, error)
+        guard let trc = ColorTRC(rawValue: raw.trc), trc != .unknown,
+              raw.clamp_input <= 1, raw.clamp_output <= 1 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The Levels settings could not be read.")
+        }
+        func channel(_ value: GlimsLevelsChannel) -> LevelsSettings.Channel {
+            .init(lowInput: value.low_input, highInput: value.high_input, gamma: value.gamma,
+                  lowOutput: value.low_output, highOutput: value.high_output)
+        }
+        let value = LevelsSettings(trc: trc, clampInput: raw.clamp_input == 1,
+            clampOutput: raw.clamp_output == 1, value: channel(raw.value), red: channel(raw.red),
+            green: channel(raw.green), blue: channel(raw.blue), alpha: channel(raw.alpha))
+        guard value.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The Levels settings could not be read.")
+        }
+        return value
+    }
+
+    func setLevelsSettings(_ filter: Int32, to value: LevelsSettings) throws {
+        guard value.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                message: "Levels endpoints must be between 0 and 1, gamma between 0.1 and 10, and the transfer curve must be known.")
+        }
+        func channel(_ value: LevelsSettings.Channel) -> GlimsLevelsChannel {
+            .init(low_input: value.lowInput, high_input: value.highInput, gamma: value.gamma,
+                  low_output: value.lowOutput, high_output: value.highOutput)
+        }
+        var raw = GlimsLevelsSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsLevelsSettings>.size)
+        raw.trc = value.trc.rawValue
+        raw.clamp_input = value.clampInput ? 1 : 0
+        raw.clamp_output = value.clampOutput ? 1 : 0
+        raw.value = channel(value.value); raw.red = channel(value.red)
+        raw.green = channel(value.green); raw.blue = channel(value.blue); raw.alpha = channel(value.alpha)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_levels_set(engine, filter, &raw, &error)
+        try check(status, error)
+    }
+
+    struct HueSaturationSettings: Equatable {
+        struct Range: Equatable {
+            var hue: Double = 0
+            var saturation: Double = 0
+            var lightness: Double = 0
+            var isValid: Bool {
+                [hue, saturation, lightness].allSatisfy { $0.isFinite && (-1...1).contains($0) }
+            }
+        }
+        var overlap: Double = 0
+        var master = Range()
+        var red = Range()
+        var yellow = Range()
+        var green = Range()
+        var cyan = Range()
+        var blue = Range()
+        var magenta = Range()
+        var isValid: Bool {
+            overlap.isFinite && (0...1).contains(overlap) &&
+                [master, red, yellow, green, cyan, blue, magenta].allSatisfy { $0.isValid }
+        }
+    }
+
+    func hueSaturationSettings(_ filter: Int32) throws -> HueSaturationSettings {
+        var raw = GlimsHueSaturationSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsHueSaturationSettings>.size)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_hue_saturation_get(engine, filter, &raw, &error)
+        try check(status, error)
+        func range(_ value: GlimsHueSaturationRange) -> HueSaturationSettings.Range {
+            .init(hue: value.hue, saturation: value.saturation, lightness: value.lightness)
+        }
+        let value = HueSaturationSettings(overlap: raw.overlap, master: range(raw.master), red: range(raw.red),
+            yellow: range(raw.yellow), green: range(raw.green), cyan: range(raw.cyan),
+            blue: range(raw.blue), magenta: range(raw.magenta))
+        guard value.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The hue and saturation settings could not be read.")
+        }
+        return value
+    }
+
+    func setHueSaturationSettings(_ filter: Int32, to value: HueSaturationSettings) throws {
+        guard value.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                message: "Hue, saturation and lightness must be between −1 and 1; overlap must be between 0 and 1.")
+        }
+        func range(_ value: HueSaturationSettings.Range) -> GlimsHueSaturationRange {
+            .init(hue: value.hue, saturation: value.saturation, lightness: value.lightness)
+        }
+        var raw = GlimsHueSaturationSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsHueSaturationSettings>.size)
+        raw.overlap = value.overlap
+        raw.master = range(value.master); raw.red = range(value.red); raw.yellow = range(value.yellow)
+        raw.green = range(value.green); raw.cyan = range(value.cyan); raw.blue = range(value.blue)
+        raw.magenta = range(value.magenta)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_hue_saturation_set(engine, filter, &raw, &error)
+        try check(status, error)
+    }
+
     /// One property's current value in an open filter session.
     func filterProperty(_ filter: Int32, _ property: String) throws -> FilterValue {
         var value = GlimsFilterValue()

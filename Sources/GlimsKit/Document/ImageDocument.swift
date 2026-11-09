@@ -3579,6 +3579,9 @@ final class ImageDocument {
     struct FilterPreviewStart {
         let filter: Int32
         let values: [String: EngineSession.FilterValue]
+        var colorBalance: EngineSession.ColorBalanceSettings? = nil
+        var hueSaturation: EngineSession.HueSaturationSettings? = nil
+        var levels: EngineSession.LevelsSettings? = nil
     }
 
     /// Source preparation reads remain counted through their deferred reply.
@@ -3646,14 +3649,7 @@ final class ImageDocument {
         }
     }
 
-    /// Begins a filter session for `operation` on the active drawable —
-    /// the layer, or its mask while mask editing is on — and reads
-    /// `properties`' starting values, as one counted job on the
-    /// input queue — behind pending stroke, field and text input, so the
-    /// preview begins on the edits the user already made instead of
-    /// overtaking them. The completion runs on the main actor before the
-    /// job counts down, so a stale completion that aborts the session it
-    /// just created still keeps the close drain waiting.
+    /// Read initial settings on the worker; failed typed reads abort the new session.
     private nonisolated static func previewValues(_ filter: Int32, operation: String?,
                                                   properties: [EngineSession.FilterProperty],
                                                   session: EngineSession) throws -> [String: EngineSession.FilterValue] {
@@ -3673,6 +3669,45 @@ final class ImageDocument {
         return values
     }
 
+    private nonisolated static func previewStart(_ filter: Int32, operation: String?,
+                                                 properties: [EngineSession.FilterProperty],
+                                                 session: EngineSession) throws -> FilterPreviewStart {
+        if operation == "gimp:levels" {
+            do {
+                return FilterPreviewStart(filter: filter, values: [:], levels: try session.levelsSettings(filter))
+            } catch {
+                try? session.abortFilter(filter)
+                throw error
+            }
+        }
+        if operation == "gimp:hue-saturation" {
+            do {
+                return FilterPreviewStart(filter: filter, values: [:], hueSaturation: try session.hueSaturationSettings(filter))
+            } catch {
+                try? session.abortFilter(filter)
+                throw error
+            }
+        }
+        if operation == "gimp:color-balance" {
+            do {
+                return FilterPreviewStart(filter: filter, values: [:], colorBalance: try session.colorBalanceSettings(filter))
+            } catch {
+                try? session.abortFilter(filter)
+                throw error
+            }
+        }
+        return FilterPreviewStart(filter: filter,
+            values: try previewValues(filter, operation: operation, properties: properties, session: session))
+    }
+
+    /// Begins a filter session for `operation` on the active drawable —
+    /// the layer, or its mask while mask editing is on — and reads
+    /// `properties`' starting values, as one counted job on the
+    /// input queue — behind pending stroke, field and text input, so the
+    /// preview begins on the edits the user already made instead of
+    /// overtaking them. The completion runs on the main actor before the
+    /// job counts down, so a stale completion that aborts the session it
+    /// just created still keeps the close drain waiting.
     func beginFilterPreview(operation: String, properties: [EngineSession.FilterProperty],
                             completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
@@ -3689,8 +3724,7 @@ final class ImageDocument {
             let result = Result<FilterPreviewStart, Error> {
                 try self.requirePaintTarget()
                 let filter = try session.beginFilter(image: image, drawable: drawable, operation: operation)
-                let values = try Self.previewValues(filter, operation: operation, properties: properties, session: session)
-                return FilterPreviewStart(filter: filter, values: values)
+                return try Self.previewStart(filter, operation: operation, properties: properties, session: session)
             }
             DispatchQueue.main.async {
                 completion(result)
@@ -3719,8 +3753,7 @@ final class ImageDocument {
         inputQueue.async { [session, image] in
             let result = Result<FilterPreviewStart, Error> {
                 let filter = try session.beginEditingEffect(effect, on: drawable, image: image)
-                let values = try Self.previewValues(filter, operation: operation, properties: properties, session: session)
-                return FilterPreviewStart(filter: filter, values: values)
+                return try Self.previewStart(filter, operation: operation, properties: properties, session: session)
             }
             DispatchQueue.main.async {
                 completion(result)
@@ -3772,6 +3805,49 @@ final class ImageDocument {
         pendingWork += 1
         inputQueue.async { [session] in
             let result = Result { try session.setBrightnessContrastSettings(filter, to: settings) }
+            DispatchQueue.main.async {
+                completion(result)
+                self.jobDidFinish(input: false)
+            }
+        }
+    }
+
+    func setColorBalance(_ filter: Int32, _ settings: EngineSession.ColorBalanceSettings,
+                          completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if refuseWhileEditingUnavailable(forPreviewWork: true) { return completion(.failure(DocumentError.busy)) }
+        pendingWork += 1
+        inputQueue.async { [session] in
+            let result = Result { try session.setColorBalanceSettings(filter, to: settings) }
+            DispatchQueue.main.async {
+                completion(result)
+                self.jobDidFinish(input: false)
+            }
+        }
+    }
+
+
+    func setHueSaturation(_ filter: Int32, _ settings: EngineSession.HueSaturationSettings,
+                          completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if refuseWhileEditingUnavailable(forPreviewWork: true) { return completion(.failure(DocumentError.busy)) }
+        pendingWork += 1
+        inputQueue.async { [session] in
+            let result = Result { try session.setHueSaturationSettings(filter, to: settings) }
+            DispatchQueue.main.async {
+                completion(result)
+                self.jobDidFinish(input: false)
+            }
+        }
+    }
+
+    func setLevels(_ filter: Int32, _ settings: EngineSession.LevelsSettings,
+                          completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if refuseWhileEditingUnavailable(forPreviewWork: true) { return completion(.failure(DocumentError.busy)) }
+        pendingWork += 1
+        inputQueue.async { [session] in
+            let result = Result { try session.setLevelsSettings(filter, to: settings) }
             DispatchQueue.main.async {
                 completion(result)
                 self.jobDidFinish(input: false)

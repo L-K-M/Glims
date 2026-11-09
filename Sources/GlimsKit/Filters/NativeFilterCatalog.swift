@@ -91,9 +91,21 @@ struct NativeFilterMenuLayout: Equatable {
         operation.name == "gimp:brightness-contrast" && operation.support == .needsConfig
     }
 
+    static func usesLevelsEditor(_ operation: EngineSession.FilterOperation) -> Bool {
+        operation.name == "gimp:levels" && operation.support == .needsConfig
+    }
+
+    static func usesHueSaturationEditor(_ operation: EngineSession.FilterOperation) -> Bool {
+        operation.name == "gimp:hue-saturation" && operation.support == .needsConfig
+    }
+
+    static func usesColorBalanceEditor(_ operation: EngineSession.FilterOperation) -> Bool {
+        operation.name == "gimp:color-balance" && operation.support == .needsConfig
+    }
+
     static func supportsParameterEditor(_ operation: EngineSession.FilterOperation?) -> Bool {
         guard let operation else { return false }
-        return operation.support == .supported || usesBrightnessContrastEditor(operation)
+        return operation.support == .supported || usesBrightnessContrastEditor(operation) || usesColorBalanceEditor(operation) || usesHueSaturationEditor(operation) || usesLevelsEditor(operation)
     }
 
     struct Section: Equatable {
@@ -152,7 +164,7 @@ struct NativeFilterMenuLayout: Equatable {
     /// The item's menu title: `Title…` when it opens a form, `Title
     /// (reason)` when it cannot run yet.
     static func itemTitle(_ operation: EngineSession.FilterOperation) -> String {
-        if usesBrightnessContrastEditor(operation) { return "\(operation.title)…" }
+        if usesBrightnessContrastEditor(operation) || usesColorBalanceEditor(operation) || usesHueSaturationEditor(operation) || usesLevelsEditor(operation) { return "\(operation.title)…" }
         if usesSourceChooser(operation) { return "\(operation.title)…" }
         if let reason = unavailableReason(operation.support) {
             return "\(operation.title) (\(reason))"
@@ -187,6 +199,9 @@ enum NativeFilterMenus {
     /// and the support gates stay — a gated operation never appears here.
     private static let adjustOperations: [(name: String, title: String)] = [
         ("gimp:brightness-contrast", "Brightness/Contrast"),
+        ("gimp:color-balance", "Color Balance"),
+        ("gimp:hue-saturation", "Hue/Saturation"),
+        ("gimp:levels", "Levels"),
         ("gimp:threshold", "Threshold"),
         ("gegl:invert-gamma", "Invert Perceptual"),
         ("gegl:invert-linear", "Invert Linear"),

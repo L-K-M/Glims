@@ -532,7 +532,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private func startPreview(title: String,
                               begin: (@escaping @MainActor (Result<ImageDocument.FilterPreviewStart, Error>) -> Void) -> Void,
                               started: (@MainActor (Result<Void, Error>) -> Void)? = nil,
-                              buildPanel: @escaping @MainActor (Int32, [String: EngineSession.FilterValue]) -> FilterPreviewPanel?) {
+                              buildPanel: @escaping @MainActor (ImageDocument.FilterPreviewStart) -> FilterPreviewPanel?) {
         // A catalog reply may arrive after windowWillClose cancels
         // previews, while rendering still drains before isClosing flips.
         guard !closeStarted, !imageDocument.isClosing else {
@@ -563,7 +563,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 started?(.failure(error))
                 NSSound.beep()
             case .success(let start):
-                guard let panel = buildPanel(start.filter, start.values) else {
+                guard let panel = buildPanel(start) else {
                     self.imageDocument.finishFilter(start.filter, commit: false) { _ in }
                     self.imageDocument.filterPreviewIsOpen = false
                     self.statusBar.message = "\(title) could not start on this layer."
@@ -588,7 +588,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         startPreview(title: title, begin: { [imageDocument] completion in
             imageDocument.beginFilterPreview(operation: operation, properties: properties,
                                              completion: completion)
-        }, buildPanel: buildPanel)
+        }, buildPanel: { buildPanel($0.filter, $0.values) })
     }
 
     /// A begin on a committed effect's own edit session; the shared
@@ -601,7 +601,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             imageDocument.beginEffectPreview(effect: effect, on: drawable, properties: properties,
                                              operation: operation,
                                              completion: completion)
-        }, buildPanel: buildPanel)
+        }, buildPanel: { buildPanel($0.filter, $0.values) })
     }
 
     /// The Layers palette's Edit Parameters on a committed effect: the
@@ -619,6 +619,36 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
         endPendingEdits()
         statusBar.message = "\(operation.title)…"
+        if NativeFilterMenuLayout.usesLevelsEditor(operation) {
+            startPreview(title: operation.title, begin: { [imageDocument] reply in
+                imageDocument.beginEffectPreview(effect: effect, on: drawable, properties: [],
+                                                 operation: operation.name, completion: reply)
+            }) { [imageDocument] start in
+                guard let settings = start.levels else { return nil }
+                return LevelsPanel(document: imageDocument, filter: start.filter, settings: settings)
+            }
+            return
+        }
+        if NativeFilterMenuLayout.usesHueSaturationEditor(operation) {
+            startPreview(title: operation.title, begin: { [imageDocument] reply in
+                imageDocument.beginEffectPreview(effect: effect, on: drawable, properties: [],
+                                                 operation: operation.name, completion: reply)
+            }) { [imageDocument] start in
+                guard let settings = start.hueSaturation else { return nil }
+                return HueSaturationPanel(document: imageDocument, filter: start.filter, settings: settings)
+            }
+            return
+        }
+        if NativeFilterMenuLayout.usesColorBalanceEditor(operation) {
+            startPreview(title: operation.title, begin: { [imageDocument] reply in
+                imageDocument.beginEffectPreview(effect: effect, on: drawable, properties: [],
+                                                 operation: operation.name, completion: reply)
+            }) { [imageDocument] start in
+                guard let settings = start.colorBalance else { return nil }
+                return ColorBalancePanel(document: imageDocument, filter: start.filter, settings: settings)
+            }
+            return
+        }
         if NativeFilterMenuLayout.usesBrightnessContrastEditor(operation) {
             startEffectPreview(title: operation.title, effect: effect, drawable: drawable,
                                properties: [], operation: operation.name) { [imageDocument] filter, values in
@@ -884,6 +914,36 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         if operation.name == "gegl:bump-map" && operation.support == .needsAuxInput {
             return openFilterSourceChooser(operation)
         }
+        if NativeFilterMenuLayout.usesLevelsEditor(operation) {
+            endPendingEdits()
+            startPreview(title: operation.title, begin: { [imageDocument] reply in
+                imageDocument.beginFilterPreview(operation: operation.name, properties: [], completion: reply)
+            }) { [imageDocument] start in
+                guard let settings = start.levels else { return nil }
+                return LevelsPanel(document: imageDocument, filter: start.filter, settings: settings)
+            }
+            return
+        }
+        if NativeFilterMenuLayout.usesHueSaturationEditor(operation) {
+            endPendingEdits()
+            startPreview(title: operation.title, begin: { [imageDocument] reply in
+                imageDocument.beginFilterPreview(operation: operation.name, properties: [], completion: reply)
+            }) { [imageDocument] start in
+                guard let settings = start.hueSaturation else { return nil }
+                return HueSaturationPanel(document: imageDocument, filter: start.filter, settings: settings)
+            }
+            return
+        }
+        if NativeFilterMenuLayout.usesColorBalanceEditor(operation) {
+            endPendingEdits()
+            startPreview(title: operation.title, begin: { [imageDocument] reply in
+                imageDocument.beginFilterPreview(operation: operation.name, properties: [], completion: reply)
+            }) { [imageDocument] start in
+                guard let settings = start.colorBalance else { return nil }
+                return ColorBalancePanel(document: imageDocument, filter: start.filter, settings: settings)
+            }
+            return
+        }
         if NativeFilterMenuLayout.usesBrightnessContrastEditor(operation) {
             endPendingEdits()
             startFilterPreview(title: operation.title, operation: operation.name) { [imageDocument] filter, values in
@@ -965,9 +1025,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                     self.startPreview(title: operation.title, begin: { [imageDocument = self.imageDocument] reply in
                         imageDocument.beginFilterPreview(operation: operation.name, properties: properties,
                                                          target: target, source: source, completion: reply)
-                    }, started: completion) { [imageDocument = self.imageDocument] filter, values in
+                    }, started: completion) { [imageDocument = self.imageDocument] start in
                         NativeFilterPanel(document: imageDocument, operation: operation, properties: properties,
-                                          filter: filter, initialValues: values, mergesPixels: true)
+                                          filter: start.filter, initialValues: start.values, mergesPixels: true)
                     }
                 }
             }

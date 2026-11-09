@@ -3396,6 +3396,18 @@ fix. Final combined bundle verification is still running. Other four custom
 config operations remain unavailable pending their dedicated editors.
 
 
+### Native Color Balance configuration (2026-11-09)
+
+Color Balance has a dedicated three-range editor over all nine corrections
+and Preserve Lightness. API v1 appends slots150/151; changed settings replace
+a private immutable native config. Delayed failures cannot silently seed
+later edits with a refused correction. The real editor passes19 checks on
+each engine, including two reproduced/fixed acknowledgement regressions.
+See `color-balance.md` for validation and the separately recorded native
+XCF blend/composite AUTO-normalization limitation. Other custom config
+editors and full integrated release checks remain open.
+
+
 ### Native Image Adjust entries (2026-11-09)
 
 The loaded Threshold and perceptual/linear Invert commands are available
@@ -3406,6 +3418,15 @@ checks pass on each supported engine, including independent pixel formulas.
 Other custom adjustment editors remain separate implementation work.
 
 
+### Native Hue/Saturation configuration (2026-11-09 candidate)
+
+Master and six hue ranges have a dedicated degree/percentage editor with
+global overlap and whole22-value immutable native configuration. API v1
+appends152/153. Independent HSL, overlap/clamp and extended-lightness
+oracles pass within387 native checks per supported engine. The actual
+editor passes21 checks per engine;948 integrated unit tests pass. See
+`hue-saturation.md`. Final bundle checks and CI remain
+open; Levels/Curves and other auxiliary forms remain separate work.
 ### AOM license text discovery (2026-11-09)
 
 The AOM 3.15.1 Git fetch has no MacPorts source archive. The bundler now
@@ -3435,3 +3456,16 @@ stale-document/close guards retain existing native metadata preservation
 policy. See `metadata-capture-date.md`:16 focused model/policy checks and
 931 total units pass, plus19 actual-window checks on the pinned engine.
 Other engines, legacy-control regressions and final bundle checks remain open.
+
+
+### Native Levels configuration (2026-11-09 candidate)
+
+Five named channels retain all 25 endpoints/gamma values, global clamps
+and an explicit transfer curve in a dedicated editor. API v1 appends
+154/155. Equal and reversed endpoints remain valid; native configuration
+replacement preserves older snapshots. Generic operation-only TRC writes
+are refused, and commit validates both new and existing previews before
+history changes. See `levels.md`: 956 unit tests; 492 focused native checks
+on each 3.2/master engine, 475 on 3.0.8; 21 actual UI checks per engine;
+and 1,917 native/2,520 app checks in the isolated final bundle. Histogram,
+automatic stretch and legacy-mismatch editing remain open.

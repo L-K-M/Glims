@@ -673,6 +673,58 @@ typedef struct GlimsBrightnessContrastSettings {
   double contrast;          /* finite -1..1; default 0 */
 } GlimsBrightnessContrastSettings;
 
+typedef struct GlimsColorBalanceRange {
+  double cyan_red;           /* finite -1..1; positive adds red */
+  double magenta_green;      /* finite -1..1; positive adds green */
+  double yellow_blue;        /* finite -1..1; positive adds blue */
+} GlimsColorBalanceRange;
+
+typedef struct GlimsColorBalanceSettings {
+  uint32_t struct_size;
+  uint32_t preserve_luminosity; /* exactly 0 or 1; default 1 */
+  GlimsColorBalanceRange shadows;
+  GlimsColorBalanceRange midtones;
+  GlimsColorBalanceRange highlights;
+} GlimsColorBalanceSettings;
+
+typedef struct GlimsHueSaturationRange {
+  double hue;               /* finite -1..1, normalized 180-degree shift */
+  double saturation;        /* finite -1..1 */
+  double lightness;         /* finite -1..1 */
+} GlimsHueSaturationRange;
+
+typedef struct GlimsHueSaturationSettings {
+  uint32_t struct_size;
+  double overlap;           /* finite 0..1; default 0 */
+  GlimsHueSaturationRange master;
+  GlimsHueSaturationRange red;
+  GlimsHueSaturationRange yellow;
+  GlimsHueSaturationRange green;
+  GlimsHueSaturationRange cyan;
+  GlimsHueSaturationRange blue;
+  GlimsHueSaturationRange magenta;
+} GlimsHueSaturationSettings;
+
+typedef struct GlimsLevelsChannel {
+  double low_input;         /* finite 0..1; default 0 */
+  double high_input;        /* finite 0..1; default 1 */
+  double gamma;             /* finite 0.1..10; default 1 */
+  double low_output;        /* finite 0..1; default 0 */
+  double high_output;       /* finite 0..1; default 1 */
+} GlimsLevelsChannel;
+
+typedef struct GlimsLevelsSettings {
+  uint32_t struct_size;
+  uint32_t trc;             /* GlimsColorTRC: LINEAR/NONLINEAR/PERCEPTUAL; default LINEAR */
+  uint32_t clamp_input;     /* exactly 0 or 1; default 0 */
+  uint32_t clamp_output;    /* exactly 0 or 1; default 0 */
+  GlimsLevelsChannel value;
+  GlimsLevelsChannel red;
+  GlimsLevelsChannel green;
+  GlimsLevelsChannel blue;
+  GlimsLevelsChannel alpha;
+} GlimsLevelsSettings;
+
 /* A layer's mask flags: ENABLED gates the mask's effect on the
  * composite; EDITING makes the mask the target of painting, fills and
  * gradients while its layer is the only selected one; SHOWING displays
@@ -2923,6 +2975,40 @@ typedef struct GlimsEngineAPI {
                                                GlimsFilterID filter,
                                                const GlimsBrightnessContrastSettings *settings,
                                                char **error);
+  /* Slots150-151: a complete gimp:color-balance preview value. Get/Set
+   * follow the sized-output and immutable replacement rules of slots148-149.
+   * All nine corrections are validated before any change. The range picker
+   * is UI state; it never changes an installed config to read another range.
+   * Preserve-luminosity means native HSL lightness. The native operation
+   * works in nonlinear sRGB and clamps before restoring lightness. */
+  GlimsStatus (*filter_color_balance_get) (GlimsEngine *engine, GlimsFilterID filter,
+                                         GlimsColorBalanceSettings *out, char **error);
+  GlimsStatus (*filter_color_balance_set) (GlimsEngine *engine, GlimsFilterID filter,
+                                         const GlimsColorBalanceSettings *settings,
+                                         char **error);
+  /* Slots 152/153: complete native Hue/Saturation settings. All 21
+   * corrections and overlap default to zero. Reads do not change the native
+   * range cursor; changed writes replace a private immutable configuration.
+   * Hue and saturation/lightness contributions combine Master and local
+   * ranges with the native fixed-sRGB HSL rules, including overlap. */
+  GlimsStatus (*filter_hue_saturation_get) (GlimsEngine *engine, GlimsFilterID filter,
+                                          GlimsHueSaturationSettings *out, char **error);
+  GlimsStatus (*filter_hue_saturation_set) (GlimsEngine *engine, GlimsFilterID filter,
+                                          const GlimsHueSaturationSettings *settings,
+                                          char **error);
+  /* Slots154/155: complete native Levels configuration. Equal/inverted
+   * input/output endpoints are valid; no implicit sorting or sum clamp.
+   * TRC is the existing owned GlimsColorTRC enum. A legacy operation/config
+   * TRC mismatch is unsupported, with no live normalization on Get/Copy.
+   * Get requires struct_size >= sizeof(GlimsLevelsSettings); failures zero
+   * the owned fields, preserving struct_size and any future tail. Set
+   * validates the complete value before mutation; numeric equality is a
+   * no-op, including signed-zero equality. Native channel cursors and base
+   * operation settings are preserved by complete-value replacement. */
+  GlimsStatus (*filter_levels_get) (GlimsEngine *engine, GlimsFilterID filter,
+                                   GlimsLevelsSettings *out, char **error);
+  GlimsStatus (*filter_levels_set) (GlimsEngine *engine, GlimsFilterID filter,
+                                   const GlimsLevelsSettings *settings, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

@@ -18,6 +18,9 @@
 #include "engine-private.h"
 #include "filter-input.h"
 #include "filter-config.h"
+#include "color-balance-config.h"
+#include "hue-saturation-config.h"
+#include "levels-config.h"
 
 #include <math.h>
 #include <string.h>
@@ -39,6 +42,28 @@
 #include "core/gimplayermask.h"
 
 #include "gimp-intl.h"
+
+static gboolean
+uses_owned_config (GeglNode *node)
+{
+  return glims_filter_config_is_brightness_contrast (node) ||
+         glims_color_balance_config_is_operation (node) ||
+         glims_hue_saturation_config_is_operation (node) ||
+         glims_levels_config_is_operation (node);
+}
+
+static GlimsStatus
+copy_owned_config (GeglNode *destination, GeglNode *source, char **error)
+{
+  if (glims_color_balance_config_is_operation (source))
+    return glims_color_balance_config_copy (destination, source, error);
+  if (glims_hue_saturation_config_is_operation (source))
+    return glims_hue_saturation_config_copy (destination, source, error);
+  if (glims_levels_config_is_operation (source))
+    return glims_levels_config_copy (destination, source, error);
+  return glims_filter_config_copy (destination, source, error);
+}
+
 
 GlimsStatus
 glims_filter_check_edit (GlimsEngine *engine, GlimsFilterID id, char **error)
@@ -207,7 +232,8 @@ filter_begin_internal (GlimsEngine    *engine,
   if (engine->busy > 0)
     return GLIMS_STATUS_BUSY;
 
-  if (!strcmp (operation, "gimp:brightness-contrast")) {
+  if (!strcmp (operation, "gimp:brightness-contrast") || !strcmp (operation, "gimp:color-balance") ||
+      !strcmp (operation, "gimp:hue-saturation") || !strcmp (operation, "gimp:levels")) {
     status = glims_edit_ready (engine, open, error);
     if (status != GLIMS_STATUS_OK) return status;
     status = source_merge_history_ready (open->image, error);
@@ -239,6 +265,12 @@ filter_begin_internal (GlimsEngine    *engine,
     return glims_fail (error, NULL, "The filter operation could not be created.");
   }
   status = glims_filter_config_prepare (session->operation, error);
+  if (status != GLIMS_STATUS_OK) { glims_filters_free (session); return status; }
+  status = glims_color_balance_config_prepare (session->operation, error);
+  if (status != GLIMS_STATUS_OK) { glims_filters_free (session); return status; }
+  status = glims_hue_saturation_config_prepare (session->operation, error);
+  if (status != GLIMS_STATUS_OK) { glims_filters_free (session); return status; }
+  status = glims_levels_config_prepare (session->operation, error);
   if (status != GLIMS_STATUS_OK) { glims_filters_free (session); return status; }
   if (aux_source) {
     if (!gegl_node_connect_to (aux_source, "output", session->operation, "aux")) {
@@ -391,7 +423,8 @@ glims_filter_edit_begin (GlimsEngine   *engine,
         *error = strdup ("That effect has no editable parameters.");
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
-  if (!strcmp (operation, "gimp:brightness-contrast")) {
+  if (!strcmp (operation, "gimp:brightness-contrast") || !strcmp (operation, "gimp:color-balance") ||
+      !strcmp (operation, "gimp:hue-saturation") || !strcmp (operation, "gimp:levels")) {
     status = source_merge_history_ready (open->image, error);
     if (status != GLIMS_STATUS_OK) { g_free (operation); return status; }
   }
@@ -417,9 +450,14 @@ glims_filter_edit_begin (GlimsEngine   *engine,
 
       if ((pspecs[i]->flags & G_PARAM_READWRITE) != G_PARAM_READWRITE)
         continue;
+      /* Levels' config hook installs its TRC and binding together. Generic
+       * copying must not create an intermediate operation/config mismatch. */
+      if (!strcmp (pspecs[i]->name, "trc") &&
+          glims_levels_config_is_operation (session->operation))
+        continue;
       if (!strcmp (pspecs[i]->name, "config") &&
-          glims_filter_config_is_brightness_contrast (session->operation)) {
-        status = glims_filter_config_copy (session->operation, existing_node, error);
+          uses_owned_config (session->operation)) {
+        status = copy_owned_config (session->operation, existing_node, error);
         if (status != GLIMS_STATUS_OK) {
           g_free (pspecs); glims_filters_free (session); return status;
         }
@@ -577,6 +615,97 @@ glims_filter_brightness_contrast_set (GlimsEngine *engine, GlimsFilterID id,
 }
 
 GlimsStatus
+glims_filter_color_balance_get (GlimsEngine *engine, GlimsFilterID id,
+                                GlimsColorBalanceSettings *out, char **error)
+{
+  GlimsFilter *session;
+  if (!out || out->struct_size < sizeof *out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  out->preserve_luminosity = 0;
+  out->shadows = out->midtones = out->highlights = (GlimsColorBalanceRange) {0};
+  session = g_hash_table_lookup (engine->filters, GINT_TO_POINTER (id));
+  if (!session) return GLIMS_STATUS_NOT_FOUND;
+  if (engine->busy > 0) return GLIMS_STATUS_BUSY;
+  return glims_color_balance_config_get (session->operation, out, error);
+}
+
+GlimsStatus
+glims_filter_color_balance_set (GlimsEngine *engine, GlimsFilterID id,
+                                const GlimsColorBalanceSettings *settings, char **error)
+{
+  GlimsFilter *session = g_hash_table_lookup (engine->filters, GINT_TO_POINTER (id));
+  gboolean changed = FALSE;
+  GlimsStatus status = glims_filter_check_edit (engine, id, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = glims_color_balance_config_set (session->operation, settings, &changed, error);
+  if (status == GLIMS_STATUS_OK && changed) {
+    glims_filter_preview_apply (session);
+    gimp_image_flush (session->image);
+  }
+  return status;
+}
+
+GlimsStatus
+glims_filter_hue_saturation_get (GlimsEngine *engine, GlimsFilterID id,
+                                GlimsHueSaturationSettings *out, char **error)
+{
+  GlimsFilter *session;
+  if (!out || out->struct_size < sizeof *out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  out->overlap = 0;
+  out->master = out->red = out->yellow = out->green = out->cyan = out->blue = out->magenta =
+    (GlimsHueSaturationRange) {0};
+  session = g_hash_table_lookup (engine->filters, GINT_TO_POINTER (id));
+  if (!session) return GLIMS_STATUS_NOT_FOUND;
+  if (engine->busy > 0) return GLIMS_STATUS_BUSY;
+  return glims_hue_saturation_config_get (session->operation, out, error);
+}
+
+GlimsStatus
+glims_filter_hue_saturation_set (GlimsEngine *engine, GlimsFilterID id,
+                                const GlimsHueSaturationSettings *settings, char **error)
+{
+  GlimsFilter *session = g_hash_table_lookup (engine->filters, GINT_TO_POINTER (id));
+  gboolean changed = FALSE;
+  GlimsStatus status = glims_filter_check_edit (engine, id, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = glims_hue_saturation_config_set (session->operation, settings, &changed, error);
+  if (status == GLIMS_STATUS_OK && changed) {
+    glims_filter_preview_apply (session);
+    gimp_image_flush (session->image);
+  }
+  return status;
+}
+
+GlimsStatus
+glims_filter_levels_get (GlimsEngine *engine, GlimsFilterID id,
+                                GlimsLevelsSettings *out, char **error)
+{
+  GlimsFilter *session;
+  if (!out || out->struct_size < sizeof *out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  out->trc = out->clamp_input = out->clamp_output = 0;
+  out->value = out->red = out->green = out->blue = out->alpha = (GlimsLevelsChannel) {0};
+  session = g_hash_table_lookup (engine->filters, GINT_TO_POINTER (id));
+  if (!session) return GLIMS_STATUS_NOT_FOUND;
+  if (engine->busy > 0) return GLIMS_STATUS_BUSY;
+  return glims_levels_config_get (session->operation, out, error);
+}
+
+GlimsStatus
+glims_filter_levels_set (GlimsEngine *engine, GlimsFilterID id,
+                                const GlimsLevelsSettings *settings, char **error)
+{
+  GlimsFilter *session = g_hash_table_lookup (engine->filters, GINT_TO_POINTER (id));
+  gboolean changed = FALSE;
+  GlimsStatus status = glims_filter_check_edit (engine, id, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = glims_levels_config_set (session->operation, settings, &changed, error);
+  if (status == GLIMS_STATUS_OK && changed) {
+    glims_filter_preview_apply (session);
+    gimp_image_flush (session->image);
+  }
+  return status;
+}
+
+GlimsStatus
 glims_filter_commit (GlimsEngine    *engine,
                      GlimsFilterID   id,
                      char          **error)
@@ -586,8 +715,17 @@ glims_filter_commit (GlimsEngine    *engine,
   GlimsStatus status = glims_filter_check_edit (engine, id, error);
 
   if (status != GLIMS_STATUS_OK) return status;
-  if (session->aux_source || glims_filter_config_is_brightness_contrast (session->operation)) {
+  if (session->aux_source || uses_owned_config (session->operation)) {
     status = source_merge_history_ready (session->image, error);
+    if (status != GLIMS_STATUS_OK) return status;
+  }
+
+  /* Validate before either commit path can freeze masks or change history.
+   * This also refuses externally altered/new configs without consuming the
+   * preview, so a caller can still abort it safely. */
+  if (glims_levels_config_is_operation (session->operation)) {
+    GlimsLevelsSettings checked = { .struct_size = sizeof checked };
+    status = glims_levels_config_get (session->operation, &checked, error);
     if (status != GLIMS_STATUS_OK) return status;
   }
 
@@ -612,6 +750,25 @@ glims_filter_commit (GlimsEngine    *engine,
         status = glims_filter_config_get (existing_node, &checked, error);
         if (status != GLIMS_STATUS_OK) return status;
       }
+      if (glims_color_balance_config_is_operation (session->operation)) {
+        GlimsColorBalanceSettings checked = { .struct_size = sizeof checked };
+        status = glims_color_balance_config_get (session->operation, &checked, error);
+        if (status != GLIMS_STATUS_OK) return status;
+        status = glims_color_balance_config_get (existing_node, &checked, error);
+        if (status != GLIMS_STATUS_OK) return status;
+      }
+      if (glims_hue_saturation_config_is_operation (session->operation)) {
+        GlimsHueSaturationSettings checked = { .struct_size = sizeof checked };
+        status = glims_hue_saturation_config_get (session->operation, &checked, error);
+        if (status != GLIMS_STATUS_OK) return status;
+        status = glims_hue_saturation_config_get (existing_node, &checked, error);
+        if (status != GLIMS_STATUS_OK) return status;
+      }
+      if (glims_levels_config_is_operation (session->operation)) {
+        GlimsLevelsSettings checked = { .struct_size = sizeof checked };
+        status = glims_levels_config_get (existing_node, &checked, error);
+        if (status != GLIMS_STATUS_OK) return status;
+      }
 
       if (! gimp_image_undo_push_filter_modified (session->image, _("Edit filter"),
                                                   session->drawable, existing))
@@ -626,9 +783,12 @@ glims_filter_commit (GlimsEngine    *engine,
 
           if ((specs[i]->flags & G_PARAM_READWRITE) != G_PARAM_READWRITE)
             continue;
+          if (!strcmp (specs[i]->name, "trc") &&
+              glims_levels_config_is_operation (session->operation))
+            continue;
           if (!strcmp (specs[i]->name, "config") &&
-              glims_filter_config_is_brightness_contrast (session->operation)) {
-            status = glims_filter_config_copy (existing_node, session->operation, error);
+              uses_owned_config (session->operation)) {
+            status = copy_owned_config (existing_node, session->operation, error);
             if (status != GLIMS_STATUS_OK) { g_free (specs); return status; }
             continue;
           }
