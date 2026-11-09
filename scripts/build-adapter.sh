@@ -76,6 +76,14 @@ for source in "$ROOT"/Engine/*.c; do
     -c "$source" -o "$object" || die "compiling $(basename "$source") failed"
 done
 
+for source in "$ROOT"/Engine/*.cpp; do
+  [[ -f "$source" ]] || continue
+  object="$OUT/obj/$(basename "${source%.cpp}").o"
+  xcrun clang++ @"$OUT/compile-cxx.rsp" -I"$INCLUDE" -I"$ROOT/Engine" \
+    -fvisibility=hidden -fvisibility-inlines-hidden -Wall \
+    -c "$source" -o "$object" || die "compiling $(basename "$source") failed"
+done
+
 echo "==> Linking libglimsengine.dylib"
 xcrun clang++ -dynamiclib -o "$OUT/libglimsengine.dylib" \
   "$OUT"/obj/*.o @"$OUT/objects.rsp" @"$OUT/link.rsp" \

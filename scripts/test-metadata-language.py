@@ -152,10 +152,10 @@ def cmd_build(args: argparse.Namespace) -> Path:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    binary = Path(args.binary)
+    binary = Path(args.binary).resolve()
     if not binary.is_file():
         fail(f"harness binary missing: {binary}; run the build subcommand first")
-    work = Path(args.work)
+    work = Path(args.work).resolve()
     for sub in ("home", "cache", "user"):
         (work / sub).mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
