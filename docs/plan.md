@@ -3239,3 +3239,21 @@ all admitted maps, unrelated data, native normalization stability and roundtrip
 fidelity. It has no public writer slot or UI yet. Native conformance, 27 preparation
 checks and 9 inventory checks pass on every engine; the normalization helper has
 124 checks per engine. 838 unit and 14 script tests pass; bundle/CI checks pending.
+
+### Trackpad view navigation candidate (2026-11-09)
+
+The canvas responds to AppKit pinch and rotate events for its own visible
+window. Pinch retains fractional zoom between events and clamps before
+integer conversion; rotation applies the event's counterclockwise delta to
+the current view angle, including phase-less events and external menu
+changes. Both preserve the pointer's image coordinate when scrolling bounds
+allow it. Pending tool interactions, guide drags, strokes and closing windows
+refuse navigation; engine-exclusive work does not block these view changes.
+No native pixels, metadata or Undo operation changes.
+
+Source review found no important issues and855 unit tests pass. The synthetic
+AppKit-event case passes22 checks on each of all four engines: real windows,
+pointer anchoring, two-document capture, busy/stroke/close guards and native
+state invariance. The first run exposed AppKit angle quantization; relative
+rotation now reads the controller's canonical Double angle. Physical hardware gestures and
+wheel/modifier behavior are not certified by these tests.
