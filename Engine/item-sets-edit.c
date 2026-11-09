@@ -124,7 +124,7 @@ glims_image_item_set_edit (GlimsEngine *e, GlimsImageID image, uint32_t operatio
   GType gkind;
   GlimsStatus status;
   GimpItemList *native = NULL;
-  GimpItem *items = NULL;
+  GimpItem **items = NULL;
   gchar *set_name = NULL;      /* owned full name of the token's set */
   const char *result_name;
 
@@ -149,11 +149,11 @@ glims_image_item_set_edit (GlimsEngine *e, GlimsImageID image, uint32_t operatio
         return fail (error, "REPLACE takes a current token and explicit members only.");
       break;
     case GLIMS_ITEM_SET_EDIT_RENAME:
-      if (token == 0 || count != 0)
+      if (token == 0 || count != 0 || members != NULL)
         return fail (error, "RENAME takes a current token and the desired name only.");
       break;
     default: /* REMOVE */
-      if (token == 0 || name != NULL || count != 0)
+      if (token == 0 || name != NULL || count != 0 || members != NULL)
         return fail (error, "REMOVE takes a current token only.");
       break;
     }
@@ -205,6 +205,35 @@ glims_image_item_set_edit (GlimsEngine *e, GlimsImageID image, uint32_t operatio
         }
     }
 
+  /* A full-definition no-op needs no new identity, even when the token
+   * counter is exhausted. Compare the manager's complete definition,
+   * including temporarily detached members retained by undo. */
+  if (operation == GLIMS_ITEM_SET_EDIT_RENAME || operation == GLIMS_ITEM_SET_EDIT_REPLACE)
+    {
+      gboolean same = operation == GLIMS_ITEM_SET_EDIT_RENAME
+                      && g_strcmp0 (set_name, name) == 0;
+      if (operation == GLIMS_ITEM_SET_EDIT_REPLACE)
+        {
+          GPtrArray *definition = glims_item_sets_copy_members (manager, native);
+          same = definition->len == (guint) count;
+          for (guint m = 0; same && m < definition->len; m++)
+            {
+              gboolean found = FALSE;
+              for (int32_t i = 0; i < count; i++)
+                if (g_ptr_array_index (definition, m) == items[i]) found = TRUE;
+              if (! found) same = FALSE;
+            }
+          g_ptr_array_unref (definition);
+        }
+      if (same)
+        {
+          if (outToken) *outToken = token;
+          g_free (items);
+          g_free (set_name);
+          return GLIMS_STATUS_OK;
+        }
+    }
+
   /* Preflight identity exhaustion before ANY mutation: CREATE/REPLACE/
    * RENAME mint a fresh token for the resulting set and fail closed at
    * UINT64_MAX. */
@@ -237,14 +266,17 @@ glims_image_item_set_edit (GlimsEngine *e, GlimsImageID image, uint32_t operatio
     }
 
   g_free (items);
-  g_free (set_name);
   if (status != GLIMS_STATUS_OK)
-    return status;
+    {
+      g_free (set_name);
+      return status;
+    }
 
   if (operation != GLIMS_ITEM_SET_EDIT_REMOVE && outToken)
     {
       GimpItemList *result = find_fixed_by_name (open->image, gkind, result_name);
       *outToken = result ? glims_item_sets_token_of (manager, result) : 0;
     }
+  g_free (set_name);
   return GLIMS_STATUS_OK;
 }

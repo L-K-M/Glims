@@ -392,6 +392,15 @@ run_all (GlimsEngine *engine, gpointer data)
     CHECK (status == GLIMS_STATUS_OK && redone != 0 && redone != empty_token,
            "[redo] e-empty restored under a fresh token (%llu)", (unsigned long long) redone);
   }
+  /* Whole-kind snapshot restoration recreates ALL layer definitions; the
+   * pre-Undo e-layers token must expire too. */
+  count = -1;
+  CHECK (members_of (probe->image_id, token, ids, 8, &count) == GLIMS_STATUS_NOT_FOUND,
+         "[redo] whole-kind restore expires the earlier layer token");
+  /* Re-query rather than relying on a fixture row count. */
+  status = list_sets (probe->image_id, rows, MAX_ROWS, &count);
+  FIXTURE (status == GLIMS_STATUS_OK && (token = token_of_row (rows, count, "e-layers")),
+           "[redo] reacquire e-layers by its freshly listed token");
 
   /* ---------- Phase C: REPLACE + no-op + Undo ---------------------------- */
 
@@ -470,10 +479,14 @@ run_all (GlimsEngine *engine, gpointer data)
   free_error (&error);
   check_quiet (probe, s0, capture_state (image), "rename noop", "same-name RENAME");
 
+  status = edit_set (probe->image_id, GLIMS_ITEM_SET_EDIT_CREATE, GLIMS_ITEM_SET_LAYER,
+                     0, "e-conflict", NULL, 0, &out, &error);
+  FIXTURE (status == GLIMS_STATUS_OK, "[rename conflict] create distinct same-kind target");
+  free_error (&error);
   s0 = capture_state (image);
   out = 77;
   status = edit_set (probe->image_id, GLIMS_ITEM_SET_EDIT_RENAME, GLIMS_ITEM_SET_LAYER,
-                     token, "e-empty", NULL, 0, &out, &error);
+                     token, "e-conflict", NULL, 0, &out, &error);
   CHECK (status == GLIMS_STATUS_INVALID_ARGUMENT && out == 0,
          "[rename conflict] RENAME onto existing name refused, token not retargeted");
   free_error (&error);
@@ -595,6 +608,7 @@ run_all (GlimsEngine *engine, gpointer data)
                        "a\x01""b", NULL, 0, &out, &error);
     CHECK (status == GLIMS_STATUS_INVALID_ARGUMENT && out == 0, "[name] control character refused");
     free_error (&error);
+    check_quiet (probe, s0, capture_state (image), "names phase", "all invalid names refused");
     /* 255 bytes of valid multi-byte UTF-8 is accepted. */
     {
       char ok_name[256];
@@ -612,7 +626,7 @@ run_all (GlimsEngine *engine, gpointer data)
       CHECK (status == GLIMS_STATUS_OK, "[name] cleanup remove of the 255-byte set");
       free_error (&error);
     }
-    check_quiet (probe, s0, capture_state (image), "names phase", "only accepted name mutated");
+    check_delta (probe, s0, capture_state (image), 2, -s0.redo, "names phase", "accepted create and cleanup remove");
   }
 
   /* Members. */
@@ -706,6 +720,72 @@ run_all (GlimsEngine *engine, gpointer data)
   CHECK (status == GLIMS_STATUS_NOT_RUNNING && out == 0, "[null engine] NOT_RUNNING, outToken reset to 0");
   free_error (&error);
 
+  /* Channels and paths use the same endpoint, but exercise their actual
+   * native lists and Undo/Redo independently rather than inferring CRUD
+   * from the layer case. Each restore invalidates that kind's tokens. */
+  for (uint32_t k = GLIMS_ITEM_SET_CHANNEL; k <= GLIMS_ITEM_SET_PATH; k++)
+    {
+      GlimsItemID member = k == GLIMS_ITEM_SET_CHANNEL ? members_ch[0] : members_p[0];
+      const char *original = "e-kind-crud", *renamed = "e-kind-renamed";
+      uint64_t current;
+      s0 = capture_state (image);
+      status = edit_set (probe->image_id, GLIMS_ITEM_SET_EDIT_CREATE, k, 0,
+                         original, &member, 1, &current, &error);
+      FIXTURE (status == GLIMS_STATUS_OK && current != 0, "[kind %u] create CRUD fixture", k);
+      free_error (&error);
+      check_delta (probe, s0, capture_state (image), 1, -s0.redo, "all kinds", "CREATE");
+      s0 = capture_state (image);
+      status = edit_set (probe->image_id, GLIMS_ITEM_SET_EDIT_REPLACE, k, current,
+                         NULL, NULL, 0, &out, &error);
+      CHECK (status == GLIMS_STATUS_OK && out != 0 && out != current, "[kind %u] REPLACE empty returns fresh token", k);
+      free_error (&error);
+      check_delta (probe, s0, capture_state (image), 1, -s0.redo, "all kinds", "REPLACE");
+      CHECK (api->image_undo (engine, probe->image_id) == GLIMS_STATUS_OK, "[kind %u] Undo REPLACE", k);
+      CHECK (list_sets (probe->image_id, rows, MAX_ROWS, &count) == GLIMS_STATUS_OK, "[kind %u] list restored definitions", k);
+      current = 0;
+      for (int32_t i = 0; i < count; i++)
+        if (rows[i].kind == k && strcmp (rows[i].display_name, original) == 0) current = rows[i].token;
+      CHECK (current != 0 && members_of (probe->image_id, current, ids, 8, &count) == GLIMS_STATUS_OK
+             && count == 1 && ids[0] == member, "[kind %u] Undo restores exact member", k);
+      CHECK (api->image_redo (engine, probe->image_id) == GLIMS_STATUS_OK, "[kind %u] Redo REPLACE", k);
+      FIXTURE (list_sets (probe->image_id, rows, MAX_ROWS, &count) == GLIMS_STATUS_OK, "[kind %u] re-list after Redo", k);
+      current = 0;
+      for (int32_t i = 0; i < count; i++)
+        if (rows[i].kind == k && strcmp (rows[i].display_name, original) == 0) current = rows[i].token;
+      CHECK (current != 0 && members_of (probe->image_id, current, ids, 8, &count) == GLIMS_STATUS_OK
+             && count == 0, "[kind %u] Redo restores explicit empty definition", k);
+      s0 = capture_state (image);
+      status = edit_set (probe->image_id, GLIMS_ITEM_SET_EDIT_RENAME, k, current,
+                         renamed, NULL, 0, &out, &error);
+      CHECK (status == GLIMS_STATUS_OK && out != 0 && out != current, "[kind %u] RENAME fresh token", k);
+      free_error (&error);
+      check_delta (probe, s0, capture_state (image), 1, -s0.redo, "all kinds", "RENAME");
+      CHECK (api->image_undo (engine, probe->image_id) == GLIMS_STATUS_OK, "[kind %u] Undo RENAME", k);
+      CHECK (api->image_redo (engine, probe->image_id) == GLIMS_STATUS_OK, "[kind %u] Redo RENAME", k);
+      FIXTURE (list_sets (probe->image_id, rows, MAX_ROWS, &count) == GLIMS_STATUS_OK, "[kind %u] renamed definitions", k);
+      current = 0;
+      for (int32_t i = 0; i < count; i++)
+        if (rows[i].kind == k && strcmp (rows[i].display_name, renamed) == 0) current = rows[i].token;
+      s0 = capture_state (image);
+      status = edit_set (probe->image_id, GLIMS_ITEM_SET_EDIT_REMOVE, k, current,
+                         NULL, NULL, 0, &out, &error);
+      CHECK (status == GLIMS_STATUS_OK && out == 0, "[kind %u] REMOVE returns zero", k);
+      free_error (&error);
+      check_delta (probe, s0, capture_state (image), 1, -s0.redo, "all kinds", "REMOVE");
+      CHECK (api->image_undo (engine, probe->image_id) == GLIMS_STATUS_OK, "[kind %u] Undo REMOVE", k);
+      CHECK (list_sets (probe->image_id, rows, MAX_ROWS, &count) == GLIMS_STATUS_OK, "[kind %u] removed definition restored", k);
+      gboolean restored = FALSE;
+      for (int32_t i = 0; i < count; i++)
+        if (rows[i].kind == k && strcmp (rows[i].display_name, renamed) == 0) restored = TRUE;
+      CHECK (restored, "[kind %u] Undo REMOVE restores named definition", k);
+      CHECK (api->image_redo (engine, probe->image_id) == GLIMS_STATUS_OK, "[kind %u] Redo REMOVE", k);
+      CHECK (list_sets (probe->image_id, rows, MAX_ROWS, &count) == GLIMS_STATUS_OK, "[kind %u] list final definitions", k);
+      restored = FALSE;
+      for (int32_t i = 0; i < count; i++)
+        if (rows[i].kind == k && strcmp (rows[i].display_name, renamed) == 0) restored = TRUE;
+      CHECK (! restored, "[kind %u] Redo REMOVE keeps definition absent", k);
+    }
+
   /* ---------- Phase G: busy gate while a stroke holds the image ---------- */
 
   {
@@ -768,10 +848,19 @@ run_all (GlimsEngine *engine, gpointer data)
     CHECK (find_row (rows, count, "e-exhaust") < 0, "[exhaustion] nothing mutated");
     out = 77;
     status = edit_set (probe->image_id, GLIMS_ITEM_SET_EDIT_REPLACE, GLIMS_ITEM_SET_LAYER,
-                       token, NULL, members_ab, 2, &out, &error);
+                       token, NULL, members_c, 1, &out, &error);
     CHECK (status == GLIMS_STATUS_FAILED && out == 0, "[exhaustion] REPLACE refuses too (fresh token needed)");
     free_error (&error);
     check_quiet (probe, s0, capture_state (image), "exhaustion", "exhausted REPLACE");
+    status = edit_set (probe->image_id, GLIMS_ITEM_SET_EDIT_REPLACE, GLIMS_ITEM_SET_LAYER,
+                       token, NULL, members_ab, 2, &out, &error);
+    CHECK (status == GLIMS_STATUS_OK && out == token, "[exhaustion] identical full REPLACE needs no fresh token");
+    free_error (&error);
+    status = edit_set (probe->image_id, GLIMS_ITEM_SET_EDIT_RENAME, GLIMS_ITEM_SET_LAYER,
+                       token, "e-renamed", NULL, 0, &out, &error);
+    CHECK (status == GLIMS_STATUS_OK && out == token, "[exhaustion] same-name RENAME needs no fresh token");
+    free_error (&error);
+    check_quiet (probe, s0, capture_state (image), "exhaustion", "both no-ops");
     engine->next_item_set_token = saved;
     s0 = capture_state (image);
     status = edit_set (probe->image_id, GLIMS_ITEM_SET_EDIT_CREATE, GLIMS_ITEM_SET_LAYER, 0,

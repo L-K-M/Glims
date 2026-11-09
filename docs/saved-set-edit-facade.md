@@ -39,7 +39,7 @@ GlimsStatus image_item_set_edit (engine, image, operation, kind, token,
   and its full name is captured internally from the resolved set. Foreign,
   stale or expired tokens are NOT_FOUND and never retargeted.
 - **Strict field relevance.** REPLACE: `name` NULL. RENAME: desired full
-  `name`, `members` NULL with count 0. REMOVE: `name` NULL, count 0. Any
+  `name`, `members` NULL with count 0. REMOVE: `name` NULL, `members` NULL, count 0. Any
   other combination, `count` < 0, or `members` NULL with `count` > 0 is
   INVALID_ARGUMENT.
 - **Names** are the FULL name: nonempty valid UTF-8, no control characters,
@@ -81,3 +81,21 @@ GlimsStatus image_item_set_edit (engine, image, operation, kind, token,
   token, zero delta), every invalid field/name/member class, busy and
   frozen refusal, stale/foreign/same-name non-retarget, token exhaustion
   preflight, close and XCF persistence.
+
+## Root acceptance
+
+Source acceptance fixed a REPLACE result-name use after free and the native
+member-array pointer type. Full-definition no-ops are recognized before
+identity exhaustion; empty Swift arrays pass a NULL member pointer so strict
+RENAME/REMOVE relevance holds across the bridge.
+
+The first runtime exposed test-oracle errors: whole-kind Undo/Redo expires
+all recreated set tokens, and an accepted create/cleanup pair changes Undo
+by two steps. The harness now reacquires tokens after restoration, uses a
+separate existing rename-conflict target, checks refusal state before the
+accepted writes, and directly exercises channel/path replace, rename and
+remove with Undo/Redo instead of inferring them from layer coverage.
+
+The pinned engine passes all 146 edit checks plus 1,917 general checks.
+All 697 unit tests pass. Remaining engine runs and independent source review
+are in progress; this is not yet an integrated editor or UI completion.

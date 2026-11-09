@@ -3009,12 +3009,13 @@ final class EngineSession: @unchecked Sendable {
         var outToken: UInt64 = 0
         var error: UnsafeMutablePointer<CChar>?
         let status = members.withUnsafeBufferPointer { buffer in
-            name?.withCString { cName in
+            let memberPointer = buffer.isEmpty ? nil : buffer.baseAddress
+            return name?.withCString { cName in
                 api.image_item_set_edit(engine, image, operation.rawValue, kind.rawValue,
-                                        token, cName, buffer.baseAddress, Int32(members.count),
+                                        token, cName, memberPointer, Int32(members.count),
                                         &outToken, &error)
             } ?? api.image_item_set_edit(engine, image, operation.rawValue, kind.rawValue,
-                                         token, nil, buffer.baseAddress, Int32(members.count),
+                                         token, nil, memberPointer, Int32(members.count),
                                          &outToken, &error)
         }
         try check(status, error)
