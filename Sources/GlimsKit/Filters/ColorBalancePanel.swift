@@ -192,6 +192,12 @@ final class ColorBalancePanel: FilterPreviewPanel, NSTextFieldDelegate {
         rangePopup.selectItem(at: selectedRange.rawValue)
     }
 
+    private func displayPreservingFieldDrafts(_ value: Settings) {
+        FilterFieldDrafts.preserve([(cyanRedField, displayedCyanRed), (magentaGreenField, displayedMagentaGreen), (yellowBlueField, displayedYellowBlue)]) {
+            display(value)
+        }
+    }
+
     private func percentage(in field: NSTextField) -> Double? {
         // Display rounding must not turn Apply on an untouched seed into a
         // parameter edit, or alter the other ranges of a full-settings write.
@@ -288,6 +294,7 @@ final class ColorBalancePanel: FilterPreviewPanel, NSTextFieldDelegate {
         guard let filter, value.isValid else { return }
         guard value != draft else { return }
         draft = value
+        display(value)
         generation += 1
         let request = generation
         pending[request] = value
@@ -306,10 +313,6 @@ final class ColorBalancePanel: FilterPreviewPanel, NSTextFieldDelegate {
             if case .failure = result, self.draftGeneration == request {
                 // A rejected full-value write must stop being the base for the
                 // next range edit immediately, even while an older write waits.
-                let fields = [self.cyanRedField, self.magentaGreenField, self.yellowBlueField]
-                let invalidText = fields.compactMap { field -> (NSTextField, String)? in
-                    self.percentage(in: field) == nil ? (field, field.stringValue) : nil
-                }
                 if let previous = self.pending.keys.filter({ $0 > self.acceptedGeneration }).max(),
                    let value = self.pending[previous] {
                     self.draft = value
@@ -318,8 +321,7 @@ final class ColorBalancePanel: FilterPreviewPanel, NSTextFieldDelegate {
                     self.draft = self.accepted
                     self.draftGeneration = self.acceptedGeneration
                 }
-                self.display(self.draft)
-                for (field, text) in invalidText { field.stringValue = text }
+                self.displayPreservingFieldDrafts(self.draft)
             }
             if self.generation == request { self.latestReply = (request, result) }
             self.resolveLatestReply()
@@ -340,7 +342,8 @@ final class ColorBalancePanel: FilterPreviewPanel, NSTextFieldDelegate {
                 showError(error.localizedDescription)
             } else {
                 draft = accepted
-                display(accepted)
+                draftGeneration = acceptedGeneration
+                displayPreservingFieldDrafts(accepted)
                 showError(error.localizedDescription)
             }
         }

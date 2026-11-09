@@ -115,6 +115,25 @@ extension EngineSmokeTest {
             try session.abortFilter(invalidSession)
             check(false, "the delayed invalid-text fixture opens")
         }
+        for text in ["31", "invalid"] {
+            let controlledFilter = try session.beginFilter(image: image, drawable: layer, operation: operation.name)
+            var writes: [EngineSession.ColorBalanceSettings] = []
+            var firstReply: (@MainActor (Result<Void, Error>) -> Void)?
+            guard let controlled = ColorBalancePanel(document: document, filter: controlledFilter, settings: .init(), write: { _, value, reply in
+                writes.append(value)
+                if writes.count == 1 { firstReply = reply }
+                else { reply(.failure(ImageDocument.DocumentError.busy)) }
+            }) else { try session.abortFilter(controlledFilter); continue }
+            controlled.cyanRedSlider.doubleValue = 10; controlled.sliderChanged(controlled.cyanRedSlider)
+            controlled.magentaGreenSlider.doubleValue = 20; controlled.sliderChanged(controlled.magentaGreenSlider)
+            controlled.window?.makeKeyAndOrderFront(nil); controlled.window?.makeFirstResponder(controlled.yellowBlueField)
+            if let fieldEditor = controlled.yellowBlueField.currentEditor() {
+                fieldEditor.string = text; firstReply?(.success(()))
+                check(controlled.yellowBlueField.currentEditor()?.string == text,
+                      "a delayed failure keeps active uncommitted color-balance text (\(text))")
+            } else { check(false, "the controlled color-balance field editor starts") }
+            controlled.cancel(); settle()
+        }
         func open() -> ColorBalancePanel? {
             controller.openNativeFilter(operation)
             wait { controller.previewPanel != nil && document.pendingWork == 0 }
