@@ -6,6 +6,9 @@ import AppKit
 @MainActor
 enum MainMenu {
     static let recentlyUsedTitle = "Recently Used"
+    /// Image ▸ Adjust's title; the native catalog and the plug-in merge
+    /// both fill this one static submenu.
+    static let adjustTitle = "Adjust"
 
     static func make() -> NSMenu {
         let menu = NSMenu()
@@ -83,6 +86,10 @@ enum MainMenu {
                 item("Assign…", #selector(DocumentWindowController.assignColorProfile(_:))),
                 item("Convert…", #selector(DocumentWindowController.convertColorProfile(_:))),
             ]),
+            // Filled by the native catalog (Threshold, Invert…) and by the
+            // plug-in merge (the engine's Colors commands); both merge into
+            // this one submenu instead of adding their own.
+            submenu(adjustTitle, []),
             .separator(),
             item("Image Size…", #selector(DocumentWindowController.imageSize(_:))),
             item("Canvas Size…", #selector(DocumentWindowController.canvasSize(_:))),

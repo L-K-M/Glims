@@ -185,12 +185,33 @@ enum NativeFilterMenus {
     /// so a plug-in refresh removes only plug-in items and vice versa.
     private static let generatedTag = 0x6C_6D_74
 
+    /// Image ▸ Adjust's dedicated native entries: scalar operations the
+    /// shared preview drives, by engine operation name with the menu title
+    /// each gets. Operations the engine does not list are simply omitted,
+    /// and the support gates stay — a gated operation never appears here.
+    private static let adjustOperations: [(name: String, title: String)] = [
+        ("gimp:brightness-contrast", "Brightness/Contrast"),
+        ("gimp:threshold", "Threshold"),
+        ("gegl:invert-gamma", "Invert Perceptual"),
+        ("gegl:invert-linear", "Invert Linear"),
+    ]
+
     /// Installs or refreshes the catalog's sections inside the Filter
-    /// menu's categories. Dedicated commands, Recently Used and the
+    /// menu's categories and its dedicated entries inside Image ▸ Adjust.
+    /// Each menu is handled independently, so one missing menu never
+    /// blocks the other. Dedicated commands, Recently Used and the
     /// plug-in merge's items are left alone; a category the catalog
     /// created goes away once nothing but generated items filled it.
     static func install(_ operations: [EngineSession.FilterOperation], in mainMenu: NSMenu) {
-        guard let menu = mainMenu.item(withTitle: GlimsMenu.filter.rawValue)?.submenu else { return }
+        if let filterMenu = mainMenu.item(withTitle: GlimsMenu.filter.rawValue)?.submenu {
+            installFilter(operations, in: filterMenu)
+        }
+        if let imageMenu = mainMenu.item(withTitle: GlimsMenu.image.rawValue)?.submenu {
+            installAdjust(operations, in: imageMenu)
+        }
+    }
+
+    private static func installFilter(_ operations: [EngineSession.FilterOperation], in menu: NSMenu) {
         for item in menu.items where item.submenu != nil {
             removeGenerated(from: item.submenu!)
             if item.submenu!.items.isEmpty && item.tag == generatedTag { menu.removeItem(item) }
@@ -215,8 +236,21 @@ enum NativeFilterMenus {
                 }
                 if let next { menu.insertItem(parent, at: next) } else { menu.addItem(parent) }
             }
-            merge(section.entries, into: submenu)
+            merge(section.entries.map { tagged(commandItem($0)) }, into: submenu)
         }
+    }
+
+    /// Merges the catalog's dedicated adjustment entries into the static
+    /// Image ▸ Adjust submenu, ahead of any plug-in content there.
+    private static func installAdjust(_ operations: [EngineSession.FilterOperation], in imageMenu: NSMenu) {
+        guard let adjust = imageMenu.item(withTitle: MainMenu.adjustTitle)?.submenu else { return }
+        removeGenerated(from: adjust)
+        let items = adjustOperations.compactMap { entry -> NSMenuItem? in
+            guard let operation = operations.first(where: { $0.name == entry.name }),
+                  NativeFilterMenuLayout.supportsParameterEditor(operation) else { return nil }
+            return tagged(commandItem(operation, title: "\(entry.title)…"))
+        }
+        merge(items, into: adjust)
     }
 
     /// Drops generated items from a category and the separators that
@@ -237,8 +271,8 @@ enum NativeFilterMenus {
     /// The native items join a category ahead of its plug-in content —
     /// generated items and plug-in submenus — with one separator between
     /// the two groups; dedicated commands (untagged) stay ahead of both.
-    private static func merge(_ entries: [EngineSession.FilterOperation], into submenu: NSMenu) {
-        let items = entries.map { tagged(commandItem($0)) }
+    private static func merge(_ items: [NSMenuItem], into submenu: NSMenu) {
+        guard !items.isEmpty else { return }
         guard let boundary = submenu.items.firstIndex(where: {
             $0.tag == PlugInMenus.generatedTag || $0.submenu != nil
         }) else {
@@ -253,8 +287,9 @@ enum NativeFilterMenus {
         }
     }
 
-    private static func commandItem(_ operation: EngineSession.FilterOperation) -> NSMenuItem {
-        let item = NSMenuItem(title: NativeFilterMenuLayout.itemTitle(operation),
+    private static func commandItem(_ operation: EngineSession.FilterOperation,
+                                    title: String? = nil) -> NSMenuItem {
+        let item = NSMenuItem(title: title ?? NativeFilterMenuLayout.itemTitle(operation),
                               action: #selector(DocumentWindowController.runNativeFilter(_:)),
                               keyEquivalent: "")
         item.representedObject = NativeFilterCommand(operation)

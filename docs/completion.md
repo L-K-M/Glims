@@ -7,11 +7,11 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-These entries describe merged main through #125, plus explicitly identified
+These entries describe merged main through #127, plus explicitly identified
 integration candidates. Trackpad pinch/rotate, Option-scroll, typed language
 metadata and guarded saved-resource management are merged and verified. The whole editor
 remains in progress; each checked entry covers its stated behavior.
-The #125 release passes 1,917 native and 2,350 app checks in a self-contained
+The #126 release passes 1,917 native and 2,391 app checks in a self-contained
 bundle with the native and Swift build outputs inaccessible.
 
 - [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
@@ -62,7 +62,7 @@ bundle with the native and Swift build outputs inaccessible.
 - [x] Adjustment layer creation as an empty pass-through group with a filter,
       explicit placement and editable filter settings.
 - [x] Bump Map height-map chooser with immutable same-image snapshots,
-      pixel Apply/Undo/Redo and native source validation (current candidate).
+      pixel Apply/Undo/Redo and native source validation (#126).
 - [x] Native Brightness/Contrast paired controls and committed-effect editing,
       with immutable settings, Undo and XCF preservation (current candidate).
 - [x] Dedicated Color Balance controls with whole-range native configuration,
@@ -97,7 +97,7 @@ bundle with the native and Swift build outputs inaccessible.
 - [x] Per-window trackpad pinch/rotation and pointer-anchored Option-scroll zoom.
 - [x] Live Shift-constrained and Option-centered rectangle/ellipse selection,
       stationary modifier preview, captured selection modes and Escape cancellation
-      (current candidate).
+      (#127).
 - [ ] Remaining snapping interactions and other modifier behavior.
 - [x] Stroke Selection and explicit Paste Into/Anchor/New Layer/Discard.
 - [x] Float Selected Pixels (move/copy), existing floating-selection drag
@@ -109,6 +109,8 @@ bundle with the native and Swift build outputs inaccessible.
       preservation; layer-boundary and selection-edge view toggles.
 - [x] Typed existing language-alternative editing, with native preservation/Undo
       guards and independent per-key drafts in the metadata controls.
+- [x] Image > Adjust placement for native Threshold and perceptual/linear
+      Invert, with shared plug-in categories (current candidate).
 - [ ] Remaining typed metadata editors, Image Adjust commands, proof view controls
       and complete menu/keyboard coverage.
 - [ ] Recorder and semantic command replay.

@@ -49,16 +49,7 @@ enum PlugInMenus {
         let layout = PlugInMenuNode.layout(procedures)
         for glimsMenu in GlimsMenu.allCases {
             guard let menu = mainMenu.item(withTitle: glimsMenu.rawValue)?.submenu else { continue }
-            for item in menu.items where item.tag == generatedTag {
-                // A generated category is emptied, not removed, when the
-                // native merge shares it; it drops only once it is empty.
-                if let submenu = item.submenu {
-                    submenu.items.filter { $0.tag == generatedTag }.forEach(submenu.removeItem)
-                    if submenu.items.isEmpty { menu.removeItem(item) }
-                } else {
-                    menu.removeItem(item)
-                }
-            }
+            removeGenerated(from: menu)
             guard let node = layout[glimsMenu], !node.isEmpty else { continue }
 
             if glimsMenu == .filter {
@@ -66,7 +57,14 @@ enum PlugInMenus {
                 // menu (for example Blur > Gaussian Blur…).
                 merge(node, into: menu)
             } else {
-                if !menu.items.isEmpty { menu.addItem(tagged(.separator())) }
+                // A category already in the menu (the static Image ▸ Adjust)
+                // absorbs its plug-in content, so only entries landing at the
+                // menu's own top level need the dividing separator.
+                let landsAtTopLevel = !node.sections.isEmpty
+                    || node.orderedSubmenus.contains { menu.item(withTitle: $0.title)?.submenu == nil }
+                if landsAtTopLevel && !menu.items.isEmpty && menu.items.last?.isSeparatorItem != true {
+                    menu.addItem(tagged(.separator()))
+                }
                 append(node, to: menu)
             }
         }
@@ -84,23 +82,57 @@ enum PlugInMenus {
 
     // MARK: Building
 
+    /// Drops this producer's generated items throughout the menu tree,
+    /// including inside shared submenus such as the static Image ▸ Adjust.
+    /// A generated submenu item drops only once nothing but generated
+    /// content filled it, so a category the native merge shares survives.
+    private static func removeGenerated(from menu: NSMenu) {
+        for item in menu.items {
+            guard let submenu = item.submenu else {
+                if item.tag == generatedTag { menu.removeItem(item) }
+                continue
+            }
+            removeGenerated(from: submenu)
+            if item.tag == generatedTag && submenu.items.isEmpty { menu.removeItem(item) }
+        }
+        removeStrandedSeparators(from: menu)
+    }
+
+    private static func removeStrandedSeparators(from menu: NSMenu) {
+        while menu.items.first?.isSeparatorItem == true { menu.removeItem(at: 0) }
+        while menu.items.last?.isSeparatorItem == true { menu.removeItem(at: menu.numberOfItems - 1) }
+        var previousWasSeparator = false
+        for item in menu.items {
+            if item.isSeparatorItem && previousWasSeparator { menu.removeItem(item) }
+            previousWasSeparator = item.isSeparatorItem
+        }
+    }
+
     private static func append(_ node: PlugInMenuNode, to menu: NSMenu) {
         for (title, child) in node.orderedSubmenus {
-            menu.addItem(tagged(submenuItem(title, child)))
+            if let submenu = menu.item(withTitle: title)?.submenu {
+                // Shared categories retain their identity even when this
+                // producer originally created the parent item.
+                merge(child, into: submenu)
+            } else {
+                menu.addItem(tagged(submenuItem(title, child)))
+            }
         }
         for (index, section) in node.orderedSections.enumerated() {
-            if index > 0 || !node.submenus.isEmpty {
+            if (index > 0 || !node.submenus.isEmpty) && menu.items.last?.isSeparatorItem != true {
                 menu.addItem(tagged(.separator()))
             }
             section.entries.forEach { menu.addItem(tagged(commandItem($0.procedure))) }
         }
+        removeStrandedSeparators(from: menu)
     }
 
     /// Adds categories to an existing menu, reusing submenus it already has.
     private static func merge(_ node: PlugInMenuNode, into menu: NSMenu) {
         for (title, child) in node.orderedSubmenus {
             if let existing = menu.item(withTitle: title)?.submenu {
-                existing.items.filter { $0.tag == generatedTag }.forEach(existing.removeItem)
+                // install already recursively removed this producer's
+                // leaves; retained categories contain somebody else's items.
                 // A trailing separator the native merge left behind
                 // already divides its entries from the plug-in block.
                 if !existing.items.isEmpty && existing.items.last?.isSeparatorItem != true {
@@ -120,9 +152,14 @@ enum PlugInMenus {
         }
         let topLevel = PlugInMenuNode(submenus: [:], sections: node.sections)
         if !topLevel.isEmpty {
-            menu.addItem(tagged(.separator()))
+            // A separator the other producer left behind already divides
+            // the blocks; an empty menu gets none at its leading edge.
+            if !menu.items.isEmpty && menu.items.last?.isSeparatorItem != true {
+                menu.addItem(tagged(.separator()))
+            }
             append(topLevel, to: menu)
         }
+        removeStrandedSeparators(from: menu)
     }
 
     private static func submenuItem(_ title: String, _ node: PlugInMenuNode) -> NSMenuItem {

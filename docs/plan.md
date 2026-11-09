@@ -3406,3 +3406,13 @@ each engine, including two reproduced/fixed acknowledgement regressions.
 See `color-balance.md` for validation and the separately recorded native
 XCF blend/composite AUTO-normalization limitation. Other custom config
 editors and full integrated release checks remain open.
+
+
+### Native Image Adjust entries (2026-11-09)
+
+The loaded Threshold and perceptual/linear Invert commands are available
+under Image > Adjust as well as Filter > Color. Native and plug-in refreshes
+preserve shared categories and unrelated content. Existing preview/Undo/XCF
+behavior is reused. See `image-adjust.md`:915 units and27 real-window
+checks pass on each supported engine, including independent pixel formulas.
+Other custom adjustment editors remain separate implementation work.
