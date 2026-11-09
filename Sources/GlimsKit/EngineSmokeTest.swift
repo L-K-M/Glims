@@ -291,6 +291,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (metadata descriptor failures)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "resource-selection-controls" {
+                try exerciseResourceSelection(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (resource selection controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
                 check(false, "unknown engine smoke case: \(selected)")
 
@@ -335,6 +340,7 @@ enum EngineSmokeTest {
             try exerciseFloatingControls(session, work: work, documents: documents)
             try exerciseMetadataControls(session, work: work, documents: documents)
             try exerciseMetadataDescriptors(session, work: work, documents: documents)
+            try exerciseResourceSelection(session, work: work, documents: documents)
             try exerciseLayerMultiselectionControls(session, work: work, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)
             try exerciseFloatingMove(session, work: work, documents: documents)
