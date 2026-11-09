@@ -2227,6 +2227,12 @@ MARSHAL (image_select_layers, return glims_image_select_layers (e, a->image,
 MARSHAL (image_selected_layers, return glims_image_selected_layers (e, a->image,
                                                                     (GlimsItemID *) a->out,
                                                                     a->capacity, a->count);)
+MARSHAL (image_select_items, return glims_image_select_items (e, a->image, (uint32_t) a->width,
+                                                              (const GlimsItemID *) a->in,
+                                                              a->capacity, a->error);)
+MARSHAL (image_selected_items, return glims_image_selected_items (e, a->image, (uint32_t) a->width,
+                                                                  (GlimsItemID *) a->out,
+                                                                  a->capacity, a->count);)
 MARSHAL (image_metadata_tags, return glims_image_metadata_tags (e, a->image, (uint32_t) a->width,
                                                                  (char ***) a->out, a->count, a->error);)
 MARSHAL (image_metadata_values, return glims_image_metadata_values (e, a->image, a->string,
@@ -2359,6 +2365,28 @@ api_image_selected_layers (GlimsEngine *e, GlimsImageID image, GlimsItemID *ids,
 {
   GlimsArgs a = { .image = image, .out = ids, .capacity = capacity, .count = count };
   return glims_engine_call (e, image_selected_layers_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_select_items (GlimsEngine *e, GlimsImageID image, uint32_t kind,
+                        const GlimsItemID *items, int32_t count, char **error)
+{
+  GlimsArgs a = { .image = image, .width = (int32_t) kind, .in = items,
+                  .capacity = count, .error = error };
+  return glims_engine_call (e, image_select_items_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_selected_items (GlimsEngine *e, GlimsImageID image, uint32_t kind,
+                          GlimsItemID *out, int32_t capacity, int32_t *count)
+{
+  /* *count is reset to 0 on every failure, including a NULL engine
+   * refused inside glims_engine_call. */
+  if (count)
+    *count = 0;
+  GlimsArgs a = { .image = image, .width = (int32_t) kind, .out = out,
+                  .capacity = capacity, .count = count };
+  return glims_engine_call (e, image_selected_items_on_engine, &a);
 }
 
 static GlimsStatus
@@ -2618,6 +2646,8 @@ static const GlimsEngineAPI api_v1 = {
   .image_item_sets = api_image_item_sets,
   .image_item_set_members = api_image_item_set_members,
   .image_item_set_edit = api_image_item_set_edit,
+  .image_select_items = api_image_select_items,
+  .image_selected_items = api_image_selected_items,
 };
 
 __attribute__ ((visibility ("default")))
