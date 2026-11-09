@@ -99,6 +99,8 @@ bundle with the native and Swift build outputs inaccessible.
       preservation; layer-boundary and selection-edge view toggles.
 - [x] Typed existing language-alternative editing, with native preservation/Undo
       guards and independent per-key drafts in the metadata controls.
+- [x] Image > Adjust placement for native Threshold and perceptual/linear
+      Invert, with shared plug-in categories (current candidate).
 - [ ] Remaining typed metadata editors, Image Adjust commands, proof view controls
       and complete menu/keyboard coverage.
 - [ ] Recorder and semantic command replay.
