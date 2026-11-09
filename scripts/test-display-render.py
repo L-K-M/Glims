@@ -91,7 +91,7 @@ def main():
                              "<repo>/_engine/adapter)")
     parser.add_argument("--timeout", type=int, default=900,
                         help="harness timeout in seconds (default: 900)")
-    args = parser.parse_args()  # --help exits here, before any work below
+    args = parser.parse_args()  # --help exits here, before any work below (no engine run)
 
     ref = args.ref or default_ref()
     adapter_root = Path(args.adapter_root or os.environ.get("GLIMS_ADAPTER_ROOT")
@@ -100,7 +100,7 @@ def main():
     if not library.is_file():
         fail(f"{library} is missing; build the producer first with "
              f"scripts/build-adapter.sh {ref} (this script never rebuilds)")
-    for fixture in ("linear-rgb.icc", "gray.icc"):
+    for fixture in ("linear-rgb.icc", "gray.icc", "wide-linear-rgb.icc"):
         if not (FIXTURES_DIR / fixture).is_file():
             fail(f"{FIXTURES_DIR / fixture} is missing")
 
