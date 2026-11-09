@@ -417,6 +417,45 @@ root_regressions (GlimsEngine *engine, Probe *probe)
          "[root expiry] new Undo really expired and native push cleared redo");
   if (error) { api->free_string (error); error = NULL; }
   CHECK (api->image_close (engine, id) == GLIMS_STATUS_OK, "[root expiry] fixture closes");
+
+  /* Legacy/XCF definitions can have long names even though new facade
+   * names are bounded. An owned snapshot must count that allocation in
+   * native Undo's byte budget, not just its GObject shell. */
+  result = api->image_new (engine, 16, 16, &id, &error);
+  FIXTURE (result == GLIMS_STATUS_OK, "[memory] fixture image created");
+  image = glims_lookup_image (engine, id)->image;
+  gchar *long_name = g_strnfill (65536, 'm');
+  GimpItemList *legacy = g_object_new (GIMP_TYPE_ITEM_LIST,
+                                      "image", image, "name", long_name,
+                                      "is-pattern", FALSE, "item-type", GIMP_TYPE_LAYER,
+                                      "items", NULL, NULL);
+  gimp_image_store_item_set (image, legacy);
+  result = glims_item_sets_rename (image, GIMP_TYPE_LAYER, long_name, "short", &error);
+  FIXTURE (result == GLIMS_STATUS_OK, "[memory] rename captures the legacy definition");
+  GimpUndo *top = gimp_undo_stack_peek (gimp_image_get_undo_stack (image));
+  CHECK (top && gimp_object_get_memsize (GIMP_OBJECT (top), NULL) >= 65537,
+         "[memory] native Undo accounts for the owned snapshot name bytes");
+  gimp_image_undo_free (image);
+  g_object_get (engine->gimp->config, "undo-levels", &previous_levels,
+                "undo-size", &previous_size, NULL);
+  g_object_set (engine->gimp->config, "undo-levels", 0,
+                "undo-size", (guint64) 16384, NULL);
+  result = glims_item_sets_rename (image, GIMP_TYPE_LAYER, "short", "shorter", &error);
+  /* This small step stays below the budget; now rename back to the large
+   * legacy name so the newly owned after-snapshot exceeds it by itself. */
+  CHECK (result == GLIMS_STATUS_OK && capture_state (image).undo == 1,
+         "[memory] the nonzero budget retains an ordinary small step");
+  result = glims_item_sets_rename (image, GIMP_TYPE_LAYER, "shorter", long_name, &error);
+  EngineState limited = capture_state (image);
+  g_object_set (engine->gimp->config, "undo-levels", previous_levels,
+                "undo-size", previous_size, NULL);
+  CHECK (result == GLIMS_STATUS_OK && limited.undo == 0,
+         "[memory] native byte limit expires an oversized saved-set snapshot");
+  CHECK (find_set (image, long_name, GIMP_TYPE_LAYER) != NULL && gimp_image_is_dirty (image),
+         "[memory] byte-limit expiry keeps the successful edit applied and dirty");
+  g_free (long_name);
+  if (error) { api->free_string (error); error = NULL; }
+  CHECK (api->image_close (engine, id) == GLIMS_STATUS_OK, "[memory] fixture closes");
   return GLIMS_STATUS_OK;
 }
 

@@ -68,6 +68,33 @@ snapshot_free (gpointer data)
   g_free (snap);
 }
 
+/* Native Undo limits use get_memsize(), so count the owned definitions,
+ * not just the subclass's object shell. As with GimpLayerUndo, attached
+ * items belong to the live image's accounting; detached items retained
+ * solely for restoration must also be counted. Deduplicate those objects
+ * across both snapshots of this step. Container sizes are estimates, like
+ * the native core's other collection accounting. */
+static gint64
+snapshot_memsize (const GlimsSetSnapshot *snap, GHashTable *counted, gint64 *gui_size)
+{
+  gint64 size;
+  if (! snap) return 0;
+  size = sizeof (*snap) + sizeof (GPtrArray) + snap->defs->len * sizeof (gpointer);
+  for (guint i = 0; i < snap->defs->len; i++)
+    {
+      GlimsSetDef *def = g_ptr_array_index (snap->defs, i);
+      size += sizeof (*def) + (def->name ? strlen (def->name) + 1 : 0)
+              + sizeof (GPtrArray) + def->members->len * sizeof (gpointer);
+      for (guint j = 0; j < def->members->len; j++)
+        {
+          GimpItem *item = g_ptr_array_index (def->members, j);
+          if (! gimp_item_is_attached (item) && g_hash_table_add (counted, item))
+            size += gimp_object_get_memsize (GIMP_OBJECT (item), gui_size);
+        }
+    }
+  return size;
+}
+
 /* Deep copy of the image's whole stored-set list of `kind`, in stored-list
  * order. Members are strong-reffed: the snapshot must keep them alive across
  * a member's own deletion undo, so a later pop can restore the same live
@@ -185,6 +212,17 @@ enum
   PROP_AFTER
 };
 
+static gint64
+glims_item_sets_undo_get_memsize (GimpObject *object, gint64 *gui_size)
+{
+  GlimsItemSetsUndo *self = GLIMS_ITEM_SETS_UNDO (object);
+  GHashTable *counted = g_hash_table_new (g_direct_hash, g_direct_equal);
+  gint64 size = snapshot_memsize (self->before, counted, gui_size)
+                + snapshot_memsize (self->after, counted, gui_size);
+  g_hash_table_unref (counted);
+  return size + GIMP_OBJECT_CLASS (glims_item_sets_undo_parent_class)->get_memsize (object, gui_size);
+}
+
 static void
 glims_item_sets_undo_pop (GimpUndo *undo, GimpUndoMode undo_mode, GimpUndoAccumulator *accum)
 {
@@ -281,11 +319,13 @@ static void
 glims_item_sets_undo_class_init (GlimsItemSetsUndoClass *klass)
 {
   GObjectClass      *object_class = G_OBJECT_CLASS (klass);
+  GimpObjectClass   *gimp_object_class = GIMP_OBJECT_CLASS (klass);
   GimpUndoClass     *undo_class = GIMP_UNDO_CLASS (klass);
 
   object_class->finalize = glims_item_sets_undo_finalize;
   object_class->set_property = glims_item_sets_undo_set_property;
   object_class->get_property = glims_item_sets_undo_get_property;
+  gimp_object_class->get_memsize = glims_item_sets_undo_get_memsize;
 
   undo_class->pop = glims_item_sets_undo_pop;
   undo_class->free = glims_item_sets_undo_free;

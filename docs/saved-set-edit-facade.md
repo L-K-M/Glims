@@ -103,3 +103,8 @@ full-definition no-op comparison and Swift empty-array bridge directly.
 The requested independent review did not complete: its helper attempted
 prohibited nested delegation and was stopped, so no independent approval is
 claimed. Controls and combined app/bundle acceptance remain separate.
+
+
+The underlying Undo subtype also accounts owned snapshots toward native
+memory limits (see `saved-set-undo.md`). The new two-failure regression is
+fixed on every engine; each passes 155 Undo checks plus 146 edit checks.

@@ -141,3 +141,20 @@ No facade/UI surface is exposed by this slice. XCF keeps storing the resulting
 item-set definitions; Undo history itself is not serialized. Pattern definitions
 are preserved but are not editable through these fixed-set commands. The
 private commands require an adopted image with its live identity manager.
+
+
+## Snapshot memory accounting
+
+Root reproduced two failures with a 64 KiB legacy set name: native Undo
+reported less memory than the owned name payload, and a 16 KiB nonzero byte
+limit retained the oversized step. The Undo subtype now reports its owned
+snapshot definitions, names and member pointer arrays. Detached items kept
+alive for restoration are counted once across both snapshots; attached
+items remain in live-image accounting, following native GimpLayerUndo.
+Collection overhead is estimated, as in the native core.
+
+All four engines pass 155 Undo checks, 146 public edit checks and general
+conformance totals 1,917 / 1,703 / 1,917 / 1,917. The small-step fixture stays
+under the nonzero limit, while the oversized step expires; the successful
+edit remains applied and dirty. Independent review of this memory change
+is pending. This supersedes the earlier 150-check Undo total.
