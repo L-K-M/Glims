@@ -1,8 +1,9 @@
 # Glims interface design
 
 Status: draft direction from the 2026-11-04 research
-([`research/r2-classic-design.md`](research/r2-classic-design.md)). Nothing is
-implemented. Evidence labels: **[M]** measured from source, **[I]** inferred or
+([`research/r2-classic-design.md`](research/r2-classic-design.md)). Implementation
+status and verification are tracked in [`completion.md`](completion.md).
+Evidence labels: **[M]** measured from source, **[I]** inferred or
 estimated. GIMP references are to master 2aef5e7 unless the 3.2.8 tag is
 named; Rigi references are to the Rigi repo.
 
@@ -60,7 +61,7 @@ The 3.2 features below come from the release notes (https://www.gimp.org/release
 | Concept | What the user sees | Engine impact |
 |---|---|---|
 | Layer size vs canvas | The layer boundary is hidden by default (a View toggle shows it). Paint tools default to "expand layer" (`expand_use`, `app/paint/gimppaintoptions.h:106`). New layers are canvas-sized. Layer > Fit to Canvas / Trim uses `layers-resize-to-image` and `layers-crop-to-content`. Fill or filter outside a layer offers "Fit layer first". | Front-end policy. *Truly unbounded layers would need an engine patch, so don't promise them.* |
-| Floating selections | In GIMP 3, plain Paste already makes a new layer unless a mask is selected (`edit-actions.c` maps `edit-paste` to `NEW_LAYER_OR_FLOATING`; `edit-commands.c` ~L389–410) **[M]**. Paste Into and moving selected pixels show a temporary "Floating" row with Anchor and New Layer buttons. Switching layer or tool anchors it automatically (`floating_sel_anchor`, `gimplayer-floating-selection.h:23`). | Front-end |
+| Floating selections | In GIMP 3, plain Paste already makes a new layer unless a mask is selected (`edit-actions.c` maps `edit-paste` to `NEW_LAYER_OR_FLOATING`; `edit-commands.c` ~L389–410) **[M]**. Paste Into and moving selected pixels show a temporary "Floating" row with Anchor and New Layer buttons. An idle floating selection survives choosing Move, paint or selection tools. Anchoring is interaction-specific; other target picks can be refused until it is resolved. See [`floating-tool-policy.md`](floating-tool-policy.md) for the measured native rules and pending front-end interactions. | Front-end |
 | Save vs Export | Save and Save As write XCF only. Export… (Shift-Cmd-E) picks the format. "Export to name.png" or "Overwrite name.png" (Cmd-E) reuse GIMP's `file-export` / `file-overwrite` logic (`file-actions.c:168,293`). Exporting never marks the document clean. | Front-end |
 | Tool options | One Options palette with presets. Non-paint tool options must be rebuilt, because every `*options*.c` includes gtk.h. | Front-end (rebuild) |
 | Non-destructive filters | A filter sub-row under the layer with eye, edit, reorder and merge. Filters on groups and on unrasterized text, link and vector layers are forced non-destructive (`filters-actions.c:888`). Filter dialogs are non-modal, with forms generated from GEGL properties. The 22 custom `app/propgui` files **[M]** need native versions or the generic form. Commit and undo must be rewritten, because they live in `gimpfiltertool.c`. | Front-end (rebuild) |

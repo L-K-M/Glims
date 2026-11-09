@@ -2,6 +2,12 @@ import AppKit
 import CGlimsEngine
 import CoreGraphics
 
+/// Carries the native creation's ids from the input queue, where the
+/// target command runs, to its main-actor completion.
+private final class CreatedAdjustmentBox: @unchecked Sendable {
+    var value: (layer: Int32, effect: Int32)?
+}
+
 /// One open image in the engine, as the interface sees it.
 ///
 /// The document keeps the state the interface shows (size, layers, undo)
@@ -364,6 +370,28 @@ final class ImageDocument {
     }
 
     var activeDrawable: Int32? { paintTarget?.drawable }
+
+    /// View ▸ Show Layer Boundary's cached outline: the actual bounds, in
+    /// image pixels, of the current cached paint target — an ordinary
+    /// layer's absolute bounds, the owner layer's bounds while its mask is
+    /// being edited, the image bounds for a selected channel, and the
+    /// floating layer's own bounds while a floating selection is active
+    /// (it owns painting ahead of any channel or mask target). Resolved
+    /// from the caches on every read, so a draw never shows a remembered
+    /// unrelated layer; nil when no target is current or its bounds are
+    /// missing or invalid. Pure cache read: no engine call, no pixel,
+    /// dirty-flag or history change.
+    var cachedPaintTargetBounds: CGRect? {
+        guard let target = paintTarget else { return nil }
+        let kind: LayerBoundaryGeometry.Target
+        switch target {
+        case .layer(let id): kind = .layer(id)
+        case .mask(let layer, _): kind = .mask(layer: layer)
+        case .channel(let id): kind = .channel(id)
+        }
+        return LayerBoundaryGeometry.boundaryRect(target: kind, layers: layers,
+            imageSize: CGSize(width: Double(info.width), height: Double(info.height)))
+    }
 
     var activeChannel: Int32? {
         if case .channel(let id) = paintTarget { return id }
@@ -861,6 +889,113 @@ final class ImageDocument {
         return nil
     }
 
+    // MARK: Create resource from selection
+
+    /// The cached-state reason Edit ▸ Create Resource ▸ … cannot run right
+    /// now, or nil when it can. Reads only the document's cached state —
+    /// never the engine — so menu validation and the sheet's open/accept
+    /// gates make no synchronous native call. The selection gate reads the
+    /// image's root selection mask bounds (`selectionBounds`): any nonzero
+    /// mask value counts, including soft coverage below the marching-ants
+    /// threshold, which has bounds but no outline. No gate keys on the
+    /// paint target, its source kind or layer locks: the capture reads the
+    /// merged image, which is valid for any target.
+    func createResourceRefusal(kind: EngineSession.ResourceKind) -> String? {
+        ResourceSelectionFormValidation.menuRefusal(
+            engineActivity: PlugInCommands.isRunning ? nil : EngineActivity.shared.label,
+            plugInLabel: PlugInCommands.running.map { $0.procedure.label.replacingOccurrences(of: "…", with: "") },
+            isClosing: isClosing,
+            isSavingForClose: isSavingForClose,
+            isTransferringClipboard: isTransferringClipboard,
+            previewOpen: filterPreviewIsOpen,
+            selectionBounds: selectionBounds,
+            kind: kind)
+    }
+
+    /// Edit ▸ Create Resource ▸ Brush/Pattern from Selection…: captures the
+    /// selected VISIBLE MERGED pixels of this document into one new saved
+    /// resource (facade slot 129, `EngineSession.createResource`) — the
+    /// native copy is the private `gimp_selection_extract` (cut FALSE)
+    /// behind `copyPixels(image, merged: true)`, never the system clipboard,
+    /// and never a full-image fallback: a fresh native check on the worker
+    /// requires an actual nonempty selection and refuses bounds over the
+    /// 10000 px per-side cap BEFORE any pixels are allocated.
+    ///
+    /// The flow is one counted global exclusive job: `EngineActivity`
+    /// drains ALL accepted input of every document before the native work,
+    /// and `pendingWork` stays counted through the deferred main completion
+    /// stage, so a close waits for the whole job and its callback. The
+    /// completion runs on the main actor exactly once with the created
+    /// id/name/kind; a successful publish never becomes a false failure
+    /// through the optional identity query. Pre-acceptance refusals
+    /// (closing, cached gate, local validation, busy) call the completion
+    /// synchronously with nothing queued.
+    func createResourceFromSelection(kind: EngineSession.ResourceKind, name: String, brushSpacing: UInt32,
+                                     completion: @escaping @MainActor (Result<CreatedResource, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if let reason = createResourceRefusal(kind: kind) {
+            return completion(.failure(EngineSession.EngineError(
+                status: Int32(GLIMS_STATUS_BUSY.rawValue), message: reason)))
+        }
+        // Pure local validation before anything is queued: the name and
+        // spacing rules (dimensions come from the fresh selection on the
+        // worker). This is the same pre-RPC gate slot 129 applies.
+        do {
+            try EngineSession.validateResourceCreation(kind: kind, name: name, width: 1, height: 1,
+                                                       byteCount: 4, brushSpacing: brushSpacing)
+        } catch { return completion(.failure(error)) }
+        // End in-flight field/text edits and this document's own open
+        // stroke explicitly — the established finishInput pattern — so the
+        // exclusive drain below starts from committed input.
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        pendingWork += 1
+        let label = "Creating \(kind.singular) “\(name)”"
+        enqueueExclusive(label: label, rejected: {
+            self.jobDidFinish(input: false)
+            completion(.failure(DocumentError.busy))
+        }) { [session, image] in
+            let result: Result<CreatedResource, Error> = Result {
+                // Fresh native check on the worker: the actual root
+                // selection, including soft coverage below the ants
+                // threshold — bounds exist whenever the mask is nonempty.
+                guard let bounds = try session.selectionBounds(image: image) else {
+                    throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                        message: "There is no selection to create a \(kind.singular) from; select an area first.")
+                }
+                guard bounds.width.isFinite, bounds.height.isFinite,
+                      Int(bounds.width) >= 1, Int(bounds.height) >= 1,
+                      Int(bounds.width) <= EngineSession.resourceMaxDimension,
+                      Int(bounds.height) <= EngineSession.resourceMaxDimension else {
+                    // Refused before copyPixels allocates any pixels.
+                    throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                        message: "The selection is too large to create a \(kind.singular) from (at most \(EngineSession.resourceMaxDimension) pixels per side).")
+                }
+                let pixels = try session.copyPixels(image, merged: true)
+                guard pixels.width == Int(bounds.width), pixels.height == Int(bounds.height) else {
+                    throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                        message: "The engine copied \(pixels.width) × \(pixels.height) pixels for a \(Int(bounds.width)) × \(Int(bounds.height)) selection.")
+                }
+                let id = try session.createResource(kind: kind, name: name, pixels: pixels,
+                                                    brushSpacing: brushSpacing)
+                // Optional identity query only: a successful publish must
+                // not become a false failure through it.
+                let identity = try? session.resourceIdentifiers(id)
+                return CreatedResource(id: id, name: identity?.name ?? name, kind: kind)
+            }
+            DispatchQueue.main.async {
+                EngineActivity.shared.whenIdle {
+                    // The extra count covers this deferred completion,
+                    // including callbacks that request window closure.
+                    defer { self.jobDidFinish(input: false) }
+                    if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                    completion(result)
+                }
+            }
+        }
+    }
+
     // MARK: Guides
 
     /// Adds a guide at `position` (image pixels on `orientation`'s
@@ -918,6 +1053,120 @@ final class ImageDocument {
                     defer { self.jobDidFinish(input: false) }
                     if !self.isClosing {
                         try? self.reload()
+                        if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                    }
+                    completion(result)
+                }
+            }
+        }
+    }
+
+    // MARK: Image metadata
+
+    /// The tag names present on the image's metadata in `domain`, read
+    /// as asynchronous COUNTED document work on the input queue — never
+    /// on the main thread and never while a menu validates. The read is
+    /// a plain native read (allowed even while a stroke, preview or
+    /// plug-in holds the image), but it still counts in `pendingWork`,
+    /// so a close drains it before the image is destroyed and a
+    /// completion always lands on a live image or reports `closed`.
+    /// The image id is captured by value in the queued job.
+    func readMetadataTags(_ domain: EngineSession.MetadataDomain,
+                          completion: @escaping @MainActor (Result<[String], Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueue(on: inputQueue) { [session, image] in
+            let result = Result { try session.metadataTags(image, domain: domain) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// The ordered value list of one metadata `tag`, queued and counted
+    /// exactly like `readMetadataTags(_:)`: duplicates, empty strings,
+    /// newlines and order are the engine's own vector, never flattened
+    /// or re-joined here. An unregistered tag reports the native
+    /// NOT_FOUND through the completion.
+    func readMetadataValues(_ tag: String,
+                            completion: @escaping @MainActor (Result<[String], Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueue(on: inputQueue) { [session, image] in
+            let result = Result { try session.metadataValues(image, tag: tag) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// The read-only descriptor of one registered metadata `tag` (facade
+    /// slot 128: presence, native multiple-value support, the facade value
+    /// kind, the type/format policy bits and the bounded native label,
+    /// description and type name), queued and counted exactly like
+    /// `readMetadataValues(_:)`: the session, image and tag are captured
+    /// explicitly by the queued job, the native call never runs on the
+    /// main thread, the read still counts in `pendingWork` so a close
+    /// drains it before the image is destroyed, and a completion always
+    /// lands on a live image or reports `closed`. An unregistered tag
+    /// reports the native NOT_FOUND through the completion.
+    func readMetadataTagInfo(_ tag: String,
+                             completion: @escaping @MainActor (Result<EngineSession.MetadataTagInfo, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueue(on: inputQueue) { [session, image] in
+            let result = Result { try session.metadataTagInfo(image, tag: tag) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// Sets or removes ONE metadata `tag` with the captured ordered
+    /// `values` array (SET requires at least one value; REMOVE takes [])
+    /// as one undo step, as counted input work on the input queue — the
+    /// same serial queue as every other accepted edit, so it lands behind
+    /// them in order. Before queueing, in-flight field/text edits are
+    /// committed and an active stroke ended (the
+    /// finishInput/endPendingUserEdits convention): both enqueue their
+    /// jobs on this queue ahead of this one.
+    ///
+    /// Admission reads only the cached busy/preview/closing/modal state
+    /// (`refuseWhileEditingUnavailable`): metadata edits are image-level,
+    /// so pixel/alpha locks and layer/mask/channel target types never
+    /// refuse them. The native readiness gate (BUSY under a stroke,
+    /// preview or plug-in) still applies on the queue. The completion
+    /// reports the engine's own answer — UNSUPPORTED (protected,
+    /// LangAlt, new XMP containers), NOT_FOUND (unregistered tag),
+    /// INVALID_ARGUMENT (empty SET, multi-value on a single-value tag),
+    /// BUSY — unchanged; every refusal leaves the image, its metadata
+    /// and its history untouched. The cache reloads only after a
+    /// successful change; a no-op (identical values, absent-tag REMOVE)
+    /// is a success with no undo.
+    func editMetadata(_ tag: String, _ operation: EngineSession.MetadataEdit, values: [String] = [],
+                      completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !refuseWhileEditingUnavailable() else {
+            return completion(.failure(isClosing ? DocumentError.closed : DocumentError.busy))
+        }
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        // Keep the deferred cache/completion stage alive through another
+        // document's exclusive work as well as the native input job.
+        pendingWork += 1
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let result = Result { try session.editMetadata(image, tag: tag, operation, values: values) }
+            let refresh: Result<(EngineSession.ImageInfo, EngineSession.UndoInfo, EngineSession.History), Error>?
+            if case .success = result {
+                refresh = Result { (try session.info(image), try session.undoInfo(image), try session.history(image)) }
+            } else { refresh = nil }
+            DispatchQueue.main.async {
+                EngineActivity.shared.whenIdle {
+                    defer { self.jobDidFinish(input: false) }
+                    if !self.isClosing {
+                        // Reload only after a successful change; a refusal
+                        // leaves the cached state as it was.
+                        if case .success(let state)? = refresh {
+                            self.info = state.0
+                            self.fileState.syncDirty(state.0.isDirty)
+                            self.undoInfo = state.1
+                            self.history = state.2
+                            self.stateVersion += 1
+                            self.onStateChange?()
+                        } else if case .failure(let error)? = refresh {
+                            self.onError?("Metadata changed, but its document state could not be refreshed: \(error)")
+                        }
                         if case .failure(let error) = result { self.onError?(String(describing: error)) }
                     }
                     completion(result)
@@ -1110,6 +1359,67 @@ final class ImageDocument {
                 .newGroupPlacement(nearActive: fresh.first(where: \.isSelected)?.id)
             _ = try session.createGroup(image: image, parent: placement.parent,
                                         index: Int32(placement.index))
+        }
+    }
+
+    /// Layer ▸ New Adjustment Layer… accepted: creates the pass-through
+    /// adjustment group with one committed native-default effect as ONE
+    /// undo step, at the placement New Layer Group would use — resolved
+    /// from the layers as the queue leaves them, never from the cache. The
+    /// creation is a counted target command queued behind accepted input,
+    /// after this document's pending edits end; like group creation it
+    /// takes no single-layer, mask or channel target restriction, since it
+    /// only inserts metadata into the hierarchy. The mode gate reads the
+    /// cached color state: RGB and grayscale only — Indexed refuses here
+    /// and in the native guard. The completion receives the created
+    /// layer and effect ids on the main actor exactly once; failures are
+    /// also reported through `onError`.
+    func createAdjustmentLayer(name: String, operation: String,
+                               completion: @escaping @MainActor (Result<(layer: Int32, effect: Int32), Error>) -> Void) {
+        guard !isClosing else {
+            onError?(DocumentError.closed.localizedDescription)
+            return completion(.failure(DocumentError.closed))
+        }
+        if let reason = AdjustmentLayerLogic.modeAdmission(colorInfo.mode).reason {
+            onError?(reason)
+            NSSound.beep()
+            return completion(.failure(AdjustmentLayerLogic.InputError(message: reason)))
+        }
+        guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
+        guard !refuseWhileFloatingActive() else { return completion(.failure(DocumentError.busy)) }
+        endPendingUserEdits()
+        let created = CreatedAdjustmentBox()
+        enqueueTargetCommand({ session, image in
+            let fresh = try session.layers(image)
+            let placement = LayerTree(layers: fresh)
+                .newGroupPlacement(nearActive: fresh.first(where: \.isSelected)?.id)
+            let ids = try session.createAdjustmentLayer(image: image, parent: placement.parent,
+                                                        index: Int32(placement.index),
+                                                        operation: operation, name: name)
+            created.value = ids
+        }, completion: { result in
+            completion(result.flatMap { _ in
+                guard let value = created.value else { return .failure(DocumentError.targetChanged) }
+                return .success(value)
+            })
+        })
+    }
+
+    /// Reads the engine's filter-operation catalog off the main thread as
+    /// one counted job on the long queue — a close waits for it — and
+    /// installs the list in the shared catalog cache that
+    /// `editEffectParameters` resolves operations through. The completion
+    /// runs on the main actor with the actual error on failure; an unsuccessful
+    /// query never replaces the existing catalog cache.
+    func loadNativeFilterOperations(completion: @escaping @MainActor (Result<[EngineSession.FilterOperation], Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueue(on: longQueue) { [session] in
+            let result = Result { try session.filterOperations() }
+            DispatchQueue.main.async {
+                guard !self.isClosing else { return completion(.failure(DocumentError.closed)) }
+                if case .success(let operations) = result { NativeFilterCatalog.shared.install(operations) }
+                completion(result)
+            }
         }
     }
 
