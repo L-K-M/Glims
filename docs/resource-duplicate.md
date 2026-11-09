@@ -188,13 +188,11 @@ thread, like the other catalog work.
   validation tests of `validateResourceName` and its identity with the
   create path's label rules.
 
-## Not run here / documented gaps
+## Initial helper checks and coverage limits (runtime results below)
 
-- The native harness above and all adapter builds were NOT run in this
-  worktree (Root owns serialized native compilation and runtime
-  acceptance); only `swift build -j 2`, `swift build -j 2 --build-tests`
+- The helper initially left native execution to Root; only `swift build -j 2`, `swift build -j 2 --build-tests`
   and `python3 scripts/test-resource-duplicate.py --help` + AST parse
-  were run. No claim of native pass is made.
+  were run by that helper. Root subsequently executed the matrix below.
 - The UNSUPPORTED capability refusal is implemented
   (`gimp_data_is_duplicatable` false / copy not writable / empty pipe)
   but is not exercisable through the facade with the shipped catalogs:
@@ -203,7 +201,7 @@ thread, like the other catalog work.
   resolve NOT_FOUND here). The empty-pipe guard is likewise defensive
   (the native loader requires `n_brushes >= 1`).
 - Source "dirty" state and source file bytes are not exposed through
-  the facade; the tests verify source identity, thumbnail and catalog
+  the facade; the original facade-only tests verify source identity, thumbnail and catalog
   membership instead. Ownership uncertainty: none found — every class
   copy produces owned payloads (`gimp_temp_buf_copy`,
   `gegl_color_duplicate`, per-child `gimp_data_duplicate`); the only
