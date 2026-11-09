@@ -9,7 +9,7 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 These entries describe main `2354d97` and the reviewed slices in the
 2026-11-09 integration candidate (`feat/editor-state-integration`). PRs
-#96–#104 and final combined verification are still pending. The whole editor
+#96–#105 and exact-head hosted CI are still pending. The whole editor
 remains in progress; each checked entry covers its stated behavior.
 
 - [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
@@ -38,7 +38,8 @@ remains in progress; each checked entry covers its stated behavior.
       app checks in a self-contained bundle with development trees inaccessible.
       Pointer painting, keyboard editing, Save, Quit/reopen, masks/channels and
       PDF printing have separate on-screen evidence. The newer combined
-      saved-set/resource/display candidate still needs its bundle pass.
+      candidate also passes 1,917 native and 2,038 app checks in its release
+      bundle, with native and Swift build trees inaccessible.
 
 ## Remaining implementation and final verification
 
@@ -441,6 +442,9 @@ checks per engine; separate full slices pass 1,949 / 1,918 / 1,953 app checks.
 Every combined native engine passes 1,917 / 1,703 / 1,917 / 1,917 general checks,
 155 Undo, 146 edit, 56 read and 188 lifetime checks. Corrected wide-source
 harness passes 40 display checks on every engine; an actual forced legacy
-sRGB-u8 roundtrip fails exactly the wide identity check. The combined pinned app run passes 2,038 checks; the remaining combined
-focused app matrix, bundle and exact-head hosted CI remain pending. These
-results do not close the broader unchecked work above.
+sRGB-u8 roundtrip fails exactly the wide identity check. The combined pinned app run passes 2,038 checks; the remaining three engines
+also pass every combined focused control case. The self-contained release
+bundle passes 1,917 native and 2,038 app checks with native and Swift build
+outputs denied. Fourteen packaging tests pass. Independent integration
+review found no important issue. Exact-head hosted CI remains pending;
+these results do not close the broader unchecked work above.
