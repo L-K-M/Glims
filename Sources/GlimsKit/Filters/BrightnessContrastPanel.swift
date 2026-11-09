@@ -15,11 +15,13 @@ final class BrightnessContrastPanel: FilterPreviewPanel, NSTextFieldDelegate {
     private var accepted: Settings
     private var generation = 0
     private var acceptedGeneration = 0
-    private var pending: Set<Int> = []
+    private var pending: [Int: Settings] = [:]
+    private var draftGeneration = 0
     private var latestReply: (generation: Int, result: Result<Void, Error>)?
     private var invalidFieldDuringCommit = false
     private var displayedBrightness = ""
     private var displayedContrast = ""
+    private let writeSettings: @MainActor (Int32, Settings, @escaping @MainActor (Result<Void, Error>) -> Void) -> Void
     private(set) var lastError: String?
 
     private struct InputError: LocalizedError {
@@ -27,13 +29,18 @@ final class BrightnessContrastPanel: FilterPreviewPanel, NSTextFieldDelegate {
     }
 
     init?(document: ImageDocument, filter: Int32,
-          initialValues: [String: EngineSession.FilterValue]) {
+          initialValues: [String: EngineSession.FilterValue],
+          write: (@MainActor (Int32, Settings, @escaping @MainActor (Result<Void, Error>) -> Void) -> Void)? = nil) {
         guard case .number(let brightness)? = initialValues["brightness"],
               case .number(let contrast)? = initialValues["contrast"] else { return nil }
         let initial = Settings(brightness: brightness, contrast: contrast)
         guard initial.isValid else { return nil }
         draft = initial
         accepted = initial
+        writeSettings = write ?? { [weak document] filter, value, reply in
+            guard let document else { return reply(.failure(ImageDocument.DocumentError.closed)) }
+            document.setBrightnessContrast(filter, value, completion: reply)
+        }
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 460, height: 208),
                             styleMask: [.titled, .closable, .utilityWindow],
                             backing: .buffered, defer: false)
@@ -125,6 +132,12 @@ final class BrightnessContrastPanel: FilterPreviewPanel, NSTextFieldDelegate {
         displayedContrast = contrastField.stringValue
     }
 
+    private func displayPreservingFieldDrafts(_ value: Settings) {
+        FilterFieldDrafts.preserve([(brightnessField, displayedBrightness), (contrastField, displayedContrast)]) {
+            display(value)
+        }
+    }
+
     private func percentage(in field: NSTextField) -> Double? {
         // Display rounding must not turn Apply on an untouched seed into a
         // parameter edit, or alter the other half of a paired write.
@@ -181,19 +194,32 @@ final class BrightnessContrastPanel: FilterPreviewPanel, NSTextFieldDelegate {
         guard let filter, value.isValid else { return }
         guard value != draft else { return }
         draft = value
+        display(value)
         generation += 1
         let request = generation
-        pending.insert(request)
+        pending[request] = value
+        draftGeneration = request
         latestReply = nil
         showError("")
-        imageDocument.setBrightnessContrast(filter, value) { [weak self] result in
+        writeSettings(filter, value) { [weak self] result in
             guard let self, self.filter == filter else { return }
-            self.pending.remove(request)
+            self.pending.removeValue(forKey: request)
             // An older accepted pair remains the engine's state if a newer
             // write fails. Do this before filtering replies for presentation.
             if case .success = result, request > self.acceptedGeneration {
                 self.accepted = value
                 self.acceptedGeneration = request
+            }
+            if case .failure = result, self.draftGeneration == request {
+                if let previous = self.pending.keys.filter({ $0 > self.acceptedGeneration }).max(),
+                   let value = self.pending[previous] {
+                    self.draft = value
+                    self.draftGeneration = previous
+                } else {
+                    self.draft = self.accepted
+                    self.draftGeneration = self.acceptedGeneration
+                }
+                self.displayPreservingFieldDrafts(self.draft)
             }
             if self.generation == request { self.latestReply = (request, result) }
             self.resolveLatestReply()
@@ -204,14 +230,17 @@ final class BrightnessContrastPanel: FilterPreviewPanel, NSTextFieldDelegate {
         guard filter != nil, let reply = latestReply, reply.generation == generation else { return }
         // Refusals can be synchronous while an earlier accepted write is
         // still queued. Wait for those replies before choosing the rollback.
-        guard !pending.contains(where: { $0 < reply.generation }) else { return }
+        guard !pending.keys.contains(where: { $0 < reply.generation }) else { return }
         latestReply = nil
         switch reply.result {
         case .success:
             showError("")
         case .failure(let error):
-            draft = accepted
-            display(accepted)
+            if !(error is InputError) {
+                draft = accepted
+                draftGeneration = acceptedGeneration
+                displayPreservingFieldDrafts(accepted)
+            }
             showError(error.localizedDescription)
         }
     }

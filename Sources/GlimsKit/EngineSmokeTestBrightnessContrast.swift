@@ -45,6 +45,59 @@ extension EngineSmokeTest {
         let original = try session.copyPixels(image, merged: true).pixels
         let otherPixels = try session.copyPixels(otherImage, merged: true).pixels
         let baseline = try session.undoInfo(image).undoCount
+        for invalidText in [false, true] {
+            let controlledFilter = try session.beginFilter(image: image, drawable: layer, operation: operation.name)
+            var writes: [EngineSession.BrightnessContrastSettings] = []
+            var replies: [@MainActor (Result<Void, Error>) -> Void] = []
+            guard let controlled = BrightnessContrastPanel(document: document, filter: controlledFilter,
+                initialValues: ["brightness": .number(0), "contrast": .number(0)], write: { _, value, reply in
+                    writes.append(value)
+                    if writes.count == 2 { reply(.failure(ImageDocument.DocumentError.busy)) }
+                    else { replies.append(reply) }
+                }) else {
+                try session.abortFilter(controlledFilter)
+                check(false, "the controlled Brightness/Contrast editor opens"); continue
+            }
+            controlled.brightnessSlider.doubleValue = 10; controlled.sliderChanged(controlled.brightnessSlider)
+            controlled.contrastSlider.doubleValue = 20; controlled.sliderChanged(controlled.contrastSlider)
+            if invalidText {
+                controlled.brightnessField.stringValue = "invalid"; controlled.fieldsChanged(controlled.brightnessField)
+                replies.first?(.success(()))
+                check(controlled.brightnessField.stringValue == "invalid",
+                      "an older acknowledgement keeps newer invalid brightness text")
+                controlled.brightnessField.stringValue = "30"; controlled.fieldsChanged(controlled.brightnessField)
+                check(writes.last == .init(brightness: 0.3, contrast: 0),
+                      "a corrected field cannot resurrect a refused contrast correction")
+            } else {
+                controlled.brightnessSlider.doubleValue = 30; controlled.sliderChanged(controlled.brightnessSlider)
+                check(writes.count == 3 && writes.last == .init(brightness: 0.3, contrast: 0),
+                      "a new edit before an older acknowledgement cannot resubmit refused contrast")
+                replies.first?(.success(())); replies.last?(.success(()))
+            }
+            controlled.cancel(); settle()
+        }
+        for text in ["31", "invalid"] {
+            let controlledFilter = try session.beginFilter(image: image, drawable: layer, operation: operation.name)
+            var writes: [EngineSession.BrightnessContrastSettings] = []
+            var firstReply: (@MainActor (Result<Void, Error>) -> Void)?
+            guard let controlled = BrightnessContrastPanel(document: document, filter: controlledFilter,
+                initialValues: ["brightness": .number(0), "contrast": .number(0)], write: { _, value, reply in
+                    writes.append(value)
+                    if writes.count == 1 { firstReply = reply }
+                    else { reply(.failure(ImageDocument.DocumentError.busy)) }
+                }) else { try session.abortFilter(controlledFilter); continue }
+            controlled.brightnessSlider.doubleValue = 10; controlled.sliderChanged(controlled.brightnessSlider)
+            controlled.contrastSlider.doubleValue = 20; controlled.sliderChanged(controlled.contrastSlider)
+            controlled.window?.makeKeyAndOrderFront(nil)
+            controlled.window?.makeFirstResponder(controlled.brightnessField)
+            if let fieldEditor = controlled.brightnessField.currentEditor() {
+                fieldEditor.string = text
+                firstReply?(.success(()))
+                check(controlled.brightnessField.currentEditor()?.string == text,
+                      "a delayed failure keeps active uncommitted brightness text (\(text))")
+            } else { check(false, "the controlled brightness field editor starts") }
+            controlled.cancel(); settle()
+        }
         func openNew() -> BrightnessContrastPanel? {
             NSApp.sendAction(action, to: controller, from: item)
             wait { controller.previewPanel != nil && document.pendingWork == 0 }
