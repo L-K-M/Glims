@@ -725,6 +725,71 @@ typedef struct GlimsLevelsSettings {
   GlimsLevelsChannel alpha;
 } GlimsLevelsSettings;
 
+/* Owned Curves data, independent of native enums and object layouts. */
+typedef enum GlimsCurveChannel {
+  GLIMS_CURVE_CHANNEL_VALUE = 1,
+  GLIMS_CURVE_CHANNEL_RED = 2,
+  GLIMS_CURVE_CHANNEL_GREEN = 3,
+  GLIMS_CURVE_CHANNEL_BLUE = 4,
+  GLIMS_CURVE_CHANNEL_ALPHA = 5
+} GlimsCurveChannel;
+
+typedef enum GlimsCurveKind {
+  GLIMS_CURVE_KIND_UNKNOWN = 0,
+  GLIMS_CURVE_KIND_SMOOTH = 1,
+  GLIMS_CURVE_KIND_FREE = 2
+} GlimsCurveKind;
+
+typedef enum GlimsCurvePointKind {
+  GLIMS_CURVE_POINT_SMOOTH = 1,
+  GLIMS_CURVE_POINT_CORNER = 2
+} GlimsCurvePointKind;
+
+/* Adapter resource limits, not limits of native Core's point representation. */
+#define GLIMS_CURVE_MAX_POINTS 65536u
+#define GLIMS_CURVE_SAMPLE_COUNT 256u
+
+typedef struct GlimsCurvePoint {
+  double x;
+  double y;
+  uint32_t kind;             /* GlimsCurvePointKind */
+} GlimsCurvePoint;
+
+typedef struct GlimsCurveState {
+  uint32_t kind;             /* GlimsCurveKind */
+  uint32_t identity;         /* exactly 0 or 1; native HDR bypass state */
+  uint32_t point_count;
+  GlimsCurvePoint *points;   /* owned, including hidden Free-mode points */
+  uint32_t sample_count;     /* exactly GLIMS_CURVE_SAMPLE_COUNT */
+  double *samples;           /* owned native generated/Free samples */
+} GlimsCurveState;
+
+typedef struct GlimsCurvesSnapshot {
+  uint32_t struct_size;
+  uint32_t trc;              /* GlimsColorTRC; new effects default PERCEPTUAL */
+  GlimsCurveState value;
+  GlimsCurveState red;
+  GlimsCurveState green;
+  GlimsCurveState blue;
+  GlimsCurveState alpha;
+} GlimsCurvesSnapshot;
+
+typedef enum GlimsCurveEditMode {
+  GLIMS_CURVE_EDIT_SMOOTH_POINTS = 1,
+  GLIMS_CURVE_EDIT_FREE_SAMPLES = 2,
+  GLIMS_CURVE_EDIT_RESET = 3
+} GlimsCurveEditMode;
+
+typedef struct GlimsCurveEdit {
+  uint32_t struct_size;
+  uint32_t channel;          /* GlimsCurveChannel */
+  uint32_t mode;             /* GlimsCurveEditMode */
+  uint32_t point_count;      /* Smooth: 0..MAX, finite ordered x/y in 0..1 */
+  const GlimsCurvePoint *points;
+  uint32_t sample_count;     /* Free: exactly SAMPLE_COUNT, finite 0..1 */
+  const double *samples;
+} GlimsCurveEdit;
+
 /* A layer's mask flags: ENABLED gates the mask's effect on the
  * composite; EDITING makes the mask the target of painting, fills and
  * gradients while its layer is the only selected one; SHOWING displays
@@ -3019,6 +3084,28 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_fit_layers_to_image) (GlimsEngine *engine, GlimsImageID image,
                                            const GlimsItemID *layers, int32_t count,
                                            char **error);
+  /* Slots157..160: owned all-channel Curves snapshots and immutable patches.
+   * Out must be zero-initialized except struct_size >= sizeof(snapshot).
+   * Failure clears owned fields, preserving struct_size and any future tail.
+   * Free releases only facade allocations; it requires no engine thread.
+   * Edit/TRC Set allocate their complete authoritative result BEFORE changing
+   * the live config. On success, even a numeric no-op returns a snapshot.
+   * Smooth points are authoritative; Core generates their sample table.
+   * Free samples are authoritative; Reset restores native channel identity.
+   * Unused edit arrays/counts must be NULL/zero. Input is validated in full;
+   * no implicit sorting/clamping. Other channels/base metadata remain exact.
+   * Native tables outside the common 256-sample domain are UNSUPPORTED.
+   * A legacy config/operation TRC mismatch is refused without normalization.
+   * Caller must free each successful snapshot before reusing its storage. */
+  GlimsStatus (*filter_curves_get) (GlimsEngine *engine, GlimsFilterID filter,
+                                   GlimsCurvesSnapshot *out, char **error);
+  void (*free_curves_snapshot) (GlimsCurvesSnapshot *snapshot);
+  GlimsStatus (*filter_curves_edit) (GlimsEngine *engine, GlimsFilterID filter,
+                                    const GlimsCurveEdit *edit,
+                                    GlimsCurvesSnapshot *out, char **error);
+  GlimsStatus (*filter_curves_set_trc) (GlimsEngine *engine, GlimsFilterID filter,
+                                       uint32_t trc, GlimsCurvesSnapshot *out,
+                                       char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

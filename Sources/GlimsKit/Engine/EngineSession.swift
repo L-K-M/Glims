@@ -1091,6 +1091,91 @@ final class EngineSession: @unchecked Sendable {
         try check(status, error)
     }
 
+    private func decodeCurves(_ raw: GlimsCurvesSnapshot) throws -> CurvesSettings {
+        func malformed() -> EngineError {
+            EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Curves settings could not be read.")
+        }
+        func channel(_ raw: GlimsCurveState) throws -> CurveState {
+            guard let kind = CurveKind(rawValue: raw.kind), raw.identity <= 1,
+                  raw.point_count <= 65_536, raw.sample_count == 256,
+                  raw.point_count == 0 || raw.points != nil, let samples = raw.samples else { throw malformed() }
+            var points: [CurvePoint] = []
+            if let pointer = raw.points {
+                points = try UnsafeBufferPointer(start: pointer, count: Int(raw.point_count)).map {
+                    guard let type = CurvePointKind(rawValue: $0.kind) else { throw malformed() }
+                    return CurvePoint(x: $0.x, y: $0.y, kind: type)
+                }
+            }
+            let value = CurveState(kind: kind, identity: raw.identity == 1, points: points,
+                                   samples: Array(UnsafeBufferPointer(start: samples, count: 256)))
+            guard value.isValid else { throw malformed() }
+            return value
+        }
+        guard let trc = ColorTRC(rawValue: raw.trc), trc != .unknown else { throw malformed() }
+        return try CurvesSettings(trc: trc, value: channel(raw.value), red: channel(raw.red),
+                                   green: channel(raw.green), blue: channel(raw.blue), alpha: channel(raw.alpha))
+    }
+
+    func curvesSettings(_ filter: Int32) throws -> CurvesSettings {
+        var raw = GlimsCurvesSnapshot()
+        raw.struct_size = UInt32(MemoryLayout<GlimsCurvesSnapshot>.size)
+        defer { api.free_curves_snapshot(&raw) }
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_curves_get(engine, filter, &raw, &error)
+        try check(status, error)
+        return try decodeCurves(raw)
+    }
+
+    func editCurve(_ filter: Int32, edit: CurveEdit) throws -> CurvesSettings {
+        guard edit.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Curve coordinates and samples must be from 0 to 1, with points ordered by input.")
+        }
+        var input = GlimsCurveEdit()
+        input.struct_size = UInt32(MemoryLayout<GlimsCurveEdit>.size)
+        input.channel = edit.channel.rawValue
+        var points: [GlimsCurvePoint] = []
+        var samples: [Double] = []
+        switch edit {
+        case .smooth(_, let value):
+            input.mode = GLIMS_CURVE_EDIT_SMOOTH_POINTS.rawValue
+            points = value.map { GlimsCurvePoint(x: $0.x, y: $0.y, kind: $0.kind.rawValue) }
+        case .free(_, let value):
+            input.mode = GLIMS_CURVE_EDIT_FREE_SAMPLES.rawValue
+            samples = value
+        case .reset:
+            input.mode = GLIMS_CURVE_EDIT_RESET.rawValue
+        }
+        var raw = GlimsCurvesSnapshot()
+        raw.struct_size = UInt32(MemoryLayout<GlimsCurvesSnapshot>.size)
+        defer { api.free_curves_snapshot(&raw) }
+        var error: UnsafeMutablePointer<CChar>?
+        let status = points.withUnsafeBufferPointer { pointBuffer in
+            samples.withUnsafeBufferPointer { sampleBuffer in
+                input.point_count = UInt32(pointBuffer.count)
+                input.points = pointBuffer.isEmpty ? nil : pointBuffer.baseAddress
+                input.sample_count = UInt32(sampleBuffer.count)
+                input.samples = sampleBuffer.isEmpty ? nil : sampleBuffer.baseAddress
+                return api.filter_curves_edit(engine, filter, &input, &raw, &error)
+            }
+        }
+        try check(status, error)
+        return try decodeCurves(raw)
+    }
+
+    func setCurvesTRC(_ filter: Int32, to trc: ColorTRC) throws -> CurvesSettings {
+        guard trc != .unknown else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: "Choose a transfer curve.")
+        }
+        var raw = GlimsCurvesSnapshot()
+        raw.struct_size = UInt32(MemoryLayout<GlimsCurvesSnapshot>.size)
+        defer { api.free_curves_snapshot(&raw) }
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_curves_set_trc(engine, filter, trc.rawValue, &raw, &error)
+        try check(status, error)
+        return try decodeCurves(raw)
+    }
+
     struct HueSaturationSettings: Equatable {
         struct Range: Equatable {
             var hue: Double = 0

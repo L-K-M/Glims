@@ -3479,3 +3479,11 @@ selection/tree preservation and one outer Undo follow Core's resize route.
 See `batch-layer-fit.md`: 964 units, 163 native and 21 UI checks per engine,
 plus 1,917 native/2,542 app checks in the isolated bundle pass. Broader
 batch/gesture policy remains open.
+
+
+Curves candidate (2026-11-09): facade v1 appends157..160 for owned five-channel
+snapshots, one-channel point/sample patches and global TRC updates. The dedicated
+graph/numeric form and native immutable replacement are under acceptance; see
+`curves.md`. Levels and Curves share exact native TRC binding installation.
+Main #135 has merged captured batch Fit; its accepted bundle passes1917 native
+and2542 app checks. This checkpoint does not close the remaining completion ledger.

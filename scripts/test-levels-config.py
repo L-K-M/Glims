@@ -11,7 +11,8 @@ spec.loader.exec_module(driver)
 
 driver.READER = root / "Engine/levels-config.c"
 driver.ADDITIONAL_SOURCES = [root / "Engine/filter.c", root / "Engine/filter-config.c",
-                             root / "Engine/color-balance-config.c", root / "Engine/hue-saturation-config.c", root / "Engine/filter-properties.c"]
+                             root / "Engine/color-balance-config.c", root / "Engine/hue-saturation-config.c", root / "Engine/filter-properties.c",
+                             root / "Engine/point-config-trc.c"]
 driver.HARNESS = root / "Engine/tests/levels-config-tests.c"
 driver.DEFAULT_OUT_ROOT = root / ".build/levels-config-tests"
 

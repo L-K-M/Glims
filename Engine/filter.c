@@ -21,6 +21,7 @@
 #include "color-balance-config.h"
 #include "hue-saturation-config.h"
 #include "levels-config.h"
+#include "curves-config.h"
 
 #include <math.h>
 #include <string.h>
@@ -49,7 +50,8 @@ uses_owned_config (GeglNode *node)
   return glims_filter_config_is_brightness_contrast (node) ||
          glims_color_balance_config_is_operation (node) ||
          glims_hue_saturation_config_is_operation (node) ||
-         glims_levels_config_is_operation (node);
+         glims_levels_config_is_operation (node) ||
+         glims_curves_config_is_operation (node);
 }
 
 static GlimsStatus
@@ -61,6 +63,8 @@ copy_owned_config (GeglNode *destination, GeglNode *source, char **error)
     return glims_hue_saturation_config_copy (destination, source, error);
   if (glims_levels_config_is_operation (source))
     return glims_levels_config_copy (destination, source, error);
+  if (glims_curves_config_is_operation (source))
+    return glims_curves_config_copy (destination, source, error);
   return glims_filter_config_copy (destination, source, error);
 }
 
@@ -233,7 +237,8 @@ filter_begin_internal (GlimsEngine    *engine,
     return GLIMS_STATUS_BUSY;
 
   if (!strcmp (operation, "gimp:brightness-contrast") || !strcmp (operation, "gimp:color-balance") ||
-      !strcmp (operation, "gimp:hue-saturation") || !strcmp (operation, "gimp:levels")) {
+      !strcmp (operation, "gimp:hue-saturation") || !strcmp (operation, "gimp:levels") ||
+      !strcmp (operation, "gimp:curves")) {
     status = glims_edit_ready (engine, open, error);
     if (status != GLIMS_STATUS_OK) return status;
     status = source_merge_history_ready (open->image, error);
@@ -271,6 +276,8 @@ filter_begin_internal (GlimsEngine    *engine,
   status = glims_hue_saturation_config_prepare (session->operation, error);
   if (status != GLIMS_STATUS_OK) { glims_filters_free (session); return status; }
   status = glims_levels_config_prepare (session->operation, error);
+  if (status != GLIMS_STATUS_OK) { glims_filters_free (session); return status; }
+  status = glims_curves_config_prepare (session->operation, error);
   if (status != GLIMS_STATUS_OK) { glims_filters_free (session); return status; }
   if (aux_source) {
     if (!gegl_node_connect_to (aux_source, "output", session->operation, "aux")) {
@@ -424,7 +431,8 @@ glims_filter_edit_begin (GlimsEngine   *engine,
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
   if (!strcmp (operation, "gimp:brightness-contrast") || !strcmp (operation, "gimp:color-balance") ||
-      !strcmp (operation, "gimp:hue-saturation") || !strcmp (operation, "gimp:levels")) {
+      !strcmp (operation, "gimp:hue-saturation") || !strcmp (operation, "gimp:levels") ||
+      !strcmp (operation, "gimp:curves")) {
     status = source_merge_history_ready (open->image, error);
     if (status != GLIMS_STATUS_OK) { g_free (operation); return status; }
   }
@@ -450,10 +458,11 @@ glims_filter_edit_begin (GlimsEngine   *engine,
 
       if ((pspecs[i]->flags & G_PARAM_READWRITE) != G_PARAM_READWRITE)
         continue;
-      /* Levels' config hook installs its TRC and binding together. Generic
+      /* The owned config hook installs its TRC and binding together. Generic
        * copying must not create an intermediate operation/config mismatch. */
       if (!strcmp (pspecs[i]->name, "trc") &&
-          glims_levels_config_is_operation (session->operation))
+          (glims_levels_config_is_operation (session->operation) ||
+           glims_curves_config_is_operation (session->operation)))
         continue;
       if (!strcmp (pspecs[i]->name, "config") &&
           uses_owned_config (session->operation)) {
@@ -706,6 +715,60 @@ glims_filter_levels_set (GlimsEngine *engine, GlimsFilterID id,
 }
 
 GlimsStatus
+glims_filter_curves_get (GlimsEngine *engine, GlimsFilterID id,
+                         GlimsCurvesSnapshot *out, char **error)
+{
+  GlimsFilter *session;
+  if (!out || out->struct_size < sizeof *out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  glims_curves_snapshot_clear (out);
+  session = g_hash_table_lookup (engine->filters, GINT_TO_POINTER (id));
+  if (!session) return GLIMS_STATUS_NOT_FOUND;
+  if (engine->busy > 0) return GLIMS_STATUS_BUSY;
+  return glims_curves_config_get (session->operation, out, error);
+}
+
+GlimsStatus
+glims_filter_curves_edit (GlimsEngine *engine, GlimsFilterID id,
+                          const GlimsCurveEdit *edit, GlimsCurvesSnapshot *out,
+                          char **error)
+{
+  GlimsFilter *session;
+  gboolean changed = FALSE;
+  GlimsStatus status;
+  if (!out || out->struct_size < sizeof *out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  glims_curves_snapshot_clear (out);
+  status = glims_filter_check_edit (engine, id, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  session = g_hash_table_lookup (engine->filters, GINT_TO_POINTER (id));
+  status = glims_curves_config_edit (session->operation, edit, out, &changed, error);
+  if (status == GLIMS_STATUS_OK && changed) {
+    glims_filter_preview_apply (session);
+    gimp_image_flush (session->image);
+  }
+  return status;
+}
+
+GlimsStatus
+glims_filter_curves_set_trc (GlimsEngine *engine, GlimsFilterID id, uint32_t trc,
+                             GlimsCurvesSnapshot *out, char **error)
+{
+  GlimsFilter *session;
+  gboolean changed = FALSE;
+  GlimsStatus status;
+  if (!out || out->struct_size < sizeof *out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  glims_curves_snapshot_clear (out);
+  status = glims_filter_check_edit (engine, id, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  session = g_hash_table_lookup (engine->filters, GINT_TO_POINTER (id));
+  status = glims_curves_config_set_trc (session->operation, trc, out, &changed, error);
+  if (status == GLIMS_STATUS_OK && changed) {
+    glims_filter_preview_apply (session);
+    gimp_image_flush (session->image);
+  }
+  return status;
+}
+
+GlimsStatus
 glims_filter_commit (GlimsEngine    *engine,
                      GlimsFilterID   id,
                      char          **error)
@@ -726,6 +789,11 @@ glims_filter_commit (GlimsEngine    *engine,
   if (glims_levels_config_is_operation (session->operation)) {
     GlimsLevelsSettings checked = { .struct_size = sizeof checked };
     status = glims_levels_config_get (session->operation, &checked, error);
+    if (status != GLIMS_STATUS_OK) return status;
+  }
+
+  if (glims_curves_config_is_operation (session->operation)) {
+    status = glims_curves_config_validate (session->operation, error);
     if (status != GLIMS_STATUS_OK) return status;
   }
 
@@ -770,6 +838,11 @@ glims_filter_commit (GlimsEngine    *engine,
         if (status != GLIMS_STATUS_OK) return status;
       }
 
+      if (glims_curves_config_is_operation (session->operation)) {
+        status = glims_curves_config_validate (existing_node, error);
+        if (status != GLIMS_STATUS_OK) return status;
+      }
+
       if (! gimp_image_undo_push_filter_modified (session->image, _("Edit filter"),
                                                   session->drawable, existing))
         return glims_fail (error, NULL, "The image's undo history is unavailable.");
@@ -784,7 +857,8 @@ glims_filter_commit (GlimsEngine    *engine,
           if ((specs[i]->flags & G_PARAM_READWRITE) != G_PARAM_READWRITE)
             continue;
           if (!strcmp (specs[i]->name, "trc") &&
-              glims_levels_config_is_operation (session->operation))
+              (glims_levels_config_is_operation (session->operation) ||
+               glims_curves_config_is_operation (session->operation)))
             continue;
           if (!strcmp (specs[i]->name, "config") &&
               uses_owned_config (session->operation)) {

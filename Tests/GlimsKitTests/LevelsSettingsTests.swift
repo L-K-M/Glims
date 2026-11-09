@@ -132,7 +132,7 @@ final class LevelsSettingsTests: XCTestCase {
         let auxiliary = operation("gimp:levels", support: .needsAuxInput)
         XCTAssertFalse(NativeFilterMenuLayout.usesLevelsEditor(auxiliary))
         XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(auxiliary))
-        for name in ["gegl:levels", "GIMP:LEVELS", "gimp:levels-legacy", "gimp:curves"] {
+        for name in ["gegl:levels", "GIMP:LEVELS", "gimp:levels-legacy", "gimp:future-config"] {
             let unrelated = operation(name, support: .needsConfig)
             XCTAssertFalse(NativeFilterMenuLayout.usesLevelsEditor(unrelated), name)
             XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(unrelated), name)

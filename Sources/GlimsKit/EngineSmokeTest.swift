@@ -316,6 +316,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (batch delete)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "curves" {
+                try exerciseCurves(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (curves)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "levels" {
                 try exerciseLevels(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (levels)" : "FAILED: \(failures) failure(s)")
@@ -496,6 +501,7 @@ enum EngineSmokeTest {
             try exerciseFilterSources(session, documents: documents)
             try exerciseBrightnessContrast(session, work: work, documents: documents)
             try exerciseColorBalance(session, work: work, documents: documents)
+            try exerciseCurves(session, work: work, documents: documents)
             try exerciseLevels(session, work: work, documents: documents)
             try exerciseHueSaturation(session, work: work, documents: documents)
             try exerciseSelectionDrag(session, documents: documents)
@@ -6633,8 +6639,8 @@ enum EngineSmokeTest {
               "Filter ▸ Blur keeps the dedicated command and gains the catalog's operations (\(blurItems))")
         check(nativeItem("gegl:gaussian-blur") == nil, "the catalog's own Gaussian Blur stays out")
         check(nativeItem("gegl:displace")?.title == "Displace (needs a second layer as its source)"
-                && nativeItem("gimp:curves")?.title == "Curves (needs a dedicated editor)",
-              "inapplicable operations stay listed with their reason")
+                && nativeItem("gimp:curves")?.title == "Curves…",
+              "auxiliary input stays gated and Curves exposes its dedicated form")
         check(submenu(["Filter", "Render", "Pattern"])?.items.isEmpty == false,
               "the plug-in categories are intact after the native install")
 

@@ -17,6 +17,7 @@
 #include "resource-rename.h"
 #include "layer-delete.h"
 #include "layer-fit.h"
+#include "curves-config.h"
 #include "filter-input.h"
 
 #include <dlfcn.h>
@@ -2866,6 +2867,52 @@ static GlimsStatus api_image_fit_layers_to_image (GlimsEngine *e, GlimsImageID i
   return glims_engine_call (e, image_fit_layers_on_engine, &a);
 }
 
+typedef struct {
+  GlimsFilterID filter;
+  const GlimsCurveEdit *edit;
+  uint32_t trc;
+  GlimsCurvesSnapshot *out;
+  char **error;
+} GlimsCurvesArgs;
+static GlimsStatus filter_curves_get_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsCurvesArgs *a = data;
+  return glims_filter_curves_get (e, a->filter, a->out, a->error);
+}
+static GlimsStatus filter_curves_edit_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsCurvesArgs *a = data;
+  return glims_filter_curves_edit (e, a->filter, a->edit, a->out, a->error);
+}
+static GlimsStatus filter_curves_set_trc_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsCurvesArgs *a = data;
+  return glims_filter_curves_set_trc (e, a->filter, a->trc, a->out, a->error);
+}
+static GlimsStatus api_filter_curves_get (GlimsEngine *e, GlimsFilterID filter,
+                                         GlimsCurvesSnapshot *out, char **error)
+{
+  glims_curves_snapshot_clear (out);
+  GlimsCurvesArgs a = { .filter = filter, .out = out, .error = error };
+  return glims_engine_call (e, filter_curves_get_on_engine, &a);
+}
+static GlimsStatus api_filter_curves_edit (GlimsEngine *e, GlimsFilterID filter,
+                                          const GlimsCurveEdit *edit,
+                                          GlimsCurvesSnapshot *out, char **error)
+{
+  glims_curves_snapshot_clear (out);
+  GlimsCurvesArgs a = { .filter = filter, .edit = edit, .out = out, .error = error };
+  return glims_engine_call (e, filter_curves_edit_on_engine, &a);
+}
+static GlimsStatus api_filter_curves_set_trc (GlimsEngine *e, GlimsFilterID filter,
+                                             uint32_t trc, GlimsCurvesSnapshot *out,
+                                             char **error)
+{
+  glims_curves_snapshot_clear (out);
+  GlimsCurvesArgs a = { .filter = filter, .trc = trc, .out = out, .error = error };
+  return glims_engine_call (e, filter_curves_set_trc_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -3028,6 +3075,10 @@ static const GlimsEngineAPI api_v1 = {
   .filter_levels_get = api_filter_levels_get,
   .filter_levels_set = api_filter_levels_set,
   .image_fit_layers_to_image = api_image_fit_layers_to_image,
+  .filter_curves_get = api_filter_curves_get,
+  .free_curves_snapshot = glims_curves_snapshot_free,
+  .filter_curves_edit = api_filter_curves_edit,
+  .filter_curves_set_trc = api_filter_curves_set_trc,
 };
 
 __attribute__ ((visibility ("default")))

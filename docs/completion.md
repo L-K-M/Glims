@@ -59,7 +59,7 @@ bundle with the native and Swift build outputs inaccessible.
 - [x] Captured ordinary pixel-layer batch deletion as one native Undo, with
       ordered selection restoration and mask/effect admission guards (#125).
 - [x] Captured pixel-layer batch Fit to Image with native masks, one Undo,
-      exact selection preservation and whole-request admission (candidate).
+      exact selection preservation and whole-request admission (#135).
 - [ ] Remaining batch operations and consistent gesture-time rasterize/revert policy.
 - [x] Adjustment layer creation as an empty pass-through group with a filter,
       explicit placement and editable filter settings.
@@ -72,8 +72,10 @@ bundle with the native and Swift build outputs inaccessible.
 - [x] Dedicated Brightness/Contrast, Color Balance, Hue/Saturation and Levels
       editors, with immutable whole configurations, existing-effect editing,
       Undo/Redo and XCF (reviewed integration candidates #129/#131/#133/#134).
-- [ ] Remaining custom filter forms, including Curves, histogram/automatic
-      Levels controls and other auxiliary inputs.
+- [x] Dedicated Curves graph, point/sample controls and immutable channel edits,
+      with all-four-engine native and actual-form checks (current candidate).
+- [ ] Remaining custom filter forms, histogram/automatic Levels controls
+      and other auxiliary inputs.
 - [ ] Preserve nondefault native-only effect blend/composite settings when
       opening XCF; upstream currently normalizes them to AUTO.
 - [x] Path fill, vector layers and vector style controls.

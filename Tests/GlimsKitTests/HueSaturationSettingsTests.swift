@@ -135,7 +135,7 @@ final class HueSaturationSettingsTests: XCTestCase {
             ("gimp:hue-saturation-legacy", "near name", .needsConfig),
             ("gegl:hue-saturation", "GEGL namespace", .needsConfig),
             ("GIMP:HUE-SATURATION", "case mismatch", .needsConfig),
-            ("gimp:curves", "curves unsupported", .needsConfig),
+            ("gimp:future-config", "unknown config unsupported", .needsConfig),
             ("gimp:levels", "other special editor", .needsConfig),
             ("gimp:color-balance", "other special editor", .needsConfig),
             ("gimp:brightness-contrast", "other special editor", .needsConfig),

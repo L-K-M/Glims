@@ -19,6 +19,7 @@
  */
 #include "engine-private.h"
 #include "levels-config.h"
+#include "curves-config.h"
 
 #include <math.h>
 #include <string.h>
@@ -821,10 +822,11 @@ glims_filter_set_property (GlimsEngine            *engine,
   if (gegl_node_has_pad (session->operation, property) ||
       ! (pspec->flags & G_PARAM_WRITABLE))
     return GLIMS_STATUS_INVALID_ARGUMENT;
-  /* Levels owns the operation/config TRC as one complete settings value.
+  /* Typed point-filter configs own the operation/config TRC together.
    * An operation-only generic write would break that invariant. */
   if (!strcmp (pspec->name, "trc") &&
-      glims_levels_config_is_operation (session->operation))
+      (glims_levels_config_is_operation (session->operation) ||
+       glims_curves_config_is_operation (session->operation)))
     return GLIMS_STATUS_UNSUPPORTED;
   if (property_kind (pspec) != value->kind ||
       value->kind == GLIMS_FILTER_VALUE_UNSUPPORTED)

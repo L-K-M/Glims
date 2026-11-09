@@ -62,9 +62,9 @@ final class NativeFilterCatalogTests: XCTestCase {
 
     func testUnavailableOperationsStayListedWithReasons() {
         let aux = operation("gegl:displace", title: "Displace", categories: ["map"], support: .needsAuxInput)
-        let config = operation("gimp:curves", title: "Curves", categories: [], support: .needsConfig)
+        let config = operation("gimp:future-config", title: "Future", categories: [], support: .needsConfig)
         XCTAssertEqual(NativeFilterMenuLayout.itemTitle(aux), "Displace (needs a second layer as its source)")
-        XCTAssertEqual(NativeFilterMenuLayout.itemTitle(config), "Curves (needs a dedicated editor)")
+        XCTAssertEqual(NativeFilterMenuLayout.itemTitle(config), "Future (needs a dedicated editor)")
         XCTAssertEqual(NativeFilterMenuLayout.itemTitle(operation("gegl:waves", title: "Waves")), "Waves…")
         let layout = NativeFilterMenuLayout(operations: [aux, config])
         XCTAssertEqual(layout.sections.map(\.title), ["Map", "Other"],
