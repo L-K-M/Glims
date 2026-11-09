@@ -3,7 +3,7 @@ import AppKit
 /// The pure, UI-free rules behind View ▸ Saved Sets…: the kind chooser,
 /// the full-name contract, the token-addressed row model (the token, never
 /// the label, is the identity), cached admission, member/request
-/// validation, layer-only recall admission and the phase machine.
+/// validation, all-kinds recall admission and the phase machine.
 enum SavedSetControlsLogic {
     struct Rejection: Error, Equatable {
         let message: String
@@ -126,26 +126,31 @@ enum SavedSetControlsLogic {
         return .success(())
     }
 
-    /// Why a non-layer kind cannot be recalled: no owned native
-    /// channel/path selection API — nothing is recalled, no take-first.
-    static func recallUnavailableReason(_ kind: EngineSession.ItemSetKind) -> String {
-        "Recall is available for layer sets only. You can create, replace, rename "
-            + "and delete \(kindTitle(kind).lowercased().dropLast()) sets here."
-    }
-
-    /// Recall admission: only a layer-kind row whose exact member list is
-    /// still in the document recalls via `selectLayers`; else a reason.
+    /// Recall admission for any kind: the row's exact member list must be
+    /// nonempty and still exist in the document, so the set recalls via
+    /// the native batch selection (slot 136) exactly; else a reason.
     static func recallAdmission(kind: EngineSession.ItemSetKind, row: Row?,
-                                existingLayerIDs: Set<Int32>) -> Result<[Int32], Rejection> {
+                                existingIDs: Set<Int32>) -> Result<[Int32], Rejection> {
         guard let row else { return .failure(Rejection(message: "Select a saved set to recall.")) }
-        guard kind == .layer else { return .failure(Rejection(message: recallUnavailableReason(kind))) }
+        guard row.kind == kind else { return .failure(Rejection(message: "The selected set has a different kind.")) }
         guard !row.members.isEmpty else {
             return .failure(Rejection(message: "The selected set is empty; there is nothing to recall."))
         }
-        guard Set(row.members).isSubset(of: existingLayerIDs) else {
+        guard Set(row.members).isSubset(of: existingIDs) else {
             return .failure(Rejection(message: "Some members of the selected set are no longer in this image, so it cannot be recalled exactly."))
         }
         return .success(row.members)
+    }
+
+    /// The document's current item ids of `kind`, for recall admission and
+    /// capture preflight — the cached rows, pure cache read.
+    static func existingIDs(ofKind kind: EngineSession.ItemSetKind, layers: [EngineSession.Layer],
+                            channels: [EngineSession.Channel], paths: [EngineSession.PathInfo]) -> Set<Int32> {
+        switch kind {
+        case .layer: return Set(layers.map(\.id))
+        case .channel: return Set(channels.map(\.id))
+        case .path: return Set(paths.map(\.id))
+        }
     }
 
     /// `idle`, or `mutating` while one accepted edit is active (gated).
@@ -172,9 +177,9 @@ enum SavedSetControlsLogic {
 /// fake all-items list); the request binds the selected row's token at
 /// apply. Mutations (slot 135) go through the global EngineActivity off the
 /// main thread, counted exactly once through the idle completion, including
-/// close. Recall is layer-only via `selectLayers`; channel/path recall
-/// stays disabled with a meaningful reason. Window close invalidates the
-/// panel, so a late completion cannot resurrect UI.
+/// close. Recall works for all three kinds through the native batch
+/// selection (slots 136/137) with fresh slot-134 members. Window close
+/// invalidates the panel, so a late completion cannot resurrect UI.
 @MainActor
 final class SavedSetPanelController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
     let imageDocument: ImageDocument
@@ -292,12 +297,17 @@ final class SavedSetPanelController: NSWindowController, NSTableViewDataSource, 
         let nameRow = NSStackView(views: [NSTextField(labelWithString: "Name:"), nameField])
         nameRow.orientation = .horizontal
         nameRow.spacing = 8
-        let buttonRow = NSStackView(views: [newButton, replaceButton, renameButton,
-                                             deleteButton, recallButton, closeButton])
-        buttonRow.orientation = .horizontal
-        buttonRow.spacing = 6
-        let stack = NSStackView(views: [topRow, scroll, nameRow, buttonRow, noteLabel, messageLabel])
+        let selectionRow = NSStackView(views: [newButton, replaceButton])
+        let actionRow = NSStackView(views: [renameButton, deleteButton, recallButton, closeButton])
+        for row in [selectionRow, actionRow] {
+            row.orientation = .horizontal
+            row.spacing = 8
+        }
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.heightAnchor.constraint(equalToConstant: 150).isActive = true
+        let stack = NSStackView(views: [topRow, scroll, nameRow, selectionRow, actionRow, noteLabel, messageLabel])
         stack.orientation = .vertical
+        stack.alignment = .leading
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -307,9 +317,12 @@ final class SavedSetPanelController: NSWindowController, NSTableViewDataSource, 
             stack.leadingAnchor.constraint(equalTo: panel.contentView!.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: panel.contentView!.trailingAnchor),
             stack.topAnchor.constraint(equalTo: panel.contentView!.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: panel.contentView!.bottomAnchor),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: panel.contentView!.bottomAnchor),
+            scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24),
+            noteLabel.widthAnchor.constraint(equalTo: scroll.widthAnchor),
+            messageLabel.widthAnchor.constraint(equalTo: scroll.widthAnchor),
         ])
-        panel.contentView!.setFrameSize(stack.fittingSize)
+        panel.setContentSize(NSSize(width: 520, height: 390))
         panel.minSize = panel.frame.size
         panel.initialFirstResponder = nameField
     }
@@ -356,15 +369,16 @@ final class SavedSetPanelController: NSWindowController, NSTableViewDataSource, 
         renameButton.isEnabled = !blocked && hasRow
         deleteButton.isEnabled = !blocked && hasRow
         let recall = SavedSetControlsLogic.recallAdmission(
-            kind: kind, row: selectedRow, existingLayerIDs: Set(imageDocument.layers.map(\.id)))
+            kind: kind, row: selectedRow,
+            existingIDs: SavedSetControlsLogic.existingIDs(ofKind: kind, layers: imageDocument.layers,
+                                                            channels: imageDocument.channels,
+                                                            paths: imageDocument.paths))
         recallButton.isEnabled = !blocked && { if case .success = recall { return true }; return false }()
         recallButton.toolTip = hasRow ? {
             if case .failure(let rejection) = recall { return rejection.message }
             return nil
         }() : nil
-        if let admission = cachedAdmission()  { note(admission) } else if selectedRow != nil && kind != .layer {
-            note(SavedSetControlsLogic.recallUnavailableReason(kind))
-        } else if !hasRow {
+        if let admission = cachedAdmission()  { note(admission) } else if !hasRow {
             note("Select a saved set to replace, rename, delete or recall it.")
         } else {
             note(nil)
@@ -453,12 +467,16 @@ final class SavedSetPanelController: NSWindowController, NSTableViewDataSource, 
         beginMutation(.remove, token: row.token, name: nil, captureSelection: false)
     }
 
-    /// Recall: layer sets only, via the exact-list `selectLayers`.
+    /// Recall: any kind, via the exact-list native batch selection — the
+    /// document, kind and current token captured at the call.
     @objc private func recallSavedSet(_ sender: Any?) {
         guard !isInvalidated, phase == .idle, let row = selectedRow else { return }
         if let reason = cachedAdmission() { refuse(reason); return }
         let admission = SavedSetControlsLogic.recallAdmission(
-            kind: kind, row: selectedRow, existingLayerIDs: Set(imageDocument.layers.map(\.id)))
+            kind: kind, row: selectedRow,
+            existingIDs: SavedSetControlsLogic.existingIDs(ofKind: kind, layers: imageDocument.layers,
+                                                            channels: imageDocument.channels,
+                                                            paths: imageDocument.paths))
         guard case .success = admission else {
             if case .failure(let rejection) = admission { refuse(rejection.message) }
             NSSound.beep()
@@ -467,7 +485,7 @@ final class SavedSetPanelController: NSWindowController, NSTableViewDataSource, 
         clearMessage()
         phase = .mutating
         updateControlStates()
-        imageDocument.recallLayerSet(token: row.token) { [weak self] result in
+        imageDocument.recallItemSet(token: row.token, kind: row.kind) { [weak self] result in
             guard let self, !self.isInvalidated else { return }
             self.phase = .idle
             if case .failure(let error) = result { self.refuse(error.localizedDescription) }

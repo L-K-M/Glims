@@ -311,6 +311,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (document placement)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "item-set-recall" {
+                try exerciseItemSetRecall(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (item set recall)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "saved-set-controls" {
                 try exerciseSavedSetControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (saved set controls)" : "FAILED: \(failures) failures")
@@ -380,6 +385,7 @@ enum EngineSmokeTest {
             try exerciseViewOverlays(session, work: work, documents: documents)
             try exerciseDisplayDestination(session, work: work, documents: documents)
             try exerciseDocumentPlacement(session, documents: documents)
+            try exerciseItemSetRecall(session, work: work, documents: documents)
             try exerciseSavedSetControls(session, work: work, documents: documents)
             try exerciseAdjustmentControls(session, work: work, documents: documents)
             try exerciseLayerMultiselectionControls(session, work: work, documents: documents)

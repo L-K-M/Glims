@@ -2924,6 +2924,82 @@ final class EngineSession: @unchecked Sendable {
         return handle
     }
 
+    /// One plain sRGB+alpha color value — the facade's GlimsColor contract
+    /// (four finite components in 0...1) as an owned value type, independent
+    /// of NSColor and AppKit, so gradient endpoints travel as plain data.
+    struct RGBAColor: Equatable, Sendable {
+        var red, green, blue, alpha: Double
+    }
+
+    /// Validates one gradient-creation request (resource_create_gradient,
+    /// slot 138) before any native call: the label (validateResourceName)
+    /// plus the .ggr edge rule — ASCII whitespace at either name edge is
+    /// refused, never silently trimmed, because the native loader strips
+    /// it and the name would change identity on reload — and both endpoints
+    /// with every component (alpha included) finite and inside 0...1, with
+    /// no clamping or normalization. Throws INVALID_ARGUMENT.
+    static func validateGradientCreation(name: String, left: RGBAColor, right: RGBAColor) throws {
+        func invalid(_ message: String) -> EngineError {
+            EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: message)
+        }
+        try validateResourceName(name)
+        let utf8 = Array(name.utf8)
+        func asciiSpace(_ byte: UInt8) -> Bool {
+            byte == 0x20 || (byte >= 0x09 && byte <= 0x0D)
+        }
+        if let first = utf8.first, let last = utf8.last,
+           asciiSpace(first) || asciiSpace(last) {
+            throw invalid("This resource format cannot preserve spaces at the "
+                          + "start or end of its name.")
+        }
+        for (label, endpoint) in [("left", left), ("right", right)] {
+            for (component, value) in [("red", endpoint.red), ("green", endpoint.green),
+                                       ("blue", endpoint.blue), ("alpha", endpoint.alpha)] {
+                guard value.isFinite, value >= 0, value <= 1 else {
+                    throw invalid("The \(label) endpoint's \(component) must be finite "
+                                  + "and inside 0...1.")
+                }
+            }
+        }
+    }
+
+    /// Creates one saved two-endpoint gradient under `name`
+    /// (resource_create_gradient, slot 138) and returns its handle: a
+    /// static one-segment gradient whose endpoint colors are exactly
+    /// `left` and `right`, saved to the engine's writable data folder and
+    /// published to the gradient catalog. The call takes no image and
+    /// changes no image, undo history, selection, context or clipboard.
+    ///
+    /// `name` and both endpoints are validated (validateGradientCreation)
+    /// before the RPC; the plain RGBA values are copied into GlimsColor
+    /// locals that live for the whole synchronous call, and the UInt64
+    /// handle passes through the bridge unchanged. BUSY while the engine
+    /// is busy or any stroke or filter session is active; FAILED on an
+    /// exact same-kind name collision (never silently renamed) or a
+    /// checked persistence failure; the handle output is zero on every
+    /// failure. The returned handle works with resources(_:),
+    /// resourceIdentifiers(_:), resolveResource(_:kind:),
+    /// resourceThumbnail(_:) and the gradient consumers. Call this off
+    /// the main thread, like the other catalog work.
+    func createGradient(name: String, left: RGBAColor, right: RGBAColor) throws -> ResourceID {
+        try Self.validateGradientCreation(name: name, left: left, right: right)
+        var leftColor = GlimsColor(red: left.red, green: left.green,
+                                   blue: left.blue, alpha: left.alpha)
+        var rightColor = GlimsColor(red: right.red, green: right.green,
+                                    blue: right.blue, alpha: right.alpha)
+        var handle: ResourceID = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try name.withCString { cName in
+            try check(api.resource_create_gradient(engine, cName,
+                                                  &leftColor, &rightColor, &handle, &error), error)
+        }
+        guard handle > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine created no resource handle.")
+        }
+        return handle
+    }
+
     /// The facade kind of an engine row; unknown kind values never reach
     /// the interface.
     private static func resourceKind(_ raw: UInt32) throws -> ResourceKind {

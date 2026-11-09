@@ -63,6 +63,18 @@ final class PathsPaletteController: NSViewController, PaletteContent, PaletteEdi
         }
     }
 
+    /// A recalled batch stays visible while the native table selection
+    /// remains a single-click control. Clicking one row resolves the batch.
+    final class SelectionRow: NSStackView {
+        var isNativeSelected = false { didSet { needsDisplay = true } }
+        override func draw(_ dirtyRect: NSRect) {
+            super.draw(dirtyRect)
+            guard isNativeSelected else { return }
+            NSColor.selectedContentBackgroundColor.withAlphaComponent(0.2).setFill()
+            bounds.fill()
+        }
+    }
+
     private weak var document: ImageDocument?
     private let table = NSTableView()
     private lazy var buttonBar = ClassicPaletteButtonBar(
@@ -229,7 +241,8 @@ final class PathsPaletteController: NSViewController, PaletteContent, PaletteEdi
         name.delegate = self
         name.setAccessibilityLabel("Path name")
 
-        let row = NSStackView(views: [visible, name])
+        let row = SelectionRow(views: [visible, name])
+        row.isNativeSelected = document?.selectedPathIDs.contains(path.id) == true
         row.spacing = 2
         return row
     }

@@ -7,8 +7,8 @@ import RigiUI
 /// slot-133/134 readback. Covers all three kinds' CRUD, the live-count
 /// readback, Undo/Redo, the no-op replace, the stale-token and foreign-
 /// document refusals, the explicit empty capture with no selection (never
-/// a fake all-items list), layer recall as an exact list with channel/path
-/// recall disabled for a meaningful reason, inline name errors, the busy
+/// a fake all-items list), layer and channel recall as exact lists, inline
+/// name errors, the busy
 /// gate, two-document capture with the other window front, pixel
 /// preservation, panel and host-window close invalidation, and close drain
 /// with exactly-one completion. Lookups go through accessibility labels.
@@ -173,6 +173,19 @@ extension EngineSmokeTest {
                 && button(panelWindow, "Recall saved set") != nil
                 && button(panelWindow, "Close saved sets panel") != nil,
               "the panel shows all management buttons with accessibility labels")
+        panelWindow.contentView?.layoutSubtreeIfNeeded()
+        if let content = panelWindow.contentView {
+            for label in ["New from selection", "Replace with selection", "Rename saved set",
+                          "Delete saved set", "Recall saved set", "Close saved sets panel"] {
+                let control = button(panelWindow, label)
+                let bounds = control.map { $0.convert($0.bounds, to: content) } ?? .zero
+                check(control != nil && bounds.width > 20 && bounds.height > 10
+                        && content.bounds.contains(bounds), "\(label) is fully inside the visible panel")
+            }
+            let visibleTable = tableView.enclosingScrollView.map { $0.convert($0.bounds, to: content) } ?? .zero
+            check(visibleTable.height >= 130 && content.bounds.contains(visibleTable),
+                  "the saved-set list has a visible scrollable viewport")
+        }
         check(button(panelWindow, "Replace with selection")?.isEnabled == false
                 && button(panelWindow, "Recall saved set")?.isEnabled == false,
               "row-bound buttons disable with no selection")
@@ -357,22 +370,23 @@ extension EngineSmokeTest {
         docA.selectLayers([l2, l1])
         settle(docA)
 
-        // Recall disabled for channel kind, with a meaningful reason and no
-        // take-first: the layer selection is untouched.
+        // Recall enabled for channel kind too: an exact slot-136/137
+        // selection of the stored members, no take-first.
         setKind(panel, kindPopup, .channel)
         settlePanel(docA, panel)
         if let chanRow = row(named: "Chan A", in: panel, tableView) {
             selectRow(panel, tableView, chanRow)
-            check(button(panelWindow, "Recall saved set")?.isEnabled == false,
-                  "channel recall is disabled")
-            check(panel.lastNote?.contains("layer sets only") == true
-                    && panel.lastNote?.contains("channel") == true,
-                  "the disabled recall carries a meaningful reason (\(panel.lastNote ?? "nil"))")
+            check(button(panelWindow, "Recall saved set")?.isEnabled == true,
+                  "channel recall enables with an existing exact list")
             button(panelWindow, "Recall saved set")?.performClick(nil)
-            settle(docA)
-            check((try session.selectedLayers(imageA)) == [l2, l1],
-                  "a disabled channel recall picks nothing (no take-first)")
-        } else { check(false, "the channel set is listed for the recall-disabled check") }
+            settlePanel(docA, panel)
+            check((try session.selectedItems(.channel, image: imageA)) == expectedChannels,
+                  "channel recall selects exactly the stored member list")
+            check(docA.selectedChannelIDs == expectedChannels && docA.activeChannel == expectedChannels.first,
+                  "the cached channel selection mirrors the native read-back, single target active")
+        } else { check(false, "the channel set is listed for the recall check") }
+        try session.channelCommand(.select, channel: 0, image: imageA)
+        settle(docA)
 
         // Management changes no pixels.
         check((try session.copyPixels(imageA, merged: true).pixels) == pixelsBeforeManagement,

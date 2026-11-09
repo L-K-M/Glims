@@ -7,10 +7,11 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-These entries describe main `2354d97` and the reviewed slices in the
-2026-11-09 integration candidate (`feat/editor-state-integration`). PRs
-#96–#105 and exact-head hosted CI are still pending. The whole editor
-remains in progress; each checked entry covers its stated behavior.
+These entries describe main `208a7c3`, including merged PRs #96–#107,
+and the channel/path recall candidate (`feat/item-set-recall-controls`).
+The recall candidate and public gradient facade #108 still need their
+exact-head hosted CI gates. The whole editor remains in progress; each
+checked entry covers its stated behavior.
 
 - [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
       fail before packaging. Hosted CI explicitly builds only the interface.
@@ -49,9 +50,11 @@ remains in progress; each checked entry covers its stated behavior.
       single-layer command gates.
 - [x] Fixed layer/channel/path set management with native Undo, runtime tokens
       and fresh-token layer recall; weak live identity and Undo memory limits.
-- [ ] Channel/path saved-set recall, batch editing and consistent gesture-time
-      rasterize/revert policy.
-- [ ] Adjustment layers/groups, remaining custom filter forms and filter inputs.
+- [x] Channel/path saved-set recall with ordered native mirrors and guarded
+      single-target edits, including arrow-key and floating-selection cases.
+- [ ] Batch editing and consistent gesture-time rasterize/revert policy.
+- [x] Adjustment layer creation with explicit placement and editable filter settings.
+- [ ] Adjustment groups, remaining custom filter forms and filter inputs.
 - [x] Path fill, vector layers and vector style controls.
 - [x] Multi-anchor path editing with group move/delete and Undo.
 - [x] Searchable brush, pattern and gradient resource choosers, with
