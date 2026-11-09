@@ -85,6 +85,9 @@ bundle with the native and Swift build outputs inaccessible.
 - [x] Per-window view rotation with projected rulers, fit/zoom/centering, real selection/paint/Undo,
       angle forms, guide drags and Hand panning (merged #115).
 - [x] Per-window trackpad pinch/rotation and pointer-anchored Option-scroll zoom.
+- [x] Live Shift-constrained and Option-centered rectangle/ellipse selection,
+      stationary modifier preview, captured selection modes and Escape cancellation
+      (current candidate).
 - [ ] Remaining snapping interactions and other modifier behavior.
 - [x] Stroke Selection and explicit Paste Into/Anchor/New Layer/Discard.
 - [x] Float Selected Pixels (move/copy), existing floating-selection drag
