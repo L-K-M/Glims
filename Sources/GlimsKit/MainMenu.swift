@@ -148,6 +148,7 @@ enum MainMenu {
         add(menu, "Layer", [
             newLayer,
             item("New Layer Group", #selector(DocumentWindowController.newLayerGroup(_:))),
+            item("New Adjustment Layer…", #selector(DocumentWindowController.newAdjustmentLayer(_:))),
             item("Duplicate Layer", #selector(DocumentWindowController.duplicateLayer(_:)), "j"),
             item("Delete Layer", #selector(DocumentWindowController.deleteLayer(_:))),
             .separator(),

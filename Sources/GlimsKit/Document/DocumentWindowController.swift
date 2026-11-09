@@ -47,6 +47,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// read and write acts on that document, never on the front one.
     /// nil while none is open.
     private(set) var metadataSheet: MetadataSheetController?
+    /// Layer ▸ New Adjustment Layer…'s creation sheet, retained by this
+    /// window for its lifetime and capturing this window's document at
+    /// open, so Create and the phase-2 editor act on that document, never
+    /// on the front one. nil while none is open.
+    private(set) var adjustmentSheet: AdjustmentLayerSheetController?
     /// View ▸ Show Grid's cached per-window state, defaulting to off.
     private(set) var gridViewState = GridViewState()
 
@@ -138,6 +143,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             self?.indexedSheet?.showError(message)
 
             self?.metadataSheet?.showError(message)
+            self?.adjustmentSheet?.showError(message)
 
         }
         // Palette picks and structural or lock changes first commit any
@@ -343,6 +349,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         indexedSheet?.commitFieldEdit()
 
         metadataSheet?.commitFieldEdit()
+        adjustmentSheet?.commitFieldEdit()
 
         for paletteWindow in PaletteEditScope.windowsEditing(imageDocument) {
             paletteWindow.endEditing(for: nil)
@@ -396,6 +403,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         indexedSheet?.documentStateDidChange()
 
         metadataSheet?.documentStateDidChange()
+        adjustmentSheet?.documentStateDidChange()
 
     }
 
@@ -750,6 +758,40 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     /// Layer ▸ New Layer Group.
     @objc func newLayerGroup(_ sender: Any?) { imageDocument.createGroup() }
+
+    /// Layer ▸ New Adjustment Layer…: opens this document's creation
+    /// sheet. The open gate reads only cached state — closing, busy,
+    /// preview, another attached sheet — plus the cached color-mode gate:
+    /// RGB and grayscale only. The sheet is owned by this window and captures
+    /// this window's document, so nothing redirects to the front document.
+    @objc func newAdjustmentLayer(_ sender: Any?) {
+        guard let window, !imageDocument.isClosing, window.attachedSheet == nil,
+              adjustmentSheet == nil, imageDocument.acceptsEdits, !previewBusy,
+              !imageDocument.targetCommandIsPending, !imageDocument.floatingState.isActive else { return }
+        if let reason = AdjustmentLayerLogic.modeAdmission(imageDocument.colorInfo.mode).reason {
+            statusBar.message = reason
+            NSSound.beep()
+            return
+        }
+        let sheet = AdjustmentLayerSheetController(document: imageDocument, hostWindow: window)
+        sheet.host = self
+        adjustmentSheet = sheet
+        window.beginSheet(sheet.panel) { [weak self, weak sheet] _ in
+            guard let self, let sheet, self.adjustmentSheet === sheet else { return }
+            sheet.invalidate()
+            self.adjustmentSheet = nil
+        }
+    }
+
+    /// Phase 2 of New Adjustment Layer: opens the existing modeless
+    /// effect-parameter editor on the created effect and layer. Called
+    /// through the creation sheet's captured host, never the front window;
+    /// a host whose document or window closed before the creation
+    /// completed skips the editor — the committed adjustment layer stays.
+    func openAdjustmentEditor(effect: Int32, on layer: Int32, operationName: String) {
+        guard !closeStarted, !imageDocument.isClosing else { return }
+        editEffectParameters(effect, on: layer, operationName: operationName)
+    }
 
     // MARK: Layer mask menu
 
@@ -1401,6 +1443,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 stateBlocked: editingBlocked || previewBusy || imageDocument.targetCommandIsPending)
         case #selector(newLayerGroup(_:)):
             return !editingBlocked && !previewBusy
+        case #selector(newAdjustmentLayer(_:)):
+            // Cached mode gate only — no native call while a menu
+            // validates: adjustment layers are RGB/grayscale only, and an
+            // indexed (or unknown) image disables the item with the reason
+            // in its tooltip.
+            let admission = AdjustmentLayerLogic.modeAdmission(imageDocument.colorInfo.mode)
+            menuItem.toolTip = admission.reason
+            return admission.allowed && !editingBlocked && !previewBusy
+                && !imageDocument.targetCommandIsPending && !imageDocument.floatingState.isActive
         case #selector(layerToImageSize(_:)), #selector(trimLayerToContent(_:)):
             // Pixel layers only, from the cached list: the engine
             // refuses groups and editable text, link and vector layers,
@@ -2128,6 +2179,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         gridSheet?.invalidate()
 
         indexedSheet?.invalidate()
+
+        adjustmentSheet?.invalidate()
 
         previewPanel?.cancel()
         cancelPendingPreview()

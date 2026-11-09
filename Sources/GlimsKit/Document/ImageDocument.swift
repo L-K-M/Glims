@@ -2,6 +2,12 @@ import AppKit
 import CGlimsEngine
 import CoreGraphics
 
+/// Carries the native creation's ids from the input queue, where the
+/// target command runs, to its main-actor completion.
+private final class CreatedAdjustmentBox: @unchecked Sendable {
+    var value: (layer: Int32, effect: Int32)?
+}
+
 /// One open image in the engine, as the interface sees it.
 ///
 /// The document keeps the state the interface shows (size, layers, undo)
@@ -1353,6 +1359,67 @@ final class ImageDocument {
                 .newGroupPlacement(nearActive: fresh.first(where: \.isSelected)?.id)
             _ = try session.createGroup(image: image, parent: placement.parent,
                                         index: Int32(placement.index))
+        }
+    }
+
+    /// Layer ▸ New Adjustment Layer… accepted: creates the pass-through
+    /// adjustment group with one committed native-default effect as ONE
+    /// undo step, at the placement New Layer Group would use — resolved
+    /// from the layers as the queue leaves them, never from the cache. The
+    /// creation is a counted target command queued behind accepted input,
+    /// after this document's pending edits end; like group creation it
+    /// takes no single-layer, mask or channel target restriction, since it
+    /// only inserts metadata into the hierarchy. The mode gate reads the
+    /// cached color state: RGB and grayscale only — Indexed refuses here
+    /// and in the native guard. The completion receives the created
+    /// layer and effect ids on the main actor exactly once; failures are
+    /// also reported through `onError`.
+    func createAdjustmentLayer(name: String, operation: String,
+                               completion: @escaping @MainActor (Result<(layer: Int32, effect: Int32), Error>) -> Void) {
+        guard !isClosing else {
+            onError?(DocumentError.closed.localizedDescription)
+            return completion(.failure(DocumentError.closed))
+        }
+        if let reason = AdjustmentLayerLogic.modeAdmission(colorInfo.mode).reason {
+            onError?(reason)
+            NSSound.beep()
+            return completion(.failure(AdjustmentLayerLogic.InputError(message: reason)))
+        }
+        guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
+        guard !refuseWhileFloatingActive() else { return completion(.failure(DocumentError.busy)) }
+        endPendingUserEdits()
+        let created = CreatedAdjustmentBox()
+        enqueueTargetCommand({ session, image in
+            let fresh = try session.layers(image)
+            let placement = LayerTree(layers: fresh)
+                .newGroupPlacement(nearActive: fresh.first(where: \.isSelected)?.id)
+            let ids = try session.createAdjustmentLayer(image: image, parent: placement.parent,
+                                                        index: Int32(placement.index),
+                                                        operation: operation, name: name)
+            created.value = ids
+        }, completion: { result in
+            completion(result.flatMap { _ in
+                guard let value = created.value else { return .failure(DocumentError.targetChanged) }
+                return .success(value)
+            })
+        })
+    }
+
+    /// Reads the engine's filter-operation catalog off the main thread as
+    /// one counted job on the long queue — a close waits for it — and
+    /// installs the list in the shared catalog cache that
+    /// `editEffectParameters` resolves operations through. The completion
+    /// runs on the main actor with the actual error on failure; an unsuccessful
+    /// query never replaces the existing catalog cache.
+    func loadNativeFilterOperations(completion: @escaping @MainActor (Result<[EngineSession.FilterOperation], Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueue(on: longQueue) { [session] in
+            let result = Result { try session.filterOperations() }
+            DispatchQueue.main.async {
+                guard !self.isClosing else { return completion(.failure(DocumentError.closed)) }
+                if case .success(let operations) = result { NativeFilterCatalog.shared.install(operations) }
+                completion(result)
+            }
         }
     }
 
