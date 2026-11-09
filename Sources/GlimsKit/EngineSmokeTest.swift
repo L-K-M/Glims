@@ -266,6 +266,16 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (snapping)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "floating-move" {
+                try exerciseFloatingMove(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (floating move)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "float-selected-pixels" {
+                try exerciseFloatSelectedPixels(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (float selected pixels)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-controls" {
                 try exerciseMetadataControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (metadata controls)" : "FAILED: \(failures) failure(s)")
@@ -327,6 +337,8 @@ enum EngineSmokeTest {
             try exerciseMetadataDescriptors(session, work: work, documents: documents)
             try exerciseLayerMultiselectionControls(session, work: work, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)
+            try exerciseFloatingMove(session, work: work, documents: documents)
+            try exerciseFloatSelectedPixels(session, work: work, documents: documents)
 
             try exerciseStrokeSelectionControls(session, work: work, documents: documents)
 
@@ -836,10 +848,19 @@ enum EngineSmokeTest {
             check(reopenedLayers.contains { $0.kind == .link },
                   "the saved copy keeps the link layer")
             let blueSource = try session.newImage(width: 24, height: 24)
-            try session.select(.all, image: blueSource)
-            try session.fill(image: blueSource, at: .zero, mode: .selection, color: .blue)
-            try session.export(blueSource, to: linkPNG.path)
-            try session.closeImage(blueSource)
+            var linkSetupPhase = "select the replacement source"
+            do {
+                try session.select(.all, image: blueSource)
+                linkSetupPhase = "fill the replacement source"
+                try session.fill(image: blueSource, at: .zero, mode: .selection, color: .blue)
+                linkSetupPhase = "export the replacement source"
+                try session.export(blueSource, to: linkPNG.path)
+                linkSetupPhase = "close the replacement source"
+                try session.closeImage(blueSource)
+            } catch {
+                print("     link refresh setup failed while trying to \(linkSetupPhase): \(error)")
+                throw error
+            }
             var updated = false
             let updateDeadline = Date().addingTimeInterval(10)
             while Date() < updateDeadline {
@@ -5279,18 +5300,27 @@ enum EngineSmokeTest {
             // Editing the copy does not reach the source (a fill needs a
             // pixel layer: the copy's text layer is still selected).
             let sourceSteps = document.undoInfo.undoCount
+            // Opening the first real document may start counted font work.
+            // Wait for admission before synthesizing the next user action.
+            spin()
+            wait { snapshotDoc?.pendingWork == 0 && !EngineActivity.shared.isBusy }
+            let snapshotReportError = snapshotDoc?.onError
+            var snapshotMessages: [String] = []
+            snapshotDoc?.onError = { snapshotReportError?($0); snapshotMessages.append($0) }
             if let background = snapshotDoc?.layers.last?.id { snapshotDoc?.selectLayer(background) }
             snapshotDoc?.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
             snapshotDoc?.inputQueue.sync {}
+            wait { snapshotDoc?.pendingWork == 0 && !EngineActivity.shared.isBusy }
             spin()
             check(snapshotDoc?.undoInfo.undoCount == 1 && document.undoInfo.undoCount == sourceSteps
                     && document.layers.contains { $0.kind == .text },
-                  "editing the snapshot leaves the source untouched")
+                  "editing the snapshot leaves the source untouched (copy undo \(snapshotDoc?.undoInfo.undoCount ?? -1), pending \(snapshotDoc?.pendingWork ?? -1), activity \(EngineActivity.shared.label ?? "none"), errors \(snapshotMessages))")
             snapshotDoc?.undo()
             snapshotDoc?.inputQueue.sync {}
             spin()
             check(snapshotDoc?.undoInfo.undoCount == 0 && document.undoInfo.undoCount == sourceSteps,
                   "the snapshot's own undo works on it alone")
+            snapshotDoc?.onError = snapshotReportError
             NSApp.windows
                 .first { ($0.windowController as? DocumentWindowController)?.imageDocument === snapshotDoc }?
                 .orderOut(nil)
