@@ -16,6 +16,7 @@
 #include "resource-mutation.h"
 #include "resource-rename.h"
 #include "layer-delete.h"
+#include "layer-fit.h"
 #include "filter-input.h"
 
 #include <dlfcn.h>
@@ -2847,6 +2848,24 @@ static GlimsStatus api_filter_levels_set (GlimsEngine *e, GlimsFilterID filter,
   return glims_engine_call (e, filter_levels_set_on_engine, &a);
 }
 
+typedef struct {
+  GlimsImageID image;
+  const GlimsItemID *layers;
+  int32_t count;
+  char **error;
+} GlimsFitLayersArgs;
+static GlimsStatus image_fit_layers_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsFitLayersArgs *a = data;
+  return glims_image_fit_layers_to_image (e, a->image, a->layers, (size_t) a->count, a->error);
+}
+static GlimsStatus api_image_fit_layers_to_image (GlimsEngine *e, GlimsImageID image,
+                                                 const GlimsItemID *layers, int32_t count, char **error)
+{
+  GlimsFitLayersArgs a = { .image = image, .layers = layers, .count = count, .error = error };
+  return glims_engine_call (e, image_fit_layers_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -3008,6 +3027,7 @@ static const GlimsEngineAPI api_v1 = {
   .filter_hue_saturation_set = api_filter_hue_saturation_set,
   .filter_levels_get = api_filter_levels_get,
   .filter_levels_set = api_filter_levels_set,
+  .image_fit_layers_to_image = api_image_fit_layers_to_image,
 };
 
 __attribute__ ((visibility ("default")))

@@ -3469,3 +3469,13 @@ history changes. See `levels.md`: 956 unit tests; 492 focused native checks
 on each 3.2/master engine, 475 on 3.0.8; 21 actual UI checks per engine;
 and 1,917 native/2,520 app checks in the isolated final bundle. Histogram,
 automatic stretch and legacy-mismatch editing remain open.
+
+
+### Captured batch layer Fit (2026-11-09 candidate)
+
+Layers to Image Size captures the ordered pixel-layer vector and preflights
+every member before resizing any. API v1 appends 156; Native mask geometry,
+selection/tree preservation and one outer Undo follow Core's resize route.
+See `batch-layer-fit.md`: 964 units, 145 native and 21 UI checks per engine,
+plus 1,917 native/2,542 app checks in the isolated bundle pass. Broader
+batch/gesture policy remains open.
