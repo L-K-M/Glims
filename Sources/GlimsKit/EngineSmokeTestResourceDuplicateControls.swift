@@ -178,6 +178,7 @@ extension EngineSmokeTest {
         // Native duplicate-name error: inline, draft kept, retry renamed works.
         dupBrush?.performClick(nil)
         let form2 = window("Duplicate Brush")
+        let beforeExpectedFailure = errorsA.count
         field(form2?.contentView, "Duplicate resource name")?.stringValue = "Dup Smoke Brush"
         button(form2?.contentView, "Create duplicate")?.performClick(nil)
         wait { docA.pendingWork == 0 && !EngineActivity.shared.isBusy }
@@ -187,6 +188,11 @@ extension EngineSmokeTest {
               "a duplicate name fails after acceptance and shows the native error inline")
         check(field(form2?.contentView, "Duplicate resource name")?.stringValue == "Dup Smoke Brush",
               "the draft is preserved after the native failure")
+        let expectedFailureReportedOnce = errorsA.count == beforeExpectedFailure + 1
+            && errorsA.last?.contains("already exists") == true
+        check(expectedFailureReportedOnce, "the expected duplicate-name error is reported exactly once")
+        if expectedFailureReportedOnce { errorsA.removeLast() }
+
         let gateReady = DispatchSemaphore(value: 0), gateHold = DispatchSemaphore(value: 0)
         _ = EngineActivity.shared.perform(label: "Dup gate hold", work: {
             gateReady.signal()
@@ -199,10 +205,15 @@ extension EngineSmokeTest {
             if !gateStarted { spin(0.01) }
         }
         check(gateStarted, "the unrelated busy gate is running")
+        check(button(form2?.contentView, "Create duplicate")?.isEnabled == false,
+              "the visible form follows document busy state without a focus bounce")
+
         check(label(form2?.contentView, "Duplicate message")?.isEmpty == false,
               "an unrelated busy gate preserves the native draft error")
         gateHold.signal()
         wait { !EngineActivity.shared.isBusy }
+        check(button(form2?.contentView, "Create duplicate")?.isEnabled == true,
+              "Create re-enables automatically when the engine becomes idle")
         field(form2?.contentView, "Duplicate resource name")?.stringValue = "Dup Smoke Brush 2"
         button(form2?.contentView, "Create duplicate")?.performClick(nil)
         wait { docA.pendingWork == 0 && window("Duplicate Brush") == nil && !EngineActivity.shared.isBusy }
@@ -220,6 +231,73 @@ extension EngineSmokeTest {
                 && ToolState.shared.brush(for: .paintbrush).resource == brushBefore,
               "Cancel closes the form with no catalog or preference change")
         BrushChooser.shared.close()
+        wait { !EngineActivity.shared.isBusy }
+
+        // A pending Default must also survive a persisted native brush choice.
+        // This panel's model provides that fixture without changing ToolState.
+        let remembered = BrushChooserModel(capturedTool: .paintbrush, currentIdentity: brushIdentity)
+        let rememberedPanel = BrushChooserPanel(document: docA, model: remembered)
+        rememberedPanel.showWindow(nil)
+        rememberedPanel.load()
+        let rememberedTable = allViews(rememberedPanel.window?.contentView, as: NSTableView.self).first
+        wait { (rememberedTable?.numberOfRows ?? 0) > 1 && !EngineActivity.shared.isBusy }
+        button(rememberedPanel.window?.contentView, "Duplicate brush")?.performClick(nil)
+        let rememberedForm = window("Duplicate Brush")
+        field(rememberedForm?.contentView, "Duplicate resource name")?.stringValue = "Dup Brush Keep Default"
+        rememberedTable?.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        spin(0.05)
+        button(rememberedForm?.contentView, "Create duplicate")?.performClick(nil)
+        wait { docA.pendingWork == 0 && window("Duplicate Brush") == nil && !EngineActivity.shared.isBusy }
+        check(remembered.selection == .nativeDefault && rememberedTable?.selectedRow == 0,
+              "explicit brush Default survives refresh despite a remembered native choice")
+        check(ToolState.shared.brush(for: .paintbrush).resource == brushBefore,
+              "the remembered-choice fixture never changes the committed brush preference")
+        // Keep the catalog RPC behind an admitted document barrier so the
+        // click definitely occurs AFTER reload captured its old highlight.
+        for useDefault in [true, false] {
+            settle(docA)
+            rememberedTable?.selectRowIndexes(IndexSet(integer: useDefault ? sourceRow : 0), byExtendingSelection: false)
+            spin(0.02)
+            let release = DispatchSemaphore(value: 0)
+            defer { release.signal() }
+            docA.inputQueue.async { _ = release.wait(timeout: .now() + 15) }
+            remembered.select(useDefault ? .resource(brushSource.id) : .nativeDefault)
+            rememberedPanel.reloadAfterDuplicate()
+            check(EngineActivity.shared.isBusy, "the brush refresh is admitted and paused before delivery")
+            rememberedTable?.selectRowIndexes(IndexSet(integer: useDefault ? 0 : sourceRow), byExtendingSelection: false)
+            let chosen = remembered.selection
+            release.signal()
+            wait { !EngineActivity.shared.isBusy }
+            spin()
+            check(remembered.selection == chosen && chosen == (useDefault ? .nativeDefault : .resource(brushSource.id)),
+                  "a newer brush \(useDefault ? "Default" : "native row") click survives in-flight refresh")
+        }
+        rememberedPanel.dismiss()
+
+        // The gradient/pattern controller has the same asynchronous refresh
+        // route; nil is an explicit Default choice, not absence of a restore.
+        for kind in [EngineSession.ResourceKind.gradient, .pattern] {
+            let (row, identity, _) = try nativeRow(kind)
+            let model = ResourceChooserModel(kind: kind, currentIdentity: identity)
+            let picker = ResourcePickerController(document: docA, model: model)
+            defer { picker.invalidate() }
+            picker.load()
+            wait { !EngineActivity.shared.isBusy }
+            for useDefault in [true, false] {
+                settle(docA)
+                let release = DispatchSemaphore(value: 0)
+                defer { release.signal() }
+                docA.inputQueue.async { _ = release.wait(timeout: .now() + 15) }
+                model.select(useDefault ? row.id : nil)
+                picker.reloadCatalog()
+                check(EngineActivity.shared.isBusy, "the \(kind.singular) refresh is admitted and paused")
+                model.select(useDefault ? nil : row.id)
+                release.signal()
+                wait { !EngineActivity.shared.isBusy }
+                check(model.selection == (useDefault ? nil : row.id),
+                      "a newer \(kind.singular) \(useDefault ? "Default" : "native row") choice survives in-flight refresh")
+            }
+        }
         wait { !EngineActivity.shared.isBusy }
 
         // Gradient chooser: same shared form, Default row refused.
@@ -253,6 +331,18 @@ extension EngineSmokeTest {
         }
         check(ToolState.shared.gradientResource == gradientBefore,
               "the gradient preference is unchanged until explicit Choose")
+        check((gradTable?.selectedRow ?? 0) > 0,
+              "gradient catalog refresh preserves the pending native row instead of showing Default")
+        button(gradPanel?.contentView, "Duplicate gradient")?.performClick(nil)
+        let defaultForm = window("Duplicate Gradient")
+        field(defaultForm?.contentView, "Duplicate resource name")?.stringValue = "Dup Gradient Keep Default"
+        gradTable?.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        spin(0.05)
+        button(defaultForm?.contentView, "Create duplicate")?.performClick(nil)
+        wait { docA.pendingWork == 0 && window("Duplicate Gradient") == nil && !EngineActivity.shared.isBusy }
+        check(gradTable?.selectedRow == 0
+                && button(gradPanel?.contentView, "Duplicate gradient")?.isEnabled == false,
+              "explicit gradient Default survives duplication refresh with no hidden resource selection")
         GradientChooser.shared.close()
         wait { !EngineActivity.shared.isBusy }
 
@@ -310,8 +400,18 @@ extension EngineSmokeTest {
         check(try session.resources(.brush).contains { $0.displayName == "Dup Drain Brush" },
               "the drained job published the resource")
         var late: Result<ImageDocument.CreatedResource, Error>?
+        let beforeClosedRefusal = errorsA.count
         docA.duplicateResource(source: source, name: "Late Dup") { late = $0 }
         check(late != nil, "a duplicate requested after close fails through its callback without crashing")
+        let closedInCompletion = late.map { result in
+            if case .failure(let error) = result {
+                return error.localizedDescription == ImageDocument.DocumentError.closed.localizedDescription
+            }
+            return false
+        } == true
+        check(closedInCompletion && errorsA.count == beforeClosedRefusal,
+              "the closed-document refusal returns through completion without a late window error")
+
 
         // Persistence evidence for the fresh-session verification (no saved handles).
         if let createdBrush, let identity = createdBrushIdentity {

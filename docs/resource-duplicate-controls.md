@@ -1,13 +1,8 @@
 # Resource duplicate controls (Duplicate…)
 
-Status: UI slice on `feat/resource-duplicate-controls`. Backend facade slot
-131 (`EngineSession.duplicateResource`, commit `b080628`) is merged into this
-branch's parent; **the final backend policy fixes (source-specific VBR/GGR
-edge-whitespace refusal, unsupported PAT-format errors) are owned and merged
-by Root later — this worktree's backend parent is the old one, so no runtime
-against it was attempted here and native behavior is pending that final
-merge.** This document describes what this slice adds and exactly what was
-and was not verified.
+The Duplicate… controls use the checked native resource backend (slot 131,
+API version 1), including the accepted VBR/GGR name and PAT format guards.
+This branch includes the current editor main and the fixed backend.
 
 ## UI scope (duplication only)
 
@@ -65,43 +60,36 @@ and was not verified.
 - After success the host refetches its catalog off the main thread through
   the existing `EngineActivity`/read controllers — `ResourcePickerController
   .reloadCatalog()` force-refreshes even the `loadOnlyOnce` pattern picker,
-  and the brush panel reloads — preserving the current highlight/explicit
-  selection when its row survives (programmatic selection callback
+  and the brush panel reloads — preserving the latest highlight/explicit
+  selection when its row survives, including choices made during the load (programmatic selection callback
   suppression via the existing `updatingTable` guard). A refresh failure is
   the model's own error state, separate from the successful publication.
 
-## Tests
+## Validation
 
-- `Tests/GlimsKitTests/ResourceDuplicateControlsTests.swift`: pure tests for
-  the name contract (through the shared `validateResourceName`), captured
-  source value semantics, proposed draft, Default-row refusal, cached gate
-  and the reused phase machine.
-- `Sources/GlimsKit/EngineSmokeTestResourceDuplicateControls.swift` (350
-  lines, new module; shared `EngineSmokeTest.swift` untouched):
-  `exerciseResourceDuplicateControls` drives the real Duplicate… buttons and
-  form for brush/pattern/gradient with native catalog/thumbnail oracles,
-  two-doc/front-window retarget safety, Default-row refusal, inline
-  duplicate-name error with retry, Cancel, accepted-count/drain/close with
-  exactly-one completion, and unchanged ToolState/preferences until
-  Choose/Fill; it records created identity+kind+thumbnail evidence to the
-  work dir. `verifyPersistedResourceDuplicate(record:session:)` is the
-  distinct fresh-session phase for Root to wire/run with a genuinely fresh
-  `EngineSession` (verifies persisted exact name/catalog/thumbnail via the
-  recorded `ResourceIdentity`, no saved handles; the shared smoke engine is
-  never stopped/restarted by this module).
+The focused `resource-duplicate-controls` smoke case is wired into the full
+app suite. It drives real buttons/forms, captured-document/source behavior,
+inline native errors and retry, busy-to-idle refresh, counted close/drain,
+host closure, and unchanged committed preferences. Controlled document
+barriers prove that a newer Default or native-row choice survives an
+in-flight catalog refresh for brushes, gradients and patterns. Selection is
+captured at delivery, before the model resolves its original saved choice.
 
-## Verification actually run in this worktree
+Root acceptance fixed hidden child-panel retention, document-state fanout,
+Default restoration, gradient row state and the asynchronous selection race.
+The initial independent source helper found no important issue; subsequent
+relay inspection identified the race and Root added the barrier regressions.
 
-- `swift build -j 2` — passes.
-- `swift build -j 2 --build-tests` — passes.
+- All 764 unit tests pass; app build passes.
+- Every supported engine passes all 58 focused checks.
+- The final full pinned-engine app suite passes all 1,949 checks, including
+  the added in-flight selection regressions.
+- Native backend durability is covered separately by 261 duplication and
+  177 persistence checks on every engine. The optional UI evidence/restart
+  helper remains unwired and brush-only; this slice claims no new UI restart
+  proof.
 
-## NOT run here (Root-owned)
-
-- No engine commands, no native compile/build/relink, no app/runtime/AppKit
-  or unit-test execution, no GUI: the smoke module and the unit tests were
-  compile-checked only. Root wires `GLIMS_SMOKE_CASE=resource-duplicate-
-  controls` (and the full suite) and runs `verifyPersistedResourceDuplicate`
-  with a fresh session against the **final merged backend**; this worktree's
-  backend parent predates Root's native VBR/GGR/PAT policy fixes, so native
-  refusal texts asserted at runtime are pending that merge.
-- Engine matrix runs happen in Root's other worktrees.
+The forms preserve drafts and errors through unrelated busy activity, refresh
+automatically as document state changes, and invalidate when their host
+window closes. Completion remains counted even if the form is gone; a closed
+document returns refusal through its completion without a late window error.

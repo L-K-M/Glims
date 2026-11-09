@@ -401,6 +401,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         gridSheet?.documentStateDidChange()
 
         indexedSheet?.documentStateDidChange()
+        ResourceDuplicateFormController.documentStateChanged(imageDocument)
 
         metadataSheet?.documentStateDidChange()
         adjustmentSheet?.documentStateDidChange()
@@ -2179,6 +2180,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         gridSheet?.invalidate()
 
         indexedSheet?.invalidate()
+        ResourceDuplicateFormController.documentWindowClosing(imageDocument)
 
         metadataSheet?.invalidate()
         adjustmentSheet?.invalidate()

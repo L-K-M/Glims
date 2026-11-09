@@ -31,7 +31,7 @@ final class ResourcePickerController {
     private var thumbnailPumpScheduled = false
     /// A highlight to restore after a forced reload (a duplicate published
     /// a new resource), when its row still exists in the fresh catalog.
-    private var restoreSelection: EngineSession.ResourceID?
+    private var shouldRestoreSelection = false
 
     /// When true, an already-ready catalog is not loaded again (the
     /// embedded pattern picker loads once per sheet); a fresh chooser
@@ -120,7 +120,7 @@ final class ResourcePickerController {
     /// in the model's error state, separate from the successful publish.
     func reloadCatalog() {
         guard !isClosed, !loadInFlight else { return }
-        restoreSelection = model.selection
+        shouldRestoreSelection = true
         let onlyOnce = loadOnlyOnce
         loadOnlyOnce = false
         load()
@@ -136,14 +136,17 @@ final class ResourcePickerController {
             onAbandoned?()
             return
         }
+        // Rows remain selectable during refresh. Capture the latest choice
+        // here, before deliver resets it from the original committed identity.
+        let keep = model.selection
         guard model.deliver(generation: generation, rows: rows, resolvedCurrent: resolvedCurrent,
                             resolutionError: resolutionError, error: error) else { return }
         // A forced reload keeps the user's explicit highlight when its row
         // survives the fresh catalog; reloadTable's updatingTable guard
         // suppresses the programmatic selection callback.
-        if let keep = restoreSelection {
-            restoreSelection = nil
-            if model.rows.contains(where: { $0.id == keep }) { model.select(keep) }
+        if shouldRestoreSelection {
+            shouldRestoreSelection = false
+            if keep == nil || model.rows.contains(where: { $0.id == keep }) { model.select(keep) }
         }
         // Prime the lazy thumbnail queue: the resolved current resource
         // first, then only the initial visible batch — the rest render as

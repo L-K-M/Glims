@@ -201,7 +201,8 @@ final class GradientChooserPanel: NSWindowController, NSWindowDelegate,
 
     private func catalogDelivered() {
         // With no persisted choice the Default row is the pending one.
-        if model.currentIdentity == nil { defaultSelected = true }
+        if model.selection != nil { defaultSelected = false }
+        else if model.currentIdentity == nil { defaultSelected = true }
         GradientChooser.shared.noteMissing(model.missingIdentity)
         refresh()
     }

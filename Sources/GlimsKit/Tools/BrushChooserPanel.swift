@@ -105,7 +105,7 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
     /// and invalidates it on dismissal.
     private var duplicateForm: ResourceDuplicateFormController?
     /// A highlight to restore after a duplicate-triggered catalog reload.
-    private var pendingRestoreSelection: BrushSelection?
+    private var shouldRestoreSelection = false
 
     init(document: ImageDocument?, model: BrushChooserModel) {
         self.sourceDocument = document
@@ -260,15 +260,19 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
             dismiss()
             return
         }
+        let keep = model.selection
         guard model.deliver(generation: generation, rows: rows, thumbnails: [:],
                             resolvedCurrent: resolvedCurrent, resolutionError: resolutionError,
                             error: error) else { return }
         // A duplicate-triggered reload keeps the explicit highlight when its
         // row survives the fresh catalog.
-        if let keep = pendingRestoreSelection {
-            pendingRestoreSelection = nil
-            if case .resource(let id) = keep, model.rows.contains(where: { $0.id == id }) {
+        if shouldRestoreSelection {
+            shouldRestoreSelection = false
+            switch keep {
+            case .none, .nativeDefault:
                 model.select(keep)
+            case .resource(let id):
+                if model.rows.contains(where: { $0.id == id }) { model.select(keep) }
             }
         }
         BrushChooser.shared.noteMissing(model.capturedTool, model.missingIdentity)
@@ -519,9 +523,9 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
 
     /// After a successful duplicate: refetch the catalog off the main
     /// thread, keeping the current highlight; the new item is NOT chosen.
-    private func reloadAfterDuplicate() {
+    func reloadAfterDuplicate() {
         guard !isClosed else { return }
-        pendingRestoreSelection = model.selection
+        shouldRestoreSelection = true
         load()
     }
 

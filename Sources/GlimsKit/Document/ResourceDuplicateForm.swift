@@ -99,6 +99,28 @@ enum ResourceDuplicateValidation {
 /// as ordinary inline errors and keep the editable draft for retry.
 @MainActor
 final class ResourceDuplicateFormController: NSObject, NSWindowDelegate {
+    private final class Reference {
+        weak var value: ResourceDuplicateFormController?
+        init(_ value: ResourceDuplicateFormController) { self.value = value }
+    }
+    private static var openForms: [Reference] = []
+
+    /// Choosers own these forms, while document windows receive the cached
+    /// engine/document state notifications. Weak registration joins those
+    /// lifetimes without replacing the document's existing callback.
+    static func documentStateChanged(_ document: ImageDocument) {
+        openForms.removeAll { $0.value == nil || $0.value?.isInvalidated == true }
+        for form in openForms.compactMap(\.value) where form.document === document {
+            form.documentStateDidChange()
+        }
+    }
+
+    static func documentWindowClosing(_ document: ImageDocument) {
+        for form in openForms.compactMap(\.value) where form.document === document {
+            form.invalidate()
+        }
+    }
+
     let document: ImageDocument
     /// The source captured ONCE when the form opened.
     let source: ResourceDuplicateValidation.Source
@@ -140,6 +162,7 @@ final class ResourceDuplicateFormController: NSObject, NSWindowDelegate {
         panel.title = "Duplicate \(noun)"
         panel.delegate = self
         buildContent()
+        Self.openForms.append(Reference(self))
         updateControlStates()
     }
 
@@ -257,7 +280,9 @@ final class ResourceDuplicateFormController: NSObject, NSWindowDelegate {
     func invalidate() {
         guard !isInvalidated else { return }
         isInvalidated = true
+        Self.openForms.removeAll { $0.value == nil || $0.value === self }
         panel.endEditing(for: nil)
+        hostWindow?.removeChildWindow(panel)
         panel.orderOut(nil)
         onClosed?()
     }
