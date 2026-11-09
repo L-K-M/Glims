@@ -143,10 +143,15 @@ struct NativeFilterMenuLayout: Equatable {
     /// The item's menu title: `Title…` when it opens a form, `Title
     /// (reason)` when it cannot run yet.
     static func itemTitle(_ operation: EngineSession.FilterOperation) -> String {
+        if usesSourceChooser(operation) { return "\(operation.title)…" }
         if let reason = unavailableReason(operation.support) {
             return "\(operation.title) (\(reason))"
         }
         return "\(operation.title)…"
+    }
+
+    static func usesSourceChooser(_ operation: EngineSession.FilterOperation) -> Bool {
+        operation.name == "gegl:bump-map" && operation.support == .needsAuxInput
     }
 }
 
@@ -273,7 +278,8 @@ enum NativeFilterMenus {
                               action: #selector(DocumentWindowController.runNativeFilter(_:)),
                               keyEquivalent: "")
         item.representedObject = NativeFilterCommand(operation)
-        if let reason = NativeFilterMenuLayout.unavailableReason(operation.support) {
+        if !NativeFilterMenuLayout.usesSourceChooser(operation),
+           let reason = NativeFilterMenuLayout.unavailableReason(operation.support) {
             item.toolTip = "\(operation.title) \(reason) — not supported yet."
         } else {
             item.toolTip = operation.blurb.isEmpty ? nil : operation.blurb

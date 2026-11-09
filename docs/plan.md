@@ -3356,6 +3356,19 @@ fresh loaders for GBR, GIH, VBR, PAT and GGR. See
 and exact coverage.
 
 
+### Bump Map snapshot input (2026-11-09)
+
+The source chooser captures a same-image drawable into owned native-format
+tiles before creating the target preview. Bump Map applies to pixels with
+one native Undo step; existing target effects remain above it. API v1
+appends slot147. Other auxiliary/config operations remain unavailable.
+See `filter-inputs.md` for policy and coverage. The expanded private/public
+harness passes228 checks on all four engines; the actual chooser/editor
+passes20 per engine. The self-contained bundle passes1,917 native and2,370
+app checks, and871 unit tests pass. Native/UI source reviews have no
+important remaining finding.
+
+
 ### Selection drag modifiers (2026-11-09)
 
 Rectangle and Ellipse Select now share one finite image-space calculation
