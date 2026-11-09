@@ -34,8 +34,26 @@ final class ImageDocument {
 
     /// The layer painting and filters apply to. It may be a group:
     /// groups cannot be painted on but stay valid metadata and filter
-    /// targets.
+    /// targets. It is always the primary of `selectedLayerIDs`.
     private(set) var activeLayer: Int32?
+    /// The image's selected layers, ordered with the primary layer
+    /// first — the order the engine's own `selectedLayers` read-back
+    /// returns, because the first selected layer is the active one.
+    /// Transient: changing it pushes no undo step and dirties nothing.
+    /// Reconciled on every reload against the ids that still exist, so
+    /// undo/redo and completions can only land on layers still present.
+    private(set) var selectedLayerIDs: [Int32] = []
+    /// Whether more than one layer is selected: the multi-selection
+    /// state that gates every single-layer command.
+    var hasMultipleSelectedLayers: Bool { LayerSelectionPolicy.isMulti(selectedLayerIDs.count) }
+    /// The cached reason single-layer commands refuse while more than
+    /// one layer is selected, or nil for a single selection. Menu and
+    /// palette validation read this; no engine call happens here.
+    var multiLayerSelectionRefusal: String? {
+        guard let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count,
+                                                        action: "This command") else { return nil }
+        return reason
+    }
     /// Each masked layer's mask state by layer id, read with the rest of
     /// the state. EDITING is transient — the engine keeps no undo for
     /// the edit target and reports no event for it — so the mask
@@ -84,6 +102,15 @@ final class ImageDocument {
     private var targetPickVersion = 0
     private var pendingTargetPick: TargetPick?
     private var rejectedTargetPick = false
+    /// A queued multi-selection, mirrored like a target pick: the ids
+    /// in primary-first order, captured with the document's own image
+    /// handle so the job can never retarget to another document.
+    private struct PendingLayerSelection {
+        let version: Int
+        let ids: [Int32]
+    }
+    private var layerSelectionVersion = 0
+    private var pendingLayerSelection: PendingLayerSelection?
     private struct ComponentIntent {
         let version: Int
         let activeMask: EngineSession.Components
@@ -275,13 +302,24 @@ final class ImageDocument {
         }
         undoInfo = try session.undoInfo(image)
         history = try session.history(image)
-        // While a pick or a pending target command mirrors an intended
-        // target, keep it; otherwise the engine's own selected layer is
-        // authoritative, so a completion only needs this reconcile —
-        // never a native select of its own.
-        let targetIsMirrored = pendingTargetPick != nil || !pendingTargetCommands.isEmpty
+        // The ordered selected layers, primary first. While a pick or a
+        // queued multi-selection mirrors an intended selection, the
+        // mirror wins; otherwise the engine's own read-back is
+        // authoritative, so undo/redo and command completions only need
+        // this reconcile — never a native select of their own. Stale ids
+        // (a layer an undo removed) drop out here, order kept.
+        let mirroredSelection: [Int32]? = {
+            if let pick = pendingTargetPick, let layer = pick.target.layer { return [layer] }
+            if let pending = pendingLayerSelection { return pending.ids }
+            return nil
+        }()
+        let targetIsMirrored = pendingTargetPick != nil || pendingLayerSelection != nil
+            || !pendingTargetCommands.isEmpty
+        let oracle = (try? session.selectedLayers(image)) ?? []
+        selectedLayerIDs = LayerSelectionPolicy.reconcile(mirroredSelection ?? oracle,
+                                                          existing: Set(layers.map(\.id)))
         if !targetIsMirrored || activeLayer == nil || !layers.contains(where: { $0.id == activeLayer }) {
-            activeLayer = layers.first(where: \.isSelected)?.id ?? layers.first?.id
+            activeLayer = selectedLayerIDs.first ?? layers.first(where: \.isSelected)?.id ?? layers.first?.id
         }
         reloadPaths()
         onStateChange?()
@@ -426,6 +464,86 @@ final class ImageDocument {
         queueTargetPick(.channel(id))
     }
 
+    /// Selects exactly `ids`, primary first, as the image's whole
+    /// selected-layer list — the native multi-selection the Layers
+    /// palette's Shift/Command clicks ask for. Transient like a single
+    /// pick: no undo step, no dirty flag, no pixel or mask change; the
+    /// engine clears mask editing on the selected layers itself. Every
+    /// id is validated against the cached list first: a stale or
+    /// invalid row refuses and refreshes instead of reaching the engine.
+    /// While a floating selection is active the resolve-first gate
+    /// refuses, exactly like a single pick. The write is one counted,
+    /// serial input-queue job capturing this document's image handle, so
+    /// it can never land on another document or the front window.
+    func selectLayers(_ ids: [Int32]) {
+        guard !isClosing else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
+        // A selection switch would implicitly anchor an active floating
+        // selection; the resolve-first gate refuses it, like selectLayer.
+        guard !refuseWhileFloatingActive() else { return }
+        endPendingUserEdits()
+        let existing = Set(layers.map(\.id))
+        guard !ids.isEmpty, Set(ids).count == ids.count,
+              ids.allSatisfy({ existing.contains($0) }) else {
+            // An invalid or stale row: refuse and refresh from the
+            // engine's authoritative selection.
+            onUserCommand?()
+            onError?(DocumentError.targetChanged.localizedDescription)
+            NSSound.beep()
+            try? reload()
+            return
+        }
+        let ordered = LayerSelectionPolicy.reconcile(ids, existing: existing)
+        guard ordered != selectedLayerIDs else { return }
+        queueLayerSelection(ordered)
+    }
+
+    /// Queues the ordered multi-selection as one serial input job, with
+    /// the same mirror discipline as a target pick: the primary id
+    /// becomes the active layer at once, the native behavior of leaving
+    /// mask editing is mirrored (the mask's pixels are never touched),
+    /// and the completion re-reads the authoritative state. The job's
+    /// read-back must equal the requested order exactly; a mismatch is
+    /// reported, never treated as success.
+    private func queueLayerSelection(_ ids: [Int32]) {
+        layerSelectionVersion += 1
+        let pick = PendingLayerSelection(version: layerSelectionVersion, ids: ids)
+        pendingLayerSelection = pick
+        // A valid pick resolves the target itself, like queueTargetPick.
+        pendingTargetPick = nil
+        rejectedTargetPick = false
+        pendingTargetCommands.removeAll()
+        selectedLayerIDs = ids
+        if let primary = ids.first { activeLayer = primary }
+        // Native multi-selection exits mask editing on every selected
+        // layer; mirror it so activeDrawable is right for input accepted
+        // before the job lands. Mask pixels and flags are untouched.
+        for id in ids { maskStates[id]?.editing = false }
+        channels = channels.map { channelRow($0, selected: false) }
+        enqueue(on: inputQueue) { [session, image] in
+            var failure: Error?
+            self.paintTargetIsValid = false
+            do {
+                try session.channelCommand(.select, channel: 0, image: image)
+                try session.selectLayers(ids, image: image)
+                guard try session.selectedLayers(image) == ids else {
+                    throw DocumentError.targetChanged
+                }
+                self.paintTargetIsValid = true
+            } catch {
+                failure = error
+            }
+            DispatchQueue.main.async {
+                if self.pendingLayerSelection?.version == pick.version {
+                    self.pendingLayerSelection = nil
+                }
+                if let failure { self.report(failure) }
+                try? self.reload()
+            }
+        }
+        onStateChange?()
+    }
+
     func returnToLayers() {
         if let layer = activeLayer { selectLayer(layer) }
     }
@@ -449,6 +567,9 @@ final class ImageDocument {
             .map(\.key)
         if let layer = target.layer {
             activeLayer = layer
+            // A single-layer pick collapses the selection to that layer.
+            selectedLayerIDs = [layer]
+            pendingLayerSelection = nil
             maskStates[layer]?.editing = target.mask != nil
         }
         for other in staleEditing { maskStates[other]?.editing = false }
@@ -577,6 +698,7 @@ final class ImageDocument {
 
     func beginStroke(at point: EngineSession.StrokePoint, brush: EngineSession.Brush = EngineSession.Brush()) {
         guard !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
+        guard !refuseSingleLayerCommand("Paint") else { return }
         guard let drawable = activeDrawable else {
             onError?(DocumentError.targetChanged.localizedDescription)
             return
@@ -651,6 +773,7 @@ final class ImageDocument {
     /// silently painting the layer's pixels, as is a layer group.
     func strokeSelection(_ brush: EngineSession.Brush = EngineSession.Brush()) {
         guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseSingleLayerCommand("Stroke Selection") else { return }
         guard !isChannelTargetActive else { return refuseChannelTransform() }
         guard !isMaskTargetActive else {
             onError?("A selection cannot be stroked onto a mask; select the layer first.")
@@ -703,6 +826,9 @@ final class ImageDocument {
         if isClosing { return DocumentError.closed.localizedDescription }
         if isSavingForClose || isTransferringClipboard { return DocumentError.busy.localizedDescription }
         if filterPreviewIsOpen { return "Apply or cancel the filter preview first." }
+        if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Stroke Selection") {
+            return reason
+        }
         if let running = PlugInCommands.running {
             let title = running.procedure.label.replacingOccurrences(of: "…", with: "")
             return "Finish or cancel \u{201C}\(title)\u{201D} first."
@@ -968,6 +1094,13 @@ final class ImageDocument {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
         endPendingUserEdits()
+        // Batch commands are unsupported: while more than one layer is
+        // selected every command but New Layer (which creates and
+        // selects a fresh row) refuses instead of silently acting on
+        // the primary layer alone.
+        if LayerSelectionPolicy.gates(command) {
+            guard !refuseSingleLayerCommand(LayerSelectionPolicy.actionTitle(for: command)) else { return }
+        }
         switch command {
         case .new, .duplicate, .delete, .mergeDown, .flatten:
             // The command's result becomes or replaces the paint target
@@ -1014,6 +1147,10 @@ final class ImageDocument {
             onError?(DocumentError.busy.localizedDescription)
             return completion(.failure(DocumentError.busy))
         }
+        guard !refuseSingleLayerCommand("Rasterize Layer", on: layer) else {
+            return completion(.failure(DocumentError.multipleLayersSelected(
+                LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Rasterize Layer")!)))
+        }
         endPendingUserEdits()
         enqueue(on: inputQueue, input: true) { [session, image] in
             let result = Result<Void, Error> { _ = try session.layerCommand(.rasterize, image: image, layer: layer) }
@@ -1049,6 +1186,10 @@ final class ImageDocument {
               !filterPreviewIsOpen, !EngineActivity.shared.isBusy else {
             onError?(DocumentError.busy.localizedDescription)
             return completion(.failure(DocumentError.busy))
+        }
+        guard !refuseSingleLayerCommand("Restore Layer Source", on: layer) else {
+            return completion(.failure(DocumentError.multipleLayersSelected(
+                LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Restore Layer Source")!)))
         }
         endPendingUserEdits()
         enqueueExclusive(label: "Restoring the layer's source", rejected: {
@@ -1090,6 +1231,7 @@ final class ImageDocument {
     func moveLayer(_ item: Int32, toParent parent: Int32, atIndex rawIndex: Int32) {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
+        guard !refuseSingleLayerCommand("Move Layer") else { return }
         switch LayerTree(layers: layers).resolveDrop(item: item, ontoParent: parent, at: rawIndex) {
         case .unchanged:
             return
@@ -1116,6 +1258,7 @@ final class ImageDocument {
     /// reported (an inherited lock is left alone — toggles act on the
     /// item's own bits).
     func toggleLocks(_ item: Int32, _ lock: EngineSession.LayerLocks) {
+        guard !refuseSingleLayerCommand("Lock \(lock.name)") else { return }
         setLayerLocks(item, lock, to: !(layerLocks[item]?.local.contains(lock) ?? false))
     }
 
@@ -1134,6 +1277,7 @@ final class ImageDocument {
         guard let layer = activeLayer, offset != .zero,
               !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
         guard !refuseWhileFloatingActive() else { return }
+        guard !refuseSingleLayerCommand("Move Layer") else { return }
         guard !isMaskTargetActive else { return refuseMaskEdit() }
         guard !isChannelTargetActive else { return refuseChannelTransform() }
         run { session, image in try session.moveLayer(layer, image: image, by: offset) }
@@ -1160,6 +1304,7 @@ final class ImageDocument {
         guard let layer = activeLayer,
               !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
         guard !refuseWhileFloatingActive() else { return }
+        guard !refuseSingleLayerCommand("Transform Layer", on: layer) else { return }
         guard !isMaskTargetActive else { return refuseMaskEdit() }
         guard !isChannelTargetActive else { return refuseChannelTransform() }
         run { session, image in try session.transformLayer(layer, image: image, transform) }
@@ -1330,6 +1475,7 @@ final class ImageDocument {
         guard !matrix.isIdentity, !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileTargetPending() else { return }
         guard !refuseWhileFloatingActive() else { return }
+        guard !refuseSingleLayerCommand("Transform Layer", on: layer) else { return }
         guard !isChannelTargetActive else { return refuseChannelTransform() }
         guard maskStates[layer]?.editing != true else {
             return refuseMaskEdit()
@@ -1589,6 +1735,7 @@ final class ImageDocument {
     /// target command.
     func addMask(_ layer: Int32, source: EngineSession.MaskSource, edit: Bool) {
         guard layers.contains(where: { $0.id == layer }) else { return }
+        guard !refuseSingleLayerCommand("Add Layer Mask", on: layer) else { return }
         if edit {
             guard !isClosing, !refuseWhileEditingUnavailable() else { return }
             guard !refuseWhileFloatingActive() else { return }
@@ -1615,6 +1762,7 @@ final class ImageDocument {
     /// refuses Apply on groups and text, link and vector layers.
     func applyMask() {
         guard let layer = activeLayer, !refuseWhileFloatingActive() else { return }
+        guard !refuseSingleLayerCommand("Apply Mask", on: layer) else { return }
         runMaskTargetCommand { session, image in
             try session.applyLayerMask(layer, image: image, mode: .apply)
         }
@@ -1622,6 +1770,7 @@ final class ImageDocument {
 
     func deleteMask() {
         guard let layer = activeLayer, !refuseWhileFloatingActive() else { return }
+        guard !refuseSingleLayerCommand("Delete Mask", on: layer) else { return }
         runMaskTargetCommand { session, image in
             try session.applyLayerMask(layer, image: image, mode: .discard)
         }
@@ -1632,23 +1781,32 @@ final class ImageDocument {
     func toggleMaskEnabled() {
         guard let layer = activeLayer, !refuseWhileFloatingActive(),
               let state = maskState(for: layer) else { return }
+        guard !refuseSingleLayerCommand("Enable Mask", on: layer) else { return }
         setMaskFlags(layer, flags: [.enabled], values: state.enabled ? [] : [.enabled])
     }
 
     /// Layer ▸ Mask ▸ Edit Mask: toggles mask editing on the active
     /// layer — the same target change the layer and mask thumbnails
-    /// make, so it queues ahead of later input like they do.
+    /// make, so it queues ahead of later input like they do. A native
+    /// multi-selection exits mask editing on its own; this menu command
+    /// is gated instead of silently re-entering it on the primary.
     func toggleMaskEditing() {
         guard let layer = activeLayer, !refuseWhileFloatingActive() else { return }
+        guard !refuseSingleLayerCommand("Edit Mask", on: layer) else { return }
         if isMaskTargetActive { selectLayer(layer) } else { editMask(layer) }
     }
 
     /// Layer ▸ Mask ▸ Show Mask and the mask thumbnail's Option-click:
     /// toggles `layer`'s mask display. This is a view flag — it neither
-    /// selects the layer nor changes the paint target.
+    /// selects the layer nor changes the paint target — so an explicit
+    /// per-row call keeps targeting its captured row under a
+    /// multi-selection; only the active-layer menu route is gated.
     func toggleMaskShowing(_ layer: Int32? = nil) {
         guard let id = layer ?? activeLayer, !refuseWhileFloatingActive(),
               let state = maskState(for: id) else { return }
+        if layer == nil {
+            guard !refuseSingleLayerCommand("Show Mask", on: id) else { return }
+        }
         setMaskFlags(id, flags: [.showing], values: state.showing ? [] : [.showing])
     }
 
@@ -1656,6 +1814,7 @@ final class ImageDocument {
     /// layer's mask into the selection.
     func maskToSelection(_ operation: EngineSession.SelectOperation) {
         guard let layer = activeLayer else { return }
+        guard !refuseSingleLayerCommand("Mask to Selection", on: layer) else { return }
         runMaskCommand { session, image in
             try session.layerMaskToSelection(layer, image: image, operation: operation)
         }
@@ -1959,6 +2118,12 @@ final class ImageDocument {
              completion: @escaping @MainActor (Result<EngineSession.RunOutcome, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard !isTransferringClipboard, !isSavingForClose, !EngineActivity.shared.isBusy else { return completion(.failure(DocumentError.busy)) }
+        // A plug-in runs on the engine's whole selected-layer list; under
+        // a multi-selection that would be a batch operation, so it refuses.
+        if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count,
+                                                     action: procedure.label.trimmingCharacters(in: CharacterSet(charactersIn: "…"))) {
+            return completion(.failure(DocumentError.multipleLayersSelected(reason)))
+        }
         enqueueExclusive(label: procedure.label, rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
             let result = Result { try session.runProcedure(procedure.name, image: image, mode: mode) }
             DispatchQueue.main.async {
@@ -1970,12 +2135,14 @@ final class ImageDocument {
 
     enum DocumentError: LocalizedError {
         case closed, busy, noLayer, targetChanged, indexedProfileConversion
+        case multipleLayersSelected(String)
         var errorDescription: String? {
             switch self {
             case .closed: return "This image has already closed."
             case .busy: return "Wait for the current image operation to finish."
             case .noLayer: return "There is no layer to work on."
             case .targetChanged: return "The selected layer, mask or channel changed. Select a paint target again."
+            case .multipleLayersSelected(let reason): return reason
             case .indexedProfileConversion:
                 return "An indexed image cannot convert its color profile: the palette conversion ignores the intent and black-point settings. Convert the image to RGB first."
             }
@@ -2005,6 +2172,14 @@ final class ImageDocument {
                     consume: @escaping @MainActor (ClipboardImage.Encoded) throws -> Void,
                     completion: @escaping @MainActor (Error?) -> Void) {
         guard !isClosing else { return completion(DocumentError.closed) }
+        // Copy/Cut of the active layer would silently read only the
+        // primary layer under a multi-selection; Copy Merged reads the
+        // whole composite and stays available.
+        if operation != .merged,
+           let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count,
+                                                     action: operation == .cutLayer ? "Cut" : "Copy") {
+            return completion(DocumentError.multipleLayersSelected(reason))
+        }
         // A pending target command does not refuse the copy: the read
         // and a cut's deferred clear resolve the native drawable on the
         // input queue as one pair — only a rejected pick or a missing
@@ -2073,6 +2248,10 @@ final class ImageDocument {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
         guard !refuseFloatingForCompletion(completion) else { return }
+        // An ordinary Paste would attach to the primary layer alone.
+        if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Paste") {
+            return completion(.failure(DocumentError.multipleLayersSelected(reason)))
+        }
         endPendingUserEdits()
         enqueueTargetCommand({ session, image in
             let pixels = try payload.decoded()
@@ -2087,7 +2266,10 @@ final class ImageDocument {
     /// refusal reason. Menu validation and the controller's capture read
     /// this; no engine call happens here.
     var pasteIntoReadiness: FloatingControlsLogic.PasteIntoTarget {
-        FloatingControlsLogic.pasteIntoTarget(activeDrawable, state: floatingState, layers: layers,
+        if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Paste Into") {
+            return .init(drawable: nil, reason: reason)
+        }
+        return FloatingControlsLogic.pasteIntoTarget(activeDrawable, state: floatingState, layers: layers,
                                               maskStates: maskStates, channels: channels, sources: layerSources,
                                               locks: layerLocks, acceptsEdits: acceptsEdits,
                                               pendingTarget: !pendingTargetCommands.isEmpty)
@@ -2112,6 +2294,9 @@ final class ImageDocument {
     func pasteIntoPixels(_ payload: ClipboardImage.Payload, target: Int32,
                          completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Paste Into") {
+            return completion(.failure(DocumentError.multipleLayersSelected(reason)))
+        }
         guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
         guard !refuseWhileTargetPending() else { return completion(.failure(DocumentError.busy)) }
         let readiness = FloatingControlsLogic.pasteIntoTarget(target, state: floatingState, layers: layers,
@@ -2269,7 +2454,13 @@ final class ImageDocument {
                     _ = try session.placeLink(image: image, path: url.path)
                     return .placedLink
                 }
-                _ = try session.openLayers(image: image, path: url.path)
+                let imported = try session.openLayers(image: image, path: url.path)
+                // Importing a stack is not a user multi-selection. Keep
+                // its primary immediately editable while the exclusive
+                // load still owns the target; no later UI pick can race it.
+                if let primary = imported.first {
+                    try session.selectLayers([primary], image: image)
+                }
                 return .openedLayers
             }
             if case .success = result {
@@ -2375,6 +2566,10 @@ final class ImageDocument {
     func beginFilterPreview(operation: String, properties: [EngineSession.FilterProperty],
                             completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        // A filter preview would run on the primary layer alone.
+        if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Apply a filter") {
+            return completion(.failure(DocumentError.multipleLayersSelected(reason)))
+        }
         guard let drawable = activeDrawable else {
             return completion(.failure(pendingTargetCommands.isEmpty ? DocumentError.noLayer : DocumentError.busy))
         }
@@ -2489,6 +2684,23 @@ final class ImageDocument {
         return true
     }
 
+    /// Refuses a single-layer command while more than one layer is
+    /// selected, with the actionable "Choose one layer" reason; batch
+    /// operations are unsupported, so nothing is ever silently applied
+    /// to only the first (primary) layer. `layer` limits the gate to
+    /// commands about that explicit layer — the primary's — while
+    /// per-row edits (rename, visibility, an explicit mask view flag)
+    /// keep targeting their captured row. Returns true when refused.
+    func refuseSingleLayerCommand(_ action: String, on layer: Int32? = nil) -> Bool {
+        guard hasMultipleSelectedLayers, layer == nil || layer == activeLayer,
+              let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: action)
+        else { return false }
+        onUserCommand?()
+        onError?(reason)
+        NSSound.beep()
+        return true
+    }
+
     /// While a queued command has yet to report the drawable it creates
     /// or leaves selected, an edit that captures the paint target now
     /// could hit the drawable that command is about to replace; refuse
@@ -2545,10 +2757,14 @@ final class ImageDocument {
 
     /// Refuses commands after a failed queued target pick or while a
     /// target command's result is unknown, before they can act on the
-    /// engine's previous implicit drawable target.
+    /// engine's previous implicit drawable target. Painting, fills,
+    /// gradients, path strokes and Clear all go through here, so a
+    /// multi-selection gates them all with the same reason instead of
+    /// painting only the primary layer.
     @discardableResult
     func runOnPaintTarget(_ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
         guard !refuseWhileTargetPending() else { return false }
+        guard !refuseSingleLayerCommand("Paint") else { return false }
         guard activeDrawable != nil else {
             onError?(DocumentError.targetChanged.localizedDescription)
             return false
