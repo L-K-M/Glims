@@ -188,13 +188,11 @@ thread, like the other catalog work.
   validation tests of `validateResourceName` and its identity with the
   create path's label rules.
 
-## Not run here / documented gaps
+## Initial helper checks and coverage limits (runtime results below)
 
-- The native harness above and all adapter builds were NOT run in this
-  worktree (Root owns serialized native compilation and runtime
-  acceptance); only `swift build -j 2`, `swift build -j 2 --build-tests`
+- The helper initially left native execution to Root; only `swift build -j 2`, `swift build -j 2 --build-tests`
   and `python3 scripts/test-resource-duplicate.py --help` + AST parse
-  were run. No claim of native pass is made.
+  were run by that helper. Root subsequently executed the matrix below.
 - The UNSUPPORTED capability refusal is implemented
   (`gimp_data_is_duplicatable` false / copy not writable / empty pipe)
   but is not exercisable through the facade with the shipped catalogs:
@@ -203,7 +201,7 @@ thread, like the other catalog work.
   resolve NOT_FOUND here). The empty-pipe guard is likewise defensive
   (the native loader requires `n_brushes >= 1`).
 - Source "dirty" state and source file bytes are not exposed through
-  the facade; the tests verify source identity, thumbnail and catalog
+  the facade; the original facade-only tests verify source identity, thumbnail and catalog
   membership instead. Ownership uncertainty: none found — every class
   copy produces owned payloads (`gimp_temp_buf_copy`,
   `gegl_color_duplicate`, per-child `gimp_data_duplicate`); the only
@@ -212,3 +210,35 @@ thread, like the other catalog work.
 - A zero-segment gradient copies and saves without crashing (the GGR
   writer emits `0` segments), but no stock catalog entry has one; not
   exercised.
+
+
+## Root acceptance, 2026-11-09
+
+Compilation alone did not establish persistence. Primary loader contracts
+showed two missing gates: generated-brush VBR and gradient GGR loaders strip
+surrounding ASCII whitespace from names, and PAT stores only raw component
+bytes without precision/transfer/profile metadata. The new independent
+Core-linked harness reproduced 60 failures against b080628, with no GLib
+criticals after synthetic sources received proper internal identifiers.
+
+The private copy now refuses VBR/GGR edge-whitespace names with
+INVALID_ARGUMENT before staging, and refuses patterns whose Babl format is
+not exactly the PAT loader's Y'/Y'A/R'G'B'/R'G'B'A u8 encodings with
+UNSUPPORTED. It preserves the source instead of silently normalizing pixels.
+The general bitmap/pipe/pattern name policy is unchanged. Native save success
+alone is no longer treated as a sufficient format-roundtrip guarantee.
+
+Each of the four engines passes 261 existing duplication/fault/restart
+checks, 177 new persistence checks, and all 149 creation regression checks
+through the extracted shared persistence helper. General conformance passes
+1,917 / 1,703 / 1,917 / 1,917 checks. New evidence uses an actual generated
+brush and verifies reloaded parameters and mask pixels, a real gradient,
+four canonical and six noncanonical PAT formats, exact refusal statuses,
+zero output handles, and source/catalog/folder preservation. Existing tests
+whose names say stock can also choose created resources; the new generated
+fixture establishes the parametric case explicitly. Directory snapshots prove
+no lasting writes, not the absence of transient I/O. The source-specific
+format gates were also reviewed directly against each native loader.
+
+These backend runs do not exercise the forthcoming Duplicate controls, and
+are separate from a final combined editor/bundle validation.
