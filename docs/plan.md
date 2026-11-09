@@ -3427,3 +3427,15 @@ oracles pass within387 native checks per supported engine. The actual
 editor passes21 checks per engine;932 unit tests pass. See
 `hue-saturation.md`. Final metadata integration, bundle checks and CI remain
 open; Levels/Curves and other auxiliary forms remain separate work.
+
+
+### Typed capture-date metadata (2026-11-09 candidate)
+
+The descriptor-gated DateTimeOriginal action opens a six-field local
+calendar editor without changing timezone or subsecond companions. Its
+strict fully specified ASCII subset preserves unsupported existing text
+until an explicit valid replacement. The counted one-tag writer and
+stale-document/close guards retain existing native metadata preservation
+policy. See `metadata-capture-date.md`:16 focused model/policy checks and
+931 total units pass, plus19 actual-window checks on the pinned engine.
+Other engines, legacy-control regressions and final bundle checks remain open.

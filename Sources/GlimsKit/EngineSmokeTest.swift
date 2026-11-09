@@ -331,6 +331,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (filter sources)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-capture-date" {
+                try exerciseMetadataCaptureDate(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (metadata capture date)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-controls" {
                 try exerciseMetadataControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (metadata controls)" : "FAILED: \(failures) failure(s)")
@@ -459,6 +464,7 @@ enum EngineSmokeTest {
             try exerciseMenuShortcuts(session, work: work, documents: documents)
             try exerciseFloatingControls(session, work: work, documents: documents)
             try exerciseMetadataControls(session, work: work, documents: documents)
+            try exerciseMetadataCaptureDate(session, work: work, documents: documents)
             try exerciseMetadataDescriptors(session, work: work, documents: documents)
             try exerciseResourceSelection(session, work: work, documents: documents)
             try exerciseResourceDuplicateControls(session, work: work, documents: documents)
