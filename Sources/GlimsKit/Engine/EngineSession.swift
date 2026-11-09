@@ -2862,6 +2862,69 @@ final class EngineSession: @unchecked Sendable {
         return kind
     }
 
+    // MARK: Saved sets (read-only, slots 133/134)
+
+    /// The kind of a saved set (GlimsItemSetKind). Facade-owned values;
+    /// the engine's own classes never cross the boundary.
+    enum ItemSetKind: UInt32, CaseIterable, Codable {
+        case layer = 1, channel, path
+    }
+
+    /// One row of `itemSets(_:)` (GlimsItemSetInfo): the set's opaque
+    /// identity token, kind, display name and live attached member count.
+    /// The token — never the name — is the identity: it stays stable
+    /// across quiet live-member rebuilds of the same set, expires when
+    /// the set is explicitly removed or replaced through an undoable
+    /// edit, and a set recreated under the same name gets a new token.
+    /// `displayName` is display-only and may be truncated.
+    struct ItemSet: Equatable {
+        let token: UInt64
+        let kind: ItemSetKind
+        let displayName: String
+        let memberCount: Int
+    }
+
+    /// The image's fixed saved sets (stored item sets), read-only: kinds
+    /// in `ItemSetKind` order, the engine's stored-list order within a
+    /// kind; pattern definitions are never listed. A plain read, allowed
+    /// while the image is busy; it changes nothing.
+    func itemSets(_ image: Int32) throws -> [ItemSet] {
+        var count: Int32 = 0
+        try check(api.image_item_sets(engine, image, nil, 0, &count), nil)
+        guard count > 0 else { return [] }
+        var rows = [GlimsItemSetInfo](repeating: GlimsItemSetInfo(), count: Int(count))
+        var filled: Int32 = 0
+        try rows.withUnsafeMutableBufferPointer { buffer in
+            try check(api.image_item_sets(engine, image, buffer.baseAddress, count, &filled), nil)
+        }
+        return try rows.prefix(Int(min(count, filled))).map { row in
+            guard let kind = ItemSetKind(rawValue: row.kind) else {
+                throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                  message: "The engine returned an unknown saved-set kind.")
+            }
+            return ItemSet(token: row.token, kind: kind,
+                           displayName: Self.string(row.display_name),
+                           memberCount: Int(row.member_count))
+        }
+    }
+
+    /// The current attached member ids of the one saved set that `token`
+    /// names in `image`, in stored membership order. Members deleted or
+    /// detached from the image are skipped; an empty set returns [].
+    /// Throws NOT_FOUND for a token this image does not own — foreign,
+    /// stale or expired tokens are never retargeted to a same-named set.
+    func itemSetMembers(_ image: Int32, token: UInt64) throws -> [Int32] {
+        var count: Int32 = 0
+        try check(api.image_item_set_members(engine, image, token, nil, 0, &count), nil)
+        guard count > 0 else { return [] }
+        var ids = [GlimsItemID](repeating: 0, count: Int(count))
+        var filled: Int32 = 0
+        try ids.withUnsafeMutableBufferPointer { buffer in
+            try check(api.image_item_set_members(engine, image, token, buffer.baseAddress, count, &filled), nil)
+        }
+        return Array(ids.prefix(Int(min(count, filled))))
+    }
+
     // MARK: Guides
 
     /// Which axis an image guide sits on (GlimsGuideOrientation). A

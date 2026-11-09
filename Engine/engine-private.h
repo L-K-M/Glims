@@ -50,16 +50,44 @@ struct GlimsEngine
   gint                busy;      /* > 0 while a plug-in call runs */
   GlimsProgress      *progress;  /* the running procedure's, or NULL */
   GFile              *icon_theme_dir;
+
+  /* Per-engine monotonic source of saved-set identity tokens (facade
+   * slots 133/134): incremented for every adopted fixed set, never
+   * reused, never reset. 0 is never issued. At UINT64_MAX the allocation
+   * fails closed (no identity is handed out, none is reused). */
+  guint64             next_item_set_token;
 };
 
 typedef struct GlimsItemSets GlimsItemSets;
-GlimsItemSets * glims_item_sets_new  (GimpImage *image);
+/* The manager allocates each fixed set's facade identity token from the
+ * engine's monotonic counter, so it needs the engine it belongs to. */
+GlimsItemSets * glims_item_sets_new  (GlimsEngine *engine, GimpImage *image);
 void            glims_item_sets_free (GlimsItemSets *manager);
 GlimsItemSets * glims_item_sets_lookup (GimpImage *image); /* borrowed */
 GPtrArray *     glims_item_sets_copy_members (GlimsItemSets *manager, GimpItemList *native);
 void            glims_item_sets_restore_members (GlimsItemSets *manager, GimpItemList *native,
                                                  const GPtrArray *members);
 void            glims_item_sets_refresh (GlimsItemSets *manager);
+/* READ-ONLY manager queries behind facade slots 133/134. Both are plain
+ * reads: no busy gate, no mutation, no dirty/history/selection change,
+ * no strong retention beyond the call. `rows`/`out` may be NULL with
+ * capacity 0 (count-only). List: every fixed (non-pattern) set, kinds in
+ * GlimsItemSetKind order, stored-list order within a kind; each row gets
+ * the set's stable token, facade kind, live attached member count and
+ * display-truncated name. Members: the current attached item ids of the
+ * one set `token` names in this manager — token 0 or a token this image
+ * does not own (foreign image, foreign engine, stale or expired) is
+ * NOT_FOUND, never retargeted. */
+GlimsStatus     glims_item_sets_list (GlimsItemSets *manager, GlimsItemSetInfo *rows,
+                                      int32_t capacity, int32_t *count);
+GlimsStatus     glims_item_sets_members_of (GlimsItemSets *manager, uint64_t token,
+                                            GlimsItemID *out, int32_t capacity, int32_t *count);
+/* item-sets-read.c: facade slots 133/134 (image_item_sets,
+ * image_item_set_members). */
+GlimsStatus     glims_image_item_sets (GlimsEngine *e, GlimsImageID image,
+                                       GlimsItemSetInfo *rows, int32_t capacity, int32_t *count);
+GlimsStatus     glims_image_item_set_members (GlimsEngine *e, GlimsImageID image, uint64_t token,
+                                              GlimsItemID *members, int32_t capacity, int32_t *count);
 
 /* item-sets-undo.c: atomic native undo steps for explicit saved-set edits.
  * Engine-internal commands (no facade slot); run on the engine thread.

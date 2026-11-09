@@ -32,6 +32,14 @@ typedef struct
   GWeakRef   native;
   GType      kind;
   GPtrArray *members;             /* WeakItem*, original membership order */
+  uint64_t   token;               /* facade identity (slots 133/134), from the
+                                   * engine's monotonic counter; 0 = none
+                                   * (counter exhausted: fail closed). Stable
+                                   * across quiet live-member replacement
+                                   * (rebuild_sets keeps this FixedSet); the
+                                   * whole struct — and so the token — dies
+                                   * when the set is removed or undo-replaced,
+                                   * which expires the token for good. */
   gboolean   seen;
 } FixedSet;
 
@@ -44,12 +52,14 @@ typedef struct
 
 struct GlimsItemSets
 {
-  GimpImage *image;               /* borrowed; manager dies before image */
-  GPtrArray *sets;                /* FixedSet* */
-  GPtrArray *watches;             /* ContainerWatch* */
-  gulong     sets_changed;
-  gulong     undo_event;
-  gboolean   rebuilding;
+  GimpImage  *image;              /* borrowed; manager dies before image */
+  GlimsEngine *engine;            /* borrowed; the engine outlives its images;
+                                   * source of the monotonic token counter */
+  GPtrArray  *sets;               /* FixedSet* */
+  GPtrArray  *watches;            /* ContainerWatch* */
+  gulong      sets_changed;
+  gulong      undo_event;
+  gboolean    rebuilding;
 };
 
 static void rebuild_sets (GlimsItemSets *manager);
@@ -122,6 +132,19 @@ find_set (GlimsItemSets *manager, GimpItemList *native)
   return NULL;
 }
 
+/* The next facade identity token for a newly adopted fixed set, from the
+ * engine's monotonic counter. Fail closed at exhaustion: 0 means "no
+ * identity", is never issued otherwise and is never reused; the set is
+ * still listed (with token 0) and slot 134 refuses to resolve it. */
+static uint64_t
+next_set_token (GlimsItemSets *manager)
+{
+  if (! manager->engine || manager->engine->next_item_set_token == G_MAXUINT64)
+    return 0;
+  manager->engine->next_item_set_token += 1;
+  return manager->engine->next_item_set_token;
+}
+
 /* Import only new set objects. Re-reading an existing native object's
  * members after Undo would adopt the very corruption the mirror avoids.
  * At initial adoption, file loading has finished and members are live. */
@@ -149,6 +172,7 @@ sync_definitions (GlimsItemSets *manager, GType kind)
           set = g_new0 (FixedSet, 1);
           g_weak_ref_init (&set->native, native);
           set->kind = kind;
+          set->token = next_set_token (manager);
           set->members = g_ptr_array_new_with_free_func (weak_item_free);
           for (GList *member = members; member; member = member->next)
             {
@@ -316,11 +340,12 @@ rebuild_sets (GlimsItemSets *manager)
 }
 
 GlimsItemSets *
-glims_item_sets_new (GimpImage *image)
+glims_item_sets_new (GlimsEngine *engine, GimpImage *image)
 {
   const GType kinds[] = { GIMP_TYPE_LAYER, GIMP_TYPE_CHANNEL, GIMP_TYPE_PATH };
   GlimsItemSets *manager = g_new0 (GlimsItemSets, 1);
   manager->image = image;
+  manager->engine = engine;
   manager->sets = g_ptr_array_new_with_free_func (fixed_set_free);
   manager->watches = g_ptr_array_new_with_free_func (container_watch_free);
   for (guint i = 0; i < G_N_ELEMENTS (kinds); i++)
@@ -394,4 +419,157 @@ void
 glims_item_sets_refresh (GlimsItemSets *manager)
 {
   rebuild_sets (manager);
+}
+
+/* ---- READ-ONLY facade queries (slots 133/134) --------------------------
+ * Plain reads on the engine thread: no busy gate, no mutation, no
+ * dirty/history/selection change. The only references taken are transient
+ * weak-ref gets, released before returning; nothing is retained. */
+
+/* The facade kind of a manager kind; the GType never leaves the adapter. */
+static uint32_t
+facade_kind (GType kind)
+{
+  if (kind == GIMP_TYPE_LAYER)
+    return GLIMS_ITEM_SET_LAYER;
+  if (kind == GIMP_TYPE_CHANNEL)
+    return GLIMS_ITEM_SET_CHANNEL;
+  if (kind == GIMP_TYPE_PATH)
+    return GLIMS_ITEM_SET_PATH;
+  return 0;
+}
+
+/* Copies `text` into `buffer` as a display label: valid UTF-8, truncated
+ * at most to `size` - 1 bytes, never inside a multi-byte character, always
+ * NUL-terminated. Display only — never an identity. */
+static void
+copy_display_name (char *buffer, size_t size, const gchar *text)
+{
+  gchar *valid = g_utf8_make_valid (text ? text : "", -1);
+  size_t length = strlen (valid);
+
+  if (length > size - 1)
+    {
+      length = size - 1;
+      while (length > 0 && (valid[length] & 0xC0) == 0x80)
+        length--;
+    }
+
+  memcpy (buffer, valid, length);
+  buffer[length] = '\0';
+  g_free (valid);
+}
+
+/* Walks the mirror's weak members and reports only the ones that are
+ * alive AND currently attached to the manager's image: deleted or
+ * detached weak members are skipped. Fills `out` up to `capacity` with
+ * their item ids in stored membership order and returns the total live
+ * count. `out` NULL means count-only. Transient refs only. */
+static guint
+live_members (GlimsItemSets *manager, FixedSet *set, GlimsItemID *out, int32_t capacity)
+{
+  guint count = 0;
+
+  for (guint i = 0; i < set->members->len; i++)
+    {
+      WeakItem *weak = g_ptr_array_index (set->members, i);
+      GObject *object = g_weak_ref_get (&weak->object);
+
+      if (! object)
+        continue;                 /* finalized: a deleted weak member */
+      if (GIMP_IS_ITEM (object) &&
+          gimp_item_get_image (GIMP_ITEM (object)) == manager->image &&
+          gimp_item_is_attached (GIMP_ITEM (object)))
+        {
+          if (out && count < (guint) capacity)
+            out[count] = gimp_item_get_id (GIMP_ITEM (object));
+          count++;
+        }
+      g_object_unref (object);
+    }
+  return count;
+}
+
+static FixedSet *
+find_set_by_token (GlimsItemSets *manager, uint64_t token)
+{
+  for (guint i = 0; i < manager->sets->len; i++)
+    {
+      FixedSet *set = g_ptr_array_index (manager->sets, i);
+      /* Tokens are unique per engine, so a token owned by another image of
+       * this engine — or issued by a foreign engine — simply matches no
+       * set here and is refused by the caller as NOT_FOUND. */
+      if (set->token != 0 && set->token == token)
+        return set;
+    }
+  return NULL;
+}
+
+GlimsStatus
+glims_item_sets_list (GlimsItemSets *manager, GlimsItemSetInfo *rows,
+                      int32_t capacity, int32_t *count)
+{
+  const GType kinds[] = { GIMP_TYPE_LAYER, GIMP_TYPE_CHANNEL, GIMP_TYPE_PATH };
+  int32_t cap, total = 0;
+
+  if (! count || capacity < 0)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  *count = 0;
+  if (! manager)
+    return GLIMS_STATUS_FAILED;   /* no manager: fail closed */
+
+  cap = rows ? capacity : 0;
+  for (guint k = 0; k < G_N_ELEMENTS (kinds); k++)
+    {
+      /* Stored-list order per kind, kinds in GlimsItemSetKind order;
+       * pattern definitions are computed, never listed. */
+      for (GList *iter = gimp_image_get_stored_item_sets (manager->image, kinds[k]);
+           iter; iter = iter->next)
+        {
+          GimpItemList *native = iter->data;
+          FixedSet *set;
+
+          if (gimp_item_list_is_pattern (native, NULL))
+            continue;
+          set = find_set (manager, native);
+          if (! set)
+            continue;
+          if (total < cap)
+            {
+              GlimsItemSetInfo *row = &rows[total];
+
+              memset (row, 0, sizeof (*row));
+              row->token = set->token;
+              row->kind = facade_kind (set->kind);
+              row->member_count = (int32_t) live_members (manager, set, NULL, 0);
+              copy_display_name (row->display_name, sizeof (row->display_name),
+                                 gimp_object_get_name (GIMP_OBJECT (native)));
+            }
+          total++;
+        }
+    }
+  *count = total;
+  return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_item_sets_members_of (GlimsItemSets *manager, uint64_t token,
+                            GlimsItemID *out, int32_t capacity, int32_t *count)
+{
+  FixedSet *set;
+
+  if (! count || capacity < 0)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  *count = 0;
+  if (token == 0)
+    return GLIMS_STATUS_INVALID_ARGUMENT;  /* never issued; no identity */
+  if (! manager)
+    return GLIMS_STATUS_FAILED;            /* no manager: fail closed */
+
+  set = find_set_by_token (manager, token);
+  if (! set)
+    return GLIMS_STATUS_NOT_FOUND;         /* foreign, stale or expired */
+
+  *count = (int32_t) live_members (manager, set, out, out ? capacity : 0);
+  return GLIMS_STATUS_OK;
 }
