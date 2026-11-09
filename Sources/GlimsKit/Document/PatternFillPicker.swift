@@ -12,8 +12,9 @@ import AppKit
 /// The document is captured at open, so a retarget cannot redirect the
 /// load. When the sheet ends — Fill, Cancel, or the document closing —
 /// `invalidate()` bumps the model's generation so a late native delivery
-/// is dropped without touching any view. The picker opens no child
-/// panel or nested sheet of its own.
+/// is dropped without touching any view. The picker opens no nested sheet
+/// of its own; its Duplicate… form is a nonmodal child panel owned by the
+/// picker for the sheet's lifetime.
 @MainActor
 final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDelegate,
                                NSSearchFieldDelegate {
@@ -25,11 +26,17 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
     private let searchField = NSSearchField()
     private let table = NSTableView()
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
+    private let duplicateButton = NSButton(title: "Duplicate…", target: nil, action: nil)
+    private weak var sourceDocument: ImageDocument?
+    /// The shared Duplicate… form while open; the picker (owned by the Fill
+    /// sheet) owns its lifecycle and invalidates it when the sheet ends.
+    private var duplicateForm: ResourceDuplicateFormController?
     private var updatingTable = false
 
     init(document: ImageDocument, currentIdentity: EngineSession.ResourceIdentity?) {
         self.model = ResourceChooserModel(kind: .pattern, currentIdentity: currentIdentity)
         self.controller = ResourcePickerController(document: document, model: model)
+        self.sourceDocument = document
         self.view = NSView()
         super.init()
         // The catalog loads once per sheet, the first time the list shows;
@@ -69,7 +76,15 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.setAccessibilityLabel("Pattern status")
 
-        for subview in [searchField, scroll, statusLabel] as [NSView] {
+        // The picker is embedded in the Fill sheet, so Duplicate… opens the
+        // shared form as a nonmodal child panel of the sheet's window —
+        // never a nested AppKit sheet.
+        duplicateButton.target = self
+        duplicateButton.action = #selector(duplicate(_:))
+        duplicateButton.setAccessibilityLabel("Duplicate pattern")
+        duplicateButton.font = .systemFont(ofSize: 11)
+
+        for subview in [searchField, scroll, duplicateButton, statusLabel] as [NSView] {
             subview.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(subview)
         }
@@ -82,7 +97,9 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
             scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             scroll.heightAnchor.constraint(equalToConstant: 150),
-            statusLabel.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 4),
+            duplicateButton.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 4),
+            duplicateButton.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            statusLabel.topAnchor.constraint(equalTo: duplicateButton.bottomAnchor, constant: 4),
             statusLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             statusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             statusLabel.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -116,6 +133,7 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
 
     private func refresh() {
         reloadTable(scrollToSelection: true)
+        updateDuplicateButton()
         switch model.state {
         case .loading:
             statusLabel.stringValue = "Loading patterns…"
@@ -204,6 +222,42 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
         // not a new resource choice; retain the explicit pending identity.
         guard visibleRows.indices.contains(row) else { return }
         model.select(visibleRows[row].id)
+        updateDuplicateButton()
+    }
+
+    // MARK: Duplicate…
+
+    /// The duplicatable source of a Duplicate… right now: the highlighted
+    /// catalog row's identity, native handle and kind. No highlight is
+    /// refused with a reason.
+    private func duplicateSource() -> ResourceDuplicateValidation.Source? {
+        guard let selection = model.selection,
+              let row = model.rows.first(where: { $0.id == selection }) else { return nil }
+        return ResourceDuplicateValidation.Source(kind: .pattern, id: row.id, identity: row.identity)
+    }
+
+    private func updateDuplicateButton() {
+        let source = duplicateSource()
+        duplicateButton.isEnabled = !isClosed && source != nil
+        duplicateButton.toolTip = ResourceDuplicateValidation.sourceRefusal(source, kind: .pattern)
+            ?? "Duplicate the selected pattern under a new name"
+    }
+
+    /// Opens the shared Duplicate… form, capturing the picker's document and
+    /// the source NOW: later highlight, document or front-window changes
+    /// cannot alter them.
+    @objc private func duplicate(_ sender: Any?) {
+        guard !isClosed, let document = sourceDocument, !document.isClosing else { return }
+        if let form = duplicateForm, !form.isInvalidated {
+            form.show()
+            return
+        }
+        guard let source = duplicateSource() else { return }
+        let form = ResourceDuplicateFormController(document: document, source: source, hostWindow: view.window)
+        form.onSucceeded = { [weak self] _ in self?.controller.reloadCatalog() }
+        form.onClosed = { [weak self] in self?.duplicateForm = nil }
+        duplicateForm = form
+        form.show()
     }
 
     // MARK: Search
@@ -216,8 +270,12 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
     // MARK: Close
 
     /// The sheet ended: no in-flight native result may touch this stale
-    /// view again. Idempotent.
+    /// view again, and the open Duplicate… form is invalidated with the
+    /// picker (its accepted work, if any, still drains on the document).
+    /// Idempotent.
     func invalidate() {
+        duplicateForm?.invalidate()
+        duplicateForm = nil
         controller.invalidate()
     }
 }

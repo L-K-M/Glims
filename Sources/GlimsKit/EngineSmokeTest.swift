@@ -316,6 +316,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (adjustment catalog failure)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "resource-duplicate-controls" {
+                try exerciseResourceDuplicateControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (resource duplicate controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
                 check(false, "unknown engine smoke case: \(selected)")
 
@@ -361,6 +366,7 @@ enum EngineSmokeTest {
             try exerciseMetadataControls(session, work: work, documents: documents)
             try exerciseMetadataDescriptors(session, work: work, documents: documents)
             try exerciseResourceSelection(session, work: work, documents: documents)
+            try exerciseResourceDuplicateControls(session, work: work, documents: documents)
             try exerciseViewOverlays(session, work: work, documents: documents)
             try exerciseDisplayDestination(session, work: work, documents: documents)
             try exerciseAdjustmentControls(session, work: work, documents: documents)

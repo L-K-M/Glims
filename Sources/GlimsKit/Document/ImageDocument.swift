@@ -996,6 +996,99 @@ final class ImageDocument {
         }
     }
 
+    // MARK: Duplicate resource
+
+    /// The cached-state reason a Duplicate… write cannot run right now, or
+    /// nil when it can. Reads only the document's cached state — never the
+    /// engine — so the choosers' validation and the form's Create gate make
+    /// no synchronous native call on the main thread.
+    func duplicateResourceRefusal(kind: EngineSession.ResourceKind) -> String? {
+        ResourceDuplicateValidation.gate(
+            engineActivity: PlugInCommands.isRunning ? nil : EngineActivity.shared.label,
+            plugInLabel: PlugInCommands.running.map { $0.procedure.label.replacingOccurrences(of: "…", with: "") },
+            isClosing: isClosing,
+            isSavingForClose: isSavingForClose,
+            isTransferringClipboard: isTransferringClipboard,
+            previewOpen: filterPreviewIsOpen,
+            kind: kind)
+    }
+
+    /// Duplicates the captured saved `source` resource as a new saved
+    /// resource of the same kind under `name` — the ONLY native write is
+    /// facade slot 131, `EngineSession.duplicateResource`. The call takes no
+    /// image and changes no image, undo history, selection, clipboard or
+    /// committed ToolState; the source itself is never renamed or dirtied.
+    ///
+    /// The flow mirrors `createResourceFromSelection` exactly: one counted
+    /// global exclusive job (`EngineActivity` drains ALL accepted document
+    /// input first), with the outer `pendingWork` count covering the
+    /// deferred main completion stage and `enqueueExclusive`'s inner count
+    /// covering the job itself, so a close waits for the whole job and its
+    /// callback and a rejection balances both counts and completes once.
+    /// On the worker the captured `ResourceIdentity` is resolved freshly
+    /// with the captured kind — the engine's own match, no name-only
+    /// fallback, internal localized-name semantics honored natively — the
+    /// current resource is revalidated through the facade, and slot 131
+    /// runs synchronously OFF MAIN with the full UInt64 handles, the result
+    /// captured by value. The completion runs on the main actor exactly once
+    /// (main -> whenIdle -> onError/completion -> jobDidFinish); a successful
+    /// publish never becomes a false failure through the optional identity
+    /// query. Pre-acceptance refusals (closing, cached gate, local
+    /// validation) call the completion synchronously with nothing queued.
+    func duplicateResource(source: ResourceDuplicateValidation.Source, name: String,
+                           completion: @escaping @MainActor (Result<CreatedResource, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if let reason = duplicateResourceRefusal(kind: source.kind) {
+            return completion(.failure(EngineSession.EngineError(
+                status: Int32(GLIMS_STATUS_BUSY.rawValue), message: reason)))
+        }
+        // Pure local validation before anything is queued: the shared label
+        // contract slot 131 applies natively as well. No trimming, no
+        // normalization — the name goes through exactly as typed.
+        do {
+            try EngineSession.validateResourceName(name)
+        } catch { return completion(.failure(error)) }
+        // End in-flight field/text edits and this document's own open
+        // stroke explicitly — the established finishInput pattern — so the
+        // exclusive drain below starts from committed input.
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        pendingWork += 1
+        let label = "Duplicating \(source.kind.singular) “\(source.identity.name)”"
+        enqueueExclusive(label: label, rejected: {
+            self.jobDidFinish(input: false)
+            completion(.failure(DocumentError.busy))
+        }) { [session, image] in
+            let result: Result<CreatedResource, Error> = Result {
+                // Resolve the captured identity freshly with the captured
+                // kind: the engine's own exact match (collection and
+                // isInternal included), no name-only fallback.
+                let sourceID = try session.resolveResource(source.identity, kind: source.kind)
+                // Revalidate the current source through the facade before
+                // writing: a removed or foreign source is NOT_FOUND here,
+                // never duplicated.
+                _ = try session.resourceIdentifiers(sourceID)
+                // The one native write: synchronous slot 131, off the main
+                // thread, full UInt64 handles by value.
+                let newID = try session.duplicateResource(sourceID, name: name)
+                // Optional follow-up only: a successful publish must not
+                // become a false failure through the identity query.
+                let identity = try? session.resourceIdentifiers(newID)
+                return CreatedResource(id: newID, name: identity?.name ?? name, kind: source.kind)
+            }
+            DispatchQueue.main.async {
+                EngineActivity.shared.whenIdle {
+                    // The outer count covers this deferred completion,
+                    // including callbacks that request window closure.
+                    defer { self.jobDidFinish(input: false) }
+                    if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                    completion(result)
+                }
+            }
+        }
+    }
+
     // MARK: Guides
 
     /// Adds a guide at `position` (image pixels on `orientation`'s
