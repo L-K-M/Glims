@@ -29,7 +29,7 @@ resubmitted after an older acknowledgement. A second ordering reproduced
 the same problem before that acknowledgement arrived. The editor now
 removes a refused write immediately as the base for future edits, retaining
 older pending intent and respecting newer already-admitted writes. Both
-regressions and the real controls pass19 checks on every supported engine.
+regressions and the real controls pass21 checks on every supported engine.
 
 ## Known native XCF limitation
 
@@ -44,6 +44,16 @@ values, preserve flag, inherited base fields, opacity, order, enabled state
 and pixels to survive. Full native blend/composite file preservation is
 separate remaining work, not implied by these passing config checks.
 
-After Image Adjust integration, all923 unit tests pass. On every engine the
+After Image Adjust integration, all939 unit tests pass. On every engine the
 shared Brightness/Contrast15, Bump Map20 and Image Adjust27 real-window
 checks also pass. Final bundle checks, CI and merge remain release gates.
+
+
+Shared field-draft preservation now retains actual field-editor text and
+selection during delayed native-error presentation, including valid text
+that has not sent its action. The expanded21-check editor suite passes on
+every supported engine; its native250-check matrix remains unchanged.
+
+The merged capture-date editor is integrated;939 unit tests pass on the
+combined source. The21-per-engine editor and250-per-engine native proofs
+remain valid; final combined bundle verification is running.
