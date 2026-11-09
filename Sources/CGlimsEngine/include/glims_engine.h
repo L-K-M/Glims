@@ -2658,18 +2658,17 @@ typedef struct GlimsEngineAPI {
    * read-back; because the engine compares membership ignoring order, a
    * pure reorder is forced with a clear-then-apply after preflight.
    *
-   * `count` 0 (with `items` NULL) clears the kind's selection: layers via
-   * the empty layer setter — refused under an active floating selection,
-   * exactly like slot 122; channels via gimp_image_unset_selected_channels,
+   * An empty LAYER list is INVALID_ARGUMENT at this batch endpoint.
+   * `count` 0 clears CHANNEL/PATH selection: channels via gimp_image_unset_selected_channels,
    * which also restores the layer stack the channel selection replaced
    * (the old channel-0 semantics); paths via the empty path setter.
    *
    * The whole input is validated before any mutation, so every refusal
    * leaves the selection untouched: INVALID_ARGUMENT for an unknown
-   * `kind`, a negative `count`, a NULL `items` with `count` > 0, the id 0,
+   * `kind`, a negative `count`, a NULL `items` with `count` > 0, any nonpositive id,
    * a repeated id, or an id of another kind (for CHANNEL also the
-   * selection/quick/layer masks: channels, but not rows of the channel
-   * list); NOT_FOUND for an unknown image or a stale, foreign or detached
+   * image selection/per-layer masks: not rows of the channel list).
+   * The enabled Quick Mask is an actual channel row and is allowed; NOT_FOUND for an unknown image or a stale, foreign or detached
    * id. This is a WRITE: it requires edit readiness and refuses with BUSY
    * before any mutation while a stroke, a filter preview or a plug-in
    * holds the image.
@@ -2697,7 +2696,7 @@ typedef struct GlimsEngineAPI {
    * NULL with `capacity` 0 to only count. A plain read, allowed at any
    * time — also while the image is busy; it mutates nothing.
    * INVALID_ARGUMENT for an unknown `kind`, a NULL `count` or a negative
-   * `capacity`; NOT_FOUND for an unknown image. On EVERY failure —
+   * `capacity`, or NULL `out` with positive capacity; NOT_FOUND for an unknown image. On EVERY failure —
    * including a NULL engine (NOT_RUNNING) — `*count` is reset to 0 and
    * no id is written. */
   GlimsStatus  (*image_selected_items) (GlimsEngine *engine, GlimsImageID image,

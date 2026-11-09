@@ -1334,14 +1334,9 @@ final class EngineSession: @unchecked Sendable {
     /// while a stroke, a filter session or a plug-in holds the image;
     /// throws NOT_FOUND for an unknown image.
     func selectedLayers(_ image: Int32) throws -> [Int32] {
-        var count: Int32 = 0
-        try check(api.image_selected_layers(engine, image, nil, 0, &count), nil)
-        var ids = [GlimsItemID](repeating: 0, count: Int(count))
-        var filled: Int32 = 0
-        try ids.withUnsafeMutableBufferPointer { buffer in
-            try check(api.image_selected_layers(engine, image, buffer.baseAddress, count, &filled), nil)
+        try Self.readWholeSelection { ids, capacity, count in
+            try self.check(self.api.image_selected_layers(self.engine, image, ids, capacity, &count), nil)
         }
-        return ids.prefix(Int(min(count, filled))).map { Int32($0) }
     }
 
     /// Selects exactly `layers`, in that order, as the image's whole
@@ -1365,23 +1360,45 @@ final class EngineSession: @unchecked Sendable {
     /// first (image_selected_items, slot 137). A plain read: allowed at
     /// any time, also while the image is busy; throws INVALID_ARGUMENT for
     /// an unknown kind, NOT_FOUND for an unknown image.
-    func selectedItems(_ kind: ItemSetKind, image: Int32) throws -> [Int32] {
-        var count: Int32 = 0
-        try check(api.image_selected_items(engine, image, kind.rawValue, nil, 0, &count), nil)
-        guard count > 0 else { return [] }
-        var ids = [GlimsItemID](repeating: 0, count: Int(count))
-        var filled: Int32 = 0
-        try ids.withUnsafeMutableBufferPointer { buffer in
-            try check(api.image_selected_items(engine, image, kind.rawValue, buffer.baseAddress, count, &filled), nil)
+    /// A count/fill pair may race a native selection change. Retry growth
+    /// instead of publishing a truncated list as the whole selection.
+    static func readWholeSelection(_ read: (UnsafeMutablePointer<Int32>?, Int32, inout Int32) throws -> Void) throws -> [Int32] {
+        for _ in 0..<3 {
+            var capacity: Int32 = 0
+            try read(nil, 0, &capacity)
+            guard (0...1_000_000).contains(capacity) else {
+                throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The engine returned an invalid selection size.")
+            }
+            if capacity == 0 { return [] }
+            var ids = [Int32](repeating: 0, count: Int(capacity))
+            var total: Int32 = 0
+            try ids.withUnsafeMutableBufferPointer { buffer in
+                try read(buffer.baseAddress, capacity, &total)
+            }
+            guard total >= 0 else {
+                throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The engine returned an invalid selection size.")
+            }
+            if total > capacity { continue }
+            let selected = Array(ids.prefix(Int(total)))
+            guard selected.allSatisfy({ $0 > 0 }), Set(selected).count == selected.count else {
+                throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The engine returned invalid selected item IDs.")
+            }
+            return selected
         }
-        return ids.prefix(Int(min(count, filled))).map { Int32($0) }
+        throw EngineError(status: Int32(GLIMS_STATUS_BUSY.rawValue), message: "The selection changed while it was being read. Try again.")
+    }
+
+    func selectedItems(_ kind: ItemSetKind, image: Int32) throws -> [Int32] {
+        try Self.readWholeSelection { ids, capacity, count in
+            try self.check(self.api.image_selected_items(self.engine, image, kind.rawValue, ids, capacity, &count), nil)
+        }
     }
 
     /// Selects exactly `items`, in that order, as the image's whole
     /// selected list of `kind` (image_select_items, slot 136); an empty
-    /// array clears it — channels go back to the layers the channel
-    /// selection replaced. Transient: no undo step, no dirty flag, no
-    /// pixel, selection or mask-data change; a floating selection is never
+    /// array clears channel/path selection; an empty layer array is refused.
+    /// Channels go back to the layers the channel selection replaced. Transient: no undo step, no dirty flag, no
+    /// pixel, selection-mask or layer-mask data change; a floating selection is never
     /// anchored. Requires edit readiness: throws BUSY while a stroke, a
     /// filter preview or a plug-in holds the image. The whole input is
     /// validated before any mutation: INVALID_ARGUMENT for a repeated id,

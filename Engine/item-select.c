@@ -149,22 +149,29 @@ glims_image_select_items (GlimsEngine       *engine,
       glims_fail (error, NULL, count < 0 ? "A negative item count." : "A NULL item list needs count 0.");
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
+  if (kind == GLIMS_ITEM_SET_LAYER && count == 0)
+    return invalid (error, "Select at least one layer.");
+  if (count > 0)
+    {
+      GList *available = list_of_kind (image, kind);
+      guint available_count = g_list_length (available);
+      g_list_free (available);
+      if ((guint) count > available_count)
+        return invalid (error, "The requested selection has more ids than this image has of the selected kind.");
+    }
+  for (i = 0; i < count; i++)
+    if (items[i] <= 0)
+      return invalid (error, "Every selected item id must be positive.");
 
   status = glims_edit_ready (engine, open, error);  /* a write: readiness first */
   if (status != GLIMS_STATUS_OK)
     return status;
+  /* Keep the existing layer selection and mask-edit policy authoritative. */
+  if (kind == GLIMS_ITEM_SET_LAYER)
+    return glims_image_select_layers (engine, id, items, (size_t) count, error);
 
   if (count > 0)
     {
-      GList *available = list_of_kind (image, kind);
-      guint  available_count = g_list_length (available);
-      g_list_free (available);
-      if ((guint) count > available_count)
-        {
-          status = invalid (error, "The requested selection contains more ids than the image has of this kind.");
-          goto out;
-        }
-
       resolved = g_new (GimpItem *, count);
       seen     = g_hash_table_new (g_direct_hash, g_direct_equal);
       for (i = 0; i < count && status == GLIMS_STATUS_OK; i++)
@@ -294,6 +301,8 @@ glims_image_selected_items (GlimsEngine  *engine,
     return GLIMS_STATUS_INVALID_ARGUMENT;
   if (! count || capacity < 0 || (capacity > 0 && ! out))
     return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (kind == GLIMS_ITEM_SET_LAYER)
+    return glims_image_selected_layers (engine, id, out, capacity, count);
 
   /* The item tree's borrowed selected list, never freed; ids copied out
    * immediately. Plain read — no readiness gate. */

@@ -395,10 +395,16 @@ run_all (GlimsEngine *engine, gpointer data)
 
   /* ---------- Phase 5: empty per kind ------------------------------------ */
 
+  EngineState before_empty_state = capture_state (image);
+  GlimsItemID before_empty[16] = {0}; int32_t before_empty_count = 0;
+  api->image_selected_items (engine, probe->image_id, GLIMS_ITEM_SET_LAYER, before_empty, 16, &before_empty_count);
   status = sel_items (probe->image_id, GLIMS_ITEM_SET_LAYER, NULL, 0, &error);
-  CHECK (status == GLIMS_STATUS_OK, "[empty] clear layers: %s", error ? error : "ok");
+  CHECK (status == GLIMS_STATUS_INVALID_ARGUMENT, "[empty] the batch endpoint refuses an empty layer list");
   if (error) { api->free_string (error); error = NULL; }
-  check_selection (probe, GLIMS_ITEM_SET_LAYER, NULL, 0, "empty layers");
+  check_selection (probe, GLIMS_ITEM_SET_LAYER, before_empty, before_empty_count, "empty layer refusal retains selection");
+  EngineState after_empty_state = capture_state (image);
+  CHECK (before_empty_state.undo == after_empty_state.undo && before_empty_state.redo == after_empty_state.redo
+         && before_empty_state.dirty == after_empty_state.dirty, "[empty] layer refusal preserves Undo and dirty");
 
   one[0] = id_a;
   sel_items (probe->image_id, GLIMS_ITEM_SET_LAYER, one, 1, NULL);
@@ -426,20 +432,21 @@ run_all (GlimsEngine *engine, gpointer data)
   two[0] = id_a; two[1] = id_b;
   sel_items (probe->image_id, GLIMS_ITEM_SET_LAYER, two, 2, NULL);
 
-#define EXPECT_REFUSAL(label, expected_status, kind, items, n)                \
-  do {                                                                        \
-    GlimsItemID nat_before[8];                                                \
-    int         n_before = native_selected (image, GLIMS_ITEM_SET_LAYER, nat_before, 8); \
-    error = NULL;                                                             \
-    status = sel_items (probe->image_id, (kind), (items), (n), &error);       \
-    {                                                                         \
-      GlimsItemID nat_after[8];                                               \
-      int n_after = native_selected (image, GLIMS_ITEM_SET_LAYER, nat_after, 8); \
-      CHECK (status == (expected_status) && n_after == n_before &&            \
-             memcmp (nat_after, nat_before, sizeof nat_before) == 0,         \
-             "[%s] refused with status %d, selection untouched", label, status); \
-    }                                                                         \
-    if (error) { api->free_string (error); error = NULL; }                    \
+#define EXPECT_REFUSAL(label, expected_status, kind, items, n)                 \
+  do {                                                                         \
+    GlimsItemID nat_before[3][8] = {{0}}, nat_after[3][8] = {{0}};               \
+    int lengths_before[3], lengths_after[3];                                    \
+    for (int k=0; k<3; k++)                                                     \
+      lengths_before[k]=native_selected (image, (uint32_t)k+1, nat_before[k], 8); \
+    error = NULL;                                                              \
+    status = sel_items (probe->image_id, (kind), (items), (n), &error);           \
+    for (int k=0; k<3; k++)                                                     \
+      lengths_after[k]=native_selected (image, (uint32_t)k+1, nat_after[k], 8);   \
+    CHECK (status == (expected_status) &&                                       \
+           memcmp(lengths_before,lengths_after,sizeof lengths_before)==0 &&     \
+           memcmp(nat_before,nat_after,sizeof nat_before)==0,                   \
+           "[%s] refused with status %d, all three selections untouched", label, status); \
+    if (error) { api->free_string (error); error = NULL; }                       \
   } while (0)
 
   EXPECT_REFUSAL ("unknown kind 0", GLIMS_STATUS_INVALID_ARGUMENT, 0, two, 2);
@@ -457,6 +464,11 @@ run_all (GlimsEngine *engine, gpointer data)
   EXPECT_REFUSAL ("NULL items, count 2", GLIMS_STATUS_INVALID_ARGUMENT, GLIMS_ITEM_SET_LAYER, NULL, 2);
   EXPECT_REFUSAL ("negative count", GLIMS_STATUS_INVALID_ARGUMENT, GLIMS_ITEM_SET_LAYER, two, -1);
   {
+    GlimsItemID negative[1] = {-1};
+    for (uint32_t k=GLIMS_ITEM_SET_LAYER; k<=GLIMS_ITEM_SET_PATH; k++)
+      EXPECT_REFUSAL ("negative id", GLIMS_STATUS_INVALID_ARGUMENT, k, negative, 1);
+  }
+  {
     GlimsItemID with_zero[2] = { id_a, 0 };
     EXPECT_REFUSAL ("id 0", GLIMS_STATUS_INVALID_ARGUMENT, GLIMS_ITEM_SET_LAYER, with_zero, 2);
   }
@@ -465,8 +477,8 @@ run_all (GlimsEngine *engine, gpointer data)
     EXPECT_REFUSAL ("duplicate ids", GLIMS_STATUS_INVALID_ARGUMENT, GLIMS_ITEM_SET_LAYER, dup, 2);
   }
   {
-    GlimsItemID too_many[4] = { id_a, id_b, id_c, 777 };
-    EXPECT_REFUSAL ("more ids than layers", GLIMS_STATUS_INVALID_ARGUMENT, GLIMS_ITEM_SET_LAYER, too_many, 4);
+    GlimsItemID too_many[5] = { id_a, id_b, id_c, id_a, id_b };
+    EXPECT_REFUSAL ("more ids than layers", GLIMS_STATUS_INVALID_ARGUMENT, GLIMS_ITEM_SET_LAYER, too_many, 5);
   }
   {
     GlimsItemID wrong[1] = { id_ch1 };
@@ -544,6 +556,10 @@ run_all (GlimsEngine *engine, gpointer data)
   status = selected_items (probe->image_id, GLIMS_ITEM_SET_LAYER, out, 1, &count);
   CHECK (status == GLIMS_STATUS_OK && count == 2 && out[0] == id_a,
          "[getter] partial capacity fills 1, reports total 2");
+  count = -1;
+  status = selected_items (probe->image_id, GLIMS_ITEM_SET_CHANNEL, NULL, 1, &count);
+  CHECK (status == GLIMS_STATUS_INVALID_ARGUMENT && count == 0,
+         "[getter] NULL output with positive capacity refuses and resets count");
 
   /* ---------- Phase 9: busy gate on select, plain read on getter --------- */
 
@@ -588,7 +604,7 @@ run_all (GlimsEngine *engine, gpointer data)
          "[fs] layer change refused FAILED with a reason (status %d)", status);
   if (error) { api->free_string (error); error = NULL; }
   status = sel_items (probe->image_id, GLIMS_ITEM_SET_LAYER, NULL, 0, &error);
-  CHECK (status == GLIMS_STATUS_FAILED, "[fs] empty layer clear refused FAILED (status %d)", status);
+  CHECK (status == GLIMS_STATUS_INVALID_ARGUMENT, "[fs] empty layer input is invalid without resolving the floating selection (status %d)", status);
   if (error) { api->free_string (error); error = NULL; }
   CHECK (api->image_floating_selection (engine, probe->image_id, &fs) == GLIMS_STATUS_OK && fs.active,
          "[fs] refusals never anchored the floating selection");
@@ -637,6 +653,8 @@ run_all (GlimsEngine *engine, gpointer data)
            "[mask] masks added with edit-mask on for a and b");
     CHECK (gimp_layer_get_edit_mask (probe->a) && gimp_layer_get_edit_mask (probe->b),
            "[mask] edit-mask on before selection change");
+    EXPECT_REFUSAL ("layer mask is not an image channel", GLIMS_STATUS_INVALID_ARGUMENT,
+                    GLIMS_ITEM_SET_CHANNEL, &mask, 1);
 
     s0 = capture_state (image);
     status = api->image_render (engine, probe->image_id, 1.0, (GlimsRect) { 0, 0, 16, 16 },
@@ -672,7 +690,7 @@ run_all (GlimsEngine *engine, gpointer data)
   /* ---------- Phase 12: read invariants ----------------------------------- */
 
   {
-    GlimsItemID nat_before[8];
+    GlimsItemID nat_before[8] = {0};
     int n_before = native_selected (image, GLIMS_ITEM_SET_LAYER, nat_before, 8);
 
     s0 = capture_state (image);
@@ -685,13 +703,39 @@ run_all (GlimsEngine *engine, gpointer data)
       }
     {
       EngineState s1 = capture_state (image);
-      GlimsItemID nat_after[8];
+      GlimsItemID nat_after[8] = {0};
       int n_after = native_selected (image, GLIMS_ITEM_SET_LAYER, nat_after, 8);
       CHECK (s1.undo == s0.undo && s1.redo == s0.redo && s1.dirty == s0.dirty,
              "[read invariants] reads changed no undo/redo/dirty");
       CHECK (n_after == n_before && memcmp (nat_after, nat_before, sizeof nat_before) == 0,
              "[read invariants] reads changed no selection");
     }
+  }
+
+  /* Quick Mask is an actual attached channel while enabled. It is distinct
+   * from the image selection mask and per-layer masks refused above. */
+  {
+    GlimsImageID quick_image = 0;
+    GlimsQuickMaskState quick = {0};
+    status = api->image_new (engine, 8, 8, &quick_image, &error);
+    FIXTURE (status == GLIMS_STATUS_OK, "[quick mask] image created");
+    if (error) { api->free_string(error); error=NULL; }
+    status = api->image_set_quick_mask (engine, quick_image, true, &error);
+    CHECK (status == GLIMS_STATUS_OK, "[quick mask] fixture enabled");
+    if (error) { api->free_string(error); error=NULL; }
+    CHECK (api->image_quick_mask(engine,quick_image,&quick)==GLIMS_STATUS_OK && quick.enabled && quick.channel>0,
+           "[quick mask] enabled mask exposes its attached channel ID");
+    EngineState quick_before = capture_state(glims_lookup_image(engine,quick_image)->image);
+    status = sel_items(quick_image,GLIMS_ITEM_SET_CHANNEL,&quick.channel,1,&error);
+    CHECK (status==GLIMS_STATUS_OK,"[quick mask] the attached channel is selectable");
+    if (error) { api->free_string(error); error=NULL; }
+    count=-1;
+    CHECK (selected_items(quick_image,GLIMS_ITEM_SET_CHANNEL,out,8,&count)==GLIMS_STATUS_OK
+           && count==1 && out[0]==quick.channel,"[quick mask] exact channel readback");
+    EngineState quick_after = capture_state(glims_lookup_image(engine,quick_image)->image);
+    CHECK (quick_before.undo==quick_after.undo && quick_before.redo==quick_after.redo
+           && quick_before.dirty==quick_after.dirty,"[quick mask] selection changes no Undo or dirty state");
+    CHECK (api->image_close(engine,quick_image)==GLIMS_STATUS_OK,"[quick mask] fixture closes");
   }
 
   /* ---------- teardown ---------------------------------------------------- */
