@@ -2505,6 +2505,40 @@ api_resource_duplicate (GlimsEngine *e, GlimsResourceID sourceID, const char *na
   return glims_engine_call (e, resource_duplicate_on_engine, &a);
 }
 
+/* resource_create_gradient carries the two endpoint colors besides the
+ * full 64-bit out handle, so it gets its own args struct; the required
+ * pointer arguments are passed through untouched (validated inside the
+ * creator, never pre-dereferenced here). */
+typedef struct
+{
+  const char       *name;
+  const GlimsColor *left;
+  const GlimsColor *right;
+  GlimsResourceID  *out;
+  char            **error;
+} GlimsResourceCreateGradientArgs;
+
+static GlimsStatus
+resource_create_gradient_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsResourceCreateGradientArgs *a = data;
+
+  return glims_resource_create_gradient (e, a->name, a->left, a->right, a->out, a->error);
+}
+
+static GlimsStatus
+api_resource_create_gradient (GlimsEngine *e, const char *name,
+                              const GlimsColor *left, const GlimsColor *right,
+                              GlimsResourceID *out, char **error)
+{
+  /* Zero the output in the bridge too, so a dispatch without a running
+   * engine (NOT_RUNNING) still clears a prefilled handle. */
+  if (out) *out = 0;
+  GlimsResourceCreateGradientArgs a = { .name = name, .left = left, .right = right,
+                                        .out = out, .error = error };
+  return glims_engine_call (e, resource_create_gradient_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -2648,6 +2682,7 @@ static const GlimsEngineAPI api_v1 = {
   .image_item_set_edit = api_image_item_set_edit,
   .image_select_items = api_image_select_items,
   .image_selected_items = api_image_selected_items,
+  .resource_create_gradient = api_resource_create_gradient,
 };
 
 __attribute__ ((visibility ("default")))

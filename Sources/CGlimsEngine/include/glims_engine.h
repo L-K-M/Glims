@@ -2702,6 +2702,34 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*image_selected_items) (GlimsEngine *engine, GlimsImageID image,
                                         uint32_t kind, GlimsItemID *out,
                                         int32_t capacity, int32_t *count);
+
+  /* Slot 138: creates ONE saved gradient: a static two-endpoint gradient
+   * with exactly one segment (positions 0 / 0.5 / 1, linear, RGB, both
+   * endpoint color types fixed) whose endpoints are the captured `left`
+   * and `right` sRGB+alpha colors — never context-dynamic FG/BG stops —
+   * saved to the engine's configured writable data folder as .ggr and
+   * published to the gradient factory, with the new handle in `out`.
+   * The call takes no image: it changes no image, no undo history, no
+   * selection, no context and no clipboard.
+   *
+   * `name` follows the resource label contract: nonempty valid UTF-8, no
+   * embedded NUL, no Unicode control characters, at most 255 UTF-8 bytes,
+   * and no ASCII whitespace at either edge (the .ggr loader strips it,
+   * which would change the name's identity on reload). `left` and `right`
+   * need every component (alpha included) finite and inside 0 ... 1.
+   * A NULL `engine` never reaches the creator: dispatch returns
+   * NOT_RUNNING (and still clears `out`); NULL `name`, `left`, `right`
+   * or `out` are INVALID_ARGUMENT. BUSY while the engine is busy or ANY stroke or
+   * filter session is active. FAILED on an exact same-kind name collision
+   * (never silently uniquified) or a checked persistence failure.
+   * `out` is set to 0 first and again on EVERY failure — including a NULL
+   * engine dispatch (NOT_RUNNING) — and on success is the new resource's
+   * positive opaque handle, usable with resources(), resource_identifiers(),
+   * resource_resolve(), resource_thumbnail() and gradient consumers like
+   * any catalog handle. */
+  GlimsStatus (*resource_create_gradient)(GlimsEngine *engine, const char *name,
+                                          const GlimsColor *left, const GlimsColor *right,
+                                          GlimsResourceID *out, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
