@@ -55,6 +55,11 @@ struct GlimsEngine
 typedef struct GlimsItemSets GlimsItemSets;
 GlimsItemSets * glims_item_sets_new  (GimpImage *image);
 void            glims_item_sets_free (GlimsItemSets *manager);
+GlimsItemSets * glims_item_sets_lookup (GimpImage *image); /* borrowed */
+GPtrArray *     glims_item_sets_copy_members (GlimsItemSets *manager, GimpItemList *native);
+void            glims_item_sets_restore_members (GlimsItemSets *manager, GimpItemList *native,
+                                                 const GPtrArray *members);
+void            glims_item_sets_refresh (GlimsItemSets *manager);
 
 /* item-sets-undo.c: atomic native undo steps for explicit saved-set edits.
  * Engine-internal commands (no facade slot); run on the engine thread.

@@ -91,10 +91,8 @@ capture_snapshot (GimpImage *image, GType kind)
       def->members = g_ptr_array_new_with_free_func (g_object_unref);
       if (! def->is_pattern)
         {
-          GList *items = gimp_item_list_get_items (native, NULL);
-          for (GList *item = items; item; item = item->next)
-            g_ptr_array_add (def->members, g_object_ref (item->data));
-          g_list_free (items);
+          g_ptr_array_unref (def->members);
+          def->members = glims_item_sets_copy_members (glims_item_sets_lookup (image), native);
         }
       g_ptr_array_add (snap->defs, def);
     }
@@ -133,7 +131,11 @@ restore_snapshot (GimpImage *image, const GlimsSetSnapshot *snap)
         {
           GList *items = NULL;
           for (guint m = 0; m < def->members->len; m++)
-            items = g_list_prepend (items, g_ptr_array_index (def->members, m));
+            {
+              GimpItem *member = g_ptr_array_index (def->members, m);
+              if (gimp_item_get_image (member) == image && gimp_item_is_attached (member))
+                items = g_list_prepend (items, member);
+            }
           items = g_list_reverse (items);
           /* items=NULL is an explicit empty set (the xcf-load route);
            * never named_new(NULL), which captures the active selection. */
@@ -147,7 +149,10 @@ restore_snapshot (GimpImage *image, const GlimsSetSnapshot *snap)
           g_list_free (items);
         }
       gimp_image_store_item_set (image, set); /* transfer full */
+      if (! def->is_pattern)
+        glims_item_sets_restore_members (glims_item_sets_lookup (image), set, def->members);
     }
+  glims_item_sets_refresh (glims_item_sets_lookup (image));
 }
 
 /* ---- the undo subtype --------------------------------------------------- */
@@ -354,7 +359,14 @@ validate_members (GimpImage *image, GType kind, GimpItem *const *members, size_t
     {
       GimpItem *item = members[i];
 
-      if (item == NULL || ! GIMP_IS_ITEM (item) || ! g_type_is_a (G_OBJECT_TYPE (item), kind))
+      /* Compare pointer values with the owned live tree before type checks:
+       * an invalid/detached input must never be dereferenced as a GObject. */
+      if (! g_hash_table_contains (live, item))
+        {
+          if (error) *error = g_strdup ("A saved-set member is not attached to the image.");
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        }
+      if (! GIMP_IS_ITEM (item) || ! g_type_is_a (G_OBJECT_TYPE (item), kind))
         {
           if (error)
             *error = g_strdup ("A saved-set member is not an item of the set's kind.");
@@ -364,12 +376,6 @@ validate_members (GimpImage *image, GType kind, GimpItem *const *members, size_t
         {
           if (error)
             *error = g_strdup ("A saved-set member belongs to another image.");
-          return GLIMS_STATUS_INVALID_ARGUMENT;
-        }
-      if (! g_hash_table_contains (live, item))
-        {
-          if (error)
-            *error = g_strdup ("A saved-set member is not attached to the image.");
           return GLIMS_STATUS_INVALID_ARGUMENT;
         }
       for (size_t j = 0; j < i; j++)
@@ -387,16 +393,16 @@ validate_members (GimpImage *image, GType kind, GimpItem *const *members, size_t
  * validated request (duplicates were already rejected, so length plus
  * subset implies equality). */
 static gboolean
-members_equal_current (GimpItemList *set, GimpItem *const *members, size_t count)
+members_equal_current (GimpImage *image, GimpItemList *set, GimpItem *const *members, size_t count)
 {
-  GList *items = gimp_item_list_get_items (set, NULL);
-  gboolean equal = g_list_length (items) == count;
+  GPtrArray *items = glims_item_sets_copy_members (glims_item_sets_lookup (image), set);
+  gboolean equal = items->len == count;
 
-  for (GList *iter = items; equal && iter; iter = iter->next)
+  for (guint m = 0; equal && m < items->len; m++)
     {
       gboolean found = FALSE;
       for (size_t i = 0; i < count; i++)
-        if (members[i] == iter->data)
+        if (members[i] == g_ptr_array_index (items, m))
           {
             found = TRUE;
             break;
@@ -404,7 +410,7 @@ members_equal_current (GimpItemList *set, GimpItem *const *members, size_t count
       if (! found)
         equal = FALSE;
     }
-  g_list_free (items);
+  g_ptr_array_unref (items);
   return equal;
 }
 
@@ -429,11 +435,11 @@ run_set_command (GimpImage *image, GType kind, const char *name, const char *new
   GHashTable       *live;
   GimpItemList     *existing;
   GlimsStatus       status;
-  GlimsSetSnapshot *before_keep, *before_push, *after_keep, *after_push;
-  GimpUndo         *undo;
+  GlimsSetSnapshot *before_push, *after_push;
   const gchar      *undo_name;
 
-  if (! valid_kind (kind) || name == NULL || *name == '\0')
+  if (! image || ! glims_item_sets_lookup (image) ||
+      ! valid_kind (kind) || name == NULL || *name == '\0')
     {
       if (error)
         *error = g_strdup ("A saved set needs a supported item kind and a name.");
@@ -464,16 +470,6 @@ run_set_command (GimpImage *image, GType kind, const char *name, const char *new
         }
     }
 
-  /* Frozen preflight: refuse before mutating. A push while frozen would
-   * still mark the image dirty (gimp_image_undo_push dirties before its
-   * freeze check), so the check must happen here, not after the fact. */
-  if (! gimp_image_undo_is_enabled (image))
-    {
-      g_hash_table_unref (live);
-      if (error)
-        *error = g_strdup ("The image's undo stack is frozen.");
-      return GLIMS_STATUS_FAILED;
-    }
 
   existing = find_fixed_set (image, kind, name);
   switch (operation)
@@ -497,7 +493,7 @@ run_set_command (GimpImage *image, GType kind, const char *name, const char *new
           return GLIMS_STATUS_NOT_FOUND;
         }
       /* No-op: identical definition. No undo step, no dirty, no mutation. */
-      if (members_equal_current (existing, members, member_count))
+      if (members_equal_current (image, existing, members, member_count))
         {
           g_hash_table_unref (live);
           return GLIMS_STATUS_OK;
@@ -538,10 +534,19 @@ run_set_command (GimpImage *image, GType kind, const char *name, const char *new
       break;
     }
 
-  /* Captured twice: the push consumes (and on immediate expiry frees) its
-   * own copies; the kept copies roll the mutation back if the push cannot
-   * keep the step. */
-  before_keep = capture_snapshot (image, kind);
+  /* Frozen preflight: refuse before mutating. A push while frozen would
+   * still mark the image dirty (gimp_image_undo_push dirties before its
+   * freeze check), so the check must happen here, not after the fact. */
+  if (! gimp_image_undo_is_enabled (image))
+    {
+      g_hash_table_unref (live);
+      if (error)
+        *error = g_strdup ("The image's undo stack is frozen.");
+      return GLIMS_STATUS_FAILED;
+    }
+
+  /* The undo owns these snapshots even if native limits immediately expire
+   * the pushed step. No borrowed Undo pointer is read or retained. */
   before_push = capture_snapshot (image, kind);
 
   switch (operation)
@@ -569,6 +574,7 @@ run_set_command (GimpImage *image, GType kind, const char *name, const char *new
 
     case GLIMS_SET_OP_RENAME:
       {
+        GPtrArray *definition = glims_item_sets_copy_members (glims_item_sets_lookup (image), existing);
         GList *items = gimp_item_list_get_items (existing, NULL);
         GimpItemList *set = g_object_new (GIMP_TYPE_ITEM_LIST,
                                           "image",      image,
@@ -578,7 +584,10 @@ run_set_command (GimpImage *image, GType kind, const char *name, const char *new
                                           "items",      items,
                                           NULL);
         gimp_image_store_item_set (image, set);
+        glims_item_sets_restore_members (glims_item_sets_lookup (image), set, definition);
         gimp_image_unlink_item_set (image, existing);
+        glims_item_sets_refresh (glims_item_sets_lookup (image));
+        g_ptr_array_unref (definition);
         g_list_free (items);
       }
       break;
@@ -588,7 +597,6 @@ run_set_command (GimpImage *image, GType kind, const char *name, const char *new
       break;
     }
 
-  after_keep = capture_snapshot (image, kind);
   after_push = capture_snapshot (image, kind);
 
   switch (operation)
@@ -599,33 +607,16 @@ run_set_command (GimpImage *image, GType kind, const char *name, const char *new
     default:                   undo_name = "Remove saved set";  break;
     }
 
-  undo = gimp_image_undo_push (image, GLIMS_TYPE_ITEM_SETS_UNDO,
+  gimp_image_undo_push (image, GLIMS_TYPE_ITEM_SETS_UNDO,
                                GIMP_UNDO_IMAGE_METADATA, undo_name,
                                GIMP_DIRTY_IMAGE_META,
                                "before", before_push,
                                "after",  after_push,
                                NULL);
-  if (undo == NULL)
-    {
-      /* Frozen was preflighted above, so NULL means the push was purged
-       * right after construction (the constructed undo consumed and freed
-       * before_push/after_push). Roll the mutation back: restore the kept
-       * before snapshot and revert the dirty mark the push applied. The
-       * redo stack the push nuked is not restored (engine contract). */
-      restore_snapshot (image, before_keep);
-      gimp_image_clean (image, GIMP_DIRTY_IMAGE_META);
-      snapshot_free (before_keep);
-      snapshot_free (after_keep);
-      g_hash_table_unref (live);
-      if (error)
-        *error = g_strdup ("The undo step could not be kept on the stack.");
-      return GLIMS_STATUS_FAILED;
-    }
-  /* The returned handle is borrowed (the stack owns the undo and may expire
-   * it at any time); never retain it across calls. */
-
-  snapshot_free (before_keep);
-  snapshot_free (after_keep);
+  /* Native undo limits may immediately expire this new step. As with
+   * native editing commands, the edit remains successful and dirty; there
+   * is no FAILED result after mutation and no attempt to reconstruct dirty
+   * or redo state. Frozen-stack refusal was preflighted before mutation. */
   g_hash_table_unref (live);
   return GLIMS_STATUS_OK;
 }

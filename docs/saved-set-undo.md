@@ -1,9 +1,10 @@
 # Native undo for explicit saved-set edits
 
 Engine-internal slice on top of the weak-identity item-set manager
-(`Engine/item-sets.c`, `docs/saved-set-lifetimes.md`). Adds atomic native
+(`Engine/item-sets.c`, `docs/saved-set-lifetimes.md`). Adds native
 Undo/Redo snapshots for the four explicit saved-set commands
-CREATE/REPLACE/RENAME/REMOVE. No facade slot, no `glims_engine.h` change, API
+CREATE/REPLACE/RENAME/REMOVE. Native stack limits may immediately expire
+a new step while the edit remains applied, as with other native commands. No facade slot, no `glims_engine.h` change, API
 version stays 1 and the prefix ABI is untouched: the commands are declared in
 `Engine/engine-private.h` and live in `Engine/item-sets-undo.c`.
 
@@ -17,7 +18,7 @@ version stays 1 and the prefix ABI is untouched: the commands are declared in
 
 ## Design (source-backed against `_engine/src/*/gimp/app/core`)
 
-- **One plain undo step per command, never a group.** `gimp_image_undo_push`
+- **One plain undo step per command when retained, never a group.** `gimp_image_undo_push`
   accepts any `GimpUndo` subtype (`gimpimage-undo.c:369-371`), so the subtype
   is `GlimsItemSetsUndo` (derives `GIMP_TYPE_UNDO`, `pop`/`free` vfuncs chain
   the parent, per the `GimpGuideUndo`/`GimpImageUndo` pattern). Empty groups
@@ -33,7 +34,7 @@ version stays 1 and the prefix ABI is untouched: the commands are declared in
   `GIMP_IS_IMAGE_UNDO`. Raw enum values never cross the facade.
 - **Owned before/after snapshots.** Each snapshot is a deep copy of the
   image's whole stored-set list of the affected kind (stored-list order;
-  name, pattern flag, select method; member list with strong refs). The
+  name, pattern flag, select method; full weak-definition member list copied into strong refs, including detached-but-alive identities). The
   strong member refs are what Undo explicitly requires: a popped step can
   restore the same live identity even while the member's own deletion undo
   is pending. The snapshots are construct-only pointer properties, so they
@@ -52,15 +53,22 @@ version stays 1 and the prefix ABI is untouched: the commands are declared in
   type/image/attached/duplicates), no-op detection (identical REPLACE,
   same-name RENAME → OK with zero delta), duplicate-name and missing-target
   errors, and the frozen check `gimp_image_undo_is_enabled()` all run before
-  anything mutates: a refused command preserves state, history and dirty
+  anything mutates: a refused preflight preserves state, history and dirty
   exactly (a push while frozen would still dirty the image —
   `gimpimage-undo.c:375-382` — hence the pre-push check).
-- **Immediate-purge rollback.** If the push returns NULL after construction
-  (only reachable when frozen was preflighted and `free_space` purged the new
-  top), the command restores the kept before-snapshot and reverts the dirty
-  mark, returning FAILED. The redo stack the push nuked is not restored
-  (engine contract). Not exercised by the harness: the undo limits are far
-  above one small step.
+- **Native expiry remains a successful edit.** A push may immediately expire
+  its new step under native stack limits. The requested edit stays applied
+  and dirty and the redo stack follows native push semantics. No borrowed
+  Undo pointer is retained, and no post-mutation FAILED result or dirty-state
+  rollback is attempted. The original helper branch incorrectly rolled back
+  metadata/dirty while leaving redo destroyed; that claim is withdrawn.
+- **Full definitions across deletion Undo.** Snapshots copy the manager's
+  weak definition into owned refs, including detached-but-alive identities.
+  They do not use the exposed live-only native list as the full definition.
+  Restore imports those identities back as weak refs, then refreshes native
+  lists to attached members only. Rename preserves the full definition, and
+  Replace no-op detection compares it, so replacing an apparently empty set
+  with an explicit empty definition can clear a hidden deleted member.
 
 ## Manager hook
 
@@ -88,8 +96,7 @@ GlimsStatus glims_item_sets_remove  (GimpImage *, GType kind, const char *name, 
 target fixed (non-pattern) sets; pattern definitions are preserved by the
 snapshots untouched. Statuses: OK (mutated with one undo step, or a true
 no-op), INVALID_ARGUMENT (bad kind/name/members, duplicate name), NOT_FOUND
-(REPLACE/RENAME/REMOVE of an absent name), FAILED (frozen, or the
-immediate-purge rollback). `count == 0` creates an explicit empty set via the
+(REPLACE/RENAME/REMOVE of an absent name), FAILED (frozen). `count == 0` creates an explicit empty set via the
 same direct-construction route XCF loading uses — never
 `gimp_item_list_named_new(..., NULL)`, which captures the active selection.
 
@@ -98,8 +105,8 @@ same direct-construction route XCF loading uses — never
 Same producer-prefix pattern as `docs/saved-set-lifetime-tests.md`:
 
 ```sh
-python3 scripts/test-saved-set-undo.py \
-    --producer "$PWD/.build/engine-adapters/GIMP_3_2_8" all \
+python3 scripts/test-saved-set-undo.py all \
+    --producer "$PWD/.build/engine-adapters/GIMP_3_2_8" \
     --work "$(mktemp -d /tmp/glims-saved-set-undo.XXXXXX)"
 ```
 
@@ -112,30 +119,25 @@ Undo/Redo, the frozen refusal, the error preflights, deletion/purge
 interaction (detached omitted, weakly known, finalized never exposed), and a
 crash-free close with sets stored.
 
-## What was and was not checked
+## Acceptance evidence
 
-- Source-only verification against all four engine trees (`_engine/src/`)
-  of every API used: `gimp_image_undo_push` varargs (pointer properties via
-  `gimp_properties_append_valist`/`G_VALUE_COLLECT`), the freeze getter,
-  store/unlink/get_stored_item_sets semantics and signal, `GimpItemList`
-  construct properties (`items` is `g_list_copy` of borrowed pointers),
-  the undo-event signal, and the category-safety greps above.
-- `clang -fsyntax-only` with each engine set's own gimp-console flags
-  (`_engine/adapter/<ref>/compile.rsp`) passes for `Engine/item-sets.c`,
-  `Engine/item-sets-undo.c`, the other `engine-private.h` consumers, and the
-  harness on GIMP_3_2_8, GIMP_3_2_0, GIMP_3_0_8 and master.
-- Run under the native grant (private root only, pinned ref GIMP_3_2_8):
-  `GLIMS_ADAPTER_ROOT=$PWD/.build/engine-adapters scripts/build-adapter.sh
-  --test GIMP_3_2_8` — adapter built, dylib exports only
-  `glims_engine_get_api`, conformance PASSED with 1917 checks, 0 failures,
-  0 GLib CRITICALs. `scripts/test-saved-set-undo.py all --producer
-  $PWD/.build/engine-adapters/GIMP_3_2_8` — PASSED, 130 checks, 0 failures.
-  Regression control `scripts/test-saved-set-lifetimes.py all` against the
-  same private producer — PASSED, 188 checks, 0 failures.
-- Not run: the other engine sets (the grant named the pinned ref only), the
-  app/engine smoke (no facade or Swift change, so `swift build` was not
-  needed), and the immediate-purge rollback path (undo limits are far above
-  one small step; the branch is code-reviewed and documented instead).
-- Out of scope (unchanged): facade slots, Swift/UI, XCF persistence of the
-  new steps (XCF stores item sets as before), and any plug-in-visible
-  surface.
+The original helper passed 130 pinned checks but missed two important
+contracts. Root regressions reproduced five failures: rename while a member
+was detached lost its definition across UndoRename/UndoDelete; replacing an
+apparently empty exposed set with an explicit empty definition was mistaken
+for a no-op; and immediate native Undo expiry returned FAILED while rolling
+metadata/dirty back after redo had already been cleared.
+
+The corrected code passes all 150 standalone Undo checks and all 188 existing
+lifetime checks on every engine (3.2.8, 3.0.8, 3.2.0 and master), plus native
+conformance counts 1,917 / 1,703 / 1,917 / 1,917. The zero-byte/zero-minimum-
+level config fixture actually expires the newly pushed step, checks applied
+metadata/dirty/redo semantics, and restores the original config. Independent
+source review of the Root fix found no important issue; it verified manager
+lifetime, synchronous store/import ordering, detached-member filtering and
+native pop/free/expiry timing. It did not execute the matrix.
+
+No facade/UI surface is exposed by this slice. XCF keeps storing the resulting
+item-set definitions; Undo history itself is not serialized. Pattern definitions
+are preserved but are not editable through these fixed-set commands. The
+private commands require an adopted image with its live identity manager.

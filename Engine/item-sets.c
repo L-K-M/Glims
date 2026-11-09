@@ -55,6 +55,8 @@ struct GlimsItemSets
 static void rebuild_sets (GlimsItemSets *manager);
 static void watch_container (GlimsItemSets *manager, GimpContainer *container);
 
+#define ITEM_SETS_DATA_KEY "glims-owned-item-set-manager"
+
 static void
 weak_item_free (gpointer data)
 {
@@ -328,6 +330,7 @@ glims_item_sets_new (GimpImage *image)
   watch_container (manager, gimp_image_get_paths (image));
   manager->sets_changed = g_signal_connect (image, "item-sets-changed", G_CALLBACK (sets_changed), manager);
   manager->undo_event = g_signal_connect (image, "undo-event", G_CALLBACK (undo_event), manager);
+  g_object_set_data (G_OBJECT (image), ITEM_SETS_DATA_KEY, manager);
   return manager;
 }
 
@@ -336,9 +339,59 @@ glims_item_sets_free (GlimsItemSets *manager)
 {
   if (! manager)
     return;
+  g_object_set_data (G_OBJECT (manager->image), ITEM_SETS_DATA_KEY, NULL);
   g_signal_handler_disconnect (manager->image, manager->sets_changed);
   g_signal_handler_disconnect (manager->image, manager->undo_event);
   g_ptr_array_unref (manager->watches);
   g_ptr_array_unref (manager->sets);
   g_free (manager);
+}
+
+GlimsItemSets *
+glims_item_sets_lookup (GimpImage *image)
+{
+  return g_object_get_data (G_OBJECT (image), ITEM_SETS_DATA_KEY);
+}
+
+/* Snapshot all still-alive identities, including detached objects owned by
+ * deletion Undo. The exposed native list intentionally contains only attached
+ * members and cannot represent the definition that a later Undo must restore.
+ * This array owns refs; the manager continues to hold only weak refs. */
+GPtrArray *
+glims_item_sets_copy_members (GlimsItemSets *manager, GimpItemList *native)
+{
+  FixedSet *set = find_set (manager, native);
+  GPtrArray *members = g_ptr_array_new_with_free_func (g_object_unref);
+  g_return_val_if_fail (set != NULL, members);
+  for (guint i = 0; i < set->members->len; i++)
+    {
+      WeakItem *weak = g_ptr_array_index (set->members, i);
+      GObject *object = g_weak_ref_get (&weak->object);
+      if (object) g_ptr_array_add (members, object);
+    }
+  return members;
+}
+
+/* store_item_set emits its signal synchronously and imports a live-only
+ * definition. Replace that imported mirror with the snapshot's full weak
+ * definition before the final refresh reconstructs the exposed live list. */
+void
+glims_item_sets_restore_members (GlimsItemSets *manager, GimpItemList *native,
+                                 const GPtrArray *members)
+{
+  FixedSet *set = find_set (manager, native);
+  g_return_if_fail (set != NULL);
+  g_ptr_array_set_size (set->members, 0);
+  for (guint i = 0; i < members->len; i++)
+    {
+      WeakItem *weak = g_new0 (WeakItem, 1);
+      g_weak_ref_init (&weak->object, g_ptr_array_index (members, i));
+      g_ptr_array_add (set->members, weak);
+    }
+}
+
+void
+glims_item_sets_refresh (GlimsItemSets *manager)
+{
+  rebuild_sets (manager);
 }

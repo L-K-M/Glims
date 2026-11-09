@@ -56,6 +56,8 @@
 #include "core/gimpgrouplayer.h"
 #include "core/gimpundostack.h"
 
+#include "config/gimpcoreconfig.h"
+
 int main (int argc, char **argv);
 
 #define MAX_SETS 16
@@ -336,6 +338,86 @@ arm_oracle (Probe *probe, GWeakRef *wr, gpointer *addr_slot, GimpLayer *layer)
   (void) probe;
   *addr_slot = (gpointer) layer;
   g_weak_ref_init (wr, layer);
+}
+
+/* Independent regressions for hidden definitions and native stack expiry. */
+static GlimsStatus
+root_regressions (GlimsEngine *engine, Probe *probe)
+{
+  GlimsImageID id = 0;
+  char *error = NULL;
+  GlimsStatus result = api->image_new (engine, 64, 64, &id, &error);
+  FIXTURE (result == GLIMS_STATUS_OK, "[root setup] image created");
+  GimpImage *image = glims_lookup_image (engine, id)->image;
+  GimpLayer *member = add_layer (probe, image, NULL, "detached-original");
+  FIXTURE (member != NULL, "[root setup] member attached");
+  GWeakRef weak;
+  g_weak_ref_init (&weak, member);
+  ExpectedMember expected = { member, &weak };
+  GimpItem *items[] = { GIMP_ITEM (member) };
+  result = glims_item_sets_create (image, GIMP_TYPE_LAYER, "S", items, 1, &error);
+  FIXTURE (result == GLIMS_STATUS_OK, "[root setup] definition created");
+  gimp_image_remove_layer (image, member, TRUE, NULL);
+  CHECK (oracle_alive (&weak), "[root detached] deletion Undo owns original member");
+  expect_set (probe, image, "S", &expected, 1, "root detached hidden");
+  result = glims_item_sets_rename (image, GIMP_TYPE_LAYER, "S", "R", &error);
+  CHECK (result == GLIMS_STATUS_OK, "[root rename] rename with a detached member succeeds");
+  CHECK (gimp_image_undo (image), "[root rename] Undo rename");
+  expect_set (probe, image, "S", &expected, 1, "root rename undone, still detached");
+  CHECK (gimp_image_undo (image), "[root rename] Undo original member deletion");
+  CHECK (oracle_addr (&weak) == expected.address, "[root rename] original object identity restored");
+  expect_set (probe, image, "S", &expected, 1, "root definition after Undo rename/delete");
+
+  CHECK (gimp_image_redo (image), "[root replace] detach original member again");
+  EngineState before = capture_state (image);
+  result = glims_item_sets_replace (image, GIMP_TYPE_LAYER, "S", NULL, 0, &error);
+  EngineState after = capture_state (image);
+  CHECK (result == GLIMS_STATUS_OK && after.undo == before.undo + 1 && after.redo == 0,
+         "[root replace] explicit empty definition changes a hidden nonempty definition");
+  if (after.undo == before.undo + 1)
+    {
+      CHECK (gimp_image_undo (image), "[root replace] Undo empty definition");
+      CHECK (gimp_image_undo (image), "[root replace] Undo member deletion");
+      expect_set (probe, image, "S", &expected, 1, "root full definition after empty replace");
+    }
+  if (error) { api->free_string (error); error = NULL; }
+  CHECK (api->image_close (engine, id) == GLIMS_STATUS_OK, "[root detached] fixture closes");
+  g_weak_ref_clear (&weak);
+
+  /* Both public config limits accept zero. Native free_space expires the
+   * new top inside gimp_image_undo_push, after it has dirtied the image. */
+  result = api->image_new (engine, 16, 16, &id, &error);
+  FIXTURE (result == GLIMS_STATUS_OK, "[root expiry setup] image created");
+  image = glims_lookup_image (engine, id)->image;
+  char path[1024];
+  snprintf (path, sizeof path, "%s/root-expiry-clean.xcf", probe->work);
+  result = api->image_save (engine, id, path, &error);
+  FIXTURE (result == GLIMS_STATUS_OK, "[root expiry setup] clean savepoint");
+  result = glims_item_sets_create (image, GIMP_TYPE_LAYER, "redo-seed", NULL, 0, &error);
+  FIXTURE (result == GLIMS_STATUS_OK && gimp_image_undo (image), "[root expiry setup] redo exists");
+  gint previous_levels = 0;
+  guint64 previous_size = 0;
+  g_object_get (engine->gimp->config, "undo-levels", &previous_levels,
+                "undo-size", &previous_size, NULL);
+  g_object_set (engine->gimp->config, "undo-levels", 0,
+                "undo-size", (guint64) 0, NULL);
+  before = capture_state (image);
+  CHECK (before.redo > 0 && !gimp_image_is_dirty (image),
+         "[root expiry setup] zero limits preserve clean baseline and redo until push");
+  result = glims_item_sets_create (image, GIMP_TYPE_LAYER, "expired-edit", NULL, 0, &error);
+  after = capture_state (image);
+  g_object_set (engine->gimp->config, "undo-levels", previous_levels,
+                "undo-size", previous_size, NULL);
+  CHECK (result == GLIMS_STATUS_OK && error == NULL,
+         "[root expiry] applied edit succeeds even when its native Undo expires");
+  CHECK (find_set (image, "expired-edit", GIMP_TYPE_LAYER) != NULL,
+         "[root expiry] requested definition remains applied");
+  CHECK (gimp_image_is_dirty (image), "[root expiry] applied edit stays dirty");
+  CHECK (after.undo == 0 && after.redo == 0,
+         "[root expiry] new Undo really expired and native push cleared redo");
+  if (error) { api->free_string (error); error = NULL; }
+  CHECK (api->image_close (engine, id) == GLIMS_STATUS_OK, "[root expiry] fixture closes");
+  return GLIMS_STATUS_OK;
 }
 
 static GlimsStatus
@@ -731,6 +813,8 @@ run_all (GlimsEngine *engine, gpointer data)
   expect_set (probe, image, "u-del", (ExpectedMember[1]) {{probe->addr_g, &probe->wr_g}}, 1, "purge");
   expect_set (probe, image, "u-sel", exp_g_gc, 2, "purge");
   expect_pattern (probe, image, "u-*", GIMP_SELECT_GLOB_PATTERN, "purge");
+
+  root_regressions (engine, probe);
 
   /* Teardown: close with sets still stored — must not crash. */
   status = api->image_close (engine, probe->image_id);
