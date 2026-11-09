@@ -57,18 +57,24 @@ typedef struct {
   GlimsItemID    selected[MAX_ROWS];
   int32_t        selected_count;
   char           engine_version[32];
+  bool           valid;
 } Snapshot;
 
 static void
 snapshot_take (GlimsImageID image, Snapshot *s)
 {
   memset (s, 0, sizeof *s);
-  api->image_render (engine, image, 1.0, (GlimsRect) { 0, 0, IMG_W, IMG_H }, s->pixels, IMG_W * 4);
-  api->image_layers (engine, image, s->layers, MAX_ROWS, &s->layer_count);
-  api->image_undo_info (engine, image, &s->undo);
-  api->image_info (engine, image, &s->info);
-  api->image_selected_layers (engine, image, s->selected, MAX_ROWS, &s->selected_count);
-  snprintf (s->engine_version, sizeof s->engine_version, "%s", api->engine_version (engine));
+  const char *version = api->engine_version (engine);
+  s->valid = version &&
+    api->image_render (engine, image, 1.0, (GlimsRect) { 0, 0, IMG_W, IMG_H }, s->pixels, IMG_W * 4) == GLIMS_STATUS_OK &&
+    api->image_layers (engine, image, s->layers, MAX_ROWS, &s->layer_count) == GLIMS_STATUS_OK &&
+    s->layer_count >= 0 && s->layer_count <= MAX_ROWS &&
+    api->image_undo_info (engine, image, &s->undo) == GLIMS_STATUS_OK &&
+    api->image_info (engine, image, &s->info) == GLIMS_STATUS_OK &&
+    api->image_selected_layers (engine, image, s->selected, MAX_ROWS, &s->selected_count) == GLIMS_STATUS_OK &&
+    s->selected_count >= 0 && s->selected_count <= MAX_ROWS;
+  if (version) snprintf (s->engine_version, sizeof s->engine_version, "%s", version);
+  CHECK (s->valid, "all snapshot reads succeed within their fixed capacities");
 }
 
 static bool
@@ -87,6 +93,10 @@ snapshot_same (const Snapshot *a, const Snapshot *b)
 {
   int32_t i;
 
+  if (!a->valid || !b->valid || a->layer_count < 0 || a->layer_count > MAX_ROWS ||
+      b->layer_count < 0 || b->layer_count > MAX_ROWS ||
+      a->selected_count < 0 || a->selected_count > MAX_ROWS ||
+      b->selected_count < 0 || b->selected_count > MAX_ROWS) return false;
   if (memcmp (a->pixels, b->pixels, sizeof a->pixels) != 0 || a->layer_count != b->layer_count)
     return false;
   for (i = 0; i < a->layer_count; i++)
@@ -134,13 +144,10 @@ composite_is (GlimsImageID image, int r, int g, int b, int tol)
 static GlimsImageID
 new_white_image (void)
 {
-  GlimsFillSettings fill = { .struct_size = sizeof fill, .mode = GLIMS_FILL_SELECTION,
-                             .color = { 1, 1, 1, 1 }, .opacity = 1 };
   GlimsImageID      image = 0;
 
   if (api->image_new (engine, IMG_W, IMG_H, &image, NULL) != GLIMS_STATUS_OK)
     return 0;
-  api->fill (engine, image, (GlimsPoint) { 1, 1 }, &fill, NULL);
   return image;
 }
 
@@ -190,8 +197,10 @@ test_positive_invert (const char *work)
 
   image = new_white_image ();
   CHECK (image != 0 && composite_is (image, 255, 255, 255, 1), "a white background layer");
+  if (!image) return;
   bg = first_layer (image);
   snapshot_take (image, &base);
+  CHECK (!base.info.dirty && base.undo.undo_count == 0, "the creation baseline is clean with empty history");
   depth = undo_depth (image);
 
   status = api->adjustment_layer_new (engine, image, 0, 0, "gegl:invert-gamma", "Invert", &layer, &effect, &error);
@@ -199,6 +208,7 @@ test_positive_invert (const char *work)
          error ? ": " : "", error ? error : "");
   api->free_string (error);
   error = NULL;
+  if (status != GLIMS_STATUS_OK) { api->image_close (engine, image); return; }
 
   CHECK (api->image_layers (engine, image, rows, MAX_ROWS, &n) == GLIMS_STATUS_OK && n == 2 &&
          rows[0].id == layer && rows[0].kind == GLIMS_LAYER_GROUP &&
@@ -210,13 +220,6 @@ test_positive_invert (const char *work)
          effects[0].enabled, "the effect is readable via drawable_effects with the returned id");
   CHECK (composite_is (image, 0, 0, 0, 1), "invert-gamma over white composites full black");
 
-  change = (GlimsEffectChange) { .struct_size = sizeof change, .properties = GLIMS_EFFECT_ENABLED, .enabled = false };
-  CHECK (api->effect_change (engine, image, layer, effect, &change, NULL) == GLIMS_STATUS_OK &&
-         undo_depth (image) == depth + 2 && composite_is (image, 255, 255, 255, 1),
-         "a hidden effect leaves the background unchanged (white)");
-  change.enabled = true;
-  CHECK (api->effect_change (engine, image, layer, effect, &change, NULL) == GLIMS_STATUS_OK &&
-         composite_is (image, 0, 0, 0, 1), "re-enabled: full black again");
 
   CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
          api->image_layers (engine, image, rows, MAX_ROWS, &n) == GLIMS_STATUS_OK && n == 1 &&
@@ -233,6 +236,15 @@ test_positive_invert (const char *work)
          api->drawable_effects (engine, image, layer, effects, 4, &count) == GLIMS_STATUS_OK &&
          count == 1 && effects[0].id == effect && composite_is (image, 0, 0, 0, 1),
          "redo restores the same layer and effect ids, black again");
+
+  change = (GlimsEffectChange) { .struct_size = sizeof change, .properties = GLIMS_EFFECT_ENABLED, .enabled = false };
+  CHECK (api->effect_change (engine, image, layer, effect, &change, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 2 && composite_is (image, 255, 255, 255, 1),
+         "a hidden effect leaves the background unchanged (white)");
+  change.enabled = true;
+  CHECK (api->effect_change (engine, image, layer, effect, &change, NULL) == GLIMS_STATUS_OK &&
+         composite_is (image, 0, 0, 0, 1), "re-enabled: full black again");
+
 
   snprintf (xcf, sizeof xcf, "%s/adjustment.xcf", work);
   CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
@@ -258,7 +270,9 @@ test_positive_invert (const char *work)
 static void
 test_filter_edit_lifecycle (void)
 {
-  GlimsImageID        image, bg;
+  GlimsImageID        image;
+  GlimsItemID         target = 0;
+  GlimsEffectID       target_effect = 0;
   GlimsFilterID       filter = 0;
   GlimsFilterProperty *props;
   GlimsLayerInfo      rows[MAX_ROWS];
@@ -272,20 +286,27 @@ test_filter_edit_lifecycle (void)
 
   image = new_white_image ();
   if (! image) { CHECK (false, "no image for the filter edit test"); return; }
-  bg = first_layer (image);
+  GlimsStatus created = api->adjustment_layer_new (engine, image, 0, 0,
+      "gegl:brightness-contrast", "Editable Adjustment", &target, &target_effect, NULL);
+  CHECK (created == GLIMS_STATUS_OK && target > 0 && target_effect > 0, "an adjustment group is ready for effect editing");
+  if (created != GLIMS_STATUS_OK) { api->image_close (engine, image); return; }
 
   CHECK (api->filter_operation_properties (engine, "gegl:brightness-contrast", NULL, 0, &pn) == GLIMS_STATUS_OK &&
          pn > 0, "gegl:brightness-contrast exposes %d editable properties", pn);
-  props = calloc ((size_t) pn, sizeof *props);
-  if (props && api->filter_operation_properties (engine, "gegl:brightness-contrast", props, pn, &pn) == GLIMS_STATUS_OK)
+  if (pn <= 0 || pn > 4096) { api->image_close (engine, image); return; }
+  int32_t capacity = pn;
+  props = calloc ((size_t) capacity, sizeof *props);
+  if (props && api->filter_operation_properties (engine, "gegl:brightness-contrast", props, capacity, &pn) == GLIMS_STATUS_OK
+      && pn >= 0 && pn <= capacity)
     for (i = 0; i < pn; i++)
       if (strcmp (props[i].name, "brightness") == 0 && props[i].kind == GLIMS_FILTER_VALUE_NUMBER)
         { brightness_min = props[i].min; found = true; }
   CHECK (found, "the parametric brightness property is discovered with its bounds");
   free (props);
+  if (!found) { api->image_close (engine, image); return; }
 
   depth = undo_depth (image);
-  CHECK (api->filter_begin (engine, image, bg, "gegl:brightness-contrast", &filter, &error) == GLIMS_STATUS_OK &&
+  CHECK (api->filter_edit_begin (engine, image, target, target_effect, &filter, &error) == GLIMS_STATUS_OK &&
          filter != 0, "the generic filter session opens%s%s", error ? ": " : "", error ? error : "");
   api->free_string (error);
   error = NULL;
@@ -300,14 +321,14 @@ test_filter_edit_lifecycle (void)
          ! composite_is (image, 255, 255, 255, 1), "setting brightness to its bound previews a darker composite");
   CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK && undo_depth (image) == depth &&
          composite_is (image, 255, 255, 255, 1), "abort leaves no undo and restores the white preview");
-  CHECK (api->filter_begin (engine, image, bg, "gegl:brightness-contrast", &filter, NULL) == GLIMS_STATUS_OK &&
+  CHECK (api->filter_edit_begin (engine, image, target, target_effect, &filter, NULL) == GLIMS_STATUS_OK &&
          api->filter_set_double (engine, filter, "brightness", brightness_min) == GLIMS_STATUS_OK &&
          api->filter_commit (engine, filter, NULL) == GLIMS_STATUS_OK && undo_depth (image) == depth + 1 &&
          ! composite_is (image, 255, 255, 255, 1), "commit applies the edit as exactly one undo step");
   CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == depth &&
          composite_is (image, 255, 255, 255, 1), "one undo removes the committed filter edit, white again");
-  CHECK (api->image_layers (engine, image, rows, MAX_ROWS, &n) == GLIMS_STATUS_OK && n == 1,
-         "the filter edit never touched the layer tree");
+  CHECK (api->image_layers (engine, image, rows, MAX_ROWS, &n) == GLIMS_STATUS_OK && n == 2 && rows[0].id == target,
+         "the effect edit preserves the adjustment group and background");
   api->image_close (engine, image);
 }
 
@@ -464,10 +485,15 @@ main (int argc, char **argv)
   CHECK (api && api->struct_size >= sizeof (GlimsEngineAPI),
          "library struct_size %u covers sizeof (GlimsEngineAPI) %zu explicitly",
          api ? api->struct_size : 0, sizeof (GlimsEngineAPI));
-  CHECK (api && api->adjustment_layer_new != NULL, "slot 130 adjustment_layer_new is present");
-  if (! api || api->api_version != GLIMS_ENGINE_API_VERSION ||
-      api->struct_size < sizeof (GlimsEngineAPI) || ! api->adjustment_layer_new)
-    return 1;
+  if (!api || api->api_version != GLIMS_ENGINE_API_VERSION || api->struct_size < sizeof (GlimsEngineAPI))
+    { dlclose (library); return 1; }
+  CHECK (api->adjustment_layer_new != NULL, "slot 130 adjustment_layer_new is present");
+  if (!api->adjustment_layer_new) { dlclose (library); return 1; }
+  GlimsItemID absent_layer = 123;
+  GlimsEffectID absent_effect = 456;
+  CHECK (api->adjustment_layer_new (NULL, 0, 0, 0, "gegl:invert-gamma", NULL,
+      &absent_layer, &absent_effect, NULL) == GLIMS_STATUS_NOT_RUNNING && absent_layer == 0 && absent_effect == 0,
+      "no running engine resets both prefilled outputs before dispatch");
   CHECK (get_api (GLIMS_ENGINE_API_VERSION + 1) == NULL, "an unknown facade version is refused");
 
   snprintf (user_dir, sizeof user_dir, "%s/user", argv[2]);
