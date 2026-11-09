@@ -72,12 +72,12 @@ final class ImageAdjustMenuTests: XCTestCase {
     func testDedicatedBrightnessContrastAppearsWithoutAdmittingOtherConfigs() {
         let menu = MainMenu.make()
         let brightness = operation("gimp:brightness-contrast", support: .needsConfig)
-        let curves = operation("gimp:curves", support: .needsConfig)
-        NativeFilterMenus.install(operations + [brightness, curves], in: menu)
+        let unknown = operation("gimp:future-config", support: .needsConfig)
+        NativeFilterMenus.install(operations + [brightness, unknown], in: menu)
         XCTAssertEqual(nativeNames(adjust(menu)), ["gimp:brightness-contrast", "gimp:threshold", "gegl:invert-gamma", "gegl:invert-linear"])
         XCTAssertEqual(adjust(menu).items.first?.title, "Brightness/Contrast…")
         XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(brightness))
-        XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(curves))
+        XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(unknown))
     }
 
     func testDedicatedColorBalanceAppearsAlongsideBrightnessContrast() {
@@ -95,12 +95,12 @@ final class ImageAdjustMenuTests: XCTestCase {
     func testDedicatedHueSaturationKeepsOtherConfigGates() {
         let menu = MainMenu.make()
         let hue = operation("gimp:hue-saturation", support: .needsConfig)
-        let curves = operation("gimp:curves", support: .needsConfig)
+        let unknown = operation("gimp:future-config", support: .needsConfig)
         let levels = operation("gimp:levels", support: .needsConfig)
-        NativeFilterMenus.install(operations + [hue, curves, levels], in: menu)
+        NativeFilterMenus.install(operations + [hue, unknown, levels], in: menu)
         XCTAssertEqual(nativeNames(adjust(menu)), ["gimp:hue-saturation", "gimp:levels", "gimp:threshold", "gegl:invert-gamma", "gegl:invert-linear"])
         XCTAssertEqual(adjust(menu).items.first?.title, "Hue/Saturation…")
-        XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(curves))
+        XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(unknown))
         XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(levels))
     }
 

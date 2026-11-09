@@ -89,7 +89,7 @@ final class ColorBalanceSettingsTests: XCTestCase {
             ("gimp:color-balance-legacy", "near name"),
             ("gegl:color-balance", "GEGL alias/namespace mismatch"),
             ("GIMP:COLOR-BALANCE", "case mismatch"),
-            ("gimp:curves", "unrelated curves"),
+            ("gimp:future-config", "unrelated config"),
         ]
         for (name, label) in nearOrUnrelated {
             let value = operation(name, support: .needsConfig)

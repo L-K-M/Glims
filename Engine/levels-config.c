@@ -1,5 +1,6 @@
 /* Whole owned Levels values; native objects stay on the engine thread. */
 #include "levels-config.h"
+#include "point-config-trc.h"
 
 #include <math.h>
 #include <string.h>
@@ -83,33 +84,6 @@ valid_cursor (GimpHistogramChannel channel)
          channel == GIMP_HISTOGRAM_ALPHA;
 }
 
-static gboolean
-trc_property (GObject *object)
-{
-  GParamSpec *spec = g_object_class_find_property (G_OBJECT_GET_CLASS (object), "trc");
-  return spec && G_IS_PARAM_SPEC_ENUM (spec) &&
-         G_PARAM_SPEC_VALUE_TYPE (spec) == GIMP_TYPE_TRC_TYPE &&
-         (spec->flags & G_PARAM_READWRITE) == G_PARAM_READWRITE;
-}
-
-#if GIMP_CHECK_VERSION (3, 2, 0)
-static gboolean
-binding_matches (GBinding *binding, GObject *config, GimpOperationPointFilter *point)
-{
-  GObject *source, *target;
-  gboolean matches;
-  if (!binding || !G_IS_BINDING (binding)) return FALSE;
-  if ((g_binding_get_flags (binding) & ~G_BINDING_SYNC_CREATE) != 0) return FALSE;
-  if (g_strcmp0 (g_binding_get_source_property (binding), "trc") ||
-      g_strcmp0 (g_binding_get_target_property (binding), "trc")) return FALSE;
-  source = g_binding_dup_source (binding); /* owned endpoint witnesses */
-  target = g_binding_dup_target (binding);
-  matches = source == config && target == G_OBJECT (point);
-  g_clear_object (&source);
-  g_clear_object (&target);
-  return matches;
-}
-#endif
 
 gboolean
 glims_levels_config_is_operation (GeglNode *node)
@@ -120,46 +94,19 @@ glims_levels_config_is_operation (GeglNode *node)
   return name && strcmp (name, "gimp:levels") == 0;
 }
 
+static GlimsPointConfigTRCSpec
+levels_spec (void)
+{
+  return (GlimsPointConfigTRCSpec) { "gimp:levels", "Levels",
+                                   GIMP_TYPE_OPERATION_LEVELS, GIMP_TYPE_LEVELS_CONFIG };
+}
+
 static GlimsStatus
 checked_point (GeglNode *node, gboolean allow_empty,
                GimpOperationPointFilter **out, char **error)
 {
-  GeglOperation *operation;
-  GimpOperationPointFilter *point;
-  *out = NULL;
-  if (!GEGL_IS_NODE (node))
-    return levels_error (GLIMS_STATUS_INVALID_ARGUMENT, error, "A filter operation is required.");
-  if (!glims_levels_config_is_operation (node))
-    return levels_error (GLIMS_STATUS_UNSUPPORTED, error, "These settings are only available for Levels.");
-  operation = gegl_node_get_gegl_operation (node); /* borrowed from node */
-  if (!operation || G_OBJECT_TYPE (operation) != GIMP_TYPE_OPERATION_LEVELS)
-    return levels_error (GLIMS_STATUS_FAILED, error, "The native Levels operation is invalid.");
-  point = GIMP_OPERATION_POINT_FILTER (operation);
-  if (!trc_property (G_OBJECT (point)))
-    return levels_error (GLIMS_STATUS_UNSUPPORTED, error, "The native Levels operation has an incompatible TRC property.");
-  if (own_trc (point->trc) == GLIMS_COLOR_TRC_UNKNOWN)
-    return levels_error (GLIMS_STATUS_FAILED, error, "The native Levels operation TRC is invalid.");
-  if (point->config) {
-    GimpLevelsConfig *config;
-    if (G_OBJECT_TYPE (point->config) != GIMP_TYPE_LEVELS_CONFIG)
-      return levels_error (GLIMS_STATUS_FAILED, error, "The native Levels configuration has the wrong type.");
-    if (!trc_property (point->config))
-      return levels_error (GLIMS_STATUS_UNSUPPORTED, error, "The native Levels configuration has an incompatible TRC property.");
-    config = GIMP_LEVELS_CONFIG (point->config);
-    if (own_trc (config->trc) == GLIMS_COLOR_TRC_UNKNOWN)
-      return levels_error (GLIMS_STATUS_FAILED, error, "The native Levels configuration TRC is invalid.");
-    if (point->trc != config->trc)
-      return levels_error (GLIMS_STATUS_UNSUPPORTED, error, "This Levels effect has inconsistent operation and configuration TRCs and cannot be edited safely.");
-  } else if (!allow_empty) {
-    return levels_error (GLIMS_STATUS_FAILED, error, "The filter has no Levels configuration.");
-  }
-#if GIMP_CHECK_VERSION (3, 2, 0)
-  if (point->config ? !binding_matches (point->trc_binding, point->config, point)
-                    : point->trc_binding != NULL)
-    return levels_error (GLIMS_STATUS_UNSUPPORTED, error, "The native Levels TRC binding is incompatible.");
-#endif
-  *out = point;
-  return GLIMS_STATUS_OK;
+  const GlimsPointConfigTRCSpec spec = levels_spec ();
+  return glims_point_config_trc_check (node, &spec, allow_empty, out, error);
 }
 
 static GlimsLevelsChannel
@@ -209,44 +156,19 @@ clear_fields (GlimsLevelsSettings *out)
   out->value = out->red = out->green = out->blue = out->alpha = (GlimsLevelsChannel) {0};
 }
 
-/* The candidate is fully private/validated before staging. DEFAULT creates no
- * target update; after staging succeeds, installation has no failing step. */
+/* Keep complete Levels validation before shared installation or pointer no-op. */
 static GlimsStatus
 install_config (GimpOperationPointFilter *point, GimpLevelsConfig *config, char **error)
 {
   GlimsLevelsSettings checked = { .struct_size = sizeof checked };
+  const GlimsPointConfigTRCSpec spec = levels_spec ();
   GlimsStatus status;
-#if GIMP_CHECK_VERSION (3, 2, 0)
-  GBinding *staged, *old;
-#endif
-  if (G_OBJECT_TYPE (config) != GIMP_TYPE_LEVELS_CONFIG || !trc_property (G_OBJECT (config)))
+  if (G_OBJECT_TYPE (config) != GIMP_TYPE_LEVELS_CONFIG ||
+      !glims_point_config_trc_property (G_OBJECT (config)))
     return levels_error (GLIMS_STATUS_FAILED, error, "The replacement Levels configuration is invalid.");
   status = read_config (config, &checked, error);
   if (status != GLIMS_STATUS_OK) return status;
-  if (point->config == G_OBJECT (config)) return GLIMS_STATUS_OK;
-#if GIMP_CHECK_VERSION (3, 2, 0)
-  staged = g_object_bind_property (config, "trc", point, "trc", G_BINDING_DEFAULT);
-  if (!staged)
-    return levels_error (GLIMS_STATUS_FAILED, error, "The Levels TRC binding could not be created.");
-  /* Staged source differs from the currently installed config. No TRC equality
-   * check belongs here: the target must retain its old value until commit. */
-  if (!binding_matches (staged, G_OBJECT (config), point)) {
-    g_binding_unbind (staged);
-    return levels_error (GLIMS_STATUS_FAILED, error, "The staged Levels TRC binding is invalid.");
-  }
-  old = point->trc_binding;
-  point->trc_binding = NULL;
-  if (old) g_binding_unbind (old);
-#endif
-  /* Native point setters duplicate a config ref (3.0:105, 3.2+:108). Avoid that
-   * setter; release only local refs. GLib binding owns its initial ref. */
-  g_set_object (&point->config, G_OBJECT (config));
-#if GIMP_CHECK_VERSION (3, 2, 0)
-  point->trc_binding = staged; /* borrowed, compatible with native clear */
-#endif
-  g_object_set (point, "trc", config->trc, NULL);
-  g_object_notify (G_OBJECT (point), "config");
-  return GLIMS_STATUS_OK;
+  return glims_point_config_trc_install (point, G_OBJECT (config), &spec, error);
 }
 
 static void
