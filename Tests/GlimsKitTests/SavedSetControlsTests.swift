@@ -5,7 +5,7 @@ import XCTest
 /// Pure tests for View ▸ Saved Sets…: the full-name contract, the kind
 /// chooser, the token-addressed row model (identity is never a label), the
 /// cached write admission, explicit member-list and request validation, the
-/// layer-only recall admission and the panel's phase machine.
+/// all-kinds recall admission and the panel's phase machine.
 final class SavedSetControlsTests: XCTestCase {
     private typealias Logic = SavedSetControlsLogic
     private typealias Kind = EngineSession.ItemSetKind
@@ -162,51 +162,64 @@ final class SavedSetControlsTests: XCTestCase {
 
     // MARK: Recall admission
 
-    func testLayerRecallNeedsAnExactExistingList() {
+    func testRecallNeedsAnExactExistingListOfAnyKind() {
         let entry = row(8, .layer, "L", count: 2, members: [3, 5])
         guard case .success(let members) = Logic.recallAdmission(kind: .layer, row: entry,
-                                                                 existingLayerIDs: [1, 3, 5]) else {
+                                                                 existingIDs: [1, 3, 5]) else {
             return XCTFail("an all-existing layer list is recallable")
         }
-        XCTAssertEqual(members, [3, 5], "the exact list, in order, goes to selectLayers")
+        XCTAssertEqual(members, [3, 5], "the exact list, in order, goes to the batch selection")
+        // Channels and paths recall the same way, against their own rows.
+        guard case .success(let channels) = Logic.recallAdmission(kind: .channel,
+                                                                   row: row(4, .channel, "C", members: [12, 9]),
+                                                                   existingIDs: [9, 12]) else {
+            return XCTFail("an all-existing channel list is recallable")
+        }
+        XCTAssertEqual(channels, [12, 9], "the channel order is kept, never sorted or take-first")
+        guard case .success(let paths) = Logic.recallAdmission(kind: .path,
+                                                                row: row(5, .path, "P", members: [7]),
+                                                                existingIDs: [6, 7]) else {
+            return XCTFail("an all-existing path list is recallable")
+        }
+        XCTAssertEqual(paths, [7])
     }
 
     func testRecallRefusesMissingEmptyAndNoRow() {
         let entry = row(8, .layer, "L", count: 2, members: [3, 5])
         guard case .failure(let missing) = Logic.recallAdmission(kind: .layer, row: entry,
-                                                                 existingLayerIDs: [1, 3]) else {
+                                                                 existingIDs: [1, 3]) else {
             return XCTFail("a member no longer in the image refuses")
         }
         XCTAssertTrue(missing.message.contains("no longer"))
+        // A channel set refuses against layer ids: kinds never mix.
+        guard case .failure = Logic.recallAdmission(kind: .channel,
+                                                    row: row(4, .channel, "C", members: [3, 5]),
+                                                    existingIDs: [1, 3, 5]) else {
+            return XCTFail("a channel set must not recall against layer ids")
+        }
         guard case .failure(let empty) = Logic.recallAdmission(kind: .layer,
                                                                row: row(9, .layer, "E", members: []),
-                                                               existingLayerIDs: [1]) else {
+                                                               existingIDs: [1]) else {
             return XCTFail("an empty set refuses")
         }
         XCTAssertTrue(empty.message.contains("empty"))
         guard case .failure(let none) = Logic.recallAdmission(kind: .layer, row: nil,
-                                                              existingLayerIDs: [1]) else {
+                                                              existingIDs: [1]) else {
             return XCTFail("no selection refuses")
         }
         XCTAssertTrue(none.message.contains("Select"))
     }
 
-    func testChannelAndPathRecallAreDisabledWithAMeaningfulReason() {
-        let channelRow = row(4, .channel, "C", count: 1, members: [12])
-        guard case .failure(let channel) = Logic.recallAdmission(kind: .channel, row: channelRow,
-                                                                  existingLayerIDs: [1, 2]) else {
-            return XCTFail("channel recall is disabled")
-        }
-        XCTAssertTrue(channel.message.contains("layer sets only"), channel.message)
-        XCTAssertTrue(channel.message.contains("channel"), channel.message)
-        XCTAssertTrue(channel.message.contains("create") && channel.message.contains("delete"), channel.message)
-        guard case .failure(let path) = Logic.recallAdmission(kind: .path,
-                                                              row: row(5, .path, "P", members: [7]),
-                                                              existingLayerIDs: [1]) else {
-            return XCTFail("path recall is disabled")
-        }
-        XCTAssertTrue(path.message.contains("path"), path.message)
-        XCTAssertEqual(Logic.recallUnavailableReason(.channel).contains("channel"), true)
+    func testExistingIDsArePerKind() {
+        let layers = [EngineSession.Layer(id: 1, parent: 0, depth: 0, kind: .pixel, name: "l",
+                                          mode: "", isVisible: true, hasMask: false, isSelected: false,
+                                          opacity: 1, bounds: .zero, filterCount: 0)]
+        let channels = [EngineSession.Channel(id: 7, name: "c", isVisible: true, isSelected: false,
+                                              isQuickMask: false, opacity: 1, color: .red)]
+        let paths = [EngineSession.PathInfo(id: 3, name: "p", isVisible: true, isSelected: false)]
+        XCTAssertEqual(Logic.existingIDs(ofKind: .layer, layers: layers, channels: channels, paths: paths), [1])
+        XCTAssertEqual(Logic.existingIDs(ofKind: .channel, layers: layers, channels: channels, paths: paths), [7])
+        XCTAssertEqual(Logic.existingIDs(ofKind: .path, layers: layers, channels: channels, paths: paths), [3])
     }
 
     // MARK: Phase machine

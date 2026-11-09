@@ -40,8 +40,13 @@ final class ChannelsPaletteView: NSView {
         let components: EngineSession.ComponentState?
         /// The flat channel list, the Quick Mask's row included.
         let channels: [EngineSession.Channel]
-        /// The active channel's id; nil while the layers are the target.
+        /// The active channel's id; nil while the layers are the target
+        /// OR several channels are selected (an ambiguous target — the
+        /// footer's single-id commands disable then).
         let activeChannel: Int32?
+        /// Whether any channel is selected, even when no single one is
+        /// the active target: Return to Layers stays available then.
+        let hasSelectedChannels: Bool
         /// The Quick Mask state; nil when the image has none to toggle.
         let quickMask: EngineSession.QuickMaskState?
         /// False while the document is busy or closing: the list stays
@@ -51,11 +56,13 @@ final class ChannelsPaletteView: NSView {
         init(components: EngineSession.ComponentState? = nil,
              channels: [EngineSession.Channel] = [],
              activeChannel: Int32? = nil,
+             hasSelectedChannels: Bool = false,
              quickMask: EngineSession.QuickMaskState? = nil,
              acceptsEdits: Bool = false) {
             self.components = components
             self.channels = channels
             self.activeChannel = activeChannel
+            self.hasSelectedChannels = hasSelectedChannels
             self.quickMask = quickMask
             self.acceptsEdits = acceptsEdits
         }
@@ -589,7 +596,8 @@ final class ChannelsPaletteView: NSView {
     }
 
     @objc private func returnToLayers(_ sender: Any?) {
-        guard snapshot.acceptsEdits, effectiveActiveChannel != nil else { return }
+        guard snapshot.acceptsEdits,
+              effectiveActiveChannel != nil || snapshot.hasSelectedChannels else { return }
         emit(.returnToLayers)
     }
 
@@ -664,7 +672,9 @@ final class ChannelsPaletteView: NSView {
         quickMaskButton.isEnabled = canEdit && quick != nil
 
         let active = effectiveActiveChannel
-        returnToLayersButton.isEnabled = snapshot.acceptsEdits && active != nil
+        // Return to Layers works with any channel selected (also a
+        // multi-selection); the single-id commands need exactly one.
+        returnToLayersButton.isEnabled = snapshot.acceptsEdits && (active != nil || snapshot.hasSelectedChannels)
         selectionPopup.isEnabled = canEdit && active != nil
 
         buttonBar.setEnabled(canEdit, forItem: FooterCommand.new.rawValue)

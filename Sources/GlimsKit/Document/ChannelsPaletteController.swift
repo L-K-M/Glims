@@ -49,7 +49,9 @@ final class ChannelsPaletteController: NSViewController, PaletteContent, Palette
             return
         }
         body.update(.init(components: document.components, channels: document.channels,
-                          activeChannel: document.activeChannel, quickMask: document.quickMaskState,
+                          activeChannel: document.activeChannel,
+                          hasSelectedChannels: document.isChannelTargetActive,
+                          quickMask: document.quickMaskState,
                           acceptsEdits: document.acceptsEdits))
         let owner = ObjectIdentifier(document), version = document.stateVersion
         guard thumbnailOwner != owner || thumbnailVersion != version else { return }

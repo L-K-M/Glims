@@ -96,6 +96,14 @@ final class PathTool {
 
     func mouseDown(at point: CGPoint, flags: NSEvent.ModifierFlags) {
         syncWithDocument()
+        // Several selected paths are ambiguous: the click is consumed —
+        // no anchor edit, and never an implicit new path or a fall
+        // through to the paint tool — until one row is picked.
+        if document.hasMultipleSelectedPaths {
+            onStatus?(ItemSelectionPolicy.refusal(count: document.selectedPathIDs.count,
+                                                  kind: .path, action: "Editing the path") ?? "")
+            return
+        }
         var path = shape
         dragBase = (document.activePath, path)
         let tolerance = Self.reach / canvas.scale
@@ -255,6 +263,12 @@ final class PathTool {
             return true
         }
         syncWithDocument()
+        // With several paths selected, Delete/Return/Escape are consumed
+        // without editing anything — no anchor removal, no new subpath.
+        if document.hasMultipleSelectedPaths,
+           Self.deleteKeys.contains(keyCode) || Self.returnKeys.contains(keyCode) || keyCode == Self.escapeKey {
+            return true
+        }
         if Self.returnKeys.contains(keyCode) || keyCode == Self.escapeKey {
             guard extending != nil || !selectedAnchors.isEmpty else { return false }
             extending = nil
