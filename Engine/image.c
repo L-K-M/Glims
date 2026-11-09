@@ -163,6 +163,8 @@ undo_event (GimpImage      *image,
             GlimsOpenImage *open)
 {
   glims_track_image_links (image);
+  if (event == GIMP_UNDO_EVENT_UNDO || event == GIMP_UNDO_EVENT_REDO)
+    glims_adjustment_projection_changed (image);
   open->history_revision++;
   glims_emit (open->engine, GLIMS_EVENT_UNDO_CHANGED, image, NULL, NULL);
   glims_emit (open->engine, GLIMS_EVENT_LAYERS_CHANGED, image, NULL, NULL);
@@ -537,23 +539,20 @@ validate_area (GeglBuffer *buffer,
   gimp_tile_handler_validate_validate (validate, buffer, &full, TRUE, FALSE);
 }
 
+/* Shared by both renderers (glims_image_render, display-render.c):
+ * validates `scale` and `area`, then prepares the projection buffer for
+ * one synchronous read of `area` at `scale`. */
 GlimsStatus
-glims_image_render (GlimsEngine  *engine,
-                    GlimsImageID  id,
-                    double        scale,
-                    GlimsRect     area,
-                    uint8_t      *pixels,
-                    size_t        stride)
+glims_projection_prepare_read (GlimsOpenImage  *open,
+                               double           scale,
+                               GlimsRect        area,
+                               GeglBuffer     **buffer_out)
 {
-  GlimsOpenImage *open = glims_lookup_image (engine, id);
   GimpProjection *projection;
   GeglBuffer     *buffer;
-  GeglRectangle   rect = { area.x, area.y, area.width, area.height };
 
-  if (! open)
-    return GLIMS_STATUS_NOT_FOUND;
-  if (! pixels || ! (scale > 0.0) || scale > MAX_RENDER_SCALE ||
-      area.width < 1 || area.height < 1 || stride < (size_t) area.width * 4)
+  if (! (scale > 0.0) || scale > MAX_RENDER_SCALE ||
+      area.width < 1 || area.height < 1)
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
   /* Hand pending updates to the projection as invalid tiles without
@@ -585,6 +584,34 @@ glims_image_render (GlimsEngine  *engine,
    * No GEGL/GIMP source changes or private cache access are needed. */
   if (scale != 1.0 || (area.width == 1 && area.height == 1))
     validate_area (buffer, scale, area);
+
+  *buffer_out = buffer;
+  return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_image_render (GlimsEngine  *engine,
+                    GlimsImageID  id,
+                    double        scale,
+                    GlimsRect     area,
+                    uint8_t      *pixels,
+                    size_t        stride)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GeglBuffer     *buffer;
+  GeglRectangle   rect = { area.x, area.y, area.width, area.height };
+  GlimsStatus     status;
+
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+  if (! pixels)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  status = glims_projection_prepare_read (open, scale, area, &buffer);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  if (stride < (size_t) area.width * 4)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
 
   /* Babl converts from the image's working space to sRGB. Display profiles
    * are not applied yet. */

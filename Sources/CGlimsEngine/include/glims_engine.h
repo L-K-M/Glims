@@ -2383,6 +2383,137 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*image_metadata_tag_info) (GlimsEngine *engine, GlimsImageID image,
                                            const char *tag, GlimsMetadataTagInfo *outInfo,
                                            char **error);
+
+  /* Creates ONE saved bitmap resource from owned pixels and publishes it
+   * to the engine's own resource catalog (slot 129): a bitmap brush
+   * (resourceKind GLIMS_RESOURCE_BRUSH) or a pattern
+   * (GLIMS_RESOURCE_PATTERN) built from `pixels`, written to the
+   * engine's configured writable data folder and added to the factory,
+   * with its new handle in `outID`. The call takes no image: it changes
+   * no image, no undo history, no context and no clipboard.
+   *
+   * `name` is the resource label: nonempty valid UTF-8 with no embedded
+   * NUL and no control characters, at most 255 UTF-8 bytes so it fits
+   * the native 256-byte label; a resource of the same `kind` already
+   * carrying this exact name is refused (FAILED), never silently
+   * uniquified. `width` and `height` are 1 ... 10000 each (the native
+   * resource dimension bound). `pixels` (`constRGBAbytes`) holds exactly
+   * `byte_count` = width * height * 4 straight-alpha R'G'B'A u8 bytes,
+   * checked with overflow-safe arithmetic before anything is mutated;
+   * a NULL `pixels` or a mismatched `byte_count` is INVALID_ARGUMENT.
+   * `brushSpacing` is 1 ... 1000 for a brush and must be 0 for a
+   * pattern. GLIMS_RESOURCE_GRADIENT is UNSUPPORTED (no pixel-to-
+   * gradient conversion exists); any other `kind` is
+   * INVALID_ARGUMENT.
+   *
+   * BUSY while the engine is busy or ANY stroke or filter session is
+   * active, not just on one image. `outID` is set to 0 first and again
+   * on EVERY failure (including a missing output or error path); on
+   * success it is the new resource's positive opaque handle, usable
+   * with resources(), resource_identifiers(), resource_resolve(),
+   * resource_thumbnail(), stroke_begin_with_brush_resource() and
+   * fill_pattern() like any catalog handle. */
+  GlimsStatus  (*resource_create_pixels) (GlimsEngine *engine, uint32_t kind,
+                                          const char *name, int32_t width, int32_t height,
+                                          const uint8_t *pixels, size_t byte_count,
+                                          uint32_t brush_spacing, GlimsResourceID *outID,
+                                          char **error);
+  /* Slot 130: add an empty pass-through group with one default-parameter
+   * non-destructive filter, as one native undo group. Creation is committed;
+   * edit its returned effect through the existing filter-edit lifecycle.
+   * Explicit parent/index; NULL name uses the native group name. Outputs
+   * are reset on failure. No active stroke/preview/floating selection.
+   * Only allowed one-input operations with generic parameters are accepted;
+   * custom native configuration objects require a separate creation flow.
+   * Indexed images are UNSUPPORTED; convert to RGB/grayscale first. */
+  GlimsStatus (*adjustment_layer_new) (GlimsEngine *engine, GlimsImageID image,
+      GlimsItemID parent, int32_t index, const char *operation, const char *name,
+      GlimsItemID *layer, GlimsEffectID *effect, char **error);
+
+  /* Duplicates ONE saved brush, pattern or gradient (slot 131): the
+   * current resource `sourceID` names is copied through the engine's
+   * own per-class copy (gimp_data_duplicate), given the requested
+   * `name`, saved to the engine's configured writable data folder with
+   * its native subclass extension (.gbr/.vbr/.gih/.pat/.ggr as the
+   * core decides) and published to the factory of its own kind, with
+   * the new handle in `outID`. The source determines its own kind; no
+   * `kind` argument. The call takes no image: it changes no image, no
+   * undo history, no selection, no context and no clipboard, and the
+   * source itself is never renamed, saved, deleted or dirtied.
+   *
+   * The source need not be writable: a built-in read-only resource is
+   * duplicatable when the engine's own capability check allows it and
+   * the private copy is saveable. A resource whose class has no native
+   * copy (or an empty native pipe) reports UNSUPPORTED with a reason.
+   *
+   * `name` follows exactly resource_create_pixels's label contract:
+   * nonempty valid UTF-8, no embedded NUL, no Unicode control
+   * characters, at most 255 UTF-8 bytes. A resource of the source's
+   * own kind already carrying this exact name is refused (FAILED)
+   * before any filesystem mutation — never silently uniquified.
+   *
+   * BUSY while the engine is busy or ANY stroke or filter session is
+   * active, not just on one image. `outID` is set to 0 first and again
+   * on EVERY failure (including a missing output, engine-null
+   * dispatch rejection, and every refusal); on success it is the new
+   * resource's positive opaque handle, distinct from `sourceID`, and
+   * usable with resources(), resource_identifiers(), resource_resolve(),
+   * resource_thumbnail() and the brush/pattern/gradient consumers like
+   * any catalog handle. INVALID_ARGUMENT for a missing `outID`, an
+   * invalid `name`, or a `sourceID` of 0 or outside the issued handle
+   * range (high bits set, or above the native id maximum — such a
+   * value can never name a resource); NOT_FOUND for a validly shaped
+   * handle that no longer resolves: stale, or issued by another
+   * engine, or no longer a member of this engine's current factory;
+   * UNSUPPORTED when the native class cannot be duplicated or the
+   * private copy cannot be saved; FAILED with `error` on a name
+   * collision or a checked persistence failure (a failed save never
+   * reports success). */
+  GlimsStatus  (*resource_duplicate) (GlimsEngine *engine, GlimsResourceID sourceID,
+                                      const char *name, GlimsResourceID *outID,
+                                      char **error);
+
+  /* Slot 132: like image_render, but the pixels are converted into the
+   * EXACT RGB destination ICC profile `destination_icc` names instead of
+   * sRGB. Renders the composited image at `scale` (1.0 = one image pixel
+   * per output pixel), `area` in scaled pixel coordinates, exactly as
+   * image_render does (same lazy projection reads and area handling), and
+   * writes area.width * area.height pixels of PREMULTIPLIED 8-bit RGBA in
+   * the destination profile's own RGB space; `stride` is the output row
+   * stride in bytes and must be at least area.width * 4. The returned
+   * buffer must be tagged with a color space built from these same ICC
+   * bytes; image_render's sRGB output must never be retagged instead.
+   *
+   * The source side uses the image's actual working space: its effective
+   * color profile (the image's own, or the engine's builtin fallback for
+   * its model) and the projection's own format and precision. Pixels are
+   * read unassociated at source precision and color-transformed
+   * straight, then premultiplied once for the output; alpha 0, partial
+   * and full alpha are handled deterministically. Grayscale images render
+   * through their gray source format and profile; an indexed image's
+   * RGB projection is handled like RGB. The transform policy is fixed:
+   * relative colorimetric SDR, no proofing, no gamut flags, no user
+   * settings.
+   *
+   * `destination_icc` is immutable caller-owned memory, copied by the
+   * native profile construction during this synchronous call; no pointer
+   * into it is retained afterwards. NULL or zero `destination_icc_length`
+   * is INVALID_ARGUMENT, as are lengths above the adapter's ICC cap
+   * (16 MiB) and any non-finite or out-of-range scale, area, stride or
+   * total output size above the adapter's pixel-buffer cap
+   * (512 MiB, GLIMS_MAX_PIXEL_BUFFER_BYTES). Malformed ICC data is FAILED
+   * with `error`; a valid but non-RGB ICC profile is UNSUPPORTED. There
+   * is never a silent sRGB fallback inside this call: the caller chooses
+   * the fallback (typically image_render) outside. Native profile,
+   * transform and temporary buffers are created, used and released per
+   * call on the engine thread; nothing is cached and no image, profile,
+   * history, dirty or pixel state is read-write touched — this is a read
+   * like image_render and is allowed while the image is not write-ready.
+   * NOT_FOUND for an unknown image, exactly like image_render. */
+  GlimsStatus  (*image_render_to_profile) (GlimsEngine *engine, GlimsImageID image,
+                                           double scale, GlimsRect area,
+                                           const uint8_t *destination_icc, size_t destination_icc_length,
+                                           uint8_t *pixels, size_t stride, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

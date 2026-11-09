@@ -1005,6 +1005,8 @@ MARSHAL (image_open,   return glims_image_open (e, a->string, a->out, a->error);
 MARSHAL (image_close,  return glims_image_close (e, a->image);)
 MARSHAL (image_info,   return glims_image_info (e, a->image, a->out);)
 MARSHAL (image_render, return glims_image_render (e, a->image, a->number, a->area, a->pixels, a->stride);)
+MARSHAL (image_render_to_profile, return glims_image_render_to_profile (e, a->image, a->number, a->area,
+                                                                          a->in, a->n, a->pixels, a->stride, a->error);)
 MARSHAL (image_save,   return glims_image_save (e, a->image, a->string, a->error);)
 MARSHAL (image_save_copy, return glims_image_save_copy (e, a->image, a->string, a->error);)
 MARSHAL (image_export, return glims_image_export (e, a->image, a->string, a->error);)
@@ -1270,6 +1272,31 @@ resource_thumbnail_on_engine (GlimsEngine *e, gpointer data)
                                    a->pixels, a->error);
 }
 
+/* resource_create_pixels carries the pixel pointer with its byte count
+ * and a full 64-bit out handle, so it gets its own args struct; the id
+ * never travels in one of GlimsArgs' 32-bit fields. */
+typedef struct
+{
+  uint32_t          kind;
+  const char       *name;
+  int32_t           width, height;
+  const uint8_t    *pixels;
+  size_t            byte_count;
+  uint32_t          brush_spacing;
+  GlimsResourceID  *out_id;
+  char            **error;
+} GlimsResourceCreateArgs;
+
+static GlimsStatus
+resource_create_pixels_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsResourceCreateArgs *a = data;
+
+  return glims_resource_create_pixels (e, a->kind, a->name, a->width, a->height,
+                                       a->pixels, a->byte_count, a->brush_spacing,
+                                       a->out_id, a->error);
+}
+
 /* The resource gradient call keeps the full 64-bit resource handle and
  * both endpoints besides its settings — more than GlimsArgs holds. */
 typedef struct
@@ -1330,6 +1357,17 @@ api_image_render (GlimsEngine *e, GlimsImageID image, double scale, GlimsRect ar
 {
   GlimsArgs a = { .image = image, .number = scale, .area = area, .pixels = pixels, .stride = stride };
   return glims_engine_call (e, image_render_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_render_to_profile (GlimsEngine *e, GlimsImageID image, double scale, GlimsRect area,
+                             const uint8_t *destination_icc, size_t destination_icc_length,
+                             uint8_t *pixels, size_t stride, char **error)
+{
+  GlimsArgs a = { .image = image, .number = scale, .area = area,
+                  .in = destination_icc, .n = destination_icc_length,
+                  .pixels = pixels, .stride = stride, .error = error };
+  return glims_engine_call (e, image_render_to_profile_on_engine, &a);
 }
 
 static GlimsStatus
@@ -2317,11 +2355,84 @@ api_image_metadata_tag_info (GlimsEngine *e, GlimsImageID image, const char *tag
   return glims_engine_call (e, image_metadata_tag_info_on_engine, &a);
 }
 
+static GlimsStatus
+api_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
+                            int32_t width, int32_t height,
+                            const uint8_t *pixels, size_t byte_count,
+                            uint32_t brush_spacing, GlimsResourceID *outID, char **error)
+{
+  if (outID) *outID = 0;
+  GlimsResourceCreateArgs a = { .kind = kind, .name = name, .width = width, .height = height,
+                                .pixels = pixels, .byte_count = byte_count,
+                                .brush_spacing = brush_spacing, .out_id = outID, .error = error };
+  return glims_engine_call (e, resource_create_pixels_on_engine, &a);
+}
+
 /* No engine state is involved: free directly, like free_string. */
 static void
 api_free_metadata_strings (char **strings)
 {
   glims_free_metadata_strings (strings);
+}
+
+typedef struct {
+  GlimsImageID image;
+  GlimsItemID parent;
+  int32_t index;
+  const char *operation, *name;
+  GlimsItemID *layer;
+  GlimsEffectID *effect;
+  char **error;
+} GlimsAdjustmentArgs;
+
+static GlimsStatus
+adjustment_layer_new_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsAdjustmentArgs *a = data;
+  return glims_adjustment_layer_new (e, a->image, a->parent, a->index,
+                                     a->operation, a->name, a->layer, a->effect, a->error);
+}
+
+static GlimsStatus
+api_adjustment_layer_new (GlimsEngine *e, GlimsImageID image, GlimsItemID parent,
+    int32_t index, const char *operation, const char *name,
+    GlimsItemID *layer, GlimsEffectID *effect, char **error)
+{
+  if (layer) *layer = 0;
+  if (effect) *effect = 0;
+  GlimsAdjustmentArgs a = { image, parent, index, operation, name, layer, effect, error };
+  return glims_engine_call (e, adjustment_layer_new_on_engine, &a);
+}
+
+/* resource_duplicate carries the full 64-bit source handle besides the
+ * 64-bit out handle, so it gets its own args struct; neither id ever
+ * travels in one of GlimsArgs' 32-bit fields. */
+typedef struct
+{
+  GlimsResourceID  source;
+  const char      *name;
+  GlimsResourceID *out_id;
+  char           **error;
+} GlimsResourceDuplicateArgs;
+
+static GlimsStatus
+resource_duplicate_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsResourceDuplicateArgs *a = data;
+
+  return glims_resource_duplicate (e, a->source, a->name, a->out_id, a->error);
+}
+
+static GlimsStatus
+api_resource_duplicate (GlimsEngine *e, GlimsResourceID sourceID, const char *name,
+                        GlimsResourceID *outID, char **error)
+{
+  /* Zero the output in the bridge too, so a dispatch without a running
+   * engine (NOT_RUNNING) still clears a prefilled handle. */
+  if (outID) *outID = 0;
+  GlimsResourceDuplicateArgs a = { .source = sourceID, .name = name,
+                                   .out_id = outID, .error = error };
+  return glims_engine_call (e, resource_duplicate_on_engine, &a);
 }
 
 static const GlimsEngineAPI api_v1 = {
@@ -2458,6 +2569,10 @@ static const GlimsEngineAPI api_v1 = {
   .image_metadata_edit = api_image_metadata_edit,
   .free_metadata_strings = api_free_metadata_strings,
   .image_metadata_tag_info = api_image_metadata_tag_info,
+  .resource_create_pixels = api_resource_create_pixels,
+  .adjustment_layer_new = api_adjustment_layer_new,
+  .resource_duplicate = api_resource_duplicate,
+  .image_render_to_profile = api_image_render_to_profile,
 };
 
 __attribute__ ((visibility ("default")))

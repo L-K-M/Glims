@@ -149,6 +149,28 @@ GlimsStatus glims_image_close      (GlimsEngine *e, GlimsImageID id);
 GlimsStatus glims_image_info       (GlimsEngine *e, GlimsImageID id, GlimsImageInfo *info);
 GlimsStatus glims_image_render     (GlimsEngine *e, GlimsImageID id, double scale, GlimsRect area,
                                     uint8_t *pixels, size_t stride);
+/* Shared lazy projection preparation for one synchronous area read,
+ * used by both renderers (image.c, display-render.c): validates `scale`
+ * and `area` (finite 0 < scale <= MAX_RENDER_SCALE, width/height >= 1),
+ * hands pending projection work over as invalid tiles (stop the chunk
+ * renderer, flush_now(FALSE)) and validates the requested area when the
+ * read is scaled or goes through GEGL's 1x1 hot-tile shortcut. On
+ * GLIMS_STATUS_OK, *buffer_out is the projection buffer to read from.
+ * Borrowed buffer; the image keeps it alive. */
+GlimsStatus glims_projection_prepare_read (GlimsOpenImage *open, double scale, GlimsRect area,
+                                           GeglBuffer **buffer_out);
+
+/* display-render.c: conservative adapter caps for slot 132
+ * (image_render_to_profile), documented in glims_engine.h and
+ * docs/display-destination-render.md. The ICC cap keeps the length well
+ * inside LCMS's 32-bit size domain; the temp cap bounds the per-call
+ * scratch allocation (rows are processed in chunks of at most this
+ * size); the output cap is the shared GLIMS_MAX_PIXEL_BUFFER_BYTES. */
+#define GLIMS_MAX_ICC_PROFILE_BYTES   ((size_t) 16 * 1024 * 1024)
+#define GLIMS_RENDER_TEMP_CHUNK_BYTES ((size_t) 16 * 1024 * 1024)
+GlimsStatus glims_image_render_to_profile (GlimsEngine *e, GlimsImageID id, double scale, GlimsRect area,
+                                           const uint8_t *destination_icc, size_t destination_icc_length,
+                                           uint8_t *pixels, size_t stride, char **error);
 GlimsStatus glims_image_save       (GlimsEngine *e, GlimsImageID id, const char *path, char **error);
 GlimsStatus glims_image_save_copy  (GlimsEngine *e, GlimsImageID id, const char *path, char **error);
 GlimsStatus glims_image_export     (GlimsEngine *e, GlimsImageID id, const char *path, char **error);
@@ -521,5 +543,104 @@ GlimsStatus glims_lookup_brush         (GlimsEngine *e, GlimsResourceID id, Gimp
  * resource admission plus the pattern kind. Borrowed reference; the
  * caller never mutates or releases it. */
 GlimsStatus glims_lookup_pattern       (GlimsEngine *e, GlimsResourceID id, GimpPattern **out);
+
+/* resource-create.c */
+/* Creates one saved bitmap brush or pattern from owned straight-alpha
+ * RGBA pixels (facade slot 129, resource_create_pixels): validates every
+ * input before any mutation, builds a private resource, saves it with a
+ * checked gimp_data_save into a unique hidden staging subdirectory of
+ * the chosen writable save folder, promotes it to a unique UUID final
+ * file, reassociates it, and only then publishes it to the factory
+ * after an exact-name membership check. `outID` is zeroed first and on
+ * every failure. No image, history, context or clipboard is touched. */
+GlimsStatus glims_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
+                                           int32_t width, int32_t height,
+                                           const uint8_t *pixels, size_t byte_count,
+                                           uint32_t brush_spacing, GlimsResourceID *outID,
+                                           char **error);
+
+/* The narrowly exposed generic resource lookup shared by the resource
+ * files: lookup_resource()'s id validation (INVALID_ARGUMENT for 0 and
+ * out-of-native-range handles before any narrowing, NOT_FOUND for
+ * stale, foreign or non-current-factory handles) with the borrowed
+ * live GimpData of any of the three kinds. The result is borrowed for
+ * the calling engine-thread call only. */
+GlimsStatus glims_lookup_resource_data (GlimsEngine *e, GlimsResourceID id,
+                                         GimpData **out);
+/* The factory of this engine that owns `data`'s kind (brush, pattern or
+ * gradient), or NULL when `data` is none of them. */
+GimpDataFactory *glims_factory_for_resource (Gimp *gimp, GimpData *data);
+
+/* resource-create.c, shared by the pixel-create and duplicate paths.
+ * The resource label contract of resource_create_pixels /
+ * resource_duplicate: nonempty valid UTF-8, at most 255 bytes, no
+ * control characters. */
+gboolean    glims_valid_resource_name (const char *name);
+/* Exact name collision against the current factory membership. */
+gboolean    glims_resource_name_taken (GimpContainer *container, const gchar *name);
+
+/* One resource call's owned staging state inside the configured save
+ * folder. `extension` is not owned and must outlive the staging (a
+ * #define literal or the class's static extension string). */
+typedef struct
+{
+  GFile        *save_dir;         /* configured writable folder */
+  GFile        *staging_dir;      /* unique hidden staging dir, or NULL */
+  GFile        *staging_file;     /* staging file inside it, or NULL */
+  GFile        *final_file;       /* promoted UUID final file, or NULL */
+  gchar        *uuid;             /* names the staging dir and final file */
+  const gchar  *extension;        /* the resource's own native extension */
+  gboolean      staging_created;  /* mkdir succeeded: cleanup owns the paths */
+  gboolean      promoted;         /* move succeeded: the final file is ours */
+} GlimsResourceStaging;
+
+/* Chooses the configured writable/search native save folder and creates
+ * this call's unique OWNED hidden staging subdirectory and staging file
+ * inside it. On failure `staging` is left zeroed. */
+GlimsStatus glims_resource_staging_begin (GimpDataFactory      *factory,
+                                          const gchar          *extension,
+                                          GlimsResourceStaging *staging,
+                                          char                **error);
+/* The checked persistence pipeline both creation paths share: associate
+ * the staging file, checked gimp_data_save(), promote to a unique UUID
+ * final file by a no-overwrite, no-fallback move, reassociate, then
+ * publish to the factory after an exact-name membership check and verify
+ * membership, exact name and a positive native id. The call owns `data`
+ * on every path: on success the container's reference remains and the
+ * local one is dropped; on failure `data` is released. The staging is
+ * always cleaned up: only this call's own actually-created staging
+ * paths and, on failure only, the promoted final file are deleted.
+ * `outID` receives the new handle on success only. */
+GlimsStatus glims_resource_save_and_publish (GimpDataFactory      *factory,
+                                              GimpData             *data,
+                                              const gchar          *name,
+                                              GlimsResourceStaging *staging,
+                                              GlimsResourceID      *outID,
+                                              char                **error);
+/* Deletes the staged file/dir and, unless `keep_final`, the promoted
+ * final file — only when this call actually created them (a preexisting
+ * sentinel path always survives) — then releases every owned member. */
+void        glims_resource_staging_cleanup (GlimsResourceStaging *staging,
+                                            gboolean              keep_final);
+
+/* resource-duplicate.c */
+/* Duplicates one current brush, pattern or gradient (facade slot 131,
+ * resource_duplicate): resolves `sourceID` once through
+ * glims_lookup_resource_data(), checks the native duplicatable
+ * capability and the private copy's saveability, duplicates with
+ * gimp_data_duplicate() into an owned private object, names it, and
+ * persists+publishes it through glims_resource_save_and_publish(). The
+ * source is never mutated. `outID` is zeroed first and on every
+ * failure. */
+GlimsStatus glims_resource_duplicate (GlimsEngine *e, GlimsResourceID sourceID,
+                                      const char *name, GlimsResourceID *outID,
+                                      char **error);
+
+
+GlimsStatus glims_adjustment_layer_new (GlimsEngine *engine, GlimsImageID image,
+    GlimsItemID parent, int32_t index, const char *operation, const char *name,
+    GlimsItemID *layer, GlimsEffectID *effect, char **error);
+
+void glims_adjustment_projection_changed (GimpImage *image);
 
 #endif /* GLIMS_ENGINE_PRIVATE_H */
