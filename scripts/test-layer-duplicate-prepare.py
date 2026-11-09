@@ -21,6 +21,8 @@ HARNESS = REPO_ROOT / "Engine" / "tests" / "layer-duplicate-prepare-tests.c"
 FACADE_INCLUDE = REPO_ROOT / "Sources" / "CGlimsEngine" / "include"
 ENGINE_DIR = REPO_ROOT / "Engine"
 DEFAULT_OUT_ROOT = REPO_ROOT / ".build" / "layer-duplicate-prepare-tests"
+ADDITIONAL_SOURCES = []
+EXTRA_COMPILE_FLAGS = lambda ref: []
 DEFAULT_REF = "GIMP_3_2_8"
 ALL_REFS = ("GIMP_3_2_8", "GIMP_3_2_0", "GIMP_3_0_8", "master")
 
@@ -42,7 +44,7 @@ def check_producer(producer: Path) -> dict[str, object]:
     objects = sorted(glob.glob(str(producer / "obj" / "*.o")))
     # Recompile the implementation under test even when it is already part
     # of the selected producer; link it exactly once.
-    objects = [path for path in objects if Path(path).name != READER.stem + ".o"]
+    objects = [path for path in objects if Path(path).stem not in {source.stem for source in [READER, *ADDITIONAL_SOURCES]}]
     paths = {
         "obj": objects,
         "compile_rsp": producer / "compile.rsp",
@@ -65,7 +67,7 @@ def cmd_syntax(args: argparse.Namespace) -> None:
         if not rsp.is_file():
             fail(f"no compile.rsp for {ref} at {producer}")
         cmd = [
-            "xcrun", "clang", f"@{rsp}",
+            "xcrun", "clang", f"@{rsp}", *EXTRA_COMPILE_FLAGS(ref),
             "-I", str(FACADE_INCLUDE), "-I", str(ENGINE_DIR),
             "-fvisibility=hidden", "-Wall", "-Wextra",
             "-Werror=implicit-function-declaration",
@@ -87,7 +89,7 @@ def cmd_build(args: argparse.Namespace) -> Path:
     binary = out / "layer-duplicate-prepare-tests"
 
     common = [
-        f"@{paths['compile_rsp']}",
+        f"@{paths['compile_rsp']}", *EXTRA_COMPILE_FLAGS(args.ref),
         "-I", str(FACADE_INCLUDE), "-I", str(ENGINE_DIR),
     ]
     compile_reader = [
@@ -101,9 +103,15 @@ def cmd_build(args: argparse.Namespace) -> Path:
         "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
         "-c", str(HARNESS), "-o", str(harness_obj),
     ]
+    extra_objects = []
+    for source in ADDITIONAL_SOURCES:
+        obj = out / (source.stem + ".o")
+        subprocess.run(["xcrun", "clang", *common, "-fvisibility=hidden", "-Wall", "-Wextra",
+                        "-Werror=implicit-function-declaration", "-c", str(source), "-o", str(obj)], check=True)
+        extra_objects.append(str(obj))
     link = [
         "xcrun", "clang++", "-o", str(binary),
-        str(reader_obj), str(harness_obj), *paths["obj"],
+        str(reader_obj), str(harness_obj), *extra_objects, *paths["obj"],
         f"@{paths['objects_rsp']}", f"@{paths['link_rsp']}",
     ]
     print("==> compile reader")
