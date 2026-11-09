@@ -440,7 +440,7 @@ glims_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
   final_name = g_strdup_printf ("%s%s", uuid, extension);
   final_file = g_file_get_child (save_dir, final_name);
   if (! g_file_move (staging_file, final_file, G_FILE_COPY_NO_FALLBACK_FOR_MOVE,
-                     NULL, NULL, &gerror))
+                     NULL, NULL, NULL, &gerror))
     {
       status = glims_fail (error, g_steal_pointer (&gerror),
                            "The saved resource could not be promoted to its final name.");
