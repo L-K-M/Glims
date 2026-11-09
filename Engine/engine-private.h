@@ -284,6 +284,10 @@ GlimsStatus glims_filter_brightness_contrast_get (GlimsEngine *, GlimsFilterID,
                                                  GlimsBrightnessContrastSettings *, char **);
 GlimsStatus glims_filter_brightness_contrast_set (GlimsEngine *, GlimsFilterID,
                                                  const GlimsBrightnessContrastSettings *, char **);
+GlimsStatus glims_filter_color_balance_get (GlimsEngine *, GlimsFilterID,
+                                           GlimsColorBalanceSettings *, char **);
+GlimsStatus glims_filter_color_balance_set (GlimsEngine *, GlimsFilterID,
+                                           const GlimsColorBalanceSettings *, char **);
 GlimsStatus glims_filter_commit    (GlimsEngine *e, GlimsFilterID id, char **error);
 GlimsStatus glims_filter_abort     (GlimsEngine *e, GlimsFilterID id);
 void        glims_filters_free     (gpointer filter);

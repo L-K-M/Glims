@@ -673,6 +673,20 @@ typedef struct GlimsBrightnessContrastSettings {
   double contrast;          /* finite -1..1; default 0 */
 } GlimsBrightnessContrastSettings;
 
+typedef struct GlimsColorBalanceRange {
+  double cyan_red;           /* finite -1..1; positive adds red */
+  double magenta_green;      /* finite -1..1; positive adds green */
+  double yellow_blue;        /* finite -1..1; positive adds blue */
+} GlimsColorBalanceRange;
+
+typedef struct GlimsColorBalanceSettings {
+  uint32_t struct_size;
+  uint32_t preserve_luminosity; /* exactly 0 or 1; default 1 */
+  GlimsColorBalanceRange shadows;
+  GlimsColorBalanceRange midtones;
+  GlimsColorBalanceRange highlights;
+} GlimsColorBalanceSettings;
+
 /* A layer's mask flags: ENABLED gates the mask's effect on the
  * composite; EDITING makes the mask the target of painting, fills and
  * gradients while its layer is the only selected one; SHOWING displays
@@ -2923,6 +2937,17 @@ typedef struct GlimsEngineAPI {
                                                GlimsFilterID filter,
                                                const GlimsBrightnessContrastSettings *settings,
                                                char **error);
+  /* Slots150-151: a complete gimp:color-balance preview value. Get/Set
+   * follow the sized-output and immutable replacement rules of slots148-149.
+   * All nine corrections are validated before any change. The range picker
+   * is UI state; it never changes an installed config to read another range.
+   * Preserve-luminosity means native HSL lightness. The native operation
+   * works in nonlinear sRGB and clamps before restoring lightness. */
+  GlimsStatus (*filter_color_balance_get) (GlimsEngine *engine, GlimsFilterID filter,
+                                         GlimsColorBalanceSettings *out, char **error);
+  GlimsStatus (*filter_color_balance_set) (GlimsEngine *engine, GlimsFilterID filter,
+                                         const GlimsColorBalanceSettings *settings,
+                                         char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

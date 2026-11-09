@@ -65,7 +65,11 @@ bundle with the native and Swift build outputs inaccessible.
       pixel Apply/Undo/Redo and native source validation (current candidate).
 - [x] Native Brightness/Contrast paired controls and committed-effect editing,
       with immutable settings, Undo and XCF preservation (current candidate).
+- [x] Dedicated Color Balance controls with whole-range native configuration,
+      immutable editing and delayed-write refusal handling (current candidate).
 - [ ] Remaining custom filter forms/config editors and other auxiliary inputs.
+- [ ] Preserve nondefault native-only effect blend/composite settings when
+      opening XCF; upstream currently normalizes them to AUTO.
 - [x] Path fill, vector layers and vector style controls.
 - [x] Multi-anchor path editing with group move/delete and Undo.
 - [x] Searchable brush, pattern and gradient resource choosers, with

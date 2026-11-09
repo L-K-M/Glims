@@ -91,9 +91,13 @@ struct NativeFilterMenuLayout: Equatable {
         operation.name == "gimp:brightness-contrast" && operation.support == .needsConfig
     }
 
+    static func usesColorBalanceEditor(_ operation: EngineSession.FilterOperation) -> Bool {
+        operation.name == "gimp:color-balance" && operation.support == .needsConfig
+    }
+
     static func supportsParameterEditor(_ operation: EngineSession.FilterOperation?) -> Bool {
         guard let operation else { return false }
-        return operation.support == .supported || usesBrightnessContrastEditor(operation)
+        return operation.support == .supported || usesBrightnessContrastEditor(operation) || usesColorBalanceEditor(operation)
     }
 
     struct Section: Equatable {
@@ -152,7 +156,7 @@ struct NativeFilterMenuLayout: Equatable {
     /// The item's menu title: `Title…` when it opens a form, `Title
     /// (reason)` when it cannot run yet.
     static func itemTitle(_ operation: EngineSession.FilterOperation) -> String {
-        if usesBrightnessContrastEditor(operation) { return "\(operation.title)…" }
+        if usesBrightnessContrastEditor(operation) || usesColorBalanceEditor(operation) { return "\(operation.title)…" }
         if usesSourceChooser(operation) { return "\(operation.title)…" }
         if let reason = unavailableReason(operation.support) {
             return "\(operation.title) (\(reason))"

@@ -2747,6 +2747,39 @@ static GlimsStatus api_filter_brightness_contrast_set (GlimsEngine *e, GlimsFilt
   return glims_engine_call (e, filter_brightness_contrast_set_on_engine, &a);
 }
 
+typedef struct {
+  GlimsFilterID filter;
+  GlimsColorBalanceSettings *out;
+  const GlimsColorBalanceSettings *settings;
+  char **error;
+} GlimsColorBalanceArgs;
+static GlimsStatus filter_color_balance_get_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsColorBalanceArgs *a = data;
+  return glims_filter_color_balance_get (e, a->filter, a->out, a->error);
+}
+static GlimsStatus filter_color_balance_set_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsColorBalanceArgs *a = data;
+  return glims_filter_color_balance_set (e, a->filter, a->settings, a->error);
+}
+static GlimsStatus api_filter_color_balance_get (GlimsEngine *e, GlimsFilterID filter,
+                                                GlimsColorBalanceSettings *out, char **error)
+{
+  if (out && out->struct_size >= sizeof *out) {
+    out->preserve_luminosity = 0;
+    out->shadows = out->midtones = out->highlights = (GlimsColorBalanceRange) {0};
+  }
+  GlimsColorBalanceArgs a = { .filter = filter, .out = out, .error = error };
+  return glims_engine_call (e, filter_color_balance_get_on_engine, &a);
+}
+static GlimsStatus api_filter_color_balance_set (GlimsEngine *e, GlimsFilterID filter,
+                                                const GlimsColorBalanceSettings *settings, char **error)
+{
+  GlimsColorBalanceArgs a = { .filter = filter, .settings = settings, .error = error };
+  return glims_engine_call (e, filter_color_balance_set_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -2902,6 +2935,8 @@ static const GlimsEngineAPI api_v1 = {
   .filter_begin_with_source = api_filter_begin_with_source,
   .filter_brightness_contrast_get = api_filter_brightness_contrast_get,
   .filter_brightness_contrast_set = api_filter_brightness_contrast_set,
+  .filter_color_balance_get = api_filter_color_balance_get,
+  .filter_color_balance_set = api_filter_color_balance_set,
 };
 
 __attribute__ ((visibility ("default")))

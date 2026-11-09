@@ -3394,3 +3394,15 @@ checks. The integrated unit suite passes 909 tests; native and UI integration
 reviews have no important remaining findings after the reproduced admission
 fix. Final combined bundle verification is still running. Other four custom
 config operations remain unavailable pending their dedicated editors.
+
+
+### Native Color Balance configuration (2026-11-09)
+
+Color Balance has a dedicated three-range editor over all nine corrections
+and Preserve Lightness. API v1 appends slots150/151; changed settings replace
+a private immutable native config. Delayed failures cannot silently seed
+later edits with a refused correction. The real editor passes17 checks on
+each engine, including two reproduced/fixed acknowledgement regressions.
+See `color-balance.md` for validation and the separately recorded native
+XCF blend/composite AUTO-normalization limitation. Other custom config
+editors and full integrated release checks remain open.

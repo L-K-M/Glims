@@ -962,6 +962,57 @@ final class EngineSession: @unchecked Sendable {
         try check(status, error)
     }
 
+    struct ColorBalanceSettings: Equatable {
+        struct Range: Equatable {
+            var cyanRed: Double = 0
+            var magentaGreen: Double = 0
+            var yellowBlue: Double = 0
+
+            var isValid: Bool {
+                [cyanRed, magentaGreen, yellowBlue].allSatisfy { $0.isFinite && (-1...1).contains($0) }
+            }
+        }
+        var shadows = Range()
+        var midtones = Range()
+        var highlights = Range()
+        var preserveLuminosity = true
+
+        var isValid: Bool { shadows.isValid && midtones.isValid && highlights.isValid }
+    }
+
+    func colorBalanceSettings(_ filter: Int32) throws -> ColorBalanceSettings {
+        var raw = GlimsColorBalanceSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsColorBalanceSettings>.size)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_color_balance_get(engine, filter, &raw, &error)
+        try check(status, error)
+        func range(_ value: GlimsColorBalanceRange) -> ColorBalanceSettings.Range {
+            .init(cyanRed: value.cyan_red, magentaGreen: value.magenta_green, yellowBlue: value.yellow_blue)
+        }
+        let value = ColorBalanceSettings(shadows: range(raw.shadows), midtones: range(raw.midtones),
+                                        highlights: range(raw.highlights), preserveLuminosity: raw.preserve_luminosity == 1)
+        guard value.isValid, raw.preserve_luminosity <= 1 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The color balance settings could not be read.")
+        }
+        return value
+    }
+
+    func setColorBalanceSettings(_ filter: Int32, to value: ColorBalanceSettings) throws {
+        guard value.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: "Color balance corrections must be between −1 and 1.")
+        }
+        func range(_ value: ColorBalanceSettings.Range) -> GlimsColorBalanceRange {
+            .init(cyan_red: value.cyanRed, magenta_green: value.magentaGreen, yellow_blue: value.yellowBlue)
+        }
+        var raw = GlimsColorBalanceSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsColorBalanceSettings>.size)
+        raw.preserve_luminosity = value.preserveLuminosity ? 1 : 0
+        raw.shadows = range(value.shadows); raw.midtones = range(value.midtones); raw.highlights = range(value.highlights)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_color_balance_set(engine, filter, &raw, &error)
+        try check(status, error)
+    }
+
     /// One property's current value in an open filter session.
     func filterProperty(_ filter: Int32, _ property: String) throws -> FilterValue {
         var value = GlimsFilterValue()
