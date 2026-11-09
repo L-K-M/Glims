@@ -9,14 +9,7 @@
 #include "core/gimpitem.h"
 #include "core/gimplayer.h"
 
-#include <string.h>
-
-static GlimsStatus
-fail (char **error, const char *message)
-{
-  if (error) *error = g_strdup (message);
-  return GLIMS_STATUS_INVALID_ARGUMENT;
-}
+#include <stdlib.h>
 
 GlimsStatus
 glims_layer_duplicate_prepare (GlimsEngine              *engine,
@@ -31,10 +24,6 @@ glims_layer_duplicate_prepare (GlimsEngine              *engine,
   GimpItem **items = NULL;
   GlimsStatus status;
   size_t i, j;
-  GError *gerror = NULL;
-
-  (void) gerror;
-
   if (out)
     *out = NULL;
 
@@ -83,7 +72,9 @@ glims_layer_duplicate_prepare (GlimsEngine              *engine,
         }
       if (!GIMP_IS_LAYER (item))
         {
-          status = fail (error, "Only plain layers can be duplicated.");
+          if (error)
+            *error = g_strdup ("The requested item is not an attached layer.");
+          status = GLIMS_STATUS_NOT_FOUND;
           goto fail;
         }
       if (G_OBJECT_TYPE (item) != GIMP_TYPE_LAYER)

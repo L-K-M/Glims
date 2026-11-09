@@ -6,7 +6,7 @@
 #include "glims_engine.h"
 
 /* Engine-thread preflight only. Prepares a batch of layer duplicates as a
- * plan of borrowed source layers and their owned clones, without attaching
+ * plan of owned source references and owned clones, without attaching
  * anything, changing history, selection or pixels. The plan is consumed and
  * freed by the same serialized engine job that created it; it is never
  * shared across calls and no thread-safety is claimed for it.
