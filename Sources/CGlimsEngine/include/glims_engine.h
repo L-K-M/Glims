@@ -1126,6 +1126,18 @@ typedef struct GlimsMetadataTagInfo {
   char     type_name[GLIMS_METADATA_TAG_INFO_TYPE_NAME_CAPACITY];    /* native type name, UTF-8, bounded */
 } GlimsMetadataTagInfo;
 
+/* One owned (language, text) pair of a language-alternative (XMP LangAlt)
+ * map, as image_metadata_languages (slot 139) reports it. The language
+ * spelling is preserved exactly (case folding only for uniqueness); the
+ * text is the exact rdf:li content, no trimming. Facade-owned; no GLib
+ * or GIMP types cross this boundary. The array returned by slot 139 is
+ * `count` of these plus one all-NULL sentinel pair, released with slot
+ * 140 (never free_string). */
+typedef struct GlimsMetadataLanguageValue {
+  char *language;
+  char *text;
+} GlimsMetadataLanguageValue;
+
 /* Saved sets (the engine's stored item sets), READ-ONLY. The facade lists
  * the FIXED (non-pattern) sets only, of three kinds, and resolves members
  * through an opaque identity token — never through a name, a pointer or
@@ -2731,6 +2743,42 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*resource_create_gradient)(GlimsEngine *engine, const char *name,
                                           const GlimsColor *left, const GlimsColor *right,
                                           GlimsResourceID *out, char **error);
+
+  /* Slot 139: reads the image's registered XMP LangAlt root property
+   * `root` (plain "Xmp.<group>.<property>") as an owned language map.
+   * `out` receives `count` GlimsMetadataLanguageValue pairs plus one
+   * all-NULL sentinel pair (both fields NULL); release the array with
+   * metadata_languages_free (slot 140). The language spelling is
+   * preserved exactly and the text is the exact rdf:li content, in the
+   * engine's own map order; duplicate case-folded language keys cannot
+   * be produced by the native map.
+   *
+   * A plain read, like image_metadata_values: allowed at any time, also
+   * while a stroke, a filter session or a plug-in holds the image (no
+   * busy gate), and it never creates metadata, never installs anything
+   * on the image and never mutates the image, its metadata, its history
+   * or its pixels. The image's own metadata is borrowed; an image with
+   * no metadata is NOT_FOUND and no metadata object is created.
+   *
+   * Both outputs are cleared before dispatch: a NULL engine returns
+   * NOT_RUNNING and still leaves a prefilled `out`/`out_count` at
+   * NULL/0. INVALID_ARGUMENT for a NULL `out`, `out_count` or `root`;
+   * NOT_FOUND for an unknown image, an absent or unregistered root and
+   * an image with no metadata; UNSUPPORTED for a root that is not a
+   * plain XMP property, a wrong native kind or any unsupported
+   * representation (the private reader decides); FAILED with the native
+   * message when a native read itself fails. On every failure `out` is
+   * NULL and `out_count` 0; `error` follows the usual free_string rule.
+   * An image closed after the read is unaffected. */
+  GlimsStatus (*image_metadata_languages) (GlimsEngine *engine, GlimsImageID image,
+                                          const char *root, GlimsMetadataLanguageValue **out,
+                                          int32_t *out_count, char **error);
+  /* Slot 140: releases a GlimsMetadataLanguageValue array returned by
+   * image_metadata_languages (slot 139). NULL is allowed. It takes no
+   * engine and no count: it walks the array until the all-NULL language
+   * sentinel pair, freeing both strings of every pair and the array
+   * itself. Never use free_string on these. */
+  void (*metadata_languages_free) (GlimsMetadataLanguageValue *values);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

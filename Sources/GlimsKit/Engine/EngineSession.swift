@@ -3431,6 +3431,76 @@ final class EngineSession: @unchecked Sendable {
                                typeName: Self.string(out.type_name))
     }
 
+    /// One owned (language, text) pair of an image's language-alternative
+    /// (XMP LangAlt) map (image_metadata_languages, slot 139). The
+    /// language spelling is preserved exactly; the text is the exact
+    /// rdf:li content, no trimming.
+    struct MetadataLanguageValue: Equatable, Sendable {
+        let language: String
+        let text: String
+    }
+
+    /// The image's registered XMP LangAlt root property `tag`
+    /// (image_metadata_languages, slot 139): the map's owned
+    /// (language, text) pairs, in the engine's own map order. A plain
+    /// read: allowed at any time, also while a stroke, a filter session
+    /// or a plug-in holds the image; it never creates metadata and never
+    /// mutates the image or its history. An image with no metadata, an
+    /// absent root or an unregistered tag throws NOT_FOUND; a wrong kind
+    /// or an unsupported representation throws UNSUPPORTED; a malformed
+    /// tag throws INVALID_ARGUMENT. The result count is validated to
+    /// 1...256 and every pair's UTF-8 and non-empty language/text are
+    /// checked before the array is published; a bad result throws FAILED,
+    /// never truncated. Call it off the main thread like other reads.
+    func metadataLanguages(_ image: Int32, tag: String) throws -> [MetadataLanguageValue] {
+        try Self.validateMetadataStrings(tag: tag, values: [])
+        guard !tag.isEmpty else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "A metadata tag must be a nonempty string.")
+        }
+        var values: UnsafeMutablePointer<GlimsMetadataLanguageValue>?
+        var count: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_metadata_languages(engine, image, tag, &values, &count, &error), error)
+        defer { api.metadata_languages_free(values) }
+        return try Self.decodeMetadataLanguages(values, count: count)
+    }
+
+    /// Decodes the facade's owned language-alternative array: the count
+    /// must be 1...256, the pointer non-NULL, and every pair a non-NULL
+    /// valid-UTF-8 non-empty language and text with no embedded NUL. A
+    /// bad result throws FAILED; it is never truncated or partially
+    /// published.
+    static func decodeMetadataLanguages(_ values: UnsafeMutablePointer<GlimsMetadataLanguageValue>?,
+                                        count: Int32) throws -> [MetadataLanguageValue] {
+        guard count >= 1, count <= 256, let values else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine returned an invalid language-alternative count.")
+        }
+        var result: [MetadataLanguageValue] = []
+        result.reserveCapacity(Int(count))
+        var languages = Set<String>()
+        for index in 0..<Int(count) {
+            let pair = values[index]
+            guard let cLanguage = pair.language, let cText = pair.text,
+                  let language = String(validatingCString: cLanguage),
+                  let text = String(validatingCString: cText),
+                  !language.isEmpty, !text.isEmpty,
+                  languages.insert(language.lowercased()).inserted,
+                  language.utf8.count == strlen(cLanguage),
+                  text.utf8.count == strlen(cText) else {
+                throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                  message: "The engine returned an invalid language-alternative pair.")
+            }
+            result.append(MetadataLanguageValue(language: language, text: text))
+        }
+        guard values[Int(count)].language == nil, values[Int(count)].text == nil else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine returned an invalid language-alternative terminator.")
+        }
+        return result
+    }
+
     /// C strings cannot represent embedded NULs; reject them before any
     /// bridge allocation or native call can silently shorten the request.
     static func validateMetadataStrings(tag: String, values: [String]) throws {
