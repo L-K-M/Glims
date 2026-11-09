@@ -301,6 +301,16 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (display destination)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "resource-duplicate-controls" {
+                try exerciseResourceDuplicateControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (resource duplicate controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "saved-set-controls" {
+                try exerciseSavedSetControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (saved set controls)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "view-overlays" {
                 try exerciseViewOverlays(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (view overlays)" : "FAILED: \(failures) failure(s)")
@@ -314,11 +324,6 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "adjustment-catalog-failure" {
                 try exerciseAdjustmentCatalogFailure(session, documents: documents)
                 print(failures == 0 ? "PASSED (adjustment catalog failure)" : "FAILED: \(failures) failure(s)")
-                return failures == 0 ? 0 : 1
-            }
-            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "resource-duplicate-controls" {
-                try exerciseResourceDuplicateControls(session, work: work, documents: documents)
-                print(failures == 0 ? "PASSED (resource duplicate controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
@@ -369,6 +374,7 @@ enum EngineSmokeTest {
             try exerciseResourceDuplicateControls(session, work: work, documents: documents)
             try exerciseViewOverlays(session, work: work, documents: documents)
             try exerciseDisplayDestination(session, work: work, documents: documents)
+            try exerciseSavedSetControls(session, work: work, documents: documents)
             try exerciseAdjustmentControls(session, work: work, documents: documents)
             try exerciseLayerMultiselectionControls(session, work: work, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)
@@ -891,7 +897,18 @@ enum EngineSmokeTest {
                 linkSetupPhase = "export the replacement source"
                 try session.export(blueSource, to: linkPNG.path)
                 linkSetupPhase = "close the replacement source"
-                try session.closeImage(blueSource)
+                // Replacing a watched file starts an asynchronous native
+                // loader. Like the document close route, wait for BUSY to
+                // clear; propagate every other error and enforce a deadline.
+                let closeDeadline = Date().addingTimeInterval(10)
+                while true {
+                    do { try session.closeImage(blueSource); break }
+                    catch {
+                        guard EngineSession.EngineError.coerce(error).isBusy,
+                              Date() < closeDeadline else { throw error }
+                        spin(0.02)
+                    }
+                }
             } catch {
                 print("     link refresh setup failed while trying to \(linkSetupPhase): \(error)")
                 throw error

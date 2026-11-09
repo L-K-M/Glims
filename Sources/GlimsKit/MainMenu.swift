@@ -214,6 +214,7 @@ enum MainMenu {
                 item("Canvas", #selector(DocumentWindowController.toggleSnapToCanvas(_:))),
                 item("Layer Bounds", #selector(DocumentWindowController.toggleSnapToLayerBounds(_:))),
             ]),
+            item("Saved Sets…", #selector(DocumentWindowController.showSavedSets(_:))),
         ])
         let lastFilterSettings = item("Last Filter Settings…", #selector(DocumentWindowController.reshowLastFilter(_:)), "f")
         lastFilterSettings.keyEquivalentModifierMask = [.command, .option]

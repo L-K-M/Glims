@@ -29,6 +29,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// open, so two documents keep independent sheets — no global binding,
     /// no retarget to the front window. nil while none is open.
     private(set) var resourceSelectionSheet: ResourceSelectionSheetController?
+    /// View ▸ Saved Sets…'s non-modal panel, retained by this window and
+    /// capturing this window's document at open — no retarget to the front
+    /// window. nil while none is open.
+    private(set) var savedSetPanel: SavedSetPanelController?
 
     /// Image ▸ Mode ▸ Indexed…'s sheet, retained by this window for its
     /// lifetime and capturing this window's document at open, so Apply and
@@ -137,6 +141,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             self?.guidesSheet?.showError(message)
             self?.strokeSelectionSheet?.showError(message)
             self?.resourceSelectionSheet?.showError(message)
+            self?.savedSetPanel?.showError(message)
 
             self?.gridSheet?.showError(message)
 
@@ -343,6 +348,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         guidesSheet?.commitFieldEdit()
         strokeSelectionSheet?.commitFieldEdit()
         resourceSelectionSheet?.commitFieldEdit()
+        savedSetPanel?.commitFieldEdit()
 
         gridSheet?.commitFieldEdit()
 
@@ -397,6 +403,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         guidesSheet?.documentStateDidChange()
         strokeSelectionSheet?.documentStateDidChange()
         resourceSelectionSheet?.documentStateDidChange()
+        savedSetPanel?.documentStateDidChange()
 
         gridSheet?.documentStateDidChange()
 
@@ -622,6 +629,21 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             sheet.invalidate()
             self.metadataSheet = nil
         }
+    }
+
+    /// View ▸ Saved Sets…: opens this document's non-modal saved-set panel.
+    /// One per window; opening makes no native call — the first catalog
+    /// read is queued as counted document work.
+    @objc func showSavedSets(_ sender: Any?) {
+        guard !imageDocument.isClosing, savedSetPanel == nil else { return }
+        let panel = SavedSetPanelController(document: imageDocument, host: self)
+        savedSetPanel = panel
+        panel.showWindow(nil)
+    }
+
+    /// The panel's own window closing clears the window's reference.
+    func clearSavedSetPanel(_ panel: SavedSetPanelController) {
+        if savedSetPanel === panel { savedSetPanel = nil }
     }
 
     /// View ▸ Show Grid: flips this window's cached flag and redraws the
@@ -1548,6 +1570,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // Image metadata is image-level: no channel/mask/target or
             // lock restriction. It must not stack on another sheet.
             return !imageDocument.isClosing && window?.attachedSheet == nil
+        case #selector(showSavedSets(_:)):
+            // Cached state only, never the engine; one non-modal panel per
+            // window.
+            return !imageDocument.isClosing && savedSetPanel == nil
         case #selector(toggleShowGrid(_:)):
             // The checkmark reads the window's cached flag, never the
             // engine; toggling is view-only, so it stays available even
@@ -2176,6 +2202,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         guidesSheet?.invalidate()
         strokeSelectionSheet?.invalidate()
         resourceSelectionSheet?.invalidate()
+        savedSetPanel?.invalidate()
+        savedSetPanel?.window?.orderOut(nil)
+        savedSetPanel = nil
 
         gridSheet?.invalidate()
 
