@@ -84,8 +84,30 @@ def main():
     if not objects:
         fail(f"no object files in {object_dir}")
 
+    # Adapter C++ code shares the engine's include/target/optimization flags,
+    # with only C-language diagnostics/standard replaced. The inventory bridge
+    # calls Exiv2 directly, so link its installed library beside GExiv2.
+    c_only = {"-Wdeclaration-after-statement", "-Wno-strict-prototypes", "-Wstrict-prototypes",
+              "-Wold-style-definition", "-Werror=implicit-function-declaration", "-Wmissing-prototypes",
+              "-Werror=missing-prototypes", "-Wnested-externs", "-Werror=implicit-int", "-ObjC"}
+    cxx_out = [arg for arg in compile_out if arg not in c_only and not arg.startswith("-std=")]
+    # Some macOS engine C units use '-x objective-c'; the adapter bridge
+    # is ordinary C++ and must override that inherited language selection.
+    cxx_out.extend(["-x", "c++", "-std=c++17"])
+    engine_sources = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Engine")
+    if any(name.endswith(".cpp") for name in os.listdir(engine_sources)):
+        gexiv = [arg for arg in link_out if os.path.basename(arg) == "libgexiv2.dylib"]
+        if len(gexiv) != 1:
+            fail("the C++ metadata inventory needs one installed GExiv2 dependency")
+        exiv = os.path.join(os.path.dirname(gexiv[0]), "libexiv2.dylib")
+        if not os.path.isfile(exiv):
+            fail(f"the C++ metadata inventory needs {exiv}")
+        if exiv not in link_out:
+            link_out.append(exiv)
+
     os.makedirs(out_dir, exist_ok=True)
-    for name, args in (("compile.rsp", compile_out), ("link.rsp", link_out), ("objects.rsp", objects)):
+    for name, args in (("compile.rsp", compile_out), ("compile-cxx.rsp", cxx_out),
+                       ("link.rsp", link_out), ("objects.rsp", objects)):
         with open(os.path.join(out_dir, name), "w") as handle:
             handle.write("\n".join(shlex.quote(a) for a in args) + "\n")
 

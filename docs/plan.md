@@ -3225,3 +3225,17 @@ floor/ceil range now covers both axes with finite/overflow guards.831 unit
 tests,47 focused checks on each engine and2237 full app checks pass. Independent
 source review covered the integration and corrected tile arithmetic. Exact-head
 CI remains the merge gate; physical display transitions remain unverified here.
+
+### Metadata copy fidelity and detached language preparation (2026-11-09)
+
+The metadata equality guard now detects zero-count entries omitted by GExiv2's
+public lists, including an empty LangAlt map also omitted by generated XMP.
+A version-locked Engine-only C++ inventory bridge reads the pinned dependency's
+complete collections; copying refuses conservatively instead of replacing the
+image with lossy metadata. See metadata-preservation.md for the reproduced
+failure, ABI/version boundary and validation matrix. Native dependency source
+stays unchanged. A detached one-existing-language preparation function verifies
+all admitted maps, unrelated data, native normalization stability and roundtrip
+fidelity. It has no public writer slot or UI yet. Native conformance, 27 preparation
+checks and 9 inventory checks pass on every engine; the normalization helper has
+124 checks per engine. 838 unit and 14 script tests pass; bundle/CI checks pending.

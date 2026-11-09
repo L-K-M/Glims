@@ -36,6 +36,8 @@
  */
 #include "engine-private.h"
 #include "metadata-xmp.h"
+#include "metadata-preservation.h"
+#include "metadata-inventory.h"
 
 #include <string.h>
 
@@ -289,12 +291,17 @@ metadata_values_match (gchar **actual, const char *const *expected, int32_t coun
  * EXIF/IPTC use raw values; XMP compares the complete generated packet so
  * language qualifiers and container structure remain part of the check.
  * A comparison error fails closed: it never authorizes a replacement. */
-static gboolean
-metadata_equal_native (GimpMetadata *left, GimpMetadata *right)
+gboolean
+glims_metadata_equal_native (GimpMetadata *left, GimpMetadata *right)
 {
   guint domain;
+  gsize empty_left = 0, empty_right = 0;
   if (! left || ! right)
     return left == right;
+  if (glims_metadata_empty_entry_count (GEXIV2_METADATA (left), &empty_left, NULL) != GLIMS_STATUS_OK ||
+      glims_metadata_empty_entry_count (GEXIV2_METADATA (right), &empty_right, NULL) != GLIMS_STATUS_OK ||
+      empty_left || empty_right)
+    return FALSE;
   for (domain = 0; domain < 3; domain++)
     {
       gchar **a = domain == 0 ? gexiv2_metadata_get_exif_tags (GEXIV2_METADATA (left)) :
@@ -306,6 +313,13 @@ metadata_equal_native (GimpMetadata *left, GimpMetadata *right)
       guint n = a ? g_strv_length (a) : 0;
       gboolean equal = n == (b ? g_strv_length (b) : 0);
       guint index;
+      if (equal && domain == 2)
+        {
+          gsize full_a = 0, full_b = 0;
+          equal = glims_metadata_xmp_entry_count (GEXIV2_METADATA (left), &full_a, NULL) == GLIMS_STATUS_OK &&
+                  glims_metadata_xmp_entry_count (GEXIV2_METADATA (right), &full_b, NULL) == GLIMS_STATUS_OK &&
+                  full_a == n && full_b == n;
+        }
       for (index = 0; equal && index < n; index++)
         {
           GError *failure = NULL;
@@ -493,7 +507,7 @@ glims_image_metadata_edit (GlimsEngine        *engine,
   copy = current ? gimp_metadata_duplicate (current) : gimp_metadata_new ();
   if (! copy)
     return glims_fail (error, NULL, "The image metadata could not be duplicated.");
-  if (current && ! metadata_equal_native (current, copy))
+  if (current && ! glims_metadata_equal_native (current, copy))
     {
       g_object_unref (copy);
       if (error) *error = strdup ("This metadata cannot be copied without changing unrelated tags; the image was left untouched.");
@@ -658,7 +672,7 @@ glims_image_metadata_edit (GlimsEngine        *engine,
     }
 
   /* Canonical native values can make an apparent string edit a no-op. */
-  if (current && metadata_equal_native (current, copy))
+  if (current && glims_metadata_equal_native (current, copy))
     {
       g_object_unref (copy);
       return GLIMS_STATUS_OK;
@@ -667,7 +681,7 @@ glims_image_metadata_edit (GlimsEngine        *engine,
    * create metadata that cannot survive that path without changing it. */
   {
     GimpMetadata *roundtrip = gimp_metadata_duplicate (copy);
-    gboolean preserved = roundtrip && metadata_equal_native (copy, roundtrip);
+    gboolean preserved = roundtrip && glims_metadata_equal_native (copy, roundtrip);
     if (roundtrip) g_object_unref (roundtrip);
     if (! preserved)
       {
