@@ -2643,6 +2643,65 @@ typedef struct GlimsEngineAPI {
                                        uint64_t token, const char *name,
                                        const GlimsItemID *members, int32_t count,
                                        uint64_t *outToken, char **error);
+
+  /* Slot 136: selects exactly `items` — an ordered array of `count` item
+   * ids of `image`, all of `kind` — as the image's whole selected list of
+   * that kind, the batch generalization of image_select_layers (slot 122)
+   * to all three kinds, through the engine's own
+   * gimp_image_set_selected_layers / _channels / _paths. `kind` is a
+   * GlimsItemSetKind (LAYER/CHANNEL/PATH): the facade's own enum only,
+   * never a GType or ABI value. Transient: no undo step, no dirty flag,
+   * no pixel, selection-mask or mask-data change; a floating selection is
+   * never auto-anchored. A change sends the kind's normal selection
+   * event; an identical request is a no-op with no event. The caller's
+   * order is kept verbatim (first id = active item) and verified by
+   * read-back; because the engine compares membership ignoring order, a
+   * pure reorder is forced with a clear-then-apply after preflight.
+   *
+   * An empty LAYER list is INVALID_ARGUMENT at this batch endpoint.
+   * `count` 0 clears CHANNEL/PATH selection: channels via gimp_image_unset_selected_channels,
+   * which also restores the layer stack the channel selection replaced
+   * (the old channel-0 semantics); paths via the empty path setter.
+   *
+   * The whole input is validated before any mutation, so every refusal
+   * leaves the selection untouched: INVALID_ARGUMENT for an unknown
+   * `kind`, a negative `count`, a NULL `items` with `count` > 0, any nonpositive id,
+   * a repeated id, or an id of another kind (for CHANNEL also the
+   * image selection/per-layer masks: not rows of the channel list).
+   * The enabled Quick Mask is an actual channel row and is allowed; NOT_FOUND for an unknown image or a stale, foreign or detached
+   * id. This is a WRITE: it requires edit readiness and refuses with BUSY
+   * before any mutation while a stroke, a filter preview or a plug-in
+   * holds the image.
+   *
+   * Floating-selection policy per kind: LAYER keeps slot 122's gate —
+   * under an active floating selection every request except exactly
+   * [floating] is refused FAILED (never anchoring it; [floating] is a
+   * no-op); a NON-EMPTY CHANNEL list is refused FAILED with an explicit
+   * reason (the native setter would silently ignore it), an EMPTY one is
+   * allowed; PATH selection is allowed (paths are independent of the
+   * drawables). For layers, a selection changing to more than one layer
+   * clears the edit-mask flag of every selected masked layer — slot 122's
+   * native mask policy, reused unchanged; mask pixels and the mask's
+   * enabled and showing flags are never touched. */
+  GlimsStatus  (*image_select_items) (GlimsEngine *engine, GlimsImageID image,
+                                      uint32_t kind, const GlimsItemID *items,
+                                      int32_t count, char **error);
+
+  /* Slot 137: reads the image's selected item ids of `kind` (a
+   * GlimsItemSetKind), in the engine's own order — the order
+   * image_select_items last set, active item first — from
+   * gimp_image_get_selected_layers / _channels / _paths, whose returned
+   * lists are BORROWED: never freed, the ids copied out immediately.
+   * Fills up to `capacity` ids; `count` receives the total. `out` may be
+   * NULL with `capacity` 0 to only count. A plain read, allowed at any
+   * time — also while the image is busy; it mutates nothing.
+   * INVALID_ARGUMENT for an unknown `kind`, a NULL `count` or a negative
+   * `capacity`, or NULL `out` with positive capacity; NOT_FOUND for an unknown image. On EVERY failure —
+   * including a NULL engine (NOT_RUNNING) — `*count` is reset to 0 and
+   * no id is written. */
+  GlimsStatus  (*image_selected_items) (GlimsEngine *engine, GlimsImageID image,
+                                        uint32_t kind, GlimsItemID *out,
+                                        int32_t capacity, int32_t *count);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
