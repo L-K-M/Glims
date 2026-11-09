@@ -265,6 +265,7 @@ typedef gchar *(*GeneratePacket) (GExiv2Metadata *, GExiv2XmpFormatFlags,
 
 static const gchar *injected_packet;
 static const gchar *injected_gerror;
+static const gchar *expected_reason;
 
 static GeneratePacket
 real_generate (void)
@@ -347,7 +348,10 @@ expect_injected (Probe *probe, const char *root, const char *packet,
     {
       CHECK (out == NULL, "%s: *out reset to NULL", label);
       CHECK (error != NULL, "%s: owned error message", label);
+      if (expected_reason)
+        CHECK (error && strstr (error, expected_reason), "%s: the intended guard reports its reason", label);
     }
+  expected_reason = NULL;
   if (out)
     g_ptr_array_unref (out);
   free (error);
@@ -588,7 +592,7 @@ run_all (GlimsEngine *engine, gpointer data)
     NULL, GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[shadow] UNSUPPORTED");
   /* One property, two rdf:Alt containers: refused by cardinality. */
   expect_injected (probe, "Xmp.dc.title",
-    PKT (TITLE (ALT (LI ("x-default", "Base")) ALT (LI ("fr", "X")))),
+    PKT (TITLE (ALT (LI ("x-default", "Base")) "<rdf:Alt/>")),
     NULL, GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[second-alt] UNSUPPORTED");
   /* Qualifiers beyond xml:lang on the li or on the container are refused;
    * non-whitespace text inside a container is mixed content. */
@@ -604,12 +608,12 @@ run_all (GlimsEngine *engine, gpointer data)
   /* Nesting past the 32-deep bound is refused; the partial frame freed
    * there is still fully zeroed, so cleanup must stay quiet. */
   {
-    GString *deep =
-      g_string_new ("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><d:e xmlns:d=\"urn:d\">");
-    for (int i = 0; i < 32; i++)
-      g_string_append (deep, "<d:e>");
-    for (int i = 0; i < 33; i++)
-      g_string_append (deep, "</d:e>");
+    GString *deep = g_string_new (
+      "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
+      "<rdf:Description xmlns:d=\"urn:d\">" TITLE (ALT (LI ("x-default", "Base"))));
+    for (int i = 0; i < 33; i++) g_string_append (deep, "<d:e>");
+    for (int i = 0; i < 33; i++) g_string_append (deep, "</d:e>");
+    g_string_append (deep, "</rdf:Description></rdf:RDF></x:xmpmeta>");
     expect_injected (probe, "Xmp.dc.title", deep->str, NULL,
                      GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[depth] UNSUPPORTED");
     g_string_free (deep, TRUE);
@@ -625,6 +629,7 @@ run_all (GlimsEngine *engine, gpointer data)
     NULL, GLIMS_STATUS_FAILED, NULL, NULL, "[malformed] FAILED");
   /* Case-folded duplicate language keys are refused even though the
    * native map cannot produce them. */
+  expected_reason = "Duplicate language key";
   expect_injected (probe, "Xmp.dc.title",
     PKT (TITLE (ALT (LI ("en-US", "A") LI ("EN-us", "B")))),
     NULL, GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[dup-lang] UNSUPPORTED");
@@ -632,7 +637,7 @@ run_all (GlimsEngine *engine, gpointer data)
    * 255. */
   {
     gchar *uri = g_strnfill (4097, 'u');
-    gchar *pkt = g_strdup_printf (PKT ("<d:e xmlns:d=\"%s\"></d:e>"), uri);
+    gchar *pkt = g_strdup_printf (PKT (TITLE (ALT (LI ("x-default", "Base"))) "<d:e xmlns:d=\"%s\"></d:e>"), uri);
     expect_injected (probe, "Xmp.dc.title", pkt, NULL,
                      GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[ns-bound] UNSUPPORTED");
     g_free (uri);
@@ -640,7 +645,7 @@ run_all (GlimsEngine *engine, gpointer data)
   }
   {
     gchar *nm = g_strnfill (511, 'e');
-    gchar *pkt = g_strdup_printf (PKT ("<d:%s xmlns:d=\"urn:d\"></d:%s>"), nm, nm);
+    gchar *pkt = g_strdup_printf (PKT (TITLE (ALT (LI ("x-default", "Base"))) "<d:%s xmlns:d=\"urn:d\"></d:%s>"), nm, nm);
     expect_injected (probe, "Xmp.dc.title", pkt, NULL,
                      GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[name-bound] UNSUPPORTED");
     g_free (nm);
@@ -650,10 +655,18 @@ run_all (GlimsEngine *engine, gpointer data)
     gchar *lg = g_strnfill (256, 'q');
     gchar *pkt = g_strdup_printf (
       PKT (TITLE (ALT ("<rdf:li xml:lang=\"%s\">v</rdf:li>"))), lg);
+    gchar *prefixed = g_strdup_printf ("lang=\"%s\" v", lg);
+    const gchar *one_long[] = { prefixed };
+    FIXTURE (seed (probe, "Xmp.dc.title", one_long, 1), "[lang-bound] native long language exists");
     expect_injected (probe, "Xmp.dc.title", pkt, NULL,
                      GLIMS_STATUS_UNSUPPORTED, NULL, NULL, "[lang-bound] UNSUPPORTED");
+    g_free (prefixed);
     g_free (lg);
     g_free (pkt);
+  }
+  {
+    const char *one[] = { "lang=\"x-default\" Base" };
+    FIXTURE (seed (probe, "Xmp.dc.title", one, 1), "[inject] restore baseline after long language");
   }
   /* A native generator GError is a native failure: FAILED with an owned
    * message through glims_fail. */
