@@ -5,11 +5,12 @@ opened a disabled placeholder. This ledger distinguishes working features
 from the remaining design in `design.md`. Compilation alone does not close
 an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
-## Implemented and checked
+## Implemented and checked (including the current integration candidate)
 
-These entries describe the merged implementation as of 2026-11-09 (`25df6af`). The
-whole editor remains in progress; each checked entry covers the stated
-behavior, not every adjacent feature in `design.md`.
+These entries describe main `2354d97` and the reviewed slices in the
+2026-11-09 integration candidate (`feat/editor-state-integration`). PRs
+#96–#104 and final combined verification are still pending. The whole editor
+remains in progress; each checked entry covers its stated behavior.
 
 - [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
       fail before packaging. Hosted CI explicitly builds only the interface.
@@ -33,11 +34,11 @@ behavior, not every adjacent feature in `design.md`.
 - [x] Searchable native help content.
 - [x] RGB/Grayscale conversion, native precision controls, accurate mode titles
       and read-only working-profile information, with undo and XCF persistence.
-- [x] A self-contained bundle at `ff5cc54` passes 697 native and 597 interface checks
-      with the development trees inaccessible. Pointer painting, keyboard editing,
-      Save, Quit/reopen, mask/channel controls and PDF printing have separate
-      on-screen evidence below and in the reviewed changes. The final
-      combined revision, including the color controls, still needs this pass.
+- [x] The editor candidate merged through #95 passes 1,917 native and 1,891
+      app checks in a self-contained bundle with development trees inaccessible.
+      Pointer painting, keyboard editing, Save, Quit/reopen, masks/channels and
+      PDF printing have separate on-screen evidence. The newer combined
+      saved-set/resource/display candidate still needs its bundle pass.
 
 ## Remaining implementation and final verification
 
@@ -45,19 +46,25 @@ behavior, not every adjacent feature in `design.md`.
 - [x] Explicit Rasterize Layer and Restore Layer Source controls.
 - [x] Layer-palette multi-selection with exact native selections and explicit
       single-layer command gates.
-- [ ] Saved-set controls and Undo, batch editing and consistent gesture-time
-      rasterize/revert policy. Weak saved-set identity ownership is checked.
+- [x] Fixed layer/channel/path set management with native Undo, runtime tokens
+      and fresh-token layer recall; weak live identity and Undo memory limits.
+- [ ] Channel/path saved-set recall, batch editing and consistent gesture-time
+      rasterize/revert policy.
 - [ ] Adjustment layers/groups, remaining custom filter forms and filter inputs.
 - [x] Path fill, vector layers and vector style controls.
 - [x] Multi-anchor path editing with group move/delete and Undo.
 - [x] Searchable brush, pattern and gradient resource choosers, with
       thumbnails, retained identities and captured gesture settings.
 - [x] Tool preset storage and controls.
-- [ ] Resource creation and management controls.
+- [x] Brush/pattern creation from selections and brush/pattern/gradient
+      duplication controls, with checked persistence and current-choice refresh.
+- [ ] New gradients, resource rename/delete and remaining management controls.
 - [x] Color profile assignment and conversion with explicit rasterization consent.
 - [x] Indexed conversion with generated/custom palettes, dithering and
       explicit structured-source consent.
-- [ ] Full monitor color management, wide-gamut/HDR output and soft proofing.
+- [x] Per-window RGB destination-ICC canvas rendering, stale-generation
+      rejection and independent wide-source pixel-preservation checks.
+- [ ] LUT/physical-display and higher-precision verification, HDR and soft proofing.
 - [x] Native guides with undo/XCF persistence, per-document management
       sheets and a per-window Show Guides overlay toggle.
 - [x] Pixel rulers, grid controls/overlay and canvas guide dragging.
@@ -68,12 +75,13 @@ behavior, not every adjacent feature in `design.md`.
 - [x] Stroke Selection and explicit Paste Into/Anchor/New Layer/Discard.
 - [x] Float Selected Pixels (move/copy), existing floating-selection drag
       and arrow nudges with captured target validation.
-- [ ] Interaction-specific automatic anchoring and resource creation controls
-      from selections. A blanket tool-switch anchor policy is unsupported.
+- [ ] Interaction-specific automatic anchoring. A blanket tool-switch anchor
+      policy is unsupported.
 - [x] Shortcut customization and menu integration using immutable defaults.
-- [ ] Image metadata editing controls (value preservation and native descriptor
-      backend merged), remaining Image Adjust commands, layer-boundary/
-      selection-edge/proof view toggles and complete menu/keyboard coverage.
+- [x] Registered image metadata editing with descriptor gates and value
+      preservation; layer-boundary and selection-edge view toggles.
+- [ ] Remaining typed metadata editing (including language alternatives), Image
+      Adjust commands, proof view controls and complete menu/keyboard coverage.
 - [ ] Recorder and semantic command replay.
 - [ ] Full accessibility/focus, appearance and English-copy audit.
 - [ ] Public distribution checks from `plan.md`: corresponding sources,
@@ -424,3 +432,15 @@ fixes the failing real-window oracle. Its integrated pinned app smoke run
 passes 1,891 checks, including metadata/resource/adjustment forms and the
 paint-target boundary. These checks cover the candidate, not the remaining
 A–Z completion work or a final distributable bundle.
+
+
+2026-11-09 state integration: reviewed source includes per-window ICC canvas,
+resource duplication and saved-set management. Individual runtime evidence:
+789 combined units; 58 duplicate, 27 destination and 62 saved-set focused app
+checks per engine; separate full slices pass 1,949 / 1,918 / 1,953 app checks.
+Every combined native engine passes 1,917 / 1,703 / 1,917 / 1,917 general checks,
+155 Undo, 146 edit, 56 read and 188 lifetime checks. Corrected wide-source
+harness passes 40 display checks on every engine; an actual forced legacy
+sRGB-u8 roundtrip fails exactly the wide identity check. The combined pinned app run passes 2,038 checks; the remaining combined
+focused app matrix, bundle and exact-head hosted CI remain pending. These
+results do not close the broader unchecked work above.
