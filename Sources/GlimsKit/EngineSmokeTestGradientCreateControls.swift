@@ -162,9 +162,18 @@ extension EngineSmokeTest {
         // particular — lies inside the panel's content view (the old
         // fittingSize content-resize clipped whole button rows).
         if let content = sheet?.contentView {
+            content.layoutSubtreeIfNeeded()
+            for input in [nameInput, leftInput, rightInput, create, cancel].compactMap({ $0 as NSView? }) {
+                let frame = input.convert(input.bounds, to: content)
+                check(frame.width >= 20 && frame.height >= 12 && content.bounds.contains(frame),
+                      "\(input.accessibilityLabel() ?? "gradient input") has a visible frame inside the sheet")
+            }
             let views = allViews(content, as: NSView.self).filter { $0 !== content }
             let outside = views.filter {
                 !content.bounds.insetBy(dx: -0.5, dy: -0.5).contains(content.convert($0.bounds, from: $0))
+            }
+            for view in outside {
+                print("layout diagnostic: \(type(of: view)) \(view.accessibilityLabel() ?? "") \(content.convert(view.bounds, from: view)) in \(content.bounds)")
             }
             check(outside.isEmpty, "every sheet control lies inside the panel's content bounds (\(outside.count) outside)")
             let buttonsOutside = allViews(content, as: NSButton.self).filter {
@@ -387,6 +396,12 @@ extension EngineSmokeTest {
 
         // Closing the actual host invalidates an accepted sheet before
         // completion. The global catalog still refreshes independently.
+        let hostName = closeName + " host"
+        GradientChooser.shared.open(document: docB)
+        let hostChooserTable = allViews(
+            NSApp.windows.first { $0.title == "Gradient" && $0.isVisible }?.contentView,
+            as: NSTableView.self).first
+        wait { (hostChooserTable?.numberOfRows ?? 0) > 1 && !EngineActivity.shared.isBusy }
         let closeImage = try session.newImage(width: 16, height: 16)
         let closeDoc = try ImageDocument(session: session, image: closeImage, name: "Gradient close")
         documents.items.append(closeDoc)
@@ -396,23 +411,36 @@ extension EngineSmokeTest {
         guard let closingForm = closeController.gradientCreateSheet else {
             check(false, "the close fixture opens a gradient form"); return
         }
-        field(closingForm.panel.contentView, "Gradient name")?.stringValue = closeName
-        let closeHold = DispatchSemaphore(value: 0)
-        closeDoc.inputQueue.async { _ = closeHold.wait(timeout: .now() + 15) }
+        field(closingForm.panel.contentView, "Gradient name")?.stringValue = hostName
+        let hostCloseHold = DispatchSemaphore(value: 0)
+        closeDoc.inputQueue.async { _ = hostCloseHold.wait(timeout: .now() + 15) }
         button(closingForm.panel.contentView, "Create gradient")?.performClick(nil)
         check(closingForm.phase == .accepting && closeDoc.pendingWork > 0,
               "the closing host has an accepted counted gradient write")
+        var hostClosed = false
+        closeController.onClose = { _ in hostClosed = true }
         closeController.window?.close()
         check(closingForm.isInvalidated && closeController.gradientCreateSheet == nil,
               "host window close invalidates and releases the gradient form immediately")
-        closeHold.signal()
-        wait { closeDoc.isClosing && closeDoc.pendingWork == 0 }
+        hostCloseHold.signal()
+        wait { hostClosed }
         spin()
         check((try? session.info(closeImage)) == nil && !closingForm.panel.isVisible,
               "the host and form stay closed after the accepted work drains")
         let closeRows = try native { try session.resources(.gradient) }
-        check(closeRows.contains { $0.displayName == closeName },
+        check(closeRows.contains { $0.displayName == hostName },
               "the accepted write still publishes after its host closes")
+        wait {
+            (1..<max(1, hostChooserTable?.numberOfRows ?? 1)).contains {
+                rowTitle(hostChooserTable, $0) == hostName
+            }
+        }
+        let hostVisibleNames = (1..<max(1, hostChooserTable?.numberOfRows ?? 1))
+            .compactMap { rowTitle(hostChooserTable, $0) }
+        check(hostVisibleNames.contains(hostName),
+              "another document’s open chooser refreshes even after the creating host closes")
+        GradientChooser.shared.close()
+        wait { !EngineActivity.shared.isBusy }
         documents.items.removeAll { $0 === closeDoc }
 
         // Accepted work drains on close with exactly-one completion; the

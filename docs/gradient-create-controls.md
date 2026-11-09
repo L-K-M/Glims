@@ -60,3 +60,25 @@ never selected and the current gradient choice never moves.
   colors, duplicate retry, the busy gate, Cancel, fresh and open chooser
   visibility, pixels/undo quiet, and close drain with exactly-once
   completion plus a clean late refusal.
+
+
+## Root acceptance (2026-11-09)
+
+Root completed the timed-out helper's partial implementation. The host now
+invalidates and releases its sheet on close; successful publication refreshes
+open choosers independently of the originating form. The RGBA data path and
+counted close/drain behavior passed on all four engines. Alpha controls use
+per-well support on macOS14 and later, with owned shared-panel handling on13.
+The older-system UI path has source coverage, not a physical macOS13 run.
+
+All 820 unit tests pass. Final focused controls checks pass on every engine.
+The first runtime check found an oversized explanatory label; Root constrained
+both labels to330points and allowed error wrapping. A test crash exposed an
+attempt to activate a relation before its views had a common ancestor; fixed
+constant-width constraints now pass all four runs. These final runs cover
+visible field/button bounds, authored endpoint readback, duplicate retry,
+Cancel/busy gates, current-choice and pixel preservation, actual host closure,
+late global chooser refresh and close drain. The earlier important lifecycle
+fixes and critical production bodies have independent source review; Root's
+final label-only correction has the runtime geometry checks. Combined full app
+and exact-head CI remain pending.

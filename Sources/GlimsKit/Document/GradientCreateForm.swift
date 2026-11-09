@@ -210,7 +210,7 @@ final class GradientCreateSheetController: NSObject {
         }
         messageLabel.setAccessibilityLabel("Gradient creation message")
         messageLabel.lineBreakMode = .byWordWrapping
-        messageLabel.maximumNumberOfLines = 2
+        messageLabel.maximumNumberOfLines = 4
         messageLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
 
         createButton.target = self
@@ -233,6 +233,8 @@ final class GradientCreateSheetController: NSObject {
             + "Choose it from the Gradient tool’s resource list."
         scopeLabel.lineBreakMode = .byWordWrapping
         scopeLabel.maximumNumberOfLines = 3
+        scopeLabel.widthAnchor.constraint(equalToConstant: 330).isActive = true
+        messageLabel.widthAnchor.constraint(equalToConstant: 330).isActive = true
         scopeLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         let buttonRow = NSStackView(views: [createButton, cancelButton])
         buttonRow.orientation = .horizontal
