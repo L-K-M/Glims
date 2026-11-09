@@ -5268,18 +5268,27 @@ enum EngineSmokeTest {
             // Editing the copy does not reach the source (a fill needs a
             // pixel layer: the copy's text layer is still selected).
             let sourceSteps = document.undoInfo.undoCount
+            // Opening the first real document may start counted font work.
+            // Wait for admission before synthesizing the next user action.
+            spin()
+            wait { snapshotDoc?.pendingWork == 0 && !EngineActivity.shared.isBusy }
+            let snapshotReportError = snapshotDoc?.onError
+            var snapshotMessages: [String] = []
+            snapshotDoc?.onError = { snapshotReportError?($0); snapshotMessages.append($0) }
             if let background = snapshotDoc?.layers.last?.id { snapshotDoc?.selectLayer(background) }
             snapshotDoc?.fill(at: .zero, mode: .selection, color: .black, threshold: 0, sampleMerged: false)
             snapshotDoc?.inputQueue.sync {}
+            wait { snapshotDoc?.pendingWork == 0 && !EngineActivity.shared.isBusy }
             spin()
             check(snapshotDoc?.undoInfo.undoCount == 1 && document.undoInfo.undoCount == sourceSteps
                     && document.layers.contains { $0.kind == .text },
-                  "editing the snapshot leaves the source untouched")
+                  "editing the snapshot leaves the source untouched (copy undo \(snapshotDoc?.undoInfo.undoCount ?? -1), pending \(snapshotDoc?.pendingWork ?? -1), activity \(EngineActivity.shared.label ?? "none"), errors \(snapshotMessages))")
             snapshotDoc?.undo()
             snapshotDoc?.inputQueue.sync {}
             spin()
             check(snapshotDoc?.undoInfo.undoCount == 0 && document.undoInfo.undoCount == sourceSteps,
                   "the snapshot's own undo works on it alone")
+            snapshotDoc?.onError = snapshotReportError
             NSApp.windows
                 .first { ($0.windowController as? DocumentWindowController)?.imageDocument === snapshotDoc }?
                 .orderOut(nil)
