@@ -61,12 +61,17 @@ cancels; ICC coefficient quantization/rounding tolerance is kept tight (<=2
 u8), far below clipping loss. The mixed in-gamut sample differs materially
 from identity premultiplication.
 
-Allowed checks run here: strict facade-only Clang compile/link of
-`Engine/tests/display-render-tests.c` (header only, no Core/GLib/engine
-libraries; binary not executed), `python3 -m py_compile` for the new generator
-and driver scripts, `python3 scripts/make-wide-icc-fixture.py` headless ICC
-generation (LCMS only), and `python3 scripts/test-display-render.py --help`.
-Not run (forbidden by task): `scripts/test-display-render.py` normal execution,
-any engine/native/runtime/AppKit/unit/GUI/harness execution, adapter or engine
-production compiler commands, and no LCMS transforms as an expected-value
-oracle. Root executes engine/native/runtime later against stable private 132/135.
+Root acceptance preserves every pixel assertion (a prior loop overwrote
+its aggregate result) and uses two-dimensional matrix indexing throughout.
+All four engines pass 40 display checks. A negative control forces ONLY the
+wide identity request through the real legacy sRGB-u8 render, unpremultiplies
+and imports those clipped bytes, then renders back to wide RGB. It fails
+exactly the wide identity assertion. Run that intentional failure with
+`GLIMS_DISPLAY_TEST_SRGB_INTERMEDIATE=1`; ordinary runs leave it disabled.
+The narrow-destination oracle proves conversion rather than relabelling;
+wide identity plus this negative control proves sensitivity to lost gamut.
+
+The generator and facade runner compile strictly, original fixture bytes and
+nanosecond mtimes remain unchanged, and no production code/API changes.
+These checks cover an 8-bit wide-source fixture and SDR output, not LUT,
+physical-display, higher-precision source or HDR accuracy.

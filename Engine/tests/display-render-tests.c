@@ -102,6 +102,39 @@ srgb_decode (double c)
 }
 
 /* Direct premultiply oracle: premultiplied u8 of a straight u8 pixel. */
+/* Independent 3x3 algebra, indexed by both dimensions so no pointer
+ * arithmetic crosses a row-array object's bounds. */
+static void
+inverse3 (const double m[3][3], double out[3][3])
+{
+  double d = m[0][0]*(m[1][1]*m[2][2]-m[1][2]*m[2][1])
+           - m[0][1]*(m[1][0]*m[2][2]-m[1][2]*m[2][0])
+           + m[0][2]*(m[1][0]*m[2][1]-m[1][1]*m[2][0]);
+  out[0][0]=(m[1][1]*m[2][2]-m[1][2]*m[2][1])/d;
+  out[0][1]=(m[0][2]*m[2][1]-m[0][1]*m[2][2])/d;
+  out[0][2]=(m[0][1]*m[1][2]-m[0][2]*m[1][1])/d;
+  out[1][0]=(m[1][2]*m[2][0]-m[1][0]*m[2][2])/d;
+  out[1][1]=(m[0][0]*m[2][2]-m[0][2]*m[2][0])/d;
+  out[1][2]=(m[0][2]*m[1][0]-m[0][0]*m[1][2])/d;
+  out[2][0]=(m[1][0]*m[2][1]-m[1][1]*m[2][0])/d;
+  out[2][1]=(m[0][1]*m[2][0]-m[0][0]*m[2][1])/d;
+  out[2][2]=(m[0][0]*m[1][1]-m[0][1]*m[1][0])/d;
+}
+
+static void
+rgb_xyz_matrix (const double p[3][2], double wx, double wy, double out[3][3])
+{
+  double inv[3][3], w[3] = {wx/wy, 1, (1-wx-wy)/wy}, scale[3];
+  for (int col=0; col<3; col++) {
+    out[0][col]=p[col][0]/p[col][1]; out[1][col]=1;
+    out[2][col]=(1-p[col][0]-p[col][1])/p[col][1];
+  }
+  inverse3 (out, inv);
+  for (int row=0; row<3; row++)
+    scale[row]=inv[row][0]*w[0]+inv[row][1]*w[1]+inv[row][2]*w[2];
+  for (int row=0; row<3; row++) for (int col=0; col<3; col++) out[row][col]*=scale[col];
+}
+
 static int
 expect_premul (int c, int a)
 {
@@ -392,7 +425,7 @@ main (int argc, char **argv)
     GlimsImageID wimg = 0; char wpath[4096];
     GlimsStatus ws; GlimsImageInfo wi; GlimsUndoInfo wu;
     uint8_t wout[TH*32]; GlimsRect wf = {0,0,TW,TH};
-    double Mw[3][3], Ms[3][3], Mi[3][3], Mws[3][3], detm, tmp[3][3];
+    double Mw[3][3], Ms[3][3], Mi[3][3], Mws[3][3];
     int ci, cj, ck;
 
     wide_icc = read_file (argv[3], "wide-linear-rgb.icc", &wide_len);
@@ -400,40 +433,12 @@ main (int argc, char **argv)
     if (! wide_icc)
       goto wide_done;
 
-    /* Build RGB->XYZ from xyY primaries (Y=1) and white. */
-    for (ci = 0; ci < 3; ci++) {
-      const double (*p)[2] = (ci==0?wp:(ci==1?wp+1:wp+2));
-      double px=(*p)[0], py=(*p)[1], X=px/py, Y=1.0, Z=(1-px-py)/py;
-      Mw[0][ci]=X; Mw[1][ci]=Y; Mw[2][ci]=Z;
-      p = (ci==0?sp:(ci==1?sp+1:sp+2)); px=(*p)[0]; py=(*p)[1];
-      Ms[0][ci]=px/py; Ms[1][ci]=1.0; Ms[2][ci]=(1-px-py)/py;
-    }
-    /* Scale columns by white: inv(M)*W */
-    {
-      double *m=Mw[0], Wv[3]={D65x/D65y,1.0,(1-D65x-D65y)/D65y}, s[3], invm[3][3];
-      detm = m[0]*(m[4]*m[8]-m[5]*m[7])-m[1]*(m[3]*m[8]-m[5]*m[6])+m[2]*(m[3]*m[7]-m[4]*m[6]);
-      invm[0][0]=(m[4]*m[8]-m[5]*m[7])/detm; invm[0][1]=(m[2]*m[7]-m[1]*m[8])/detm; invm[0][2]=(m[1]*m[5]-m[2]*m[4])/detm;
-      invm[1][0]=(m[5]*m[6]-m[3]*m[8])/detm; invm[1][1]=(m[0]*m[8]-m[2]*m[6])/detm; invm[1][2]=(m[2]*m[3]-m[0]*m[5])/detm;
-      invm[2][0]=(m[3]*m[7]-m[4]*m[6])/detm; invm[2][1]=(m[1]*m[6]-m[0]*m[7])/detm; invm[2][2]=(m[0]*m[4]-m[1]*m[3])/detm;
-      for(ci=0;ci<3;ci++) s[ci]=invm[ci][0]*Wv[0]+invm[ci][1]*Wv[1]+invm[ci][2]*Wv[2];
-      for(ci=0;ci<3;ci++) for(cj=0;cj<3;cj++) Mw[ci][cj]*=s[cj];
-      m=Ms[0];
-      detm = m[0]*(m[4]*m[8]-m[5]*m[7])-m[1]*(m[3]*m[8]-m[5]*m[6])+m[2]*(m[3]*m[7]-m[4]*m[6]);
-      invm[0][0]=(m[4]*m[8]-m[5]*m[7])/detm; invm[0][1]=(m[2]*m[7]-m[1]*m[8])/detm; invm[0][2]=(m[1]*m[5]-m[2]*m[4])/detm;
-      invm[1][0]=(m[5]*m[6]-m[3]*m[8])/detm; invm[1][1]=(m[0]*m[8]-m[2]*m[6])/detm; invm[1][2]=(m[2]*m[3]-m[0]*m[5])/detm;
-      invm[2][0]=(m[3]*m[7]-m[4]*m[6])/detm; invm[2][1]=(m[1]*m[6]-m[0]*m[7])/detm; invm[2][2]=(m[0]*m[4]-m[1]*m[3])/detm;
-      for(ci=0;ci<3;ci++) s[ci]=invm[ci][0]*Wv[0]+invm[ci][1]*Wv[1]+invm[ci][2]*Wv[2];
-      for(ci=0;ci<3;ci++) for(cj=0;cj<3;cj++) Ms[ci][cj]*=s[cj];
-    }
-    /* Mi = inv(Ms), Mws = Mi * Mw (wide -> linear sRGB primaries). */
-    {
-      double *m=Ms[0];
-      detm = m[0]*(m[4]*m[8]-m[5]*m[7])-m[1]*(m[3]*m[8]-m[5]*m[6])+m[2]*(m[3]*m[7]-m[4]*m[6]);
-      Mi[0][0]=(m[4]*m[8]-m[5]*m[7])/detm; Mi[0][1]=(m[2]*m[7]-m[1]*m[8])/detm; Mi[0][2]=(m[1]*m[5]-m[2]*m[4])/detm;
-      Mi[1][0]=(m[5]*m[6]-m[3]*m[8])/detm; Mi[1][1]=(m[0]*m[8]-m[2]*m[6])/detm; Mi[1][2]=(m[2]*m[3]-m[0]*m[5])/detm;
-      Mi[2][0]=(m[3]*m[7]-m[4]*m[6])/detm; Mi[2][1]=(m[1]*m[6]-m[0]*m[7])/detm; Mi[2][2]=(m[0]*m[4]-m[1]*m[3])/detm;
-      for(ci=0;ci<3;ci++) for(cj=0;cj<3;cj++) { tmp[ci][cj]=0; for(ck=0;ck<3;ck++) tmp[ci][cj]+=Mi[ci][ck]*Mw[ck][cj]; }
-      for(ci=0;ci<3;ci++) for(cj=0;cj<3;cj++) Mws[ci][cj]=tmp[ci][cj];
+    rgb_xyz_matrix (wp, D65x, D65y, Mw);
+    rgb_xyz_matrix (sp, D65x, D65y, Ms);
+    inverse3 (Ms, Mi);
+    for (ci=0; ci<3; ci++) for (cj=0; cj<3; cj++) {
+      Mws[ci][cj]=0;
+      for (ck=0; ck<3; ck++) Mws[ci][cj]+=Mi[ci][ck]*Mw[ck][cj];
     }
     /* Sensitivity: saturated wide red primary leaves linear sRGB gamut
      * (R>1, G<0, B<0), so a forced sRGB-u8 intermediate clips unrecoverably. */
@@ -460,6 +465,29 @@ main (int argc, char **argv)
                                        (const uint8_t *) wide_icc, wide_len,
                                        wout, 32, &error);
     take_error (error); error = NULL;
+    /* Negative control, enabled only by the runtime owner: intentionally
+     * lose gamut through the real legacy sRGB-u8 path, then convert those
+     * clipped bytes back to wide RGB. Only this identity case is replaced. */
+    if (getenv ("GLIMS_DISPLAY_TEST_SRGB_INTERMEDIATE")) {
+      uint8_t clipped[TW*TH*4], straight[TW*TH*4];
+      GlimsImageID intermediate=0;
+      ws=api->image_render (engine, wimg, 1.0, wf, clipped, TW*4);
+      if (ws==GLIMS_STATUS_OK) {
+        for (int p=0; p<TW*TH; p++) {
+          unsigned a=clipped[p*4+3]; straight[p*4+3]=(uint8_t)a;
+          for (int c=0; c<3; c++)
+            straight[p*4+c]=a ? (uint8_t) fmin(255, lround(clipped[p*4+c]*255.0/a)) : 0;
+        }
+        ws=api->image_from_pixels (engine, TW, TH, straight, sizeof straight, &intermediate, &error);
+        take_error (error); error=NULL;
+        if (ws==GLIMS_STATUS_OK) {
+          ws=api->image_render_to_profile (engine, intermediate, 1.0, wf,
+                                          (const uint8_t *)wide_icc, wide_len, wout, 32, &error);
+          take_error (error); error=NULL;
+        }
+      }
+      if (intermediate) api->image_close (engine, intermediate);
+    }
     {
       int ok = ws == GLIMS_STATUS_OK;
       for (i = 0; ok && i < TH; i++) {
@@ -504,10 +532,9 @@ main (int argc, char **argv)
       }
       CHECK (ok, "wide->linear-sRGB render matches independent xyY matrix oracle (tol<=2), guards intact");
     }
-    /* Saturated wide primaries would be clipped if forced through an sRGB-u8
-     * intermediate (matrix gives R>1 or negative channels); the renderer must
-     * keep gamut, so wide red/green/blue render as their clamped sRGB mapping,
-     * not as identity premultiplication of the wide-encoded source bytes. */
+    /* The narrow destination legitimately clips saturated primaries. This
+     * check distinguishes a nonidentity mapping from relabelled wide bytes;
+     * gamut preservation itself is proved by the wide->wide identity case. */
     {
       int ok = ws == GLIMS_STATUS_OK;
       /* wide red/green/blue (rows 0, pixels 0-2): identity premul would keep
@@ -524,7 +551,7 @@ main (int argc, char **argv)
         int idr=expect_premul(s[0],s[3]), idg=expect_premul(s[1],s[3]), idb=expect_premul(s[2],s[3]);
         ok = ok && (abs(d[0]-idr)>4 || abs(d[1]-idg)>4 || abs(d[2]-idb)>4);
       }
-      CHECK (ok, "wide gamut mapping differs from identity/clipped-sRGB intermediate for saturated+mixed samples");
+      CHECK (ok, "wide-to-narrow mapping differs from relabelled identity for mixed samples");
     }
     {
       GlimsImageInfo wa; GlimsUndoInfo wb;
