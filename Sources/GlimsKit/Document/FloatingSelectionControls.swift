@@ -23,6 +23,16 @@ enum FloatingControlsLogic {
         var allowed: Bool { drawable != nil }
     }
 
+    /// Select ▸ Float Selected Pixels / Float a Copy's explicit target,
+    /// from cached state only.
+    struct FloatTarget: Equatable {
+        /// The drawable the float would take its pixels from; nil when
+        /// refused.
+        let drawable: Int32?
+        let reason: String?
+        var allowed: Bool { drawable != nil }
+    }
+
     /// The resolve-first reason: while a floating selection is active,
     /// commands that would implicitly anchor it (target switches,
     /// structural layer/mask/channel changes, an ordinary Paste) are
@@ -37,6 +47,17 @@ enum FloatingControlsLogic {
         "Detach the floating selection as a new layer. The selection clipping is removed and the full pasted pixels are revealed, so the result is not necessarily the same as the clipped preview."
     static let anchorTooltip = "Merge the floating selection into the drawable it is attached to."
     static let discardTooltip = "Remove the floating selection without merging it."
+
+    /// Float Selected Pixels (MOVE) tooltip: a cut, and the float clears
+    /// the selection — stated, never silently.
+    static let floatMoveTooltip =
+        "Cut the selected pixels out of the target and float them as a floating selection. "
+        + "Those pixels are cleared from the target, and the selection is cleared."
+    /// Float a Copy (COPY) tooltip: non-destructive, and the selection is
+    /// still cleared.
+    static let floatCopyTooltip =
+        "Float a copy of the selected pixels as a floating selection. "
+        + "The target is unchanged, and the selection is cleared."
 
     /// The resolve-first gate for structural commands while a floating
     /// selection is active; nil when none is.
@@ -150,6 +171,79 @@ enum FloatingControlsLogic {
         }
         return PasteIntoTarget(drawable: nil,
                                reason: "The selected layer, mask or channel changed. Select a paint target again.")
+    }
+
+    /// Whether Select ▸ Float … may take the current selection off
+    /// `drawable` in `mode`, from cached state. The id is never 0: no
+    /// layer-0 / front-document fallback reaches the engine. The gates
+    /// mirror the native preflight in `glims_selection_float`: an
+    /// existing floating selection (resolve-first, never a silent
+    /// anchor), a real selection, a non-group target that is not a
+    /// genuine editable text/link/vector layer (rasterize first — the
+    /// source gate applies to the layer's own pixels only, never to its
+    /// mask or a channel), and for MOVE the target's content and alpha
+    /// locks (COPY is non-destructive and checks no locks). Mask and
+    /// channel targets carry no structured source of their own, matching
+    /// the native check, which only reads the source of a layer target.
+    static func floatTarget(_ drawable: Int32?, mode: EngineSession.FloatMode, hasSelection: Bool,
+                            state: EngineSession.FloatingState,
+                            layers: [EngineSession.Layer], maskStates: [Int32: EngineSession.MaskState],
+                            channels: [EngineSession.Channel], sources: [Int32: EngineSession.LayerSource],
+                            locks: [Int32: EngineSession.LayerLockState],
+                            acceptsEdits: Bool, pendingTarget: Bool) -> FloatTarget {
+        if !acceptsEdits {
+            return FloatTarget(drawable: nil, reason: "Wait for the current image operation to finish.")
+        }
+        if pendingTarget {
+            return FloatTarget(drawable: nil, reason: "The paint target is changing; wait for it to settle.")
+        }
+        if let reason = resolveFirstGate(state) {
+            return FloatTarget(drawable: nil, reason: reason)
+        }
+        guard let drawable, drawable != 0 else {
+            return FloatTarget(drawable: nil, reason: "Select a layer, mask or channel to float.")
+        }
+        if !hasSelection {
+            return FloatTarget(drawable: nil, reason: "There is no selection to float; select an area first.")
+        }
+        if channels.contains(where: { $0.id == drawable }) {
+            // Channel locks are not exposed by the cached channel model.
+            // Native MOVE rechecks content locks and reports any refusal;
+            // COPY remains non-destructive. Channels have no layer source.
+            return FloatTarget(drawable: drawable, reason: nil)
+        }
+        if let owner = maskStates.first(where: { $0.value.mask != 0 && $0.value.mask == drawable })?.key {
+            // MOVE cuts through the mask; the owning layer's content
+            // lock gates it, as the native inherited-lock check does.
+            if mode == .move, locks[owner]?.effective.contains(.pixels) == true {
+                return FloatTarget(drawable: nil, reason: "The mask's layer has its pixels locked.")
+            }
+            return FloatTarget(drawable: drawable, reason: nil)
+        }
+        if let layer = layers.first(where: { $0.id == drawable }) {
+            if layer.kind == .group {
+                return FloatTarget(drawable: nil,
+                                   reason: "Cannot float from a layer group; choose one of its layers, its mask or a channel.")
+            }
+            if isGenuineEditableSource(sources[drawable]) {
+                return FloatTarget(drawable: nil,
+                    reason: "The target is a genuine editable text, link or vector layer; rasterize it before floating the selection.")
+            }
+            if mode == .move {
+                let effective = locks[drawable]?.effective ?? []
+                if effective.contains(.pixels) {
+                    return FloatTarget(drawable: nil,
+                                       reason: "The target's pixels are locked; unlock them before cutting the selection out.")
+                }
+                if effective.contains(.alpha) {
+                    return FloatTarget(drawable: nil,
+                                       reason: "The target's transparency is locked; unlock it before cutting the selection out.")
+                }
+            }
+            return FloatTarget(drawable: drawable, reason: nil)
+        }
+        return FloatTarget(drawable: nil,
+                           reason: "The selected layer, mask or channel changed. Select a paint target again.")
     }
 
     /// Whether resolving the active floating selection with `command`

@@ -52,11 +52,16 @@ struct GlimsEngine
   GFile              *icon_theme_dir;
 };
 
+typedef struct GlimsItemSets GlimsItemSets;
+GlimsItemSets * glims_item_sets_new  (GimpImage *image);
+void            glims_item_sets_free (GlimsItemSets *manager);
+
 /* An image the app holds open. */
 typedef struct
 {
   GimpImage *image;
   GlimsEngine *engine;
+  GlimsItemSets *item_sets;
   gulong     projection_update_handler;
   gulong     undo_event_handler;
   gulong     layers_changed_handler;
@@ -450,6 +455,10 @@ GlimsStatus glims_image_metadata_edit   (GlimsEngine *e, GlimsImageID image, con
                                          uint32_t operation, const char *const *values,
                                          int32_t count, char **error);
 void        glims_free_metadata_strings (char **strings);
+/* READ-ONLY descriptor of one registered tag (slot 128); a plain read
+ * with no edit-readiness gate, never creates or installs metadata. */
+GlimsStatus glims_image_metadata_tag_info (GlimsEngine *e, GlimsImageID image, const char *tag,
+                                           GlimsMetadataTagInfo *outInfo, char **error);
 
 /* layer-source.c */
 GlimsStatus glims_layer_source_info (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,

@@ -1249,6 +1249,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             }
             menuItem.toolTip = nil
             return !editingBlocked && !previewBusy
+        case #selector(floatSelectedPixels(_:)), #selector(floatACopy(_:)):
+            // Cached readiness only — selection present, no active
+            // floating selection, one selected layer, not busy/closing/
+            // preview/save/clipboard, no pending target change, and the
+            // mode's lock/source gates. The tooltip carries the refusal
+            // reason, or the mode's cut-vs-copy and selection-clear copy.
+            let mode: EngineSession.FloatMode =
+                menuItem.action == #selector(floatSelectedPixels(_:)) ? .move : .copy
+            let readiness = imageDocument.floatReadiness(mode)
+            if !readiness.allowed {
+                menuItem.toolTip = readiness.reason
+                return false
+            }
+            menuItem.toolTip = mode == .move
+                ? FloatingControlsLogic.floatMoveTooltip : FloatingControlsLogic.floatCopyTooltip
+            return !editingBlocked && !previewBusy
         case #selector(toVectorLayer(_:)):
             // Vector layers arrived in GIMP 3.2; older engines report
             // UNSUPPORTED when the command runs, so the item stays listed.
