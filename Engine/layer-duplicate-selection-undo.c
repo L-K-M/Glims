@@ -152,15 +152,15 @@ valid_layers (GimpImage *image, GPtrArray *layers)
 }
 
 GimpUndo *
-glims_layer_duplicate_selection_undo_push (GimpImage *image, GPtrArray *before, GPtrArray *after)
+glims_layer_selection_undo_push (GimpImage *image, GPtrArray *before, GPtrArray *after)
 {
   if (!GIMP_IS_IMAGE (image) || !valid_layers (image, before) ||
-      !valid_layers (image, after) || !after->len || !gimp_image_undo_is_enabled (image)) return NULL;
+      !valid_layers (image, after) || !gimp_image_undo_is_enabled (image)) return NULL;
   /* Like item-sets-undo.c, the metadata category accepts this custom
    * GimpUndo subtype. NONE adds no dirty step; the outer layer-add group
    * owns structure accounting. Both snapshots exist before notifications
    * or history expiry can observe the newly constructed record. */
   return gimp_image_undo_push (image, GLIMS_TYPE_LAYER_SELECTION_UNDO,
-    GIMP_UNDO_IMAGE_METADATA, "Duplicate layer selection", GIMP_DIRTY_NONE,
+    GIMP_UNDO_IMAGE_METADATA, "Layer selection", GIMP_DIRTY_NONE,
     "before-layers", before, "after-layers", after, NULL);
 }

@@ -88,7 +88,7 @@ glims_image_duplicate_layers (GlimsEngine *engine, GlimsImageID image,
      * restores the complete ordered vector on Redo and the prior vector
      * before Undo removes copies. Native retention policy may expire the
      * record/group; as with native commands, that is not a failed edit. */
-    glims_layer_duplicate_selection_undo_push (open->image, before, after);
+    glims_layer_selection_undo_push (open->image, before, after);
   }
   gimp_image_undo_group_end (open->image);
   gimp_image_flush (open->image);
