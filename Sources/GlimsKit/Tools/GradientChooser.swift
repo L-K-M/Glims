@@ -104,6 +104,10 @@ final class GradientChooserPanel: NSWindowController, NSWindowDelegate,
     private let table = ResourcePickerTableView()
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let retryButton = NSButton(title: "Retry", target: nil, action: nil)
+    private let duplicateButton = NSButton(title: "Duplicate…", target: nil, action: nil)
+    /// The shared Duplicate… form while open; the panel owns its lifecycle
+    /// and invalidates it on dismissal.
+    private var duplicateForm: ResourceDuplicateFormController?
 
     init(document: ImageDocument?, model: ResourceChooserModel) {
         self.sourceDocument = document
@@ -164,7 +168,10 @@ final class GradientChooserPanel: NSWindowController, NSWindowDelegate,
         retryButton.target = self
         retryButton.action = #selector(load)
         retryButton.isHidden = true
-        let buttons = NSStackView(views: [retryButton, cancel, choose])
+        duplicateButton.target = self
+        duplicateButton.action = #selector(duplicate(_:))
+        duplicateButton.setAccessibilityLabel("Duplicate gradient")
+        let buttons = NSStackView(views: [retryButton, duplicateButton, cancel, choose])
         buttons.spacing = 8
         buttons.orientation = .horizontal
 
@@ -237,6 +244,7 @@ final class GradientChooserPanel: NSWindowController, NSWindowDelegate,
 
     private func refresh() {
         reloadTable(scrollToSelection: true)
+        updateDuplicateButton()
         switch model.state {
         case .loading:
             statusLabel.stringValue = "Loading gradients…"
@@ -338,8 +346,45 @@ final class GradientChooserPanel: NSWindowController, NSWindowDelegate,
             defaultSelected = false
             model.select(visibleRows[row - 1].id)
         }
+        updateDuplicateButton()
         // A hidden or temporarily deselected row is not a new choice; the
         // pending identity is retained through search and reloads.
+    }
+
+    // MARK: Duplicate…
+
+    /// The duplicatable source of a Duplicate… right now: the highlighted
+    /// catalog row's identity, native handle and kind. The Foreground to
+    /// Background Default row (and no highlight) is not a saved resource and
+    /// is refused with a reason.
+    private func duplicateSource() -> ResourceDuplicateValidation.Source? {
+        guard let selection = model.selection,
+              let row = model.rows.first(where: { $0.id == selection }) else { return nil }
+        return ResourceDuplicateValidation.Source(kind: .gradient, id: row.id, identity: row.identity)
+    }
+
+    private func updateDuplicateButton() {
+        let source = duplicateSource()
+        duplicateButton.isEnabled = !controller.isClosed && source != nil
+        duplicateButton.toolTip = ResourceDuplicateValidation.sourceRefusal(source, kind: .gradient)
+            ?? "Duplicate the selected gradient under a new name"
+    }
+
+    /// Opens the shared Duplicate… form, capturing the document and the
+    /// source NOW: later highlight, tool or front-window changes cannot
+    /// alter them.
+    @objc private func duplicate(_ sender: Any?) {
+        guard !controller.isClosed, let document = sourceDocument, !document.isClosing else { return }
+        if let form = duplicateForm, !form.isInvalidated {
+            form.show()
+            return
+        }
+        guard let source = duplicateSource() else { return }
+        let form = ResourceDuplicateFormController(document: document, source: source, hostWindow: window)
+        form.onSucceeded = { [weak self] _ in self?.controller.reloadCatalog() }
+        form.onClosed = { [weak self] in self?.duplicateForm = nil }
+        duplicateForm = form
+        form.show()
     }
 
     // MARK: Search
@@ -389,8 +434,12 @@ final class GradientChooserPanel: NSWindowController, NSWindowDelegate,
 
     func dismiss() {
         guard !controller.isClosed else { return }
-        // Late native results must not restore this stale view.
+        // Late native results must not restore this stale view; the open
+        // Duplicate… form is invalidated with the panel (its accepted work,
+        // if any, still drains on the document).
         controller.invalidate()
+        duplicateForm?.invalidate()
+        duplicateForm = nil
         window?.orderOut(nil)
         GradientChooser.shared.didClose(self)
     }
