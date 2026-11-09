@@ -13,6 +13,7 @@ enum MainMenu {
         add(menu, AppIdentity.name, [
             item("About \(AppIdentity.name)", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
             item("Preferences…", #selector(AppController.showPreferences(_:)), ","),
+            item("Keyboard Shortcuts…", #selector(AppController.showKeyboardShortcuts(_:))),
             .separator(),
             item("Hide \(AppIdentity.name)", #selector(NSApplication.hide(_:)), "h"),
             item("Quit \(AppIdentity.name)", #selector(NSApplication.terminate(_:)), "q"),
@@ -253,7 +254,13 @@ enum MainMenu {
     }
 
     private static func item(_ title: String, _ action: Selector, _ key: String = "") -> NSMenuItem {
-        NSMenuItem(title: title, action: action, keyEquivalent: key)
+        let newItem = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        // Marks the statically built commands so the shortcut bridge
+        // collects exactly these; dynamic content (plug-in commands,
+        // workspaces, the recent-documents list) is never marked and stays
+        // out of the shortcut catalog.
+        newItem.identifier = MenuShortcutBridge.builtinIdentifier
+        return newItem
     }
 
     @discardableResult
