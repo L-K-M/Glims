@@ -3381,3 +3381,16 @@ The baseline reproduced six ignored-modifier failures; the corrected
 workflow passes21 real-window checks on all four supported engines and909
 unit tests. Independent source review has no important findings. Final
 integrated bundle validation remains open.
+
+
+### Brightness/Contrast configuration (2026-11-09)
+
+The dedicated native editor owns a normalized settings pair and immutable
+config replacements, with default seeding before preview and guarded native
+Undo. API v1 appends slots 148/149. New and existing-effect controls preserve
+captured documents and committed settings. See `brightness-contrast.md`.
+All four engines pass 177 dedicated native checks and 15 actual-window
+checks. The integrated unit suite passes 909 tests; native and UI integration
+reviews have no important remaining findings after the reproduced admission
+fix. Final combined bundle verification is still running. Other four custom
+config operations remain unavailable pending their dedicated editors.
