@@ -10,6 +10,16 @@ import CoreGraphics
 /// pixel) is therefore the percent alone, while view points also divide
 /// by the window's backing factor.
 enum CanvasGeometry {
+    /// Every tile intersecting a nonempty half-open interval. Viewports
+    /// have fractional device-pixel edges after scrolling or rotation.
+    static func tileIndexRange(minimum: Double, maximum: Double, tileSize: Int) -> ClosedRange<Int>? {
+        guard tileSize > 0, minimum.isFinite, maximum.isFinite, minimum < maximum,
+              let first = Int(exactly: floor(minimum / Double(tileSize))),
+              let last = Int(exactly: ceil(maximum / Double(tileSize)) - 1),
+              first <= last else { return nil }
+        return first...last
+    }
+
     /// Device pixels per image pixel at `zoomPercent`. Backing-independent,
     /// so the same zoom renders the same tiles on every screen.
     static func renderScale(zoomPercent: Int) -> Double {

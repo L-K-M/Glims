@@ -211,6 +211,41 @@ extension EngineSmokeTest {
             settle()
             check(try session.copyPixels(image, merged: true).pixels == beforePaint,
                   "one Undo restores the complete rotated stroke at \(angle)")
+            if let window = controller.window {
+                func mouse(_ type: NSEvent.EventType, _ location: CGPoint) -> NSEvent? {
+                    NSEvent.mouseEvent(with: type, location: location, modifierFlags: [], timestamp: 0,
+                        windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+                }
+                let ruler = controller.horizontalRuler
+                let destination = controller.canvas.convert(CGPoint(x: 25 * controller.canvas.scale, y: 32 * controller.canvas.scale), to: nil)
+                if let down = mouse(.leftMouseDown, ruler.convert(CGPoint(x: 50, y: 5), to: nil)),
+                   let drag = mouse(.leftMouseDragged, destination), let up = mouse(.leftMouseUp, destination) {
+                    ruler.mouseDown(with: down)
+                    ruler.mouseDragged(with: drag)
+                    ruler.mouseUp(with: up)
+                    settle()
+                    let guide = doc.guides.first { $0.orientation == .horizontal && $0.position == 32 }
+                    check(guide != nil, "the horizontal ruler creates an image-horizontal guide at the rotated drop coordinate at \(angle)")
+                    if let guide { doc.removeGuide(guide.id); settle() }
+                } else { check(false, "rotated ruler drag events can be constructed") }
+
+                controller.zoom(to: 3200)
+                controller.center(on: CGPoint(x: 60, y: 40))
+                state.select(.hand)
+                let local = CGPoint(x: 60 * controller.canvas.scale, y: 40 * controller.canvas.scale)
+                let beforePan = controller.canvas.convert(local, to: nil)
+                let dragTo = CGPoint(x: beforePan.x + 20, y: beforePan.y + 10)
+                if let down = mouse(.leftMouseDown, beforePan), let drag = mouse(.leftMouseDragged, dragTo),
+                   let up = mouse(.leftMouseUp, dragTo) {
+                    controller.canvas.mouseDown(with: down)
+                    controller.canvas.mouseDragged(with: drag)
+                    controller.canvas.mouseUp(with: up)
+                    let afterPan = controller.canvas.convert(local, to: nil)
+                    check(abs(afterPan.x - beforePan.x - 20) < 0.01 && abs(afterPan.y - beforePan.y - 10) < 0.01,
+                          "the hand gesture follows screen displacement while the canvas is rotated at \(angle)")
+                } else { check(false, "rotated hand events can be constructed") }
+                controller.zoom(to: 100)
+            }
         }
     }
 }

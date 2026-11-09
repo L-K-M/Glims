@@ -24,13 +24,19 @@ Actual rotated rectangle gestures exposed affine roundoff at exact pixel edges:
 noise within1e-7 image pixels of an integer; genuine subpixel input is preserved.
 The failing runtime checks now select exact12,14,30,24 bounds at90°,−45°,180°.
 
-Verification:830 unit tests pass. The real engine smoke case `canvas-rotation`
+Verification:831 unit tests pass. The real engine smoke case `canvas-rotation`
 passes on all four supported engines: known-color rendered quadrants, event
 mapping, projected rulers, fit/zoom center, native pixel/history preservation,
 menu actions/title, invalid and fractional custom-angle forms, actual rectangle
-selection, pencil strokes and one-step Undo. The container's unit tests also
+selection, pencil strokes and one-step Undo, rotated ruler guide creation and
+screen-relative Hand panning. The container's unit tests also
 cover rotated native hit testing outside the unrotated frame, resizing, finite
 angles, observer lifetime and absence of a deferred notification loop.
 
-Full app regression and independent integration review remain pending at this
-checkpoint. Physical movement between displays is not newly verified here.
+The full app regression passes2237 checks. Independent review found a
+fractional visible-tile interval bug: subtracting one from an exclusive
+fractional edge could produce0...−1 or omit a partially visible next tile.
+The corrected floor/ceil half-open tile range has direct boundary, sliver and
+invalid-input tests; independent source inspection of the correction found no
+further important issue. All four focused runtime cases pass after that fix.
+Hosted CI is pending. Physical movement between displays is not newly verified.

@@ -3208,3 +3208,20 @@ keeps later cascades inside it and preserves existing palette positions.
 Initial Fit Image follows placement and layout. All four engines pass 15
 real window/adoption checks, all 816 units pass, and the integrated pinned
 app passes 2,121 checks. See `document-placement.md` for scope and limits.
+
+### Per-window view rotation (2026-11-09)
+
+View ▸ Rotate View rotates the existing AppKit canvas through a bounding host.
+Clockwise/counterclockwise steps, fractional angle entry, reset and the window
+title expose the state. Image pixels/history remain unchanged; pointer events,
+overlays/text, fit/zoom/centering and projected equal-DPI rulers use native view
+conversion. Guide orientation remains in image axes, while Hand panning follows
+window displacement. Close cancels the owned angle sheet and frame observers.
+
+Actual rotated rectangle gestures found affine noise expanding exact pixel
+edges; only sub1e-7-pixel numerical noise is removed. Review found a fractional
+tile sliver could create an invalid range or omit a partial tile. The half-open
+floor/ceil range now covers both axes with finite/overflow guards.831 unit
+tests,47 focused checks on each engine and2237 full app checks pass. Independent
+source review covered the integration and corrected tile arithmetic. Exact-head
+CI remains the merge gate; physical display transitions remain unverified here.

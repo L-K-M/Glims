@@ -7,6 +7,19 @@ import XCTest
 /// up in device pixels, and a backing change keeps the image pixel under
 /// the viewport centre within the scrollable range.
 final class CanvasGeometryTests: XCTestCase {
+    func testVisibleTilesIncludeFractionalSliversAndRespectExclusiveEdges() {
+        XCTAssertEqual(CanvasGeometry.tileIndexRange(minimum: 0, maximum: 0.5, tileSize: 256), 0...0)
+        XCTAssertEqual(CanvasGeometry.tileIndexRange(minimum: 256, maximum: 256.5, tileSize: 256), 1...1)
+        XCTAssertEqual(CanvasGeometry.tileIndexRange(minimum: 255.75, maximum: 256.25, tileSize: 256), 0...1)
+        XCTAssertEqual(CanvasGeometry.tileIndexRange(minimum: 0, maximum: 256, tileSize: 256), 0...0)
+        XCTAssertEqual(CanvasGeometry.tileIndexRange(minimum: 256, maximum: 512, tileSize: 256), 1...1)
+        XCTAssertNil(CanvasGeometry.tileIndexRange(minimum: 1, maximum: 1, tileSize: 256))
+        XCTAssertNil(CanvasGeometry.tileIndexRange(minimum: .nan, maximum: 2, tileSize: 256))
+        XCTAssertNil(CanvasGeometry.tileIndexRange(minimum: 0, maximum: .infinity, tileSize: 256))
+        XCTAssertNil(CanvasGeometry.tileIndexRange(minimum: 0, maximum: 2, tileSize: 0))
+        XCTAssertNil(CanvasGeometry.tileIndexRange(minimum: Double.greatestFiniteMagnitude / 2,
+                                                  maximum: Double.greatestFiniteMagnitude, tileSize: 256))
+    }
     func testImagePointRemovesAffineNoiseWithoutQuantizingSubpixels() {
         for zoom in [25, 100, 150, 3200] {
             for backing in [1.0, 2.0] {

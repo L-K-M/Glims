@@ -321,8 +321,8 @@ final class EngineCanvasView: NSView {
                             width: visible.width * backingScale, height: visible.height * backingScale)
             .intersection(CGRect(origin: .zero, size: deviceImageSize))
         guard !device.isEmpty else { return [] }
-        let columns = Int(floor(device.minX / size))...Int(floor((device.maxX - 1) / size))
-        let rows = Int(floor(device.minY / size))...Int(floor((device.maxY - 1) / size))
+        guard let columns = CanvasGeometry.tileIndexRange(minimum: device.minX, maximum: device.maxX, tileSize: Self.tileSize),
+              let rows = CanvasGeometry.tileIndexRange(minimum: device.minY, maximum: device.maxY, tileSize: Self.tileSize) else { return [] }
         let center = CGPoint(x: device.midX / size, y: device.midY / size)
         return rows.flatMap { row in columns.map { TileKey(column: $0, row: row) } }
             .sorted {
