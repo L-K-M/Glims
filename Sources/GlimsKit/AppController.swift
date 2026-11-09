@@ -123,6 +123,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The shortcut manager attaches exactly once, now that the real
+        // main menu is installed (GlimsApplication set it before the run
+        // loop started). MainMenu.make() itself never attaches or rewrites
+        // anything global.
+        MenuShortcutManager.shared.attach()
         ClassicChrome.apply(scheme: EditorPreferences.shared.appearance)
         NotificationCenter.default.addObserver(self, selector: #selector(preferencesChanged),
                                                name: EditorPreferences.didChange, object: EditorPreferences.shared)
@@ -186,6 +191,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         if preferencesWindow == nil { preferencesWindow = PreferencesWindowController() }
         preferencesWindow?.showWindow(nil)
         preferencesWindow?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// App ▸ Keyboard Shortcuts…: the menu shortcut customization panel.
+    @objc func showKeyboardShortcuts(_ sender: Any?) {
+        MenuShortcutManager.shared.showPanel()
     }
 
     /// Help > Glims Help: the bundled manual in its own window. The panel
