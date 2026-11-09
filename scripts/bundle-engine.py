@@ -34,6 +34,8 @@ Deliberately left out: GIMP's GTK modules and tool presets (the adapter
 never loads them), engine translations (Glims is English-only so far),
 gimp-console and other engine tools, headers, and Python's build tools.
 """
+import base64
+import hashlib
 import os
 import re
 import shutil
@@ -42,6 +44,24 @@ import subprocess
 import sys
 import tarfile
 import zipfile
+import urllib.request
+
+# Reviewed upstream v3.15.1 tag (07a36fde37aaab02f00e210c4c5035310b94213d)
+# peels to this commit. LICENSE bytes are pinned separately; never use another
+# release's text merely because a git-fetched port has no distfile archive.
+AOM_LICENSE_SOURCES = {
+    "3.15.1": ("44d0a57786f432d933ff64b653347c66f4d0fa1d",
+               "4764a286d8b2faeaf42f4418e7d7a28d58fc8fd4d00a3d0a7f44b0a4099de7f2"),
+}
+
+class _AomNoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Reject before urllib drains an unbounded redirect response body.
+        raise ValueError("upstream LICENSE redirect refused")
+
+
+def _open_aom_license(url, *, timeout):
+    return urllib.request.build_opener(_AomNoRedirect()).open(url, timeout=timeout)
 
 PYTHON_VERSION = "3.13"
 SYSTEM_PREFIXES = ("/usr/lib/", "/System/")
@@ -457,6 +477,8 @@ class Bundler:
     def license_texts(self, name, version):
         """The port's license files, from its installed docs or its source
         archive (cached per version under _engine/cache/notices)."""
+        if name == "aom":
+            return self.aom_license_text(version)
         cache = os.path.join(os.path.dirname(self.install), "..", "cache", "notices", f"{name}-{version}.txt")
         cache = os.path.normpath(cache)
         if os.path.exists(cache):
@@ -485,6 +507,67 @@ class Bundler:
             with open(cache, "w", encoding="utf-8") as handle:
                 handle.write(result)
         return result
+
+    def aom_license_text(self, version):
+        """AOM's git fetch has no archive: require this release's verified text."""
+        if version not in AOM_LICENSE_SOURCES:
+            raise SystemExit(f"AOM {version}: add a reviewed upstream LICENSE commit/hash before bundling.")
+        commit, digest = AOM_LICENSE_SOURCES[version]
+        source_url = f"https://aomedia.googlesource.com/aom/+/{commit}/LICENSE"
+        cache = os.path.normpath(os.path.join(os.path.dirname(self.install), "..", "cache", "notices",
+                                             f"aom-{version}-{commit}.LICENSE"))
+        data = None
+        if os.path.isfile(cache):
+            with open(cache, "rb") as handle:
+                data = handle.read(65537)
+        else:
+            # Read committed Git content, not potentially patched working files.
+            # port work may be empty after clean; inspect only that exact root
+            # and its immediate children, never global source directories.
+            try:
+                work = run(os.path.join(self.prefix, "bin/port"), "-q", "work", "aom").strip()
+            except SystemExit:
+                work = ""
+            candidates = []
+            if work and os.path.isdir(work):
+                candidates = [work] + [entry.path for entry in os.scandir(work) if entry.is_dir()]
+            for candidate in candidates:
+                if not os.path.exists(os.path.join(candidate, ".git")):
+                    continue
+                try:
+                    if run("git", "-C", candidate, "rev-parse", "HEAD").strip() != commit:
+                        continue
+                    data = run("git", "-C", candidate, "show", f"{commit}:LICENSE").encode("utf-8")
+                    break
+                except SystemExit:
+                    continue
+            if data is None:
+                # Small immutable primary-source fallback; no repository clone,
+                # mutable tag lookup, or dependency rebuild during bundling.
+                try:
+                    with _open_aom_license(source_url + "?format=TEXT", timeout=15) as response:
+                        if response.geturl() != source_url + "?format=TEXT":
+                            raise ValueError("unexpected upstream redirect")
+                        payload = response.read(65537)
+                    if len(payload) > 65536:
+                        raise ValueError("upstream LICENSE response is too large")
+                    data = base64.b64decode(payload, validate=True)
+                except (OSError, ValueError) as exc:
+                    raise SystemExit(f"AOM {version}: required LICENSE unavailable. Restore the matching MacPorts "
+                                     f"git worktree or obtain {source_url} (SHA-256 {digest}): {exc}") from exc
+        if not data or len(data) > 65536 or hashlib.sha256(data).hexdigest() != digest:
+            raise SystemExit(f"AOM {version}: LICENSE does not match reviewed SHA-256 {digest}; "
+                             f"check the Git source or remove the invalid notice cache {cache}.")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise SystemExit(f"AOM {version}: verified LICENSE is not UTF-8.") from exc
+        if not os.path.isfile(cache):
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            with open(cache, "wb") as handle:
+                handle.write(data)
+        return (f"--- LICENSE\n\nAOM {version} upstream source: {source_url}\n"
+                f"LICENSE SHA-256: {digest}\n\n{text}\n")
 
     @staticmethod
     def archive_licenses(archive):
