@@ -684,6 +684,30 @@ GlimsStatus glims_resource_duplicate (GlimsEngine *e, GlimsResourceID sourceID,
                                       const char *name, GlimsResourceID *outID,
                                       char **error);
 
+/* resource-gradient-create.c */
+/* INTERNAL-ONLY two-endpoint gradient creation — no facade slot, no API
+ * table entry (slots 136/137 stay reserved; a public gradient-create slot
+ * is added later by another change). Engine thread only (call through
+ * glims_engine_call). Creates ONE privately owned, NON-internal
+ * GimpGradient with exactly one segment (positions 0 / 0.5 / 1, stored
+ * type GIMP_GRADIENT_SEGMENT_LINEAR, coloring GIMP_GRADIENT_SEGMENT_RGB,
+ * both endpoint color types GIMP_GRADIENT_COLOR_FIXED) whose endpoint
+ * colors are the captured GlimsColor sRGB+alpha values interpreted through
+ * gegl_color_set_rgba_with_space(..., NULL) — never context-dynamic FG/BG
+ * — and persists it through glims_resource_staging_begin() +
+ * glims_resource_save_and_publish() with the native .ggr extension, after
+ * the shared admission: `out` required and zeroed first and on every
+ * failure, NULL engine/name/left/right/out INVALID_ARGUMENT, the
+ * glims_valid_resource_name contract plus the GGR leading/trailing
+ * ASCII-whitespace refusal, endpoint components finite 0...1, the
+ * resource-duplicate BUSY gate (global busy plus any open stroke/filter),
+ * and the exact-name duplicate refusal (FAILED, no uniquify). On success
+ * `out` receives the positive current-factory native id. No image, undo,
+ * context, clipboard or other catalog is touched. */
+GlimsStatus glims_resource_create_gradient (GlimsEngine *engine, const char *name,
+                                            const GlimsColor *left, const GlimsColor *right,
+                                            GlimsResourceID *out, char **error);
+
 
 GlimsStatus glims_adjustment_layer_new (GlimsEngine *engine, GlimsImageID image,
     GlimsItemID parent, int32_t index, const char *operation, const char *name,
