@@ -56,6 +56,13 @@ enum MainMenu {
             item("Stroke Path", #selector(DocumentWindowController.strokePath(_:))),
             item("Fill Path", #selector(DocumentWindowController.fillPath(_:))),
             item("To Vector Layer", #selector(DocumentWindowController.toVectorLayer(_:))),
+            .separator(),
+            // No shortcuts: creation captures whatever selection is
+            // current, so the items stay plain menu entries.
+            submenu("Create Resource", [
+                item("Brush from Selection…", #selector(DocumentWindowController.createBrushFromSelection(_:))),
+                item("Pattern from Selection…", #selector(DocumentWindowController.createPatternFromSelection(_:))),
+            ]),
         ])
         // Plug-in commands are appended to Image, Layer and Select (PlugInMenus).
         let mode = NSMenuItem(title: "Mode", action: nil, keyEquivalent: "")
@@ -93,6 +100,7 @@ enum MainMenu {
             .separator(),
             item("Guides…", #selector(DocumentWindowController.showGuides(_:))),
             item("Configure Grid…", #selector(DocumentWindowController.configureGrid(_:))),
+            item("Metadata…", #selector(DocumentWindowController.showMetadata(_:))),
             item("Image Information…", #selector(DocumentWindowController.imageInformation(_:))),
         ])
         let newLayer = item("New Layer", #selector(DocumentWindowController.newLayer(_:)), "n")
@@ -140,6 +148,7 @@ enum MainMenu {
         add(menu, "Layer", [
             newLayer,
             item("New Layer Group", #selector(DocumentWindowController.newLayerGroup(_:))),
+            item("New Adjustment Layer…", #selector(DocumentWindowController.newAdjustmentLayer(_:))),
             item("Duplicate Layer", #selector(DocumentWindowController.duplicateLayer(_:)), "j"),
             item("Delete Layer", #selector(DocumentWindowController.deleteLayer(_:))),
             .separator(),
