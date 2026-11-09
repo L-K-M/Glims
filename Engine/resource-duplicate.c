@@ -45,10 +45,14 @@
 
 #include "core/gimp.h"
 #include "core/gimpbrushpipe.h"
+#include "core/gimpbrushgenerated.h"
 #include "core/gimpcontainer.h"
 #include "core/gimpdata.h"
 #include "core/gimpdatafactory.h"
 #include "core/gimpobject.h"
+#include "core/gimpgradient.h"
+#include "core/gimppattern.h"
+#include "core/gimptempbuf.h"
 
 GlimsStatus
 glims_resource_duplicate (GlimsEngine     *e,
@@ -149,6 +153,36 @@ glims_resource_duplicate (GlimsEngine     *e,
       if (error)
         *error = strdup ("The duplicated resource cannot be saved by the engine.");
       return GLIMS_STATUS_UNSUPPORTED;
+    }
+
+  /* The VBR and GGR loaders strip surrounding ASCII whitespace from names.
+   * A successful native save would therefore change identity on restart. */
+  if ((GIMP_IS_BRUSH_GENERATED (copy) || GIMP_IS_GRADIENT (copy)) &&
+      (g_ascii_isspace (name[0]) || g_ascii_isspace (name[strlen (name) - 1])))
+    {
+      g_object_unref (copy);
+      if (error) *error = strdup ("This resource format cannot preserve spaces at the start or end of its name.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  /* PAT writes raw bytes and only stores a component count. Its loader
+   * reconstructs exactly these four encodings, with no profile/precision
+   * metadata. Clipboard patterns can use arbitrary formats: refusing them
+   * preserves their source rather than saving an unloadable or reinterpreted
+   * copy. Bitmap pixel creation already produces canonical RGBA u8. */
+  if (GIMP_IS_PATTERN (copy))
+    {
+      GimpTempBuf *mask = GIMP_PATTERN (copy)->mask;
+      const Babl *format = mask ? gimp_temp_buf_get_format (mask) : NULL;
+      if (! format || (format != babl_format ("Y' u8") &&
+                       format != babl_format ("Y'A u8") &&
+                       format != babl_format ("R'G'B' u8") &&
+                       format != babl_format ("R'G'B'A u8")))
+        {
+          g_object_unref (copy);
+          if (error) *error = strdup ("This pattern's pixel format cannot be preserved in a saved PAT file.");
+          return GLIMS_STATUS_UNSUPPORTED;
+        }
     }
 
   /* The requested name is copied into the private object (this marks
