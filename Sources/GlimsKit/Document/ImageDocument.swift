@@ -365,6 +365,28 @@ final class ImageDocument {
 
     var activeDrawable: Int32? { paintTarget?.drawable }
 
+    /// View ▸ Show Layer Boundary's cached outline: the actual bounds, in
+    /// image pixels, of the current cached paint target — an ordinary
+    /// layer's absolute bounds, the owner layer's bounds while its mask is
+    /// being edited, the image bounds for a selected channel, and the
+    /// floating layer's own bounds while a floating selection is active
+    /// (it owns painting ahead of any channel or mask target). Resolved
+    /// from the caches on every read, so a draw never shows a remembered
+    /// unrelated layer; nil when no target is current or its bounds are
+    /// missing or invalid. Pure cache read: no engine call, no pixel,
+    /// dirty-flag or history change.
+    var cachedPaintTargetBounds: CGRect? {
+        guard let target = paintTarget else { return nil }
+        let kind: LayerBoundaryGeometry.Target
+        switch target {
+        case .layer(let id): kind = .layer(id)
+        case .mask(let layer, _): kind = .mask(layer: layer)
+        case .channel(let id): kind = .channel(id)
+        }
+        return LayerBoundaryGeometry.boundaryRect(target: kind, layers: layers,
+            imageSize: CGSize(width: Double(info.width), height: Double(info.height)))
+    }
+
     var activeChannel: Int32? {
         if case .channel(let id) = paintTarget { return id }
         return nil
