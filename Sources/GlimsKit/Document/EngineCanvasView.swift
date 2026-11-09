@@ -863,27 +863,15 @@ final class EngineCanvasView: NSView {
             return true
         }
         let point = event.locationInWindow
-        guard point.x.isFinite, point.y.isFinite else { return true }
-        let rawDelta = event.scrollingDeltaY != 0 ? event.scrollingDeltaY : event.scrollingDeltaX
-        let delta = Double(rawDelta)
-        guard delta.isFinite, delta != 0 else { return true }
-        let factor = OptionScrollZoom.factor(delta: delta, precise: event.hasPreciseScrollingDeltas)
-        if optionScrollZoomAccumulator.publishedPercent != zoomPercent
-            || event.phase.contains(.began)
-            || event.momentumPhase.contains(.began) {
-            optionScrollZoomAccumulator.rebase(to: zoomPercent)
-        }
-        if event.phase.contains(.cancelled) || event.momentumPhase.contains(.cancelled) {
-            optionScrollZoomAccumulator.clear()
-            return true
-        }
-        let ended = event.phase.contains(.ended) || event.momentumPhase.contains(.ended)
-        if let percent = optionScrollZoomAccumulator.apply(magnification: factor - 1) {
-            onTrackpadZoom?(percent, point)
-        }
-        if ended {
-            optionScrollZoomAccumulator.clear()
-        }
+        let delta = event.scrollingDeltaY != 0 ? event.scrollingDeltaY : event.scrollingDeltaX
+        let usableDelta = point.x.isFinite && point.y.isFinite ? Double(delta) : nil
+        let percent = OptionScrollZoom.apply(
+            delta: usableDelta, precise: event.hasPreciseScrollingDeltas, currentPercent: zoomPercent,
+            began: event.phase.contains(.began) || event.momentumPhase.contains(.began),
+            ended: event.phase.contains(.ended) || event.momentumPhase.contains(.ended),
+            cancelled: event.phase.contains(.cancelled) || event.momentumPhase.contains(.cancelled),
+            to: &optionScrollZoomAccumulator)
+        if let percent { onTrackpadZoom?(percent, point) }
         return true
     }
 }

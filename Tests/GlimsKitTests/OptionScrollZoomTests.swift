@@ -1,46 +1,77 @@
+import AppKit
 import XCTest
 @testable import GlimsKit
 
 final class OptionScrollZoomTests: XCTestCase {
-    func testCoarseDeltaEightDoubles() {
-        XCTAssertEqual(OptionScrollZoom.factor(delta: 8, precise: false), 2, accuracy: 1e-12)
+    func testCoarseAndPreciseFactorsHaveIndependentExpectedValues() throws {
+        XCTAssertEqual(try XCTUnwrap(OptionScrollZoom.factor(delta: 8, precise: false)), 2, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(OptionScrollZoom.factor(delta: 240, precise: true)), 2, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(OptionScrollZoom.factor(delta: -8, precise: false)), 0.5, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(OptionScrollZoom.factor(delta: -240, precise: true)), 0.5, accuracy: 1e-12)
+        XCTAssertEqual(OptionScrollZoom.factor(delta: 0, precise: false), 1)
+        XCTAssertEqual(OptionScrollZoom.factor(delta: 0, precise: true), 1)
     }
 
-    func testPreciseDeltaTwoFortyDoubles() {
-        XCTAssertEqual(OptionScrollZoom.factor(delta: 240, precise: true), 2, accuracy: 1e-12)
+    func testExponentIsClampedAndNonfiniteDeltasAreRefused() {
+        XCTAssertEqual(OptionScrollZoom.factor(delta: .greatestFiniteMagnitude, precise: false), 65536)
+        XCTAssertEqual(OptionScrollZoom.factor(delta: -.greatestFiniteMagnitude, precise: true), 1.0 / 65536)
+        for delta in [Double.nan, .infinity, -.infinity] {
+            XCTAssertNil(OptionScrollZoom.factor(delta: delta, precise: false))
+        }
     }
 
-    func testNegativeDeltaHalves() {
-        XCTAssertEqual(OptionScrollZoom.factor(delta: -8, precise: false), 0.5, accuracy: 1e-12)
-        XCTAssertEqual(OptionScrollZoom.factor(delta: -240, precise: true), 0.5, accuracy: 1e-12)
+    func testNativeModifierValuesAllowShiftAndIgnoreUnrelatedFlags() {
+        XCTAssertTrue(OptionScrollZoom.isAdmitted(.option))
+        XCTAssertTrue(OptionScrollZoom.isAdmitted([.option, .shift, .capsLock, .function]))
+        for flags: NSEvent.ModifierFlags in [[], .shift, .command, [.option, .command], [.option, .control]] {
+            XCTAssertFalse(OptionScrollZoom.isAdmitted(flags))
+        }
     }
 
-    func testZeroDeltaIsOne() {
-        XCTAssertEqual(OptionScrollZoom.factor(delta: 0, precise: false), 1, accuracy: 1e-12)
-        XCTAssertEqual(OptionScrollZoom.factor(delta: 0, precise: true), 1, accuracy: 1e-12)
+    private func apply(_ delta: Double?, to accumulator: inout TrackpadNavigationLogic.ZoomAccumulator,
+                       current: Int = 100, began: Bool = false, ended: Bool = false,
+                       cancelled: Bool = false) -> Int? {
+        OptionScrollZoom.apply(delta: delta, precise: false, currentPercent: current,
+                               began: began, ended: ended, cancelled: cancelled, to: &accumulator)
     }
 
-    func testExtremeDeltaClampsExponent() {
-        XCTAssertEqual(OptionScrollZoom.factor(delta: 1e9, precise: true), pow(2, 16), accuracy: 1e-6)
-        XCTAssertEqual(OptionScrollZoom.factor(delta: -1e9, precise: true), pow(2, -16), accuracy: 1e-12)
+    func testSubpercentMessagesAccumulateWithoutRoundingEachDelta() {
+        var accumulator = TrackpadNavigationLogic.ZoomAccumulator(publishedPercent: 100)
+        XCTAssertNil(apply(0.04, to: &accumulator))
+        XCTAssertEqual(apply(0.04, to: &accumulator), 101)
     }
 
-    func testNonFiniteDeltaDoesNotCrash() {
-        XCTAssertTrue(OptionScrollZoom.factor(delta: .nan, precise: false).isNaN
-            || OptionScrollZoom.factor(delta: .nan, precise: false).isFinite)
-        XCTAssertTrue(OptionScrollZoom.factor(delta: .infinity, precise: false).isFinite)
+    func testZeroAndInvalidTerminalDeltasClearPendingFraction() {
+        for delta in [Double?.some(0), .some(.nan), .none] {
+            var accumulator = TrackpadNavigationLogic.ZoomAccumulator(publishedPercent: 100)
+            XCTAssertNil(apply(0.04, to: &accumulator))
+            XCTAssertNil(apply(delta, to: &accumulator, ended: true))
+            XCTAssertEqual(accumulator.fractionalPercent, 100)
+            XCTAssertNil(apply(0.04, to: &accumulator))
+        }
     }
 
-    func testModifierAdmission() {
-        XCTAssertTrue(OptionScrollZoom.isAdmitted(option: true, command: false, control: false))
-        XCTAssertTrue(OptionScrollZoom.isAdmitted(option: true, command: false, control: false, shift: true))
-        XCTAssertFalse(OptionScrollZoom.isAdmitted(option: false, command: false, control: false))
-        XCTAssertFalse(OptionScrollZoom.isAdmitted(option: true, command: true, control: false))
-        XCTAssertFalse(OptionScrollZoom.isAdmitted(option: true, command: false, control: true))
+    func testCancelIgnoresItsDeltaAndDropsPendingFraction() {
+        var accumulator = TrackpadNavigationLogic.ZoomAccumulator(publishedPercent: 100)
+        XCTAssertNil(apply(0.04, to: &accumulator))
+        XCTAssertNil(apply(8, to: &accumulator, cancelled: true))
+        XCTAssertEqual(accumulator.fractionalPercent, 100)
+        XCTAssertNil(apply(0.04, to: &accumulator))
     }
 
-    func testModifierAdmissionIgnoresShift() {
-        XCTAssertTrue(OptionScrollZoom.isAdmitted(option: true, command: false, control: false, shift: false))
-        XCTAssertTrue(OptionScrollZoom.isAdmitted(option: true, command: false, control: false, shift: true))
+    func testBeginAndExternalZoomRebaseBeforeApplyingDelta() {
+        var accumulator = TrackpadNavigationLogic.ZoomAccumulator(publishedPercent: 100)
+        XCTAssertNil(apply(0.04, to: &accumulator))
+        XCTAssertNil(apply(0, to: &accumulator, began: true))
+        XCTAssertEqual(accumulator.fractionalPercent, 100)
+        XCTAssertEqual(apply(8, to: &accumulator, current: 200), 400)
+    }
+
+    func testEndsApplyTheirDeltaThenDropTailAndClampAtZoomBounds() {
+        var accumulator = TrackpadNavigationLogic.ZoomAccumulator(publishedPercent: 100)
+        XCTAssertEqual(apply(8, to: &accumulator, ended: true), 200)
+        XCTAssertEqual(accumulator.fractionalPercent, 200)
+        XCTAssertEqual(apply(.greatestFiniteMagnitude, to: &accumulator, current: 200), 3200)
+        XCTAssertEqual(apply(-.greatestFiniteMagnitude, to: &accumulator, current: 3200), 5)
     }
 }
