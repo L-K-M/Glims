@@ -7,11 +7,11 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-These entries describe merged main through #121, plus the explicitly identified
-batch-duplication candidate. Trackpad pinch/rotate, Option-scroll, and typed
-single-language metadata controls are merged and verified. The whole editor
+These entries describe merged main through #124, plus explicitly identified
+integration candidates. Trackpad pinch/rotate, Option-scroll, typed language
+metadata and guarded saved-resource management are merged and verified. The whole editor
 remains in progress; each checked entry covers its stated behavior.
-The #121 release passes 1,917 native and 2,278 app checks in a self-contained
+The #124 release passes 1,917 native and 2,331 app checks in a self-contained
 bundle with the native and Swift build outputs inaccessible.
 
 - [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
@@ -57,8 +57,9 @@ bundle with the native and Swift build outputs inaccessible.
 - [x] Captured ordinary pixel-layer batch duplication as one native Undo,
       ordered selection restoration, Command-J and Layers palette controls (#122).
 - [ ] Remaining batch operations and consistent gesture-time rasterize/revert policy.
-- [x] Adjustment layer creation with explicit placement and editable filter settings.
-- [ ] Adjustment groups, remaining custom filter forms and filter inputs.
+- [x] Adjustment layer creation as an empty pass-through group with a filter,
+      explicit placement and editable filter settings.
+- [ ] Remaining custom filter forms/config editors and auxiliary filter inputs.
 - [x] Path fill, vector layers and vector style controls.
 - [x] Multi-anchor path editing with group move/delete and Undo.
 - [x] Searchable brush, pattern and gradient resource choosers, with
@@ -67,7 +68,8 @@ bundle with the native and Swift build outputs inaccessible.
 - [x] Brush/pattern creation from selections and brush/pattern/gradient
       duplication controls, with checked persistence and current-choice refresh.
 - [x] New gradients from explicit endpoint colors, with native persistence and owned creation forms.
-- [ ] Resource rename/delete and remaining management controls.
+- [x] Guarded resource Rename/Delete controls, explicit Retry/Refresh and exact
+      saved-choice/preset reference migration (#124).
 - [x] Color profile assignment and conversion with explicit rasterization consent.
 - [x] Indexed conversion with generated/custom palettes, dithering and
       explicit structured-source consent.

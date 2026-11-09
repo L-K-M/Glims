@@ -24,6 +24,7 @@
 
 #include <math.h>
 #include <string.h>
+#include <cairo.h>
 
 #include "libgimpmath/gimpmath.h"
 
@@ -40,6 +41,7 @@
 #include "core/gimppickable.h"
 #include "core/gimpprojection.h"
 #include "core/gimpviewable.h"
+#include "gegl/gimptilehandlervalidate.h"
 #include "text/gimptextlayer.h"
 
 #include "gimp-intl.h"
@@ -439,6 +441,16 @@ glims_drawable_thumbnail (GlimsEngine  *engine,
    * the group's bounds in image coordinates
    * (app/core/gimpdrawable.c gimp_drawable_real_set_buffer). */
   extent = gegl_buffer_get_extent (buffer);
+  /* GEGL's 1x1 shortcut can reuse a hot tile without validating it. An
+   * empty group's projection may therefore show pixels from before Redo.
+   * Match the image renderer's explicit validation for this exact path. */
+  if (scale == 1.0 && out_w == 1 && out_h == 1) {
+    GimpTileHandlerValidate *validate = gimp_tile_handler_validate_get_assigned (buffer);
+    if (validate) {
+      GeglRectangle area = { extent->x, extent->y, 1, 1 };
+      gimp_tile_handler_validate_validate (validate, buffer, &area, TRUE, FALSE);
+    }
+  }
   gegl_buffer_get (buffer,
                    GEGL_RECTANGLE ((gint) RINT (extent->x * scale),
                                    (gint) RINT (extent->y * scale),

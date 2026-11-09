@@ -86,7 +86,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
                     else { $0.layerCommand(.duplicate) }
                 }]
             .map(bind),
-        trailingItems: [bind(Self.item("delete", "Delete Layer", ["trash"]) { $0.layerCommand(.delete) })])
+        trailingItems: [bind(Self.item("delete", "Delete Layers", ["trash"]) { $0.layerCommand(.delete) })])
     /// The floating-selection footer (Anchor / New Layer / Discard),
     /// shown only while the shown document has an active floating
     /// selection; its state comes from the cached readiness only.
@@ -436,7 +436,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     }
 
     /// Uses only the palette's captured document cache, never the front window.
-    private func duplicateAdmission(_ document: ImageDocument) -> Bool {
+    private func layerBatchAdmission(_ document: ImageDocument) -> Bool {
         let ids = document.selectedLayerIDs
         return document.acceptsEdits && !document.targetCommandIsPending
             && !document.floatingState.isActive && !ids.isEmpty
@@ -466,11 +466,12 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         case #selector(runLayerCommand(_:)):
             guard let document, document.acceptsEdits,
                   let command = EngineSession.LayerCommand(rawValue: UInt32(menuItem.tag)) else { return false }
-            if command == .duplicate {
-                menuItem.title = document.hasMultipleSelectedLayers ? "Duplicate Layers" : "Duplicate Layer"
-                menuItem.toolTip = duplicateAdmission(document) ? nil
-                    : "Select ordinary pixel layers for a batch. Duplicate groups or editable sources individually."
-                return duplicateAdmission(document)
+            if command == .duplicate || command == .delete {
+                let verb = command == .duplicate ? "Duplicate" : "Delete"
+                menuItem.title = "\(verb) \(document.hasMultipleSelectedLayers ? "Layers" : "Layer")"
+                menuItem.toolTip = layerBatchAdmission(document) ? nil
+                    : "Select ordinary pixel layers for a batch. \(verb) groups or editable sources individually."
+                return layerBatchAdmission(document)
             }
             // While more than one layer is selected, every single-layer
             // command but New Layer is disabled with the reason; New
@@ -573,18 +574,14 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             thumbnailWaiters.removeValue(forKey: key)?.forEach { $0(nil) }
         }
         let editable = document?.acceptsEdits == true
-        let hasLayer = editable && document?.activeLayer != nil
         // While a floating selection is active the structural layer
         // commands are gated resolve-first, so their buttons go quiet too.
         let floatingActive = document?.floatingState.isActive == true
-        // While more than one layer is selected the single-layer buttons
-        // go quiet too; New Layer and New Layer Group stay available:
-        // they create and select a fresh row, which is safe.
-        let multi = document?.hasMultipleSelectedLayers == true
+        // Duplicate and Delete admit bounded ordinary-pixel batches.
         buttonBar.setEnabled(editable && !floatingActive, forItem: "new")
         buttonBar.setEnabled(editable && !floatingActive, forItem: "group")
-        buttonBar.setEnabled(document.map(duplicateAdmission) == true, forItem: "duplicate")
-        buttonBar.setEnabled(hasLayer && !floatingActive && !multi, forItem: "delete")
+        buttonBar.setEnabled(document.map(layerBatchAdmission) == true, forItem: "duplicate")
+        buttonBar.setEnabled(document.map(layerBatchAdmission) == true, forItem: "delete")
         // The floating-selection footer appears only while the shown
         // document's cached floating state is active; its buttons read
         // the cached readiness, never the engine.

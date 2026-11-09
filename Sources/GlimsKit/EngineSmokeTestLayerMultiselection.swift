@@ -251,7 +251,6 @@ extension EngineSmokeTest {
               "painting refuses under a multi-selection with the actionable reason")
         documentA.endStroke()
         documentA.fill(at: CGPoint(x: 8, y: 8), mode: .similarColors, color: .red, threshold: 0.2, sampleMerged: false)
-        documentA.layerCommand(.delete)
         documentA.layerCommand(.duplicate)
         documentA.layerCommand(.raise)
         documentA.layerCommand(.fitToImage)
@@ -291,9 +290,8 @@ extension EngineSmokeTest {
         let layerMenu = menu.items.first { $0.title == "Layer" }?.submenu
         func layerItem(_ title: String) -> NSMenuItem? { layerMenu?.items.first { $0.title == title } }
         if let deleteItem = layerItem("Delete Layer") {
-            check(controllerA.validateMenuItem(deleteItem) == false
-                    && deleteItem.toolTip?.contains("Choose one layer") == true,
-                  "Layer ▸ Delete Layer validates disabled with the reason under a multi-selection")
+            check(controllerA.validateMenuItem(deleteItem) && deleteItem.title == "Delete Layers",
+                  "Layer ▸ Delete Layers admits the selected ordinary pixel layers")
         } else {
             check(false, "the Layer menu lists Delete Layer")
         }
@@ -317,8 +315,8 @@ extension EngineSmokeTest {
         check(palette.paletteMenu?.items.first(where: { $0.title == "New Layer" })
             .map { palette.validateMenuItem($0) } == true, "the palette menu's New Layer stays available")
         if let bar = descendant(of: palette.view, as: ClassicPaletteButtonBar.self) {
-            check(bar.isEnabled(item: "duplicate") && !bar.isEnabled(item: "delete"),
-                  "the duplicate button admits the pixel batch while Delete still requests one layer")
+            check(bar.isEnabled(item: "duplicate") && bar.isEnabled(item: "delete"),
+                  "Duplicate and Delete buttons admit the selected pixel batch")
             check(bar.isEnabled(item: "new") && bar.isEnabled(item: "group"),
                   "the new layer and group buttons stay enabled")
         } else {

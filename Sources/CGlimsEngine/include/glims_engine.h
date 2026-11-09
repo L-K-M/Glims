@@ -2871,6 +2871,19 @@ typedef struct GlimsEngineAPI {
                                   const char *guard, const char *name, char **error);
   GlimsStatus (*resource_delete) (GlimsEngine *engine, GlimsResourceID id,
                                   const char *guard, char **error);
+  /* Slot 146: captured plain pixel-layer deletion, 1..256 distinct positive
+   * IDs attached to this image. Validate the whole vector before mutation;
+   * groups, structured subclasses and masks with live effects are UNSUPPORTED.
+   * BUSY for active work, floating selections, disabled/frozen Undo or an open
+   * native Undo group. Native layer locks do not prevent removing a layer.
+   * One native Undo group, subject to native history retention. Surviving
+   * selected layers retain their order; if none survive, select the first
+   * remaining layer-tree row, or no layer in an empty image. Undo restores the
+   * complete prior selection and native objects; Redo restores the survivor
+   * selection. Ordinary reported failures precede the first removal. */
+  GlimsStatus (*image_delete_layers) (GlimsEngine *engine, GlimsImageID image,
+                                      const GlimsItemID *layers, int32_t count,
+                                      char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

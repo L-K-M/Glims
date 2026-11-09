@@ -15,6 +15,7 @@
 #include "engine-private.h"
 #include "resource-mutation.h"
 #include "resource-rename.h"
+#include "layer-delete.h"
 
 #include <dlfcn.h>
 #include <stdlib.h>
@@ -2675,6 +2676,24 @@ static GlimsStatus api_resource_delete (GlimsEngine *e, GlimsResourceID id, cons
   return glims_engine_call (e, resource_delete_on_engine, &a);
 }
 
+typedef struct {
+  GlimsImageID image;
+  const GlimsItemID *layers;
+  int32_t count;
+  char **error;
+} GlimsDeleteLayersArgs;
+static GlimsStatus image_delete_layers_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsDeleteLayersArgs *a = data;
+  return glims_image_delete_layers (e, a->image, a->layers, (size_t) a->count, a->error);
+}
+static GlimsStatus api_image_delete_layers (GlimsEngine *e, GlimsImageID image,
+                                           const GlimsItemID *layers, int32_t count, char **error)
+{
+  GlimsDeleteLayersArgs a = { .image = image, .layers = layers, .count = count, .error = error };
+  return glims_engine_call (e, image_delete_layers_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -2826,6 +2845,7 @@ static const GlimsEngineAPI api_v1 = {
   .resource_mutation_info = api_resource_mutation_info,
   .resource_rename = api_resource_rename,
   .resource_delete = api_resource_delete,
+  .image_delete_layers = api_image_delete_layers,
 };
 
 __attribute__ ((visibility ("default")))

@@ -1531,7 +1531,18 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 }
             }
             return true
-        case #selector(deleteLayer(_:)), #selector(mergeDown(_:)),
+        case #selector(deleteLayer(_:)):
+            let ids = imageDocument.selectedLayerIDs
+            menuItem.title = ids.count > 1 ? "Delete Layers" : "Delete Layer"
+            menuItem.toolTip = nil
+            guard !editingBlocked, !previewBusy, !ids.isEmpty, !imageDocument.targetCommandIsPending,
+                  !imageDocument.floatingState.isActive else { return false }
+            if ids.count > 1 && (ids.count > 256 || !ids.allSatisfy({ imageDocument.layerSources[$0]?.kind == .pixel })) {
+                menuItem.toolTip = "Select ordinary pixel layers for a batch. Delete groups or editable sources individually."
+                return false
+            }
+            return true
+        case #selector(mergeDown(_:)),
              #selector(flattenImage(_:)), #selector(bringLayerToFront(_:)), #selector(bringLayerForward(_:)),
              #selector(sendLayerBackward(_:)), #selector(sendLayerToBack(_:)),
              #selector(rotateLayer90(_:)), #selector(rotateLayer270(_:)), #selector(rotateLayer180(_:)),

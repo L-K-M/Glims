@@ -1865,19 +1865,38 @@ final class ImageDocument {
         }, completion: completion)
     }
 
+    /// Capture the whole ordered vector before queued selection changes can
+    /// retarget Delete. The native operation preflights every source first.
+    func deleteSelectedLayers(completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !refuseWhileEditingUnavailable() else {
+            return completion(.failure(isClosing ? DocumentError.closed : DocumentError.busy))
+        }
+        guard !refuseWhileTargetPending(), !refuseWhileFloatingActive() else {
+            return completion(.failure(DocumentError.busy))
+        }
+        let captured = selectedLayerIDs
+        guard !captured.isEmpty else { return completion(.failure(DocumentError.noLayer)) }
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueueTargetCommand({ session, image in
+            try session.deleteLayers(image, layers: captured)
+        }, completion: completion)
+    }
+
     /// The menu commands act on the layer the engine selects when they
     /// run — layer 0, the adapter's "selected layer at execution" — so a
     /// creation or pick queued ahead of them is what they hit, not the
     /// id the interface last saw selected. Palette rows name their
     /// layer explicitly instead.
     func layerCommand(_ command: EngineSession.LayerCommand) {
+        if command == .delete && hasMultipleSelectedLayers { return deleteSelectedLayers() }
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
         endPendingUserEdits()
-        // Batch commands are unsupported: while more than one layer is
-        // selected every command but New Layer (which creates and
-        // selects a fresh row) refuses instead of silently acting on
-        // the primary layer alone.
+        // Other single-layer commands refuse a multi-selection instead
+        // of silently editing its primary. Captured batch Delete takes
+        // its dedicated route above; New Layer selects its fresh row.
         if LayerSelectionPolicy.gates(command) {
             guard !refuseSingleLayerCommand(LayerSelectionPolicy.actionTitle(for: command)) else { return }
         }
