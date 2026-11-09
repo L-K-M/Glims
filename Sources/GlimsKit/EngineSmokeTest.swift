@@ -311,6 +311,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (batch delete)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "hue-saturation" {
+                try exerciseHueSaturation(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (hue saturation)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "color-balance" {
                 try exerciseColorBalance(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (color balance)" : "FAILED: \(failures) failure(s)")
@@ -474,6 +479,7 @@ enum EngineSmokeTest {
             try exerciseFilterSources(session, documents: documents)
             try exerciseBrightnessContrast(session, work: work, documents: documents)
             try exerciseColorBalance(session, work: work, documents: documents)
+            try exerciseHueSaturation(session, work: work, documents: documents)
             try exerciseSelectionDrag(session, documents: documents)
             try exerciseImageAdjust(session, work: work, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)

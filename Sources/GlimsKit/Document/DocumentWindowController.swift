@@ -619,6 +619,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
         endPendingEdits()
         statusBar.message = "\(operation.title)…"
+        if NativeFilterMenuLayout.usesHueSaturationEditor(operation) {
+            startPreview(title: operation.title, begin: { [imageDocument] reply in
+                imageDocument.beginEffectPreview(effect: effect, on: drawable, properties: [],
+                                                 operation: operation.name, completion: reply)
+            }) { [imageDocument] start in
+                guard let settings = start.hueSaturation else { return nil }
+                return HueSaturationPanel(document: imageDocument, filter: start.filter, settings: settings)
+            }
+            return
+        }
         if NativeFilterMenuLayout.usesColorBalanceEditor(operation) {
             startPreview(title: operation.title, begin: { [imageDocument] reply in
                 imageDocument.beginEffectPreview(effect: effect, on: drawable, properties: [],
@@ -893,6 +903,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
               !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
         if operation.name == "gegl:bump-map" && operation.support == .needsAuxInput {
             return openFilterSourceChooser(operation)
+        }
+        if NativeFilterMenuLayout.usesHueSaturationEditor(operation) {
+            endPendingEdits()
+            startPreview(title: operation.title, begin: { [imageDocument] reply in
+                imageDocument.beginFilterPreview(operation: operation.name, properties: [], completion: reply)
+            }) { [imageDocument] start in
+                guard let settings = start.hueSaturation else { return nil }
+                return HueSaturationPanel(document: imageDocument, filter: start.filter, settings: settings)
+            }
+            return
         }
         if NativeFilterMenuLayout.usesColorBalanceEditor(operation) {
             endPendingEdits()

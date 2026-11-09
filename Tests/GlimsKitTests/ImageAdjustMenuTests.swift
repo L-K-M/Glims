@@ -92,6 +92,18 @@ final class ImageAdjustMenuTests: XCTestCase {
         XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(levels))
     }
 
+    func testDedicatedHueSaturationKeepsOtherConfigGates() {
+        let menu = MainMenu.make()
+        let hue = operation("gimp:hue-saturation", support: .needsConfig)
+        let curves = operation("gimp:curves", support: .needsConfig)
+        let levels = operation("gimp:levels", support: .needsConfig)
+        NativeFilterMenus.install(operations + [hue, curves, levels], in: menu)
+        XCTAssertEqual(nativeNames(adjust(menu)), ["gimp:hue-saturation", "gimp:threshold", "gegl:invert-gamma", "gegl:invert-linear"])
+        XCTAssertEqual(adjust(menu).items.first?.title, "Hue/Saturation…")
+        XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(curves))
+        XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(levels))
+    }
+
     func testExactNativeTitlesUseExistingCommandAndFilterCopies() {
         let menu = MainMenu.make()
         NativeFilterMenus.install(operations + [operation("gegl:threshold"), operation("gegl:brightness-contrast")], in: menu)

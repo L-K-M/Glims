@@ -3416,3 +3416,14 @@ preserve shared categories and unrelated content. Existing preview/Undo/XCF
 behavior is reused. See `image-adjust.md`:915 units and27 real-window
 checks pass on each supported engine, including independent pixel formulas.
 Other custom adjustment editors remain separate implementation work.
+
+
+### Native Hue/Saturation configuration (2026-11-09 candidate)
+
+Master and six hue ranges have a dedicated degree/percentage editor with
+global overlap and whole22-value immutable native configuration. API v1
+appends152/153. Independent HSL, overlap/clamp and extended-lightness
+oracles pass within387 native checks per supported engine. The actual
+editor passes21 checks per engine;932 unit tests pass. See
+`hue-saturation.md`. Final metadata integration, bundle checks and CI remain
+open; Levels/Curves and other auxiliary forms remain separate work.

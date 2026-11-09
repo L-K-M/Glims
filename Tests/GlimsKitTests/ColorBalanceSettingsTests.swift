@@ -91,7 +91,6 @@ final class ColorBalanceSettingsTests: XCTestCase {
             ("GIMP:COLOR-BALANCE", "case mismatch"),
             ("gimp:curves", "unrelated curves"),
             ("gimp:levels", "unrelated levels"),
-            ("gimp:hue-saturation", "unrelated hue-saturation"),
         ]
         for (name, label) in nearOrUnrelated {
             let value = operation(name, support: .needsConfig)
@@ -105,6 +104,10 @@ final class ColorBalanceSettingsTests: XCTestCase {
         XCTAssertFalse(NativeFilterMenuLayout.usesColorBalanceEditor(brightnessContrast))
         XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(brightnessContrast),
                       "existing brightness/contrast remains supported via its own policy")
+
+        let hueSaturation = operation("gimp:hue-saturation", support: .needsConfig)
+        XCTAssertFalse(NativeFilterMenuLayout.usesColorBalanceEditor(hueSaturation))
+        XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(hueSaturation))
 
         XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(nil))
     }

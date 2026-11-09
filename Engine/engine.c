@@ -2780,6 +2780,40 @@ static GlimsStatus api_filter_color_balance_set (GlimsEngine *e, GlimsFilterID f
   return glims_engine_call (e, filter_color_balance_set_on_engine, &a);
 }
 
+typedef struct {
+  GlimsFilterID filter;
+  GlimsHueSaturationSettings *out;
+  const GlimsHueSaturationSettings *settings;
+  char **error;
+} GlimsHueSaturationArgs;
+static GlimsStatus filter_hue_saturation_get_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsHueSaturationArgs *a = data;
+  return glims_filter_hue_saturation_get (e, a->filter, a->out, a->error);
+}
+static GlimsStatus filter_hue_saturation_set_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsHueSaturationArgs *a = data;
+  return glims_filter_hue_saturation_set (e, a->filter, a->settings, a->error);
+}
+static GlimsStatus api_filter_hue_saturation_get (GlimsEngine *e, GlimsFilterID filter,
+                                                GlimsHueSaturationSettings *out, char **error)
+{
+  if (out && out->struct_size >= sizeof *out) {
+    out->overlap = 0;
+    out->master = out->red = out->yellow = out->green = out->cyan = out->blue = out->magenta =
+      (GlimsHueSaturationRange) {0};
+  }
+  GlimsHueSaturationArgs a = { .filter = filter, .out = out, .error = error };
+  return glims_engine_call (e, filter_hue_saturation_get_on_engine, &a);
+}
+static GlimsStatus api_filter_hue_saturation_set (GlimsEngine *e, GlimsFilterID filter,
+                                                const GlimsHueSaturationSettings *settings, char **error)
+{
+  GlimsHueSaturationArgs a = { .filter = filter, .settings = settings, .error = error };
+  return glims_engine_call (e, filter_hue_saturation_set_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -2937,6 +2971,8 @@ static const GlimsEngineAPI api_v1 = {
   .filter_brightness_contrast_set = api_filter_brightness_contrast_set,
   .filter_color_balance_get = api_filter_color_balance_get,
   .filter_color_balance_set = api_filter_color_balance_set,
+  .filter_hue_saturation_get = api_filter_hue_saturation_get,
+  .filter_hue_saturation_set = api_filter_hue_saturation_set,
 };
 
 __attribute__ ((visibility ("default")))

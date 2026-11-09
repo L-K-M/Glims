@@ -687,6 +687,24 @@ typedef struct GlimsColorBalanceSettings {
   GlimsColorBalanceRange highlights;
 } GlimsColorBalanceSettings;
 
+typedef struct GlimsHueSaturationRange {
+  double hue;               /* finite -1..1, normalized 180-degree shift */
+  double saturation;        /* finite -1..1 */
+  double lightness;         /* finite -1..1 */
+} GlimsHueSaturationRange;
+
+typedef struct GlimsHueSaturationSettings {
+  uint32_t struct_size;
+  double overlap;           /* finite 0..1; default 0 */
+  GlimsHueSaturationRange master;
+  GlimsHueSaturationRange red;
+  GlimsHueSaturationRange yellow;
+  GlimsHueSaturationRange green;
+  GlimsHueSaturationRange cyan;
+  GlimsHueSaturationRange blue;
+  GlimsHueSaturationRange magenta;
+} GlimsHueSaturationSettings;
+
 /* A layer's mask flags: ENABLED gates the mask's effect on the
  * composite; EDITING makes the mask the target of painting, fills and
  * gradients while its layer is the only selected one; SHOWING displays
@@ -2948,6 +2966,16 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*filter_color_balance_set) (GlimsEngine *engine, GlimsFilterID filter,
                                          const GlimsColorBalanceSettings *settings,
                                          char **error);
+  /* Slots 152/153: complete native Hue/Saturation settings. All 21
+   * corrections and overlap default to zero. Reads do not change the native
+   * range cursor; changed writes replace a private immutable configuration.
+   * Hue and saturation/lightness contributions combine Master and local
+   * ranges with the native fixed-sRGB HSL rules, including overlap. */
+  GlimsStatus (*filter_hue_saturation_get) (GlimsEngine *engine, GlimsFilterID filter,
+                                          GlimsHueSaturationSettings *out, char **error);
+  GlimsStatus (*filter_hue_saturation_set) (GlimsEngine *engine, GlimsFilterID filter,
+                                          const GlimsHueSaturationSettings *settings,
+                                          char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

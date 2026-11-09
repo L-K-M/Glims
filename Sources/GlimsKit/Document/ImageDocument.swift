@@ -3580,6 +3580,7 @@ final class ImageDocument {
         let filter: Int32
         let values: [String: EngineSession.FilterValue]
         var colorBalance: EngineSession.ColorBalanceSettings? = nil
+        var hueSaturation: EngineSession.HueSaturationSettings? = nil
     }
 
     /// Source preparation reads remain counted through their deferred reply.
@@ -3670,6 +3671,14 @@ final class ImageDocument {
     private nonisolated static func previewStart(_ filter: Int32, operation: String?,
                                                  properties: [EngineSession.FilterProperty],
                                                  session: EngineSession) throws -> FilterPreviewStart {
+        if operation == "gimp:hue-saturation" {
+            do {
+                return FilterPreviewStart(filter: filter, values: [:], hueSaturation: try session.hueSaturationSettings(filter))
+            } catch {
+                try? session.abortFilter(filter)
+                throw error
+            }
+        }
         if operation == "gimp:color-balance" {
             do {
                 return FilterPreviewStart(filter: filter, values: [:], colorBalance: try session.colorBalanceSettings(filter))
@@ -3801,6 +3810,21 @@ final class ImageDocument {
         pendingWork += 1
         inputQueue.async { [session] in
             let result = Result { try session.setColorBalanceSettings(filter, to: settings) }
+            DispatchQueue.main.async {
+                completion(result)
+                self.jobDidFinish(input: false)
+            }
+        }
+    }
+
+
+    func setHueSaturation(_ filter: Int32, _ settings: EngineSession.HueSaturationSettings,
+                          completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if refuseWhileEditingUnavailable(forPreviewWork: true) { return completion(.failure(DocumentError.busy)) }
+        pendingWork += 1
+        inputQueue.async { [session] in
+            let result = Result { try session.setHueSaturationSettings(filter, to: settings) }
             DispatchQueue.main.async {
                 completion(result)
                 self.jobDidFinish(input: false)

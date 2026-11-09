@@ -1013,6 +1013,66 @@ final class EngineSession: @unchecked Sendable {
         try check(status, error)
     }
 
+    struct HueSaturationSettings: Equatable {
+        struct Range: Equatable {
+            var hue: Double = 0
+            var saturation: Double = 0
+            var lightness: Double = 0
+            var isValid: Bool {
+                [hue, saturation, lightness].allSatisfy { $0.isFinite && (-1...1).contains($0) }
+            }
+        }
+        var overlap: Double = 0
+        var master = Range()
+        var red = Range()
+        var yellow = Range()
+        var green = Range()
+        var cyan = Range()
+        var blue = Range()
+        var magenta = Range()
+        var isValid: Bool {
+            overlap.isFinite && (0...1).contains(overlap) &&
+                [master, red, yellow, green, cyan, blue, magenta].allSatisfy { $0.isValid }
+        }
+    }
+
+    func hueSaturationSettings(_ filter: Int32) throws -> HueSaturationSettings {
+        var raw = GlimsHueSaturationSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsHueSaturationSettings>.size)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_hue_saturation_get(engine, filter, &raw, &error)
+        try check(status, error)
+        func range(_ value: GlimsHueSaturationRange) -> HueSaturationSettings.Range {
+            .init(hue: value.hue, saturation: value.saturation, lightness: value.lightness)
+        }
+        let value = HueSaturationSettings(overlap: raw.overlap, master: range(raw.master), red: range(raw.red),
+            yellow: range(raw.yellow), green: range(raw.green), cyan: range(raw.cyan),
+            blue: range(raw.blue), magenta: range(raw.magenta))
+        guard value.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The hue and saturation settings could not be read.")
+        }
+        return value
+    }
+
+    func setHueSaturationSettings(_ filter: Int32, to value: HueSaturationSettings) throws {
+        guard value.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                message: "Hue, saturation and lightness must be between −1 and 1; overlap must be between 0 and 1.")
+        }
+        func range(_ value: HueSaturationSettings.Range) -> GlimsHueSaturationRange {
+            .init(hue: value.hue, saturation: value.saturation, lightness: value.lightness)
+        }
+        var raw = GlimsHueSaturationSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsHueSaturationSettings>.size)
+        raw.overlap = value.overlap
+        raw.master = range(value.master); raw.red = range(value.red); raw.yellow = range(value.yellow)
+        raw.green = range(value.green); raw.cyan = range(value.cyan); raw.blue = range(value.blue)
+        raw.magenta = range(value.magenta)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_hue_saturation_set(engine, filter, &raw, &error)
+        try check(status, error)
+    }
+
     /// One property's current value in an open filter session.
     func filterProperty(_ filter: Int32, _ property: String) throws -> FilterValue {
         var value = GlimsFilterValue()
