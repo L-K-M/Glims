@@ -48,16 +48,16 @@ proved; independent whole-metadata/map checks remain mandatory.
 
 Validation on all four supported engines:
 
-- Existing native conformance:1917 checks on3.2.8/3.2.0/master,1703 on3.0.8.
--27 preparation/refusal/preservation checks, including real hidden empty maps,
+- Existing native conformance: 1,917 checks on 3.2.8, 3.2.0 and master; 1,703 on 3.0.8.
+- 27 preparation/refusal/preservation checks, including real hidden empty maps,
   zero-count EXIF/IPTC, unchanged facts/history and the existing generic writer.
--9 inventory/version-refusal checks, including wrong-version unrelated objects
-  and complete-count2 versus filtered-count1 on the legal empty-map fixture.
--124 normalization checks: all six component types, native Adobe and another
+- 9 inventory/version-refusal checks, including wrong-version unrelated objects
+  and 2 complete entries versus 1 filtered entry on the legal empty-map fixture.
+- 124 normalization checks: all six component types, native Adobe and another
   explicit RGB profile, a separate native-setter oracle, idempotence and unchanged
   source metadata/history. The helper's production body is unchanged afterward.
 
-All838 app unit tests and14 script tests pass. Runtime uses fatal GLib criticals
+All 838 app unit tests and 14 script tests pass. Runtime uses fatal GLib criticals
 and isolated absolute home/cache/user directories. Relative home paths exposed a
 3.2.0 initialization assertion; the shared test driver now canonicalizes them.
 Raw empty-map import emits native conversion warnings, and master has its known

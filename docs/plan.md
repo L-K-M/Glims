@@ -3236,6 +3236,6 @@ image with lossy metadata. See metadata-preservation.md for the reproduced
 failure, ABI/version boundary and validation matrix. Native dependency source
 stays unchanged. A detached one-existing-language preparation function verifies
 all admitted maps, unrelated data, native normalization stability and roundtrip
-fidelity. It has no public writer slot or UI yet. Native conformance,27 preparation
-checks and9 inventory checks pass on every engine; the normalization helper has
-124 checks per engine.838 unit and14 script tests pass; bundle/CI checks pending.
+fidelity. It has no public writer slot or UI yet. Native conformance, 27 preparation
+checks and 9 inventory checks pass on every engine; the normalization helper has
+124 checks per engine. 838 unit and 14 script tests pass; bundle/CI checks pending.
