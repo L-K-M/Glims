@@ -433,6 +433,16 @@ GlimsStatus glims_image_select_layers (GlimsEngine *e, GlimsImageID image,
                                        const GlimsItemID *layers, size_t count, char **error);
 GlimsStatus glims_image_selected_layers (GlimsEngine *e, GlimsImageID image,
                                          GlimsItemID *ids, int32_t capacity, int32_t *count);
+/* Slots 136/137: the batch item selection of any kind (GlimsItemSetKind).
+ * Select: an exact, ordered, transient write of the whole selected list
+ * of `kind` (edit-ready gated; per-kind floating-selection policy; count 0
+ * clears — channels through gimp_image_unset_selected_channels to restore
+ * the old layer stack). Read: a borrowed-order plain read allowed at any
+ * time; *count reset to 0 on every failure. */
+GlimsStatus glims_image_select_items (GlimsEngine *e, GlimsImageID image, uint32_t kind,
+                                      const GlimsItemID *items, int32_t count, char **error);
+GlimsStatus glims_image_selected_items (GlimsEngine *e, GlimsImageID image, uint32_t kind,
+                                        GlimsItemID *out, int32_t capacity, int32_t *count);
 GlimsStatus glims_layer_command    (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                     uint32_t command, GlimsItemID *result, char **error);
 GlimsStatus glims_layer_change     (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
