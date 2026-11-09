@@ -3262,13 +3262,16 @@ refuse a pending replacement target, and refresh the native result through the
 counted queue. The deferred refresh/completion remains counted through global
 exclusive work, so close waits for accepted commands.
 
-The public harness passes 122 checks on each supported engine, including exact
+The public harness passes 123 checks on each supported engine, including exact
 and shifted buffer overlap, explicit nested parents, one Undo, ordered selection
 restoration, known red/blue pixels and independent binary mask pixels/flags.
 The private preparation harness passes 101 checks per engine. The pending-target
 regression reproduced three failures before its refusal guards were added, then
-passed 11 real-window checks per engine. Palette controls and combined acceptance
-remain in progress.
+passed 11 real-window checks per engine. The expanded case passes 15 checks
+per engine, including actual palette menu/button actions and pending-target
+refusals. The integrated branch passes 863 unit tests; the packaged engine
+also passes the 123 public checks with native and Swift build trees denied.
+Full isolated app acceptance and exact-head CI remain in progress.
 
 ### Trackpad view navigation (2026-11-09)
 

@@ -33,7 +33,7 @@ static int layers_equal (GlimsImageID image, const GlimsLayerInfo *base, int bas
   GlimsLayerInfo now[16];
   int n = get_layers (image, now, 16);
   int i;
-  if (n != base_count) return 0;
+  if (base_count < 0 || n != base_count) return 0;
   for (i = 0; i < n; i++)
     {
       if (now[i].id != base[i].id) return 0;
@@ -134,18 +134,23 @@ static void extra_public_cases (void)
   NEED (api->image_paste_pixels (engine, image, (GlimsRect) {12, 5, 8, 8}, blue, sizeof blue, &B, &error) == GLIMS_STATUS_OK,
         "extra fixtures paste the known blue layer");
   baseline_count = get_layers (image, baseline, 16);
+  NEED (baseline_count == 2, "extra baseline enumeration succeeds with both known sources");
   for (int alias = 0; alias < 3; alias++) {
     GlimsItemID arena[6] = { 0x11223344, 0, 0, 0, 0x55667788, 0x12345678 };
     GlimsItemID *input = arena + (alias == 2 ? 2 : 1);
     GlimsItemID *output = arena + (alias == 1 ? 2 : 1);
     input[0] = B; input[1] = A;
+    GlimsItemID preserved[6];
+    memcpy (preserved, arena, sizeof arena);
     NEED (api->image_duplicate_layers (engine, image, input, 2, output, &error) == GLIMS_STATUS_OK,
           "exact or shifted input/output overlap duplicates successfully");
     CHECK (output[0] > 0 && output[1] > 0 && output[0] != output[1] &&
            output[0] != A && output[0] != B && output[1] != A && output[1] != B,
            "overlapping buffers return distinct new ids independently of overwritten inputs");
-    CHECK (arena[0] == 0x11223344 && arena[4] == 0x55667788 && arena[5] == 0x12345678,
-           "overlapping buffers preserve outer canaries");
+    int untouched = 1;
+    for (int cell = 0; cell < 6; cell++)
+      if ((arena + cell < output || arena + cell >= output + 2) && arena[cell] != preserved[cell]) untouched = 0;
+    CHECK (untouched, "overlapping buffers preserve every cell outside the exact output, including input-only cells");
     GlimsItemID selected[4];
     CHECK (get_selected (image, selected, 4) == 2 && selected[0] == output[0] && selected[1] == output[1],
            "overlapping buffers preserve the requested blue/red selected order");
