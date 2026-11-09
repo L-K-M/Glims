@@ -56,6 +56,13 @@ enum MainMenu {
             item("Stroke Path", #selector(DocumentWindowController.strokePath(_:))),
             item("Fill Path", #selector(DocumentWindowController.fillPath(_:))),
             item("To Vector Layer", #selector(DocumentWindowController.toVectorLayer(_:))),
+            .separator(),
+            // No shortcuts: creation captures whatever selection is
+            // current, so the items stay plain menu entries.
+            submenu("Create Resource", [
+                item("Brush from Selection…", #selector(DocumentWindowController.createBrushFromSelection(_:))),
+                item("Pattern from Selection…", #selector(DocumentWindowController.createPatternFromSelection(_:))),
+            ]),
         ])
         // Plug-in commands are appended to Image, Layer and Select (PlugInMenus).
         let mode = NSMenuItem(title: "Mode", action: nil, keyEquivalent: "")

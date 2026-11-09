@@ -861,6 +861,114 @@ final class ImageDocument {
         return nil
     }
 
+    // MARK: Create resource from selection
+
+    /// The cached-state reason Edit ▸ Create Resource ▸ … cannot run right
+    /// now, or nil when it can. Reads only the document's cached state —
+    /// never the engine — so menu validation and the sheet's open/accept
+    /// gates make no synchronous native call. The selection gate reads the
+    /// image's root selection mask bounds (`selectionBounds`): any nonzero
+    /// mask value counts, including soft coverage below the marching-ants
+    /// threshold, which has bounds but no outline. No gate keys on the
+    /// paint target, its source kind or layer locks: the capture reads the
+    /// merged image, which is valid for any target.
+    func createResourceRefusal(kind: EngineSession.ResourceKind) -> String? {
+        ResourceSelectionFormValidation.menuRefusal(
+            engineActivity: PlugInCommands.isRunning ? nil : EngineActivity.shared.label,
+            plugInLabel: PlugInCommands.running.map { $0.procedure.label.replacingOccurrences(of: "…", with: "") },
+            isClosing: isClosing,
+            isSavingForClose: isSavingForClose,
+            isTransferringClipboard: isTransferringClipboard,
+            previewOpen: filterPreviewIsOpen,
+            selectionBounds: selectionBounds,
+            kind: kind)
+    }
+
+    /// Edit ▸ Create Resource ▸ Brush/Pattern from Selection…: captures the
+    /// selected VISIBLE MERGED pixels of this document into one new saved
+    /// resource (facade slot 129, `EngineSession.createResource`) — the
+    /// native copy is the private `gimp_selection_extract` (cut FALSE)
+    /// behind `copyPixels(image, merged: true)`, never the system clipboard,
+    /// and never a full-image fallback: a fresh native check on the worker
+    /// requires an actual nonempty selection and refuses bounds over the
+    /// 10000 px per-side cap BEFORE any pixels are allocated.
+    ///
+    /// The flow is one counted global exclusive job: `EngineActivity`
+    /// drains ALL accepted input of every document before the native work,
+    /// and `pendingWork` stays counted through the deferred main completion
+    /// stage, so a close waits for the whole job and its callback. The
+    /// completion runs on the main actor exactly once with the created
+    /// id/name/kind; a successful publish never becomes a false failure
+    /// through the optional identity query. Pre-acceptance refusals
+    /// (closing, cached gate, local validation, busy) call the completion
+    /// synchronously with nothing queued.
+    func createResourceFromSelection(kind: EngineSession.ResourceKind, name: String, brushSpacing: UInt32,
+                                     completion: @escaping @MainActor (Result<CreatedResource, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if let reason = createResourceRefusal(kind: kind) {
+            return completion(.failure(EngineSession.EngineError(
+                status: Int32(GLIMS_STATUS_BUSY.rawValue), message: reason)))
+        }
+        // Pure local validation before anything is queued: the name and
+        // spacing rules (dimensions come from the fresh selection on the
+        // worker). This is the same pre-RPC gate slot 129 applies.
+        do {
+            try EngineSession.validateResourceCreation(kind: kind, name: name, width: 1, height: 1,
+                                                       byteCount: 4, brushSpacing: brushSpacing)
+        } catch { return completion(.failure(error)) }
+        // End in-flight field/text edits and this document's own open
+        // stroke explicitly — the established finishInput pattern — so the
+        // exclusive drain below starts from committed input.
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        pendingWork += 1
+        let label = "Creating \(kind.singular) “\(name)”"
+        let accepted = EngineActivity.shared.perform(label: label) { [session, image] in
+            let result: Result<CreatedResource, Error> = Result {
+                // Fresh native check on the worker: the actual root
+                // selection, including soft coverage below the ants
+                // threshold — bounds exist whenever the mask is nonempty.
+                guard let bounds = try session.selectionBounds(image: image) else {
+                    throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                        message: "There is no selection to create a \(kind.singular) from; select an area first.")
+                }
+                guard bounds.width.isFinite, bounds.height.isFinite,
+                      Int(bounds.width) >= 1, Int(bounds.height) >= 1,
+                      Int(bounds.width) <= EngineSession.resourceMaxDimension,
+                      Int(bounds.height) <= EngineSession.resourceMaxDimension else {
+                    // Refused before copyPixels allocates any pixels.
+                    throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                        message: "The selection is too large to create a \(kind.singular) from (at most \(EngineSession.resourceMaxDimension) pixels per side).")
+                }
+                let pixels = try session.copyPixels(image, merged: true)
+                guard pixels.width == Int(bounds.width), pixels.height == Int(bounds.height) else {
+                    throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                        message: "The engine copied \(pixels.width) × \(pixels.height) pixels for a \(Int(bounds.width)) × \(Int(bounds.height)) selection.")
+                }
+                let id = try session.createResource(kind: kind, name: name, pixels: pixels,
+                                                    brushSpacing: brushSpacing)
+                // Optional identity query only: a successful publish must
+                // not become a false failure through it.
+                let identity = try? session.resourceIdentifiers(id)
+                return CreatedResource(id: id, name: identity?.name ?? name, kind: kind)
+            }
+            DispatchQueue.main.async {
+                if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                completion(result)
+                // This main block was queued during `work`, so it runs
+                // before the activity's own completion below: pendingWork
+                // stays counted through the deferred completion stage.
+            }
+        } completion: {
+            self.jobDidFinish(input: false)
+        }
+        if !accepted {
+            jobDidFinish(input: false)
+            completion(.failure(DocumentError.busy))
+        }
+    }
+
     // MARK: Guides
 
     /// Adds a guide at `position` (image pixels on `orientation`'s

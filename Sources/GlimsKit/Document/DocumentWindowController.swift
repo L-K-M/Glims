@@ -24,6 +24,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// Edit ▸ Stroke Selection…'s sheet, retained by this window for its
     /// lifetime the same way; nil while none is open.
     private(set) var strokeSelectionSheet: StrokeSelectionSheetController?
+    /// Edit ▸ Create Resource ▸ …'s sheet, retained by this window for its
+    /// lifetime and capturing this window's document and creation kind at
+    /// open, so two documents keep independent sheets — no global binding,
+    /// no retarget to the front window. nil while none is open.
+    private(set) var resourceSelectionSheet: ResourceSelectionSheetController?
 
     /// Image ▸ Mode ▸ Indexed…'s sheet, retained by this window for its
     /// lifetime and capturing this window's document at open, so Apply and
@@ -113,6 +118,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // existing handlers — the sheets never install their own callback.
             self?.guidesSheet?.showError(message)
             self?.strokeSelectionSheet?.showError(message)
+            self?.resourceSelectionSheet?.showError(message)
 
             self?.gridSheet?.showError(message)
 
@@ -315,6 +321,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         previewPanel?.window?.endEditing(for: nil)
         guidesSheet?.commitFieldEdit()
         strokeSelectionSheet?.commitFieldEdit()
+        resourceSelectionSheet?.commitFieldEdit()
 
         gridSheet?.commitFieldEdit()
 
@@ -365,6 +372,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
         guidesSheet?.documentStateDidChange()
         strokeSelectionSheet?.documentStateDidChange()
+        resourceSelectionSheet?.documentStateDidChange()
 
         gridSheet?.documentStateDidChange()
 
@@ -1092,6 +1100,38 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    /// Edit ▸ Create Resource ▸ Brush from Selection….
+    @objc func createBrushFromSelection(_ sender: Any?) {
+        presentResourceSelectionSheet(.brush)
+    }
+
+    /// Edit ▸ Create Resource ▸ Pattern from Selection….
+    @objc func createPatternFromSelection(_ sender: Any?) {
+        presentResourceSelectionSheet(.pattern)
+    }
+
+    /// Opens this document's create-resource sheet for `kind`. The sheet
+    /// captures this window's document and the kind at open; the open gate
+    /// reads only the cached document state — busy, preview, closing, no
+    /// selection or an oversized selection refuse with a reason, never a
+    /// native call on the main thread.
+    private func presentResourceSelectionSheet(_ kind: EngineSession.ResourceKind) {
+        guard let window, !imageDocument.isClosing, window.attachedSheet == nil,
+              resourceSelectionSheet == nil else { return }
+        if let reason = imageDocument.createResourceRefusal(kind: kind) {
+            imageDocument.onError?(reason)
+            NSSound.beep()
+            return
+        }
+        let sheet = ResourceSelectionSheetController(document: imageDocument, kind: kind, hostWindow: window)
+        resourceSelectionSheet = sheet
+        window.beginSheet(sheet.panel) { [weak self, weak sheet] _ in
+            guard let self, let sheet, self.resourceSelectionSheet === sheet else { return }
+            sheet.invalidate()
+            self.resourceSelectionSheet = nil
+        }
+    }
+
     /// Edit ▸ Fill Path: fills the active path's area on the current paint
     /// target using the Path tool's foreground color and fill settings.
     @objc func fillPath(_ sender: Any?) {
@@ -1244,6 +1284,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // The gate reads only cached state — no native call while a
             // menu validates; the reason becomes the item's tool tip.
             if let reason = imageDocument.strokeSelectionRefusal {
+                menuItem.toolTip = reason
+                return false
+            }
+            menuItem.toolTip = nil
+            return !editingBlocked && !previewBusy
+        case #selector(createBrushFromSelection(_:)), #selector(createPatternFromSelection(_:)):
+            // Cached gate only — no native call while a menu validates; the
+            // refusal reason becomes the item's tool tip.
+            let kind: EngineSession.ResourceKind =
+                menuItem.action == #selector(createBrushFromSelection(_:)) ? .brush : .pattern
+            if let reason = imageDocument.createResourceRefusal(kind: kind) {
                 menuItem.toolTip = reason
                 return false
             }
@@ -2009,6 +2060,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         removeRulerObservers()
         guidesSheet?.invalidate()
         strokeSelectionSheet?.invalidate()
+        resourceSelectionSheet?.invalidate()
 
         gridSheet?.invalidate()
 
