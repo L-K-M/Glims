@@ -10,7 +10,7 @@ final class SavedSetControlsTests: XCTestCase {
     private typealias Logic = SavedSetControlsLogic
     private typealias Kind = EngineSession.ItemSetKind
 
-    private func rejection(_ result: Result<String, Logic.Rejection>) -> String? {
+    private func rejection<T>(_ result: Result<T, Logic.Rejection>) -> String? {
         if case .failure(let rejection) = result { return rejection.message }
         return nil
     }
@@ -121,11 +121,11 @@ final class SavedSetControlsTests: XCTestCase {
     }
 
     func testRequestValidationMirrorsSlot135() {
-        XCTAssertNotNil(Logic.validateRequest(operation: .create, kind: .layer, token: 5,
-                                              name: "x", members: [], captureSelection: true),
+        XCTAssertNotNil(rejection(Logic.validateRequest(operation: .create, kind: .layer, token: 5,
+                                              name: "x", members: [], captureSelection: true)),
                         "CREATE takes token 0")
-        XCTAssertNotNil(Logic.validateRequest(operation: .create, kind: .layer, token: 0,
-                                              name: nil, members: [], captureSelection: true),
+        XCTAssertNotNil(rejection(Logic.validateRequest(operation: .create, kind: .layer, token: 0,
+                                              name: nil, members: [], captureSelection: true)),
                         "CREATE takes a name")
         if case .failure(let r) = Logic.validateRequest(operation: .create, kind: .layer, token: 0,
                                                         name: "", members: [], captureSelection: true) {
@@ -135,24 +135,24 @@ final class SavedSetControlsTests: XCTestCase {
                                                     name: "ok", members: [4], captureSelection: false) else {
             return XCTFail("a valid CREATE passes")
         }
-        XCTAssertNotNil(Logic.validateRequest(operation: .replace, kind: .layer, token: 0,
-                                              name: nil, members: [1], captureSelection: false),
+        XCTAssertNotNil(rejection(Logic.validateRequest(operation: .replace, kind: .layer, token: 0,
+                                              name: nil, members: [1], captureSelection: false)),
                         "REPLACE takes a current token")
-        XCTAssertNotNil(Logic.validateRequest(operation: .replace, kind: .layer, token: 3,
-                                              name: "x", members: [1], captureSelection: false),
+        XCTAssertNotNil(rejection(Logic.validateRequest(operation: .replace, kind: .layer, token: 3,
+                                              name: "x", members: [1], captureSelection: false)),
                         "REPLACE takes no name")
-        XCTAssertNotNil(Logic.validateRequest(operation: .replace, kind: .layer, token: 3,
-                                              name: nil, members: [0], captureSelection: false),
+        XCTAssertNotNil(rejection(Logic.validateRequest(operation: .replace, kind: .layer, token: 3,
+                                              name: nil, members: [0], captureSelection: false)),
                         "explicit member 0 is refused")
-        XCTAssertNotNil(Logic.validateRequest(operation: .rename, kind: .layer, token: 3,
-                                              name: "x", members: [1], captureSelection: false),
+        XCTAssertNotNil(rejection(Logic.validateRequest(operation: .rename, kind: .layer, token: 3,
+                                              name: "x", members: [1], captureSelection: false)),
                         "RENAME takes no members")
         guard case .success = Logic.validateRequest(operation: .rename, kind: .path, token: 3,
                                                     name: "new", members: [], captureSelection: false) else {
             return XCTFail("a valid RENAME passes")
         }
-        XCTAssertNotNil(Logic.validateRequest(operation: .remove, kind: .layer, token: 0,
-                                              name: nil, members: [], captureSelection: false),
+        XCTAssertNotNil(rejection(Logic.validateRequest(operation: .remove, kind: .layer, token: 0,
+                                              name: nil, members: [], captureSelection: false)),
                         "REMOVE takes a current token")
         guard case .success = Logic.validateRequest(operation: .remove, kind: .layer, token: 3,
                                                     name: nil, members: [], captureSelection: false) else {
@@ -199,7 +199,7 @@ final class SavedSetControlsTests: XCTestCase {
         }
         XCTAssertTrue(channel.message.contains("layer sets only"), channel.message)
         XCTAssertTrue(channel.message.contains("channel"), channel.message)
-        XCTAssertTrue(channel.message.contains("no item is picked implicitly"), channel.message)
+        XCTAssertTrue(channel.message.contains("create") && channel.message.contains("delete"), channel.message)
         guard case .failure(let path) = Logic.recallAdmission(kind: .path,
                                                               row: row(5, .path, "P", members: [7]),
                                                               existingLayerIDs: [1]) else {

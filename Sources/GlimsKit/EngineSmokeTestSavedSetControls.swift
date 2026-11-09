@@ -239,6 +239,7 @@ extension EngineSmokeTest {
         selectRow(panel, tableView, row(named: "Layers A", in: panel, tableView) ?? 0)
         docA.selectLayers([bg])
         settle(docA)
+        let undoBeforeReplace = try session.undoInfo(imageA).undoCount
         button(panelWindow, "Replace with selection")?.performClick(nil)
         settlePanel(docA, panel)
         sets = try layerSets(imageA)
@@ -254,7 +255,7 @@ extension EngineSmokeTest {
         check(panel.selectedToken == tokenAfterReplace
                 && cell(panel, tableView, row(named: "Layers A", in: panel, tableView) ?? 0, panel.countColumn) == "1",
               "the table binds the fresh token and its live count")
-        check(docA.undoInfo.undoCount == undoBefore + 2, "REPLACE is one undo step")
+        check(docA.undoInfo.undoCount == undoBeforeReplace + 1, "REPLACE is one undo step")
 
         // No-op REPLACE (identical members): OK, same token, no undo step.
         let undoBeforeNoop = docA.undoInfo.undoCount
@@ -271,6 +272,7 @@ extension EngineSmokeTest {
         selectRow(panel, tableView, row(named: "Layers A", in: panel, tableView) ?? 0)
         check(nameField.stringValue == "", "selecting a row does not seed the rename draft from the label")
         nameField.stringValue = "Layers A2"
+        let undoBeforeRename = try session.undoInfo(imageA).undoCount
         button(panelWindow, "Rename saved set")?.performClick(nil)
         settlePanel(docA, panel)
         sets = try layerSets(imageA)
@@ -283,7 +285,7 @@ extension EngineSmokeTest {
                 && tokenAfterRename != tokenAfterReplace
                 && (try? session.itemSetMembers(imageA, token: tokenAfterReplace)) == nil,
               "RENAME applies the full new name, keeps members, expires the old token")
-        check(docA.undoInfo.undoCount == undoBefore + 3, "RENAME is one undo step")
+        check(docA.undoInfo.undoCount == undoBeforeRename + 1, "RENAME is one undo step")
         check(cell(panel, tableView, row(named: "Layers A2", in: panel, tableView) ?? 0, panel.nameColumn) == "Layers A2",
               "the table shows the new label")
 
@@ -324,6 +326,35 @@ extension EngineSmokeTest {
         settle(docA)
         check((try session.selectedLayers(imageA)) == [l2, l1],
               "layer recall selects exactly the stored member list")
+
+        // A stale table must not turn an expired set into a cached list of
+        // otherwise valid layer IDs. Suppress automatic view refresh only;
+        // the real button and native operation remain unchanged.
+        docA.selectLayers([bg])
+        settle(docA)
+        selectRow(panel, tableView, row(named: "Recall", in: panel, tableView) ?? recallRow)
+        guard let staleRecallToken = panel.selectedToken else {
+            check(false, "the stale-recall fixture has a selected token")
+            return
+        }
+        let stateCallback = docA.onStateChange
+        docA.onStateChange = nil
+        defer { docA.onStateChange = stateCallback }
+        _ = try session.editItemSet(imageA, .remove, kind: .layer, token: staleRecallToken)
+        check(panel.selectedToken == staleRecallToken,
+              "the table intentionally retains the now-expired recall token")
+        if let recall = button(panelWindow, "Recall saved set"), let action = recall.action {
+            NSApp.sendAction(action, to: recall.target, from: recall)
+        }
+        settlePanel(docA, panel)
+        check((try session.selectedLayers(imageA)) == [bg],
+              "recalling an expired token refuses without selecting cached layer IDs")
+        check(panel.lastError != nil, "stale recall reports the refusal in the captured panel")
+        docA.onStateChange = stateCallback
+        panel.reload()
+        settlePanel(docA, panel)
+        docA.selectLayers([l2, l1])
+        settle(docA)
 
         // Recall disabled for channel kind, with a meaningful reason and no
         // take-first: the layer selection is untouched.

@@ -129,9 +129,8 @@ enum SavedSetControlsLogic {
     /// Why a non-layer kind cannot be recalled: no owned native
     /// channel/path selection API — nothing is recalled, no take-first.
     static func recallUnavailableReason(_ kind: EngineSession.ItemSetKind) -> String {
-        "Recall is available for layer sets only: this build owns no native "
-            + "\(kindTitle(kind).lowercased()) selection API yet, so nothing is recalled "
-            + "and no item is picked implicitly."
+        "Recall is available for layer sets only. You can create, replace, rename "
+            + "and delete \(kindTitle(kind).lowercased().dropLast()) sets here."
     }
 
     /// Recall admission: only a layer-kind row whose exact member list is
@@ -456,16 +455,24 @@ final class SavedSetPanelController: NSWindowController, NSTableViewDataSource, 
 
     /// Recall: layer sets only, via the exact-list `selectLayers`.
     @objc private func recallSavedSet(_ sender: Any?) {
-        guard !isInvalidated, phase == .idle else { return }
+        guard !isInvalidated, phase == .idle, let row = selectedRow else { return }
+        if let reason = cachedAdmission() { refuse(reason); return }
         let admission = SavedSetControlsLogic.recallAdmission(
             kind: kind, row: selectedRow, existingLayerIDs: Set(imageDocument.layers.map(\.id)))
-        guard case .success(let members) = admission else {
+        guard case .success = admission else {
             if case .failure(let rejection) = admission { refuse(rejection.message) }
             NSSound.beep()
             return
         }
         clearMessage()
-        imageDocument.selectLayers(members)
+        phase = .mutating
+        updateControlStates()
+        imageDocument.recallLayerSet(token: row.token) { [weak self] result in
+            guard let self, !self.isInvalidated else { return }
+            self.phase = .idle
+            if case .failure(let error) = result { self.refuse(error.localizedDescription) }
+            self.reload()
+        }
     }
 
     @objc private func closePanel(_ sender: Any?) {

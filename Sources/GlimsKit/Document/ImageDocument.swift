@@ -1092,6 +1092,27 @@ final class ImageDocument {
         }
     }
 
+    /// Recall resolves the current set on the worker before changing the
+    /// native target. Cached table members are never an executable command.
+    /// The existing target-command gate counts the job, blocks painting an
+    /// unknown target and reconciles the mirror without a second selection.
+    func recallLayerSet(token: UInt64, completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !refuseWhileEditingUnavailable(), !refuseWhileFloatingActive() else {
+            return completion(.failure(DocumentError.busy))
+        }
+        endPendingUserEdits()
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueueTargetCommand({ session, image in
+            let members = try session.itemSetMembers(image, token: token)
+            guard !members.isEmpty else {
+                throw SavedSetControlsLogic.Rejection(message: "The saved set is empty; there is nothing to recall.")
+            }
+            try session.selectLayers(members, image: image)
+            guard try session.selectedLayers(image) == members else { throw DocumentError.targetChanged }
+        }, completion: completion)
+    }
+
     // MARK: Guides
 
     /// Adds a guide at `position` (image pixels on `orientation`'s
