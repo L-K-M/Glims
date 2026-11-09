@@ -67,7 +67,11 @@ bundle with the native and Swift build outputs inaccessible.
       with immutable settings, Undo and XCF preservation (current candidate).
 - [x] Dedicated Color Balance controls with whole-range native configuration,
       immutable editing and delayed-write refusal handling (current candidate).
-- [ ] Remaining custom filter forms/config editors and other auxiliary inputs.
+- [x] Dedicated Brightness/Contrast, Color Balance, Hue/Saturation and Levels
+      editors, with immutable whole configurations, existing-effect editing,
+      Undo/Redo and XCF (reviewed integration candidates #129/#131/#133/#134).
+- [ ] Remaining custom filter forms, including Curves, histogram/automatic
+      Levels controls and other auxiliary inputs.
 - [ ] Preserve nondefault native-only effect blend/composite settings when
       opening XCF; upstream currently normalizes them to AUTO.
 - [x] Path fill, vector layers and vector style controls.
@@ -111,6 +115,8 @@ bundle with the native and Swift build outputs inaccessible.
       guards and independent per-key drafts in the metadata controls.
 - [x] Image > Adjust placement for native Threshold and perceptual/linear
       Invert, with shared plug-in categories (current candidate).
+- [x] Typed capture-date metadata, descriptor-gated and preserving timezone
+      and subsecond companions (#132).
 - [ ] Remaining typed metadata editors, Image Adjust commands, proof view controls
       and complete menu/keyboard coverage.
 - [ ] Recorder and semantic command replay.
@@ -498,3 +504,15 @@ findings after the Undo admission and idle Escape corrections. Expanded
 source-kind, sparse-budget and XCF acceptance is recorded in
 `filter-inputs.md`; this entry does not close the other auxiliary/config
 forms or the final whole-editor gate.
+
+
+2026-11-09 adjustment integration candidate: source `e65a01d` includes the
+reviewed Brightness/Contrast, Color Balance, Hue/Saturation and Levels
+controls plus the complete AOM text. All 956 unit tests pass. Levels' final
+native suites pass 492 focused/1,917 general checks per 3.2/master engine
+and 475 focused/1,703 general on 3.0.8. Its 21 focused UI checks pass on
+each engine, and the final self-contained bundle passes 1,917 native and
+2,520 app checks with native and Swift build trees inaccessible. A generic
+TRC-write/new-commit invariant gap was reproduced with four failing
+assertions, fixed and checked across the matrix. Latest-head CI and merge
+remain pending. The remaining unchecked items above are not complete.

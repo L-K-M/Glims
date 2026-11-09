@@ -1,8 +1,7 @@
 # Levels configuration editor
 
-This is an implementation candidate. Native and UI acceptance results are
-recorded below when executed; compilation and source review alone do not
-establish runtime correctness.
+This implementation candidate has passed the native, UI and isolated
+bundle checks below. Latest-head CI and merge remain separate gates.
 
 The dedicated `gimp:levels` form edits Value, Red, Green, Blue and Alpha.
 Each channel retains Low Input, High Input, Gamma, Low Output and High
@@ -71,8 +70,9 @@ endpoint ordering or epsilon restriction that the native operation lacks.
   1,917/1,703 general checks. The legacy numeric setter’s existing conversion
   refusal is independently checked without a production change.
 - UI source review found no important issue. Final native follow-up review
-  accepts the guards at source level. Final packaged and post-guard UI
-  checks are pending.
+  accepts the guards. The final post-guard UI run passes 21 checks on each
+  supported engine. The self-contained bundle passes 1,917 native and 2,520
+  app checks with native and Swift build trees inaccessible.
 - The 13 raw pixel oracles derive independently from the pinned operation's
   arithmetic. All 13 cases pass, with independent TRC-space checks, within
   the focused native suite. Actual image ICC and physical-display coverage

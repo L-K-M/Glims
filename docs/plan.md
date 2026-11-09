@@ -3465,5 +3465,7 @@ and an explicit transfer curve in a dedicated editor. API v1 appends
 154/155. Equal and reversed endpoints remain valid; native configuration
 replacement preserves older snapshots. Generic operation-only TRC writes
 are refused, and commit validates both new and existing previews before
-history changes. See `levels.md` for current acceptance and open histogram,
-automatic-stretch and legacy-mismatch editing boundaries.
+history changes. See `levels.md`: 956 unit tests; 492 focused native checks
+on each 3.2/master engine, 475 on 3.0.8; 21 actual UI checks per engine;
+and 1,917 native/2,520 app checks in the isolated final bundle. Histogram,
+automatic stretch and legacy-mismatch editing remain open.
