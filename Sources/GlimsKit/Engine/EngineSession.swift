@@ -2874,6 +2874,154 @@ final class EngineSession: @unchecked Sendable {
         return kind
     }
 
+    // MARK: Saved sets (read-only, slots 133/134)
+
+    /// The kind of a saved set (GlimsItemSetKind). Facade-owned values;
+    /// the engine's own classes never cross the boundary.
+    enum ItemSetKind: UInt32, CaseIterable, Codable {
+        case layer = 1, channel, path
+    }
+
+    /// One row of `itemSets(_:)` (GlimsItemSetInfo): the set's opaque
+    /// identity token, kind, display name and live attached member count.
+    /// The token — never the name — is the identity: it stays stable
+    /// across quiet live-member rebuilds of the same set, expires when
+    /// the set is explicitly removed or replaced through an undoable
+    /// edit, and a set recreated under the same name gets a new token.
+    /// `displayName` is display-only and may be truncated.
+    struct ItemSet: Equatable {
+        let token: UInt64
+        let kind: ItemSetKind
+        let displayName: String
+        let memberCount: Int
+    }
+
+    /// The image's fixed saved sets (stored item sets), read-only: kinds
+    /// in `ItemSetKind` order, the engine's stored-list order within a
+    /// kind; pattern definitions are never listed. A plain read, allowed
+    /// while the image is busy; it changes nothing.
+    func itemSets(_ image: Int32) throws -> [ItemSet] {
+        var count: Int32 = 0
+        try check(api.image_item_sets(engine, image, nil, 0, &count), nil)
+        guard count > 0 else { return [] }
+        var rows = [GlimsItemSetInfo](repeating: GlimsItemSetInfo(), count: Int(count))
+        var filled: Int32 = 0
+        try rows.withUnsafeMutableBufferPointer { buffer in
+            try check(api.image_item_sets(engine, image, buffer.baseAddress, count, &filled), nil)
+        }
+        return try rows.prefix(Int(min(count, filled))).map { row in
+            guard let kind = ItemSetKind(rawValue: row.kind) else {
+                throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                  message: "The engine returned an unknown saved-set kind.")
+            }
+            return ItemSet(token: row.token, kind: kind,
+                           displayName: Self.string(row.display_name),
+                           memberCount: Int(row.member_count))
+        }
+    }
+
+    /// The current attached member ids of the one saved set that `token`
+    /// names in `image`, in stored membership order. Members deleted or
+    /// detached from the image are skipped; an empty set returns [].
+    /// Throws NOT_FOUND for a token this image does not own — foreign,
+    /// stale or expired tokens are never retargeted to a same-named set.
+    func itemSetMembers(_ image: Int32, token: UInt64) throws -> [Int32] {
+        var count: Int32 = 0
+        try check(api.image_item_set_members(engine, image, token, nil, 0, &count), nil)
+        guard count > 0 else { return [] }
+        var ids = [GlimsItemID](repeating: 0, count: Int(count))
+        var filled: Int32 = 0
+        try ids.withUnsafeMutableBufferPointer { buffer in
+            try check(api.image_item_set_members(engine, image, token, buffer.baseAddress, count, &filled), nil)
+        }
+        return Array(ids.prefix(Int(min(count, filled))))
+    }
+
+    // MARK: Saved sets (edit, slot 135)
+
+    /// One edit operation of `editItemSet(_:)` (GlimsItemSetEditOp).
+    enum ItemSetEdit: UInt32 {
+        /// Token 0, full new `name`, explicit `members` (empty = empty set).
+        case create = 1
+        /// Current `token`, explicit `members`, no name.
+        case replace
+        /// Current `token`, desired full `name`, no members.
+        case rename
+        /// Current `token`, no name, no members.
+        case remove
+    }
+
+    /// C strings cannot represent an embedded NUL; reject it before any
+    /// bridge allocation or native call can silently shorten the request.
+    /// The engine enforces the rest of the full-name contract (nonempty
+    /// valid UTF-8, no control characters, at most 255 bytes).
+    static func validateItemSetName(_ name: String) throws {
+        guard !name.utf8.contains(0) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "A saved-set name cannot contain a NUL character.")
+        }
+    }
+
+    /// One undoable edit of one of `image`'s fixed saved sets (slot 135),
+    /// addressed by the set's current identity token — never by name.
+    /// Field relevance is strict, validated here as on the engine: `.create`
+    /// needs token 0 and a full new `name`; `.replace` a current token,
+    /// explicit `members`, no name; `.rename` a current token and the
+    /// desired `name`, no members; `.remove` a current token and neither.
+    /// Members are item ids, each positive, attached to `image`, of `kind`,
+    /// unique; 0 never means "the current selection". Throws BUSY while a
+    /// stroke, filter preview or plug-in holds the image, NOT_FOUND for an
+    /// unknown image or a foreign/stale/expired token (never retargeted),
+    /// INVALID_ARGUMENT for any malformed field. A successful mutating call
+    /// is one native undo step; a no-op (identical members, same name)
+    /// changes nothing. Returns the resulting set's token: fresh after
+    /// CREATE/REPLACE/RENAME, the current one after a no-op, 0 after REMOVE
+    /// and after every failure.
+    @discardableResult
+    func editItemSet(_ image: Int32, _ operation: ItemSetEdit, kind: ItemSetKind,
+                     token: UInt64 = 0, name: String? = nil, members: [Int32] = []) throws -> UInt64 {
+        func invalid(_ message: String) -> EngineError {
+            EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: message)
+        }
+        switch operation {
+        case .create:
+            guard token == 0, let name else {
+                throw invalid("CREATE takes token 0 and a full new name.")
+            }
+            try Self.validateItemSetName(name)
+        case .replace:
+            guard token != 0, name == nil else {
+                throw invalid("REPLACE takes a current token and explicit members only, no name.")
+            }
+        case .rename:
+            guard token != 0, let name, members.isEmpty else {
+                throw invalid("RENAME takes a current token and the desired name, no members.")
+            }
+            try Self.validateItemSetName(name)
+        case .remove:
+            guard token != 0, name == nil, members.isEmpty else {
+                throw invalid("REMOVE takes a current token only, no name and no members.")
+            }
+        }
+        guard members.count <= Int(Int32.max) else {
+            throw invalid("The member list is too long for the engine interface.")
+        }
+        var outToken: UInt64 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        let status = members.withUnsafeBufferPointer { buffer in
+            let memberPointer = buffer.isEmpty ? nil : buffer.baseAddress
+            return name?.withCString { cName in
+                api.image_item_set_edit(engine, image, operation.rawValue, kind.rawValue,
+                                        token, cName, memberPointer, Int32(members.count),
+                                        &outToken, &error)
+            } ?? api.image_item_set_edit(engine, image, operation.rawValue, kind.rawValue,
+                                         token, nil, memberPointer, Int32(members.count),
+                                         &outToken, &error)
+        }
+        try check(status, error)
+        return outToken
+    }
+
     // MARK: Guides
 
     /// Which axis an image guide sits on (GlimsGuideOrientation). A

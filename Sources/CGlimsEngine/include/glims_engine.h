@@ -1126,6 +1126,42 @@ typedef struct GlimsMetadataTagInfo {
   char     type_name[GLIMS_METADATA_TAG_INFO_TYPE_NAME_CAPACITY];    /* native type name, UTF-8, bounded */
 } GlimsMetadataTagInfo;
 
+/* Saved sets (the engine's stored item sets), READ-ONLY. The facade lists
+ * the FIXED (non-pattern) sets only, of three kinds, and resolves members
+ * through an opaque identity token — never through a name, a pointer or
+ * a native type. All values here are the facade's own; no GType, struct
+ * layout or raw pointer ever crosses this boundary. */
+typedef enum GlimsItemSetKind {
+  GLIMS_ITEM_SET_LAYER   = 1,
+  GLIMS_ITEM_SET_CHANNEL = 2,
+  GLIMS_ITEM_SET_PATH    = 3
+} GlimsItemSetKind;
+
+/* One row of image_item_sets (slot 133). */
+typedef struct GlimsItemSetInfo {
+  uint64_t token;             /* opaque stable identity of this set within
+                               * the engine; 0 is never issued. Tokens are
+                               * NOT names: a set recreated under the same
+                               * name gets a new token, and an expired
+                               * token is never retargeted. */
+  uint32_t kind;              /* GlimsItemSetKind */
+  int32_t  member_count;      /* LIVE members: members currently attached to
+                               * this image right now (deleted or detached
+                               * weak members are not counted) */
+  char     display_name[256]; /* UTF-8, truncated at a character boundary for
+                               * display only; the name is never the identity
+                               * — resolve members through `token` */
+} GlimsItemSetInfo;
+
+/* One edit operation of image_item_set_edit (slot 135); see the slot's
+ * comment below for the per-op argument contract. Facade-owned. */
+typedef enum GlimsItemSetEditOp {
+  GLIMS_ITEM_SET_EDIT_CREATE  = 1,
+  GLIMS_ITEM_SET_EDIT_REPLACE = 2,
+  GLIMS_ITEM_SET_EDIT_RENAME  = 3,
+  GLIMS_ITEM_SET_EDIT_REMOVE  = 4
+} GlimsItemSetEditOp;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -2517,6 +2553,96 @@ typedef struct GlimsEngineAPI {
                                            double scale, GlimsRect area,
                                            const uint8_t *destination_icc, size_t destination_icc_length,
                                            uint8_t *pixels, size_t stride, char **error);
+
+  /* Slot 133: the image's FIXED saved sets (stored item sets), read-only.
+   * Lists every non-pattern stored set of every kind (layers, channels,
+   * paths), in the engine's stored-list order per kind, kinds in
+   * GlimsItemSetKind order. Fills up to `capacity` rows; `count` receives
+   * the total. `rows` may be NULL with capacity 0 for a count-only read.
+   *
+   * This is a plain read, like image_layers: allowed at any time, also
+   * while a stroke, a filter preview or a plug-in holds the image (no
+   * busy gate), and it never changes the selection, the image, its
+   * history, its dirty flag or any pixel; it holds no new strong
+   * reference beyond the call. Pattern sets are computed definitions and
+   * are never listed.
+   *
+   * Each row's `token` is the set's stable opaque identity within this
+   * engine (allocated from a per-engine monotonic counter, never reused):
+   * it stays the same across quiet live-member rebuilds of the same set,
+   * and it EXPIRES when the set is explicitly removed or replaced through
+   * an undoable edit — an expired token is never retargeted, and a set
+   * recreated under the same name gets a fresh token. `display_name` is
+   * display-only and may be truncated; only `token` resolves members
+   * (slot 134). `member_count` is the LIVE attached member count.
+   *
+   * INVALID_ARGUMENT for a NULL `count` or a negative `capacity` (with a
+   * non-NULL `count`, `*count` is reset to 0 first, as on every failure);
+   * NOT_FOUND for an unknown image. On every failure `*count` is 0 and no
+   * row is written. */
+  GlimsStatus  (*image_item_sets) (GlimsEngine *engine, GlimsImageID image,
+                                   GlimsItemSetInfo *rows, int32_t capacity,
+                                   int32_t *count);
+  /* Slot 134: the CURRENT ATTACHED member ids of the one saved set that
+   * `token` names in this image (as listed by slot 133). Fills up to
+   * `capacity` ids in the set's stored membership order; `count` receives
+   * the total live count. `members` may be NULL with capacity 0 for a
+   * count-only read. Members are the ids of items currently attached to
+   * this image only: weak members that were deleted or detached are
+   * skipped, and an empty set reports count 0. The read captures the
+   * image id and the token only — no pointer, no name lookup, no strong
+   * retention beyond the call.
+   *
+   * Plain read, like slot 133: allowed while the image is busy, no
+   * selection/mutation/dirty/history change. The token is resolved only
+   * within this image's own sets: a token issued for another image (or
+   * by another engine) is refused, and so is a stale or expired token —
+   * never retargeted to a same-named set.
+   *
+   * INVALID_ARGUMENT for token 0 (never issued), a NULL `count` or a
+   * negative `capacity` (`*count` reset to 0 first when it is non-NULL);
+   * NOT_FOUND for an unknown image or a token that names no live set of
+   * this image. On every failure `*count` is 0 and no id is written. */
+  GlimsStatus  (*image_item_set_members) (GlimsEngine *engine, GlimsImageID image,
+                                          uint64_t token, GlimsItemID *members,
+                                          int32_t capacity, int32_t *count);
+  /* Slot 135: ONE undoable edit of one of the image's fixed saved sets.
+   * `operation` is a GlimsItemSetEditOp, `kind` a GlimsItemSetKind; both are
+   * the facade's own enums, unknown values are INVALID_ARGUMENT.
+   * CREATE (token 0) takes the full new `name` and the EXPLICIT `members`
+   * (`count` 0 with `members` NULL is an empty set). REPLACE, RENAME and
+   * REMOVE take the CURRENT `token` of a set of this image and kind, as
+   * listed by slot 133: a foreign, stale or expired token is NOT_FOUND and
+   * never retargeted — the set is never resolved through a name or the
+   * display label. Field relevance is strict: REPLACE passes only `members`
+   * (`name` NULL), RENAME only the desired full `name` (count 0), REMOVE
+   * neither; any other combination, `count` < 0 or `members` NULL with
+   * `count` > 0 is INVALID_ARGUMENT. `name` is the FULL name: nonempty
+   * valid UTF-8, no control characters, at most 255 bytes, as a
+   * NUL-terminated C string (an embedded NUL cannot be expressed here).
+   * Members are item ids, each > 0 (0 never means "the current selection"),
+   * currently attached to this image, of the set's kind, and unique.
+   * This is a WRITE: it requires edit readiness (BUSY while a stroke, filter
+   * preview or plug-in holds the image) and refuses before any mutation when
+   * the undo stack is frozen; every refused or failed call preserves state,
+   * history and the dirty flag exactly. A successful mutating call is one
+   * native undo step and dirties the image (native stack limits may expire
+   * the new step immediately — the edit stays applied, as with other native
+   * commands). A no-op (identical REPLACE members, same-name RENAME) returns
+   * OK with no undo step and no dirty change.
+   * `outToken` (may be NULL) is reset to 0 before dispatch and on every
+   * failure. On success CREATE/REPLACE/RENAME receive the resulting set's
+   * token — fresh after a mutation (the old token expires for good), the
+   * current one after a no-op; REMOVE receives 0. At token-counter
+   * exhaustion (UINT64_MAX) CREATE/REPLACE/RENAME are refused (FAILED,
+   * outToken 0) in preflight before ANY mutation. NOT_FOUND for an unknown
+   * image or a token this image+kind does not own; NOT_RUNNING for a NULL
+   * engine. On every failure nothing is mutated. */
+  GlimsStatus  (*image_item_set_edit) (GlimsEngine *engine, GlimsImageID image,
+                                       uint32_t operation, uint32_t kind,
+                                       uint64_t token, const char *name,
+                                       const GlimsItemID *members, int32_t count,
+                                       uint64_t *outToken, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

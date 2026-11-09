@@ -988,6 +988,7 @@ typedef struct
   void             *in_out;
   double            number2;
   uint64_t          revision;
+  uint64_t          token;      /* full 64-bit saved-set identity; never narrowed */
   GlimsResourceID   resource;   /* full 64-bit handle; never narrowed */
   size_t            n;
   char            **error;
@@ -1007,6 +1008,13 @@ MARSHAL (image_info,   return glims_image_info (e, a->image, a->out);)
 MARSHAL (image_render, return glims_image_render (e, a->image, a->number, a->area, a->pixels, a->stride);)
 MARSHAL (image_render_to_profile, return glims_image_render_to_profile (e, a->image, a->number, a->area,
                                                                           a->in, a->n, a->pixels, a->stride, a->error);)
+MARSHAL (image_item_sets, return glims_image_item_sets (e, a->image, a->out, a->capacity, a->count);)
+MARSHAL (image_item_set_members, return glims_image_item_set_members (e, a->image, a->token, a->out,
+                                                                       a->capacity, a->count);)
+MARSHAL (image_item_set_edit, return glims_image_item_set_edit (e, a->image, (uint32_t) a->width,
+                                                                (uint32_t) a->height, a->token, a->string,
+                                                                a->in, a->capacity, (uint64_t *) a->out,
+                                                                a->error);)
 MARSHAL (image_save,   return glims_image_save (e, a->image, a->string, a->error);)
 MARSHAL (image_save_copy, return glims_image_save_copy (e, a->image, a->string, a->error);)
 MARSHAL (image_export, return glims_image_export (e, a->image, a->string, a->error);)
@@ -1368,6 +1376,40 @@ api_image_render_to_profile (GlimsEngine *e, GlimsImageID image, double scale, G
                   .in = destination_icc, .n = destination_icc_length,
                   .pixels = pixels, .stride = stride, .error = error };
   return glims_engine_call (e, image_render_to_profile_on_engine, &a);
+}
+
+/* Read slots: zero the count in the bridge too, so a dispatch without a
+ * running engine (NOT_RUNNING) still resets the output. */
+static GlimsStatus
+api_image_item_sets (GlimsEngine *e, GlimsImageID image, GlimsItemSetInfo *rows,
+                     int32_t capacity, int32_t *count)
+{
+  GlimsArgs a = { .image = image, .out = rows, .capacity = capacity, .count = count };
+  if (count) *count = 0;
+  return glims_engine_call (e, image_item_sets_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_item_set_members (GlimsEngine *e, GlimsImageID image, uint64_t token,
+                            GlimsItemID *members, int32_t capacity, int32_t *count)
+{
+  GlimsArgs a = { .image = image, .token = token, .out = members, .capacity = capacity, .count = count };
+  if (count) *count = 0;
+  return glims_engine_call (e, image_item_set_members_on_engine, &a);
+}
+
+/* Zero the out token in the bridge too, so a dispatch without a running
+ * engine (NOT_RUNNING) still resets the output. */
+static GlimsStatus
+api_image_item_set_edit (GlimsEngine *e, GlimsImageID image, uint32_t operation, uint32_t kind,
+                         uint64_t token, const char *name, const GlimsItemID *members,
+                         int32_t count, uint64_t *outToken, char **error)
+{
+  GlimsArgs a = { .image = image, .width = (int32_t) operation, .height = (int32_t) kind,
+                  .token = token, .string = name, .in = members, .capacity = count,
+                  .out = outToken, .error = error };
+  if (outToken) *outToken = 0;
+  return glims_engine_call (e, image_item_set_edit_on_engine, &a);
 }
 
 static GlimsStatus
@@ -2573,6 +2615,9 @@ static const GlimsEngineAPI api_v1 = {
   .adjustment_layer_new = api_adjustment_layer_new,
   .resource_duplicate = api_resource_duplicate,
   .image_render_to_profile = api_image_render_to_profile,
+  .image_item_sets = api_image_item_sets,
+  .image_item_set_members = api_image_item_set_members,
+  .image_item_set_edit = api_image_item_set_edit,
 };
 
 __attribute__ ((visibility ("default")))
