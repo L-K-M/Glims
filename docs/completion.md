@@ -54,8 +54,8 @@ bundle with the native and Swift build outputs inaccessible.
       and fresh-token layer recall; weak live identity and Undo memory limits.
 - [x] Channel/path saved-set recall with ordered native mirrors and guarded
       single-target edits, including arrow-key and floating-selection cases.
-- [ ] Batch duplication candidate: captured ordinary pixel layers, one native Undo,
-      ordered selection restoration, Command-J and Layers palette controls.
+- [x] Captured ordinary pixel-layer batch duplication as one native Undo,
+      ordered selection restoration, Command-J and Layers palette controls (#122).
 - [ ] Remaining batch operations and consistent gesture-time rasterize/revert policy.
 - [x] Adjustment layer creation with explicit placement and editable filter settings.
 - [ ] Adjustment groups, remaining custom filter forms and filter inputs.
