@@ -194,6 +194,13 @@ enum MainMenu {
             item("Show Grid", #selector(DocumentWindowController.toggleShowGrid(_:))),
             item("Show Layer Boundary", #selector(DocumentWindowController.toggleLayerBoundary(_:))),
             item("Show Selection Edges", #selector(DocumentWindowController.toggleSelectionEdges(_:))),
+            .separator(),
+            submenu("Snap To", [
+                item("Guides", #selector(DocumentWindowController.toggleSnapToGuides(_:))),
+                item("Grid", #selector(DocumentWindowController.toggleSnapToGrid(_:))),
+                item("Canvas", #selector(DocumentWindowController.toggleSnapToCanvas(_:))),
+                item("Layer Bounds", #selector(DocumentWindowController.toggleSnapToLayerBounds(_:))),
+            ]),
         ])
         let lastFilterSettings = item("Last Filter Settings…", #selector(DocumentWindowController.reshowLastFilter(_:)), "f")
         lastFilterSettings.keyEquivalentModifierMask = [.command, .option]

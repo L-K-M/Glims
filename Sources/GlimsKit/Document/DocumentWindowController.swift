@@ -638,6 +638,30 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         (sender as? NSMenuItem)?.state = canvas.showsSelectionEdges ? .on : .off
     }
 
+    // MARK: Snap To
+
+    /// View ▸ Snap To ▸ Guides: flips this window's cached snap entry and
+    /// redraws. Pure view state — no engine call, no pixel, dirty, history,
+    /// selection, export or print change.
+    @objc func toggleSnapToGuides(_ sender: Any?) { toggleSnapTo(.guides, sender) }
+
+    /// View ▸ Snap To ▸ Grid. Same contract as Guides.
+    @objc func toggleSnapToGrid(_ sender: Any?) { toggleSnapTo(.grid, sender) }
+
+    /// View ▸ Snap To ▸ Canvas (the image edge and centre). Same contract.
+    @objc func toggleSnapToCanvas(_ sender: Any?) { toggleSnapTo(.canvas, sender) }
+
+    /// View ▸ Snap To ▸ Layer Bounds (other layers' edges and centres).
+    /// Same contract.
+    @objc func toggleSnapToLayerBounds(_ sender: Any?) { toggleSnapTo(.layerBounds, sender) }
+
+    private func toggleSnapTo(_ kind: SnapToKind, _ sender: Any?) {
+        guard !imageDocument.isClosing else { return }
+        canvas.snapTo.toggle(kind)
+        canvas.needsDisplay = true
+        if let item = sender as? NSMenuItem { item.state = canvas.snapTo.menuState(kind) }
+    }
+
     /// A catalog item in a Filter category: opens its generic form.
     @objc func runNativeFilter(_ sender: Any?) {
         guard let command = (sender as? NSMenuItem)?.representedObject as? NativeFilterCommand else { return }
@@ -1408,6 +1432,20 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(toggleSelectionEdges(_:)):
             menuItem.state = canvas.showsSelectionEdges ? .on : .off
             return !imageDocument.isClosing
+        case #selector(toggleSnapToGuides(_:)), #selector(toggleSnapToGrid(_:)),
+             #selector(toggleSnapToCanvas(_:)), #selector(toggleSnapToLayerBounds(_:)):
+            // The checkmark reads the window's cached per-entry flag, never
+            // the engine; toggling is view-only, so it stays available
+            // wherever navigation is.
+            let kind: SnapToKind
+            switch menuItem.action {
+            case #selector(toggleSnapToGuides(_:)): kind = .guides
+            case #selector(toggleSnapToGrid(_:)): kind = .grid
+            case #selector(toggleSnapToCanvas(_:)): kind = .canvas
+            default: kind = .layerBounds
+            }
+            menuItem.state = canvas.snapTo.menuState(kind)
+            return !imageDocument.isClosing
         case #selector(assignColorProfile(_:)):
             // Assignment is allowed on every mode, indexed included:
             // it embeds a compatible profile without converting pixels.
@@ -1981,6 +2019,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // cleared and no guide action is committed; late events afterwards
         // are ignored by the gesture's captured window/document identity.
         canvas.guideDrag.cancel()
+        // A closing window likewise cancels an in-progress Move snap: the
+        // preview and indicators clear and the release commits nothing.
+        canvas.tools.cancelMoveSnap()
         // A closing window leaves no ruler observation behind; the ruler
         // views themselves go away with the scroll view's view hierarchy.
         removeRulerObservers()
