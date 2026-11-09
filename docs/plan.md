@@ -3198,3 +3198,13 @@ as well as Delete/Return/Escape rather than moving the paint layer or
 floating selection. Single row picks narrow a batch safely. The visible
 selection rows and Saved Sets panel geometry are checked separately from
 button existence. See `item-set-recall-controls.md` for scope and evidence.
+
+
+### Initial document placement (2026-11-09)
+
+New/Open now materializes palette layout before choosing a document frame.
+A pure geometry policy finds usable space around visible palette windows,
+keeps later cascades inside it and preserves existing palette positions.
+Initial Fit Image follows placement and layout. All four engines pass 15
+real window/adoption checks, all 816 units pass, and the integrated pinned
+app passes 2,121 checks. See `document-placement.md` for scope and limits.
