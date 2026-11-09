@@ -195,6 +195,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         canvas.onTrackpadRotate = { [weak self] degrees, anchor in
             self?.applyTrackpadNavigation(zoomPercent: nil, rotationDegrees: degrees, anchorWindowPoint: anchor)
         }
+        // Option-scroll zoom: the scroll view intercepts the wheel and forwards
+        // admitted events to the canvas; the owning controller stays weak.
+        scrollView.onOptionScroll = { [weak self] event in
+            self?.canvas.handleOptionScroll(event) ?? false
+        }
         statusBar.onZoomIn = { [weak self] in self?.zoom(to: ZoomLadder.zoomIn(from: self?.canvas.zoomPercent ?? 100)) }
         statusBar.onZoomOut = { [weak self] in self?.zoom(to: ZoomLadder.zoomOut(from: self?.canvas.zoomPercent ?? 100)) }
         statusBar.onZoomReset = { [weak self] in self?.zoom(to: ZoomLadder.actualPixels) }

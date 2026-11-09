@@ -86,6 +86,8 @@ final class EngineCanvasView: NSView {
     /// One pinch gesture's fractional zoom; rebased on .began and whenever
     /// the view's integer zoom changed outside the gesture.
     private var zoomGesture = TrackpadNavigationLogic.ZoomAccumulator(publishedPercent: ZoomLadder.actualPixels)
+    /// Option-scroll zoom's own fractional zoom accumulator.
+    private var optionScrollZoomAccumulator = TrackpadNavigationLogic.ZoomAccumulator(publishedPercent: ZoomLadder.actualPixels)
     /// Relative rotation is rebased from the current view for every event.
     private var rotationGesture = TrackpadNavigationLogic.RotationAccumulator(baseDegrees: 0)
 
@@ -847,5 +849,41 @@ final class EngineCanvasView: NSView {
                 onTrackpadRotate?(degrees, point)
             }
         }
+    }
+
+    // MARK: Option-scroll view zoom
+
+    func handleOptionScroll(_ event: NSEvent) -> Bool {
+        guard OptionScrollZoom.isAdmitted(event.modifierFlags) else {
+            optionScrollZoomAccumulator.rebase(to: zoomPercent)
+            return false
+        }
+        guard trackpadNavigationAllowed(for: event) else {
+            optionScrollZoomAccumulator.rebase(to: zoomPercent)
+            return true
+        }
+        let point = event.locationInWindow
+        guard point.x.isFinite, point.y.isFinite else { return true }
+        let rawDelta = event.scrollingDeltaY != 0 ? event.scrollingDeltaY : event.scrollingDeltaX
+        let delta = Double(rawDelta)
+        guard delta.isFinite, delta != 0 else { return true }
+        let factor = OptionScrollZoom.factor(delta: delta, precise: event.hasPreciseScrollingDeltas)
+        if optionScrollZoomAccumulator.publishedPercent != zoomPercent
+            || event.phase.contains(.began)
+            || event.momentumPhase.contains(.began) {
+            optionScrollZoomAccumulator.rebase(to: zoomPercent)
+        }
+        if event.phase.contains(.cancelled) || event.momentumPhase.contains(.cancelled) {
+            optionScrollZoomAccumulator.clear()
+            return true
+        }
+        let ended = event.phase.contains(.ended) || event.momentumPhase.contains(.ended)
+        if let percent = optionScrollZoomAccumulator.apply(magnification: factor - 1) {
+            onTrackpadZoom?(percent, point)
+        }
+        if ended {
+            optionScrollZoomAccumulator.clear()
+        }
+        return true
     }
 }
