@@ -3248,4 +3248,6 @@ map, keeps separate local drafts, and applies only the selected key through
 the counted document queue. Native refusals retain the draft. Closing a form
 invalidates late callbacks while accepted edits still drain; host close
 dismisses the child form. The public native API is merged in118, with39 public
-and13 Undo-admission checks perengine; real-window UI acceptance is pending.
+and13 Undo-admission checks perengine. The real form passes14 controls checks
+and13 counted document checks on every supported engine, including a host-close
+regression that now explicitly ends and releases the metadata sheet.

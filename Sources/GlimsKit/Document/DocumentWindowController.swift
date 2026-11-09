@@ -2338,6 +2338,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         ResourceDuplicateFormController.documentWindowClosing(imageDocument)
 
         metadataSheet?.invalidate()
+        if let panel = metadataSheet?.panel {
+            if window?.attachedSheet === panel { window?.endSheet(panel) }
+            panel.orderOut(nil)
+        }
+        metadataSheet = nil
         adjustmentSheet?.invalidate()
 
         previewPanel?.cancel()

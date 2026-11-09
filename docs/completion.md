@@ -11,8 +11,9 @@ These entries include merged main `f442676` (PRs through #118): per-window
 rotation, typed language reads, metadata-copy preservation and the public
 single-language writer are merged. The release built from the preservation
 revision passed1,917 native and2,237 app checks with build trees inaccessible.
-The language controls and trackpad navigation are separate candidates pending
-real-window acceptance. The whole editor remains in progress; each checked
+The language controls and trackpad navigation are separate candidates with
+passing real-window cases on all four engines; combined release validation
+remains pending. The whole editor remains in progress; each checked
 entry covers its stated behavior.
 
 - [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
@@ -463,6 +464,6 @@ writer and counted document wrappers. Each of all four native engines passes
 39 public edit/Undo/no-op/busy/save/reopen checks and13 native Undo-admission
 checks. A reproduced plug-in-left Undo-disabled state now refuses changed
 metadata edits in both writers while allowing exact no-ops. Hosted CI passed.
-Dedicated language controls, counted-document runtime checks and trackpad
-window geometry checks remain pending shared-desktop access; compilation and
-source review alone do not mark those workflows complete.
+Dedicated language controls pass14 real-window checks and counted-document
+work passes13 checks perengine. The trackpad candidate passes22 window checks
+perengine. Combined release validation remains pending.

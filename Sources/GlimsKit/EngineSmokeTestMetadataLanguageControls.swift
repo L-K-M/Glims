@@ -149,6 +149,7 @@ extension EngineSmokeTest {
         a.inputQueue.async { readGate.wait() }
         launch.performClick(nil)
         let latePanel = metadata.languageEditor?.panel
+        check(latePanel != nil && a.pendingWork > 0, "the host-close fixture has a child with a counted read queued")
         ca.window?.close()
         readGate.signal()
         wait { (try? session.info(imageA)) == nil }
