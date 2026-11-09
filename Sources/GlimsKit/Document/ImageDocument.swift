@@ -3581,6 +3581,71 @@ final class ImageDocument {
         let values: [String: EngineSession.FilterValue]
     }
 
+    /// Source preparation reads remain counted through their deferred reply.
+    func loadFilterProperties(_ operation: String,
+                              completion: @escaping @MainActor (Result<[EngineSession.FilterProperty], Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        pendingWork += 1
+        enqueue(on: longQueue) { [session] in
+            let result = Result { () throws -> [EngineSession.FilterProperty] in
+                var properties = try session.filterOperationProperties(operation)
+                for index in properties.indices where properties[index].kind == .enumeration {
+                    properties[index].choices = try session.filterEnumChoices(operation, property: properties[index].name)
+                }
+                return properties
+            }
+            DispatchQueue.main.async {
+                EngineActivity.shared.whenIdle {
+                    defer { self.jobDidFinish(input: false) }
+                    completion(self.isClosing ? .failure(DocumentError.closed) : result)
+                }
+            }
+        }
+    }
+
+    /// Cached admission only. The source chooser keeps its original target.
+    func bumpMapRefusal(target: Int32) -> String? {
+        if !acceptsEdits { return "Finish or cancel the current operation first." }
+        if targetCommandIsPending { return "Wait for the layer change to finish." }
+        if floatingState.isActive { return "Resolve the floating selection first." }
+        if colorInfo.mode != .rgb && colorInfo.mode != .grayscale { return "Convert the image to RGB or grayscale first." }
+        if selectedLayerIDs != [target] || activeDrawable != target { return "Select the original target layer before previewing." }
+        guard let source = layerSources[target], source.kind == .pixel || source.isRasterized else {
+            return "Rasterize the editable target layer first."
+        }
+        if layerLocks[target]?.effective.contains(.pixels) == true { return "Unlock the target layer's pixels first." }
+        return nil
+    }
+
+    /// An explicit captured target and source, queued behind accepted input.
+    /// startPreview has already reserved the document's preview gate.
+    func beginFilterPreview(operation: String, properties: [EngineSession.FilterProperty],
+                            target: Int32, source: Int32,
+                            completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !isSavingForClose, !isTransferringClipboard, !PlugInCommands.isRunning,
+              !EngineActivity.shared.isBusy, !targetCommandIsPending,
+              selectedLayerIDs == [target], activeDrawable == target else {
+            return completion(.failure(DocumentError.busy))
+        }
+        pendingWork += 1
+        inputQueue.async { [session, image] in
+            let result = Result<FilterPreviewStart, Error> {
+                try self.requirePaintTarget()
+                let filter = try session.beginFilter(image: image, drawable: target, operation: operation, source: source)
+                var values: [String: EngineSession.FilterValue] = [:]
+                for property in properties where property.kind.isEditable {
+                    values[property.name] = try? session.filterProperty(filter, property.name)
+                }
+                return FilterPreviewStart(filter: filter, values: values)
+            }
+            DispatchQueue.main.async {
+                defer { self.jobDidFinish(input: false) }
+                completion(result)
+            }
+        }
+    }
+
     /// Begins a filter session for `operation` on the active drawable —
     /// the layer, or its mask while mask editing is on — and reads
     /// `properties`' starting values, as one counted job on the

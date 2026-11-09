@@ -7,11 +7,11 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-These entries describe merged main through #124, plus explicitly identified
+These entries describe merged main through #125, plus explicitly identified
 integration candidates. Trackpad pinch/rotate, Option-scroll, typed language
 metadata and guarded saved-resource management are merged and verified. The whole editor
 remains in progress; each checked entry covers its stated behavior.
-The #124 release passes 1,917 native and 2,331 app checks in a self-contained
+The #125 release passes 1,917 native and 2,350 app checks in a self-contained
 bundle with the native and Swift build outputs inaccessible.
 
 - [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
@@ -56,10 +56,14 @@ bundle with the native and Swift build outputs inaccessible.
       single-target edits, including arrow-key and floating-selection cases.
 - [x] Captured ordinary pixel-layer batch duplication as one native Undo,
       ordered selection restoration, Command-J and Layers palette controls (#122).
+- [x] Captured ordinary pixel-layer batch deletion as one native Undo, with
+      ordered selection restoration and mask/effect admission guards (#125).
 - [ ] Remaining batch operations and consistent gesture-time rasterize/revert policy.
 - [x] Adjustment layer creation as an empty pass-through group with a filter,
       explicit placement and editable filter settings.
-- [ ] Remaining custom filter forms/config editors and auxiliary filter inputs.
+- [x] Bump Map height-map chooser with immutable same-image snapshots,
+      pixel Apply/Undo/Redo and native source validation (current candidate).
+- [ ] Remaining custom filter forms/config editors and other auxiliary inputs.
 - [x] Path fill, vector layers and vector style controls.
 - [x] Multi-anchor path editing with group move/delete and Undo.
 - [x] Searchable brush, pattern and gradient resource choosers, with
@@ -472,3 +476,14 @@ metadata edits in both writers while allowing exact no-ops. Hosted CI passed.
 Dedicated language controls pass14 real-window checks and counted-document
 work passes13 checks perengine. The trackpad candidate passes22 window checks
 perengine. Combined release validation remains pending.
+
+
+2026-11-09 snapshot-input candidate: API v1 appends slot147 for captured
+Bump Map inputs. The real chooser and merged-pixel editor pass20 focused
+checks on each of all four engines; the self-contained bundle passes1,917
+native and2,370 app checks with build outputs blocked, and871 unit tests
+pass. Independent native/UI source reviews report no important remaining
+findings after the Undo admission and idle Escape corrections. Expanded
+source-kind, sparse-budget and XCF acceptance is recorded in
+`filter-inputs.md`; this entry does not close the other auxiliary/config
+forms or the final whole-editor gate.

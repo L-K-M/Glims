@@ -16,6 +16,7 @@
  * unconditionally reactivates it.
  */
 #include "engine-private.h"
+#include "filter-input.h"
 
 #include <math.h>
 #include <string.h>
@@ -27,7 +28,9 @@
 #include "core/gimpdrawable-filters.h"
 #include "core/gimpdrawablefilter.h"
 #include "core/gimpfilter.h"
+#include "core/gimpgrouplayer.h"
 #include "core/gimpimage.h"
+#include "core/gimpimage-undo.h"
 #include "core/gimpimage-quick-mask.h"
 #include "core/gimpimage-undo-push.h"
 #include "core/gimpitem.h"
@@ -71,6 +74,7 @@ glims_filters_free (gpointer data)
   g_clear_object (&session->filter);
   g_clear_object (&session->existing);
   g_clear_object (&session->operation);
+  g_clear_object (&session->aux_source);
   g_clear_object (&session->drawable);
   g_clear_object (&session->image);
   g_free (session);
@@ -168,11 +172,22 @@ filter_commit_policy (GimpImage    *image,
   return FALSE;
 }
 
-GlimsStatus
-glims_filter_begin (GlimsEngine    *engine,
+static GlimsStatus
+source_merge_history_ready (GimpImage *image, char **error)
+{
+  if (!gimp_image_undo_is_enabled (image) || gimp_image_get_undo_group_count (image)) {
+    if (error) *error = g_strdup ("Finish the current edit and enable Undo before applying Bump Map.");
+    return GLIMS_STATUS_BUSY;
+  }
+  return GLIMS_STATUS_OK;
+}
+
+static GlimsStatus
+filter_begin_internal (GlimsEngine    *engine,
                     GlimsImageID    image_id,
                     GlimsItemID     drawable_id,
                     const char     *operation,
+                    GeglNode       *aux_source,
                     GlimsFilterID  *out,
                     char          **error)
 {
@@ -210,6 +225,18 @@ glims_filter_begin (GlimsEngine    *engine,
   session->drawable        = g_object_ref (drawable);
   session->non_destructive = non_destructive;
   session->operation = gegl_node_new_child (NULL, "operation", operation, NULL);
+  if (!session->operation) {
+    glims_filters_free (session);
+    return glims_fail (error, NULL, "The filter operation could not be created.");
+  }
+  if (aux_source) {
+    if (!gegl_node_connect_to (aux_source, "output", session->operation, "aux")) {
+      glims_filters_free (session);
+      return glims_fail (error, NULL, "The height map could not be connected.");
+    }
+    session->aux_source = g_object_ref (aux_source);
+    session->non_destructive = FALSE;
+  }
   /* The undo step and the filter's name in the layer's filter list use the
    * operation's title ("Gaussian Blur"), as GIMP's filter tools do
    * (gimp_tool_get_undo_desc in app/tools). */
@@ -220,6 +247,12 @@ glims_filter_begin (GlimsEngine    *engine,
                                                 session->operation, NULL);
   }
 
+  if (!session->filter) {
+    glims_filters_free (session);
+    return glims_fail (error, NULL, "The filter preview could not be created.");
+  }
+  if (aux_source) g_object_set (session->filter, "to-be-merged", TRUE, NULL);
+
   /* A live preview sits on the drawable's stack but is not a committed
    * effect: mark it temporary, as the engine's tools do with their
    * editing filters — XCF skips temporary filters, and drawable_effects
@@ -227,6 +260,14 @@ glims_filter_begin (GlimsEngine    *engine,
   gimp_drawable_filter_set_temporary (session->filter, TRUE);
   gimp_drawable_filter_apply (session->filter, NULL);
   gimp_drawable_filter_set_preview (session->filter, TRUE);
+  if (aux_source) {
+    /* Native merged previews sit below existing committed effects. */
+    GimpContainer *filters = gimp_drawable_get_filters (drawable);
+    gint count = gimp_container_get_n_children (filters);
+    if (gimp_container_have (filters, GIMP_OBJECT (session->filter)))
+      gimp_container_reorder (filters, GIMP_OBJECT (session->filter), count - 1);
+    gimp_drawable_update (drawable, 0, 0, -1, -1);
+  }
   gimp_image_flush (open->image);
 
   id = glims_next_session_id (engine);
@@ -234,6 +275,49 @@ glims_filter_begin (GlimsEngine    *engine,
   *out = id;
 
   return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_filter_begin (GlimsEngine *engine, GlimsImageID image, GlimsItemID drawable,
+                    const char *operation, GlimsFilterID *out, char **error)
+{
+  return filter_begin_internal (engine, image, drawable, operation, NULL, out, error);
+}
+
+GlimsStatus
+glims_filter_begin_with_source (GlimsEngine *engine, GlimsImageID image,
+                                GlimsItemID target, const char *operation,
+                                GlimsItemID source, GlimsFilterID *out, char **error)
+{
+  GlimsOpenImage *open;
+  GimpDrawable *drawable;
+  GeglNode *snapshot = NULL;
+  GlimsStatus status;
+  if (out) *out = 0;
+  if (!out || !operation || target <= 0 || source <= 0) return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (strcmp (operation, "gegl:bump-map")) return GLIMS_STATUS_UNSUPPORTED;
+  open = glims_lookup_image (engine, image);
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = source_merge_history_ready (open->image, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (gimp_image_get_floating_selection (open->image)) return GLIMS_STATUS_BUSY;
+  if (gimp_image_get_base_type (open->image) == GIMP_INDEXED) return GLIMS_STATUS_UNSUPPORTED;
+  drawable = glims_lookup_drawable (open, target);
+  if (!drawable) return GLIMS_STATUS_NOT_FOUND;
+  if (!GIMP_IS_LAYER (drawable) || GIMP_IS_GROUP_LAYER (drawable) ||
+      glims_layer_editable_source_kind (GIMP_LAYER (drawable))) {
+    if (error) *error = g_strdup ("Bump Map needs a pixel layer. Rasterize the editable source first.");
+    return GLIMS_STATUS_UNSUPPORTED;
+  }
+  status = glims_check_item_locks (GIMP_ITEM (drawable), GLIMS_LOCK_PIXELS, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = glims_filter_input_snapshot (engine, open, source, &snapshot, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = filter_begin_internal (engine, image, target, operation, snapshot, out, error);
+  g_object_unref (snapshot);
+  return status;
 }
 
 /* Opens a live session that edits the committed effect `effect_id`: the
@@ -450,6 +534,10 @@ glims_filter_commit (GlimsEngine    *engine,
   GlimsStatus status = glims_filter_check_edit (engine, id, error);
 
   if (status != GLIMS_STATUS_OK) return status;
+  if (session->aux_source) {
+    status = source_merge_history_ready (session->image, error);
+    if (status != GLIMS_STATUS_OK) return status;
+  }
 
   if (session->existing)
     {

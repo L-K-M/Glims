@@ -158,6 +158,7 @@ typedef struct
   gboolean            non_destructive;
   GimpDrawableFilter *existing;
   gboolean            existing_active;
+  GeglNode           *aux_source; /* owned detached snapshot node, new sessions only */
 } GlimsFilter;
 
 typedef GlimsStatus (*GlimsEngineFunc) (GlimsEngine *engine, gpointer data);

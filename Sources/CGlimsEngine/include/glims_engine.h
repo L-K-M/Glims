@@ -2884,6 +2884,24 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_delete_layers) (GlimsEngine *engine, GlimsImageID image,
                                       const GlimsItemID *layers, int32_t count,
                                       char **error);
+  /* Slot 147: begin a new merge-only preview with a detached native-format
+   * snapshot of a same-image drawable's pixels and committed effects. Currently
+   * supports gegl:bump-map and its aux pad. target/source are explicit positive
+   * IDs; target must be a pixel-behaving layer, including a previously
+   * rasterized source. Groups and editable sources are not merge targets.
+   * Indexed images are UNSUPPORTED. Existing work/floating selections, disabled
+   * or frozen Undo and an open native Undo group are BUSY. Merge rechecks Undo
+   * readiness before changing target pixels; a refusal leaves the preview open.
+   * The snapshot is bounded by GLIMS_MAX_PIXEL_BUFFER_BYTES (512 MiB), owns no
+   * live source graph and remains independent of later source changes. Source
+   * offsets are those of its native buffer; no item-offset translation is added.
+   * Abort changes no stored pixels/history. Commit merges into target pixels as
+   * one native Undo; auxiliary connections are not persisted as an XCF effect.
+   * out is zero on failure, including a nonrunning engine. */
+  GlimsStatus (*filter_begin_with_source) (GlimsEngine *engine, GlimsImageID image,
+                                           GlimsItemID target, const char *operation,
+                                           GlimsItemID source, GlimsFilterID *out,
+                                           char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
