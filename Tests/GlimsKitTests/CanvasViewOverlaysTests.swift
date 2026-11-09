@@ -129,6 +129,24 @@ final class CanvasViewOverlaysTests: XCTestCase {
                        CGRect(x: 5, y: 10, width: 15, height: 4))
     }
 
+    func testStrokeStaysInsideFullImageEdgesAtBothBackingDensities() {
+        XCTAssertEqual(LayerBoundaryGeometry.strokeRect(for: CGRect(x: 0, y: 0, width: 64, height: 48),
+                                                        backingFactor: 1),
+                       CGRect(x: 0.5, y: 0.5, width: 63, height: 47))
+        XCTAssertEqual(LayerBoundaryGeometry.strokeRect(for: CGRect(x: 0, y: 0, width: 32, height: 24),
+                                                        backingFactor: 2),
+                       CGRect(x: 0.25, y: 0.25, width: 31.5, height: 23.5))
+    }
+
+    func testFractionalBoundaryAlignsToDevicePixelCenters() {
+        XCTAssertEqual(LayerBoundaryGeometry.strokeRect(for: CGRect(x: 2.25, y: 3.75, width: 4, height: 5),
+                                                        backingFactor: 1),
+                       CGRect(x: 2.5, y: 3.5, width: 4, height: 5))
+        XCTAssertNil(LayerBoundaryGeometry.strokeRect(for: .zero, backingFactor: 1))
+        XCTAssertNil(LayerBoundaryGeometry.strokeRect(for: CGRect(x: 0, y: 0, width: 1, height: 1),
+                                                      backingFactor: .infinity))
+    }
+
     func testDeviceLineWidthIsOnePhysicalPixelInViewPoints() {
         XCTAssertEqual(LayerBoundaryGeometry.deviceLineWidth(zoomPercent: 100, backingFactor: 1), 1,
                        accuracy: Self.accuracy)

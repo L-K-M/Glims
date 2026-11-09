@@ -16,7 +16,7 @@ view outlives `ImageDocument.reload()`.
 | `Sources/GlimsKit/Document/DocumentWindowController.swift` | The two per-window view states, the toggle actions (push to the canvas, set the sender's checkmark) and menu validation reading the cached state, enabled unless the document is closing. |
 | `Sources/GlimsKit/MainMenu.swift` | (Pre-existing) View ▸ Show Layer Boundary and View ▸ Show Selection Edges, no key equivalents. |
 | `Tests/GlimsKitTests/CanvasViewOverlaysTests.swift` | Pure tests: defaults, mask/channel/floating precedence, missing-target clearing, invalid extents, zoom/backing mapping. |
-| `Sources/GlimsKit/EngineSmokeTestViewOverlays.swift` | New modular `exerciseViewOverlays` in the smoke-extension style; the shared `EngineSmokeTest.swift` dispatcher is Root-owned and untouched. |
+| `Sources/GlimsKit/EngineSmokeTestViewOverlays.swift` | New modular `exerciseViewOverlays` in the smoke-extension style; Root wired its focused selector and full-suite dispatcher. |
 | `docs/canvas-view-overlays.md` | This document. |
 
 ## Show Selection Edges
@@ -59,22 +59,23 @@ view outlives `ImageDocument.reload()`.
   never paints raster pixels — export and print use the engine
   projection / an immutable PrintSnapshot, never this view.
 
-## Checks actually run (this branch)
+## Acceptance checks
 
-- `swift build -j 2` — Build complete (GlimsKit + product).
-- `swift build -j 2 --build-tests` — Build complete (incl.
-  `CanvasViewOverlaysTests` and `EngineSmokeTestViewOverlays`).
+The first pure run reproduced three invalid-extent failures because CGRect
+width/height accessors standardize negative sizes. Validation now checks raw
+origin/size and finite far edges. Fifteen geometry/state tests pass, including
+device-center stroke alignment and full-image edges at 1x and 2x backing.
+The nonorigin 32×28 layer fixture distinguishes layer/mask bounds from its
+64×48 image's channel bounds.
 
-## Explicitly UNRUN
+All 681 unit tests/build checks pass. All 28 focused overlay checks pass on
+every supported engine, including real menu actions, independent windows,
+busy toggling, layer/mask/channel/floating targets, native selection retained
+while edges hide, and unchanged pixels/history/dirty state. The combined
+pinned app passes 1,728 checks. Completed independent acceptance-fix source
+review found no important issue.
 
-- `swift test` / any unit-test runtime: not allowed in this task; the new
-  pure tests compile but were not executed here.
-- `EngineSmokeTestViewOverlays.exerciseViewOverlays`: compiles only. No
-  `GLIMS_SMOKE_CASE` selector or dispatch entry was added — that wiring in
-  the shared `EngineSmokeTest.swift` is Root-owned. Runtime behavior
-  (menu dispatch, checkmarks, busy toggling, boundary geometry per
-  target, reload persistence, cleanup) is therefore unverified at
-  runtime; the renderer source (`EngineCanvasView.draw` →
-  `drawLayerBoundary` / `drawSelectionOutline`) is the evidence for the
-  later visual review.
-- No app launch, `--smoke-test`, engine build, adapter or bundle check.
+The aligned line has a one-device-pixel geometric width. Pixel-perfect screen
+coverage and tiny subpixel boundaries remain visual verification limits;
+alignment can collapse very small rectangles to zero extent. Final editor
+bundle and whole-editor on-screen verification are separate.

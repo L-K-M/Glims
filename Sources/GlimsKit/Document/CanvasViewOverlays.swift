@@ -43,8 +43,9 @@ enum LayerBoundaryGeometry {
     /// positive area; anything else (a missing or degenerate cached
     /// bounds) clears the outline rather than showing a stale rect.
     static func isDisplayable(_ rect: CGRect) -> Bool {
-        [rect.minX, rect.minY, rect.width, rect.height].allSatisfy(\.isFinite)
-            && rect.width > 0 && rect.height > 0
+        [rect.origin.x, rect.origin.y, rect.size.width, rect.size.height,
+         rect.origin.x + rect.size.width, rect.origin.y + rect.size.height].allSatisfy(\.isFinite)
+            && rect.size.width > 0 && rect.size.height > 0
     }
 
     /// The actual cached paint-target bounds in image pixels: an ordinary
@@ -73,6 +74,17 @@ enum LayerBoundaryGeometry {
         let scale = CanvasGeometry.pointScale(zoomPercent: zoomPercent, backingFactor: backingFactor)
         return CGRect(x: boundary.minX * scale, y: boundary.minY * scale,
                       width: boundary.width * scale, height: boundary.height * scale)
+    }
+
+    /// Put a one-pixel outline inside device-pixel edges. Integral image
+    /// edges otherwise place half the stroke outside the clipped canvas,
+    /// and fractional zooms can spread it over two antialiased pixels.
+    static func strokeRect(for viewRect: CGRect, backingFactor: Double) -> CGRect? {
+        guard isDisplayable(viewRect), backingFactor.isFinite, backingFactor > 0 else { return nil }
+        let device = viewRect.applying(CGAffineTransform(scaleX: backingFactor, y: backingFactor))
+        guard isDisplayable(device) else { return nil }
+        let aligned = device.integral.insetBy(dx: 0.5, dy: 0.5)
+        return aligned.applying(CGAffineTransform(scaleX: 1 / backingFactor, y: 1 / backingFactor))
     }
 
     /// One physical (device) pixel in view points: the outline's line

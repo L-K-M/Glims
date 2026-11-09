@@ -27,6 +27,11 @@ extension EngineSmokeTest {
 
         let imageA = try session.newImage(width: 64, height: 48)
         let imageB = try session.newImage(width: 40, height: 30)
+        // Distinguish the remembered layer from a channel's full-image
+        // boundary. Equal full-size fixtures cannot detect that mistake.
+        let smallLayer = ClipboardImage(width: 32, height: 28,
+            pixels: Data(repeating: 255, count: 32 * 28 * 4), origin: .zero)
+        _ = try session.pastePixels(imageA, pixels: smallLayer, at: CGPoint(x: 2, y: 3))
         let docA = try ImageDocument(session: session, image: imageA, name: "Overlays A")
         let docB = try ImageDocument(session: session, image: imageB, name: "Overlays B")
         documents.items += [docA, docB]
@@ -144,6 +149,8 @@ extension EngineSmokeTest {
         }
         let layerBounds = docA.layers.first { $0.id == layerA }?.bounds
         let imageRectA = CGRect(x: 0, y: 0, width: 64, height: 48)
+        check(layerBounds == CGRect(x: 2, y: 3, width: 32, height: 28),
+              "the layer boundary fixture differs from the image in origin and size")
         check(docA.cachedPaintTargetBounds == layerBounds
                 && LayerBoundaryGeometry.boundaryRect(target: .layer(layerA), layers: docA.layers,
                                                        imageSize: imageRectA.size) == layerBounds,

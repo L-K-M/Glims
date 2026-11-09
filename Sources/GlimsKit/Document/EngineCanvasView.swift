@@ -526,8 +526,9 @@ final class EngineCanvasView: NSView {
         guard let boundary = document.cachedPaintTargetBounds else { return }
         let device = LayerBoundaryGeometry.deviceLineWidth(zoomPercent: zoomPercent, backingFactor: backingScale)
         guard device.isFinite, device > 0 else { return }
-        let rect = LayerBoundaryGeometry.viewRect(for: boundary, zoomPercent: zoomPercent,
-                                                  backingFactor: backingScale)
+        let viewRect = LayerBoundaryGeometry.viewRect(for: boundary, zoomPercent: zoomPercent,
+                                                      backingFactor: backingScale)
+        guard let rect = LayerBoundaryGeometry.strokeRect(for: viewRect, backingFactor: backingScale) else { return }
         NSGraphicsContext.saveGraphicsState()
         // Clip to the canvas frame: a floating selection's bounds can reach
         // past the image edge into the surround, and the outline stays
