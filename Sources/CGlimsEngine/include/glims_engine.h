@@ -2429,6 +2429,49 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*adjustment_layer_new) (GlimsEngine *engine, GlimsImageID image,
       GlimsItemID parent, int32_t index, const char *operation, const char *name,
       GlimsItemID *layer, GlimsEffectID *effect, char **error);
+
+  /* Duplicates ONE saved brush, pattern or gradient (slot 131): the
+   * current resource `sourceID` names is copied through the engine's
+   * own per-class copy (gimp_data_duplicate), given the requested
+   * `name`, saved to the engine's configured writable data folder with
+   * its native subclass extension (.gbr/.vbr/.gih/.pat/.ggr as the
+   * core decides) and published to the factory of its own kind, with
+   * the new handle in `outID`. The source determines its own kind; no
+   * `kind` argument. The call takes no image: it changes no image, no
+   * undo history, no selection, no context and no clipboard, and the
+   * source itself is never renamed, saved, deleted or dirtied.
+   *
+   * The source need not be writable: a built-in read-only resource is
+   * duplicatable when the engine's own capability check allows it and
+   * the private copy is saveable. A resource whose class has no native
+   * copy (or an empty native pipe) reports UNSUPPORTED with a reason.
+   *
+   * `name` follows exactly resource_create_pixels's label contract:
+   * nonempty valid UTF-8, no embedded NUL, no Unicode control
+   * characters, at most 255 UTF-8 bytes. A resource of the source's
+   * own kind already carrying this exact name is refused (FAILED)
+   * before any filesystem mutation — never silently uniquified.
+   *
+   * BUSY while the engine is busy or ANY stroke or filter session is
+   * active, not just on one image. `outID` is set to 0 first and again
+   * on EVERY failure (including a missing output, engine-null
+   * dispatch rejection, and every refusal); on success it is the new
+   * resource's positive opaque handle, distinct from `sourceID`, and
+   * usable with resources(), resource_identifiers(), resource_resolve(),
+   * resource_thumbnail() and the brush/pattern/gradient consumers like
+   * any catalog handle. INVALID_ARGUMENT for a missing `outID`, an
+   * invalid `name`, or a `sourceID` of 0 or outside the issued handle
+   * range (high bits set, or above the native id maximum — such a
+   * value can never name a resource); NOT_FOUND for a validly shaped
+   * handle that no longer resolves: stale, or issued by another
+   * engine, or no longer a member of this engine's current factory;
+   * UNSUPPORTED when the native class cannot be duplicated or the
+   * private copy cannot be saved; FAILED with `error` on a name
+   * collision or a checked persistence failure (a failed save never
+   * reports success). */
+  GlimsStatus  (*resource_duplicate) (GlimsEngine *engine, GlimsResourceID sourceID,
+                                      const char *name, GlimsResourceID *outID,
+                                      char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
