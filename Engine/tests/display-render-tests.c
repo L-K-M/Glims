@@ -375,6 +375,169 @@ main (int argc, char **argv)
     api->image_close (engine, gray_image);
   }
 
+  /* --- Wide-gamut pixel regression (public facade only) --- */
+  {
+    /* Independent matrix math from literal xyY primaries + D65 white.
+     * D65 source/destination => PCS chromatic adaptation cancels. */
+    static const double wp[3][2] = {{0.708,0.292},{0.170,0.797},{0.131,0.046}};
+    static const double sp[3][2] = {{0.64,0.33},{0.30,0.60},{0.15,0.06}};
+    static const double D65x=0.3127, D65y=0.3290;
+    /* 4x2 straight RGBA u8: saturated wide primaries (outside sRGB), mixed
+     * in-gamut color, alpha 0/partial/opaque and nonzero-channel mixtures. */
+    static const uint8_t wpix[TW*TH*4] = {
+      255,0,0,255,  0,255,0,255,  0,0,255,255,  153,51,26,128,
+      255,255,255,255, 77,88,99,200, 40,200,30,0, 12,34,56,1
+    };
+    char *wide_icc = NULL; size_t wide_len = 0;
+    GlimsImageID wimg = 0; char wpath[4096];
+    GlimsStatus ws; GlimsImageInfo wi; GlimsUndoInfo wu;
+    uint8_t wout[TH*32]; GlimsRect wf = {0,0,TW,TH};
+    double Mw[3][3], Ms[3][3], Mi[3][3], Mws[3][3], detm, tmp[3][3];
+    int ci, cj, ck;
+
+    wide_icc = read_file (argv[3], "wide-linear-rgb.icc", &wide_len);
+    CHECK (wide_icc && wide_len > 0, "wide-linear-rgb.icc fixture loads");
+    if (! wide_icc)
+      goto wide_done;
+
+    /* Build RGB->XYZ from xyY primaries (Y=1) and white. */
+    for (ci = 0; ci < 3; ci++) {
+      const double (*p)[2] = (ci==0?wp:(ci==1?wp+1:wp+2));
+      double px=(*p)[0], py=(*p)[1], X=px/py, Y=1.0, Z=(1-px-py)/py;
+      Mw[0][ci]=X; Mw[1][ci]=Y; Mw[2][ci]=Z;
+      p = (ci==0?sp:(ci==1?sp+1:sp+2)); px=(*p)[0]; py=(*p)[1];
+      Ms[0][ci]=px/py; Ms[1][ci]=1.0; Ms[2][ci]=(1-px-py)/py;
+    }
+    /* Scale columns by white: inv(M)*W */
+    {
+      double *m=Mw[0], Wv[3]={D65x/D65y,1.0,(1-D65x-D65y)/D65y}, s[3], invm[3][3];
+      detm = m[0]*(m[4]*m[8]-m[5]*m[7])-m[1]*(m[3]*m[8]-m[5]*m[6])+m[2]*(m[3]*m[7]-m[4]*m[6]);
+      invm[0][0]=(m[4]*m[8]-m[5]*m[7])/detm; invm[0][1]=(m[2]*m[7]-m[1]*m[8])/detm; invm[0][2]=(m[1]*m[5]-m[2]*m[4])/detm;
+      invm[1][0]=(m[5]*m[6]-m[3]*m[8])/detm; invm[1][1]=(m[0]*m[8]-m[2]*m[6])/detm; invm[1][2]=(m[2]*m[3]-m[0]*m[5])/detm;
+      invm[2][0]=(m[3]*m[7]-m[4]*m[6])/detm; invm[2][1]=(m[1]*m[6]-m[0]*m[7])/detm; invm[2][2]=(m[0]*m[4]-m[1]*m[3])/detm;
+      for(ci=0;ci<3;ci++) s[ci]=invm[ci][0]*Wv[0]+invm[ci][1]*Wv[1]+invm[ci][2]*Wv[2];
+      for(ci=0;ci<3;ci++) for(cj=0;cj<3;cj++) Mw[ci][cj]*=s[cj];
+      m=Ms[0];
+      detm = m[0]*(m[4]*m[8]-m[5]*m[7])-m[1]*(m[3]*m[8]-m[5]*m[6])+m[2]*(m[3]*m[7]-m[4]*m[6]);
+      invm[0][0]=(m[4]*m[8]-m[5]*m[7])/detm; invm[0][1]=(m[2]*m[7]-m[1]*m[8])/detm; invm[0][2]=(m[1]*m[5]-m[2]*m[4])/detm;
+      invm[1][0]=(m[5]*m[6]-m[3]*m[8])/detm; invm[1][1]=(m[0]*m[8]-m[2]*m[6])/detm; invm[1][2]=(m[2]*m[3]-m[0]*m[5])/detm;
+      invm[2][0]=(m[3]*m[7]-m[4]*m[6])/detm; invm[2][1]=(m[1]*m[6]-m[0]*m[7])/detm; invm[2][2]=(m[0]*m[4]-m[1]*m[3])/detm;
+      for(ci=0;ci<3;ci++) s[ci]=invm[ci][0]*Wv[0]+invm[ci][1]*Wv[1]+invm[ci][2]*Wv[2];
+      for(ci=0;ci<3;ci++) for(cj=0;cj<3;cj++) Ms[ci][cj]*=s[cj];
+    }
+    /* Mi = inv(Ms), Mws = Mi * Mw (wide -> linear sRGB primaries). */
+    {
+      double *m=Ms[0];
+      detm = m[0]*(m[4]*m[8]-m[5]*m[7])-m[1]*(m[3]*m[8]-m[5]*m[6])+m[2]*(m[3]*m[7]-m[4]*m[6]);
+      Mi[0][0]=(m[4]*m[8]-m[5]*m[7])/detm; Mi[0][1]=(m[2]*m[7]-m[1]*m[8])/detm; Mi[0][2]=(m[1]*m[5]-m[2]*m[4])/detm;
+      Mi[1][0]=(m[5]*m[6]-m[3]*m[8])/detm; Mi[1][1]=(m[0]*m[8]-m[2]*m[6])/detm; Mi[1][2]=(m[2]*m[3]-m[0]*m[5])/detm;
+      Mi[2][0]=(m[3]*m[7]-m[4]*m[6])/detm; Mi[2][1]=(m[1]*m[6]-m[0]*m[7])/detm; Mi[2][2]=(m[0]*m[4]-m[1]*m[3])/detm;
+      for(ci=0;ci<3;ci++) for(cj=0;cj<3;cj++) { tmp[ci][cj]=0; for(ck=0;ck<3;ck++) tmp[ci][cj]+=Mi[ci][ck]*Mw[ck][cj]; }
+      for(ci=0;ci<3;ci++) for(cj=0;cj<3;cj++) Mws[ci][cj]=tmp[ci][cj];
+    }
+    /* Sensitivity: saturated wide red primary leaves linear sRGB gamut
+     * (R>1, G<0, B<0), so a forced sRGB-u8 intermediate clips unrecoverably. */
+    CHECK (Mws[0][0] > 1.02 && Mws[1][0] < -0.02 && Mws[2][0] < -0.01,
+           "wide red maps outside linear sRGB gamut (independent matrix)");
+    CHECK (Mws[0][1] < -0.02 && Mws[1][1] > 1.02,
+           "wide green maps outside linear sRGB gamut (independent matrix)");
+    CHECK (Mws[0][2] < -0.02 && Mws[2][2] > 1.02,
+           "wide blue maps outside linear sRGB gamut (independent matrix)");
+
+    ws = api->image_from_pixels (engine, TW, TH, wpix, sizeof wpix, &wimg, &error);
+    CHECK (ws == GLIMS_STATUS_OK && wimg != 0, "wide image_from_pixels (%s)", error ? error : "ok");
+    take_error (error); error = NULL;
+    snprintf (wpath, sizeof wpath, "%s/wide-linear-rgb.icc", argv[3]);
+    ws = api->image_assign_profile (engine, wimg, wpath, &error);
+    CHECK (ws == GLIMS_STATUS_OK, "image_assign_profile(wide-linear-rgb.icc) (%s)", error ? error : "ok");
+    take_error (error); error = NULL;
+    api->image_info (engine, wimg, &wi);
+    api->image_undo_info (engine, wimg, &wu);
+
+    /* Wide -> same wide: direct premultiplied bytes (no conversion). */
+    memset (wout, 0xA5, sizeof wout);
+    ws = api->image_render_to_profile (engine, wimg, 1.0, wf,
+                                       (const uint8_t *) wide_icc, wide_len,
+                                       wout, 32, &error);
+    take_error (error); error = NULL;
+    {
+      int ok = ws == GLIMS_STATUS_OK;
+      for (i = 0; ok && i < TH; i++) {
+        int p;
+        for (p = 0; p < TW; p++) {
+          const uint8_t *s = wpix + (i*TW+p)*4; uint8_t *d = wout + i*32 + p*4;
+          ok = abs(d[0]-expect_premul(s[0],s[3]))<=1 && abs(d[1]-expect_premul(s[1],s[3]))<=1 &&
+               abs(d[2]-expect_premul(s[2],s[3]))<=1 && d[3]==s[3];
+        }
+        for (int pad = TW*4; pad < 32; pad++) ok = ok && wout[i*32+pad] == 0xA5;
+      }
+      CHECK (ok, "wide->wide render returns direct premultiplied input, stride/guards intact");
+    }
+    {
+      GlimsImageInfo wa; GlimsUndoInfo wb;
+      api->image_info (engine, wimg, &wa); api->image_undo_info (engine, wimg, &wb);
+      CHECK (wa.dirty == wi.dirty && wb.undo_count == wu.undo_count && wb.redo_count == wu.redo_count,
+             "wide->wide render preserves post-assign dirty/undo state");
+    }
+
+    /* Wide -> linear-rgb.icc (sRGB primaries, D65, linear TRC):
+     * expected from inv(M_srgb)*M_wide, clamp to u8 contract, premultiply.
+     * ICC coefficient quantization/rounding tolerance: <=2 u8 (well below
+     * clipping loss; wide red/green/blue clip to a channel at 0 or 255). */
+    memset (wout, 0xA5, sizeof wout);
+    ws = api->image_render_to_profile (engine, wimg, 1.0, wf,
+                                       (const uint8_t *) linear_icc, linear_len,
+                                       wout, 32, &error);
+    take_error (error); error = NULL;
+    {
+      int ok = ws == GLIMS_STATUS_OK;
+      for (i = 0; ok && i < TH; i++) {
+        int p;
+        for (p = 0; p < TW; p++) {
+          const uint8_t *s = wpix + (i*TW+p)*4; uint8_t *d = wout + i*32 + p*4;
+          double a=s[3]/255.0, rgb[3]={s[0]/255.0,s[1]/255.0,s[2]/255.0}, o[3]; int er[3]; int c;
+          for(c=0;c<3;c++) o[c]=Mws[c][0]*rgb[0]+Mws[c][1]*rgb[1]+Mws[c][2]*rgb[2];
+          for(c=0;c<3;c++){ double v=o[c]; if(v<0) v=0; if(v>1) v=1; er[c]=(int)lround(v*255.0*a); }
+          ok = abs(d[0]-er[0])<=2 && abs(d[1]-er[1])<=2 && abs(d[2]-er[2])<=2 && d[3]==s[3];
+        }
+        for (int pad = TW*4; pad < 32; pad++) ok = ok && wout[i*32+pad] == 0xA5;
+      }
+      CHECK (ok, "wide->linear-sRGB render matches independent xyY matrix oracle (tol<=2), guards intact");
+    }
+    /* Saturated wide primaries would be clipped if forced through an sRGB-u8
+     * intermediate (matrix gives R>1 or negative channels); the renderer must
+     * keep gamut, so wide red/green/blue render as their clamped sRGB mapping,
+     * not as identity premultiplication of the wide-encoded source bytes. */
+    {
+      int ok = ws == GLIMS_STATUS_OK;
+      /* wide red/green/blue (rows 0, pixels 0-2): identity premul would keep
+       * the saturated channel at 255 with others 0; correct output clamps the
+       * independent matrix result (still saturated primary, other channels 0). */
+      ok = ok && wout[0*32+0*4+0] >= 253 && wout[0*32+0*4+1] <= 2  && wout[0*32+0*4+2] <= 2;
+      ok = ok && wout[0*32+1*4+0] <= 2   && wout[0*32+1*4+1] >= 253 && wout[0*32+1*4+2] <= 2;
+      ok = ok && wout[0*32+2*4+0] <= 2   && wout[0*32+2*4+1] <= 2  && wout[0*32+2*4+2] >= 253;
+      /* mixed wide sample (153,51,26,128, index 3): matrix maps it to a
+       * different color in linear sRGB primaries, so output differs materially
+       * from identity premultiplication of the wide-encoded bytes. */
+      {
+        const uint8_t *s = wpix + 3*4; const uint8_t *d = wout + 3*4;
+        int idr=expect_premul(s[0],s[3]), idg=expect_premul(s[1],s[3]), idb=expect_premul(s[2],s[3]);
+        ok = ok && (abs(d[0]-idr)>4 || abs(d[1]-idg)>4 || abs(d[2]-idb)>4);
+      }
+      CHECK (ok, "wide gamut mapping differs from identity/clipped-sRGB intermediate for saturated+mixed samples");
+    }
+    {
+      GlimsImageInfo wa; GlimsUndoInfo wb;
+      api->image_info (engine, wimg, &wa); api->image_undo_info (engine, wimg, &wb);
+      CHECK (wa.dirty == wi.dirty && wb.undo_count == wu.undo_count && wb.redo_count == wu.redo_count,
+             "wide renders preserve post-assign dirty/undo state (read-only)");
+    }
+
+    api->image_close (engine, wimg);
+  wide_done:
+    free (wide_icc);
+  }
+
   /* A narrow request spans two full 256-row chunks and one cached pixel.
    * Warm the old final pixel, mutate the projection, then read the entire
    * column through both APIs: no stale final-row cache and no tall-stack call. */
