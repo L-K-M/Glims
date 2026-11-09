@@ -60,6 +60,22 @@ final class ImageDocument {
                                                         action: "This command") else { return nil }
         return reason
     }
+    /// The image's selected channels, ordered as the slot-137 read-back
+    /// returns them (the order slot 136 last wrote). Transient like the
+    /// layer selection; reconciled on every reload. Exactly one selected
+    /// channel is the paint/edit target; several are an ambiguous target
+    /// (none), never the first row.
+    private(set) var selectedChannelIDs: [Int32] = []
+    /// The image's selected paths, ordered as the slot-137 read-back
+    /// returns them. Exactly one selected path is the active path; none
+    /// or several selected means no active path.
+    private(set) var selectedPathIDs: [Int32] = []
+    /// Whether more than one channel is selected: the ambiguous
+    /// channel-target state that gates target-writing commands.
+    var hasMultipleSelectedChannels: Bool { ItemSelectionPolicy.isMulti(selectedChannelIDs.count) }
+    /// Whether more than one path is selected: the ambiguous path state
+    /// the Path tool and the palette commands refuse.
+    var hasMultipleSelectedPaths: Bool { ItemSelectionPolicy.isMulti(selectedPathIDs.count) }
     /// Each masked layer's mask state by layer id, read with the rest of
     /// the state. EDITING is transient — the engine keeps no undo for
     /// the edit target and reports no event for it — so the mask
@@ -117,6 +133,17 @@ final class ImageDocument {
     }
     private var layerSelectionVersion = 0
     private var pendingLayerSelection: PendingLayerSelection?
+    /// A queued channel/path batch selection, mirrored like a target pick:
+    /// the ordered ids captured with the document's own image handle, so
+    /// the job can never retarget to another document.
+    private struct PendingItemSelection {
+        let version: Int
+        let kind: EngineSession.ItemSetKind
+        let ids: [Int32]
+    }
+    private var itemSelectionVersion = 0
+    private var pendingChannelSelection: PendingItemSelection?
+    private var pendingPathSelection: PendingItemSelection?
     private struct ComponentIntent {
         let version: Int
         let activeMask: EngineSession.Components
@@ -302,14 +329,24 @@ final class ImageDocument {
         grid = try session.grid(image)
         floatingState = try session.floatingSelection(image)
         mirrorChannelIntents()
-        if let pick = pendingTargetPick {
-            channels = channels.map { row in
-                channelRow(row, selected: {
-                    if case .channel(let id) = pick.target { return id == row.id }
-                    return false
-                }())
+        // The ordered selected channels come from the whole-list slot-137
+        // read-back, reconciled against the channels that still exist; a
+        // queued pick's mirror wins until its completion lands. The rows'
+        // own isSelected flags are then derived from the reconciled list,
+        // so the palette shows exactly the native selection.
+        let mirroredChannelIDs: [Int32]? = {
+            if let pick = pendingTargetPick {
+                if case .channel(let id) = pick.target { return [id] }
+                return []
             }
-        }
+            return pendingChannelSelection?.ids
+        }()
+        let existingChannelIDs = Set(channels.map(\.id))
+        selectedChannelIDs = LayerSelectionPolicy.reconcile(
+            mirroredChannelIDs ?? (try? session.selectedItems(.channel, image: image))
+                ?? channels.filter(\.isSelected).map(\.id),
+            existing: existingChannelIDs)
+        channels = channels.map { channelRow($0, selected: selectedChannelIDs.contains($0.id)) }
         undoInfo = try session.undoInfo(image)
         history = try session.history(image)
         // The ordered selected layers, primary first. While a pick or a
@@ -337,9 +374,18 @@ final class ImageDocument {
 
     private func reloadPaths() {
         paths = (try? session.paths(image)) ?? []
-        if activePath == nil || !paths.contains(where: { $0.id == activePath }) {
-            activePath = paths.first(where: \.isSelected)?.id
-        }
+        // The ordered selected paths, from the slot-137 read-back or a
+        // queued pick's mirror, reconciled against the paths that still
+        // exist. The active path is always reconciled from this current
+        // native selection: exactly one selected path is active; none or
+        // several selected means no active path — never a stale
+        // remembered row.
+        let existingPathIDs = Set(paths.map(\.id))
+        selectedPathIDs = LayerSelectionPolicy.reconcile(
+            pendingPathSelection?.ids ?? (try? session.selectedItems(.path, image: image))
+                ?? paths.filter(\.isSelected).map(\.id),
+            existing: existingPathIDs)
+        activePath = ItemSelectionPolicy.activePath(selectedPathIDs, existing: existingPathIDs)
         var shapes: [Int32: VectorPath] = [:]
         for path in paths where path.isVisible || path.id == activePath {
             if pendingPathEdits[path.id, default: 0] > 0, let pending = pathShapes[path.id] {
@@ -356,12 +402,19 @@ final class ImageDocument {
     /// layer, just as it does for implicit engine edits — except while a
     /// floating selection is active: it owns painting even when it is
     /// attached to a mask or channel, whose drawable would otherwise win
-    /// as the channel-priority (or mask-editing) target.
+    /// as the channel-priority (or mask-editing) target. Several selected
+    /// channels are an ambiguous target: no drawable at all, never the
+    /// first selected channel.
     private var paintTarget: PaintTarget? {
         guard !rejectedTargetPick, pendingTargetCommands.isEmpty else { return nil }
         if let pick = pendingTargetPick { return pick.target }
         if floatingState.isActive { return .layer(floatingState.floating) }
-        if let channel = channels.first(where: \.isSelected) { return .channel(channel.id) }
+        if !selectedChannelIDs.isEmpty {
+            guard let channel = ItemSelectionPolicy.channelTarget(selectedChannelIDs,
+                                                                   existing: Set(channels.map(\.id)))
+            else { return nil }
+            return .channel(channel)
+        }
         guard let layer = activeLayer else { return nil }
         if let state = maskStates[layer], state.editing, state.mask != 0 {
             return .mask(layer: layer, drawable: state.mask)
@@ -406,7 +459,10 @@ final class ImageDocument {
         return false
     }
 
-    var isChannelTargetActive: Bool { activeChannel != nil }
+    /// Whether any channel is selected — even when several are and no
+    /// single channel is the active target: channel-target edits refuse
+    /// either way.
+    var isChannelTargetActive: Bool { ItemSelectionPolicy.isChannelTargetActive(selectedChannelIDs) }
 
     private func channelRow(_ row: EngineSession.Channel, selected: Bool? = nil,
                             visible: Bool? = nil) -> EngineSession.Channel {
@@ -488,12 +544,31 @@ final class ImageDocument {
         queueTargetPick(editingMask ? .mask(layer: id, drawable: mask!) : .layer(id))
     }
 
+    /// Makes `id` the image's whole selected-channel list — one row, so a
+    /// click resolves an earlier multi-selection to exactly this channel —
+    /// through the native batch write (slot 136), never a first-row pick.
     func selectChannel(_ id: Int32) {
         guard !isClosing, !refuseWhileEditingUnavailable() else { return }
+        // The native write refuses a non-empty channel list under an
+        // active floating selection; a single pick refuses it too.
         guard !refuseWhileFloatingActive() else { return }
         endPendingUserEdits()
         guard channels.contains(where: { $0.id == id }) else { return }
-        queueTargetPick(.channel(id))
+        queueItemSelection([id], kind: .channel)
+    }
+
+    /// Selects exactly `ids`, in that order, as the image's whole
+    /// selected-channel list (slot 136) with the exact slot-137 read-back
+    /// as the postcondition. An empty list returns the target to the
+    /// layers. Transient; the native edit-readiness and floating rules
+    /// apply (a non-empty list is refused under a floating selection).
+    func selectChannelItems(_ ids: [Int32]) {
+        guard !isClosing, !refuseWhileEditingUnavailable() else { return }
+        guard ids.isEmpty || !refuseWhileFloatingActive() else { return }
+        endPendingUserEdits()
+        let existing = Set(channels.map(\.id))
+        guard ids.allSatisfy({ existing.contains($0) }), Set(ids).count == ids.count else { return }
+        queueItemSelection(ids, kind: .channel)
     }
 
     /// Selects exactly `ids`, primary first, as the image's whole
@@ -552,6 +627,7 @@ final class ImageDocument {
         // before the job lands. Mask pixels and flags are untouched.
         for id in ids { maskStates[id]?.editing = false }
         channels = channels.map { channelRow($0, selected: false) }
+        selectedChannelIDs = []
         enqueue(on: inputQueue) { [session, image] in
             var failure: Error?
             self.paintTargetIsValid = false
@@ -568,6 +644,74 @@ final class ImageDocument {
             DispatchQueue.main.async {
                 if self.pendingLayerSelection?.version == pick.version {
                     self.pendingLayerSelection = nil
+                }
+                if let failure { self.report(failure) }
+                try? self.reload()
+            }
+        }
+        onStateChange?()
+    }
+
+    /// Queues the ordered channel/path batch selection as one serial
+    /// input job, mirrored like a target pick; the completion re-reads the
+    /// authoritative state and its slot-137 read-back must equal the
+    /// requested order exactly. A single selected channel also mirrors
+    /// the paint target through `pendingTargetPick`; several selected
+    /// channels resolve to no target. Path selection never touches it.
+    private func queueItemSelection(_ ids: [Int32], kind: EngineSession.ItemSetKind) {
+        itemSelectionVersion += 1
+        let pick = PendingItemSelection(version: itemSelectionVersion, kind: kind, ids: ids)
+        let existing: Set<Int32>
+        switch kind {
+        case .channel:
+            pendingChannelSelection = pick
+            existing = Set(channels.map(\.id))
+        case .path:
+            pendingPathSelection = pick
+            existing = Set(paths.map(\.id))
+        case .layer:
+            return
+        }
+        let ordered = LayerSelectionPolicy.reconcile(ids, existing: existing)
+        var pickTargetVersion = 0
+        if kind == .channel {
+            selectedChannelIDs = ordered
+            channels = channels.map { channelRow($0, selected: ordered.contains($0.id)) }
+            pendingTargetCommands.removeAll()
+            if let id = ordered.first, ordered.count == 1 {
+                targetPickVersion += 1
+                pickTargetVersion = targetPickVersion
+                pendingTargetPick = TargetPick(version: pickTargetVersion, target: .channel(id))
+                rejectedTargetPick = false
+            } else {
+                pendingTargetPick = nil
+                rejectedTargetPick = false
+            }
+        } else {
+            selectedPathIDs = ordered
+            activePath = ordered.count == 1 ? ordered.first : nil
+        }
+        enqueue(on: inputQueue) { [session, image] in
+            var failure: Error?
+            if kind == .channel { self.paintTargetIsValid = false }
+            do {
+                try session.selectItems(ordered, kind: kind, image: image)
+                guard try session.selectedItems(kind, image: image) == ordered else {
+                    throw DocumentError.targetChanged
+                }
+                if kind == .channel { self.paintTargetIsValid = true }
+            } catch {
+                failure = error
+            }
+            DispatchQueue.main.async {
+                if kind == .channel {
+                    if self.pendingChannelSelection?.version == pick.version { self.pendingChannelSelection = nil }
+                    if self.pendingTargetPick?.version == pickTargetVersion {
+                        self.pendingTargetPick = nil
+                        self.rejectedTargetPick = failure != nil
+                    }
+                } else if self.pendingPathSelection?.version == pick.version {
+                    self.pendingPathSelection = nil
                 }
                 if let failure { self.report(failure) }
                 try? self.reload()
@@ -608,6 +752,10 @@ final class ImageDocument {
         channels = channels.map { row in
             if case .channel(let id) = target { return channelRow(row, selected: row.id == id) }
             return channelRow(row, selected: false)
+        }
+        switch target {
+        case .channel(let id): selectedChannelIDs = [id]
+        case .layer, .mask: selectedChannelIDs = []
         }
         enqueue(on: inputQueue) { [session, image] in
             var failure: Error?
@@ -731,6 +879,7 @@ final class ImageDocument {
     func beginStroke(at point: EngineSession.StrokePoint, brush: EngineSession.Brush = EngineSession.Brush()) {
         guard !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
         guard !refuseSingleLayerCommand("Paint") else { return }
+        guard !refuseMultiChannelCommand("Paint") else { return }
         guard let drawable = activeDrawable else {
             onError?(DocumentError.targetChanged.localizedDescription)
             return
@@ -1212,16 +1361,13 @@ final class ImageDocument {
         }
     }
 
-    /// The current selected item ids of `kind` from an actual query (layers
-    /// via `selectedLayers`, channels/paths via `isSelected`); a failed
-    /// query throws — never a fake all-items list, empty = explicit empty.
+    /// The current selected item ids of `kind`, in the engine's own order,
+    /// from the authoritative whole-list slot-137 query for all three
+    /// kinds; a failed query throws — never a fake all-items list, never a
+    /// filtered row cache, empty = explicit empty.
     static func currentSelectedItemIDs(_ session: EngineSession, image: Int32,
                                        kind: EngineSession.ItemSetKind) throws -> [Int32] {
-        switch kind {
-        case .layer: return try session.selectedLayers(image)
-        case .channel: return try session.channels(image).filter(\.isSelected).map(\.id)
-        case .path: return try session.paths(image).filter(\.isSelected).map(\.id)
-        }
+        try session.selectedItems(kind, image: image)
     }
 
     /// One undoable saved-set edit (slot 135) as one counted GLOBAL
@@ -1272,25 +1418,45 @@ final class ImageDocument {
         }
     }
 
-    /// Recall resolves the current set on the worker before changing the
-    /// native target. Cached table members are never an executable command.
-    /// The existing target-command gate counts the job, blocks painting an
-    /// unknown target and reconciles the mirror without a second selection.
-    func recallLayerSet(token: UInt64, completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+    /// Recall of a saved set of any kind: the document, kind and token are
+    /// captured at the call, and the worker resolves the CURRENT members
+    /// (slot 134) fresh — cached table members are never an executable
+    /// command. Nonempty members become the whole native selection of
+    /// `kind` (slot 136) with the exact slot-137 read-back as the
+    /// postcondition; a stale or foreign token fails NOT_FOUND without
+    /// touching the selection. Layer and channel recall replace the paint
+    /// target, so they run inside the counted target-command lifecycle
+    /// (paint refuses while pending); path recall keeps the drawable
+    /// state as one counted input job. Under a floating selection the
+    /// native contract refuses layer/channel recall, allows path recall.
+    func recallItemSet(token: UInt64, kind: EngineSession.ItemSetKind,
+                       completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
-        guard !refuseWhileEditingUnavailable(), !refuseWhileFloatingActive() else {
-            return completion(.failure(DocumentError.busy))
-        }
+        guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
+        if kind != .path, refuseWhileFloatingActive() { return completion(.failure(DocumentError.busy)) }
         endPendingUserEdits()
+        if strokeIsActive { endStroke() }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
-        enqueueTargetCommand({ session, image in
+        let work: (EngineSession, Int32) throws -> Void = { session, image in
             let members = try session.itemSetMembers(image, token: token)
             guard !members.isEmpty else {
                 throw SavedSetControlsLogic.Rejection(message: "The saved set is empty; there is nothing to recall.")
             }
-            try session.selectLayers(members, image: image)
-            guard try session.selectedLayers(image) == members else { throw DocumentError.targetChanged }
-        }, completion: completion)
+            try session.selectItems(members, kind: kind, image: image)
+            guard try session.selectedItems(kind, image: image) == members else { throw DocumentError.targetChanged }
+        }
+        if kind == .path {
+            enqueue(on: inputQueue, input: true) { [session, image] in
+                let result = Result { try work(session, image) }
+                DispatchQueue.main.async {
+                    if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                    try? self.reload()
+                    completion(result)
+                }
+            }
+        } else {
+            enqueueTargetCommand(work, completion: completion)
+        }
     }
 
     // MARK: Guides
@@ -2157,12 +2323,16 @@ final class ImageDocument {
     // MARK: Paths
 
     /// Makes `id` the path the Path tool edits, here and in the engine.
+    /// Makes `id` the image's whole selected-path list — one row, so a
+    /// palette click resolves an earlier multi-selection to exactly this
+    /// path — through the native batch write (slot 136). The active path
+    /// follows the native selection: exactly this one path, never a stale
+    /// remembered row. Path selection is allowed under a floating
+    /// selection (the native contract), and changes no paint target.
     func selectPath(_ id: Int32) {
         guard paths.contains(where: { $0.id == id }), !refuseWhileEditingUnavailable() else { return }
-        activePath = id
         if pathShapes[id] == nil { pathShapes[id] = try? session.path(id, image: image) }
-        run { session, image in try session.changePath(id, image: image, select: true) }
-        onStateChange?()
+        queueItemSelection([id], kind: .path)
     }
 
     /// Adds a path with `shape` and makes it the active one. Waits for the
@@ -2171,7 +2341,13 @@ final class ImageDocument {
     func addPath(_ shape: VectorPath) -> Int32? {
         guard !refuseWhileEditingUnavailable() else { return nil }
         let result = inputQueue.sync { [session, image] in
-            Result { try session.setPath(nil, image: image, shape) }
+            Result { () -> Int32 in
+                let id = try session.setPath(nil, image: image, shape)
+                // Make the new path the image's whole path selection, so
+                // the reload's exact-one active-path rule keeps it active.
+                try? session.selectItems([id], kind: .path, image: image)
+                return id
+            }
         }
         switch result {
         case .success(let id):
@@ -2624,6 +2800,11 @@ final class ImageDocument {
                                                      action: procedure.label.trimmingCharacters(in: CharacterSet(charactersIn: "…"))) {
             return completion(.failure(DocumentError.multipleLayersSelected(reason)))
         }
+        // Several selected channels leave no single drawable target either.
+        if let reason = ItemSelectionPolicy.refusal(count: selectedChannelIDs.count, kind: .channel,
+                                                     action: procedure.label.trimmingCharacters(in: CharacterSet(charactersIn: "…"))) {
+            return completion(.failure(DocumentError.multipleLayersSelected(reason)))
+        }
         enqueueExclusive(label: procedure.label, rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
             let result = Result { try session.runProcedure(procedure.name, image: image, mode: mode) }
             DispatchQueue.main.async {
@@ -2752,6 +2933,9 @@ final class ImageDocument {
         if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Paste") {
             return completion(.failure(DocumentError.multipleLayersSelected(reason)))
         }
+        if let reason = ItemSelectionPolicy.refusal(count: selectedChannelIDs.count, kind: .channel, action: "Paste") {
+            return completion(.failure(DocumentError.multipleLayersSelected(reason)))
+        }
         endPendingUserEdits()
         enqueueTargetCommand({ session, image in
             let pixels = try payload.decoded()
@@ -2795,6 +2979,9 @@ final class ImageDocument {
                          completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Paste Into") {
+            return completion(.failure(DocumentError.multipleLayersSelected(reason)))
+        }
+        if let reason = ItemSelectionPolicy.refusal(count: selectedChannelIDs.count, kind: .channel, action: "Paste Into") {
             return completion(.failure(DocumentError.multipleLayersSelected(reason)))
         }
         guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
@@ -3343,6 +3530,20 @@ final class ImageDocument {
         return true
     }
 
+    /// Refuses a single-target command while more than one channel is
+    /// selected: the paint target is ambiguous (no drawable), so nothing
+    /// may silently act on the first selected channel. Returns true when
+    /// refused.
+    func refuseMultiChannelCommand(_ action: String) -> Bool {
+        guard let reason = ItemSelectionPolicy.refusal(count: selectedChannelIDs.count,
+                                                        kind: .channel, action: action)
+        else { return false }
+        onUserCommand?()
+        onError?(reason)
+        NSSound.beep()
+        return true
+    }
+
     /// While a queued command has yet to report the drawable it creates
     /// or leaves selected, an edit that captures the paint target now
     /// could hit the drawable that command is about to replace; refuse
@@ -3407,6 +3608,7 @@ final class ImageDocument {
     func runOnPaintTarget(_ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
         guard !refuseWhileTargetPending() else { return false }
         guard !refuseSingleLayerCommand("Paint") else { return false }
+        guard !refuseMultiChannelCommand("Paint") else { return false }
         guard activeDrawable != nil else {
             onError?(DocumentError.targetChanged.localizedDescription)
             return false

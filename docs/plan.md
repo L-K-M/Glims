@@ -3186,3 +3186,15 @@ still present after completion. The fixed retry method passes on GIMP
 The final fixture requires NOT_FOUND specifically, stops on a missing
 pause marker, checks that no app activity masks the native busy state,
 and cleans up any image left by the deliberate red implementation.
+
+
+### Ordered channel and path recall (2026-11-09)
+
+The channel/path recall candidate uses the merged slots 136/137 to keep
+ordered native selections, resolves saved-set members freshly by token and
+uses exact readback. Several selected channels have no single paint target;
+several selected paths have no active path. The Path tool consumes arrows
+as well as Delete/Return/Escape rather than moving the paint layer or
+floating selection. Single row picks narrow a batch safely. The visible
+selection rows and Saved Sets panel geometry are checked separately from
+button existence. See `item-set-recall-controls.md` for scope and evidence.

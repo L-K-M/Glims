@@ -82,3 +82,20 @@ matrix) and the Core 97-check native segment/pixel oracle in
 harness and is not claimed as this change's runtime validation. The
 runtime behavior of the slot therefore remains unverified in this
 worktree until root runs the producer.
+
+## Root runtime acceptance (2026-11-09)
+
+All four engines pass the general adapter suite (1,917 / 1,703 / 1,917 /
+1,917 checks) and 77 facade assertions each across create and fresh-process
+verify. The public harness checks API1/size admission, required pointers,
+NULL-engine output clearing, invalid names/components, busy sessions,
+exact-identity handoff, catalog/thumbnail access and persistence. Its
+thumbnail red ordering is deliberately a limited oracle; the separate
+accepted Core harness checks exact static segments and endpoint samples
+with 97 assertions per engine. Neither suite reports GEGL criticals or
+assertion failures in the final runs. All 805 unit tests pass.
+
+Root corrected the handoff reader to reserve and write a terminating NUL
+before string parsing. An independent complete-body source review found
+no important remaining facade issue. Controls and their runtime checks are
+a separate change.
