@@ -7,6 +7,20 @@ import XCTest
 /// up in device pixels, and a backing change keeps the image pixel under
 /// the viewport centre within the scrollable range.
 final class CanvasGeometryTests: XCTestCase {
+    func testImagePointRemovesAffineNoiseWithoutQuantizingSubpixels() {
+        for zoom in [25, 100, 150, 3200] {
+            for backing in [1.0, 2.0] {
+                let scale = CanvasGeometry.pointScale(zoomPercent: zoom, backingFactor: backing)
+                let point = CanvasGeometry.imagePoint(viewPoint: CGPoint(x: (12 - 1e-12) * scale, y: (42 + 1e-12) * scale),
+                                                       zoomPercent: zoom, backingFactor: backing)
+                XCTAssertEqual(point, CGPoint(x: 12, y: 42))
+                let fractional = CanvasGeometry.imagePoint(viewPoint: CGPoint(x: 12.000001 * scale, y: -13.25 * scale),
+                                                            zoomPercent: zoom, backingFactor: backing)
+                XCTAssertEqual(fractional.x, 12.000001, accuracy: 1e-12)
+                XCTAssertEqual(fractional.y, -13.25, accuracy: 1e-12)
+            }
+        }
+    }
     private static let accuracy = 1e-9
 
     // MARK: Zoom, point and device mapping at 1x and 2x

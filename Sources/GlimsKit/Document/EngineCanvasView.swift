@@ -411,18 +411,21 @@ final class EngineCanvasView: NSView {
     private func backingDidChange() {
         refreshDisplayDestination()
         generation += 1
-        let viewport = enclosingScrollView?.contentView.bounds ?? .zero
-        let center = CanvasGeometry.imageCenter(scrollOffset: viewport.origin, viewportSize: viewport.size,
-                                                zoomPercent: zoomPercent, backingFactor: lastBackingFactor)
+        let clip = enclosingScrollView?.contentView
+        let viewport = clip?.bounds ?? .zero
+        let viewCenter = convert(CGPoint(x: viewport.midX, y: viewport.midY), from: clip)
+        let oldScale = CanvasGeometry.pointScale(zoomPercent: zoomPercent, backingFactor: lastBackingFactor)
+        let center = CGPoint(x: viewCenter.x / oldScale, y: viewCenter.y / oldScale)
         lastBackingFactor = backingScale
         updateFrameSize()
         tools.canvasScaleDidChange()
         needsDisplay = true
-        if enclosingScrollView != nil {
-            let target = CanvasGeometry.scrollOffset(preservingImageCenter: center, viewportSize: viewport.size,
-                                                     canvasSize: frame.size,
-                                                     zoomPercent: zoomPercent, backingFactor: backingScale)
-            if target != viewport.origin { scroll(target) }
+        if let scrollView = enclosingScrollView, let clip {
+            let point = convert(CGPoint(x: center.x * scale, y: center.y * scale), to: scrollView.documentView)
+            let target = CGRect(x: point.x - clip.bounds.width / 2, y: point.y - clip.bounds.height / 2,
+                                width: clip.bounds.width, height: clip.bounds.height)
+            clip.scroll(to: clip.constrainBoundsRect(target).origin)
+            scrollView.reflectScrolledClipView(clip)
         }
         setNeedsRender()
     }

@@ -1,17 +1,36 @@
-# Canvas rotation container
+# Canvas view rotation
 
-`CanvasRotationView` is a standalone AppKit container for a later Root-owned
-document workspace integration. It wraps one flipped canvas view and applies
-view rotation with ordinary `NSView.frameRotation`.
+The document scroll view hosts `CanvasRotationView`, which rotates the existing
+flipped canvas with AppKit's `frameRotation`. View ▸ Rotate View offers 15°
+clockwise/counterclockwise steps, a fractional angle form and reset. Nonzero
+angles appear in the window title. Rotation belongs to each window; image
+pixels, native history and file data are unchanged.
 
-Measured probe behavior (`/tmp/glims-completion/view-rotation-probe.*`): the
-rotated child's frame and bounds sizes stay unrotated while AppKit rotates point
-conversion and hit testing. `setFrameSize` keeps logical bounds and does not
-swap width and height.
+AppKit rotates point conversion, hit testing and the existing image-space
+canvas, overlays and text editor together. The host offsets the converted
+canvas bounding box into positive coordinates. Synchronous frame notifications
+update it during zoom/backing changes, with a reentrancy guard and observer
+cleanup. Zoom and backing changes preserve the image-space viewport center;
+Fit Image uses the rotated extent.
 
-The container keeps rotation as a plain degree value normalized to `[-180, 180)`,
-rejects non-finite values without mutation, observes child frame changes, and
-lays the rotated bounds box into positive host coordinates. Canvas pixels, tile
-keys, tool coordinates, and overlays remain in unrotated image space. DWC
-centering, zoom, fit, backing, rulers, and menu integration are intentionally
-left for Root.
+The rulers stay on the screen axes and project the rotated canvas extent.
+This follows the equal-resolution pixel-ruler behavior in pinned GIMP commit
+7addd2b, `app/display/gimpdisplayshell-rulers.c`. A horizontal ruler still creates
+an image-horizontal guide; the coordinate event passes through native view
+conversion. View rotation does not change the user's ruler visibility choice.
+
+Actual rotated rectangle gestures exposed affine roundoff at exact pixel edges:
+11.99999999999999 expanded a selection to pixel11. CanvasGeometry removes only
+noise within1e-7 image pixels of an integer; genuine subpixel input is preserved.
+The failing runtime checks now select exact12,14,30,24 bounds at90°,−45°,180°.
+
+Verification:830 unit tests pass. The real engine smoke case `canvas-rotation`
+passes on all four supported engines: known-color rendered quadrants, event
+mapping, projected rulers, fit/zoom center, native pixel/history preservation,
+menu actions/title, invalid and fractional custom-angle forms, actual rectangle
+selection, pencil strokes and one-step Undo. The container's unit tests also
+cover rotated native hit testing outside the unrotated frame, resizing, finite
+angles, observer lifetime and absence of a deferred notification loop.
+
+Full app regression and independent integration review remain pending at this
+checkpoint. Physical movement between displays is not newly verified here.

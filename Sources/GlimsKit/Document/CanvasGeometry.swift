@@ -53,7 +53,14 @@ enum CanvasGeometry {
     /// The image pixel under a view point.
     static func imagePoint(viewPoint: CGPoint, zoomPercent: Int, backingFactor: Double) -> CGPoint {
         let scale = pointScale(zoomPercent: zoomPercent, backingFactor: backingFactor)
-        return CGPoint(x: viewPoint.x / scale, y: viewPoint.y / scale)
+        // Affine view conversion can return 11.99999999999999 for an
+        // exact pixel edge. Preserve genuine subpixel input, but remove
+        // numerical noise before native selections expand fractional bounds.
+        func stable(_ value: Double) -> Double {
+            let integer = value.rounded()
+            return abs(value - integer) < 1e-7 ? integer : value
+        }
+        return CGPoint(x: stable(viewPoint.x / scale), y: stable(viewPoint.y / scale))
     }
 
     /// The inverse: where an image pixel lands in view points.

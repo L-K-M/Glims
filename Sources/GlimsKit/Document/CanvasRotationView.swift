@@ -67,6 +67,13 @@ final class CanvasRotationView: NSView {
         layoutCanvas()
     }
 
+    static func rotatedSize(_ size: CGSize, degrees: Double) -> CGSize {
+        let radians = degrees * .pi / 180
+        let c = abs(cos(radians)), s = abs(sin(radians))
+        return CGSize(width: size.width * c + size.height * s,
+                      height: size.width * s + size.height * c)
+    }
+
     private static func normalize(_ degrees: Double) -> Double {
         var value = degrees.truncatingRemainder(dividingBy: 360)
         if value >= 180 { value -= 360 }

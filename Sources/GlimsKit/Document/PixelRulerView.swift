@@ -113,35 +113,39 @@ final class PixelRulerView: NSRulerView {
     /// extent. The visible range is derived by converting the ruler's own
     /// corners into canvas coordinates (scroll- and flip-safe) and then
     /// through the canvas's existing image-point mapping.
-    func currentPlan() -> PixelRulerPlan.Plan? {
+    private var rulerSpace: NSView? {
         guard let canvas else { return nil }
+        return canvas.superview as? CanvasRotationView ?? canvas
+    }
+
+    func currentPlan() -> PixelRulerPlan.Plan? {
+        guard let canvas, let space = rulerSpace else { return nil }
         let scale = canvas.scale
         var start = Double.infinity
         var end = -Double.infinity
         for corner in [CGPoint(x: bounds.minX, y: bounds.minY), CGPoint(x: bounds.maxX, y: bounds.minY),
                        CGPoint(x: bounds.minX, y: bounds.maxY), CGPoint(x: bounds.maxX, y: bounds.maxY)] {
-            let image = canvas.imagePoint(at: canvas.convert(corner, from: self))
-            if orientation == .horizontalRuler {
-                start = min(start, image.x); end = max(end, image.x)
-            } else {
-                start = min(start, image.y); end = max(end, image.y)
-            }
+            let point = space.convert(corner, from: self)
+            let position = orientation == .horizontalRuler ? point.x / scale : point.y / scale
+            start = min(start, position); end = max(end, position)
         }
         guard start.isFinite, end.isFinite else { return nil }
+        // Like the native pixel rulers, measure the projected display
+        // bounds; ruler widgets and guide orientation do not swap.
+        let extent: Double
+        if let rotation = space as? CanvasRotationView, rotation.rotationDegrees != 0 {
+            extent = Double(orientation == .horizontalRuler ? space.bounds.width / scale : space.bounds.height / scale)
+        } else { extent = imageExtent }
         return PixelRulerPlan.plan(visibleStart: start, visibleEnd: end,
-                                   pointsPerPixel: scale, imageExtent: imageExtent)
+                                   pointsPerPixel: scale, imageExtent: extent)
     }
 
-    /// Maps an image-pixel coordinate to a coordinate along this ruler's
-    /// axis, by converting the canvas origin and one image pixel from the
-    /// canvas into ruler coordinates. Returns the origin and the signed
-    /// ruler points per image pixel.
     private func axisMapping() -> (origin: Double, perPixel: Double)? {
-        guard let canvas else { return nil }
+        guard let canvas, let space = rulerSpace else { return nil }
         let scale = canvas.scale
         guard scale.isFinite, scale > 0 else { return nil }
-        let originPoint = convert(CGPoint.zero, from: canvas)
-        let unitPoint = convert(CGPoint(x: scale, y: scale), from: canvas)
+        let originPoint = convert(CGPoint.zero, from: space)
+        let unitPoint = convert(CGPoint(x: scale, y: scale), from: space)
         let origin = orientation == .horizontalRuler ? originPoint.x : originPoint.y
         let perPixel = orientation == .horizontalRuler ? unitPoint.x - originPoint.x : unitPoint.y - originPoint.y
         guard origin.isFinite, perPixel.isFinite else { return nil }
