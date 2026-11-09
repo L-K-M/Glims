@@ -171,6 +171,21 @@ enum MetadataSheetLogic {
                                isReadOnly: readOnly, refusal: refusal)
     }
 
+    static let captureDateTag = "Exif.Photo.DateTimeOriginal"
+
+    static func captureDateInitialValues(tag: String?, descriptor: EngineSession.MetadataTagInfo?,
+                                         valuesReady: Bool, values: [String], draftIsDirty: Bool) -> [String]? {
+        guard tag == captureDateTag, valuesReady, let info = descriptor,
+              info.valueKind == .single, !info.supportsMultiple, info.typeName == "Ascii",
+              writeGates(descriptor: info, valuesReady: true, locallyProtected: false).canSet else { return nil }
+        // Add Tag creates this blank local row without creating metadata.
+        // It can enter the typed form without first storing an empty date.
+        if !info.present && values == [""] { return [] }
+        guard !draftIsDirty, (0...1).contains(values.count),
+              info.present == (values.count == 1) else { return nil }
+        return values
+    }
+
     /// A queued read's completion may land only for the same tag and the
     /// still-current generation; anything older, for another tag, or after
     /// a close is stale and must not update the sheet.
@@ -292,6 +307,9 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     private let closeButton = NSButton(title: "Close", target: nil, action: nil)
     private let editLanguageButton = NSButton(title: "Edit Language…", target: nil, action: nil)
     private(set) var languageEditor: MetadataLanguageEditorController?
+    private let editCaptureDateButton = NSButton(title: "Edit Date…", target: nil, action: nil)
+    private let typedEditorActions = NSStackView()
+    private(set) var captureDateEditor: MetadataCaptureDateEditor?
     private let noteLabel = NSTextField(labelWithString: "")
     private let messageLabel = NSTextField(labelWithString: "")
     private let descriptorTitleLabel = NSTextField(labelWithString: "")
@@ -452,6 +470,9 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         editLanguageButton.setAccessibilityLabel("Edit metadata language")
         editLanguageButton.target = self
         editLanguageButton.action = #selector(editLanguage(_:))
+        editCaptureDateButton.setAccessibilityLabel("Edit capture date and time")
+        editCaptureDateButton.target = self
+        editCaptureDateButton.action = #selector(editCaptureDate(_:))
         noteLabel.setAccessibilityLabel("Metadata note")
         messageLabel.setAccessibilityLabel("Metadata message")
         hintLabel.setAccessibilityLabel("Metadata hint")
@@ -520,11 +541,15 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         let middleRow = NSStackView(views: [tagScroll, rightColumn])
         middleRow.orientation = .horizontal
         middleRow.spacing = 8
+        typedEditorActions.orientation = .horizontal
+        typedEditorActions.spacing = 8
+        typedEditorActions.addArrangedSubview(editLanguageButton)
+        typedEditorActions.addArrangedSubview(editCaptureDateButton)
         let buttonRow = NSStackView(views: [addValueButton, removeValueButton, applyButton,
-                                             removeTagButton, editLanguageButton, closeButton])
+                                             removeTagButton, closeButton])
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
-        let stack = NSStackView(views: [hintLabel, topRow, middleRow, descriptorBox, buttonRow,
+        let stack = NSStackView(views: [hintLabel, topRow, middleRow, descriptorBox, typedEditorActions, buttonRow,
                                         noteLabel, messageLabel])
         stack.orientation = .vertical
         stack.spacing = 8
@@ -670,6 +695,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     func documentStateDidChange() {
         guard !isInvalidated else { return }
         languageEditor?.documentStateDidChange()
+        captureDateEditor?.documentStateDidChange()
         if lastDocumentStateVersion != document.stateVersion, !isApplying {
             lastDocumentStateVersion = document.stateVersion
             loadTags()
@@ -697,6 +723,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     func commitFieldEdit() {
         panel.endEditing(for: nil)
         languageEditor?.commitFieldEdit()
+        captureDateEditor?.commitFieldEdit()
     }
 
     /// Close cleanup: no later callback may update or reopen the sheet.
@@ -707,6 +734,8 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         isInvalidated = true
         languageEditor?.invalidate()
         languageEditor = nil
+        captureDateEditor?.invalidate()
+        captureDateEditor = nil
         tagLoadGeneration += 1
         valuesGeneration += 1
         descriptorGeneration += 1
@@ -785,6 +814,15 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         editLanguageButton.isHidden = tagDescriptor?.valueKind != .langAlt
         editLanguageButton.isEnabled = canNavigate && descriptorKnown && valuesReady
             && tagDescriptor?.valueKind == .langAlt && languageEditor == nil && !document.isClosing
+        editCaptureDateButton.isHidden = selectedTag != MetadataSheetLogic.captureDateTag
+        editCaptureDateButton.isEnabled = canWrite && captureDateEditor == nil && languageEditor == nil
+            && MetadataSheetLogic.captureDateInitialValues(tag: selectedTag,
+                descriptor: descriptorKnown ? tagDescriptor : nil,
+                valuesReady: valuesReady && !valuesAreLoading,
+                values: draft, draftIsDirty: draftIsDirty) != nil
+        editCaptureDateButton.toolTip = draftIsDirty
+            ? "Apply the text draft before opening the date editor." : nil
+        typedEditorActions.isHidden = editCaptureDateButton.isHidden && editLanguageButton.isHidden
         updateDescriptorDisplay()
         if let tag = selectedTag, descriptorKnown, tagDescriptor?.valueKind == .langAlt {
             // LangAlt is visibly read-only from the descriptor itself,
@@ -1044,6 +1082,29 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
                 self.loadDescriptor(for: tag)
                 self.updateControlStates()
             }
+        }
+        editor.present(on: panel)
+        updateControlStates()
+    }
+
+    @objc private func editCaptureDate(_ sender: Any?) {
+        guard !isInvalidated, !isApplying, captureDateEditor == nil, languageEditor == nil,
+              !descriptorIsLoading, !valuesAreLoading, writeRefusal == nil,
+              let values = MetadataSheetLogic.captureDateInitialValues(tag: selectedTag, descriptor: tagDescriptor,
+                valuesReady: valuesReady, values: draft, draftIsDirty: draftIsDirty),
+              let editor = MetadataCaptureDateEditor(document: document, values: values) else { return }
+        let tag = MetadataSheetLogic.captureDateTag
+        captureDateEditor = editor
+        editor.onClosed = { [weak self, weak editor] in
+            guard let self, self.captureDateEditor === editor else { return }
+            self.captureDateEditor = nil
+            guard !self.isInvalidated else { return }
+            if self.selectedTag == tag {
+                self.loadTags()
+                self.loadValues(for: tag)
+                self.loadDescriptor(for: tag)
+            }
+            self.updateControlStates()
         }
         editor.present(on: panel)
         updateControlStates()
