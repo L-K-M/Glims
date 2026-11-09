@@ -466,7 +466,7 @@ main (int argc, char **argv)
         int p;
         for (p = 0; p < TW; p++) {
           const uint8_t *s = wpix + (i*TW+p)*4; uint8_t *d = wout + i*32 + p*4;
-          ok = abs(d[0]-expect_premul(s[0],s[3]))<=1 && abs(d[1]-expect_premul(s[1],s[3]))<=1 &&
+          ok = ok && abs(d[0]-expect_premul(s[0],s[3]))<=1 && abs(d[1]-expect_premul(s[1],s[3]))<=1 &&
                abs(d[2]-expect_premul(s[2],s[3]))<=1 && d[3]==s[3];
         }
         for (int pad = TW*4; pad < 32; pad++) ok = ok && wout[i*32+pad] == 0xA5;
@@ -498,7 +498,7 @@ main (int argc, char **argv)
           double a=s[3]/255.0, rgb[3]={s[0]/255.0,s[1]/255.0,s[2]/255.0}, o[3]; int er[3]; int c;
           for(c=0;c<3;c++) o[c]=Mws[c][0]*rgb[0]+Mws[c][1]*rgb[1]+Mws[c][2]*rgb[2];
           for(c=0;c<3;c++){ double v=o[c]; if(v<0) v=0; if(v>1) v=1; er[c]=(int)lround(v*255.0*a); }
-          ok = abs(d[0]-er[0])<=2 && abs(d[1]-er[1])<=2 && abs(d[2]-er[2])<=2 && d[3]==s[3];
+          ok = ok && abs(d[0]-er[0])<=2 && abs(d[1]-er[1])<=2 && abs(d[2]-er[2])<=2 && d[3]==s[3];
         }
         for (int pad = TW*4; pad < 32; pad++) ok = ok && wout[i*32+pad] == 0xA5;
       }
