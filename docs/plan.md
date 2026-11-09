@@ -3251,8 +3251,9 @@ allow it. Pending tool interactions, guide drags, strokes and closing windows
 refuse navigation; engine-exclusive work does not block these view changes.
 No native pixels, metadata or Undo operation changes.
 
-Source review found no important issues and855 unit tests pass. A synthetic
-AppKit-event check exercises real windows, pointer anchoring, two-document
-capture, busy/stroke/close guards and native-state invariance; its runtime
-acceptance is pending shared-desktop access. Physical hardware gestures and
+Source review found no important issues and855 unit tests pass. The synthetic
+AppKit-event case passes22 checks on each of all four engines: real windows,
+pointer anchoring, two-document capture, busy/stroke/close guards and native
+state invariance. The first run exposed AppKit angle quantization; relative
+rotation now reads the controller's canonical Double angle. Physical hardware gestures and
 wheel/modifier behavior are not certified by these tests.
