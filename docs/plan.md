@@ -3394,3 +3394,13 @@ checks. The integrated unit suite passes 909 tests; native and UI integration
 reviews have no important remaining findings after the reproduced admission
 fix. Final combined bundle verification is still running. Other four custom
 config operations remain unavailable pending their dedicated editors.
+
+
+### Native Image Adjust entries (2026-11-09)
+
+The loaded Threshold and perceptual/linear Invert commands are available
+under Image > Adjust as well as Filter > Color. Native and plug-in refreshes
+preserve shared categories and unrelated content. Existing preview/Undo/XCF
+behavior is reused. See `image-adjust.md`:915 units and27 real-window
+checks pass on each supported engine, including independent pixel formulas.
+Other custom adjustment editors remain separate implementation work.
