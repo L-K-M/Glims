@@ -42,7 +42,7 @@ final class BrushChooserModel {
     /// The paint tool whose brush this chooser edits, captured at open.
     let capturedTool: ToolID
     /// The identity chosen when the chooser opened (nil = native default).
-    let currentIdentity: EngineSession.ResourceIdentity?
+    private(set) var currentIdentity: EngineSession.ResourceIdentity?
 
     /// The lazy thumbnail pipeline; driven by the panel with bounded native
     /// batches. Invalidated together with `generation`.
@@ -68,6 +68,16 @@ final class BrushChooserModel {
     init(capturedTool: ToolID, currentIdentity: EngineSession.ResourceIdentity?) {
         self.capturedTool = capturedTool
         self.currentIdentity = currentIdentity
+    }
+
+    /// Remaps the stored current identity only when it exactly equals `old`.
+    /// Used by resource rename/mutation callbacks; no other model state,
+    /// selection or generation semantics change.
+    func remapIdentity(from old: EngineSession.ResourceIdentity,
+                       to new: EngineSession.ResourceIdentity) {
+        if currentIdentity == old {
+            currentIdentity = new
+        }
     }
 
     /// Drops every in-flight result: the next delivery checks its captured

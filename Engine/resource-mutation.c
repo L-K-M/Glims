@@ -34,6 +34,33 @@ glims_resource_mutation_guard (const GlimsResourceMutationFacts *facts)
   return result;
 }
 
+GlimsStatus
+glims_resource_mutation_info (GlimsEngine *engine, GlimsResourceID id,
+                                uint32_t *flags, char **guard, char **reason, char **error)
+{
+  GlimsResourceMutationFacts *facts = NULL;
+  if (flags) *flags = 0;
+  if (guard) *guard = NULL;
+  if (reason) *reason = NULL;
+  if (!flags || !guard || !reason) {
+    if (error) *error = strdup ("Resource capabilities, guard and reason outputs are required.");
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  }
+  GlimsStatus status = glims_resource_mutation_inspect (engine, id, &facts, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  gchar *token = facts->capabilities ? glims_resource_mutation_guard (facts) : NULL;
+  if (facts->capabilities && token) {
+    *flags = ((facts->capabilities & GLIMS_RESOURCE_MUTATION_RENAME) ? GLIMS_RESOURCE_CAN_RENAME : 0) |
+             ((facts->capabilities & GLIMS_RESOURCE_MUTATION_DELETE) ? GLIMS_RESOURCE_CAN_DELETE : 0);
+    *guard = strdup (token);
+  } else {
+    *reason = strdup (facts->reason ? facts->reason : "The resource file has no verifiable version. Refresh the catalog.");
+  }
+  g_free (token);
+  glims_resource_mutation_facts_free (facts);
+  return GLIMS_STATUS_OK;
+}
+
 static gboolean
 valid_guard (const char *guard)
 {

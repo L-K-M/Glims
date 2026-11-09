@@ -38,6 +38,12 @@ struct ResourceChoiceCache<Key: Hashable> {
         previews[key] = nil
         missing[key] = nil
     }
+
+    /// A catalog mutation invalidates presentation only, never the saved choice.
+    mutating func invalidate(identity: EngineSession.ResourceIdentity) {
+        for key in Array(previews.keys) where previews[key]?.identity == identity { previews[key] = nil }
+        for key in Array(missing.keys) where missing[key] == identity { missing[key] = nil }
+    }
 }
 
 /// The brush chooser's per-tool presentation cache.

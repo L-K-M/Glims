@@ -15,7 +15,14 @@ final class BrushChooser {
     private var choiceCache = BrushChoiceCache()
     private(set) var presentationRevision = 0
 
-    private init() {}
+    private init() {
+        ResourceCatalogChanges.observe(owner: self) { [weak self] change in
+            guard let self, change.kind == .brush else { return }
+            self.choiceCache.invalidate(identity: change.oldIdentity)
+            self.presentationRevision += 1
+            ToolState.shared.notifyChange()
+        }
+    }
 
     /// Opens the chooser for `tool`, capturing the tool NOW: applying later
     /// writes only this tool's `ToolState` brush resource, never whichever
@@ -104,6 +111,22 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
     /// The shared Duplicate… form while open; the panel owns its lifecycle
     /// and invalidates it on dismissal.
     private var duplicateForm: ResourceDuplicateFormController?
+    /// Shared rename/delete controls beside the Duplicate… affordance.
+    private lazy var controls: ResourceManagementControls = {
+        ResourceManagementControls(
+            document: { [weak self] in self?.sourceDocument },
+            source: { [weak self] in self?.duplicateSource() },
+            hostWindow: { [weak self] in self?.window },
+            onCatalogChanged: { [weak self] change in
+                guard let self else { return }
+                guard change.kind == .brush else { return }
+                if let newIdentity = change.newIdentity {
+                    self.model.remapIdentity(from: change.oldIdentity, to: newIdentity)
+                }
+                self.reloadAfterDuplicate()
+            }
+        )
+    }()
     /// A highlight to restore after a duplicate-triggered catalog reload.
     private var shouldRestoreSelection = false
 
@@ -161,7 +184,7 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
         duplicateButton.target = self
         duplicateButton.action = #selector(duplicate(_:))
         duplicateButton.setAccessibilityLabel("Duplicate brush")
-        let buttons = NSStackView(views: [retryButton, duplicateButton, cancel, choose])
+        let buttons = NSStackView(views: [retryButton, duplicateButton, controls, cancel, choose])
         buttons.spacing = 8
         buttons.orientation = .horizontal
 
@@ -502,6 +525,7 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
         duplicateButton.isEnabled = !isClosed && source != nil
         duplicateButton.toolTip = ResourceDuplicateValidation.sourceRefusal(source, kind: .brush)
             ?? "Duplicate the selected brush under a new name"
+        controls.update()
     }
 
     /// Opens the shared Duplicate… form, capturing the document and the
@@ -584,6 +608,7 @@ final class BrushChooserPanel: NSWindowController, NSWindowDelegate,
         model.invalidate()
         duplicateForm?.invalidate()
         duplicateForm = nil
+        controls.invalidate()
         window?.orderOut(nil)
         BrushChooser.shared.didClose(self)
     }

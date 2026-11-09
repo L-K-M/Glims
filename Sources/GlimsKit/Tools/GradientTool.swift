@@ -68,6 +68,76 @@ final class GradientToolStore {
     func reset() {
         defaults.removeObject(forKey: Self.preferencesKey)
     }
+
+    enum MigrationError: Error, LocalizedError, Equatable {
+        case malformed(String)
+        case invalidIdentity(String)
+        var errorDescription: String? {
+            switch self {
+            case .malformed(let detail):
+                return "The stored gradient tool preferences could not be read: \(detail). The stored data was left untouched."
+            case .invalidIdentity(let reason):
+                return "The gradient resource identity is invalid: \(reason)."
+            }
+        }
+    }
+
+    func migrateIdentity(from: EngineSession.ResourceIdentity,
+                        to: EngineSession.ResourceIdentity) throws -> Int {
+        try validateIdentity(from)
+        try validateIdentity(to)
+        let key = Self.preferencesKey
+        guard let stored = defaults.object(forKey: key) else { return 0 }
+        guard let data = stored as? Data else {
+            throw MigrationError.malformed("the stored value is not gradient tool data")
+        }
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any] else {
+            throw MigrationError.malformed("not a readable gradient tool document")
+        }
+        let decoded: GradientToolPreferences
+        do { decoded = try JSONDecoder().decode(GradientToolPreferences.self, from: data) }
+        catch { throw MigrationError.malformed("not a readable gradient tool document: \(error)") }
+        if let identity = decoded.identity { try validateIdentity(identity) }
+        guard decoded.opacity.isFinite && (0...1).contains(decoded.opacity) else {
+            throw MigrationError.malformed("the saved opacity is outside 0...1")
+        }
+        guard dictionary["schemaVersion"] == nil else { throw MigrationError.malformed("an unsupported schema version is present") }
+        guard from != to else { return 0 }
+        guard let identity = decoded.identity, identity == from else { return 0 }
+        var patched = dictionary
+        if var identityDictionary = patched["identity"] as? [String: Any] {
+            identityDictionary["name"] = to.name
+            if let collection = to.collection { identityDictionary["collection"] = collection }
+            else { identityDictionary["collection"] = NSNull() }
+            identityDictionary["isInternal"] = to.isInternal
+            patched["identity"] = identityDictionary
+        } else {
+            var identityDictionary: [String: Any] = ["name": to.name, "isInternal": to.isInternal]
+            if let collection = to.collection { identityDictionary["collection"] = collection }
+            else { identityDictionary["collection"] = NSNull() }
+            patched["identity"] = identityDictionary
+        }
+        let output: Data
+        do { output = try JSONSerialization.data(withJSONObject: patched, options: [.sortedKeys]) }
+        catch { throw MigrationError.malformed("the migrated gradient tool preferences could not be encoded: \(error)") }
+        do { _ = try JSONDecoder().decode(GradientToolPreferences.self, from: output) }
+        catch { throw MigrationError.malformed("the migrated gradient tool preferences could not be validated: \(error)") }
+        defaults.set(output, forKey: key)
+        return 1
+    }
+
+    private func validateIdentity(_ identity: EngineSession.ResourceIdentity) throws {
+        guard !identity.name.isEmpty else {
+            throw MigrationError.invalidIdentity("the resource name is empty")
+        }
+        guard !identity.name.utf8.contains(0) else {
+            throw MigrationError.invalidIdentity("the resource name contains a NUL byte")
+        }
+        if let collection = identity.collection, collection.utf8.contains(0) {
+            throw MigrationError.invalidIdentity("the resource collection contains a NUL byte")
+        }
+    }
 }
 
 extension EngineSession.ResourceIdentity {

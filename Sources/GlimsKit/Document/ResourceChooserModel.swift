@@ -37,7 +37,7 @@ final class ResourceChooserModel {
     let kind: EngineSession.ResourceKind
     /// The identity persisted when the chooser opened (nil = none chosen
     /// yet, or the chooser's own default).
-    let currentIdentity: EngineSession.ResourceIdentity?
+    private(set) var currentIdentity: EngineSession.ResourceIdentity?
 
     /// The lazy thumbnail pipeline; driven by the picker with bounded
     /// native batches. Invalidated together with `generation`.
@@ -66,6 +66,16 @@ final class ResourceChooserModel {
     init(kind: EngineSession.ResourceKind = .pattern, currentIdentity: EngineSession.ResourceIdentity?) {
         self.kind = kind
         self.currentIdentity = currentIdentity
+    }
+
+    /// Remaps the stored current identity only when it exactly equals `old`.
+    /// Used by resource rename/mutation callbacks; no other model state,
+    /// selection or generation semantics change.
+    func remapIdentity(from old: EngineSession.ResourceIdentity,
+                       to new: EngineSession.ResourceIdentity) {
+        if currentIdentity == old {
+            currentIdentity = new
+        }
     }
 
     /// Drops every in-flight result: the next delivery checks its captured

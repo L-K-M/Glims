@@ -1238,6 +1238,95 @@ final class ImageDocument {
         }
     }
 
+    /// Reads the exact captured resource off-main. Both the worker and its
+    /// deferred delivery remain counted, so host close cannot overtake them.
+    func loadResourceMutationInfo(source: ResourceDuplicateValidation.Source,
+                                  completion: @escaping @MainActor (Result<EngineSession.ResourceMutationInfo, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        pendingWork += 1
+        enqueue(on: longQueue) { [session] in
+            let result = Result { () throws -> EngineSession.ResourceMutationInfo in
+                let id = try session.resolveResource(source.identity, kind: source.kind)
+                guard id == source.id else { throw EngineSession.EngineError(
+                    status: Int32(GLIMS_STATUS_NOT_FOUND.rawValue), message: "This resource changed. Refresh the chooser.") }
+                return try session.resourceMutationInfo(id)
+            }
+            DispatchQueue.main.async {
+                EngineActivity.shared.whenIdle {
+                    defer { self.jobDidFinish(input: false) }
+                    completion(self.isClosing ? .failure(DocumentError.closed) : result)
+                }
+            }
+        }
+    }
+
+    func resourceMutationRefusal() -> String? {
+        if isClosing { return DocumentError.closed.localizedDescription }
+        if isSavingForClose || isTransferringClipboard { return DocumentError.busy.localizedDescription }
+        if PlugInCommands.isRunning { return "Finish or cancel the running plug-in first." }
+        if let label = EngineActivity.shared.label { return "Wait for \(label) to finish." }
+        if filterPreviewIsOpen { return "Apply or cancel the filter preview first." }
+        return nil
+    }
+
+    /// A resource write is globally exclusive and outside image Undo. onCommitted
+    /// survives form invalidation: global identity references still need migration
+    /// after an accepted rename, even if its original host has already closed.
+    func mutateResource(source: ResourceDuplicateValidation.Source, guardToken: String,
+                        action: ResourceMutationAction,
+                        onCommitted: @escaping @MainActor (ResourceMutationOutcome) -> String? = { _ in nil },
+                        completion: @escaping @MainActor (Result<ResourceMutationOutcome, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if let reason = resourceMutationRefusal() {
+            return completion(.failure(EngineSession.EngineError(status: Int32(GLIMS_STATUS_BUSY.rawValue), message: reason)))
+        }
+        do {
+            try EngineSession.validateResourceGuard(guardToken)
+            if case .rename(let name) = action { try EngineSession.validateResourceName(name) }
+        } catch { return completion(.failure(error)) }
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        pendingWork += 1
+        enqueueExclusive(label: "\(action.progress) \(source.kind.singular) “\(source.identity.name)”", rejected: {
+            self.jobDidFinish(input: false)
+            completion(.failure(DocumentError.busy))
+        }) { [session] in
+            let result: Result<ResourceMutationOutcome, Error> = Result {
+                let id = try session.resolveResource(source.identity, kind: source.kind)
+                guard id == source.id else { throw EngineSession.EngineError(
+                    status: Int32(GLIMS_STATUS_NOT_FOUND.rawValue), message: "This resource changed. Refresh the chooser.") }
+                switch action {
+                case .rename(let name):
+                    try session.renameResource(id, guardToken: guardToken, name: name)
+                    let identity = try? session.resourceIdentifiers(id)
+                    return ResourceMutationOutcome(renamedIdentity: identity,
+                        warning: identity == nil ? "The resource was renamed, but its new identity could not be read. Refresh the chooser." : nil)
+                case .delete:
+                    try session.deleteResource(id, guardToken: guardToken)
+                    return ResourceMutationOutcome(renamedIdentity: nil, warning: nil)
+                }
+            }
+            DispatchQueue.main.async {
+                EngineActivity.shared.whenIdle {
+                    defer { self.jobDidFinish(input: false) }
+                    var delivered = result
+                    if case .success(let outcome) = result {
+                        let migrationWarning = onCommitted(outcome)
+                        let warnings = [outcome.warning, migrationWarning].compactMap { $0 }
+                        delivered = .success(ResourceMutationOutcome(renamedIdentity: outcome.renamedIdentity,
+                            warning: warnings.isEmpty ? nil : warnings.joined(separator: "\n")))
+                    }
+                    let newIdentity: EngineSession.ResourceIdentity?
+                    if case .success(let outcome) = result { newIdentity = outcome.renamedIdentity } else { newIdentity = nil }
+                    ResourceCatalogChanges.publish(.init(kind: source.kind, oldIdentity: source.identity, newIdentity: newIdentity))
+                    if case .failure(let error) = result, !self.isClosing { self.onError?(String(describing: error)) }
+                    completion(delivered)
+                }
+            }
+        }
+    }
+
     // MARK: Create gradient
 
     /// The cached-state reason Edit ▸ Create Resource ▸ Gradient… cannot

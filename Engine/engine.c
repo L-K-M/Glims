@@ -13,6 +13,8 @@
  * network, and no change to the process locale.
  */
 #include "engine-private.h"
+#include "resource-mutation.h"
+#include "resource-rename.h"
 
 #include <dlfcn.h>
 #include <stdlib.h>
@@ -2632,6 +2634,47 @@ api_image_duplicate_layers (GlimsEngine *e, GlimsImageID image, const GlimsItemI
   return glims_engine_call (e, image_duplicate_layers_on_engine, &a);
 }
 
+typedef struct {
+  GlimsResourceID id;
+  uint32_t *flags;
+  char **guard, **reason, **error;
+  const char *expected_guard, *name;
+} GlimsResourceMutationArgs;
+static GlimsStatus resource_mutation_info_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsResourceMutationArgs *a = data;
+  return glims_resource_mutation_info (e, a->id, a->flags, a->guard, a->reason, a->error);
+}
+static GlimsStatus resource_rename_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsResourceMutationArgs *a = data;
+  return glims_resource_rename_checked (e, a->id, a->expected_guard, a->name, a->error);
+}
+static GlimsStatus resource_delete_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsResourceMutationArgs *a = data;
+  return glims_resource_delete_checked (e, a->id, a->expected_guard, a->error);
+}
+static GlimsStatus api_resource_mutation_info (GlimsEngine *e, GlimsResourceID id, uint32_t *flags,
+                                               char **guard, char **reason, char **error)
+{
+  if (flags) *flags = 0;
+  if (guard) *guard = NULL;
+  if (reason) *reason = NULL;
+  GlimsResourceMutationArgs a = { .id = id, .flags = flags, .guard = guard, .reason = reason, .error = error };
+  return glims_engine_call (e, resource_mutation_info_on_engine, &a);
+}
+static GlimsStatus api_resource_rename (GlimsEngine *e, GlimsResourceID id, const char *guard, const char *name, char **error)
+{
+  GlimsResourceMutationArgs a = { .id = id, .expected_guard = guard, .name = name, .error = error };
+  return glims_engine_call (e, resource_rename_on_engine, &a);
+}
+static GlimsStatus api_resource_delete (GlimsEngine *e, GlimsResourceID id, const char *guard, char **error)
+{
+  GlimsResourceMutationArgs a = { .id = id, .expected_guard = guard, .error = error };
+  return glims_engine_call (e, resource_delete_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -2780,6 +2823,9 @@ static const GlimsEngineAPI api_v1 = {
   .metadata_languages_free = api_metadata_languages_free,
   .image_metadata_edit_language = api_image_metadata_edit_language,
   .image_duplicate_layers = api_image_duplicate_layers,
+  .resource_mutation_info = api_resource_mutation_info,
+  .resource_rename = api_resource_rename,
+  .resource_delete = api_resource_delete,
 };
 
 __attribute__ ((visibility ("default")))

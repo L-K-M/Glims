@@ -322,6 +322,23 @@ final class ToolState {
         updateGradientPrefs { $0.identity = identity }
     }
 
+    /// Compare-and-swap stored references, then reconcile only cached brushes
+    /// still carrying the old choice. A newer persisted choice wins.
+    func migrateResourceIdentity(kind: EngineSession.ResourceKind,
+                                 from old: EngineSession.ResourceIdentity,
+                                 to new: EngineSession.ResourceIdentity) throws {
+        switch kind {
+        case .brush:
+            _ = try brushStore.migrateIdentity(from: old, to: new)
+            for tool in Array(brushes.keys) where brushes[tool]?.resource == old {
+                brushes[tool]?.resource = brushStore.identity(for: tool)
+            }
+        case .gradient: _ = try gradientStore.migrateIdentity(from: old, to: new)
+        case .pattern: break
+        }
+        notify()
+    }
+
     /// Captures one canvas gradient gesture as pure values: the identity
     /// (the choice, or the built-in Foreground-to-Background identity for
     /// the Default), shape, reverse, blend space, opacity, the global

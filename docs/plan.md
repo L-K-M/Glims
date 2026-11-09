@@ -3332,5 +3332,25 @@ is alive. The existing post-exit cleanup drain remains; unrelated queued work
 is not dispatched early.
 
 The regression passes five checks on each of all four engines, including exact
-pending preference persistence. General conformance and bundle verification are
-pending on this candidate. No upstream source patch or facade slot change.
+pending preference persistence. General conformance and the release bundle check
+pass. No upstream source patch or facade slot change.
+
+### Saved resource Rename and Delete (2026-11-09)
+
+Brush, gradient and pattern choosers now manage eligible configured user files
+through captured, counted Rename/Delete forms. Writable/deletable native data
+must have a known format and a regular nonsymlink file directly in a configured
+search-and-write directory. Every write reinspects an observed-state guard;
+Duplicate remains available for resources that cannot be changed in place.
+Rename preserves native identity/payload and file metadata; Delete commits disk
+removal before native catalog removal and explains that image Undo cannot restore
+it. Reference migration preserves unrelated settings/newer choices, leaves
+malformed data untouched with a warning, and compares identities by native UTF-8
+bytes. API version 1 appends slots 143–145.
+
+All 871 unit tests pass. Public facade tests pass 26 checks per supported engine;
+real chooser tests pass 38, plus 39 with an injected capability-read failure and
+explicit Retry. Native fault/format tests cover failed saves/commits/deletes and
+fresh loaders for GBR, GIH, VBR, PAT and GGR. See
+[`resource-mutation.md`](resource-mutation.md) for admission, transaction limits
+and exact coverage.

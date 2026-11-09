@@ -32,6 +32,18 @@ final class BrushChooserTests: XCTestCase {
                        intent: .defaultIntent)!
     }
 
+    func testCatalogMutationInvalidatesOnlyMatchingPresentation() {
+        let removed = Self.identity("Removed"), other = Self.identity("Other")
+        var cache = BrushChoiceCache()
+        cache.setPreview(Self.tinyImage(), identity: removed, for: .paintbrush)
+        cache.setMissing(removed, for: .paintbrush)
+        cache.setPreview(Self.tinyImage(), identity: other, for: .eraser)
+        cache.invalidate(identity: removed)
+        XCTAssertNil(cache.preview(for: .paintbrush, choice: removed))
+        XCTAssertNil(cache.missingIdentity(for: .paintbrush, choice: removed))
+        XCTAssertNotNil(cache.preview(for: .eraser, choice: other))
+    }
+
     // MARK: Persistence
 
     func testIdentitiesPersistPerToolAcrossInstances() {

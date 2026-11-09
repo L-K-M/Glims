@@ -56,4 +56,71 @@ final class BrushSelectionStore {
         guard let data = try? encoder.encode(selections) else { return }
         defaults.set(data, forKey: Self.selectionsKey)
     }
+
+    enum MigrationError: Error, LocalizedError, Equatable {
+        case malformed(String)
+        case invalidIdentity(String)
+        var errorDescription: String? {
+            switch self {
+            case .malformed(let detail):
+                return "The stored brush selections could not be read: \(detail). The stored data was left untouched."
+            case .invalidIdentity(let reason):
+                return "The brush resource identity is invalid: \(reason)."
+            }
+        }
+    }
+
+    func migrateIdentity(from: EngineSession.ResourceIdentity,
+                        to: EngineSession.ResourceIdentity) throws -> Int {
+        try validateIdentity(from)
+        try validateIdentity(to)
+        let key = Self.selectionsKey
+        guard let stored = defaults.object(forKey: key) else { return 0 }
+        guard let data = stored as? Data else {
+            throw MigrationError.malformed("the stored value is not brush selection data")
+        }
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any] else {
+            throw MigrationError.malformed("not a readable brush selection document")
+        }
+        let decoded: [String: EngineSession.ResourceIdentity]
+        do { decoded = try JSONDecoder().decode([String: EngineSession.ResourceIdentity].self, from: data) }
+        catch { throw MigrationError.malformed("not a readable brush selection document: \(error)") }
+        for identity in decoded.values { try validateIdentity(identity) }
+        guard from != to else { return 0 }
+        var patched = dictionary
+        var changed = 0
+        for (toolKey, rawValue) in dictionary {
+            guard let identityDictionary = rawValue as? [String: Any],
+                  let decodedIdentity = decoded[toolKey],
+                  decodedIdentity == from else { continue }
+            var next = identityDictionary
+            next["name"] = to.name
+            if let collection = to.collection { next["collection"] = collection }
+            else { next["collection"] = NSNull() }
+            next["isInternal"] = to.isInternal
+            patched[toolKey] = next
+            changed += 1
+        }
+        guard changed > 0 else { return 0 }
+        let output: Data
+        do { output = try JSONSerialization.data(withJSONObject: patched, options: [.sortedKeys]) }
+        catch { throw MigrationError.malformed("the migrated brush selections could not be encoded: \(error)") }
+        do { _ = try JSONDecoder().decode([String: EngineSession.ResourceIdentity].self, from: output) }
+        catch { throw MigrationError.malformed("the migrated brush selections could not be validated: \(error)") }
+        defaults.set(output, forKey: key)
+        return changed
+    }
+
+    private func validateIdentity(_ identity: EngineSession.ResourceIdentity) throws {
+        guard !identity.name.isEmpty else {
+            throw MigrationError.invalidIdentity("the resource name is empty")
+        }
+        guard !identity.name.utf8.contains(0) else {
+            throw MigrationError.invalidIdentity("the resource name contains a NUL byte")
+        }
+        if let collection = identity.collection, collection.utf8.contains(0) {
+            throw MigrationError.invalidIdentity("the resource collection contains a NUL byte")
+        }
+    }
 }

@@ -326,6 +326,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (resource duplicate controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "resource-management" {
+                try exerciseResourceManagement(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (resource management)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "option-scroll" {
                 try exerciseOptionScroll(session, documents: documents)
                 print(failures == 0 ? "PASSED (Option scroll)" : "FAILED: \(failures) failures")
@@ -422,6 +427,7 @@ enum EngineSmokeTest {
             try exerciseMetadataDescriptors(session, work: work, documents: documents)
             try exerciseResourceSelection(session, work: work, documents: documents)
             try exerciseResourceDuplicateControls(session, work: work, documents: documents)
+            try exerciseResourceManagement(session, work: work, documents: documents)
             try exerciseViewOverlays(session, work: work, documents: documents)
             try exerciseDisplayDestination(session, work: work, documents: documents)
             try exerciseCanvasRotation(session, documents: documents)
