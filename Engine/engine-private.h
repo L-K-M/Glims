@@ -520,4 +520,6 @@ GlimsStatus glims_adjustment_layer_new (GlimsEngine *engine, GlimsImageID image,
     GlimsItemID parent, int32_t index, const char *operation, const char *name,
     GlimsItemID *layer, GlimsEffectID *effect, char **error);
 
+void glims_adjustment_projection_changed (GimpImage *image);
+
 #endif /* GLIMS_ENGINE_PRIVATE_H */

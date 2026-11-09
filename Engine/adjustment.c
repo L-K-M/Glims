@@ -6,6 +6,7 @@
 
 #include "core/gimpcontainer.h"
 #include "core/gimpdrawable.h"
+#include "core/gimpdrawable-filters.h"
 #include "core/gimpdrawablefilter.h"
 #include "core/gimpgrouplayer.h"
 #include "core/gimpimage.h"
@@ -135,4 +136,30 @@ cleanup:
   g_clear_object (&group);
   g_clear_object (&node);
   return status;
+}
+
+/* 3.0's pass-through groups can keep cached backdrop pixels after a
+ * filter parameter changes, including modified-filter Undo. The node
+ * values themselves are current. Invalidate the image projection after
+ * these mutations; lazy rendering still reads only requested tiles.
+ * This does not touch image pixels, dirty state or history. */
+void
+glims_adjustment_projection_changed (GimpImage *image)
+{
+#if !GIMP_CHECK_VERSION (3, 2, 0)
+  GList *layers = gimp_image_get_layer_list (image);
+  gboolean found = FALSE;
+  for (GList *iter = layers; iter; iter = iter->next)
+    {
+      GimpLayer *layer = iter->data;
+      if (GIMP_IS_GROUP_LAYER (layer) &&
+          gimp_layer_get_mode (layer) == GIMP_LAYER_MODE_PASS_THROUGH &&
+          gimp_container_get_n_children (gimp_drawable_get_filters (GIMP_DRAWABLE (layer))) > 0)
+        { found = TRUE; break; }
+    }
+  g_list_free (layers);
+  if (found) gimp_image_invalidate_all (image);
+#else
+  (void) image;
+#endif
 }

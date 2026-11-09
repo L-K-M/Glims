@@ -79,3 +79,14 @@ and order arrays, undo counts), not mirrors of the adapter implementation.
   `brightness` property; `gegl:displace` aux detection via
   `filter_operations`; composite renders are premultiplied RGBA u8 with
   opaque alpha for these fills (channel checks allow ±1).
+
+## Root acceptance
+
+Root corrected ABI footer access, bounded successful snapshots, clean-state
+setup, creation Undo/Redo ordering around independent visibility tests, and
+editing the actual adjustment effect. The older bridge failed its NULL-engine
+output reset once. The original 3.0.8 run then failed two pixel checks while
+its stored parameters were correct; adapter-only projection invalidation
+fixes those cases. Final general suites and all 91 standalone checks pass on
+every supported engine with no skips. Independent source/code-safety reviews
+completed; precise upstream cache-cause research timed out without a verdict.

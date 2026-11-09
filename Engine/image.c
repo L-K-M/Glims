@@ -163,6 +163,8 @@ undo_event (GimpImage      *image,
             GlimsOpenImage *open)
 {
   glims_track_image_links (image);
+  if (event == GIMP_UNDO_EVENT_UNDO || event == GIMP_UNDO_EVENT_REDO)
+    glims_adjustment_projection_changed (image);
   open->history_revision++;
   glims_emit (open->engine, GLIMS_EVENT_UNDO_CHANGED, image, NULL, NULL);
   glims_emit (open->engine, GLIMS_EVENT_LAYERS_CHANGED, image, NULL, NULL);

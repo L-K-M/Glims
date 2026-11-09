@@ -31,4 +31,22 @@ footer checking, bounded successful snapshots, an actually clean baseline,
 independent effect visibility checks after the creation Undo oracle, and
 editing an adjustment's actual effect rather than an unrelated raster.
 A pre-dispatch NULL-engine check reproduced the output-reset error in the
-older producer. The final matrix is still pending; no UI is wired yet.
+older producer. The final four-engine matrix passes all 91 standalone checks
+per engine and the general 1,917 / 1,703 / 1,917 / 1,917 native checks.
+No creation UI is wired yet.
+
+The oldest engine exposed two more failures: modified-filter preview kept
+white pixels despite a brightness value of -3, and Undo retained black
+pixels despite a restored value of 0. Opening a fresh edit also showed the
+correct restored value. A 3.0-only compatibility hook invalidates the image
+projection after filter preview/commit and Undo/Redo when a pass-through
+group holds filters. Lazy reads still render requested tiles; rendering
+itself never calls this hook. It changes no image data or history. The same
+91 checks now pass on 3.0.8, including preview and Undo pixels.
+
+Independent implementation and compatibility code-safety reviews found no
+important issue. A separate attempt to trace the precise native cache
+mechanism timed out without a verdict. The runtime mismatch and corrected
+pixels are established; the exact upstream invalidation path remains an
+investigation gap. Whole-image invalidation has a cost on the affected old
+engine, bounded to mutations in images containing these groups.
