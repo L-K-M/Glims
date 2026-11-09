@@ -2450,6 +2450,38 @@ api_metadata_languages_free (GlimsMetadataLanguageValue *values)
   glims_metadata_languages_free (values);
 }
 
+/* Slot 141 carries three borrowed C strings that must stay alive only
+ * for the synchronous engine call. A dedicated Args struct keeps them
+ * distinct from the generic GlimsArgs string/vector slots, so no pointer
+ * is narrowed or reinterpreted. */
+typedef struct
+{
+  GlimsImageID  image;
+  const char   *root;
+  const char   *language;
+  const char   *text;
+  char        **error;
+} GlimsMetadataLanguageEditArgs;
+
+static GlimsStatus
+image_metadata_edit_language_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsMetadataLanguageEditArgs *a = data;
+
+  return glims_image_metadata_edit_language (e, a->image, a->root, a->language,
+                                             a->text, a->error);
+}
+
+static GlimsStatus
+api_image_metadata_edit_language (GlimsEngine *e, GlimsImageID image, const char *root,
+                                  const char *language, const char *text, char **error)
+{
+  GlimsMetadataLanguageEditArgs a = { .image = image, .root = root,
+                                      .language = language, .text = text,
+                                      .error = error };
+  return glims_engine_call (e, image_metadata_edit_language_on_engine, &a);
+}
+
 static GlimsStatus
 api_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
                             int32_t width, int32_t height,
@@ -2710,6 +2742,7 @@ static const GlimsEngineAPI api_v1 = {
   .resource_create_gradient = api_resource_create_gradient,
   .image_metadata_languages = api_image_metadata_languages,
   .metadata_languages_free = api_metadata_languages_free,
+  .image_metadata_edit_language = api_image_metadata_edit_language,
 };
 
 __attribute__ ((visibility ("default")))

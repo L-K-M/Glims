@@ -1557,6 +1557,23 @@ final class ImageDocument {
         }
     }
 
+    /// The image's registered XMP LangAlt root property `tag` (its owned
+    /// (language, text) pairs), queued and counted exactly like
+    /// `readMetadataValues(_:)`: a plain native read on the input queue,
+    /// never on the main thread, still counted in `pendingWork` so a
+    /// close drains it before the image is destroyed, with the session,
+    /// image and tag captured by value in the queued job. An absent root
+    /// or unregistered tag reports the native NOT_FOUND through the
+    /// completion.
+    func readMetadataLanguages(_ tag: String,
+                               completion: @escaping @MainActor (Result<[EngineSession.MetadataLanguageValue], Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueue(on: inputQueue) { [session, image] in
+            let result = Result { try session.metadataLanguages(image, tag: tag) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     /// The read-only descriptor of one registered metadata `tag` (facade
     /// slot 128: presence, native multiple-value support, the facade value
     /// kind, the type/format policy bits and the bounded native label,
@@ -1610,6 +1627,60 @@ final class ImageDocument {
         pendingWork += 1
         enqueue(on: inputQueue, input: true) { [session, image] in
             let result = Result { try session.editMetadata(image, tag: tag, operation, values: values) }
+            let refresh: Result<(EngineSession.ImageInfo, EngineSession.UndoInfo, EngineSession.History), Error>?
+            if case .success = result {
+                refresh = Result { (try session.info(image), try session.undoInfo(image), try session.history(image)) }
+            } else { refresh = nil }
+            DispatchQueue.main.async {
+                EngineActivity.shared.whenIdle {
+                    defer { self.jobDidFinish(input: false) }
+                    if !self.isClosing {
+                        // Reload only after a successful change; a refusal
+                        // leaves the cached state as it was.
+                        if case .success(let state)? = refresh {
+                            self.info = state.0
+                            self.fileState.syncDirty(state.0.isDirty)
+                            self.undoInfo = state.1
+                            self.history = state.2
+                            self.stateVersion += 1
+                            self.onStateChange?()
+                        } else if case .failure(let error)? = refresh {
+                            self.onError?("Metadata changed, but its document state could not be refreshed: \(error)")
+                        }
+                        if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                    }
+                    completion(result)
+                }
+            }
+        }
+    }
+
+    /// Sets ONE language-alternative `tag`/`language` pair to `text` as
+    /// one undo step, as counted input work on the input queue, mirroring
+    /// `editMetadata(_:_:values:completion:)` exactly: admission reads
+    /// only the cached busy/preview/closing/modal state
+    /// (`refuseWhileEditingUnavailable`), in-flight field/text edits are
+    /// committed and an active stroke ended before queueing, a second
+    /// closed guard runs after that, and an extra `pendingWork` hold keeps
+    /// the deferred cache/completion stage alive through another
+    /// document's exclusive work as well as the native input job. The job
+    /// is queued as accepted input behind already-accepted input; on
+    /// success it reloads info/undo/history/stateVersion/onStateChange,
+    /// while the completion lands on the main actor. Every refusal leaves
+    /// the image, its metadata and its history untouched.
+    func editMetadataLanguage(_ tag: String, language: String, text: String,
+                              completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !refuseWhileEditingUnavailable() else {
+            return completion(.failure(isClosing ? DocumentError.closed : DocumentError.busy))
+        }
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        // Keep the deferred cache/completion stage alive through another
+        // document's exclusive work as well as the native input job.
+        pendingWork += 1
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let result = Result { try session.editMetadataLanguage(image, tag: tag, language: language, text: text) }
             let refresh: Result<(EngineSession.ImageInfo, EngineSession.UndoInfo, EngineSession.History), Error>?
             if case .success = result {
                 refresh = Result { (try session.info(image), try session.undoInfo(image), try session.history(image)) }

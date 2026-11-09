@@ -565,6 +565,13 @@ GlimsStatus glims_image_metadata_languages (GlimsEngine *e, GlimsImageID image, 
                                             GlimsMetadataLanguageValue **out,
                                             int32_t *out_count, char **error);
 void        glims_metadata_languages_free (GlimsMetadataLanguageValue *values);
+/* metadata-language-edit.c: facade slot 141. The WRITE path for one
+ * registered XMP LangAlt root property: looks the image up, delegates
+ * to the sealed Engine/metadata-language-write.c preflight and applies
+ * the owned copy through the one native setter. OK+NULL copy is an
+ * exact no-op before the readiness gate. */
+GlimsStatus glims_image_metadata_edit_language (GlimsEngine *e, GlimsImageID image, const char *root,
+                                                const char *language, const char *text, char **error);
 
 /* layer-source.c */
 GlimsStatus glims_layer_source_info (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,

@@ -67,3 +67,13 @@ Independent source review caught the original enumeration hole. The corrected
 inventory bridge/build changes passed a Vibe Large4 review and a separate source
 addendum for all-domain zero counting; no important issue remained within the
 pinned dependency ABI. Full packaged-app validation and hosted CI are pending.
+
+Single-language public editing (slot141) uses the sealed preparation path,
+then the native image setter as one metadata Undo operation. Exact no-ops
+return before readiness checks. Both this writer and the generic slot126
+refuse actual changes with BUSY if native Undo is frozen or disabled: a
+plug-in can otherwise leave that state behind after it returns. The guard
+does not thaw or enable Undo, which could destroy existing history or break
+a nested native operation. A direct native fixture reproduces the original
+change-without-Undo behavior and checks both freeze and disable refusals,
+no-op success, the original object/serialized values, dirty state and history.

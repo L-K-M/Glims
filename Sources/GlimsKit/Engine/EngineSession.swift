@@ -3364,6 +3364,27 @@ final class EngineSession: @unchecked Sendable {
         }
     }
 
+    /// Changes ONE existing language key of a registered XMP LangAlt
+    /// root property `tag` (image_metadata_edit_language): the key must
+    /// already exist in the map under the exact `language` spelling
+    /// reported by `metadataLanguages`, and `language`/`text` must be
+    /// nonempty. Embedded NULs are rejected before any bridge allocation
+    /// or native call can silently shorten the request.
+    /// A success is exactly one undo step; an exact no-op (the key already
+    /// holds `text`) is a no-op with no undo and no readiness gate. BUSY
+    /// while a stroke, a filter session or a plug-in holds the image for a
+    /// changed edit; every refusal leaves the image, its metadata and its
+    /// history untouched.
+    func editMetadataLanguage(_ image: Int32, tag: String, language: String, text: String) throws {
+        try Self.validateMetadataStrings(tag: tag, values: [language, text])
+        guard !language.isEmpty, !text.isEmpty else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "A language-alternative language and text must be nonempty strings.")
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_metadata_edit_language(engine, image, tag, language, text, &error), error)
+    }
+
     /// The facade's own value kind of a metadata tag
     /// (GlimsMetadataValueKind): how many values the tag holds natively.
     /// The native type names never cross the boundary as enums.
