@@ -191,6 +191,7 @@ enum NativeFilterMenus {
     /// and the support gates stay — a gated operation never appears here.
     private static let adjustOperations: [(name: String, title: String)] = [
         ("gimp:brightness-contrast", "Brightness/Contrast"),
+        ("gimp:color-balance", "Color Balance"),
         ("gimp:threshold", "Threshold"),
         ("gegl:invert-gamma", "Invert Perceptual"),
         ("gegl:invert-linear", "Invert Linear"),

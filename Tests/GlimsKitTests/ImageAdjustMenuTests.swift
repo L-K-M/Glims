@@ -80,6 +80,18 @@ final class ImageAdjustMenuTests: XCTestCase {
         XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(curves))
     }
 
+    func testDedicatedColorBalanceAppearsAlongsideBrightnessContrast() {
+        let menu = MainMenu.make()
+        let brightness = operation("gimp:brightness-contrast", support: .needsConfig)
+        let balance = operation("gimp:color-balance", support: .needsConfig)
+        let levels = operation("gimp:levels", support: .needsConfig)
+        NativeFilterMenus.install(operations + [balance, levels, brightness], in: menu)
+        XCTAssertEqual(nativeNames(adjust(menu)), ["gimp:brightness-contrast", "gimp:color-balance", "gimp:threshold", "gegl:invert-gamma", "gegl:invert-linear"])
+        XCTAssertEqual(adjust(menu).items[1].title, "Color Balance…")
+        XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(balance))
+        XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(levels))
+    }
+
     func testExactNativeTitlesUseExistingCommandAndFilterCopies() {
         let menu = MainMenu.make()
         NativeFilterMenus.install(operations + [operation("gegl:threshold"), operation("gegl:brightness-contrast")], in: menu)

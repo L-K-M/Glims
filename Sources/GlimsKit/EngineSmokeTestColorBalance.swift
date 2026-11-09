@@ -79,6 +79,42 @@ extension EngineSmokeTest {
             try session.abortFilter(pendingSession)
             check(false, "the pending acknowledgement fixture opens")
         }
+        let newerSession = try session.beginFilter(image: image, drawable: layer, operation: operation.name)
+        writes = []; replies = []
+        if let controlled = ColorBalancePanel(document: document, filter: newerSession, settings: .init(), write: { _, value, reply in
+            writes.append(value); replies.append(reply)
+        }) {
+            controlled.cyanRedSlider.doubleValue = 10; controlled.sliderChanged(controlled.cyanRedSlider)
+            controlled.magentaGreenSlider.doubleValue = 20; controlled.sliderChanged(controlled.magentaGreenSlider)
+            controlled.yellowBlueSlider.doubleValue = 30; controlled.sliderChanged(controlled.yellowBlueSlider)
+            replies[2](.success(())); replies[1](.failure(ImageDocument.DocumentError.busy)); replies[0](.success(()))
+            controlled.rangePopup.selectItem(at: 0); controlled.rangeChanged(controlled.rangePopup)
+            controlled.cyanRedSlider.doubleValue = 5; controlled.sliderChanged(controlled.cyanRedSlider)
+            check(writes.count == 4 && writes.last?.midtones == .init(cyanRed: 0.1, magentaGreen: 0.2, yellowBlue: 0.3),
+                  "an older refused reply never overwrites a newer accepted complete configuration")
+            controlled.cancel(); settle()
+        } else {
+            try session.abortFilter(newerSession)
+            check(false, "the newer accepted configuration fixture opens")
+        }
+        let invalidSession = try session.beginFilter(image: image, drawable: layer, operation: operation.name)
+        writes = []; replies = []
+        if let controlled = ColorBalancePanel(document: document, filter: invalidSession, settings: .init(), write: { _, value, reply in
+            writes.append(value); replies.append(reply)
+        }) {
+            controlled.cyanRedSlider.doubleValue = 10; controlled.sliderChanged(controlled.cyanRedSlider)
+            controlled.magentaGreenSlider.doubleValue = 20; controlled.sliderChanged(controlled.magentaGreenSlider)
+            controlled.yellowBlueField.stringValue = "invalid"; controlled.fieldsChanged(controlled.yellowBlueField)
+            replies[1](.failure(ImageDocument.DocumentError.busy)); replies[0](.success(()))
+            let invalidPreserved = controlled.yellowBlueField.stringValue == "invalid"
+            controlled.yellowBlueField.stringValue = "5"; controlled.fieldsChanged(controlled.yellowBlueField)
+            check(invalidPreserved && writes.last?.midtones == .init(cyanRed: 0.1, magentaGreen: 0, yellowBlue: 0.05),
+                  "a delayed refusal rebases hidden settings without discarding newer invalid text")
+            controlled.cancel(); settle()
+        } else {
+            try session.abortFilter(invalidSession)
+            check(false, "the delayed invalid-text fixture opens")
+        }
         func open() -> ColorBalancePanel? {
             controller.openNativeFilter(operation)
             wait { controller.previewPanel != nil && document.pendingWork == 0 }

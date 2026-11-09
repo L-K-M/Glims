@@ -3401,7 +3401,7 @@ config operations remain unavailable pending their dedicated editors.
 Color Balance has a dedicated three-range editor over all nine corrections
 and Preserve Lightness. API v1 appends slots150/151; changed settings replace
 a private immutable native config. Delayed failures cannot silently seed
-later edits with a refused correction. The real editor passes17 checks on
+later edits with a refused correction. The real editor passes19 checks on
 each engine, including two reproduced/fixed acknowledgement regressions.
 See `color-balance.md` for validation and the separately recorded native
 XCF blend/composite AUTO-normalization limitation. Other custom config

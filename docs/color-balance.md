@@ -29,7 +29,7 @@ resubmitted after an older acknowledgement. A second ordering reproduced
 the same problem before that acknowledgement arrived. The editor now
 removes a refused write immediately as the base for future edits, retaining
 older pending intent and respecting newer already-admitted writes. Both
-regressions and the real controls pass17 checks on every supported engine.
+regressions and the real controls pass19 checks on every supported engine.
 
 ## Known native XCF limitation
 
@@ -44,4 +44,6 @@ values, preserve flag, inherited base fields, opacity, order, enabled state
 and pixels to survive. Full native blend/composite file preservation is
 separate remaining work, not implied by these passing config checks.
 
-Final integrated units, bundle checks, CI and merge remain release gates.
+After Image Adjust integration, all923 unit tests pass. On every engine the
+shared Brightness/Contrast15, Bump Map20 and Image Adjust27 real-window
+checks also pass. Final bundle checks, CI and merge remain release gates.
