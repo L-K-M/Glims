@@ -50,8 +50,7 @@ proofing, gamut warnings, transform/profile cache or destination UI.
   `render(_:scale:area:destinationICC:)`; its `CGImage` is exactly tagged
   with the destination space.
 - If that call fails with an **unusable profile/transform** — UNSUPPORTED
-  (non-RGB/malformed ICC, engine without slot 132) or FAILED (the LCMS
-  profile error) — the tile falls back **once per render request** to the
+  (non-RGB/malformed ICC, engine without slot 132) or FAILED (a profile/transform or allocation failure) — the tile falls back **once per render request** to the
   existing sRGB render. Every other error (NOT_FOUND stale image/close,
   BUSY, LOCKED/REQUIRES_RASTERIZE admission, INVALID_ARGUMENT, ...) is not a
   destination failure: it propagates through the existing
@@ -83,7 +82,7 @@ proofing, gamut warnings, transform/profile cache or destination UI.
 - Rendering is read-only: no image pixel, profile, history, dirty, export
   or print change. No native/disk calls from `draw`/menus.
 
-## Test seams (narrow, read-only)
+## Test seams
 
 - `EngineCanvasView.destination` is `private(set)` — internal read lets the
   smoke assert which destination the view actually snapshotted.
@@ -155,3 +154,25 @@ here). The Root executes them. Physical monitor calibration, LUT/device
 accuracy, HDR/EDR and per-call transform performance are explicitly **not**
 established by this slice. The nil-window-colorSpace fallback path remains
 an unrun runtime uncertainty that the Root decides on.
+
+## Root runtime acceptance
+
+All 767 unit tests pass. Every supported engine passes 27 focused window
+checks; the pinned full app suite passes 1,918 checks. The initial test
+incorrectly assumed assigning a nil window color space made its getter nil.
+AppKit can resolve that to an actual default space: the test now follows the
+getter and separately exercises a real generic-gray window's non-RGB
+fallback. Partial-construction cleanup is owned immediately and both render
+gates are released before teardown. Native state snapshots precede attachment
+and follow final render quiescence.
+
+One independent free Glyph source review of both complete production files
+found no important issue; Root checked the current SDK notification contract.
+Apple's [TN2313](https://developer.apple.com/library/archive/technotes/tn2313/_index.html)
+describes tagged pixel buffers and actual window backing stores. Current
+NSWindow SDK headers recommend backing-properties notifications for both
+profile and resolution changes; the implementation observes those.
+
+These checks verify wiring, identity, invalidation, selection-free rendering
+and lifecycle. Wide-gamut/LUT pixel oracles, physical device accuracy,
+performance, proofing, gamut warnings and HDR remain separate work.

@@ -57,10 +57,14 @@ extension EngineSmokeTest {
             gate1.signal()
             gate2.signal()
             for canvas in ownedCanvases {
-                let document = canvas.document
                 var drained = false
-                canvas.stopRendering { document.closeImageWhenDrained { drained = true } }
+                canvas.stopRendering { drained = true }
                 wait { drained }
+            }
+            for document in ownedDocs where !document.isClosing {
+                var closed = false
+                document.closeImageWhenDrained { closed = true }
+                wait { closed }
             }
             for window in ownedWindows { window.close() }
             documents.items.removeAll { doc in ownedDocs.contains { $0 === doc } }
@@ -76,12 +80,25 @@ extension EngineSmokeTest {
             guard let space = CGColorSpace(iccData: icc as CFData) else { return nil }
             return space.copyICCData() as Data?
         }
-        let imageA = try session.newImage(width: 1200, height: 900)
-        let imageB = try session.newImage(width: 220, height: 160)
-        let docA = try ImageDocument(session: session, image: imageA, name: "Destination A")
-        let docB = try ImageDocument(session: session, image: imageB, name: "Destination B")
-        ownedDocs += [docA, docB]
-        documents.items += [docA, docB]
+        func newDocument(width: Int, height: Int, name: String) throws -> ImageDocument {
+            let image = try session.newImage(width: width, height: height)
+            do {
+                let document = try ImageDocument(session: session, image: image, name: name)
+                ownedDocs.append(document)
+                documents.items.append(document)
+                return document
+            } catch {
+                try? session.closeImage(image)
+                throw error
+            }
+        }
+        let docA = try newDocument(width: 1200, height: 900, name: "Destination A")
+        let docB = try newDocument(width: 220, height: 160, name: "Destination B")
+        let imageA = docA.image
+        // Baseline precedes attachment, which starts automatic rendering.
+        let infoBefore = try session.info(imageA)
+        let undoBefore = try session.undoInfo(imageA)
+        let pixelsBefore = try session.copyPixels(imageA, merged: true).pixels
         func attach(_ document: ImageDocument, _ space: NSColorSpace) -> (DestinationWindow, NSScrollView, EngineCanvasView) {
             let window = DestinationWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 320),
                                            styleMask: [.titled], backing: .buffered, defer: false)
@@ -108,12 +125,6 @@ extension EngineSmokeTest {
         check(canvasB.destination.kind == .windowProfile && canvasB.destination.icc == srgbICC
                 && canvasB.destination != canvasA.destination,
               "window B snapshots its own sRGB window; the two destinations are independent")
-
-        // Fresh native read-only baseline, read through the engine APIs
-        // directly (not the document caches), before any rendering.
-        let infoBefore = try session.info(imageA)
-        let undoBefore = try session.undoInfo(imageA)
-        let pixelsBefore = try session.copyPixels(imageA, merged: true).pixels
 
         try canvasA.renderVisibleTilesNow()
         try canvasB.renderVisibleTilesNow()
@@ -207,10 +218,7 @@ extension EngineSmokeTest {
               "window B keeps its own destination and cache through A's profile and density changes")
 
         // Detached canvas: explicit sRGB fallback with the real sRGB tag.
-        let imageC = try session.newImage(width: 120, height: 90)
-        let docC = try ImageDocument(session: session, image: imageC, name: "Destination C")
-        ownedDocs.append(docC)
-        documents.items.append(docC)
+        let docC = try newDocument(width: 120, height: 90, name: "Destination C")
         let canvasC = EngineCanvasView(document: docC)
         ownedCanvases.append(canvasC)
         canvasC.frame = NSRect(x: 0, y: 0, width: 300, height: 220)
@@ -219,16 +227,24 @@ extension EngineSmokeTest {
         check(canvasC.renderedTileCount > 0 && canvasC.cachedTileICCData() == iccTag(srgbICC),
               "the detached fallback renders with the real sRGB CGImage tag, not a guessed profile")
 
-        // A window whose backing color space is unusable is never overridden
-        // with a guessed monitor profile.
+        // AppKit may resolve a nil assignment to the screen's actual color
+        // space. Follow the getter's result rather than assuming nil means
+        // the window has no usable destination.
         windowA.colorSpace = nil
         canvasA.viewDidChangeBackingProperties()
-        check(canvasA.destination == .srgbFallback,
-              "an unusable window colorSpace falls back to explicit sRGB, never a guessed monitor profile")
+        check(canvasA.destination == CanvasDisplayDestination.snapshot(window: windowA),
+              "resetting the window color space follows AppKit's actual getter result")
+        windowA.colorSpace = .genericGray
+        canvasA.viewDidChangeBackingProperties()
+        check(windowA.colorSpace?.cgColorSpace?.model == .monochrome && canvasA.destination == .srgbFallback,
+              "a non-RGB owning-window profile takes the explicit sRGB fallback")
         windowA.colorSpace = p3
         canvasA.viewDidChangeBackingProperties()
         check(canvasA.destination.icc == p3ICC && canvasA.renderedTileCount == 0,
               "restoring a usable window profile re-snapshots and invalidates the cache again")
+        check(wait { !canvasA.hasPendingRender && canvasA.renderedTileCount > 0
+                        && !canvasB.hasPendingRender && !canvasC.hasPendingRender },
+              "all canvas requests settle before the final native read-only comparison")
 
         // Fresh native read-only proof: re-read the engine APIs now and
         // compare pixels, undo/redo counts and the native dirty flag.
