@@ -3424,8 +3424,8 @@ Master and six hue ranges have a dedicated degree/percentage editor with
 global overlap and whole22-value immutable native configuration. API v1
 appends152/153. Independent HSL, overlap/clamp and extended-lightness
 oracles pass within387 native checks per supported engine. The actual
-editor passes21 checks per engine;932 unit tests pass. See
-`hue-saturation.md`. Final metadata integration, bundle checks and CI remain
+editor passes21 checks per engine;948 integrated unit tests pass. See
+`hue-saturation.md`. Final bundle checks and CI remain
 open; Levels/Curves and other auxiliary forms remain separate work.
 
 

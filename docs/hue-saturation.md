@@ -27,7 +27,7 @@ guards. The editor passes21 real-window checks per engine, including
 actual Image Adjust routing, seven ranges, overlap, captured documents,
 last-field Apply, Cancel, Undo/Redo, XCF and active unsubmitted field text.
 Shared field-draft preservation retains text and selection through delayed
-replies. All932 unit tests pass before final metadata integration. Native
+replies. All948 unit tests pass after the merged capture-date integration. Native
 and Swift source reviews have no important findings.
 
 These are targeted results, not final bundle/CI/merge acceptance. The
