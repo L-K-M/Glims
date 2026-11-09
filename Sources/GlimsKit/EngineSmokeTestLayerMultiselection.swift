@@ -297,8 +297,8 @@ extension EngineSmokeTest {
         } else {
             check(false, "the Layer menu lists Delete Layer")
         }
-        check(layerItem("Duplicate Layer").map { controllerA.validateMenuItem($0) } == false,
-              "Layer ▸ Duplicate Layer validates disabled")
+        check(layerItem("Duplicate Layer").map { controllerA.validateMenuItem($0) } == true,
+              "Layer ▸ Duplicate Layers admits the selected ordinary pixel layers")
         check(layerItem("Layer Properties…").map { controllerA.validateMenuItem($0) } == false,
               "Layer ▸ Properties validates disabled")
         check(layerItem("New Layer").map { controllerA.validateMenuItem($0) } == true,
@@ -309,17 +309,16 @@ extension EngineSmokeTest {
         check(editMenu?.items.first { $0.title == "Cut" }.map { controllerA.validateMenuItem($0) } == false,
               "Cut is gated under a multi-selection")
         if let paletteDup = palette.paletteMenu?.items.first(where: { $0.title == "Duplicate Layer" }) {
-            check(palette.validateMenuItem(paletteDup) == false
-                    && paletteDup.toolTip?.contains("Choose one layer") == true,
-                  "the palette menu's Duplicate Layer validates disabled with the reason")
+            check(palette.validateMenuItem(paletteDup) && paletteDup.title == "Duplicate Layers",
+                  "the palette menu admits the selected ordinary pixel layers as Duplicate Layers")
         } else {
             check(false, "the palette menu lists Duplicate Layer")
         }
         check(palette.paletteMenu?.items.first(where: { $0.title == "New Layer" })
             .map { palette.validateMenuItem($0) } == true, "the palette menu's New Layer stays available")
         if let bar = descendant(of: palette.view, as: ClassicPaletteButtonBar.self) {
-            check(bar.isEnabled(item: "duplicate") == false && bar.isEnabled(item: "delete") == false,
-                  "the duplicate and delete buttons are disabled under a multi-selection")
+            check(bar.isEnabled(item: "duplicate") && !bar.isEnabled(item: "delete"),
+                  "the duplicate button admits the pixel batch while Delete still requests one layer")
             check(bar.isEnabled(item: "new") && bar.isEnabled(item: "group"),
                   "the new layer and group buttons stay enabled")
         } else {

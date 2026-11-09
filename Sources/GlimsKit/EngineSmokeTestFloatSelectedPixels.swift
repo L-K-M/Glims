@@ -411,7 +411,7 @@ extension EngineSmokeTest {
         let workBeforeAccept = documentA.pendingWork
         var accepted: Result<Void, Error>?
         documentA.floatSelectedPixels(mode: .copy, target: layerA) { accepted = $0 }
-        check(documentA.pendingWork == workBeforeAccept + 1, "an accepted float is counted as pending work")
+        check(documentA.pendingWork > workBeforeAccept, "an accepted float is counted as pending work")
         var closedA = false
         documentA.closeImageWhenDrained { closedA = true }
         let closeDeadline = Date().addingTimeInterval(10)

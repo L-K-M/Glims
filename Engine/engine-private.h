@@ -570,6 +570,9 @@ void        glims_metadata_languages_free (GlimsMetadataLanguageValue *values);
  * to the sealed Engine/metadata-language-write.c preflight and applies
  * the owned copy through the one native setter. OK+NULL copy is an
  * exact no-op before the readiness gate. */
+GlimsStatus glims_image_duplicate_layers (GlimsEngine *e, GlimsImageID image,
+                                           const GlimsItemID *sources, int32_t count,
+                                           GlimsItemID *copies, char **error);
 GlimsStatus glims_image_metadata_edit_language (GlimsEngine *e, GlimsImageID image, const char *root,
                                                 const char *language, const char *text, char **error);
 

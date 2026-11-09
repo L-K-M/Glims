@@ -3240,6 +3240,39 @@ fidelity. It has no public writer slot or UI yet. Native conformance, 27 prepara
 checks and 9 inventory checks pass on every engine; the normalization helper has
 124 checks per engine. 838 unit and 14 script tests pass; bundle/CI checks pending.
 
+
+### Captured plain-layer batch duplication (2026-11-09)
+
+The additive API 1 slot 142 duplicates 1–256 explicit, ordered, unique
+ordinary pixel-layer IDs. Preparation resolves the complete set and makes
+detached copies before insertion. Each copy lands immediately above its source
+in the source's actual parent. Existing locks are retained; structured layers
+and groups remain available through individual duplication. Floating selections,
+active native editing and disabled/frozen Undo refuse the batch. Ordinary
+preflight refusals preserve image facts, pixels, tree, selection and history.
+
+A native layer-add group makes the batch one Undo operation. A companion weak
+selection record restores the original ordered selection on Undo and every copy
+on Redo, including a reorder of the same members between commands. This is not
+a general transaction: an unexpected Core insertion failure may leave a positive
+output prefix as one recoverable Undo operation, and callers refresh on failures.
+
+Command-J and the Layers palette capture their own document and cached selection,
+refuse a pending replacement target, and refresh the native result through the
+counted queue. The deferred refresh/completion remains counted through global
+exclusive work, so close waits for accepted commands.
+
+The public harness passes 123 checks on each supported engine, including exact
+and shifted buffer overlap, explicit nested parents, one Undo, ordered selection
+restoration, known red/blue pixels and independent binary mask pixels/flags.
+The private preparation harness passes 101 checks per engine. The pending-target
+regression reproduced three failures before its refusal guards were added, then
+passed 11 real-window checks per engine. The expanded case passes 15 checks
+per engine, including actual palette menu/button actions and pending-target
+refusals. The integrated branch passes 863 unit tests; the packaged engine
+also passes the 123 public checks with native and Swift build trees denied.
+Full isolated app acceptance and exact-head CI remain in progress.
+
 ### Trackpad view navigation (2026-11-09)
 
 The canvas responds to AppKit pinch and rotate events for its own visible

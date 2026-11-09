@@ -1758,6 +1758,24 @@ final class ImageDocument {
         }
     }
 
+    /// Captures the complete ordered layer selection at admission. The
+    /// worker validates every id and chooses all copies natively; refresh
+    /// is required even on a rare partial Core failure.
+    func duplicateSelectedLayers(completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !refuseWhileEditingUnavailable() else {
+            return completion(.failure(isClosing ? DocumentError.closed : DocumentError.busy))
+        }
+        guard !refuseWhileTargetPending() else { return completion(.failure(DocumentError.busy)) }
+        let captured = selectedLayerIDs
+        guard !captured.isEmpty else { return completion(.failure(DocumentError.noLayer)) }
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueueTargetCommand({ session, image in
+            _ = try session.duplicateLayers(image, layers: captured)
+        }, completion: completion)
+    }
+
     /// The menu commands act on the layer the engine selects when they
     /// run — layer 0, the adapter's "selected layer at execution" — so a
     /// creation or pick queued ahead of them is what they hit, not the
@@ -3639,10 +3657,16 @@ final class ImageDocument {
     /// deferred write.
     private func enqueueTargetCommand(_ work: @escaping (EngineSession, Int32) throws -> Void,
                                       completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
+        guard !isClosing else {
+            completion?(.failure(DocumentError.closed))
+            return
+        }
         nextTargetCommandToken += 1
         let token = nextTargetCommandToken
         pendingTargetCommands.insert(token)
-        onStateChange?()
+        // Hold the deferred cache/completion stage too, so an exclusive
+        // operation admitted after this input cannot overtake its cleanup.
+        pendingWork += 1
         enqueue(on: inputQueue, input: true) { [session, image] in
             // While the command runs the target it replaces cannot be
             // painted; a success leaves a fresh native selection the
@@ -3654,19 +3678,25 @@ final class ImageDocument {
             self.paintTargetIsValid = targetWasValid
             if case .success = result { self.paintTargetIsValid = true }
             DispatchQueue.main.async {
-                // The token still stands only if no pick took over the
-                // target while the command was queued — a pick owns the
-                // rejected state through its own completion then. A
-                // success ends a refused pick's rejection; a failure
-                // never reopens it.
-                if self.pendingTargetCommands.remove(token) != nil, case .success = result {
-                    self.rejectedTargetPick = false
+                EngineActivity.shared.whenIdle {
+                    defer { self.jobDidFinish(input: false) }
+                    if self.pendingTargetCommands.remove(token) != nil, case .success = result {
+                        self.rejectedTargetPick = false
+                    }
+                    if !self.isClosing {
+                        // Core can report a partial native insertion failure;
+                        // always reconcile the actual state, never an optimistic
+                        // selection written from the captured result vector.
+                        if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                        do { try self.reload() }
+                        catch { self.onError?("The image state could not be refreshed: \(error)") }
+                    }
+                    completion?(result)
                 }
-                if case .failure(let error) = result { self.onError?(String(describing: error)) }
-                try? self.reload()
-                completion?(result)
             }
         }
+        // Queue/count first: this callback may itself request a close.
+        onStateChange?()
     }
 
     /// Refuses commands after a failed queued target pick or while a

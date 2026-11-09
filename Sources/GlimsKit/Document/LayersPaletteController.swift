@@ -81,7 +81,10 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     private lazy var buttonBar = ClassicPaletteButtonBar(
         items: [Self.item("new", "New Layer", ["plus"]) { $0.layerCommand(.new) },
                 Self.item("group", "New Layer Group", ["folder.badge.plus", "folder", "plus"]) { $0.createGroup() },
-                Self.item("duplicate", "Duplicate Layer", ["plus.square.on.square"]) { $0.layerCommand(.duplicate) }]
+                Self.item("duplicate", "Duplicate Layers", ["plus.square.on.square"]) {
+                    if $0.hasMultipleSelectedLayers { $0.duplicateSelectedLayers() }
+                    else { $0.layerCommand(.duplicate) }
+                }]
             .map(bind),
         trailingItems: [bind(Self.item("delete", "Delete Layer", ["trash"]) { $0.layerCommand(.delete) })])
     /// The floating-selection footer (Anchor / New Layer / Discard),
@@ -248,7 +251,11 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
 
     @objc private func runLayerCommand(_ sender: NSMenuItem) {
         guard let command = EngineSession.LayerCommand(rawValue: UInt32(sender.tag)) else { return }
-        document?.layerCommand(command)
+        if command == .duplicate, document?.hasMultipleSelectedLayers == true {
+            document?.duplicateSelectedLayers()
+        } else {
+            document?.layerCommand(command)
+        }
     }
 
     @objc private func newLayerGroup(_ sender: NSMenuItem) {
@@ -428,6 +435,15 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         effectMenuItems(for: effect).forEach { menu.addItem($0) }
     }
 
+    /// Uses only the palette's captured document cache, never the front window.
+    private func duplicateAdmission(_ document: ImageDocument) -> Bool {
+        let ids = document.selectedLayerIDs
+        return document.acceptsEdits && !document.targetCommandIsPending
+            && !document.floatingState.isActive && !ids.isEmpty
+            && (ids.count == 1 || (ids.count <= 256
+                && ids.allSatisfy { document.layerSources[$0]?.kind == .pixel }))
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if let item = menuItem.representedObject as? EffectItem {
             return validateEffectItem(menuItem, item)
@@ -450,6 +466,12 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         case #selector(runLayerCommand(_:)):
             guard let document, document.acceptsEdits,
                   let command = EngineSession.LayerCommand(rawValue: UInt32(menuItem.tag)) else { return false }
+            if command == .duplicate {
+                menuItem.title = document.hasMultipleSelectedLayers ? "Duplicate Layers" : "Duplicate Layer"
+                menuItem.toolTip = duplicateAdmission(document) ? nil
+                    : "Select ordinary pixel layers for a batch. Duplicate groups or editable sources individually."
+                return duplicateAdmission(document)
+            }
             // While more than one layer is selected, every single-layer
             // command but New Layer is disabled with the reason; New
             // Layer creates and selects a fresh row, which is safe.
@@ -561,7 +583,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         let multi = document?.hasMultipleSelectedLayers == true
         buttonBar.setEnabled(editable && !floatingActive, forItem: "new")
         buttonBar.setEnabled(editable && !floatingActive, forItem: "group")
-        buttonBar.setEnabled(hasLayer && !floatingActive && !multi, forItem: "duplicate")
+        buttonBar.setEnabled(document.map(duplicateAdmission) == true, forItem: "duplicate")
         buttonBar.setEnabled(hasLayer && !floatingActive && !multi, forItem: "delete")
         // The floating-selection footer appears only while the shown
         // document's cached floating state is active; its buttons read

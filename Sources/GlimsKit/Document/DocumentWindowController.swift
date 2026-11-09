@@ -892,7 +892,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     // MARK: Layer menu
 
     @objc func newLayer(_ sender: Any?) { imageDocument.layerCommand(.new) }
-    @objc func duplicateLayer(_ sender: Any?) { imageDocument.layerCommand(.duplicate) }
+    @objc func duplicateLayer(_ sender: Any?) {
+        if imageDocument.hasMultipleSelectedLayers { imageDocument.duplicateSelectedLayers() }
+        else { imageDocument.layerCommand(.duplicate) }
+    }
     @objc func deleteLayer(_ sender: Any?) { imageDocument.layerCommand(.delete) }
     @objc func bringLayerToFront(_ sender: Any?) { imageDocument.layerCommand(.toTop) }
     @objc func bringLayerForward(_ sender: Any?) { imageDocument.layerCommand(.raise) }
@@ -1514,7 +1517,20 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
             || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || EngineActivity.shared.isBusy || window?.attachedSheet != nil
         switch menuItem.action {
-        case #selector(duplicateLayer(_:)), #selector(deleteLayer(_:)), #selector(mergeDown(_:)),
+        case #selector(duplicateLayer(_:)):
+            let ids = imageDocument.selectedLayerIDs
+            menuItem.title = ids.count > 1 ? "Duplicate Layers" : "Duplicate Layer"
+            menuItem.toolTip = nil
+            guard !editingBlocked, !previewBusy, !ids.isEmpty, !imageDocument.targetCommandIsPending,
+                  !imageDocument.floatingState.isActive else { return false }
+            if ids.count > 1 {
+                guard ids.count <= 256, ids.allSatisfy({ imageDocument.layerSources[$0]?.kind == .pixel }) else {
+                    menuItem.toolTip = "Select ordinary pixel layers for a batch. Duplicate groups or editable sources individually."
+                    return false
+                }
+            }
+            return true
+        case #selector(deleteLayer(_:)), #selector(mergeDown(_:)),
              #selector(flattenImage(_:)), #selector(bringLayerToFront(_:)), #selector(bringLayerForward(_:)),
              #selector(sendLayerBackward(_:)), #selector(sendLayerToBack(_:)),
              #selector(rotateLayer90(_:)), #selector(rotateLayer270(_:)), #selector(rotateLayer180(_:)),

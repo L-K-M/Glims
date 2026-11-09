@@ -2813,6 +2813,29 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_metadata_edit_language) (GlimsEngine *engine, GlimsImageID image,
                                                const char *root, const char *language,
                                                const char *text, char **error);
+  /* Slot142: duplicates1..256 explicit, ordered, positive unique plain
+   * pixel-layer ids. Copies are placed immediately above each source in
+   * its actual parent; locks are preserved and do not refuse copying.
+   * Groups/structured subclasses are UNSUPPORTED. Wrong-kind, foreign,
+   * detached/dead ids or image are NOT_FOUND. Malformed arrays/count/ids
+   * are INVALID_ARGUMENT. Stroke/filter/plug-in work, floating selection
+   * or disabled/frozen Undo is BUSY. All ordinary preflight refusals leave
+   * image/tree/selection/history untouched, before any insertion.
+   *
+   * `copies` is caller-owned storage for count ids. For valid count and
+   * non-NULL output it is cleared before preflight; input/output may
+   * overlap. Success returns new ids in INPUT order, selects that ordered
+   * vector, and pushes one native layer-add Undo group (subject to native
+   * history retention). Undo restores the prior layer selection; Redo
+   * restores the complete copy selection, including its order.
+   *
+   * An unexpected Core failure after insertion can leave a positive id
+   * prefix followed by zeros, as one recoverable Undo operation. FAILED
+   * is therefore NOT a no-change promise: callers must refresh image
+   * state on failure as well as success. `error` uses free_string. */
+  GlimsStatus (*image_duplicate_layers) (GlimsEngine *engine, GlimsImageID image,
+                                        const GlimsItemID *sources, int32_t count,
+                                        GlimsItemID *copies, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
