@@ -1,0 +1,240 @@
+import AppKit
+
+// MARK: - GLIMS_SMOKE_CASE=adjustment-controls
+
+@MainActor
+extension EngineSmokeTest {
+    /// Layer ▸ New Adjustment Layer…, end to end: menu wiring and cached
+    /// validation (RGB/grayscale vs Indexed), the creation sheet's Cancel
+    /// (no mutation) and accepted Create (counted, ONE undo step, actual
+    /// native layer/effect ids, phase-2 parameter editor), two-document
+    /// capture with B front, busy and floating refusals, Undo/Redo of the
+    /// creation, and close draining with late-editor suppression.
+    static func exerciseAdjustmentControls(_ session: EngineSession, work: URL,
+                                           documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func settle(_ document: ImageDocument) {
+            document.inputQueue.sync {}
+            wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }
+            spin()
+        }
+        // Recursive view search that recurses into children EVEN WHEN THE
+        // ROOT ITSELF MATCHES the type (an NSStackView root must not hide
+        // a nested match of the same class).
+        func allViews<T: NSView>(_ root: NSView?, as type: T.Type) -> [T] {
+            guard let root else { return [] }
+            var found: [T] = []
+            if let match = root as? T { found.append(match) }
+            for child in root.subviews { found += allViews(child, as: type) }
+            return found
+        }
+        func control<T: NSView>(_ sheet: NSWindow?, _ label: String, as type: T.Type) -> T? {
+            allViews(sheet?.contentView, as: type).first { $0.accessibilityLabel() == label }
+        }
+
+        // Fixture: A (RGB, one white layer), B; B is front so every capture
+        // on A's controller must still land in A.
+        let imageA = try session.newImage(width: 48, height: 32)
+        let white = ClipboardImage(width: 48, height: 32,
+                                   pixels: Data(repeating: 255, count: 48 * 32 * 4), origin: .zero)
+        let layerA = try session.pastePixels(imageA, pixels: white, at: .zero)
+        let docA = try ImageDocument(session: session, image: imageA, name: "Adj A")
+        documents.items.append(docA)
+        let a = DocumentWindowController(document: docA)
+        a.showWindow(nil)
+        let imageB = try session.newImage(width: 24, height: 24)
+        let docB = try ImageDocument(session: session, image: imageB, name: "Adj B")
+        documents.items.append(docB)
+        let b = DocumentWindowController(document: docB)
+        b.showWindow(nil)
+        b.window?.makeKeyAndOrderFront(nil)
+        var errorsA: [String] = []
+        let reportA = docA.onError
+        docA.onError = { reportA?($0); errorsA.append($0) }
+        defer {
+            for (controller, document) in [(a, docA), (b, docB)] {
+                if let sheet = controller.window?.attachedSheet {
+                    controller.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                }
+                controller.previewPanel?.cancel()
+                controller.window?.close()
+                documents.items.removeAll { $0 === document }
+                guard !document.isClosing else { continue }
+                var closed = false
+                document.closeImageWhenDrained { closed = true }
+                wait { closed }
+            }
+        }
+        guard a.window != nil else { return check(false, "the adjustment windows exist") }
+        docA.selectLayer(layerA)
+        settle(docA)
+
+        // MARK: Menu wiring and the cached mode gate
+
+        let adjSelector = #selector(DocumentWindowController.newAdjustmentLayer(_:))
+        let layerMenu = MainMenu.make().items.first { $0.title == "Layer" }?.submenu
+        let adjItem = layerMenu?.items.first { $0.title == "New Adjustment Layer…" }
+        check(adjItem?.action == adjSelector, "Layer offers New Adjustment Layer… on the document's selector")
+        check(adjItem.map { a.validateMenuItem($0) } == true, "the item validates on an RGB image")
+        do {
+            let imageI = try session.newImage(width: 16, height: 16)
+            try session.convertToIndexed(imageI, settings: .init())
+            let docI = try ImageDocument(session: session, image: imageI, name: "Adj I")
+            documents.items.append(docI)
+            let c = DocumentWindowController(document: docI)
+            c.showWindow(nil)
+            defer {
+                c.window?.close()
+                documents.items.removeAll { $0 === docI }
+                if !docI.isClosing {
+                    var closed = false
+                    docI.closeImageWhenDrained { closed = true }
+                    wait { closed }
+                }
+            }
+            let item = NSMenuItem(title: "New Adjustment Layer…", action: adjSelector, keyEquivalent: "")
+            check(!c.validateMenuItem(item) && item.toolTip?.contains("indexed") == true,
+                  "on an indexed image the item disables with the reason as tooltip")
+            c.newAdjustmentLayer(nil)
+            check(c.adjustmentSheet == nil && c.window?.attachedSheet == nil,
+                  "the action opens no sheet on an indexed image")
+            let imageG = try session.newImage(width: 16, height: 16)
+            try session.convertMode(imageG, to: .grayscale)
+            let docG = try ImageDocument(session: session, image: imageG, name: "Adj G")
+            documents.items.append(docG)
+            let g = DocumentWindowController(document: docG)
+            let itemG = NSMenuItem(title: "New Adjustment Layer…", action: adjSelector, keyEquivalent: "")
+            check(g.validateMenuItem(itemG), "grayscale validates")
+            g.window?.close()
+            documents.items.removeAll { $0 === docG }
+            var closedG = false
+            docG.closeImageWhenDrained { closedG = true }
+            wait { closedG }
+        }
+
+        // MARK: Cancel before Create mutates nothing (B front)
+
+        let layersBefore = docA.layers.count
+        let undoBefore = docA.undoInfo.undoCount
+        a.newAdjustmentLayer(nil)
+        guard let sheet = a.adjustmentSheet, let sheetWindow = a.window?.attachedSheet else {
+            return check(false, "the creation sheet opens on A while B is front")
+        }
+        wait { !sheet.isLoadingOperations }
+        check(!sheet.availableOperations.isEmpty, "the counted catalog load offers supported adjustments")
+        check(adjItem.map { a.validateMenuItem($0) } == false, "the item disables while its sheet is attached")
+        let nameField = control(sheetWindow, "Adjustment layer name", as: NSTextField.self)
+        let popup = control(sheetWindow, "Adjustment", as: NSPopUpButton.self)
+        let createButton = control(sheetWindow, "Create adjustment layer", as: NSButton.self)
+        let cancelButton = control(sheetWindow, "Cancel adjustment layer", as: NSButton.self)
+        check(nameField != nil && popup != nil && createButton != nil && cancelButton != nil,
+              "the sheet's fields and buttons carry accessibility labels")
+        check(createButton?.isEnabled == true && cancelButton?.isEnabled == true,
+              "Create and Cancel start enabled")
+        nameField?.stringValue = "  Draft  "
+        popup?.selectItem(at: 0)
+        cancelButton?.performClick(nil)
+        wait { a.adjustmentSheet == nil && a.window?.attachedSheet == nil }
+        check(docA.layers.count == layersBefore && docA.undoInfo.undoCount == undoBefore
+                && errorsA.isEmpty,
+              "Cancel before Create mutates nothing")
+
+        // MARK: Accepted Create: ONE undo step, real ids, phase-2 editor
+
+        let pixelsBefore = try session.copyPixels(imageA, merged: true).pixels
+        a.newAdjustmentLayer(nil)
+        guard let sheet2 = a.adjustmentSheet else { return check(false, "the sheet reopens for Create") }
+        wait { !sheet2.isLoadingOperations && !sheet2.availableOperations.isEmpty }
+        let opName = sheet2.availableOperations.first!.name
+        let sheetWindow2 = a.window?.attachedSheet
+        control(sheetWindow2, "Adjustment layer name", as: NSTextField.self)?.stringValue = "Brightness Test"
+        control(sheetWindow2, "Adjustment", as: NSPopUpButton.self)?.selectItem(at: 0)
+        let create2 = control(sheetWindow2, "Create adjustment layer", as: NSButton.self)
+        let cancel2 = control(sheetWindow2, "Cancel adjustment layer", as: NSButton.self)
+        create2?.performClick(nil)
+        check(create2?.isEnabled == false && cancel2?.isEnabled == false,
+              "Create and Cancel disable while accepted work runs")
+        wait { !sheet2.isCreating }
+        settle(docA)
+        let newLayer = docA.layers.first { $0.name == "Brightness Test" }
+        check(newLayer?.kind == .group && newLayer?.filterCount == 1,
+              "the native adjustment layer lands in A (B front) with one effect")
+        check((try? session.layers(imageB).contains { $0.name == "Brightness Test" }) == false,
+              "the front document B receives nothing")
+        check(docA.undoInfo.undoCount == undoBefore + 1, "the creation is exactly ONE undo step")
+        let effects = try session.effects(on: newLayer!.id, image: imageA)
+        check(effects.count == 1 && effects[0].operation == opName && effects[0].isEnabled,
+              "the actual native effect id resolves to the chosen operation")
+        wait { a.previewPanel != nil }
+        check(a.previewPanel is NativeFilterPanel,
+              "phase 2 opens the existing generic effect-parameter editor on the created effect")
+
+        // Busy refusal while the parameter preview holds the image.
+        var busyResult: Result<(layer: Int32, effect: Int32), Error>?
+        docA.createAdjustmentLayer(name: "Second", operation: opName) { busyResult = $0 }
+        settle(docA)
+        check(busyResult.map { if case .failure = $0 { return true }; return false } == true
+                && errorsA.contains { $0.contains("filter preview") },
+              "a second creation refuses while the parameter editor's preview is open")
+
+        // Canceling the parameter edit keeps the created layer, no extra undo.
+        a.previewPanel?.cancel()
+        settle(docA)
+        check(a.previewPanel == nil && docA.layers.contains { $0.name == "Brightness Test" }
+                && docA.undoInfo.undoCount == undoBefore + 1,
+              "canceling the parameter editor keeps the explicitly created layer and adds no undo")
+
+        // ONE Undo/Redo of the creation restores the original pixels.
+        docA.undo()
+        settle(docA)
+        let pixelsAfterUndo = try session.copyPixels(imageA, merged: true).pixels
+        check(docA.layers.first { $0.name == "Brightness Test" } == nil
+                && pixelsAfterUndo == pixelsBefore,
+              "one Undo removes the adjustment layer and restores the original pixels")
+        docA.redo()
+        settle(docA)
+        check(docA.layers.first { $0.name == "Brightness Test" } != nil,
+              "Redo brings the adjustment layer back")
+
+        // MARK: Floating-selection refusal
+
+        var options = EngineSession.SelectOptions()
+        options.antialias = false
+        docA.select(.rectangle(CGRect(x: 4, y: 4, width: 8, height: 8)), options: options)
+        settle(docA)
+        docA.refreshSelection()
+        docA.floatSelectedPixels(mode: .move, target: layerA) { _ in }
+        settle(docA)
+        check(docA.floatingState.isActive, "the floating fixture is active on A")
+        var floatResult: Result<(layer: Int32, effect: Int32), Error>?
+        docA.createAdjustmentLayer(name: "Float", operation: opName) { floatResult = $0 }
+        settle(docA)
+        check(floatResult.map { if case .failure = $0 { return true }; return false } == true,
+              "creation refuses while a floating selection is active")
+        docA.resolveFloatingSelection(.anchor) { _ in }
+        settle(docA)
+        check(!docA.floatingState.isActive, "the floating fixture resolves for the close test")
+
+        // MARK: Close drains the counted work; a closed host opens no editor
+
+        a.newAdjustmentLayer(nil)
+        guard let sheet3 = a.adjustmentSheet else { return check(false, "the sheet opens for the close test") }
+        wait { !sheet3.isLoadingOperations && !sheet3.availableOperations.isEmpty }
+        let sheetWindow3 = a.window?.attachedSheet
+        control(sheetWindow3, "Adjustment layer name", as: NSTextField.self)?.stringValue = "Close Test"
+        control(sheetWindow3, "Create adjustment layer", as: NSButton.self)?.performClick(nil)
+        // Same main-queue turn as the click: the accepted job's completion
+        // cannot have run, so the close invalidates the sheet first.
+        a.window?.close()
+        check(sheet3.isCreating, "the accepted creation is still running when the window closes")
+        settle(docA)
+        wait { (try? session.info(imageA)) == nil }
+        check(docA.isClosing && docA.layers.contains { $0.name == "Close Test" },
+              "the counted creation ran to completion before the close destroyed the image")
+        check(a.previewPanel == nil,
+              "a host closed before the creation completed never opens the parameter editor")
+    }
+}
