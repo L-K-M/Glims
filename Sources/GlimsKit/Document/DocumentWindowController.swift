@@ -53,6 +53,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// View ▸ Show Rulers' cached per-window state, defaulting to on. Kept
     /// separate from the guides state — the two toggles never couple.
     private(set) var rulerViewState = RulerViewState()
+    /// View ▸ Show Selection Edges' cached per-window state, defaulting to
+    /// on. Hiding only stops the marching-ants drawing and its timer; the
+    /// native selection and its cached state are untouched.
+    private(set) var selectionEdgesViewState = SelectionEdgesViewState()
+    /// View ▸ Show Layer Boundary's cached per-window state, defaulting to
+    /// off. The outline is the current cached paint-target bounds, resolved
+    /// per draw; toggling never touches engine state.
+    private(set) var layerBoundaryViewState = LayerBoundaryViewState()
     /// The pixel rulers in the scroll view's native ruler slots. They read
     /// the canvas geometry through a weak reference at draw time, so no
     /// global ruler controller exists.
@@ -634,16 +642,29 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     }
 
+    /// View ▸ Show Layer Boundary: flips this window's cached flag and
+    /// redraws the canvas. Pure view state — no engine call, no pixel,
+    /// dirty, history, selection, export or print change — so it works
+    /// while the engine is busy.
     @objc func toggleLayerBoundary(_ sender: Any?) {
         guard !imageDocument.isClosing else { return }
-        canvas.showsLayerBoundary.toggle()
-        (sender as? NSMenuItem)?.state = canvas.showsLayerBoundary ? .on : .off
+        layerBoundaryViewState.toggle()
+        canvas.showsLayerBoundary = layerBoundaryViewState.showsLayerBoundary
+        canvas.needsDisplay = true
+        if let item = sender as? NSMenuItem { item.state = layerBoundaryViewState.menuState }
     }
 
+    /// View ▸ Show Selection Edges: flips this window's cached flag and
+    /// redraws. Hiding only stops the marching-ants outline and its
+    /// timer; the native selection, its cached bounds and every command
+    /// stay unchanged. Pure view state, so it works while the engine is
+    /// busy.
     @objc func toggleSelectionEdges(_ sender: Any?) {
         guard !imageDocument.isClosing else { return }
-        canvas.showsSelectionEdges.toggle()
-        (sender as? NSMenuItem)?.state = canvas.showsSelectionEdges ? .on : .off
+        selectionEdgesViewState.toggle()
+        canvas.showsSelectionEdges = selectionEdgesViewState.showsSelectionEdges
+        canvas.needsDisplay = true
+        if let item = sender as? NSMenuItem { item.state = selectionEdgesViewState.menuState }
     }
 
     // MARK: Snap To
@@ -1494,10 +1515,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
 
         case #selector(toggleLayerBoundary(_:)):
-            menuItem.state = canvas.showsLayerBoundary ? .on : .off
+            // The checkmark reads the window's cached flag, never the
+            // engine; toggling is view-only, so it stays available even
+            // while the engine is busy.
+            menuItem.state = layerBoundaryViewState.menuState
             return !imageDocument.isClosing
         case #selector(toggleSelectionEdges(_:)):
-            menuItem.state = canvas.showsSelectionEdges ? .on : .off
+            // Same contract as Show Layer Boundary: the cached per-window
+            // flag drives the checkmark and the item never gates on the
+            // engine being busy.
+            menuItem.state = selectionEdgesViewState.menuState
             return !imageDocument.isClosing
         case #selector(toggleSnapToGuides(_:)), #selector(toggleSnapToGrid(_:)),
              #selector(toggleSnapToCanvas(_:)), #selector(toggleSnapToLayerBounds(_:)):
