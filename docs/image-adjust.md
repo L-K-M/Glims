@@ -12,7 +12,7 @@ Unavailable operations are omitted from Adjust without lifting config or
 auxiliary-input gates elsewhere.
 
 Six new menu tests reproduced four refresh defects in the initial draft.
-The corrected source passes915 unit tests and27 actual-window checks on
+The corrected source passes 915 unit tests and 27 actual-window checks on
 each supported engine. The latter independently check threshold samples,
 sRGB encoded inversion, linear-light inversion and unchanged alpha, plus
 captured-document preview, Cancel, one Undo/Redo and XCF pixels. Independent
