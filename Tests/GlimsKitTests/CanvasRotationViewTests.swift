@@ -68,13 +68,25 @@ final class CanvasRotationViewTests: XCTestCase {
             XCTAssertEqual(canvas.bounds.size.height, 110, accuracy: eps)
             XCTAssertEqual(host.frame.size.width, 110, accuracy: eps)
             XCTAssertEqual(host.frame.size.height, 220, accuracy: eps)
-            let points = [NSPoint(x: 110, y: 0), NSPoint(x: 110, y: 220), NSPoint(x: 0, y: 110), NSPoint(x: 0, y: 0)]
+            let points = [NSPoint(x: 0, y: 0), NSPoint(x: 220, y: 0), NSPoint(x: 220, y: 110), NSPoint(x: 0, y: 110)]
+                .map { canvas.convert($0, to: host) }
             let xs = points.map(\.x); let ys = points.map(\.y)
             XCTAssertTrue((xs.min() ?? 0) >= -eps && (ys.min() ?? 0) >= -eps)
             XCTAssertTrue((xs.max() ?? 0) <= host.frame.width + eps && (ys.max() ?? 0) <= host.frame.height + eps)
-            XCTAssertTrue(host.hitTest(NSPoint(x: 55, y: 110)) === canvas)
-            host.layoutCanvas(); host.layoutCanvas()
+            let hit = NSPoint(x: 55, y: 110)
+            XCTAssertFalse(canvas.frame.contains(hit), "the native rotated hit lies outside the unrotated frame")
+            XCTAssertTrue(host.hitTest(hit) === canvas)
+            var notifications = 0
+            let token = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification,
+                                                               object: canvas, queue: .main) { _ in notifications += 1 }
+            defer { NotificationCenter.default.removeObserver(token) }
+            host.layoutCanvas()
+            let settled = notifications
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+            XCTAssertEqual(notifications, settled, "layout must not enqueue a repeating frame-notification cycle")
         }
         XCTAssertNil(weakHost)
+        XCTAssertNil(canvas.superview)
+        canvas.setFrameSize(NSSize(width: 300, height: 150))
     }
 }
