@@ -37,6 +37,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// lifetime; nil while none is open. Two documents keep independent
     /// sheets through their own controllers — no global binding.
     private(set) var gridSheet: GridSheetController?
+    /// Image ▸ Metadata…'s sheet, retained by this window for its
+    /// lifetime and capturing this window's document at open, so every
+    /// read and write acts on that document, never on the front one.
+    /// nil while none is open.
+    private(set) var metadataSheet: MetadataSheetController?
     /// View ▸ Show Grid's cached per-window state, defaulting to off.
     private(set) var gridViewState = GridViewState()
 
@@ -117,6 +122,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             self?.gridSheet?.showError(message)
 
             self?.indexedSheet?.showError(message)
+
+            self?.metadataSheet?.showError(message)
 
         }
         // Palette picks and structural or lock changes first commit any
@@ -320,6 +327,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
         indexedSheet?.commitFieldEdit()
 
+        metadataSheet?.commitFieldEdit()
+
         for paletteWindow in PaletteEditScope.windowsEditing(imageDocument) {
             paletteWindow.endEditing(for: nil)
         }
@@ -369,6 +378,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         gridSheet?.documentStateDidChange()
 
         indexedSheet?.documentStateDidChange()
+
+        metadataSheet?.documentStateDidChange()
 
     }
 
@@ -566,6 +577,25 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             guard let self, let sheet, self.gridSheet === sheet else { return }
             sheet.invalidate()
             self.gridSheet = nil
+        }
+    }
+
+    /// Image ▸ Metadata…: opens this document's metadata sheet. The
+    /// sheet is owned by this window controller and captures this
+    /// document at open; its first tag-catalog read is queued as counted
+    /// document work, so opening makes no native call on the main thread.
+    /// Metadata is image-level: a mask or channel target does not
+    /// restrict it. The sheet must not stack on another sheet of this
+    /// window.
+    @objc func showMetadata(_ sender: Any?) {
+        guard let window, !imageDocument.isClosing, window.attachedSheet == nil,
+              metadataSheet == nil else { return }
+        let sheet = MetadataSheetController(document: imageDocument, hostWindow: window)
+        metadataSheet = sheet
+        window.beginSheet(sheet.panel) { [weak self, weak sheet] _ in
+            guard let self, let sheet, self.metadataSheet === sheet else { return }
+            sheet.invalidate()
+            self.metadataSheet = nil
         }
     }
 
@@ -1387,6 +1417,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // The sheet seeds only from cached state; it must not stack
             // on another sheet of this window. Grid configuration is
             // image metadata: a selected channel does not restrict it.
+            return !imageDocument.isClosing && window?.attachedSheet == nil
+        case #selector(showMetadata(_:)):
+            // The sheet's reads and writes are queued counted document
+            // work; validation reads only cached state, never the engine.
+            // Image metadata is image-level: no channel/mask/target or
+            // lock restriction. It must not stack on another sheet.
             return !imageDocument.isClosing && window?.attachedSheet == nil
         case #selector(toggleShowGrid(_:)):
             // The checkmark reads the window's cached flag, never the

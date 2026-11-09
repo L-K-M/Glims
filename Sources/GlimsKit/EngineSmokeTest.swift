@@ -276,6 +276,21 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (float selected pixels)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-controls" {
+                try exerciseMetadataControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (metadata controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-descriptors" {
+                try exerciseMetadataDescriptors(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (metadata descriptors)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-descriptor-failures" {
+                try exerciseMetadataDescriptorFailures(session, documents: documents)
+                print(failures == 0 ? "PASSED (metadata descriptor failures)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
                 check(false, "unknown engine smoke case: \(selected)")
 
@@ -318,6 +333,8 @@ enum EngineSmokeTest {
             try exerciseToolPresetControls(session, work: work, documents: documents)
             try exerciseMenuShortcuts(session, work: work, documents: documents)
             try exerciseFloatingControls(session, work: work, documents: documents)
+            try exerciseMetadataControls(session, work: work, documents: documents)
+            try exerciseMetadataDescriptors(session, work: work, documents: documents)
             try exerciseLayerMultiselectionControls(session, work: work, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)
             try exerciseFloatingMove(session, work: work, documents: documents)
