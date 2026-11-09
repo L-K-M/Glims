@@ -179,6 +179,11 @@ enum MainMenu {
             item("From Layer Transparency", #selector(DocumentWindowController.selectFromAlpha(_:))),
             item("From Path", #selector(DocumentWindowController.selectFromPath(_:))),
             .separator(),
+            // No shortcuts: Float works on whatever selection and target
+            // are current, so the items stay plain menu entries.
+            item("Float Selected Pixels", #selector(DocumentWindowController.floatSelectedPixels(_:))),
+            item("Float a Copy", #selector(DocumentWindowController.floatACopy(_:))),
+            .separator(),
             item("Save Selection as Channel…", #selector(DocumentWindowController.saveSelectionAsChannel(_:))),
             item("Quick Mask", #selector(DocumentWindowController.toggleQuickMask(_:))),
         ])
@@ -193,6 +198,13 @@ enum MainMenu {
             item("Show Grid", #selector(DocumentWindowController.toggleShowGrid(_:))),
             item("Show Layer Boundary", #selector(DocumentWindowController.toggleLayerBoundary(_:))),
             item("Show Selection Edges", #selector(DocumentWindowController.toggleSelectionEdges(_:))),
+            .separator(),
+            submenu("Snap To", [
+                item("Guides", #selector(DocumentWindowController.toggleSnapToGuides(_:))),
+                item("Grid", #selector(DocumentWindowController.toggleSnapToGrid(_:))),
+                item("Canvas", #selector(DocumentWindowController.toggleSnapToCanvas(_:))),
+                item("Layer Bounds", #selector(DocumentWindowController.toggleSnapToLayerBounds(_:))),
+            ]),
         ])
         let lastFilterSettings = item("Last Filter Settings…", #selector(DocumentWindowController.reshowLastFilter(_:)), "f")
         lastFilterSettings.keyEquivalentModifierMask = [.command, .option]

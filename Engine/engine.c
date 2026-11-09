@@ -815,6 +815,8 @@ open_image_free (gpointer data)
 {
   GlimsOpenImage *open = data;
 
+  glims_item_sets_free (open->item_sets);
+
   if (open->image)
     {
       GimpProjection *projection = gimp_image_get_projection (open->image);
