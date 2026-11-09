@@ -417,3 +417,10 @@ state remain per-PR gates; the visible checkboxes describe merged main only.
 The intermediate dist/Glims.app is not the final verified revision. Final
 engine/runtime matrices, self-contained packaging and real editing/file
 workflows must run again after the remaining feature integrations.
+
+The combined controls candidate additionally reproduced a host-window-close
+metadata callback defect. Explicit form invalidation in `windowWillClose`
+fixes the failing real-window oracle. Its integrated pinned app smoke run
+passes 1,891 checks, including metadata/resource/adjustment forms and the
+paint-target boundary. These checks cover the candidate, not the remaining
+A–Z completion work or a final distributable bundle.

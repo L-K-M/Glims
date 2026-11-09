@@ -2180,6 +2180,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
         indexedSheet?.invalidate()
 
+        metadataSheet?.invalidate()
         adjustmentSheet?.invalidate()
 
         previewPanel?.cancel()

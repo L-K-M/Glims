@@ -430,6 +430,17 @@ extension EngineSmokeTest {
         metaSheetA.documentStateDidChange()
         check(metaSheetA.lastError == errorBefore,
               "a late error/state callback on the invalidated sheet changes nothing")
+        controllerA.showMetadata(nil)
+        if let closingSheet = controllerA.metadataSheet {
+            let priorError = closingSheet.lastError
+            controllerA.window?.close()
+            closingSheet.showError("late error after host window close")
+            closingSheet.documentStateDidChange()
+            check(closingSheet.lastError == priorError,
+                  "host window close invalidates the metadata form before late callbacks")
+        } else {
+            check(false, "the metadata form reopens for host-close coverage")
+        }
         documents.items.removeAll { $0 === docB }
     }
 }
