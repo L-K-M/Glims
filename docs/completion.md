@@ -7,10 +7,11 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-These entries describe main `08a3eb9`, including merged PRs #96–#109,
-and the initial document placement candidate (`fix/initial-document-placement`).
-The placement candidate still needs its exact-head hosted CI gate. The whole
-editor remains in progress; each checked entry covers its stated behavior.
+These entries describe main `ef1ff97`, including merged PRs #96–#114,
+and the per-window view rotation candidate (#115). Initial placement, gradient
+creation and the read-only metadata parser are merged. The rotation candidate
+still needs its exact-head hosted CI gate. The whole editor remains in progress;
+each checked entry covers its stated behavior.
 
 - [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
       fail before packaging. Hosted CI explicitly builds only the interface.
@@ -38,8 +39,9 @@ editor remains in progress; each checked entry covers its stated behavior.
       app checks in a self-contained bundle with development trees inaccessible.
       Pointer painting, keyboard editing, Save, Quit/reopen, masks/channels and
       PDF printing have separate on-screen evidence. The newer combined
-      candidate also passes 1,917 native and 2,038 app checks in its release
-      bundle, with native and Swift build trees inaccessible.
+      release from main `e7c7fb0` passes1,917 native and2,190 app checks,
+      with native and Swift build trees inaccessible. The rotation candidate
+      passes831 unit tests, all four focused runtime cases and2,237 full app checks.
 
 ## Remaining implementation and final verification
 
@@ -61,7 +63,8 @@ editor remains in progress; each checked entry covers its stated behavior.
 - [x] Tool preset storage and controls.
 - [x] Brush/pattern creation from selections and brush/pattern/gradient
       duplication controls, with checked persistence and current-choice refresh.
-- [ ] New gradients, resource rename/delete and remaining management controls.
+- [x] New gradients from explicit endpoint colors, with native persistence and owned creation forms.
+- [ ] Resource rename/delete and remaining management controls.
 - [x] Color profile assignment and conversion with explicit rasterization consent.
 - [x] Indexed conversion with generated/custom palettes, dithering and
       explicit structured-source consent.
@@ -74,7 +77,9 @@ editor remains in progress; each checked entry covers its stated behavior.
 - [x] Per-window snap toggles and captured canvas-gesture snapping to
       guides, grid and canvas.
 - [x] Initial New/Open document placement and fitting around visible palettes.
-- [ ] Remaining snapping interactions, view rotation and trackpad/modifier behavior.
+- [x] Per-window view rotation with projected rulers, fit/zoom/centering, real selection/paint/Undo,
+      angle forms, guide drags and Hand panning (current candidate).
+- [ ] Remaining snapping interactions and trackpad/modifier behavior.
 - [x] Stroke Selection and explicit Paste Into/Anchor/New Layer/Discard.
 - [x] Float Selected Pixels (move/copy), existing floating-selection drag
       and arrow nudges with captured target validation.

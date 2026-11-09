@@ -202,6 +202,12 @@ enum MainMenu {
             item("Zoom Out", #selector(DocumentWindowController.zoomOut(_:)), "-"),
             item("Fit Image", #selector(DocumentWindowController.fitImage(_:)), "0"),
             item("Actual Pixels", #selector(DocumentWindowController.actualPixels(_:)), "1"),
+            submenu("Rotate View", [
+                item("15° Clockwise", #selector(DocumentWindowController.rotateViewClockwise(_:))),
+                item("15° Counterclockwise", #selector(DocumentWindowController.rotateViewCounterclockwise(_:))),
+                item("Set Angle…", #selector(DocumentWindowController.setViewAngle(_:))),
+                item("Reset Rotation", #selector(DocumentWindowController.resetViewRotation(_:))),
+            ]),
             .separator(),
             item("Show Rulers", #selector(DocumentWindowController.toggleShowRulers(_:))),
             item("Show Guides", #selector(DocumentWindowController.toggleShowGuides(_:))),

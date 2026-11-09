@@ -9,6 +9,8 @@ import UniformTypeIdentifiers
 final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
     let imageDocument: ImageDocument
     let canvas: EngineCanvasView
+    let rotationView: CanvasRotationView
+    private var viewAngleAlert: NSAlert?
     private let preferences: EditorPreferences
     let statusBar = StatusBarView(frame: .zero)
     /// The scroll view hosting the canvas and its native ruler slots;
@@ -121,7 +123,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     init(document imageDocument: ImageDocument, preferences: EditorPreferences? = nil) {
         self.imageDocument = imageDocument
         self.preferences = preferences ?? .shared
-        self.canvas = EngineCanvasView(document: imageDocument)
+        let canvas = EngineCanvasView(document: imageDocument)
+        self.canvas = canvas
+        self.rotationView = CanvasRotationView(canvas: canvas)
 
         let window = ClassicWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 680),
                                    styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -196,6 +200,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc private func applyPreferences() {
         let color = preferences.surround.color
         canvas.surroundColor = color
+        rotationView.surroundColor = color
         scrollView.backgroundColor = color
     }
 
@@ -216,7 +221,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // must not also include automatic title-bar overlap insets.
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
-        scrollView.documentView = canvas
+        scrollView.documentView = rotationView
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.backgroundColor = NSColor(calibratedWhite: 0.42, alpha: 1)
@@ -304,23 +309,45 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// restores it on the replacement document.
     var canvasCenter: CGPoint {
         let visible = scrollView.contentView.bounds
-        return CGPoint(x: visible.midX / canvas.scale, y: visible.midY / canvas.scale)
+        let point = canvas.convert(CGPoint(x: visible.midX, y: visible.midY), from: scrollView.contentView)
+        return CGPoint(x: point.x / canvas.scale, y: point.y / canvas.scale)
     }
 
     /// Scrolls so `point` (image pixels) is in the middle of the view.
     func center(on point: CGPoint) {
-        let visible = scrollView.contentView.bounds
-        canvas.scroll(NSPoint(x: point.x * canvas.scale - visible.width / 2,
-                              y: point.y * canvas.scale - visible.height / 2))
+        let clip = scrollView.contentView
+        let point = rotationView.convert(CGPoint(x: point.x * canvas.scale, y: point.y * canvas.scale), from: canvas)
+        let target = CGRect(x: point.x - clip.bounds.width / 2, y: point.y - clip.bounds.height / 2,
+                            width: clip.bounds.width, height: clip.bounds.height)
+        clip.scroll(to: clip.constrainBoundsRect(target).origin)
+        scrollView.reflectScrolledClipView(clip)
     }
 
     func zoom(to percent: Int) {
-        let visible = scrollView.contentView.bounds
-        let imageCenter = CGPoint(x: visible.midX / canvas.scale, y: visible.midY / canvas.scale)
+        let imageCenter = canvasCenter
         canvas.setZoom(percent: percent)
+        rotationView.layoutCanvas()
         center(on: imageCenter)
         statusBar.setZoom(percent: percent)
         stateDidChange()
+    }
+
+    @discardableResult
+    func setViewRotation(degrees: Double) -> Bool {
+        guard degrees.isFinite, !closeStarted, !imageDocument.isClosing else { return false }
+        let centerBefore = canvasCenter
+        canvas.guideDrag.cancel()
+        canvas.tools.cancelMoveSnap()
+        canvas.tools.cancelFloatingMove()
+        guard rotationView.setRotationDegrees(degrees) else { return false }
+        scrollView.rulersVisible = rulerViewState.showsRulers
+        window?.contentView?.layoutSubtreeIfNeeded()
+        center(on: centerBefore)
+        canvas.needsDisplay = true
+        canvas.setNeedsRender()
+        invalidateRulers()
+        stateDidChange()
+        return true
     }
 
     /// Classic title and status: `name @ 100% (RGB, u8-non-linear)`.
@@ -328,8 +355,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// grayscale or indexed image — or one a conversion just made — no
     /// longer titles itself RGB.
     static func title(name: String, zoomPercent: Int, isDirty: Bool,
-                      mode: EngineSession.ColorMode, precision: String) -> String {
-        "\(isDirty ? "• " : "")\(name) @ \(zoomPercent)% (\(mode.title), \(precision))"
+                      mode: EngineSession.ColorMode, precision: String, viewRotation: Double = 0) -> String {
+        let rotation = viewRotation == 0 ? "" : " · View \(viewRotation.formatted(.number.precision(.fractionLength(0...2))))°"
+        return "\(isDirty ? "• " : "")\(name) @ \(zoomPercent)% (\(mode.title), \(precision))\(rotation)"
     }
 
     /// While true the status bar shows a refusal the user should read;
@@ -388,7 +416,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         window?.title = Self.title(name: imageDocument.name, zoomPercent: canvas.zoomPercent,
                                    isDirty: imageDocument.hasUnsavedChanges,
                                    mode: imageDocument.colorInfo.mode,
-                                   precision: imageDocument.info.precision)
+                                   precision: imageDocument.info.precision,
+                                   viewRotation: rotationView.rotationDegrees)
         let undo = imageDocument.undoInfo.nextUndo.isEmpty ? "" : " · Undo \(imageDocument.undoInfo.nextUndo)"
         if !statusIsError {
             statusBar.message = EngineActivity.shared.label.map { "\($0)…" } ?? "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(imageDocument.info.layerCount) layer\(imageDocument.info.layerCount == 1 ? "" : "s")\(undo)"
@@ -552,10 +581,50 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func zoomIn(_ sender: Any?) { zoom(to: ZoomLadder.zoomIn(from: canvas.zoomPercent)) }
     @objc func zoomOut(_ sender: Any?) { zoom(to: ZoomLadder.zoomOut(from: canvas.zoomPercent)) }
     @objc func actualPixels(_ sender: Any?) { zoom(to: ZoomLadder.actualPixels) }
+    @objc func rotateViewClockwise(_ sender: Any?) {
+        endPendingEdits()
+        setViewRotation(degrees: rotationView.rotationDegrees + 15)
+    }
+    @objc func rotateViewCounterclockwise(_ sender: Any?) {
+        endPendingEdits()
+        setViewRotation(degrees: rotationView.rotationDegrees - 15)
+    }
+    @objc func resetViewRotation(_ sender: Any?) {
+        endPendingEdits()
+        setViewRotation(degrees: 0)
+    }
+    @objc func setViewAngle(_ sender: Any?) {
+        guard let window, !imageDocument.isClosing, window.attachedSheet == nil else { return }
+        endPendingEdits()
+        let alert = NSAlert()
+        alert.messageText = "Rotate View"
+        alert.informativeText = "Angle in degrees, clockwise. This changes the view without rotating image pixels."
+        let field = NSTextField(string: String(rotationView.rotationDegrees))
+        field.frame = NSRect(x: 0, y: 0, width: 180, height: 24)
+        field.setAccessibilityLabel("View angle in degrees")
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Apply")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        viewAngleAlert = alert
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            self.viewAngleAlert = nil
+            guard response == .alertFirstButtonReturn, !self.closeStarted, !self.imageDocument.isClosing else { return }
+            guard let angle = Double(field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)), angle.isFinite else {
+                self.showStatusError("Enter a finite angle in degrees, such as 22.5.")
+                return
+            }
+            self.setViewRotation(degrees: angle)
+        }
+    }
     @objc func fitImage(_ sender: Any?) {
         window?.contentView?.layoutSubtreeIfNeeded()
         let viewport = scrollView.contentSize
-        zoom(to: ZoomLadder.fit(imageWidth: Double(imageDocument.info.width), imageHeight: Double(imageDocument.info.height),
+        let extent = CanvasRotationView.rotatedSize(
+            CGSize(width: imageDocument.info.width, height: imageDocument.info.height),
+            degrees: rotationView.rotationDegrees)
+        zoom(to: ZoomLadder.fit(imageWidth: Double(extent.width), imageHeight: Double(extent.height),
                                viewportWidth: Double(viewport.width), viewportHeight: Double(viewport.height),
                                backingFactor: Double(window?.backingScaleFactor ?? 1)))
         center(on: CGPoint(x: Double(imageDocument.info.width) / 2, y: Double(imageDocument.info.height) / 2))
@@ -1414,6 +1483,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return !editingBlocked && !previewBusy
         case #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)):
             return !imageDocument.isClosing
+        case #selector(rotateViewClockwise(_:)), #selector(rotateViewCounterclockwise(_:)), #selector(setViewAngle(_:)):
+            return !imageDocument.isClosing && window?.attachedSheet == nil
+        case #selector(resetViewRotation(_:)):
+            return !imageDocument.isClosing && window?.attachedSheet == nil && rotationView.rotationDegrees != 0
         case #selector(pasteInto(_:)):
             // The tooltip explains the cached refusal: an active floating
             // selection, a missing/locked/structured target, a pending
@@ -2231,6 +2304,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     func windowWillClose(_ notification: Notification) {
         closeStarted = true
+        if let alert = viewAngleAlert, window?.attachedSheet === alert.window {
+            window?.endSheet(alert.window, returnCode: .abort)
+        }
+        viewAngleAlert = nil
         // A closing window cancels any in-progress guide drag: the ghost is
         // cleared and no guide action is committed; late events afterwards
         // are ignored by the gesture's captured window/document identity.
