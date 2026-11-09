@@ -2383,6 +2383,41 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*image_metadata_tag_info) (GlimsEngine *engine, GlimsImageID image,
                                            const char *tag, GlimsMetadataTagInfo *outInfo,
                                            char **error);
+
+  /* Creates ONE saved bitmap resource from owned pixels and publishes it
+   * to the engine's own resource catalog (slot 129): a bitmap brush
+   * (resourceKind GLIMS_RESOURCE_BRUSH) or a pattern
+   * (GLIMS_RESOURCE_PATTERN) built from `pixels`, written to the
+   * engine's configured writable data folder and added to the factory,
+   * with its new handle in `outID`. The call takes no image: it changes
+   * no image, no undo history, no context and no clipboard.
+   *
+   * `name` is the resource label: nonempty valid UTF-8 with no embedded
+   * NUL and no control characters, at most 255 UTF-8 bytes so it fits
+   * the native 256-byte label; a resource of the same `kind` already
+   * carrying this exact name is refused (FAILED), never silently
+   * uniquified. `width` and `height` are 1 ... 10000 each (the native
+   * resource dimension bound). `pixels` (`constRGBAbytes`) holds exactly
+   * `byte_count` = width * height * 4 straight-alpha R'G'B'A u8 bytes,
+   * checked with overflow-safe arithmetic before anything is mutated;
+   * a NULL `pixels` or a mismatched `byte_count` is INVALID_ARGUMENT.
+   * `brushSpacing` is 1 ... 1000 for a brush and must be 0 for a
+   * pattern. GLIMS_RESOURCE_GRADIENT is UNSUPPORTED (no pixel-to-
+   * gradient conversion exists); any other `kind` is
+   * INVALID_ARGUMENT.
+   *
+   * BUSY while the engine is busy or ANY stroke or filter session is
+   * active, not just on one image. `outID` is set to 0 first and again
+   * on EVERY failure (including a missing output or error path); on
+   * success it is the new resource's positive opaque handle, usable
+   * with resources(), resource_identifiers(), resource_resolve(),
+   * resource_thumbnail(), stroke_begin_with_brush_resource() and
+   * fill_pattern() like any catalog handle. */
+  GlimsStatus  (*resource_create_pixels) (GlimsEngine *engine, uint32_t kind,
+                                          const char *name, int32_t width, int32_t height,
+                                          const uint8_t *pixels, size_t byte_count,
+                                          uint32_t brush_spacing, GlimsResourceID *outID,
+                                          char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
