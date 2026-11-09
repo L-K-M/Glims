@@ -3476,6 +3476,6 @@ automatic stretch and legacy-mismatch editing remain open.
 Layers to Image Size captures the ordered pixel-layer vector and preflights
 every member before resizing any. API v1 appends 156; Native mask geometry,
 selection/tree preservation and one outer Undo follow Core's resize route.
-See `batch-layer-fit.md`: 964 units, 145 native and 21 UI checks per engine,
+See `batch-layer-fit.md`: 964 units, 163 native and 21 UI checks per engine,
 plus 1,917 native/2,542 app checks in the isolated bundle pass. Broader
 batch/gesture policy remains open.

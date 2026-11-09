@@ -2,8 +2,10 @@
 
 Layer > Layers to Image Size and the Layers palette operate on the complete
 ordered layer selection captured when the command is accepted. They resize
-each selected pixel layer to the image bounds at 0,0 with transparent fill;
-Native Core resizes each layer's mask with it. Existing pixels keep their
+each selected pixel layer to the image bounds at 0,0. Core requests
+transparent padding and resizes each layer's mask with it. As in the
+single-layer command, an opaque layer without alpha uses the native
+background color for padding; this command does not add an alpha channel. Existing pixels keep their
 image coordinates inside the canvas. Pixels outside the canvas are cropped,
 and Undo restores their original extent and bytes.
 
@@ -29,8 +31,8 @@ engine. Existing single-layer Fit and Trim behavior is retained.
 Verification:
 
 - All 964 unit tests pass, including eight cached policy tests.
-- Each supported engine passes 145 focused native checks: exact world-space
-  layer/mask bytes, nested/root targets and untouched siblings, selection,
+- Each supported engine passes 163 focused native checks: exact world-space
+  layer/mask bytes, opaque RGB background padding and unchanged format, nested/root targets and untouched siblings, selection,
   alpha locks, maximum 256 no-op, invalid inputs, readiness, clean Undo/Redo,
   retained rasterized Text and host-thread facade dispatch.
 - Each engine passes 21 actual UI checks, including real main/palette actions,

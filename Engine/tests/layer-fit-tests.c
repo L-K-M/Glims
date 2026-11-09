@@ -286,6 +286,91 @@ cleanup:
 }
 
 static GlimsStatus
+opaque_background_case (GlimsEngine *engine, gpointer unused)
+{
+  (void) unused;
+  GlimsImageID id = 0; char *error = NULL;
+  GimpContext *context = gimp_get_user_context (engine->gimp);
+  GeglColor *old_background = NULL, *background = NULL;
+  gchar *original = NULL, *fitted = NULL, *state = NULL;
+  Raw opaque_before = {0}, rgba_before = {0}, resized = {0};
+  guint8 original_pixels[16 * 12 * 4], fitted_image[16 * 12 * 4], rendered[16 * 12 * 4];
+  NEED (context && gimp_context_get_background (context), "opaque fixture has a native user-context background");
+  old_background = gegl_color_duplicate (gimp_context_get_background (context));
+  background = gegl_color_new (NULL);
+  NEED (old_background && background, "original background is independently owned for cleanup");
+  gegl_color_set_rgba_with_space (background, 0.2, 0.4, 0.6, 1.0, NULL); /* Explicit nonlinear sRGB. */
+  gimp_context_set_background (context, background);
+  NEED (api->image_new (engine, 16, 12, &id, &error) == GLIMS_STATUS_OK, "opaque RGB fixture image starts");
+  GimpImage *image = glims_lookup_image (engine, id)->image;
+  GimpLayer *opaque = gimp_layer_new (image, 5, 4, gimp_image_get_layer_format (image, FALSE),
+                                     "Opaque RGB offset", 1.0, GIMP_LAYER_MODE_NORMAL);
+  NEED (opaque != NULL, "native RGB layer constructs without alpha");
+  gimp_item_set_offset (GIMP_ITEM (opaque), 3, 2);
+  gboolean attached = gimp_image_add_layer (image, opaque, NULL, 0, FALSE);
+  if (!attached) g_object_unref (opaque);
+  NEED (attached, "opaque RGB layer attaches");
+  guint8 rgb[5 * 4 * 3];
+  for (guint y = 0; y < 4; y++) for (guint x = 0; x < 5; x++) {
+    guint8 *p = rgb + (y * 5 + x) * 3; p[0] = 17 + x * 13; p[1] = 33 + y * 17; p[2] = 65 + x + y;
+  }
+  gegl_buffer_set (gimp_drawable_get_buffer (GIMP_DRAWABLE (opaque)), GEGL_RECTANGLE (0, 0, 5, 4),
+                   0, babl_format ("R'G'B' u8"), rgb, GEGL_AUTO_ROWSTRIDE);
+  gimp_drawable_update (GIMP_DRAWABLE (opaque), 0, 0, 5, 4);
+  GimpLayer *rgba = add_layer (image, NULL, "RGBA alongside opaque", 5, 4, -2, 6, 37);
+  NEED (rgba && !gimp_drawable_has_alpha (GIMP_DRAWABLE (opaque)), "mixed batch has real RGB and RGBA targets");
+  const Babl *original_format = gimp_drawable_get_format (GIMP_DRAWABLE (opaque));
+  opaque_before = read_raw (GIMP_DRAWABLE (opaque), FALSE); rgba_before = read_raw (GIMP_DRAWABLE (rgba), FALSE);
+  NEED (opaque_before.x == 3 && opaque_before.y == 2 && opaque_before.bytes[0] == 17 &&
+        opaque_before.bytes[1] == 33 && opaque_before.bytes[2] == 65 && opaque_before.bytes[3] == 255,
+        "opaque seed has independently known RGB/alpha and image offset");
+  NEED (api->image_render (engine, id, 1, (GlimsRect) {0, 0, 16, 12}, original_pixels, 16 * 4) == GLIMS_STATUS_OK,
+        "original opaque composite captured");
+  gimp_image_clean_all (image); original = fingerprint (engine, id, FALSE);
+  GlimsUndoInfo before = {0}, after = {0}; GlimsItemID ids[] = { item_id (opaque), item_id (rgba) };
+  NEED (original && api->image_undo_info (engine, id, &before) == GLIMS_STATUS_OK &&
+        glims_image_fit_layers_to_image (engine, id, ids, 2, &error) == GLIMS_STATUS_OK, "mixed RGB/RGBA batch fits");
+  resized = read_raw (GIMP_DRAWABLE (opaque), FALSE);
+  gboolean expected = resized.x == 0 && resized.y == 0 && resized.width == 16 && resized.height == 12;
+  const guint8 padding[] = {51, 102, 153, 255};
+  for (gint y = 0; expected && y < 12; y++) for (gint x = 0; expected && x < 16; x++) {
+    gint sx = x - opaque_before.x, sy = y - opaque_before.y;
+    const guint8 *pixel = padding;
+    if (sx >= 0 && sx < opaque_before.width && sy >= 0 && sy < opaque_before.height)
+      pixel = opaque_before.bytes + ((gsize) sy * opaque_before.width + sx) * 4;
+    expected = !memcmp (resized.bytes + ((gsize) y * 16 + x) * 4, pixel, 4);
+  }
+  CHECK (expected && !gimp_drawable_has_alpha (GIMP_DRAWABLE (opaque)) &&
+         gimp_drawable_get_format (GIMP_DRAWABLE (opaque)) == original_format,
+         "no-alpha fit preserves source RGB/format and pads exact opaque sRGB background51/102/153");
+  CHECK (fitted_pixels (GIMP_DRAWABLE (rgba), &rgba_before, FALSE, 16, 12), "same batch still pads RGBA target transparently");
+  CHECK (api->image_undo_info (engine, id, &after) == GLIMS_STATUS_OK && after.undo_count == before.undo_count + 1,
+         "opaque/RGBA batch adds one native Undo");
+  NEED (api->image_render (engine, id, 1, (GlimsRect) {0, 0, 16, 12}, fitted_image, 16 * 4) == GLIMS_STATUS_OK,
+        "fitted opaque composite captured");
+  fitted = fingerprint (engine, id, FALSE);
+  NEED (fitted && api->image_undo (engine, id) == GLIMS_STATUS_OK, "opaque batch undoes");
+  state = fingerprint (engine, id, FALSE);
+  CHECK (state && !strcmp (state, original) && !gimp_image_is_dirty (image) &&
+         gimp_drawable_get_format (GIMP_DRAWABLE (opaque)) == original_format &&
+         api->image_undo_info (engine, id, &after) == GLIMS_STATUS_OK && after.undo_count == before.undo_count && after.redo_count == 1 &&
+         api->image_render (engine, id, 1, (GlimsRect) {0, 0, 16, 12}, rendered, 16 * 4) == GLIMS_STATUS_OK &&
+         !memcmp (rendered, original_pixels, sizeof rendered), "Undo restores raw RGB format/bounds/pixels/composite, clean mark and history position");
+  g_clear_pointer (&state, g_free);
+  NEED (api->image_redo (engine, id) == GLIMS_STATUS_OK, "opaque batch redoes");
+  state = fingerprint (engine, id, FALSE);
+  CHECK (state && !strcmp (state, fitted) && !gimp_drawable_has_alpha (GIMP_DRAWABLE (opaque)) &&
+         api->image_render (engine, id, 1, (GlimsRect) {0, 0, 16, 12}, rendered, 16 * 4) == GLIMS_STATUS_OK &&
+         !memcmp (rendered, fitted_image, sizeof rendered), "Redo restores exact background-filled RGB pixels and composite");
+cleanup:
+  if (old_background) gimp_context_set_background (context, old_background);
+  g_clear_object (&old_background); g_clear_object (&background);
+  raw_clear (&opaque_before); raw_clear (&rgba_before); raw_clear (&resized);
+  g_free (original); g_free (fitted); g_free (state); clear_error (&error); if (id) api->image_close (engine, id);
+  return GLIMS_STATUS_OK;
+}
+
+static GlimsStatus
 nesting_and_alpha_case (GlimsEngine *engine, gpointer unused)
 {
   (void) unused;
@@ -568,6 +653,7 @@ main (int argc, char **argv)
     if (api && error) api->free_string (error); g_free (user); g_free (cache); return 2;
   }
   CHECK (glims_engine_call (engine, geometry_cases, NULL) == GLIMS_STATUS_OK, "geometry fixtures execute on worker");
+  CHECK (glims_engine_call (engine, opaque_background_case, NULL) == GLIMS_STATUS_OK, "opaque background-fill fixture executes on worker");
   CHECK (glims_engine_call (engine, nesting_and_alpha_case, NULL) == GLIMS_STATUS_OK, "nested/alpha-lock fixture executes on worker");
   CHECK (glims_engine_call (engine, capacity_case, NULL) == GLIMS_STATUS_OK, "maximum-count fixture executes on worker");
   CHECK (glims_engine_call (engine, refusal_cases, NULL) == GLIMS_STATUS_OK, "refusal fixtures execute on worker");
