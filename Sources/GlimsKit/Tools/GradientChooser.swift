@@ -41,6 +41,16 @@ final class GradientChooser {
         panel?.dismiss()
     }
 
+    /// The focused catalog refresh after a create or duplicate published a
+    /// new gradient: the open chooser refetches its rows off the main
+    /// thread with the picker's stale-generation discipline, keeping its
+    /// pending highlight and the committed choice untouched — the new
+    /// gradient is never auto-selected. A closed chooser ignores this; its
+    /// next open loads the fresh catalog anyway.
+    func reloadCatalog() {
+        panel?.reloadCatalog()
+    }
+
     /// The preview of exactly `choice`, if one was rendered for it — an old
     /// image is never reused for a changed choice.
     func thumbnail(choice: EngineSession.ResourceIdentity?) -> NSImage? {
@@ -197,6 +207,16 @@ final class GradientChooserPanel: NSWindowController, NSWindowDelegate,
 
     @objc func load() {
         controller.load()
+    }
+
+    /// Refetches the catalog after a create or duplicate published a new
+    /// gradient. The picker's stale-generation discipline applies: a late
+    /// delivery for a closed or replaced view is dropped. The highlighted
+    /// row survives when its row does; the new item is never chosen and
+    /// the committed choice is untouched.
+    func reloadCatalog() {
+        guard !controller.isClosed else { return }
+        controller.reloadCatalog()
     }
 
     private func catalogDelivered() {
