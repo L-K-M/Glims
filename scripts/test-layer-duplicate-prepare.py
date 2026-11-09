@@ -40,6 +40,9 @@ def check_producer(producer: Path) -> dict[str, object]:
     if not producer.is_dir():
         fail(f"producer prefix {producer} is not a directory")
     objects = sorted(glob.glob(str(producer / "obj" / "*.o")))
+    # Recompile the implementation under test even when it is already part
+    # of the selected producer; link it exactly once.
+    objects = [path for path in objects if Path(path).name != READER.stem + ".o"]
     paths = {
         "obj": objects,
         "compile_rsp": producer / "compile.rsp",

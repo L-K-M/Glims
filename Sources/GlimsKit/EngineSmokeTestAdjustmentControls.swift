@@ -240,6 +240,13 @@ extension EngineSmokeTest {
         let closeHold = DispatchSemaphore(value: 0)
         docA.inputQueue.async { closeHold.wait() }
         control(sheetWindow3, "Create adjustment layer", as: NSButton.self)?.performClick(nil)
+        // Inspect native state on the counted queue before teardown. A closed
+        // host intentionally stops refreshing its presentation cache.
+        final class CloseCreationProbe: @unchecked Sendable { var found = false }
+        let creationProbe = CloseCreationProbe()
+        docA.run(effect: .readsPixels) { session, image in
+            creationProbe.found = try session.layers(image).contains { $0.name == "Close Test" }
+        }
         // Hold the accepted worker explicitly: performClick can pump the main
         // run loop, so same-turn timing alone cannot establish an in-flight job.
         a.window?.close()
@@ -247,7 +254,7 @@ extension EngineSmokeTest {
         closeHold.signal()
         settle(docA)
         wait { (try? session.info(imageA)) == nil }
-        check(docA.isClosing && docA.layers.contains { $0.name == "Close Test" },
+        check(docA.isClosing && creationProbe.found,
               "the counted creation ran to completion before the close destroyed the image")
         check(a.previewPanel == nil,
               "a host closed before the creation completed never opens the parameter editor")

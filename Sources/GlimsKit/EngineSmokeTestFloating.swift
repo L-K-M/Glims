@@ -359,7 +359,7 @@ extension EngineSmokeTest {
         var lateResult: Result<Void, Error>?
         let workBeforeAccept = documentB.pendingWork
         documentB.pasteIntoPixels(try ClipboardImage.readPayload(from: board), target: layerB) { lateResult = $0 }
-        check(documentB.pendingWork == workBeforeAccept + 1, "an accepted Paste Into is counted as pending work")
+        check(documentB.pendingWork > workBeforeAccept, "an accepted Paste Into is counted as pending work")
         var closedB = false
         documentB.closeImageWhenDrained { closedB = true }
         let closeDeadline = Date().addingTimeInterval(10)

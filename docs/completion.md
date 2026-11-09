@@ -7,11 +7,10 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-These entries describe main `ef1ff97`, including merged PRs #96–#114,
-and the per-window view rotation candidate (#115). Initial placement, gradient
-creation and the read-only metadata parser are merged. The rotation candidate
-still needs its exact-head hosted CI gate. The whole editor remains in progress;
-each checked entry covers its stated behavior.
+These entries describe merged main through #121, plus the explicitly identified
+batch-duplication candidate. Trackpad pinch/rotate, Option-scroll, and typed
+single-language metadata controls are merged and verified. The whole editor
+remains in progress; each checked entry covers its stated behavior.
 
 - [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
       fail before packaging. Hosted CI explicitly builds only the interface.
@@ -53,7 +52,9 @@ each checked entry covers its stated behavior.
       and fresh-token layer recall; weak live identity and Undo memory limits.
 - [x] Channel/path saved-set recall with ordered native mirrors and guarded
       single-target edits, including arrow-key and floating-selection cases.
-- [ ] Batch editing and consistent gesture-time rasterize/revert policy.
+- [ ] Batch duplication candidate: captured ordinary pixel layers, one native Undo,
+      ordered selection restoration, Command-J and Layers palette controls.
+- [ ] Remaining batch operations and consistent gesture-time rasterize/revert policy.
 - [x] Adjustment layer creation with explicit placement and editable filter settings.
 - [ ] Adjustment groups, remaining custom filter forms and filter inputs.
 - [x] Path fill, vector layers and vector style controls.
@@ -79,7 +80,8 @@ each checked entry covers its stated behavior.
 - [x] Initial New/Open document placement and fitting around visible palettes.
 - [x] Per-window view rotation with projected rulers, fit/zoom/centering, real selection/paint/Undo,
       angle forms, guide drags and Hand panning (current candidate).
-- [ ] Remaining snapping interactions and trackpad/modifier behavior.
+- [x] Per-window trackpad pinch/rotation and pointer-anchored Option-scroll zoom.
+- [ ] Remaining snapping interactions and other modifier behavior.
 - [x] Stroke Selection and explicit Paste Into/Anchor/New Layer/Discard.
 - [x] Float Selected Pixels (move/copy), existing floating-selection drag
       and arrow nudges with captured target validation.
@@ -88,8 +90,10 @@ each checked entry covers its stated behavior.
 - [x] Shortcut customization and menu integration using immutable defaults.
 - [x] Registered image metadata editing with descriptor gates and value
       preservation; layer-boundary and selection-edge view toggles.
-- [ ] Remaining typed metadata editing (including language alternatives), Image
-      Adjust commands, proof view controls and complete menu/keyboard coverage.
+- [x] Typed existing language-alternative editing, with native preservation/Undo
+      guards and independent per-key drafts in the metadata controls.
+- [ ] Remaining typed metadata editors, Image Adjust commands, proof view controls
+      and complete menu/keyboard coverage.
 - [ ] Recorder and semantic command replay.
 - [ ] Full accessibility/focus, appearance and English-copy audit.
 - [ ] Public distribution checks from `plan.md`: corresponding sources,

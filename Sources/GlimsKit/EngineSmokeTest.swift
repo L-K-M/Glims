@@ -281,6 +281,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (float selected pixels)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "batch-duplicate" {
+                try exerciseBatchDuplicate(session, documents: documents)
+                print(failures == 0 ? "PASSED (batch duplicate)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-controls" {
                 try exerciseMetadataControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (metadata controls)" : "FAILED: \(failures) failure(s)")
@@ -406,6 +411,7 @@ enum EngineSmokeTest {
             try exerciseSavedSetControls(session, work: work, documents: documents)
             try exerciseAdjustmentControls(session, work: work, documents: documents)
             try exerciseLayerMultiselectionControls(session, work: work, documents: documents)
+            try exerciseBatchDuplicate(session, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)
             try exerciseFloatingMove(session, work: work, documents: documents)
             try exerciseFloatSelectedPixels(session, work: work, documents: documents)
