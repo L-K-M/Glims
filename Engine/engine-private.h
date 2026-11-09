@@ -101,6 +101,26 @@ GlimsStatus glims_item_sets_rename  (GimpImage *image, GType kind, const char *n
                                      const char *new_name, char **error);
 GlimsStatus glims_item_sets_remove  (GimpImage *image, GType kind, const char *name, char **error);
 
+/* item-sets.c, EDIT-facade (slot 135) support: token-exhaustion preflight
+ * (TRUE at UINT64_MAX; token-minting edits fail closed before any
+ * mutation), token resolution within one image AND kind (borrowed native
+ * set; NULL for foreign/stale/expired/wrong-kind), token of a native set. */
+gboolean        glims_item_sets_token_exhausted (GlimsItemSets *manager);
+GimpItemList *  glims_item_sets_resolve (GlimsItemSets *manager, uint64_t token, GType kind);
+uint64_t        glims_item_sets_token_of (GlimsItemSets *manager, GimpItemList *native);
+
+/* item-sets-edit.c: facade slot 135 (image_item_set_edit), one undoable
+ * CREATE/REPLACE/RENAME/REMOVE of one fixed saved set by its current
+ * token. Engine thread; all validation and the edit-readiness gate happen
+ * before any mutation. outToken: zeroed at entry and on failure, the
+ * resulting set's token on CREATE/REPLACE/RENAME success (fresh after a
+ * mutation, current after a no-op), 0 on REMOVE. */
+GlimsStatus     glims_image_item_set_edit (GlimsEngine *e, GlimsImageID image,
+                                           uint32_t operation, uint32_t kind,
+                                           uint64_t token, const char *name,
+                                           const GlimsItemID *members, int32_t count,
+                                           uint64_t *outToken, char **error);
+
 /* An image the app holds open. */
 typedef struct
 {

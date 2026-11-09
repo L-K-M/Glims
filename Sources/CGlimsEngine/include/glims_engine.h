@@ -1153,6 +1153,15 @@ typedef struct GlimsItemSetInfo {
                                * — resolve members through `token` */
 } GlimsItemSetInfo;
 
+/* One edit operation of image_item_set_edit (slot 135); see the slot's
+ * comment below for the per-op argument contract. Facade-owned. */
+typedef enum GlimsItemSetEditOp {
+  GLIMS_ITEM_SET_EDIT_CREATE  = 1,
+  GLIMS_ITEM_SET_EDIT_REPLACE = 2,
+  GLIMS_ITEM_SET_EDIT_RENAME  = 3,
+  GLIMS_ITEM_SET_EDIT_REMOVE  = 4
+} GlimsItemSetEditOp;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -2597,6 +2606,43 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*image_item_set_members) (GlimsEngine *engine, GlimsImageID image,
                                           uint64_t token, GlimsItemID *members,
                                           int32_t capacity, int32_t *count);
+  /* Slot 135: ONE undoable edit of one of the image's fixed saved sets.
+   * `operation` is a GlimsItemSetEditOp, `kind` a GlimsItemSetKind; both are
+   * the facade's own enums, unknown values are INVALID_ARGUMENT.
+   * CREATE (token 0) takes the full new `name` and the EXPLICIT `members`
+   * (`count` 0 with `members` NULL is an empty set). REPLACE, RENAME and
+   * REMOVE take the CURRENT `token` of a set of this image and kind, as
+   * listed by slot 133: a foreign, stale or expired token is NOT_FOUND and
+   * never retargeted — the set is never resolved through a name or the
+   * display label. Field relevance is strict: REPLACE passes only `members`
+   * (`name` NULL), RENAME only the desired full `name` (count 0), REMOVE
+   * neither; any other combination, `count` < 0 or `members` NULL with
+   * `count` > 0 is INVALID_ARGUMENT. `name` is the FULL name: nonempty
+   * valid UTF-8, no control characters, at most 255 bytes, as a
+   * NUL-terminated C string (an embedded NUL cannot be expressed here).
+   * Members are item ids, each > 0 (0 never means "the current selection"),
+   * currently attached to this image, of the set's kind, and unique.
+   * This is a WRITE: it requires edit readiness (BUSY while a stroke, filter
+   * preview or plug-in holds the image) and refuses before any mutation when
+   * the undo stack is frozen; every refused or failed call preserves state,
+   * history and the dirty flag exactly. A successful mutating call is one
+   * native undo step and dirties the image (native stack limits may expire
+   * the new step immediately — the edit stays applied, as with other native
+   * commands). A no-op (identical REPLACE members, same-name RENAME) returns
+   * OK with no undo step and no dirty change.
+   * `outToken` (may be NULL) is reset to 0 before dispatch and on every
+   * failure. On success CREATE/REPLACE/RENAME receive the resulting set's
+   * token — fresh after a mutation (the old token expires for good), the
+   * current one after a no-op; REMOVE receives 0. At token-counter
+   * exhaustion (UINT64_MAX) CREATE/REPLACE/RENAME are refused (FAILED,
+   * outToken 0) in preflight before ANY mutation. NOT_FOUND for an unknown
+   * image or a token this image+kind does not own; NOT_RUNNING for a NULL
+   * engine. On every failure nothing is mutated. */
+  GlimsStatus  (*image_item_set_edit) (GlimsEngine *engine, GlimsImageID image,
+                                       uint32_t operation, uint32_t kind,
+                                       uint64_t token, const char *name,
+                                       const GlimsItemID *members, int32_t count,
+                                       uint64_t *outToken, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

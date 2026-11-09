@@ -572,3 +572,34 @@ glims_item_sets_members_of (GlimsItemSets *manager, uint64_t token,
   *count = (int32_t) live_members (manager, set, out, out ? capacity : 0);
   return GLIMS_STATUS_OK;
 }
+
+/* ---- EDIT facade support (slot 135) ------------------------------------- */
+
+/* TRUE at token-counter exhaustion: token-minting edits fail closed in
+ * preflight, before any mutation. */
+gboolean
+glims_item_sets_token_exhausted (GlimsItemSets *manager)
+{
+  return ! manager->engine || manager->engine->next_item_set_token == G_MAXUINT64;
+}
+
+/* The set `token` names here, only when its kind matches; a token owned by
+ * another image or kind matches nothing. Strong ref; the caller unrefs. */
+GimpItemList *
+glims_item_sets_resolve (GlimsItemSets *manager, uint64_t token, GType kind)
+{
+  FixedSet *set = find_set_by_token (manager, token);
+
+  if (! set || set->kind != kind)
+    return NULL;
+  return g_weak_ref_get (&set->native);
+}
+
+/* The facade token of the mirror set of `native`, or 0. */
+uint64_t
+glims_item_sets_token_of (GlimsItemSets *manager, GimpItemList *native)
+{
+  FixedSet *set = find_set (manager, native);
+
+  return set ? set->token : 0;
+}

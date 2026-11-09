@@ -1011,6 +1011,10 @@ MARSHAL (image_render_to_profile, return glims_image_render_to_profile (e, a->im
 MARSHAL (image_item_sets, return glims_image_item_sets (e, a->image, a->out, a->capacity, a->count);)
 MARSHAL (image_item_set_members, return glims_image_item_set_members (e, a->image, a->token, a->out,
                                                                        a->capacity, a->count);)
+MARSHAL (image_item_set_edit, return glims_image_item_set_edit (e, a->image, (uint32_t) a->width,
+                                                                (uint32_t) a->height, a->token, a->string,
+                                                                a->in, a->capacity, (uint64_t *) a->out,
+                                                                a->error);)
 MARSHAL (image_save,   return glims_image_save (e, a->image, a->string, a->error);)
 MARSHAL (image_save_copy, return glims_image_save_copy (e, a->image, a->string, a->error);)
 MARSHAL (image_export, return glims_image_export (e, a->image, a->string, a->error);)
@@ -1392,6 +1396,20 @@ api_image_item_set_members (GlimsEngine *e, GlimsImageID image, uint64_t token,
   GlimsArgs a = { .image = image, .token = token, .out = members, .capacity = capacity, .count = count };
   if (count) *count = 0;
   return glims_engine_call (e, image_item_set_members_on_engine, &a);
+}
+
+/* Zero the out token in the bridge too, so a dispatch without a running
+ * engine (NOT_RUNNING) still resets the output. */
+static GlimsStatus
+api_image_item_set_edit (GlimsEngine *e, GlimsImageID image, uint32_t operation, uint32_t kind,
+                         uint64_t token, const char *name, const GlimsItemID *members,
+                         int32_t count, uint64_t *outToken, char **error)
+{
+  GlimsArgs a = { .image = image, .width = (int32_t) operation, .height = (int32_t) kind,
+                  .token = token, .string = name, .in = members, .capacity = count,
+                  .out = outToken, .error = error };
+  if (outToken) *outToken = 0;
+  return glims_engine_call (e, image_item_set_edit_on_engine, &a);
 }
 
 static GlimsStatus
@@ -2599,6 +2617,7 @@ static const GlimsEngineAPI api_v1 = {
   .image_render_to_profile = api_image_render_to_profile,
   .image_item_sets = api_image_item_sets,
   .image_item_set_members = api_image_item_set_members,
+  .image_item_set_edit = api_image_item_set_edit,
 };
 
 __attribute__ ((visibility ("default")))
