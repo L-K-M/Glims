@@ -3239,3 +3239,13 @@ all admitted maps, unrelated data, native normalization stability and roundtrip
 fidelity. It has no public writer slot or UI yet. Native conformance, 27 preparation
 checks and 9 inventory checks pass on every engine; the normalization helper has
 124 checks per engine. 838 unit and 14 script tests pass; bundle/CI checks pending.
+
+### Single-language metadata controls candidate (2026-11-09)
+
+Image → Metadata offers Edit Language for a descriptor-confirmed language
+alternative. The typed form uses exact existing keys from the owned engine
+map, keeps separate local drafts, and applies only the selected key through
+the counted document queue. Native refusals retain the draft. Closing a form
+invalidates late callbacks while accepted edits still drain; host close
+dismisses the child form. The public native API is merged in118, with39 public
+and13 Undo-admission checks perengine; real-window UI acceptance is pending.

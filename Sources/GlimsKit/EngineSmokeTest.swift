@@ -105,6 +105,16 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-language-controls" {
+                try exerciseMetadataLanguageControls(session, documents: documents)
+                print(failures == 0 ? "PASSED (metadata language controls)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-language-edit" {
+                try exerciseMetadataLanguageEdit(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (metadata language edit)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-language-read" {
                 try exerciseMetadataLanguages(session)
                 print(failures == 0 ? "PASSED (metadata language bridge)" : "FAILED: \(failures) failure(s)")
