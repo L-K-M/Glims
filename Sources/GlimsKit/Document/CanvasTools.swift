@@ -97,6 +97,16 @@ final class CanvasToolController {
     private var dragStart: CGPoint?
     private var dragCurrent: CGPoint?
     private var dragOperation = EngineSession.SelectOperation.replace
+    private var selectionDragFlags: NSEvent.ModifierFlags = []
+
+    /// The same image-space bounds drive the rubber band and its commit.
+    var selectionDragRect: CGRect? {
+        guard dragTool == .rectangleSelect || dragTool == .ellipseSelect,
+              let start = dragStart, let end = dragCurrent else { return nil }
+        return SelectionDragGeometry.rect(start: start, end: end,
+            constrained: selectionDragFlags.contains(.shift),
+            fromCenter: selectionDragFlags.contains(.option))
+    }
     private var lassoPoints: [CGPoint] = []
     /// The gradient gesture's captured values (identity, settings, colors),
     /// taken once at the press so later UI/tool/color changes cannot
@@ -231,6 +241,7 @@ final class CanvasToolController {
             dragCurrent = point
             lassoPoints = [point]
             dragOperation = Self.operation(for: event.modifierFlags)
+            selectionDragFlags = event.modifierFlags
         case .magicWand, .selectByColor:
             var options = ToolState.shared.selectOptions
             options.operation = Self.operation(for: event.modifierFlags)
@@ -303,6 +314,7 @@ final class CanvasToolController {
         switch tool {
         case .rectangleSelect, .ellipseSelect, .gradient, .crop:
             dragCurrent = point
+            selectionDragFlags = event.modifierFlags
             canvas.needsDisplay = true
         case .move:
             dragCurrent = point
@@ -342,6 +354,7 @@ final class CanvasToolController {
             dragTool = nil
             dragStart = nil
             dragCurrent = nil
+            selectionDragFlags = []
             lassoPoints = []
             handOrigin = nil
             gradientCapture = nil
@@ -426,10 +439,9 @@ final class CanvasToolController {
             onStatus?(pendingCrop == nil ? "Drag the area to keep."
                                          : "Return crops to \(Int(rect.width)) × \(Int(rect.height)) px; Escape cancels.")
         case .rectangleSelect, .ellipseSelect:
-            guard let start = dragStart else { return }
-            let end = canvas.imagePoint(for: event)
-            let rect = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
-                              width: abs(end.x - start.x), height: abs(end.y - start.y))
+            dragCurrent = end
+            selectionDragFlags = event.modifierFlags
+            guard let rect = selectionDragRect else { return }
             if rect.width < 1 || rect.height < 1 {
                 // A click without a drag deselects, as in classic editors.
                 if dragOperation == .replace { document.select(.none) }
@@ -651,6 +663,15 @@ final class CanvasToolController {
     func keyDown(with event: NSEvent) -> Bool {
         let keyCode = Int(event.keyCode)
 
+        if keyCode == Self.escapeKey,
+           dragTool == .rectangleSelect || dragTool == .ellipseSelect || dragTool == .lasso {
+            dragTool = nil; dragStart = nil; dragCurrent = nil
+            selectionDragFlags = []; lassoPoints = []
+            canvas.needsDisplay = true
+            onStatus?("Selection cancelled.")
+            return true
+        }
+
         // Command and Option are temporary-tool modifiers; track their held
         // state before the plain-key guard below rejects their flags.
         if CanvasKeyboardPolicy.isTemporaryModifierKey(keyCode: keyCode) {
@@ -777,15 +798,23 @@ final class CanvasToolController {
 
     // MARK: Overlay
 
+    /// Modifier-only changes redraw a stationary selection without changing
+    /// the selection operation captured at the press.
+    func selectionModifiersChanged(_ flags: NSEvent.ModifierFlags) {
+        guard dragTool == .rectangleSelect || dragTool == .ellipseSelect else { return }
+        selectionDragFlags = flags
+        canvas.needsDisplay = true
+    }
+
     /// The rubber band or lasso path of a selection being drawn, in view
     /// coordinates (the canvas is flipped).
     func drawOverlay(scale: Double) {
         let path: NSBezierPath
         switch dragTool {
         case .rectangleSelect?, .ellipseSelect?:
-            guard let start = dragStart, let end = dragCurrent else { return }
-            let rect = NSRect(x: min(start.x, end.x) * scale, y: min(start.y, end.y) * scale,
-                              width: abs(end.x - start.x) * scale, height: abs(end.y - start.y) * scale)
+            guard let bounds = selectionDragRect else { return }
+            let rect = NSRect(x: bounds.minX * scale, y: bounds.minY * scale,
+                              width: bounds.width * scale, height: bounds.height * scale)
             path = dragTool == .ellipseSelect ? NSBezierPath(ovalIn: rect) : NSBezierPath(rect: rect)
         case .lasso?:
             guard lassoPoints.count > 1 else { return }

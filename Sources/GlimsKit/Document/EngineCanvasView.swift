@@ -774,6 +774,11 @@ final class EngineCanvasView: NSView {
         if !tools.keyUp(with: event) { super.keyUp(with: event) }
     }
 
+    override func flagsChanged(with event: NSEvent) {
+        tools.selectionModifiersChanged(event.modifierFlags)
+        super.flagsChanged(with: event)
+    }
+
     // MARK: Trackpad pinch and rotate (view-only navigation)
 
     /// The guards for trackpad view navigation: the event must belong to
