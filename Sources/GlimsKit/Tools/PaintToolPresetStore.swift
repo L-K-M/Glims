@@ -91,14 +91,34 @@ final class PaintToolPresetStore {
         defaults.removeObject(forKey: Self.presetsKey)
     }
 
+    /// Migrate exact brush references in one validated write; preserve choices
+    /// changed since the form opened and avoid rewriting an unchanged document.
+    func migrateBrushResource(from oldIdentity: EngineSession.ResourceIdentity,
+                             to newIdentity: EngineSession.ResourceIdentity) throws -> Int {
+        var changed = 0
+        try mutate(skipUnchanged: true) { presets in
+            guard oldIdentity != newIdentity else { return }
+            for index in presets.indices where presets[index].brushResource?.identity == oldIdentity {
+                let existing = presets[index]
+                presets[index] = try PaintToolPreset(id: existing.id, tool: existing.tool,
+                    name: existing.name, settings: existing.settings,
+                    brushResource: PaintToolPreset.BrushResource(newIdentity),
+                    foregroundColor: existing.foregroundColor)
+                changed += 1
+            }
+        }
+        return changed
+    }
+
     /// Loads the stored document, applies `change`, checks the result and
     /// only then writes the single encoded document back. Any load,
     /// validation or encoding failure throws before the write, so the
     /// stored bytes — and the snapshot they decode to — are untouched.
-    private func mutate(_ change: (inout [PaintToolPreset]) throws -> Void) throws {
+    private func mutate(skipUnchanged: Bool = false, _ change: (inout [PaintToolPreset]) throws -> Void) throws {
         let current = try document()
         var presets = current.presets
         try change(&presets)
+        if skipUnchanged && presets == current.presets { return }
         try Self.validateCollection(presets)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

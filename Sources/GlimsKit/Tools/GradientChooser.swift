@@ -20,7 +20,14 @@ final class GradientChooser {
     private var choiceCache = ResourceChoiceCache<EngineSession.ResourceKind>()
     private(set) var presentationRevision = 0
 
-    private init() {}
+    private init() {
+        ResourceCatalogChanges.observe(owner: self) { [weak self] change in
+            guard let self, change.kind == .gradient else { return }
+            self.choiceCache.invalidate(identity: change.oldIdentity)
+            self.presentationRevision += 1
+            ToolState.shared.notifyChange()
+        }
+    }
 
     /// Opens the chooser, capturing `document` NOW: a later retarget or
     /// close invalidates the panel instead of redirecting it.
@@ -118,6 +125,22 @@ final class GradientChooserPanel: NSWindowController, NSWindowDelegate,
     /// The shared Duplicate… form while open; the panel owns its lifecycle
     /// and invalidates it on dismissal.
     private var duplicateForm: ResourceDuplicateFormController?
+    /// Shared rename/delete controls beside the Duplicate… affordance.
+    private lazy var controls: ResourceManagementControls = {
+        ResourceManagementControls(
+            document: { [weak self] in self?.sourceDocument },
+            source: { [weak self] in self?.duplicateSource() },
+            hostWindow: { [weak self] in self?.window },
+            onCatalogChanged: { [weak self] change in
+                guard let self else { return }
+                guard change.kind == .gradient else { return }
+                if let newIdentity = change.newIdentity {
+                    self.model.remapIdentity(from: change.oldIdentity, to: newIdentity)
+                }
+                self.controller.reloadCatalog()
+            }
+        )
+    }()
 
     init(document: ImageDocument?, model: ResourceChooserModel) {
         self.sourceDocument = document
@@ -181,7 +204,7 @@ final class GradientChooserPanel: NSWindowController, NSWindowDelegate,
         duplicateButton.target = self
         duplicateButton.action = #selector(duplicate(_:))
         duplicateButton.setAccessibilityLabel("Duplicate gradient")
-        let buttons = NSStackView(views: [retryButton, duplicateButton, cancel, choose])
+        let buttons = NSStackView(views: [retryButton, duplicateButton, controls, cancel, choose])
         buttons.spacing = 8
         buttons.orientation = .horizontal
 
@@ -389,6 +412,7 @@ final class GradientChooserPanel: NSWindowController, NSWindowDelegate,
         duplicateButton.isEnabled = !controller.isClosed && source != nil
         duplicateButton.toolTip = ResourceDuplicateValidation.sourceRefusal(source, kind: .gradient)
             ?? "Duplicate the selected gradient under a new name"
+        controls.update()
     }
 
     /// Opens the shared Duplicate… form, capturing the document and the
@@ -461,6 +485,7 @@ final class GradientChooserPanel: NSWindowController, NSWindowDelegate,
         controller.invalidate()
         duplicateForm?.invalidate()
         duplicateForm = nil
+        controls.invalidate()
         window?.orderOut(nil)
         GradientChooser.shared.didClose(self)
     }

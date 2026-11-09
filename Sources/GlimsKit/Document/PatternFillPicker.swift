@@ -31,6 +31,22 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
     /// The shared Duplicate… form while open; the picker (owned by the Fill
     /// sheet) owns its lifecycle and invalidates it when the sheet ends.
     private var duplicateForm: ResourceDuplicateFormController?
+    /// Shared rename/delete controls beside the Duplicate… affordance.
+    private lazy var controls: ResourceManagementControls = {
+        ResourceManagementControls(
+            document: { [weak self] in self?.sourceDocument },
+            source: { [weak self] in self?.duplicateSource() },
+            hostWindow: { [weak self] in self?.view.window },
+            onCatalogChanged: { [weak self] change in
+                guard let self else { return }
+                guard change.kind == .pattern else { return }
+                if let newIdentity = change.newIdentity {
+                    self.model.remapIdentity(from: change.oldIdentity, to: newIdentity)
+                }
+                self.controller.reloadCatalog()
+            }
+        )
+    }()
     private var updatingTable = false
 
     init(document: ImageDocument, currentIdentity: EngineSession.ResourceIdentity?) {
@@ -84,7 +100,12 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
         duplicateButton.setAccessibilityLabel("Duplicate pattern")
         duplicateButton.font = .systemFont(ofSize: 11)
 
-        for subview in [searchField, scroll, duplicateButton, statusLabel] as [NSView] {
+        let duplicateRow = NSStackView(views: [duplicateButton, controls])
+        duplicateRow.orientation = .horizontal
+        duplicateRow.spacing = 6
+        duplicateRow.translatesAutoresizingMaskIntoConstraints = false
+
+        for subview in [searchField, scroll, duplicateRow, statusLabel] as [NSView] {
             subview.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(subview)
         }
@@ -97,9 +118,9 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
             scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             scroll.heightAnchor.constraint(equalToConstant: 150),
-            duplicateButton.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 4),
-            duplicateButton.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            statusLabel.topAnchor.constraint(equalTo: duplicateButton.bottomAnchor, constant: 4),
+            duplicateRow.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 4),
+            duplicateRow.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            statusLabel.topAnchor.constraint(equalTo: duplicateRow.bottomAnchor, constant: 4),
             statusLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             statusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             statusLabel.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -241,6 +262,7 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
         duplicateButton.isEnabled = !isClosed && source != nil
         duplicateButton.toolTip = ResourceDuplicateValidation.sourceRefusal(source, kind: .pattern)
             ?? "Duplicate the selected pattern under a new name"
+        controls.update()
     }
 
     /// Opens the shared Duplicate… form, capturing the picker's document and
@@ -276,6 +298,7 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
     func invalidate() {
         duplicateForm?.invalidate()
         duplicateForm = nil
+        controls.invalidate()
         controller.invalidate()
     }
 }

@@ -2623,6 +2623,16 @@ final class EngineSession: @unchecked Sendable {
         let name: String
         let collection: String?
         let isInternal: Bool
+
+        /// Native resource lookup compares UTF-8 bytes, including normalization.
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            guard lhs.isInternal == rhs.isInternal, lhs.name.utf8.elementsEqual(rhs.name.utf8) else { return false }
+            switch (lhs.collection, rhs.collection) {
+            case (nil, nil): return true
+            case (.some(let left), .some(let right)): return left.utf8.elementsEqual(right.utf8)
+            default: return false
+            }
+        }
     }
 
     /// The engine's resources of `kind`, in the engine's own order (sort
@@ -2922,6 +2932,61 @@ final class EngineSession: @unchecked Sendable {
                               message: "The engine created no resource handle.")
         }
         return handle
+    }
+
+    struct ResourceMutationInfo: Equatable, Sendable {
+        let flags: UInt32
+        let guardToken: String?
+        let reason: String?
+        var canRename: Bool { flags & UInt32(GLIMS_RESOURCE_CAN_RENAME.rawValue) != 0 && guardToken != nil }
+        var canDelete: Bool { flags & UInt32(GLIMS_RESOURCE_CAN_DELETE.rawValue) != 0 && guardToken != nil }
+    }
+
+    static func validateResourceGuard(_ token: String) throws {
+        guard token.utf8.count == 64,
+              token.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Refresh the resource before changing it.")
+        }
+    }
+
+    /// Owned observed-state values only; query off-main and never persist the guard.
+    func resourceMutationInfo(_ id: ResourceID) throws -> ResourceMutationInfo {
+        var flags: UInt32 = 0
+        var token: UnsafeMutablePointer<CChar>?, reason: UnsafeMutablePointer<CChar>?, error: UnsafeMutablePointer<CChar>?
+        let status = api.resource_mutation_info(engine, id, &flags, &token, &reason, &error)
+        let observed = Self.takeString(token, api: api)
+        let explanation = Self.takeString(reason, api: api)
+        try check(status, error)
+        guard flags & ~UInt32(3) == 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The resource capabilities could not be read.")
+        }
+        if flags != 0 {
+            guard let observed else {
+                throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The resource file version could not be read.")
+            }
+            try Self.validateResourceGuard(observed)
+        }
+        return ResourceMutationInfo(flags: flags, guardToken: observed, reason: explanation)
+    }
+
+    func renameResource(_ id: ResourceID, guardToken: String, name: String) throws {
+        try Self.validateResourceGuard(guardToken)
+        try Self.validateResourceName(name)
+        var error: UnsafeMutablePointer<CChar>?
+        try guardToken.withCString { guardBytes in
+            try name.withCString { nameBytes in
+                try check(api.resource_rename(engine, id, guardBytes, nameBytes, &error), error)
+            }
+        }
+    }
+
+    func deleteResource(_ id: ResourceID, guardToken: String) throws {
+        try Self.validateResourceGuard(guardToken)
+        var error: UnsafeMutablePointer<CChar>?
+        try guardToken.withCString { bytes in
+            try check(api.resource_delete(engine, id, bytes, &error), error)
+        }
     }
 
     /// One plain sRGB+alpha color value — the facade's GlimsColor contract

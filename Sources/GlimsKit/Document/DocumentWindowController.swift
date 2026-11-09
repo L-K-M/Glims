@@ -493,6 +493,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
         indexedSheet?.documentStateDidChange()
         ResourceDuplicateFormController.documentStateChanged(imageDocument)
+        ResourceMutationFormController.documentStateChanged(imageDocument)
 
         metadataSheet?.documentStateDidChange()
         adjustmentSheet?.documentStateDidChange()
@@ -2400,6 +2401,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
         indexedSheet?.invalidate()
         ResourceDuplicateFormController.documentWindowClosing(imageDocument)
+        ResourceMutationFormController.documentWindowClosing(imageDocument)
 
         metadataSheet?.invalidate()
         if let panel = metadataSheet?.panel {

@@ -1174,6 +1174,11 @@ typedef enum GlimsItemSetEditOp {
   GLIMS_ITEM_SET_EDIT_REMOVE  = 4
 } GlimsItemSetEditOp;
 
+typedef enum GlimsResourceMutationFlag {
+  GLIMS_RESOURCE_CAN_RENAME = 1u << 0,
+  GLIMS_RESOURCE_CAN_DELETE = 1u << 1
+} GlimsResourceMutationFlag;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -2836,6 +2841,36 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_duplicate_layers) (GlimsEngine *engine, GlimsImageID image,
                                         const GlimsItemID *sources, int32_t count,
                                         GlimsItemID *copies, char **error);
+  /* Slots 143–145: manage explicitly selected, saved user resources.
+   * No image/Undo/clipboard changes. Only regular local native-format files
+   * directly in configured writable/search folders are eligible; internal,
+   * shared, unsaved and stock resources remain read-only. These capabilities
+   * describe current native/file facts, never Glims authorship.
+   *
+   * Info is read-only. Required outputs are initialized to 0/NULL; flags
+   * bit 1 permits Rename, bit 2 Delete. Eligible resources return an opaque
+   * observed-state guard; ineligible current resources return flags 0 and
+   * a reason. guard/reason/error are owned strings using free_string.
+   * Rename/Delete require that exact guard and revalidate current membership
+   * and file identity/version. Stale guards are NOT_FOUND; ineligible files
+   * UNSUPPORTED; malformed input INVALID_ARGUMENT; native work on any image
+   * BUSY. Flags and guards must never be persisted across engine sessions.
+   *
+   * Rename validates names like resource_duplicate, including VBR/GGR edge
+   * whitespace and PAT encoding restrictions, then saves privately and replaces
+   * the same file before changing the live name. Exact same-name is a no-op.
+   * Delete removes the disk file before catalog membership; native context
+   * fallback may run. These are outside image Undo. After any result callers
+   * must reconcile catalog state: a rare post-commit failure is FAILED, not
+   * an unchanged-state promise. No concurrent external-writer transaction or
+   * power-loss durability guarantee is made. */
+  GlimsStatus (*resource_mutation_info) (GlimsEngine *engine, GlimsResourceID id,
+                                         uint32_t *flags, char **guard, char **reason,
+                                         char **error);
+  GlimsStatus (*resource_rename) (GlimsEngine *engine, GlimsResourceID id,
+                                  const char *guard, const char *name, char **error);
+  GlimsStatus (*resource_delete) (GlimsEngine *engine, GlimsResourceID id,
+                                  const char *guard, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
