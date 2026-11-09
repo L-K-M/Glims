@@ -23,7 +23,10 @@ Unicode, refusal output clearing, reads during actual stroke/filter sessions,
 history/dirty preservation, native serialization and ownership across closure
 and engine shutdown. The Core-only fixture generator validates independent
 known maps before saving the committed1.6KB XCF. A fresh pinned run through the
-public driver also passes with fatal GLib criticals enabled. Master emits its
+public driver also passes with fatal GLib criticals enabled. The focused
+`metadata-language-read` app smoke case passes five real Swift-bridge checks
+on every engine using an explicit `GLIMS_LANGUAGE_FIXTURE`: known maps,
+Unicode, native refusal, history preservation and Swift ownership after close. Master emits its
 existing missing cached-XML cleanup diagnostic; no GLib critical or test fails.
 
 Reproduce:
