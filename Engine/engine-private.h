@@ -292,6 +292,8 @@ GlimsStatus glims_filter_hue_saturation_get (GlimsEngine *, GlimsFilterID,
                                             GlimsHueSaturationSettings *, char **);
 GlimsStatus glims_filter_hue_saturation_set (GlimsEngine *, GlimsFilterID,
                                             const GlimsHueSaturationSettings *, char **);
+GlimsStatus glims_filter_levels_get (GlimsEngine *, GlimsFilterID, GlimsLevelsSettings *, char **);
+GlimsStatus glims_filter_levels_set (GlimsEngine *, GlimsFilterID, const GlimsLevelsSettings *, char **);
 GlimsStatus glims_filter_commit    (GlimsEngine *e, GlimsFilterID id, char **error);
 GlimsStatus glims_filter_abort     (GlimsEngine *e, GlimsFilterID id);
 void        glims_filters_free     (gpointer filter);

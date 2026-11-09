@@ -1013,6 +1013,84 @@ final class EngineSession: @unchecked Sendable {
         try check(status, error)
     }
 
+    /// Complete Levels values; the channel shown by a form is not native state.
+    struct LevelsSettings: Equatable {
+        struct Channel: Equatable {
+            var lowInput: Double = 0
+            var highInput: Double = 1
+            var gamma: Double = 1
+            var lowOutput: Double = 0
+            var highOutput: Double = 1
+
+            var isValid: Bool {
+                [lowInput, highInput, lowOutput, highOutput].allSatisfy {
+                    $0.isFinite && (0...1).contains($0)
+                } && gamma.isFinite && (0.1...10).contains(gamma)
+            }
+        }
+
+        var trc: ColorTRC = .linear
+        var clampInput = false
+        var clampOutput = false
+        var value = Channel()
+        var red = Channel()
+        var green = Channel()
+        var blue = Channel()
+        var alpha = Channel()
+
+        var isValid: Bool {
+            // Equal or inverted endpoints are valid native mappings.
+            [ColorTRC.linear, .nonlinear, .perceptual].contains(trc) &&
+                [value, red, green, blue, alpha].allSatisfy { $0.isValid }
+        }
+    }
+
+    func levelsSettings(_ filter: Int32) throws -> LevelsSettings {
+        var raw = GlimsLevelsSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsLevelsSettings>.size)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_levels_get(engine, filter, &raw, &error)
+        try check(status, error)
+        guard let trc = ColorTRC(rawValue: raw.trc), trc != .unknown,
+              raw.clamp_input <= 1, raw.clamp_output <= 1 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The Levels settings could not be read.")
+        }
+        func channel(_ value: GlimsLevelsChannel) -> LevelsSettings.Channel {
+            .init(lowInput: value.low_input, highInput: value.high_input, gamma: value.gamma,
+                  lowOutput: value.low_output, highOutput: value.high_output)
+        }
+        let value = LevelsSettings(trc: trc, clampInput: raw.clamp_input == 1,
+            clampOutput: raw.clamp_output == 1, value: channel(raw.value), red: channel(raw.red),
+            green: channel(raw.green), blue: channel(raw.blue), alpha: channel(raw.alpha))
+        guard value.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The Levels settings could not be read.")
+        }
+        return value
+    }
+
+    func setLevelsSettings(_ filter: Int32, to value: LevelsSettings) throws {
+        guard value.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                message: "Levels endpoints must be between 0 and 1, gamma between 0.1 and 10, and the transfer curve must be known.")
+        }
+        func channel(_ value: LevelsSettings.Channel) -> GlimsLevelsChannel {
+            .init(low_input: value.lowInput, high_input: value.highInput, gamma: value.gamma,
+                  low_output: value.lowOutput, high_output: value.highOutput)
+        }
+        var raw = GlimsLevelsSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsLevelsSettings>.size)
+        raw.trc = value.trc.rawValue
+        raw.clamp_input = value.clampInput ? 1 : 0
+        raw.clamp_output = value.clampOutput ? 1 : 0
+        raw.value = channel(value.value); raw.red = channel(value.red)
+        raw.green = channel(value.green); raw.blue = channel(value.blue); raw.alpha = channel(value.alpha)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_levels_set(engine, filter, &raw, &error)
+        try check(status, error)
+    }
+
     struct HueSaturationSettings: Equatable {
         struct Range: Equatable {
             var hue: Double = 0

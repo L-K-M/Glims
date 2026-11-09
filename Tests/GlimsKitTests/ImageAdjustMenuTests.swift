@@ -86,10 +86,10 @@ final class ImageAdjustMenuTests: XCTestCase {
         let balance = operation("gimp:color-balance", support: .needsConfig)
         let levels = operation("gimp:levels", support: .needsConfig)
         NativeFilterMenus.install(operations + [balance, levels, brightness], in: menu)
-        XCTAssertEqual(nativeNames(adjust(menu)), ["gimp:brightness-contrast", "gimp:color-balance", "gimp:threshold", "gegl:invert-gamma", "gegl:invert-linear"])
+        XCTAssertEqual(nativeNames(adjust(menu)), ["gimp:brightness-contrast", "gimp:color-balance", "gimp:levels", "gimp:threshold", "gegl:invert-gamma", "gegl:invert-linear"])
         XCTAssertEqual(adjust(menu).items[1].title, "Color Balance…")
         XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(balance))
-        XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(levels))
+        XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(levels))
     }
 
     func testDedicatedHueSaturationKeepsOtherConfigGates() {
@@ -98,10 +98,10 @@ final class ImageAdjustMenuTests: XCTestCase {
         let curves = operation("gimp:curves", support: .needsConfig)
         let levels = operation("gimp:levels", support: .needsConfig)
         NativeFilterMenus.install(operations + [hue, curves, levels], in: menu)
-        XCTAssertEqual(nativeNames(adjust(menu)), ["gimp:hue-saturation", "gimp:threshold", "gegl:invert-gamma", "gegl:invert-linear"])
+        XCTAssertEqual(nativeNames(adjust(menu)), ["gimp:hue-saturation", "gimp:levels", "gimp:threshold", "gegl:invert-gamma", "gegl:invert-linear"])
         XCTAssertEqual(adjust(menu).items.first?.title, "Hue/Saturation…")
         XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(curves))
-        XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(levels))
+        XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(levels))
     }
 
     func testExactNativeTitlesUseExistingCommandAndFilterCopies() {

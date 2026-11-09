@@ -3456,3 +3456,14 @@ stale-document/close guards retain existing native metadata preservation
 policy. See `metadata-capture-date.md`:16 focused model/policy checks and
 931 total units pass, plus19 actual-window checks on the pinned engine.
 Other engines, legacy-control regressions and final bundle checks remain open.
+
+
+### Native Levels configuration (2026-11-09 candidate)
+
+Five named channels retain all 25 endpoints/gamma values, global clamps
+and an explicit transfer curve in a dedicated editor. API v1 appends
+154/155. Equal and reversed endpoints remain valid; native configuration
+replacement preserves older snapshots. Generic operation-only TRC writes
+are refused, and commit validates both new and existing previews before
+history changes. See `levels.md` for current acceptance and open histogram,
+automatic-stretch and legacy-mismatch editing boundaries.

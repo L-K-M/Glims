@@ -136,14 +136,17 @@ final class HueSaturationSettingsTests: XCTestCase {
             ("gegl:hue-saturation", "GEGL namespace", .needsConfig),
             ("GIMP:HUE-SATURATION", "case mismatch", .needsConfig),
             ("gimp:curves", "curves unsupported", .needsConfig),
-            ("gimp:levels", "levels unsupported", .needsConfig),
+            ("gimp:levels", "other special editor", .needsConfig),
             ("gimp:color-balance", "other special editor", .needsConfig),
             ("gimp:brightness-contrast", "other special editor", .needsConfig),
         ]
         for (name, label, support) in nearOrUnrelated {
             let value = operation(name, support: support)
             XCTAssertFalse(NativeFilterMenuLayout.usesHueSaturationEditor(value), label)
-            if name == "gimp:color-balance" {
+            if name == "gimp:levels" {
+                XCTAssertTrue(NativeFilterMenuLayout.usesLevelsEditor(value), label)
+                XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(value), label)
+            } else if name == "gimp:color-balance" {
                 XCTAssertTrue(NativeFilterMenuLayout.usesColorBalanceEditor(value), label)
                 XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(value), label)
             } else if name == "gimp:brightness-contrast" {
@@ -152,7 +155,7 @@ final class HueSaturationSettingsTests: XCTestCase {
             } else {
                 XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(value), label)
             }
-            if support == .needsConfig && name != "gimp:color-balance" && name != "gimp:brightness-contrast" {
+            if support == .needsConfig && name != "gimp:levels" && name != "gimp:color-balance" && name != "gimp:brightness-contrast" {
                 XCTAssertEqual(NativeFilterMenuLayout.itemTitle(value), "Test (needs a dedicated editor)", label)
             }
         }

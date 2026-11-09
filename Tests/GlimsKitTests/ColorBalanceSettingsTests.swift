@@ -90,7 +90,6 @@ final class ColorBalanceSettingsTests: XCTestCase {
             ("gegl:color-balance", "GEGL alias/namespace mismatch"),
             ("GIMP:COLOR-BALANCE", "case mismatch"),
             ("gimp:curves", "unrelated curves"),
-            ("gimp:levels", "unrelated levels"),
         ]
         for (name, label) in nearOrUnrelated {
             let value = operation(name, support: .needsConfig)
@@ -109,6 +108,10 @@ final class ColorBalanceSettingsTests: XCTestCase {
         XCTAssertFalse(NativeFilterMenuLayout.usesColorBalanceEditor(hueSaturation))
         XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(hueSaturation))
 
+        let levels = operation("gimp:levels", support: .needsConfig)
+        XCTAssertFalse(NativeFilterMenuLayout.usesColorBalanceEditor(levels))
+        XCTAssertTrue(NativeFilterMenuLayout.usesLevelsEditor(levels))
+        XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(levels))
         XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(nil))
     }
 }

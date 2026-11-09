@@ -705,6 +705,26 @@ typedef struct GlimsHueSaturationSettings {
   GlimsHueSaturationRange magenta;
 } GlimsHueSaturationSettings;
 
+typedef struct GlimsLevelsChannel {
+  double low_input;         /* finite 0..1; default 0 */
+  double high_input;        /* finite 0..1; default 1 */
+  double gamma;             /* finite 0.1..10; default 1 */
+  double low_output;        /* finite 0..1; default 0 */
+  double high_output;       /* finite 0..1; default 1 */
+} GlimsLevelsChannel;
+
+typedef struct GlimsLevelsSettings {
+  uint32_t struct_size;
+  uint32_t trc;             /* GlimsColorTRC: LINEAR/NONLINEAR/PERCEPTUAL; default LINEAR */
+  uint32_t clamp_input;     /* exactly 0 or 1; default 0 */
+  uint32_t clamp_output;    /* exactly 0 or 1; default 0 */
+  GlimsLevelsChannel value;
+  GlimsLevelsChannel red;
+  GlimsLevelsChannel green;
+  GlimsLevelsChannel blue;
+  GlimsLevelsChannel alpha;
+} GlimsLevelsSettings;
+
 /* A layer's mask flags: ENABLED gates the mask's effect on the
  * composite; EDITING makes the mask the target of painting, fills and
  * gradients while its layer is the only selected one; SHOWING displays
@@ -2976,6 +2996,19 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*filter_hue_saturation_set) (GlimsEngine *engine, GlimsFilterID filter,
                                           const GlimsHueSaturationSettings *settings,
                                           char **error);
+  /* Slots154/155: complete native Levels configuration. Equal/inverted
+   * input/output endpoints are valid; no implicit sorting or sum clamp.
+   * TRC is the existing owned GlimsColorTRC enum. A legacy operation/config
+   * TRC mismatch is unsupported, with no live normalization on Get/Copy.
+   * Get requires struct_size >= sizeof(GlimsLevelsSettings); failures zero
+   * the owned fields, preserving struct_size and any future tail. Set
+   * validates the complete value before mutation; numeric equality is a
+   * no-op, including signed-zero equality. Native channel cursors and base
+   * operation settings are preserved by complete-value replacement. */
+  GlimsStatus (*filter_levels_get) (GlimsEngine *engine, GlimsFilterID filter,
+                                   GlimsLevelsSettings *out, char **error);
+  GlimsStatus (*filter_levels_set) (GlimsEngine *engine, GlimsFilterID filter,
+                                   const GlimsLevelsSettings *settings, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
