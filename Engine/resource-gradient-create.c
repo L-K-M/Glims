@@ -172,8 +172,8 @@ glims_resource_create_gradient (GlimsEngine      *engine,
 
   /* Direct field assignment on the new private object only (the same rule
    * as pattern->mask in resource-create.c): the native set_left/right_color
-   * setters blend the range in place and never take a reference, so using
-   * them here would leak the owned colors. gimp_gradient_finalize() ->
+   * setters blend the range in place and borrow their color arguments.
+   * Direct assignment here transfers each private owned reference once. gimp_gradient_finalize() ->
    * gimp_gradient_segment_free() releases both endpoint colors exactly
    * once when the gradient is released. */
   g_clear_object (&seg->left_color);

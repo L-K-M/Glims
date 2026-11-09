@@ -64,6 +64,7 @@ typedef struct
   char *save_dir;  /* owned: writable gradient folder */
   void (*arm) (const char *, const char *, const char *);
   void (*disarm) (void);
+  unsigned (*uuid_replaced) (void), (*mkdir_calls) (void), (*move_calls) (void), (*path_mismatch) (void);
 } Probe;
 
 typedef struct
@@ -89,9 +90,7 @@ static GlimsStatus
 do_create (Probe *p, const char *name, const GlimsColor *left,
            const GlimsColor *right, GlimsResourceID *out, char **err)
 {
-  CreateCall c = { name, left, right, 0, NULL, GLIMS_STATUS_FAILED };
-
-  if (out) *out = 0;
+  CreateCall c = { name, left, right, 0xfeedbeef, NULL, GLIMS_STATUS_FAILED };
   if (err) *err = NULL;
   glims_engine_call (p->engine, call_create, &c);
   if (out) *out = c.out;
@@ -125,7 +124,7 @@ dir_count (const char *path)
   int n = 0;
 
   if (! d)
-    return -1;
+    return errno == ENOENT ? 0 : -1;
   while ((de = readdir (d)))
     {
       char full[1024];
@@ -184,14 +183,19 @@ clip_snap (Probe *p, ClipSnap *s)
 
   s->obj = obj;
   s->hash = 0;
+  CHECK (obj && GIMP_IS_BUFFER(obj), "the known clipboard buffer still exists");
   if (obj && GIMP_IS_BUFFER (obj))
     {
       GeglBuffer *buf = gimp_buffer_get_buffer (GIMP_BUFFER (obj));
       const GeglRectangle *ext = gegl_buffer_get_extent (buf);
       unsigned char *px = g_malloc ((gsize) ext->width * ext->height * 4);
 
-      gegl_buffer_get (buf, ext, 0, babl_format ("R'G'B'A u8"), px, GEGL_AUTO_ROWSTRIDE,
+      gegl_buffer_get (buf, ext, 1.0, babl_format ("R'G'B'A u8"), px, GEGL_AUTO_ROWSTRIDE,
                        GEGL_ABYSS_NONE);
+      unsigned char expected[64];
+      for (int i=0; i<64; i++) expected[i]=(unsigned char)(i*3+7);
+      CHECK (ext->width==4 && ext->height==4 && memcmp(px,expected,sizeof expected)==0,
+             "clipboard snapshot reads the exact known fixture pixels");
       s->hash = hash_bytes (px, (gsize) ext->width * ext->height * 4);
       g_free (px);
     }
@@ -448,7 +452,7 @@ phase_create (Probe *p)
 
   /* Armed fault collisions via the reused interpose shim (optional). Each
    * arm wraps exactly ONE resource call, after startup. */
-  if (p->arm && p->disarm)
+  if (p->arm && p->disarm && p->uuid_replaced && p->mkdir_calls && p->move_calls && p->path_mismatch)
     {
       const char *uuid1 = "11111111-2222-3333-4444-555555555555";
       const char *uuid2 = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -463,21 +467,27 @@ phase_create (Probe *p)
       p->arm (uuid1, p->save_dir, ".ggr");
       expect_refusal (p, GLIMS_STATUS_FAILED, "glims-fault-stage", &LEFT, &RIGHT,
                       "staging-dir collision FAILED");
+      CHECK (p->uuid_replaced() > 0 && p->mkdir_calls() > 0 && p->move_calls() == 0
+             && p->path_mismatch() == 0, "stage-collision hooks ran on the expected paths");
       p->disarm ();
       CHECK (access (sentinel_dir, F_OK) == 0, "sentinel staging dir survives");
       p->arm (uuid2, p->save_dir, ".ggr");
       expect_refusal (p, GLIMS_STATUS_FAILED, "glims-fault-final", &LEFT, &RIGHT,
                       "final-file collision FAILED");
+      CHECK (p->uuid_replaced() > 0 && p->mkdir_calls() > 0 && p->move_calls() > 0
+             && p->path_mismatch() == 0, "final-collision move hook ran on the expected paths");
       p->disarm ();
       f = fopen (sentinel_file, "rb");
-      CHECK (f && fgetc (f) == 'S', "sentinel final file survives intact");
+      char sentinel_bytes[16] = {0};
+      size_t sentinel_length = f ? fread(sentinel_bytes,1,sizeof sentinel_bytes,f) : 0;
+      CHECK (sentinel_length == 8 && memcmp(sentinel_bytes,"SENTINEL",8)==0, "sentinel final file survives intact");
       if (f) fclose (f);
       CHECK (access (staging2, F_OK) != 0, "owned staging cleaned, no leftovers");
       rmdir (sentinel_dir);
       unlink (sentinel_file);
     }
   else
-    printf ("SKIP  interpose shim absent; fault-collision tests skipped\n");
+    CHECK (false, "the required interpose fault shim exports are present");
 
   /* The battery preserved everything except the two intended creates. */
   dir1 = dir_count (p->save_dir);
@@ -491,20 +501,32 @@ phase_create (Probe *p)
   CHECK (clip0.obj == clip1.obj && clip0.hash == clip1.hash, "clipboard object/content unchanged");
   CHECK (cat1 == cat0 + 2, "catalog grew by exactly 2 (%d -> %d)", cat0, cat1);
   CHECK (dir1 == dir0 + 2, "gradient folder grew by exactly 2 files (%d -> %d)", dir0, dir1);
+  /* Persist the actual native identity triplets, never session handles or
+   * a fabricated NULL file collection. */
   {
-    GlimsResourceID ra = 0, rb = 0;
-
-    CHECK (api->resource_resolve (p->engine, GLIMS_RESOURCE_GRADIENT, NAME_A, NULL, false,
-                                  &ra, NULL) == GLIMS_STATUS_OK && ra == id, "name A roundtrip");
-    CHECK (api->resource_resolve (p->engine, GLIMS_RESOURCE_GRADIENT, NAME_B, NULL, false,
-                                  &rb, NULL) == GLIMS_STATUS_OK && rb == idb, "name B roundtrip");
+    GKeyFile *handoff = g_key_file_new ();
+    const GlimsResourceID ids[2] = {id, idb};
+    const char *groups[2] = {"first", "second"};
+    for (int i=0; i<2; i++) {
+      char *name=NULL, *collection=NULL, *identity_error=NULL;
+      bool internal=true;
+      GlimsResourceID roundtrip=0;
+      GlimsStatus result=api->resource_identifiers(p->engine,ids[i],&name,&collection,&internal,&identity_error);
+      CHECK(result==GLIMS_STATUS_OK && name && collection && !internal, "saved gradient has a full file identity");
+      if (result==GLIMS_STATUS_OK && name && collection) {
+        CHECK(api->resource_resolve(p->engine,GLIMS_RESOURCE_GRADIENT,name,collection,internal,&roundtrip,NULL)==GLIMS_STATUS_OK
+              && roundtrip==ids[i], "exact identity roundtrip before restart");
+        g_key_file_set_string(handoff,groups[i],"name",name);
+        g_key_file_set_string(handoff,groups[i],"collection",collection);
+        g_key_file_set_boolean(handoff,groups[i],"internal",internal);
+      }
+      free(name); free(collection); free(identity_error);
+    }
+    snprintf(path,sizeof path,"%s/gradient-create-handoff.ini",p->work);
+    char *serialized=g_key_file_to_data(handoff,NULL,NULL);
+    CHECK(serialized && g_file_set_contents(path,serialized,-1,NULL), "full identity handoff written");
+    g_free(serialized); g_key_file_unref(handoff);
   }
-
-  /* Handoff: identity by NAME only (session ids die with the process). */
-  snprintf (path, sizeof path, "%s/gradient-create-handoff.txt", p->work);
-  f = fopen (path, "w");
-  CHECK (f != NULL, "handoff written");
-  if (f) { fprintf (f, "%s\n%s\n", NAME_A, NAME_B); fclose (f); }
   CHECK (api->image_close (p->engine, img) == GLIMS_STATUS_OK, "fixture image closed");
 }
 
@@ -513,33 +535,32 @@ phase_create (Probe *p)
 static void
 phase_verify (Probe *p)
 {
-  char path[1024], line[256];
-  FILE *f;
+  char path[1024];
   int checked = 0;
-
-  snprintf (path, sizeof path, "%s/gradient-create-handoff.txt", p->work);
-  f = fopen (path, "r");
-  CHECK (f != NULL, "verify reads the create handoff");
-  if (! f)
-    return;
-  while (fgets (line, sizeof line, f) && checked < 2)
+  GKeyFile *handoff = g_key_file_new ();
+  const char *groups[2] = {"first", "second"};
+  snprintf(path,sizeof path,"%s/gradient-create-handoff.ini",p->work);
+  gboolean loaded=g_key_file_load_from_file(handoff,path,G_KEY_FILE_NONE,NULL);
+  CHECK(loaded,"verify reads the complete identity handoff");
+  if (!loaded) { g_key_file_unref(handoff); return; }
+  for (int entry=0; entry<2; entry++)
     {
+      gchar *line=g_key_file_get_string(handoff,groups[entry],"name",NULL);
+      gchar *collection=g_key_file_get_string(handoff,groups[entry],"collection",NULL);
+      gboolean stored_internal=g_key_file_get_boolean(handoff,groups[entry],"internal",NULL);
+      CHECK(line && collection,"handoff contains both identity strings");
+      if (!line || !collection) { g_free(line); g_free(collection); continue; }
       GlimsResourceID id = 0;
       char *name = NULL, *coll = NULL, *err = NULL;
       bool internal = true;
       GimpGradient *g = NULL;
-      size_t len = strlen (line);
       char want[300];
       DIR *d;
       struct dirent *de;
       int file_ok = 0;
 
-      if (len && line[len - 1] == '\n')
-        line[--len] = '\0';
-      /* This fresh process reloaded the writable folder at engine startup
-       * (native GGR load), so resolve-by-name + the native checks below are
-       * the fresh-process reload verification. */
-      CHECK (api->resource_resolve (p->engine, GLIMS_RESOURCE_GRADIENT, line, NULL, false,
+      /* Fresh process: resolve the exact persisted name/collection/internal. */
+      CHECK (api->resource_resolve (p->engine, GLIMS_RESOURCE_GRADIENT, line, collection, stored_internal,
                                     &id, &err) == GLIMS_STATUS_OK && id > 0,
              "fresh process resolves '%s', id %llu", line, (unsigned long long) id);
       free (err); err = NULL;
@@ -577,9 +598,10 @@ phase_verify (Probe *p)
       if (d)
         closedir (d);
       CHECK (file_ok, "saved GGR file carries 'Name: %s'", line);
+      g_free(line); g_free(collection);
       checked++;
     }
-  fclose (f);
+  g_key_file_unref(handoff);
   CHECK (checked == 2, "verify checked both handoff gradients (%d)", checked);
 }
 
@@ -593,15 +615,20 @@ run_phase (GlimsEngine *engine, gpointer data)
   p->gimp   = engine->gimp;
   if (! wl)
     return GLIMS_STATUS_FAILED;
-  p->save_dir = g_strdup (g_file_get_path (wl->data));
+  p->save_dir = g_file_get_path (wl->data);
   g_list_free_full (wl, (GDestroyNotify) g_object_unref);
   p->arm    = (void (*)(const char *, const char *, const char *))
               dlsym (RTLD_DEFAULT, "glims_test_arm");
   p->disarm = (void (*)(void)) dlsym (RTLD_DEFAULT, "glims_test_disarm");
+  p->uuid_replaced = (unsigned (*)(void)) dlsym(RTLD_DEFAULT,"glims_test_uuid_replaced");
+  p->mkdir_calls = (unsigned (*)(void)) dlsym(RTLD_DEFAULT,"glims_test_mkdir_calls");
+  p->move_calls = (unsigned (*)(void)) dlsym(RTLD_DEFAULT,"glims_test_move_calls");
+  p->path_mismatch = (unsigned (*)(void)) dlsym(RTLD_DEFAULT,"glims_test_path_mismatch");
   if (strcmp (p->phase, "create") == 0)
     phase_create (p);
   else
     phase_verify (p);
+  g_free(p->save_dir); p->save_dir=NULL;
   return failures > 0 ? GLIMS_STATUS_FAILED : GLIMS_STATUS_OK;
 }
 

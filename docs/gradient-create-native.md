@@ -125,3 +125,25 @@ misinterpretation). Identity crosses process phases by NAME only
 - Harness is 656 lines, above the 500 target, because the mandated refusal
   matrix, preservation snapshots, fault injection and two-phase reload are
   all required; it stays far below the older 1000+ line harnesses.
+
+
+## Root runtime acceptance
+
+All four engines pass 97 assertions across creation and fresh-process reload.
+Root corrected the test handoff to store exact name/collection/internal
+triplets, preserved an output sentinel until production clears it, required
+the fault shim and checked actual UUID/mkdir/move/path counters, compared the
+entire sentinel file and released owned directory strings. An initially
+missing resource folder counts as zero files; successful creation may create
+it. The earlier missing-folder delta failure was a fixture error.
+
+Independent source review found no important production issue. Relay then
+identified a zero-scale GEGL clipboard read, which returned before writing
+its output. Root corrected scale to 1.0 and requires the exact known 64-byte
+clipboard pattern before hashing. The final 97-check runs contain no GEGL
+CRITICAL or assertion failures; the earlier 93-check runs do not prove
+clipboard preservation and are superseded.
+
+The helper creates one private static LINEAR/RGB segment with sRGB endpoint
+colors and alpha, reusing the checked staging/publication pipeline. This is
+still internal only; the public facade and UI are separate work.
