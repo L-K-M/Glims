@@ -3319,3 +3319,18 @@ four supported engines, including native CGEvent panning, pointer anchoring
 in a rotated view, event routing from the surround, phase boundaries, two
 document capture and engine/stroke/close guards. These synthetic events do
 not certify physical mouse or trackpad hardware.
+
+
+### Preferences save during engine teardown (2026-11-09)
+
+A deterministic regression holds a real RC autosave behind a ready higher-priority
+idle until Quit. The old shutdown order then dispatches the save after destroying
+the user context: RC save constructs dialog defaults and reaches a fatal
+`gimp_fill_options_new` precondition. The adapter now disables future RC autosaves,
+removes the exact pending source, and saves it synchronously while its context
+is alive. The existing post-exit cleanup drain remains; unrelated queued work
+is not dispatched early.
+
+The regression passes five checks on each of all four engines, including exact
+pending preference persistence. General conformance and bundle verification are
+pending on this candidate. No upstream source patch or facade slot change.
