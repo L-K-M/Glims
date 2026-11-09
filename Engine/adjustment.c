@@ -47,6 +47,13 @@ glims_adjustment_layer_new (GlimsEngine *engine, GlimsImageID image_id,
       glims_fail (error, NULL, "Resolve the floating selection before creating an adjustment layer.");
       return GLIMS_STATUS_BUSY;
     }
+  /* Native layers-actions disables new groups on indexed images. A
+   * pass-through adjustment needs RGB/grayscale compositing semantics. */
+  if (gimp_image_get_base_type (open->image) == GIMP_INDEXED)
+    {
+      glims_fail (error, NULL, "Convert the image to RGB or grayscale before creating an adjustment layer.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
   if (!gimp_image_undo_is_enabled (open->image))
     return glims_fail (error, NULL, "The image's undo history is unavailable.");
   if (parent_id)

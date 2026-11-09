@@ -228,6 +228,7 @@ glims_adopt_image (GlimsEngine  *engine,
 
   open->image  = image;
   open->engine = engine;
+  open->item_sets = glims_item_sets_new (image);
   glims_track_image_links (image);
   open->history_revision = 1;
   open->projection_update_handler =

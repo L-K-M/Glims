@@ -52,11 +52,16 @@ struct GlimsEngine
   GFile              *icon_theme_dir;
 };
 
+typedef struct GlimsItemSets GlimsItemSets;
+GlimsItemSets * glims_item_sets_new  (GimpImage *image);
+void            glims_item_sets_free (GlimsItemSets *manager);
+
 /* An image the app holds open. */
 typedef struct
 {
   GimpImage *image;
   GlimsEngine *engine;
+  GlimsItemSets *item_sets;
   gulong     projection_update_handler;
   gulong     undo_event_handler;
   gulong     layers_changed_handler;

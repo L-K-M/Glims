@@ -176,7 +176,7 @@ expect_refusal (GlimsImageID image, GlimsItemID parent, int32_t index,
   snapshot_take (image, &after);
   CHECK (status == want && layer == 0 && effect == 0 && snapshot_same (&before, &after),
          "%s: status %d, outputs reset, state exactly unchanged [%s]",
-         label, (int) want, error ? error : "");
+         label, (int) status, error ? error : "");
   api->free_string (error);
 }
 
@@ -515,6 +515,17 @@ main (int argc, char **argv)
   test_positive_invert (argv[2]);
   test_filter_edit_lifecycle ();
   test_refusals ();
+  GlimsImageID indexed = new_white_image ();
+  GlimsIndexedSettings quantize = { .struct_size = sizeof quantize,
+      .palette = GLIMS_INDEXED_PALETTE_GENERATED, .max_colors = 256,
+      .dither = GLIMS_INDEXED_DITHER_NONE, .preservation = GLIMS_INDEXED_PRESERVE_EDITABLE };
+  CHECK (indexed && api->image_convert_indexed (engine, indexed, &quantize, NULL, 0, NULL) == GLIMS_STATUS_OK,
+         "an indexed-image refusal fixture is quantized");
+  if (indexed) {
+    expect_refusal (indexed, 0, 0, "gegl:invert-gamma", NULL, GLIMS_STATUS_UNSUPPORTED,
+                    "indexed images require RGB or grayscale before adjustment creation");
+    api->image_close (engine, indexed);
+  }
   test_nested_placement ();
 
   api->stop (engine);
