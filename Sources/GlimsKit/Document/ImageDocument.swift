@@ -996,6 +996,102 @@ final class ImageDocument {
         }
     }
 
+    // MARK: Saved sets (facade slots 133/134 read, 135 edit)
+
+    /// One saved-set read row: the slot-133 row plus the slot-134 current
+    /// member ids of the same token.
+    struct SavedSetRow: Equatable {
+        let set: EngineSession.ItemSet
+        let members: [Int32]
+    }
+
+    /// One explicit saved-set edit request captured by value at apply.
+    /// `captureSelection` asks the worker to query the CURRENT selected ids
+    /// of `kind` by an actual per-kind query (never a fake all-items list).
+    struct SavedSetEditRequest: Equatable {
+        let operation: EngineSession.ItemSetEdit
+        let kind: EngineSession.ItemSetKind
+        let token: UInt64
+        let name: String?
+        let members: [Int32]
+        let captureSelection: Bool
+    }
+
+    /// Reads the catalog (slot 133) AND each set's members (slot 134) off
+    /// the main thread as one counted input-queue job — plain reads, allowed
+    /// even while busy — so a close drains the read before destroy.
+    func readSavedSetRows(completion: @escaping @MainActor (Result<[SavedSetRow], Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueue(on: inputQueue) { [session, image] in
+            let result = Result {
+                try session.itemSets(image).map { set in
+                    SavedSetRow(set: set, members: try session.itemSetMembers(image, token: set.token))
+                }
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// The current selected item ids of `kind` from an actual query (layers
+    /// via `selectedLayers`, channels/paths via `isSelected`); a failed
+    /// query throws — never a fake all-items list, empty = explicit empty.
+    static func currentSelectedItemIDs(_ session: EngineSession, image: Int32,
+                                       kind: EngineSession.ItemSetKind) throws -> [Int32] {
+        switch kind {
+        case .layer: return try session.selectedLayers(image)
+        case .channel: return try session.channels(image).filter(\.isSelected).map(\.id)
+        case .path: return try session.paths(image).filter(\.isSelected).map(\.id)
+        }
+    }
+
+    /// One undoable saved-set edit (slot 135) as one counted GLOBAL
+    /// exclusive job: `EngineActivity` drains ALL accepted input of every
+    /// document first, and `pendingWork` stays counted through the deferred
+    /// main completion (inside `whenIdle`), so a close waits for the whole
+    /// job including its callback, which runs exactly once with the
+    /// resulting token (0 after REMOVE and every failure). The request is
+    /// captured by value — a foreign/stale token fails NOT_FOUND, never
+    /// retargeted, no front-document fallback. Pre-acceptance refusals
+    /// complete synchronously with nothing queued.
+    func editSavedSet(_ request: SavedSetEditRequest,
+                      completion: @escaping @MainActor (Result<UInt64, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if refuseWhileEditingUnavailable() { return completion(.failure(isClosing ? DocumentError.closed : DocumentError.busy)) }
+        if case .failure(let rejection) = SavedSetControlsLogic.validateRequest(
+            operation: request.operation, kind: request.kind, token: request.token,
+            name: request.name, members: request.members, captureSelection: request.captureSelection) {
+            return completion(.failure(rejection))
+        }
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        pendingWork += 1
+        enqueueExclusive(label: "Editing a saved set", rejected: {
+            self.jobDidFinish(input: false)
+            completion(.failure(DocumentError.busy))
+        }) { [session, image] in
+            let result: Result<UInt64, Error> = Result {
+                let members: [Int32]
+                if request.captureSelection {
+                    members = try Self.currentSelectedItemIDs(session, image: image, kind: request.kind)
+                } else {
+                    members = request.members
+                }
+                return try session.editItemSet(image, request.operation, kind: request.kind,
+                                              token: request.token, name: request.name, members: members)
+            }
+            DispatchQueue.main.async {
+                EngineActivity.shared.whenIdle {
+                    // The extra count covers this deferred completion,
+                    // including callbacks that request window closure.
+                    defer { self.jobDidFinish(input: false) }
+                    if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                    completion(result)
+                }
+            }
+        }
+    }
+
     // MARK: Guides
 
     /// Adds a guide at `position` (image pixels on `orientation`'s
