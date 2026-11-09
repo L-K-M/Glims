@@ -22,7 +22,8 @@ enum AdjustmentLayerLogic {
         ("gegl:hue-chroma", "Hue/Chroma"),
         ("gegl:saturation", "Saturation"),
         ("gegl:color-temperature", "Color Temperature"),
-        ("gegl:invert", "Invert"),
+        ("gegl:invert-linear", "Linear Invert"),
+        ("gegl:invert-gamma", "Value Invert"),
     ]
 
     /// The catalog's operations of the known set that the generic form
@@ -52,7 +53,7 @@ enum AdjustmentLayerLogic {
             return .failure(InputError(message: "Enter a name for the adjustment layer."))
         }
         if trimmed.utf8.count > maximumNameBytes {
-            return .failure(InputError(message: "The name is too long — at most \(maximumNameBytes) characters."))
+            return .failure(InputError(message: "The name is too long."))
         }
         return .success(trimmed)
     }
@@ -68,7 +69,7 @@ enum AdjustmentLayerLogic {
 
     /// The cached color-mode gate: adjustment layers are offered for RGB
     /// and grayscale images only. Indexed is visibly unavailable in the
-    /// Swift layer until the native guard lands; the reason is shown.
+    /// Swift layer as well as the native guard; the reason is shown.
     struct ModeAdmission: Equatable {
         let allowed: Bool
         let reason: String?
@@ -80,7 +81,7 @@ enum AdjustmentLayerLogic {
             return ModeAdmission(allowed: true, reason: nil)
         case .indexed:
             return ModeAdmission(allowed: false,
-                reason: "Adjustment layers are not available for indexed images yet. Convert the image to RGB first.")
+                reason: "Adjustment layers require RGB or grayscale. Convert the indexed image first.")
         case .unknown:
             return ModeAdmission(allowed: false,
                 reason: "The image's color mode is unknown, so no adjustment layer can be added.")
@@ -175,9 +176,9 @@ final class AdjustmentLayerSheetController: NSObject, NSTextFieldDelegate {
         messageLabel.maximumNumberOfLines = 2
         hintLabel.setAccessibilityLabel("Adjustment layer hint")
         hintLabel.lineBreakMode = .byWordWrapping
-        hintLabel.maximumNumberOfLines = 2
+        hintLabel.maximumNumberOfLines = 3
         hintLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        hintLabel.stringValue = "Create adds an adjustment layer above the active layer and opens its parameters."
+        hintLabel.stringValue = "Create adds a layer and opens its parameters. Canceling the parameter edit keeps the created layer; Undo removes it."
 
         let grid = NSGridView(views: [
             [NSTextField(labelWithString: "Name:"), nameField],
@@ -217,9 +218,14 @@ final class AdjustmentLayerSheetController: NSObject, NSTextFieldDelegate {
         isLoadingOperations = true
         setMessage("Loading adjustments…", isError: false)
         updateControlStates()
-        document.loadNativeFilterOperations { [weak self] operations in
+        document.loadNativeFilterOperations { [weak self] result in
             guard let self, !self.isInvalidated, self.loadGeneration == generation else { return }
             self.isLoadingOperations = false
+            guard case .success(let operations) = result else {
+                if case .failure(let error) = result { self.refuse(error.localizedDescription) }
+                self.updateControlStates()
+                return
+            }
             self.availableOperations = AdjustmentLayerLogic.availableOperations(in: operations)
             self.installPicker()
             if let first = self.availableOperations.first, !self.nameIsCustom {

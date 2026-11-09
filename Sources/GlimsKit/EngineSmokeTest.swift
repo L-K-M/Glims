@@ -276,6 +276,16 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (float selected pixels)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "adjustment-controls" {
+                try exerciseAdjustmentControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (adjustment controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "adjustment-catalog-failure" {
+                try exerciseAdjustmentCatalogFailure(session, documents: documents)
+                print(failures == 0 ? "PASSED (adjustment catalog failure)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
                 check(false, "unknown engine smoke case: \(selected)")
 
@@ -322,6 +332,7 @@ enum EngineSmokeTest {
             try exerciseSnapping(session, work: work, documents: documents)
             try exerciseFloatingMove(session, work: work, documents: documents)
             try exerciseFloatSelectedPixels(session, work: work, documents: documents)
+            try exerciseAdjustmentControls(session, work: work, documents: documents)
 
             try exerciseStrokeSelectionControls(session, work: work, documents: documents)
 

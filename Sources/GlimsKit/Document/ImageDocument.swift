@@ -1128,7 +1128,7 @@ final class ImageDocument {
     /// takes no single-layer, mask or channel target restriction, since it
     /// only inserts metadata into the hierarchy. The mode gate reads the
     /// cached color state: RGB and grayscale only — Indexed refuses here
-    /// until the native guard lands. The completion receives the created
+    /// and in the native guard. The completion receives the created
     /// layer and effect ids on the main actor exactly once; failures are
     /// also reported through `onError`.
     func createAdjustmentLayer(name: String, operation: String,
@@ -1166,15 +1166,16 @@ final class ImageDocument {
     /// one counted job on the long queue — a close waits for it — and
     /// installs the list in the shared catalog cache that
     /// `editEffectParameters` resolves operations through. The completion
-    /// runs on the main actor; an empty list means the read failed or the
-    /// document was closing.
-    func loadNativeFilterOperations(completion: @escaping @MainActor ([EngineSession.FilterOperation]) -> Void) {
-        guard !isClosing else { return completion([]) }
+    /// runs on the main actor with the actual error on failure; an unsuccessful
+    /// query never replaces the existing catalog cache.
+    func loadNativeFilterOperations(completion: @escaping @MainActor (Result<[EngineSession.FilterOperation], Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         enqueue(on: longQueue) { [session] in
-            let operations = (try? session.filterOperations()) ?? []
+            let result = Result { try session.filterOperations() }
             DispatchQueue.main.async {
-                if !self.isClosing { NativeFilterCatalog.shared.install(operations) }
-                completion(operations)
+                guard !self.isClosing else { return completion(.failure(DocumentError.closed)) }
+                if case .success(let operations) = result { NativeFilterCatalog.shared.install(operations) }
+                completion(result)
             }
         }
     }

@@ -148,15 +148,20 @@ extension EngineSmokeTest {
         a.newAdjustmentLayer(nil)
         guard let sheet2 = a.adjustmentSheet else { return check(false, "the sheet reopens for Create") }
         wait { !sheet2.isLoadingOperations && !sheet2.availableOperations.isEmpty }
-        let opName = sheet2.availableOperations.first!.name
+        guard let opName = sheet2.availableOperations.first?.name else {
+            return check(false, "a supported native adjustment is available")
+        }
         let sheetWindow2 = a.window?.attachedSheet
         control(sheetWindow2, "Adjustment layer name", as: NSTextField.self)?.stringValue = "Brightness Test"
         control(sheetWindow2, "Adjustment", as: NSPopUpButton.self)?.selectItem(at: 0)
         let create2 = control(sheetWindow2, "Create adjustment layer", as: NSButton.self)
         let cancel2 = control(sheetWindow2, "Cancel adjustment layer", as: NSButton.self)
+        let creationHold = DispatchSemaphore(value: 0)
+        docA.inputQueue.async { creationHold.wait() }
         create2?.performClick(nil)
         check(create2?.isEnabled == false && cancel2?.isEnabled == false,
               "Create and Cancel disable while accepted work runs")
+        creationHold.signal()
         wait { !sheet2.isCreating }
         settle(docA)
         let newLayer = docA.layers.first { $0.name == "Brightness Test" }
@@ -165,8 +170,9 @@ extension EngineSmokeTest {
         check((try? session.layers(imageB).contains { $0.name == "Brightness Test" }) == false,
               "the front document B receives nothing")
         check(docA.undoInfo.undoCount == undoBefore + 1, "the creation is exactly ONE undo step")
-        let effects = try session.effects(on: newLayer!.id, image: imageA)
-        check(effects.count == 1 && effects[0].operation == opName && effects[0].isEnabled,
+        guard let newLayer else { return check(false, "the created adjustment layer exists") }
+        let effects = try session.effects(on: newLayer.id, image: imageA)
+        check(effects.count == 1 && effects[0].operation == opName,
               "the actual native effect id resolves to the chosen operation")
         wait { a.previewPanel != nil }
         check(a.previewPanel is NativeFilterPanel,
@@ -186,6 +192,10 @@ extension EngineSmokeTest {
         check(a.previewPanel == nil && docA.layers.contains { $0.name == "Brightness Test" }
                 && docA.undoInfo.undoCount == undoBefore + 1,
               "canceling the parameter editor keeps the explicitly created layer and adds no undo")
+        let restoredEffects = try session.effects(on: newLayer.id, image: imageA)
+        check(restoredEffects.count == 1 && restoredEffects[0].id == effects[0].id
+                && restoredEffects[0].operation == opName && restoredEffects[0].isEnabled,
+              "Cancel restores the same committed effect's enabled state after the temporary preview")
 
         // ONE Undo/Redo of the creation restores the original pixels.
         docA.undo()
@@ -209,6 +219,8 @@ extension EngineSmokeTest {
         docA.floatSelectedPixels(mode: .move, target: layerA) { _ in }
         settle(docA)
         check(docA.floatingState.isActive, "the floating fixture is active on A")
+        check(adjItem.map { !a.validateMenuItem($0) } == true,
+              "the adjustment creation menu disables while a floating selection is active")
         var floatResult: Result<(layer: Int32, effect: Int32), Error>?
         docA.createAdjustmentLayer(name: "Float", operation: opName) { floatResult = $0 }
         settle(docA)
@@ -225,16 +237,71 @@ extension EngineSmokeTest {
         wait { !sheet3.isLoadingOperations && !sheet3.availableOperations.isEmpty }
         let sheetWindow3 = a.window?.attachedSheet
         control(sheetWindow3, "Adjustment layer name", as: NSTextField.self)?.stringValue = "Close Test"
+        let closeHold = DispatchSemaphore(value: 0)
+        docA.inputQueue.async { closeHold.wait() }
         control(sheetWindow3, "Create adjustment layer", as: NSButton.self)?.performClick(nil)
-        // Same main-queue turn as the click: the accepted job's completion
-        // cannot have run, so the close invalidates the sheet first.
+        // Hold the accepted worker explicitly: performClick can pump the main
+        // run loop, so same-turn timing alone cannot establish an in-flight job.
         a.window?.close()
         check(sheet3.isCreating, "the accepted creation is still running when the window closes")
+        closeHold.signal()
         settle(docA)
         wait { (try? session.info(imageA)) == nil }
         check(docA.isClosing && docA.layers.contains { $0.name == "Close Test" },
               "the counted creation ran to completion before the close destroyed the image")
         check(a.previewPanel == nil,
               "a host closed before the creation completed never opens the parameter editor")
+    }
+
+    /// Run only with the test proxy: the catalog fails while image/layer APIs
+    /// remain real. A failed query must not erase a previously working cache.
+    static func exerciseAdjustmentCatalogFailure(_ session: EngineSession,
+                                                 documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
+        func views(_ root: NSView?) -> [NSView] {
+            guard let root else { return [] }
+            return [root] + root.subviews.flatMap { views($0) }
+        }
+        let cached = NativeFilterCatalog.shared.operations
+        let sentinel = EngineSession.FilterOperation(name: "gegl:brightness-contrast",
+            title: "Existing catalog entry", categories: ["color"], blurb: "", support: .supported)
+        NativeFilterCatalog.shared.install([sentinel])
+        defer { NativeFilterCatalog.shared.install(cached) }
+        let image = try session.newImage(width: 16, height: 16)
+        let document = try ImageDocument(session: session, image: image, name: "Catalog failure")
+        let originalLayerIDs = document.layers.map(\.id)
+        let originalUndo = document.undoInfo.undoCount
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        controller.showWindow(nil)
+        defer {
+            if let sheet = controller.window?.attachedSheet { controller.window?.endSheet(sheet) }
+            controller.window?.close()
+            documents.items.removeAll { $0 === document }
+            if !document.isClosing {
+                var closed = false
+                document.closeImageWhenDrained { closed = true }
+                wait { closed }
+            }
+        }
+        controller.newAdjustmentLayer(nil)
+        guard let sheet = controller.adjustmentSheet else {
+            return check(false, "the adjustment form opens for the failed catalog read")
+        }
+        wait { !sheet.isLoadingOperations && document.pendingWork == 0 }
+        check(sheet.lastError != nil && sheet.lastError != "No supported adjustments are available.",
+              "the actual catalog failure is visible instead of an empty-catalog explanation")
+        check(NativeFilterCatalog.shared.operation(named: sentinel.name)?.title == sentinel.title,
+              "a failed native catalog query preserves the working shared cache")
+        let buttons = views(sheet.panel.contentView).compactMap { $0 as? NSButton }
+        check(buttons.first { $0.accessibilityLabel() == "Create adjustment layer" }?.isEnabled == false,
+              "Create remains disabled without a valid catalog")
+        check(buttons.first { $0.accessibilityLabel() == "Cancel adjustment layer" }?.isEnabled == true,
+              "Cancel remains available after a catalog failure")
+        check(document.layers.map(\.id) == originalLayerIDs && document.undoInfo.undoCount == originalUndo,
+              "the failed catalog read creates no layer or history entry")
     }
 }

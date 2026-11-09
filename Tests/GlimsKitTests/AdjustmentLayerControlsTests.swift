@@ -58,7 +58,7 @@ final class AdjustmentLayerControlsTests: XCTestCase {
 
     func testOnlySupportedKnownOperationsAreOfferedInKnownOrder() {
         let catalog = [
-            operation("gegl:invert"),
+            operation("gegl:invert-linear"),
             operation("gegl:saturation", support: .needsConfig),
             operation("gegl:brightness-contrast", title: "Brightness-Contrast"),
             operation("gegl:color-temperature", support: .needsAuxInput),
@@ -68,7 +68,7 @@ final class AdjustmentLayerControlsTests: XCTestCase {
         ]
         let offered = AdjustmentLayerLogic.availableOperations(in: catalog)
         XCTAssertEqual(offered.map(\.name),
-                       ["gegl:brightness-contrast", "gegl:exposure", "gegl:hue-chroma", "gegl:invert"],
+                       ["gegl:brightness-contrast", "gegl:exposure", "gegl:hue-chroma", "gegl:invert-linear"],
                        "unsupported, config/aux operations and unknown names never appear, in known-set order")
         XCTAssertEqual(offered.first?.title, "Brightness-Contrast", "the native title is shown, not a fallback")
     }
@@ -76,9 +76,15 @@ final class AdjustmentLayerControlsTests: XCTestCase {
     func testNoSupportedKnownOperationOffersNothing() {
         XCTAssertTrue(AdjustmentLayerLogic.availableOperations(in: []).isEmpty)
         XCTAssertTrue(AdjustmentLayerLogic.availableOperations(in: [
-            operation("gegl:invert", support: .needsConfig),
+            operation("gegl:invert-linear", support: .needsConfig),
             operation("gegl:gaussian-blur"),
         ]).isEmpty, "no unsupported fallback to an unlisted operation")
+    }
+
+    func testCanonicalInvertOperationsFromTheNativeCatalogAreOffered() {
+        let catalog = [operation("gegl:invert-gamma"), operation("gegl:invert-linear")]
+        XCTAssertEqual(AdjustmentLayerLogic.availableOperations(in: catalog).map(\.name),
+                       ["gegl:invert-linear", "gegl:invert-gamma"])
     }
 
     // MARK: Default name

@@ -706,12 +706,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// Layer ▸ New Adjustment Layer…: opens this document's creation
     /// sheet. The open gate reads only cached state — closing, busy,
     /// preview, another attached sheet — plus the cached color-mode gate:
-    /// RGB and grayscale only, Indexed is visibly unavailable until the
-    /// native guard lands. The sheet is owned by this window and captures
+    /// RGB and grayscale only. The sheet is owned by this window and captures
     /// this window's document, so nothing redirects to the front document.
     @objc func newAdjustmentLayer(_ sender: Any?) {
         guard let window, !imageDocument.isClosing, window.attachedSheet == nil,
-              adjustmentSheet == nil else { return }
+              adjustmentSheet == nil, imageDocument.acceptsEdits, !previewBusy,
+              !imageDocument.targetCommandIsPending, !imageDocument.floatingState.isActive else { return }
         if let reason = AdjustmentLayerLogic.modeAdmission(imageDocument.colorInfo.mode).reason {
             statusBar.message = reason
             NSSound.beep()
@@ -1352,6 +1352,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let admission = AdjustmentLayerLogic.modeAdmission(imageDocument.colorInfo.mode)
             menuItem.toolTip = admission.reason
             return admission.allowed && !editingBlocked && !previewBusy
+                && !imageDocument.targetCommandIsPending && !imageDocument.floatingState.isActive
         case #selector(layerToImageSize(_:)), #selector(trimLayerToContent(_:)):
             // Pixel layers only, from the cached list: the engine
             // refuses groups and editable text, link and vector layers,

@@ -3,15 +3,16 @@
 The Swift UI slice over the frozen facade slot 130
 (`adjustment_layer_new`, see `docs/adjustment-layer-create.md` and
 `docs/adjustment-layer-tests.md`). The native signature is unchanged; no
-C, header, upstream, dependency, Rigi or build-script file is touched.
+production C, header, upstream, dependency, Rigi or build-script file is touched.
+A separate test-only facade proxy injects a catalog failure.
 
 ## Product flow
 
 1. **Creation sheet** (`AdjustmentLayerSheetController` in
    `Sources/GlimsKit/Document/AdjustmentLayerForm.swift`): a name field, an
    adjustment picker and Create/Cancel. Cancel before Create mutates
-   nothing. The hint states simply that Create adds an adjustment layer
-   and opens its parameters.
+   nothing. The hint explains that Canceling the later parameter edit keeps
+   the explicitly created layer, and Undo removes it.
 2. **Accepted Create** queues the native creation as one counted target
    command (`ImageDocument.createAdjustmentLayer`) behind accepted input,
    after this document's pending edits end. Placement is resolved from
@@ -34,18 +35,20 @@ queue, `pendingWork`-counted so a close waits), installs the list into
 `NativeFilterCatalog`'s cache (`install(_:)`) so `editEffectParameters`
 resolves the chosen operation, and filters to the supported known set
 (`AdjustmentLayerLogic.availableOperations`): Brightness/Contrast,
-Exposure, Hue/Chroma, Saturation, Color Temperature, Invert — matched by
+Exposure, Hue/Chroma, Saturation, Color Temperature and the canonical linear/
+gamma invert operations — matched by
 actual native name and `support == .supported`, in a stable display order,
 with no unsupported fallback. A generation counter plus sheet
 invalidation drop late or post-close answers. Property queries for the
 editor keep running off the main thread through the catalog's queue. No
-native call happens in menu validation or draw.
+native call happens in menu validation or draw. Catalog errors remain visible
+and never erase a previously working shared catalog.
 
 ## Admission and lifetime
 
 - Cached mode gate: RGB and grayscale only; Indexed is visibly disabled
   in the menu (tooltip reason) and refused in the action and the document
-  until the native Indexed guard lands in the parent slice.
+  and in the merged-parent native guard.
 - Busy/closed/preview/plug-in/floating gates match `createGroup`; no
   single-layer, mask or channel target restriction, since creation only
   inserts metadata into the hierarchy.
@@ -71,10 +74,17 @@ native call happens in menu validation or draw.
 
 ## Verification
 
-Compile-only in this slice: `swift build -j 2` and
-`swift build -j 2 --build-tests`. The modular smoke
-(`GLIMS_SMOKE_CASE=adjustment-controls`) is not run here; the root
-serializes runtime/native/GUI acceptance. Not covered by it: a deep
-generic parameter-edit harness (the group-filter editing path already has
-native check coverage) and the native Indexed backend guard, which the
-parent slice owns.
+The root acceptance run passes all 694 unit/build checks and nine focused
+pure rules. Canonical invert discovery initially failed, then passed after
+using the actual catalog operation names. The real-control workflow passes
+28 checks on every engine; five injected catalog-failure checks pass on
+every engine. A temporary preview disables the committed effect while
+editing; Cancel restores its actual identity, operation and enabled state.
+The accepted-work and close-drain oracles hold the worker explicitly rather
+than relying on performClick timing. Catalog-failure preservation compares
+the actual preexisting layer/history baseline.
+
+Completed independent source review found no important issue. The combined
+pinned app run is pending. Deep parameter-edit coverage belongs to the
+existing generic editor and native group-filter harness; custom-config and
+auxiliary-input operations remain outside this picker.
