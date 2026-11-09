@@ -280,8 +280,9 @@ extension EngineSmokeTest {
             check(false, "the renamed set is listed")
             return
         }
+        let renamedMembers = try session.itemSetMembers(imageA, token: tokenAfterRename)
         check(sets.first?.displayName == "Layers A2"
-                && (try session.itemSetMembers(imageA, token: tokenAfterRename)) == [bg]
+                && renamedMembers == [bg]
                 && tokenAfterRename != tokenAfterReplace
                 && (try? session.itemSetMembers(imageA, token: tokenAfterReplace)) == nil,
               "RENAME applies the full new name, keeps members, expires the old token")
@@ -398,8 +399,9 @@ extension EngineSmokeTest {
         settle(docA)
         wait { cell(panel, tableView, row(named: "Live", in: panel, tableView) ?? liveRow, panel.countColumn) == "1" }
         spin()
-        check((try session.itemSetMembers(imageA, token: liveToken)) == [bg]
-                && ((try session.itemSets(imageA).first { $0.token == liveToken }?.memberCount) ?? 0) == 1,
+        let liveMembers = try session.itemSetMembers(imageA, token: liveToken)
+        let liveCount = try session.itemSets(imageA).first { $0.token == liveToken }?.memberCount
+        check(liveMembers == [bg] && liveCount == 1,
               "the count is LIVE: a deleted member drops out of the stored set")
 
         // No selection captured explicitly as EMPTY (never all items).
