@@ -1005,6 +1005,8 @@ MARSHAL (image_open,   return glims_image_open (e, a->string, a->out, a->error);
 MARSHAL (image_close,  return glims_image_close (e, a->image);)
 MARSHAL (image_info,   return glims_image_info (e, a->image, a->out);)
 MARSHAL (image_render, return glims_image_render (e, a->image, a->number, a->area, a->pixels, a->stride);)
+MARSHAL (image_render_to_profile, return glims_image_render_to_profile (e, a->image, a->number, a->area,
+                                                                          a->in, a->n, a->pixels, a->stride, a->error);)
 MARSHAL (image_save,   return glims_image_save (e, a->image, a->string, a->error);)
 MARSHAL (image_save_copy, return glims_image_save_copy (e, a->image, a->string, a->error);)
 MARSHAL (image_export, return glims_image_export (e, a->image, a->string, a->error);)
@@ -1355,6 +1357,17 @@ api_image_render (GlimsEngine *e, GlimsImageID image, double scale, GlimsRect ar
 {
   GlimsArgs a = { .image = image, .number = scale, .area = area, .pixels = pixels, .stride = stride };
   return glims_engine_call (e, image_render_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_render_to_profile (GlimsEngine *e, GlimsImageID image, double scale, GlimsRect area,
+                             const uint8_t *destination_icc, size_t destination_icc_length,
+                             uint8_t *pixels, size_t stride, char **error)
+{
+  GlimsArgs a = { .image = image, .number = scale, .area = area,
+                  .in = destination_icc, .n = destination_icc_length,
+                  .pixels = pixels, .stride = stride, .error = error };
+  return glims_engine_call (e, image_render_to_profile_on_engine, &a);
 }
 
 static GlimsStatus
@@ -2559,6 +2572,7 @@ static const GlimsEngineAPI api_v1 = {
   .resource_create_pixels = api_resource_create_pixels,
   .adjustment_layer_new = api_adjustment_layer_new,
   .resource_duplicate = api_resource_duplicate,
+  .image_render_to_profile = api_image_render_to_profile,
 };
 
 __attribute__ ((visibility ("default")))

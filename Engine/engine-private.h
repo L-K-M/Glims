@@ -132,6 +132,28 @@ GlimsStatus glims_image_close      (GlimsEngine *e, GlimsImageID id);
 GlimsStatus glims_image_info       (GlimsEngine *e, GlimsImageID id, GlimsImageInfo *info);
 GlimsStatus glims_image_render     (GlimsEngine *e, GlimsImageID id, double scale, GlimsRect area,
                                     uint8_t *pixels, size_t stride);
+/* Shared lazy projection preparation for one synchronous area read,
+ * used by both renderers (image.c, display-render.c): validates `scale`
+ * and `area` (finite 0 < scale <= MAX_RENDER_SCALE, width/height >= 1),
+ * hands pending projection work over as invalid tiles (stop the chunk
+ * renderer, flush_now(FALSE)) and validates the requested area when the
+ * read is scaled or goes through GEGL's 1x1 hot-tile shortcut. On
+ * GLIMS_STATUS_OK, *buffer_out is the projection buffer to read from.
+ * Borrowed buffer; the image keeps it alive. */
+GlimsStatus glims_projection_prepare_read (GlimsOpenImage *open, double scale, GlimsRect area,
+                                           GeglBuffer **buffer_out);
+
+/* display-render.c: conservative adapter caps for slot 132
+ * (image_render_to_profile), documented in glims_engine.h and
+ * docs/display-destination-render.md. The ICC cap keeps the length well
+ * inside LCMS's 32-bit size domain; the temp cap bounds the per-call
+ * scratch allocation (rows are processed in chunks of at most this
+ * size); the output cap is the shared GLIMS_MAX_PIXEL_BUFFER_BYTES. */
+#define GLIMS_MAX_ICC_PROFILE_BYTES   ((size_t) 16 * 1024 * 1024)
+#define GLIMS_RENDER_TEMP_CHUNK_BYTES ((size_t) 16 * 1024 * 1024)
+GlimsStatus glims_image_render_to_profile (GlimsEngine *e, GlimsImageID id, double scale, GlimsRect area,
+                                           const uint8_t *destination_icc, size_t destination_icc_length,
+                                           uint8_t *pixels, size_t stride, char **error);
 GlimsStatus glims_image_save       (GlimsEngine *e, GlimsImageID id, const char *path, char **error);
 GlimsStatus glims_image_save_copy  (GlimsEngine *e, GlimsImageID id, const char *path, char **error);
 GlimsStatus glims_image_export     (GlimsEngine *e, GlimsImageID id, const char *path, char **error);

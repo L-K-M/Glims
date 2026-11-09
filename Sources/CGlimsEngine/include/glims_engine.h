@@ -2472,6 +2472,48 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*resource_duplicate) (GlimsEngine *engine, GlimsResourceID sourceID,
                                       const char *name, GlimsResourceID *outID,
                                       char **error);
+
+  /* Slot 132: like image_render, but the pixels are converted into the
+   * EXACT RGB destination ICC profile `destination_icc` names instead of
+   * sRGB. Renders the composited image at `scale` (1.0 = one image pixel
+   * per output pixel), `area` in scaled pixel coordinates, exactly as
+   * image_render does (same lazy projection reads and area handling), and
+   * writes area.width * area.height pixels of PREMULTIPLIED 8-bit RGBA in
+   * the destination profile's own RGB space; `stride` is the output row
+   * stride in bytes and must be at least area.width * 4. The returned
+   * buffer must be tagged with a color space built from these same ICC
+   * bytes; image_render's sRGB output must never be retagged instead.
+   *
+   * The source side uses the image's actual working space: its effective
+   * color profile (the image's own, or the engine's builtin fallback for
+   * its model) and the projection's own format and precision. Pixels are
+   * read unassociated at source precision and color-transformed
+   * straight, then premultiplied once for the output; alpha 0, partial
+   * and full alpha are handled deterministically. Grayscale images render
+   * through their gray source format and profile; an indexed image's
+   * RGB projection is handled like RGB. The transform policy is fixed:
+   * relative colorimetric SDR, no proofing, no gamut flags, no user
+   * settings.
+   *
+   * `destination_icc` is immutable caller-owned memory, copied by the
+   * native profile construction during this synchronous call; no pointer
+   * into it is retained afterwards. NULL or zero `destination_icc_length`
+   * is INVALID_ARGUMENT, as are lengths above the adapter's ICC cap
+   * (16 MiB) and any non-finite or out-of-range scale, area, stride or
+   * total output size above the adapter's pixel-buffer cap
+   * (512 MiB, GLIMS_MAX_PIXEL_BUFFER_BYTES). Malformed ICC data is FAILED
+   * with `error`; a valid but non-RGB ICC profile is UNSUPPORTED. There
+   * is never a silent sRGB fallback inside this call: the caller chooses
+   * the fallback (typically image_render) outside. Native profile,
+   * transform and temporary buffers are created, used and released per
+   * call on the engine thread; nothing is cached and no image, profile,
+   * history, dirty or pixel state is read-write touched — this is a read
+   * like image_render and is allowed while the image is not write-ready.
+   * NOT_FOUND for an unknown image, exactly like image_render. */
+  GlimsStatus  (*image_render_to_profile) (GlimsEngine *engine, GlimsImageID image,
+                                           double scale, GlimsRect area,
+                                           const uint8_t *destination_icc, size_t destination_icc_length,
+                                           uint8_t *pixels, size_t stride, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

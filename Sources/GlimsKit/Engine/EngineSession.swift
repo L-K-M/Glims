@@ -493,6 +493,77 @@ final class EngineSession: @unchecked Sendable {
                        intent: .defaultIntent)!
     }
 
+    /// Adapter caps mirrored from the facade (glims_engine.h, slot 132):
+    /// the largest destination ICC blob and the largest output buffer the
+    /// native call accepts.
+    private static let maxDestinationICCBytes = 16 * 1024 * 1024
+    private static let maxRenderBufferBytes = 512 * 1024 * 1024
+
+    /// Renders `area` (in scaled pixels) of the composited image at `scale`
+    /// converted into the exact RGB destination ICC profile
+    /// `destinationICC`, as premultiplied 8-bit RGBA. The returned
+    /// `CGImage` is tagged with a color space built from those exact ICC
+    /// bytes, so Quartz must not reinterpret the pixels. The caller owns
+    /// the fallback policy: when no usable destination exists, call
+    /// `render(_:scale:area:)` (sRGB) instead — the native call never
+    /// falls back to sRGB silently.
+    func render(_ image: Int32, scale: Double, area: CGRect, destinationICC: Data) throws -> CGImage {
+        // Build the matching RGB space from the exact ICC bytes up front;
+        // malformed or non-RGB data is rejected here, never guessed.
+        guard let space = CGColorSpace(iccData: destinationICC as CFData), space.model == .rgb else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "The destination ICC data is not a usable RGB color profile.")
+        }
+        guard scale.isFinite, scale > 0,
+              destinationICC.count > 0, destinationICC.count <= Self.maxDestinationICCBytes else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The render request is out of range.")
+        }
+        let minX = area.minX, minY = area.minY, width = area.width, height = area.height
+        guard minX.isFinite, minY.isFinite, width.isFinite, height.isFinite,
+              minX.rounded() == minX, minY.rounded() == minY,
+              width.rounded() == width, height.rounded() == height,
+              minX >= Double(Int32.min), minX <= Double(Int32.max),
+              minY >= Double(Int32.min), minY <= Double(Int32.max),
+              width >= 1, height >= 1,
+              minX + width <= Double(Int32.max), minY + height <= Double(Int32.max),
+              width <= Double(Int32.max), height <= Double(Int32.max) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The render area is not a finite integral rectangle in range.")
+        }
+        let rect = GlimsRect(x: Int32(minX), y: Int32(minY),
+                             width: Int32(width), height: Int32(height))
+        // Overflow-checked stride and byte count before any allocation or
+        // narrowing to the C API.
+        let stride64 = Int64(rect.width) * 4
+        let count64 = stride64 * Int64(rect.height)
+        guard stride64 <= Int64(Int.max), count64 <= Int64(Int.max),
+              count64 <= Int64(Self.maxRenderBufferBytes) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The render output buffer would exceed the adapter limit.")
+        }
+        let stride = Int(stride64)
+        let data = NSMutableData(length: Int(count64))!
+        var error: UnsafeMutablePointer<CChar>?
+        try destinationICC.withUnsafeBytes { icc in
+            try check(api.image_render_to_profile(engine, image, scale, rect,
+                                                  icc.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                                                  destinationICC.count,
+                                                  data.mutableBytes.assumingMemoryBound(to: UInt8.self),
+                                                  stride, &error), error)
+        }
+
+        // `data` owns the bytes for the provider's (and so the image's)
+        // whole lifetime, exactly as in render(_:scale:area:).
+        let provider = CGDataProvider(data: data)!
+        return CGImage(width: Int(rect.width), height: Int(rect.height),
+                       bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: stride,
+                       space: space,
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: false,
+                       intent: .defaultIntent)!
+    }
+
     func save(_ image: Int32, to path: String) throws {
         var error: UnsafeMutablePointer<CChar>?
         try check(api.image_save(engine, image, path, &error), error)
