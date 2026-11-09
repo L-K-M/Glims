@@ -19,7 +19,7 @@ CI shell build is explicitly for interface verification only.
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | Pull requests, pushes to `main`, manual dispatch | License and bundle-id assertions, script syntax, `swift build`, `swift test`, `.app` assembly with the notices check, a smoke launch, on a pinned Xcode toolchain. |
-| `.github/workflows/zai-code-review.yml` | Pull requests (opened / reopened / synchronize / ready for review) | Automated review pass with GLM 5.3 (deep) and StepFun step-5-preview (fast tier), with MiMo as the outage fallback. |
+| `.github/workflows/zai-code-review.yml` | Pull requests (opened / reopened / synchronize / ready for review) | Automated review pass with GLM 5.3 (deep) and MiMo v2.6 Pro (fast tier), with StepFun step-5-preview as the last-resort fallback. |
 | `.github/workflows/engine-nightly.yml` | Nightly (02:17 UTC), manual dispatch | On a self-hosted Mac: `scripts/engine-matrix.sh` builds the pinned engine and upstream master, runs the adapter conformance tests, the interface diff, builds the app with each engine bundled and checks the bundle with the build trees unreadable. Never runs on pull requests. |
 | `.github/workflows/release.yml` | Pushing a `v*` tag (e.g. `v0.2.0`) | Check the tag against the committed versions, re-run tests, build the `.app`, package `.zip` + `.dmg`, check the notices inside both archives, publish a GitHub Release, then byte-compare the published assets. |
 
@@ -74,7 +74,7 @@ hardening:
 - The third-party action is pinned to an immutable commit rather than a moving tag.
 - One review per PR at a time; a superseded review of an outdated diff is cancelled.
 - `ZAI_API_KEY` is required; `MIMO_API_KEY` and `STEPFUN_API_KEY` are optional.
-  Empty secrets keep the outage fallback and the dedicated fast tier disabled.
+  Empty secrets keep the dedicated fast tier and the outage fallback disabled.
 - Because `pull_request_target` reads the workflow from the base branch, the PR
   that introduces this file is not itself reviewed; reviews start with the next.
 
