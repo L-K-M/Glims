@@ -96,6 +96,10 @@ separate existing rename-conflict target, checks refusal state before the
 accepted writes, and directly exercises channel/path replace, rename and
 remove with Undo/Redo instead of inferring them from layer coverage.
 
-The pinned engine passes all 146 edit checks plus 1,917 general checks.
-All 697 unit tests pass. Remaining engine runs and independent source review
-are in progress; this is not yet an integrated editor or UI completion.
+Every engine passes all 146 edit checks; general conformance totals are
+1,917 / 1,703 / 1,917 / 1,917. After merging current editor main, all 761
+unit tests pass. Root reviewed the token helpers, dispatch, pointer lifetime,
+full-definition no-op comparison and Swift empty-array bridge directly.
+The requested independent review did not complete: its helper attempted
+prohibited nested delegation and was stopped, so no independent approval is
+claimed. Controls and combined app/bundle acceptance remain separate.
