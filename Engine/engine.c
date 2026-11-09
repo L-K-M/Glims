@@ -2391,6 +2391,37 @@ api_adjustment_layer_new (GlimsEngine *e, GlimsImageID image, GlimsItemID parent
   return glims_engine_call (e, adjustment_layer_new_on_engine, &a);
 }
 
+/* resource_duplicate carries the full 64-bit source handle besides the
+ * 64-bit out handle, so it gets its own args struct; neither id ever
+ * travels in one of GlimsArgs' 32-bit fields. */
+typedef struct
+{
+  GlimsResourceID  source;
+  const char      *name;
+  GlimsResourceID *out_id;
+  char           **error;
+} GlimsResourceDuplicateArgs;
+
+static GlimsStatus
+resource_duplicate_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsResourceDuplicateArgs *a = data;
+
+  return glims_resource_duplicate (e, a->source, a->name, a->out_id, a->error);
+}
+
+static GlimsStatus
+api_resource_duplicate (GlimsEngine *e, GlimsResourceID sourceID, const char *name,
+                        GlimsResourceID *outID, char **error)
+{
+  /* Zero the output in the bridge too, so a dispatch without a running
+   * engine (NOT_RUNNING) still clears a prefilled handle. */
+  if (outID) *outID = 0;
+  GlimsResourceDuplicateArgs a = { .source = sourceID, .name = name,
+                                   .out_id = outID, .error = error };
+  return glims_engine_call (e, resource_duplicate_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -2527,6 +2558,7 @@ static const GlimsEngineAPI api_v1 = {
   .image_metadata_tag_info = api_image_metadata_tag_info,
   .resource_create_pixels = api_resource_create_pixels,
   .adjustment_layer_new = api_adjustment_layer_new,
+  .resource_duplicate = api_resource_duplicate,
 };
 
 __attribute__ ((visibility ("default")))

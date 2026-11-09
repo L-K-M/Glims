@@ -520,6 +520,83 @@ GlimsStatus glims_resource_create_pixels (GlimsEngine *e, uint32_t kind, const c
                                            uint32_t brush_spacing, GlimsResourceID *outID,
                                            char **error);
 
+/* The narrowly exposed generic resource lookup shared by the resource
+ * files: lookup_resource()'s id validation (INVALID_ARGUMENT for 0 and
+ * out-of-native-range handles before any narrowing, NOT_FOUND for
+ * stale, foreign or non-current-factory handles) with the borrowed
+ * live GimpData of any of the three kinds. The result is borrowed for
+ * the calling engine-thread call only. */
+GlimsStatus glims_lookup_resource_data (GlimsEngine *e, GlimsResourceID id,
+                                         GimpData **out);
+/* The factory of this engine that owns `data`'s kind (brush, pattern or
+ * gradient), or NULL when `data` is none of them. */
+GimpDataFactory *glims_factory_for_resource (Gimp *gimp, GimpData *data);
+
+/* resource-create.c, shared by the pixel-create and duplicate paths.
+ * The resource label contract of resource_create_pixels /
+ * resource_duplicate: nonempty valid UTF-8, at most 255 bytes, no
+ * control characters. */
+gboolean    glims_valid_resource_name (const char *name);
+/* Exact name collision against the current factory membership. */
+gboolean    glims_resource_name_taken (GimpContainer *container, const gchar *name);
+
+/* One resource call's owned staging state inside the configured save
+ * folder. `extension` is not owned and must outlive the staging (a
+ * #define literal or the class's static extension string). */
+typedef struct
+{
+  GFile        *save_dir;         /* configured writable folder */
+  GFile        *staging_dir;      /* unique hidden staging dir, or NULL */
+  GFile        *staging_file;     /* staging file inside it, or NULL */
+  GFile        *final_file;       /* promoted UUID final file, or NULL */
+  gchar        *uuid;             /* names the staging dir and final file */
+  const gchar  *extension;        /* the resource's own native extension */
+  gboolean      staging_created;  /* mkdir succeeded: cleanup owns the paths */
+  gboolean      promoted;         /* move succeeded: the final file is ours */
+} GlimsResourceStaging;
+
+/* Chooses the configured writable/search native save folder and creates
+ * this call's unique OWNED hidden staging subdirectory and staging file
+ * inside it. On failure `staging` is left zeroed. */
+GlimsStatus glims_resource_staging_begin (GimpDataFactory      *factory,
+                                          const gchar          *extension,
+                                          GlimsResourceStaging *staging,
+                                          char                **error);
+/* The checked persistence pipeline both creation paths share: associate
+ * the staging file, checked gimp_data_save(), promote to a unique UUID
+ * final file by a no-overwrite, no-fallback move, reassociate, then
+ * publish to the factory after an exact-name membership check and verify
+ * membership, exact name and a positive native id. The call owns `data`
+ * on every path: on success the container's reference remains and the
+ * local one is dropped; on failure `data` is released. The staging is
+ * always cleaned up: only this call's own actually-created staging
+ * paths and, on failure only, the promoted final file are deleted.
+ * `outID` receives the new handle on success only. */
+GlimsStatus glims_resource_save_and_publish (GimpDataFactory      *factory,
+                                              GimpData             *data,
+                                              const gchar          *name,
+                                              GlimsResourceStaging *staging,
+                                              GlimsResourceID      *outID,
+                                              char                **error);
+/* Deletes the staged file/dir and, unless `keep_final`, the promoted
+ * final file — only when this call actually created them (a preexisting
+ * sentinel path always survives) — then releases every owned member. */
+void        glims_resource_staging_cleanup (GlimsResourceStaging *staging,
+                                            gboolean              keep_final);
+
+/* resource-duplicate.c */
+/* Duplicates one current brush, pattern or gradient (facade slot 131,
+ * resource_duplicate): resolves `sourceID` once through
+ * glims_lookup_resource_data(), checks the native duplicatable
+ * capability and the private copy's saveability, duplicates with
+ * gimp_data_duplicate() into an owned private object, names it, and
+ * persists+publishes it through glims_resource_save_and_publish(). The
+ * source is never mutated. `outID` is zeroed first and on every
+ * failure. */
+GlimsStatus glims_resource_duplicate (GlimsEngine *e, GlimsResourceID sourceID,
+                                      const char *name, GlimsResourceID *outID,
+                                      char **error);
+
 
 GlimsStatus glims_adjustment_layer_new (GlimsEngine *engine, GlimsImageID image,
     GlimsItemID parent, int32_t index, const char *operation, const char *name,

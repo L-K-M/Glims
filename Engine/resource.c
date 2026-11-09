@@ -134,6 +134,36 @@ lookup_resource (GlimsEngine *engine, GlimsResourceID id, GimpData **out)
   return GLIMS_STATUS_OK;
 }
 
+/* The generic admission, exposed narrowly for the other resource files
+ * (resource-duplicate.c): the same id validation and current-factory
+ * membership check, returning the borrowed live data of any of the
+ * three kinds. The result is borrowed for the calling engine-thread
+ * call only; the caller never mutates or releases it. */
+GlimsStatus
+glims_lookup_resource_data (GlimsEngine *engine, GlimsResourceID id, GimpData **out)
+{
+  if (! out)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  *out = NULL;
+
+  return lookup_resource (engine, id, out);
+}
+
+/* The factory of this engine that owns `data`'s kind, or NULL when
+ * `data` is no brush, pattern or gradient. Shared with
+ * resource-duplicate.c so the duplicate path publishes into the same
+ * current factory container the lookup validated against. */
+GimpDataFactory *
+glims_factory_for_resource (Gimp *gimp, GimpData *data)
+{
+  uint32_t kind = kind_of_data (data);
+
+  if (! kind)
+    return NULL;
+
+  return factory_for_kind (gimp, kind);
+}
+
 /* The narrowly typed lookup the paint path needs. It reuses
  * lookup_resource(), which already refuses 0 and out-of-native-range
  * handles before the native id table (INVALID_ARGUMENT) and stale,
