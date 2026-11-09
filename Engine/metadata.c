@@ -44,6 +44,7 @@
 #include "core/gimp.h"
 #include "core/gimpimage.h"
 #include "core/gimpimage-metadata.h"
+#include "core/gimpimage-undo.h"
 
 /* The tags gimp_image_set_metadata rewrites from the image's own state
  * on every metadata change (gimpimage-metadata.c,
@@ -603,6 +604,17 @@ glims_image_metadata_edit (GlimsEngine        *engine,
     {
       g_object_unref (copy);
       return status;
+    }
+
+  /* A plug-in can leave Undo frozen after it returns. Refuse a real
+   * mutation rather than apply metadata with no recoverable Undo step.
+   * Exact no-ops have already returned above. */
+  if (! gimp_image_undo_is_enabled (open->image))
+    {
+      if (error)
+        *error = g_strdup ("Metadata cannot be changed while Undo is disabled.");
+      g_object_unref (copy);
+      return GLIMS_STATUS_BUSY;
     }
 
   /* Apply on the PRIVATE copy only; the original metadata is untouched
