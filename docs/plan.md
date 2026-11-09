@@ -3406,6 +3406,7 @@ The focused offline suite passes10 checks; all24 packaging tests pass. A
 real upstream request and repeated cache read produced the expected1,316
 bytes, and actual core-source notices with a controlled AOM ownership entry
 include those bytes without a missing-text placeholder. Independent source
-review found and verified a redirect-body bound fix. Full bundle verification
-is still pending. Corresponding-source delivery, remaining components and
-signed public distribution remain separate work.
+review found and verified a redirect-body bound fix. The full self-contained
+bundle contains the original AOM text and passes1,917 native and2,418 app
+checks with build trees inaccessible. Corresponding-source delivery,
+remaining components and signed public distribution remain separate work.
