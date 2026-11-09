@@ -2717,6 +2717,36 @@ static GlimsStatus api_filter_begin_with_source (GlimsEngine *e, GlimsImageID im
   return glims_engine_call (e, filter_begin_with_source_on_engine, &a);
 }
 
+typedef struct {
+  GlimsFilterID filter;
+  GlimsBrightnessContrastSettings *out;
+  const GlimsBrightnessContrastSettings *settings;
+  char **error;
+} GlimsBrightnessContrastArgs;
+static GlimsStatus filter_brightness_contrast_get_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsBrightnessContrastArgs *a = data;
+  return glims_filter_brightness_contrast_get (e, a->filter, a->out, a->error);
+}
+static GlimsStatus filter_brightness_contrast_set_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsBrightnessContrastArgs *a = data;
+  return glims_filter_brightness_contrast_set (e, a->filter, a->settings, a->error);
+}
+static GlimsStatus api_filter_brightness_contrast_get (GlimsEngine *e, GlimsFilterID filter,
+                                                      GlimsBrightnessContrastSettings *out, char **error)
+{
+  if (out && out->struct_size >= sizeof *out) out->brightness = out->contrast = 0;
+  GlimsBrightnessContrastArgs a = { .filter = filter, .out = out, .error = error };
+  return glims_engine_call (e, filter_brightness_contrast_get_on_engine, &a);
+}
+static GlimsStatus api_filter_brightness_contrast_set (GlimsEngine *e, GlimsFilterID filter,
+                                                           const GlimsBrightnessContrastSettings *settings, char **error)
+{
+  GlimsBrightnessContrastArgs a = { .filter = filter, .settings = settings, .error = error };
+  return glims_engine_call (e, filter_brightness_contrast_set_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -2870,6 +2900,8 @@ static const GlimsEngineAPI api_v1 = {
   .resource_delete = api_resource_delete,
   .image_delete_layers = api_image_delete_layers,
   .filter_begin_with_source = api_filter_begin_with_source,
+  .filter_brightness_contrast_get = api_filter_brightness_contrast_get,
+  .filter_brightness_contrast_set = api_filter_brightness_contrast_set,
 };
 
 __attribute__ ((visibility ("default")))

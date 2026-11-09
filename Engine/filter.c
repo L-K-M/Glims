@@ -17,6 +17,7 @@
  */
 #include "engine-private.h"
 #include "filter-input.h"
+#include "filter-config.h"
 
 #include <math.h>
 #include <string.h>
@@ -176,7 +177,7 @@ static GlimsStatus
 source_merge_history_ready (GimpImage *image, char **error)
 {
   if (!gimp_image_undo_is_enabled (image) || gimp_image_get_undo_group_count (image)) {
-    if (error) *error = g_strdup ("Finish the current edit and enable Undo before applying Bump Map.");
+    if (error) *error = g_strdup ("Finish the current edit and enable Undo before applying this filter.");
     return GLIMS_STATUS_BUSY;
   }
   return GLIMS_STATUS_OK;
@@ -198,12 +199,20 @@ filter_begin_internal (GlimsEngine    *engine,
   gint            id;
   GlimsStatus     status;
 
+  if (out) *out = 0;
   if (! open)
     return GLIMS_STATUS_NOT_FOUND;
   if (! operation || ! out)
     return GLIMS_STATUS_INVALID_ARGUMENT;
   if (engine->busy > 0)
     return GLIMS_STATUS_BUSY;
+
+  if (!strcmp (operation, "gimp:brightness-contrast")) {
+    status = glims_edit_ready (engine, open, error);
+    if (status != GLIMS_STATUS_OK) return status;
+    status = source_merge_history_ready (open->image, error);
+    if (status != GLIMS_STATUS_OK) return status;
+  }
 
   drawable = glims_lookup_drawable (open, drawable_id);
   if (! drawable)
@@ -229,6 +238,8 @@ filter_begin_internal (GlimsEngine    *engine,
     glims_filters_free (session);
     return glims_fail (error, NULL, "The filter operation could not be created.");
   }
+  status = glims_filter_config_prepare (session->operation, error);
+  if (status != GLIMS_STATUS_OK) { glims_filters_free (session); return status; }
   if (aux_source) {
     if (!gegl_node_connect_to (aux_source, "output", session->operation, "aux")) {
       glims_filters_free (session);
@@ -380,6 +391,10 @@ glims_filter_edit_begin (GlimsEngine   *engine,
         *error = strdup ("That effect has no editable parameters.");
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
+  if (!strcmp (operation, "gimp:brightness-contrast")) {
+    status = source_merge_history_ready (open->image, error);
+    if (status != GLIMS_STATUS_OK) { g_free (operation); return status; }
+  }
 
   session = g_new0 (GlimsFilter, 1);
   session->image           = g_object_ref (open->image);
@@ -402,6 +417,14 @@ glims_filter_edit_begin (GlimsEngine   *engine,
 
       if ((pspecs[i]->flags & G_PARAM_READWRITE) != G_PARAM_READWRITE)
         continue;
+      if (!strcmp (pspecs[i]->name, "config") &&
+          glims_filter_config_is_brightness_contrast (session->operation)) {
+        status = glims_filter_config_copy (session->operation, existing_node, error);
+        if (status != GLIMS_STATUS_OK) {
+          g_free (pspecs); glims_filters_free (session); return status;
+        }
+        continue;
+      }
       g_value_init (&value, pspecs[i]->value_type);
       gegl_node_get_property (existing_node, pspecs[i]->name, &value);
       gegl_node_set_property (session->operation, pspecs[i]->name, &value);
@@ -525,6 +548,35 @@ glims_filter_set_double (GlimsEngine   *engine,
 }
 
 GlimsStatus
+glims_filter_brightness_contrast_get (GlimsEngine *engine, GlimsFilterID id,
+                                     GlimsBrightnessContrastSettings *out, char **error)
+{
+  GlimsFilter *session;
+  if (!out || out->struct_size < sizeof *out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  out->brightness = out->contrast = 0;
+  session = g_hash_table_lookup (engine->filters, GINT_TO_POINTER (id));
+  if (!session) return GLIMS_STATUS_NOT_FOUND;
+  if (engine->busy > 0) return GLIMS_STATUS_BUSY;
+  return glims_filter_config_get (session->operation, out, error);
+}
+
+GlimsStatus
+glims_filter_brightness_contrast_set (GlimsEngine *engine, GlimsFilterID id,
+                                     const GlimsBrightnessContrastSettings *settings, char **error)
+{
+  GlimsFilter *session = g_hash_table_lookup (engine->filters, GINT_TO_POINTER (id));
+  gboolean changed = FALSE;
+  GlimsStatus status = glims_filter_check_edit (engine, id, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = glims_filter_config_set (session->operation, settings, &changed, error);
+  if (status == GLIMS_STATUS_OK && changed) {
+    glims_filter_preview_apply (session);
+    gimp_image_flush (session->image);
+  }
+  return status;
+}
+
+GlimsStatus
 glims_filter_commit (GlimsEngine    *engine,
                      GlimsFilterID   id,
                      char          **error)
@@ -534,7 +586,7 @@ glims_filter_commit (GlimsEngine    *engine,
   GlimsStatus status = glims_filter_check_edit (engine, id, error);
 
   if (status != GLIMS_STATUS_OK) return status;
-  if (session->aux_source) {
+  if (session->aux_source || glims_filter_config_is_brightness_contrast (session->operation)) {
     status = source_merge_history_ready (session->image, error);
     if (status != GLIMS_STATUS_OK) return status;
   }
@@ -553,6 +605,14 @@ glims_filter_commit (GlimsEngine    *engine,
       gchar              *operation_name = NULL;
       guint               n_specs;
 
+      if (glims_filter_config_is_brightness_contrast (session->operation)) {
+        GlimsBrightnessContrastSettings checked = { .struct_size = sizeof checked };
+        status = glims_filter_config_get (session->operation, &checked, error);
+        if (status != GLIMS_STATUS_OK) return status;
+        status = glims_filter_config_get (existing_node, &checked, error);
+        if (status != GLIMS_STATUS_OK) return status;
+      }
+
       if (! gimp_image_undo_push_filter_modified (session->image, _("Edit filter"),
                                                   session->drawable, existing))
         return glims_fail (error, NULL, "The image's undo history is unavailable.");
@@ -566,6 +626,12 @@ glims_filter_commit (GlimsEngine    *engine,
 
           if ((specs[i]->flags & G_PARAM_READWRITE) != G_PARAM_READWRITE)
             continue;
+          if (!strcmp (specs[i]->name, "config") &&
+              glims_filter_config_is_brightness_contrast (session->operation)) {
+            status = glims_filter_config_copy (existing_node, session->operation, error);
+            if (status != GLIMS_STATUS_OK) { g_free (specs); return status; }
+            continue;
+          }
           g_value_init (&value, specs[i]->value_type);
           gegl_node_get_property (session->operation, specs[i]->name, &value);
           gegl_node_set_property (existing_node, specs[i]->name, &value);

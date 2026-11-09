@@ -927,6 +927,41 @@ final class EngineSession: @unchecked Sendable {
             .map { FilterEnumChoice(nick: Self.string($0.nick), label: Self.string($0.label)) }
     }
 
+    struct BrightnessContrastSettings: Equatable {
+        var brightness: Double = 0
+        var contrast: Double = 0
+
+        var isValid: Bool {
+            brightness.isFinite && contrast.isFinite
+                && (-1...1).contains(brightness) && (-1...1).contains(contrast)
+        }
+    }
+
+    func brightnessContrastSettings(_ filter: Int32) throws -> BrightnessContrastSettings {
+        var raw = GlimsBrightnessContrastSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsBrightnessContrastSettings>.size)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_brightness_contrast_get(engine, filter, &raw, &error)
+        try check(status, error)
+        let value = BrightnessContrastSettings(brightness: raw.brightness, contrast: raw.contrast)
+        guard value.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The adjustment settings could not be read.")
+        }
+        return value
+    }
+
+    func setBrightnessContrastSettings(_ filter: Int32, to value: BrightnessContrastSettings) throws {
+        guard value.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: "Brightness and contrast must be between −1 and 1.")
+        }
+        var raw = GlimsBrightnessContrastSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsBrightnessContrastSettings>.size)
+        raw.brightness = value.brightness; raw.contrast = value.contrast
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_brightness_contrast_set(engine, filter, &raw, &error)
+        try check(status, error)
+    }
+
     /// One property's current value in an open filter session.
     func filterProperty(_ filter: Int32, _ property: String) throws -> FilterValue {
         var value = GlimsFilterValue()

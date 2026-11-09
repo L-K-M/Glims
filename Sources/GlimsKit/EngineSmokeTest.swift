@@ -301,6 +301,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (batch delete)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brightness-contrast" {
+                try exerciseBrightnessContrast(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (brightness contrast)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "filter-sources" {
                 try exerciseFilterSources(session, documents: documents)
                 print(failures == 0 ? "PASSED (filter sources)" : "FAILED: \(failures) failures")
@@ -452,6 +457,7 @@ enum EngineSmokeTest {
             try exerciseBatchDuplicate(session, documents: documents)
             try exerciseBatchDelete(session, documents: documents)
             try exerciseFilterSources(session, documents: documents)
+            try exerciseBrightnessContrast(session, work: work, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)
             try exerciseFloatingMove(session, work: work, documents: documents)
             try exerciseFloatSelectedPixels(session, work: work, documents: documents)

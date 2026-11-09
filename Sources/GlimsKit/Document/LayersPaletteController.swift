@@ -309,7 +309,8 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             menuItem.toolTip = toolTip
             return menuItem
         }
-        let editSupported = NativeFilterCatalog.shared.operation(named: item.effect.operation)?.support == .supported
+        let editSupported = NativeFilterMenuLayout.supportsParameterEditor(
+            NativeFilterCatalog.shared.operation(named: item.effect.operation))
         let editReason = NativeFilterMenuLayout.unavailableReason(
             NativeFilterCatalog.shared.operation(named: item.effect.operation)?.support ?? .needsConfig)
         let enable = entry("Enable", #selector(toggleEffectEnabled(_:)))
@@ -346,7 +347,8 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         let effect = stack[index]
         switch menuItem.action {
         case #selector(editParametersOfItem(_:)):
-            return NativeFilterCatalog.shared.operation(named: effect.operation)?.support == .supported
+            return NativeFilterMenuLayout.supportsParameterEditor(
+                NativeFilterCatalog.shared.operation(named: effect.operation))
         case #selector(toggleEffectEnabled(_:)):
             menuItem.state = effect.isEnabled ? .on : .off
             return true
@@ -378,7 +380,8 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     private func editEffectParameters(_ item: EffectItem) {
         guard let document, item.document === document, document.acceptsEdits,
               document.canChangeEffect(item.effect.id, on: item.drawable),
-              NativeFilterCatalog.shared.operation(named: item.effect.operation)?.support == .supported
+              NativeFilterMenuLayout.supportsParameterEditor(
+                NativeFilterCatalog.shared.operation(named: item.effect.operation))
         else { return }
         documentWindowController(for: document)?
             .editEffectParameters(item.effect.id, on: item.drawable, operationName: item.effect.operation)
