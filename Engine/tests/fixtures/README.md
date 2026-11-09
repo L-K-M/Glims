@@ -75,3 +75,11 @@ The generator and facade runner compile strictly, original fixture bytes and
 nanosecond mtimes remain unchanged, and no production code/API changes.
 These checks cover an 8-bit wide-source fixture and SDR output, not LUT,
 physical-display, higher-precision source or HDR accuracy.
+
+`metadata-language.xcf` is a64×64 image generated with the pinned3.2.8
+engine by `scripts/make-metadata-language-fixture.py`. Its known LangAlt maps
+are dc:title (x-default Hello, fr Salut, de Hallo) and dc:rights (x-default
+Default rights, ja 権利), plus Artist Fixture Artist and Caption Fixture caption.
+The Core-only generator validates those independent expected maps before saving.
+`scripts/test-metadata-language-facade.py` reads it using only the public facade,
+checks ownership/refusals/history/read-during-edit, then saves/reopens a copy.

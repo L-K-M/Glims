@@ -557,6 +557,15 @@ void        glims_free_metadata_strings (char **strings);
 GlimsStatus glims_image_metadata_tag_info (GlimsEngine *e, GlimsImageID image, const char *tag,
                                            GlimsMetadataTagInfo *outInfo, char **error);
 
+/* metadata-language-facade.c: facade slots 139/140. A plain read of one
+ * registered XMP LangAlt root property through the accepted private
+ * reader (Engine/metadata-language.c); no writer, no BUSY gate, never
+ * creates metadata. */
+GlimsStatus glims_image_metadata_languages (GlimsEngine *e, GlimsImageID image, const char *root,
+                                            GlimsMetadataLanguageValue **out,
+                                            int32_t *out_count, char **error);
+void        glims_metadata_languages_free (GlimsMetadataLanguageValue *values);
+
 /* layer-source.c */
 GlimsStatus glims_layer_source_info (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                      GlimsLayerSourceInfo *out, char **error);

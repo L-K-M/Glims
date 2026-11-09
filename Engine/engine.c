@@ -2244,6 +2244,9 @@ MARSHAL (image_metadata_edit, return glims_image_metadata_edit (e, a->image, a->
 MARSHAL (image_metadata_tag_info, return glims_image_metadata_tag_info (e, a->image, a->string,
                                                                          (GlimsMetadataTagInfo *) a->in_out,
                                                                          a->error);)
+MARSHAL (image_metadata_languages, return glims_image_metadata_languages (e, a->image, a->string,
+                                                                            (GlimsMetadataLanguageValue **) a->out,
+                                                                            a->count, a->error);)
 
 static GlimsStatus
 api_image_guides (GlimsEngine *e, GlimsImageID image, GlimsGuideInfo *rows,
@@ -2423,6 +2426,28 @@ api_image_metadata_tag_info (GlimsEngine *e, GlimsImageID image, const char *tag
 {
   GlimsArgs a = { .image = image, .string = tag, .in_out = outInfo, .error = error };
   return glims_engine_call (e, image_metadata_tag_info_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_metadata_languages (GlimsEngine *e, GlimsImageID image, const char *root,
+                              GlimsMetadataLanguageValue **out, int32_t *out_count,
+                              char **error)
+{
+  /* Both outputs are cleared before dispatch: a NULL engine returns
+   * NOT_RUNNING and still leaves a prefilled out/count at NULL/0. */
+  if (out)
+    *out = NULL;
+  if (out_count)
+    *out_count = 0;
+  GlimsArgs a = { .image = image, .string = root, .out = out,
+                  .count = out_count, .error = error };
+  return glims_engine_call (e, image_metadata_languages_on_engine, &a);
+}
+
+static void
+api_metadata_languages_free (GlimsMetadataLanguageValue *values)
+{
+  glims_metadata_languages_free (values);
 }
 
 static GlimsStatus
@@ -2683,6 +2708,8 @@ static const GlimsEngineAPI api_v1 = {
   .image_select_items = api_image_select_items,
   .image_selected_items = api_image_selected_items,
   .resource_create_gradient = api_resource_create_gradient,
+  .image_metadata_languages = api_image_metadata_languages,
+  .metadata_languages_free = api_metadata_languages_free,
 };
 
 __attribute__ ((visibility ("default")))
