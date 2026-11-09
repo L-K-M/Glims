@@ -86,6 +86,8 @@ final class EngineCanvasView: NSView {
     /// One pinch gesture's fractional zoom; rebased on .began and whenever
     /// the view's integer zoom changed outside the gesture.
     private var zoomGesture = TrackpadNavigationLogic.ZoomAccumulator(publishedPercent: ZoomLadder.actualPixels)
+    /// Option-scroll zoom's own fractional zoom accumulator.
+    private var optionScrollZoomAccumulator = TrackpadNavigationLogic.ZoomAccumulator(publishedPercent: ZoomLadder.actualPixels)
     /// Relative rotation is rebased from the current view for every event.
     private var rotationGesture = TrackpadNavigationLogic.RotationAccumulator(baseDegrees: 0)
 
@@ -847,5 +849,29 @@ final class EngineCanvasView: NSView {
                 onTrackpadRotate?(degrees, point)
             }
         }
+    }
+
+    // MARK: Option-scroll view zoom
+
+    func handleOptionScroll(_ event: NSEvent) -> Bool {
+        guard OptionScrollZoom.isAdmitted(event.modifierFlags) else {
+            optionScrollZoomAccumulator.rebase(to: zoomPercent)
+            return false
+        }
+        guard trackpadNavigationAllowed(for: event) else {
+            optionScrollZoomAccumulator.rebase(to: zoomPercent)
+            return true
+        }
+        let point = event.locationInWindow
+        let delta = event.scrollingDeltaY != 0 ? event.scrollingDeltaY : event.scrollingDeltaX
+        let usableDelta = point.x.isFinite && point.y.isFinite ? Double(delta) : nil
+        let percent = OptionScrollZoom.apply(
+            delta: usableDelta, precise: event.hasPreciseScrollingDeltas, currentPercent: zoomPercent,
+            began: event.phase.contains(.began) || event.momentumPhase.contains(.began),
+            ended: event.phase.contains(.ended) || event.momentumPhase.contains(.ended),
+            cancelled: event.phase.contains(.cancelled) || event.momentumPhase.contains(.cancelled),
+            to: &optionScrollZoomAccumulator)
+        if let percent { onTrackpadZoom?(percent, point) }
+        return true
     }
 }

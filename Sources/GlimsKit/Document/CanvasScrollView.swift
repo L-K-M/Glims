@@ -3,6 +3,8 @@ import AppKit
 /// Keeps native ruler slots outside the editable viewport, including on
 /// AppKit versions that tile them over the clip view with zero insets.
 final class CanvasScrollView: NSScrollView {
+    /// Option-scroll zoom handling. Returns true when the event was consumed.
+    var onOptionScroll: ((NSEvent) -> Bool)?
     override func tile() {
         let previousFrame = contentView.frame
         let previousBounds = contentView.bounds
@@ -40,5 +42,10 @@ final class CanvasScrollView: NSScrollView {
         if viewport == previousFrame {
             contentView.scroll(to: contentView.constrainBoundsRect(previousBounds).origin)
         }
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        if onOptionScroll?(event) == true { return }
+        super.scrollWheel(with: event)
     }
 }
