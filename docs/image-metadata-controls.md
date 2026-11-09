@@ -16,8 +16,9 @@ until close drains them.
 Add Tag validates registration with a read, then creates a local draft.
 No empty native value is written before the user enters text and applies.
 Normalization-protected tags are read-only. Other unsupported formats show
-the native refusal. The existing text-only reader does not support editing
-XMP language alternatives or choosing a new XMP container type.
+the native refusal. Text that can have different versions for different
+languages is shown for reading only and cannot be safely changed yet;
+Glims also cannot yet choose a new XMP container type.
 
 The editor preserves duplicate, multiline and empty draft rows as separate
 values. The native backend verifies exact representability before attaching

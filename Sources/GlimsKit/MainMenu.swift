@@ -62,6 +62,7 @@ enum MainMenu {
             submenu("Create Resource", [
                 item("Brush from Selection…", #selector(DocumentWindowController.createBrushFromSelection(_:))),
                 item("Pattern from Selection…", #selector(DocumentWindowController.createPatternFromSelection(_:))),
+                item("Gradient…", #selector(DocumentWindowController.createGradient(_:))),
             ]),
         ])
         // Plug-in commands are appended to Image, Layer and Select (PlugInMenus).

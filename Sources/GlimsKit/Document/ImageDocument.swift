@@ -1238,6 +1238,93 @@ final class ImageDocument {
         }
     }
 
+    // MARK: Create gradient
+
+    /// The cached-state reason Edit ▸ Create Resource ▸ Gradient… cannot
+    /// run right now, or nil when it can. Reads only the document's cached
+    /// state — never the engine — so menu validation and the sheet's
+    /// open/accept gates make no synchronous native call. The gradient
+    /// catalog is global and the write takes no image: no gate keys on the
+    /// selection, the paint target, layer or channel targets, a floating
+    /// selection or the file state.
+    func createGradientRefusal() -> String? {
+        GradientCreateValidation.gate(
+            engineActivity: PlugInCommands.isRunning ? nil : EngineActivity.shared.label,
+            plugInLabel: PlugInCommands.running.map { $0.procedure.label.replacingOccurrences(of: "…", with: "") },
+            isClosing: isClosing,
+            isSavingForClose: isSavingForClose,
+            isTransferringClipboard: isTransferringClipboard,
+            previewOpen: filterPreviewIsOpen)
+    }
+
+    /// Creates one saved two-endpoint gradient under `name` — the ONLY
+    /// native write is facade slot 138, `EngineSession.createGradient`,
+    /// whose endpoints are plain owned sRGB RGBA values converted from the
+    /// color wells on the main thread at accept; the worker never sees
+    /// NSColor or AppKit. The call takes no image and changes no image,
+    /// undo history, selection, clipboard, context or committed ToolState;
+    /// it never selects the new gradient or replaces the current gradient
+    /// choice.
+    ///
+    /// The flow mirrors `duplicateResource` exactly: one counted global
+    /// exclusive job (`EngineActivity` drains ALL accepted document input
+    /// first), with the outer `pendingWork` count covering the deferred
+    /// main completion stage and `enqueueExclusive`'s inner count covering
+    /// the job itself, so a close waits for the whole job and its callback
+    /// and a rejection balances both counts and completes once. The
+    /// completion runs on the main actor exactly once — pre-acceptance
+    /// refusals call it synchronously with nothing queued — and a
+    /// successful publish never becomes a false failure through the
+    /// optional identity query.
+    func createGradient(name: String, left: EngineSession.RGBAColor, right: EngineSession.RGBAColor,
+                        completion: @escaping @MainActor (Result<CreatedResource, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if let reason = createGradientRefusal() {
+            return completion(.failure(EngineSession.EngineError(
+                status: Int32(GLIMS_STATUS_BUSY.rawValue), message: reason)))
+        }
+        // Pure local validation before anything is queued: the name
+        // contract, the .ggr ASCII edge-whitespace rule and both endpoints
+        // (every component, alpha included, finite inside 0...1) — the
+        // same pre-RPC gate slot 138 applies. No trimming, no clamping.
+        do {
+            try EngineSession.validateGradientCreation(name: name, left: left, right: right)
+        } catch { return completion(.failure(error)) }
+        // End in-flight field/text edits and this document's own open
+        // stroke explicitly — the established finishInput pattern — so the
+        // exclusive drain below starts from committed input.
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        pendingWork += 1
+        let label = "Creating gradient “\(name)”"
+        enqueueExclusive(label: label, rejected: {
+            self.jobDidFinish(input: false)
+            completion(.failure(DocumentError.busy))
+        }) { [session] in
+            let result: Result<CreatedResource, Error> = Result {
+                // The one native write: synchronous slot 138, off the main
+                // thread, plain RGBA values by value. The call persists one
+                // static gradient and mutates no image.
+                let id = try session.createGradient(name: name, left: left, right: right)
+                // Optional identity query only: a successful publish must
+                // not become a false failure through it.
+                let identity = try? session.resourceIdentifiers(id)
+                return CreatedResource(id: id, name: identity?.name ?? name, kind: .gradient)
+            }
+            DispatchQueue.main.async {
+                EngineActivity.shared.whenIdle {
+                    // The outer count covers this deferred completion,
+                    // including callbacks that request window closure.
+                    defer { self.jobDidFinish(input: false) }
+                    if case .failure(let error) = result { self.onError?(String(describing: error)) }
+                    if case .success = result { GradientChooser.shared.reloadCatalog() }
+                    completion(result)
+                }
+            }
+        }
+    }
+
     // MARK: Saved sets (facade slots 133/134 read, 135 edit)
 
     /// One saved-set read row: the slot-133 row plus the slot-134 current

@@ -372,11 +372,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             }
             self.revert(controller, to: source, completion: done)
         }
-        if let previous = documents.last?.window, previous.isVisible, let window = controller.window,
-           let visible = (previous.screen ?? NSScreen.main)?.visibleFrame {
-            window.setFrameTopLeftPoint(DocumentWindowController.cascadedTopLeft(
-                after: previous.frame, size: window.frame.size, in: visible))
-        }
+        let previousWindow = documents.last?.window.flatMap { $0.isVisible ? $0 : nil }
         controller.onClose = { [weak self] closed in
             self?.documents.removeAll { $0 === closed }
             self?.recovery?.untrack(closed.imageDocument)
@@ -398,9 +394,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         recovery?.track(document, isReady: { [weak controller] in
             controller?.isReadyForRecoveryCopy ?? false
         })
-        controller.showWindow(nil)
-        if EditorPreferences.shared.initialView == .fit { controller.fitImage(nil) }
-        PaletteCenter.shared.frontDocumentDidChange()
+        // Materialize the current palette arrangement before choosing the
+        // new document's frame. Fitting before this point used the old
+        // viewport and could leave the canvas underneath palette columns.
         PaletteCenter.shared.setDefaultLayout(Self.defaultPaletteLayout)
         // Paths and History before Layers, so Layers is the tab their
         // shared group shows.
@@ -408,6 +404,17 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         where !palette.isPresented {
             palette.showPanel()
         }
+        if let window = controller.window,
+           let visible = (previousWindow?.screen ?? window.screen ?? NSScreen.main)?.visibleFrame {
+            let palettes = NSApp.windows.filter { $0.isVisible && $0 is ClassicPaletteWindow }.map(\.frame)
+            let available = DocumentWindowPlacement.availableFrame(in: visible, avoiding: palettes)
+            let frame = DocumentWindowPlacement.frame(size: window.frame.size,
+                                                       after: previousWindow?.frame, in: available)
+            if !frame.isEmpty { window.setFrame(frame, display: false) }
+        }
+        controller.showWindow(nil)
+        if EditorPreferences.shared.initialView == .fit { controller.fitImage(nil) }
+        PaletteCenter.shared.frontDocumentDidChange()
         loadFontsIfNeeded(using: document)
     }
 
