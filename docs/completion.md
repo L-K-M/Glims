@@ -7,11 +7,10 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-These entries describe main `208a7c3`, including merged PRs #96–#107,
-and the channel/path recall candidate (`feat/item-set-recall-controls`).
-The recall candidate and public gradient facade #108 still need their
-exact-head hosted CI gates. The whole editor remains in progress; each
-checked entry covers its stated behavior.
+These entries describe main `08a3eb9`, including merged PRs #96–#109,
+and the initial document placement candidate (`fix/initial-document-placement`).
+The placement candidate still needs its exact-head hosted CI gate. The whole
+editor remains in progress; each checked entry covers its stated behavior.
 
 - [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
       fail before packaging. Hosted CI explicitly builds only the interface.
@@ -74,8 +73,8 @@ checked entry covers its stated behavior.
 - [x] Pixel rulers, grid controls/overlay and canvas guide dragging.
 - [x] Per-window snap toggles and captured canvas-gesture snapping to
       guides, grid and canvas.
-- [ ] Remaining snapping interactions, view rotation, trackpad/modifier
-      behavior and initial fit that avoids palettes.
+- [x] Initial New/Open document placement and fitting around visible palettes.
+- [ ] Remaining snapping interactions, view rotation and trackpad/modifier behavior.
 - [x] Stroke Selection and explicit Paste Into/Anchor/New Layer/Discard.
 - [x] Float Selected Pixels (move/copy), existing floating-selection drag
       and arrow nudges with captured target validation.
