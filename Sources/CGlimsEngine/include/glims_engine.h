@@ -2333,9 +2333,10 @@ typedef struct GlimsEngineAPI {
   /* The value list of the single `tag` (slot 125): `count` strings, in
    * the native order, duplicates included — the vector is never
    * flattened or deduplicated. A registered tag that is absent yields
-   * the empty owned vector. Language-alternative (Xmp LangAlt) tags
-   * report their alternative texts; the xml:lang qualifiers are not
-   * part of the returned strings. */
+   * the empty owned vector. Language-alternative (XMP LangAlt) tags
+   * return the native labeled fragments (for example `lang="fr" Salut`),
+   * not plain text and not a lossless language/value structure; the
+   * separators between fragments can be ambiguous. */
   GlimsStatus  (*image_metadata_values) (GlimsEngine *engine, GlimsImageID image,
                                           const char *tag, char ***result,
                                           int32_t *count, char **error);
