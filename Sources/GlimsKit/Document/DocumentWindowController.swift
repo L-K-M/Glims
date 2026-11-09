@@ -768,6 +768,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func layerProperties(_ sender: Any?) {
         guard let window, let id = imageDocument.activeLayer,
               let layer = imageDocument.layers.first(where: { $0.id == id }) else { return }
+        // Layer Properties is a single-layer command; under a
+        // multi-selection it refuses instead of editing the primary alone.
+        guard !imageDocument.refuseSingleLayerCommand("Layer Properties") else { return }
         let name = NSTextField(string: layer.name)
         let opacity = NSTextField(string: String(Int((layer.opacity * 100).rounded())))
         let mode = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -1195,10 +1198,32 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    /// The cached multi-selection gate for a single-layer menu item:
+    /// while more than one layer is selected the item is disabled and
+    /// its tooltip carries the actionable "Choose one layer" reason.
+    /// Reads only cached state; returns false when gated.
+    private func singleLayerItemAllowed(_ menuItem: NSMenuItem, action: String) -> Bool {
+        if let reason = LayerSelectionPolicy.refusal(count: imageDocument.selectedLayerIDs.count, action: action) {
+            menuItem.toolTip = reason
+            return false
+        }
+        return true
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
             || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || EngineActivity.shared.isBusy || window?.attachedSheet != nil
         switch menuItem.action {
+        case #selector(duplicateLayer(_:)), #selector(deleteLayer(_:)), #selector(mergeDown(_:)),
+             #selector(flattenImage(_:)), #selector(bringLayerToFront(_:)), #selector(bringLayerForward(_:)),
+             #selector(sendLayerBackward(_:)), #selector(sendLayerToBack(_:)),
+             #selector(rotateLayer90(_:)), #selector(rotateLayer270(_:)), #selector(rotateLayer180(_:)),
+             #selector(flipLayerHorizontally(_:)), #selector(flipLayerVertically(_:)),
+             #selector(layerProperties(_:)):
+            // Single-layer commands: batch operations are unsupported, so
+            // they disable with the reason under a multi-selection.
+            guard !editingBlocked, !previewBusy, imageDocument.activeLayer != nil else { return false }
+            return singleLayerItemAllowed(menuItem, action: menuItem.title)
         case #selector(toggleQuickMask(_:)):
             menuItem.state = imageDocument.quickMaskState?.enabled == true ? .on : .off
             return !editingBlocked && !previewBusy
@@ -1219,7 +1244,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(selectFromPath(_:)), #selector(strokePath(_:)), #selector(fillPath(_:)):
             return imageDocument.activePath != nil && !editingBlocked
         case #selector(fill(_:)):
-            return !editingBlocked && !previewBusy && imageDocument.activeDrawable != nil
+            guard !editingBlocked, !previewBusy, imageDocument.activeDrawable != nil else { return false }
+            return singleLayerItemAllowed(menuItem, action: "Fill")
         case #selector(strokeSelection(_:)):
             // The gate reads only cached state — no native call while a
             // menu validates; the reason becomes the item's tool tip.
@@ -1244,6 +1270,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // layer never gets the item.
             return activeLayerInfo?.kind == .vector && !editingBlocked && !previewBusy
                 && imageDocument.supportsVectorLayers != false
+                && singleLayerItemAllowed(menuItem, action: "Vector Style")
         case #selector(rasterizeLayer(_:)), #selector(restoreLayerSource(_:)):
             // Cached source state only — never a synchronous native call:
             // Rasterize on genuine unrasterized text/link/vector with its
@@ -1254,6 +1281,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let command: LayerSourceMenuPolicy.Command =
                 menuItem.action == #selector(rasterizeLayer(_:)) ? .rasterize : .restore
             guard let layer = activeLayerInfo else { return false }
+            guard singleLayerItemAllowed(menuItem, action: menuItem.title) else { return false }
             return LayerSourceMenuPolicy.isEnabled(command,
                 source: imageDocument.layerSources[layer.id],
                 locks: imageDocument.layerLocks[layer.id],
@@ -1268,37 +1296,43 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // position locks hide the refusal the engine would report.
             guard let layer = activeLayerInfo, layer.kind == .pixel,
                   !editingBlocked, !previewBusy else { return false }
+            guard singleLayerItemAllowed(menuItem, action: menuItem.title) else { return false }
             return imageDocument.layerLocks[layer.id]?.effective
                 .isDisjoint(with: [.pixels, .position]) != false
         case #selector(toggleLayerLock(_:)):
             guard !editingBlocked, !previewBusy, let id = imageDocument.activeLayer else { return false }
+            guard singleLayerItemAllowed(menuItem, action: "Lock") else { return false }
             let lock = EngineSession.LayerLocks(rawValue: UInt32(menuItem.tag))
             let tree = LayerTree(layers: imageDocument.layers)
             let sources = tree.nodesByID[id].map { tree.lockSources(for: $0, states: imageDocument.layerLocks) }
             menuItem.state = sources?.local.contains(lock) == true ? .on : .off
             menuItem.toolTip = Self.lockNote(lock, sources: sources)
             return true
-        case #selector(addLayerMask(_:)):
-            guard !editingBlocked, !previewBusy, let layer = activeLayerInfo else { return false }
-            return !layer.hasMask
-        case #selector(applyLayerMask(_:)):
-            guard !editingBlocked, !previewBusy, let layer = activeLayerInfo,
-                  activeMask != nil else { return false }
-            // Apply is raster-only: the engine refuses groups and text,
-            // link and vector layers, so they never offer it.
-            return layer.kind == .pixel
-        case #selector(deleteLayerMask(_:)), #selector(maskToSelection(_:)):
-            guard !editingBlocked, !previewBusy, let layer = activeLayerInfo else { return false }
-            return layer.hasMask
-        case #selector(toggleMaskEnabled(_:)), #selector(toggleMaskEditing(_:)),
+        case #selector(addLayerMask(_:)), #selector(applyLayerMask(_:)),
+             #selector(deleteLayerMask(_:)), #selector(maskToSelection(_:)),
+             #selector(toggleMaskEnabled(_:)), #selector(toggleMaskEditing(_:)),
              #selector(toggleMaskShowing(_:)):
-            guard !editingBlocked, !previewBusy, let mask = activeMask else { return false }
+            // The active-layer mask commands are single-layer commands.
+            guard !editingBlocked, !previewBusy, activeLayerInfo != nil,
+                  singleLayerItemAllowed(menuItem, action: menuItem.title) else { return false }
             switch menuItem.action {
-            case #selector(toggleMaskEnabled(_:)): menuItem.state = mask.enabled ? .on : .off
-            case #selector(toggleMaskEditing(_:)): menuItem.state = mask.editing ? .on : .off
-            default: menuItem.state = mask.showing ? .on : .off
+            case #selector(addLayerMask(_:)):
+                return !activeLayerInfo!.hasMask
+            case #selector(applyLayerMask(_:)):
+                // Apply is raster-only: the engine refuses groups and text,
+                // link and vector layers, so they never offer it.
+                return activeMask != nil && activeLayerInfo!.kind == .pixel
+            case #selector(deleteLayerMask(_:)), #selector(maskToSelection(_:)):
+                return activeLayerInfo!.hasMask
+            default:
+                guard let mask = activeMask else { return false }
+                switch menuItem.action {
+                case #selector(toggleMaskEnabled(_:)): menuItem.state = mask.enabled ? .on : .off
+                case #selector(toggleMaskEditing(_:)): menuItem.state = mask.editing ? .on : .off
+                default: menuItem.state = mask.showing ? .on : .off
+                }
+                return true
             }
-            return true
         case #selector(convertImageMode(_:)):
             // The checkmark reads the cached color state, never the
             // engine. Indexed and unknown modes check neither entry —
@@ -1390,13 +1424,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // Without an app to adopt the copy there is nothing to run.
             return imageDocument.snapshotHandler != nil && !editingBlocked && !previewBusy
         case #selector(gaussianBlur(_:)):
-            return !editingBlocked && !previewBusy
+            guard !editingBlocked, !previewBusy else { return false }
+            return singleLayerItemAllowed(menuItem, action: "Gaussian Blur")
         case #selector(runNativeFilter(_:)):
             // Auxiliary-input and config operations stay listed but can't
             // open a form yet; their titles carry the reason.
             guard let command = menuItem.representedObject as? NativeFilterCommand,
                   command.operation.support == .supported else { return false }
-            return !editingBlocked && !previewBusy && imageDocument.activeLayer != nil
+            guard !editingBlocked, !previewBusy, imageDocument.activeLayer != nil else { return false }
+            return singleLayerItemAllowed(menuItem, action: command.operation.title)
         case #selector(repeatExport(_:)):
             menuItem.title = imageDocument.fileState.lastExportURL.map { "Export to \($0.lastPathComponent)" } ?? "Export Again…"
             return !editingBlocked && !previewBusy
@@ -1419,7 +1455,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(runPlugIn(_:)):
             // The engine runs no plug-in while a filter preview is open.
             guard let command = menuItem.representedObject as? PlugInCommand else { return false }
-            return !editingBlocked && !previewBusy && imageDocument.canRun(command.procedure)
+            guard !editingBlocked, !previewBusy, imageDocument.canRun(command.procedure) else { return false }
+            // A plug-in would run on every selected layer: a batch operation.
+            return singleLayerItemAllowed(menuItem, action: command.procedure.label)
         case #selector(repeatLastFilter(_:)), #selector(reshowLastFilter(_:)):
             let base = menuItem.action == #selector(repeatLastFilter(_:)) ? "Last Filter" : "Last Filter Settings…"
             guard let last = PlugInCommands.last else {
@@ -1429,7 +1467,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let title = last.label.replacingOccurrences(of: "…", with: "")
             menuItem.title = menuItem.action == #selector(repeatLastFilter(_:))
                 ? "Last Filter: \(title)" : "Last Filter Settings: \(title)…"
-            return !editingBlocked && !previewBusy && imageDocument.canRun(last)
+            guard !editingBlocked && !previewBusy && imageDocument.canRun(last) else { return false }
+            return singleLayerItemAllowed(menuItem, action: last.label)
         case #selector(runGlimsPageSetup(_:)):
             // Page setup edits only the document's print info; it just
             // must not compete with another sheet on the same window.
