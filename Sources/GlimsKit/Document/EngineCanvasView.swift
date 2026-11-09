@@ -79,6 +79,10 @@ final class EngineCanvasView: NSView {
     /// degrees (positive = clockwise, the flipped canvas's positive
     /// frameRotation), anchored the same way.
     var onTrackpadRotate: ((Double, CGPoint) -> Void)?
+    /// The controller owns the exact view angle. NSView.frameRotation's
+    /// getter rounds through AppKit's affine representation, which must
+    /// not accumulate into the next relative gesture message.
+    var trackpadRotationDegrees: (() -> Double)?
     /// One pinch gesture's fractional zoom; rebased on .began and whenever
     /// the view's integer zoom changed outside the gesture.
     private var zoomGesture = TrackpadNavigationLogic.ZoomAccumulator(publishedPercent: ZoomLadder.actualPixels)
@@ -786,7 +790,7 @@ final class EngineCanvasView: NSView {
     /// and rotation.
     private func resetTrackpadGestures() {
         zoomGesture.rebase(to: zoomPercent)
-        rotationGesture.rebase(to: Double(frameRotation))
+        rotationGesture.rebase(to: trackpadRotationDegrees?() ?? Double(frameRotation))
     }
 
     /// Trackpad pinch-zoom. Per Apple's Event Overview the magnification is
@@ -829,7 +833,7 @@ final class EngineCanvasView: NSView {
         // Rotation events are relative. Read the current angle even for a
         // phase-none event or a menu change between events; the view also
         // normalizes angles, so retaining an old absolute base would drift.
-        rotationGesture.rebase(to: Double(frameRotation))
+        rotationGesture.rebase(to: trackpadRotationDegrees?() ?? Double(frameRotation))
         switch event.phase {
         case .cancelled:
             rotationGesture.cancel()

@@ -191,6 +191,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         canvas.onTrackpadZoom = { [weak self] percent, anchor in
             self?.applyTrackpadNavigation(zoomPercent: percent, rotationDegrees: nil, anchorWindowPoint: anchor)
         }
+        canvas.trackpadRotationDegrees = { [weak self] in self?.rotationView.rotationDegrees ?? 0 }
         canvas.onTrackpadRotate = { [weak self] degrees, anchor in
             self?.applyTrackpadNavigation(zoomPercent: nil, rotationDegrees: degrees, anchorWindowPoint: anchor)
         }

@@ -92,7 +92,7 @@ extension EngineSmokeTest {
         controller.setViewRotation(degrees: 179)
         send(.rotate, -5, phase: .began)
         send(.rotate, 4, phase: .changed)
-        check(controller.rotationView.rotationDegrees == -180, "relative rotation stays continuous across the normalized angle boundary")
+        check(controller.rotationView.rotationDegrees == -180, "relative rotation stays continuous across the normalized angle boundary: \(controller.rotationView.rotationDegrees)")
         send(.rotate, 30, phase: .cancelled)
         check(controller.rotationView.rotationDegrees == -180, "cancelled rotation applies no new delta")
         send(.rotate, 5, phase: .ended)
@@ -134,7 +134,7 @@ extension EngineSmokeTest {
         gate.signal()
         wait { idle }
         check(admitted && controller.canvas.zoomPercent == 333 && controller.rotationView.rotationDegrees == 170,
-              "view navigation remains available during engine-exclusive work")
+              "view navigation remains available during engine-exclusive work: admitted=\(admitted), zoom=\(controller.canvas.zoomPercent), angle=\(controller.rotationView.rotationDegrees)")
         check(try session.info(image) == before && session.undoInfo(image) == undoBefore
                 && session.copyPixels(image, merged: true).pixels == pixelsBefore,
               "pinch and rotation preserve native pixels, dirty state, dimensions and Undo history")
