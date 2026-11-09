@@ -2424,7 +2424,8 @@ typedef struct GlimsEngineAPI {
    * Explicit parent/index; NULL name uses the native group name. Outputs
    * are reset on failure. No active stroke/preview/floating selection.
    * Only allowed one-input operations with generic parameters are accepted;
-   * custom native configuration objects require a separate creation flow. */
+   * custom native configuration objects require a separate creation flow.
+   * Indexed images are UNSUPPORTED; convert to RGB/grayscale first. */
   GlimsStatus (*adjustment_layer_new) (GlimsEngine *engine, GlimsImageID image,
       GlimsItemID parent, int32_t index, const char *operation, const char *name,
       GlimsItemID *layer, GlimsEffectID *effect, char **error);

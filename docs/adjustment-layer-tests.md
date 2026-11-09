@@ -87,6 +87,11 @@ setup, creation Undo/Redo ordering around independent visibility tests, and
 editing the actual adjustment effect. The older bridge failed its NULL-engine
 output reset once. The original 3.0.8 run then failed two pixel checks while
 its stored parameters were correct; adapter-only projection invalidation
-fixes those cases. Final general suites and all 91 standalone checks pass on
+fixes those cases. Final general suites and all 95 standalone checks pass on
 every supported engine with no skips. Independent source/code-safety reviews
 completed; precise upstream cache-cause research timed out without a verdict.
+
+Native `layers-actions.c:1039` disables new groups on indexed images. The
+indexed refusal fixture initially failed against the older producer; creation
+now returns UNSUPPORTED before mutation and resets outputs. The 95-check
+four-engine runs include that whole-state preservation oracle.
