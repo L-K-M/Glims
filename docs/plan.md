@@ -3240,7 +3240,7 @@ fidelity. It has no public writer slot or UI yet. Native conformance, 27 prepara
 checks and 9 inventory checks pass on every engine; the normalization helper has
 124 checks per engine. 838 unit and 14 script tests pass; bundle/CI checks pending.
 
-### Trackpad view navigation candidate (2026-11-09)
+### Trackpad view navigation (2026-11-09)
 
 The canvas responds to AppKit pinch and rotate events for its own visible
 window. Pinch retains fractional zoom between events and clamps before
@@ -3251,14 +3251,14 @@ allow it. Pending tool interactions, guide drags, strokes and closing windows
 refuse navigation; engine-exclusive work does not block these view changes.
 No native pixels, metadata or Undo operation changes.
 
-Source review found no important issues and855 unit tests pass. The synthetic
+Source review found no important issues and 855 unit tests pass. The synthetic
 AppKit-event case passes22 checks on each of all four engines: real windows,
 pointer anchoring, two-document capture, busy/stroke/close guards and native
 state invariance. The first run exposed AppKit angle quantization; relative
 rotation now reads the controller's canonical Double angle. Physical hardware gestures and
 wheel/modifier behavior are not certified by these tests.
 
-### Single-language metadata controls candidate (2026-11-09)
+### Single-language metadata controls (2026-11-09)
 
 Image → Metadata offers Edit Language for a descriptor-confirmed language
 alternative. The typed form uses exact existing keys from the owned engine
@@ -3269,3 +3269,20 @@ dismisses the child form. The public native API is merged in118, with39 public
 and13 Undo-admission checks perengine. The real form passes14 controls checks
 and13 counted document checks on every supported engine, including a host-close
 regression that now explicitly ends and releases the metadata sheet.
+
+
+### Option-scroll view zoom (2026-11-09)
+
+Option-scroll zooms around the pointer in the owning document window, including
+over the gray canvas surround. Precise trackpad deltas retain fractional zoom
+through gesture and momentum phases; ordinary wheel notches use a separate
+sensitivity. Normal scrolling still pans. Command/Control combinations, active
+strokes, tool or guide drags, hidden windows and closing documents refuse zoom;
+exclusive engine work allows these view-only changes. The native image and its
+Undo history remain unchanged.
+
+All 863 unit tests pass. The real-window case passes 19 checks on each of all
+four supported engines, including native CGEvent panning, pointer anchoring
+in a rotated view, event routing from the surround, phase boundaries, two
+document capture and engine/stroke/close guards. These synthetic events do
+not certify physical mouse or trackpad hardware.
