@@ -76,6 +76,10 @@ final class EngineCanvasView: NSView {
     var showsGrid = false {
         didSet { needsDisplay = true }
     }
+    /// View ▸ Show Layer Boundary: whether the canvas draws the dashed
+    /// outline of the current cached paint-target bounds. Cached per
+    /// window (the document window controller owns the toggle), default
+    /// OFF; flipping it is pure view state and just redraws.
     var showsLayerBoundary = false {
         didSet { needsDisplay = true }
     }
@@ -87,6 +91,11 @@ final class EngineCanvasView: NSView {
     var snapTo = SnapToViewState() {
         didSet { needsDisplay = true }
     }
+    /// View ▸ Show Selection Edges: whether the canvas draws the marching
+    /// ants. Cached per window (the document window controller owns the
+    /// toggle), default ON; hiding only stops the outline drawing and its
+    /// timer — the native selection, its cached bounds/admission and every
+    /// painting/selection command stay exactly as they are.
     var showsSelectionEdges = true {
         didSet {
             needsDisplay = true
@@ -504,22 +513,39 @@ final class EngineCanvasView: NSView {
         NSGraphicsContext.restoreGraphicsState()
     }
 
-    /// Display-only bounds of the selected layer. Cached layer metadata
-    /// supplies the geometry; this never changes the selection or tiles.
+    /// View ▸ Show Layer Boundary: a dashed outline exactly one physical
+    /// pixel wide around the current cached paint-target bounds (an
+    /// ordinary or floating layer's own bounds, the owner layer's bounds
+    /// while a mask is being edited, the image bounds for a channel). The
+    /// rect is resolved from the document's caches on every draw — nil
+    /// clears the outline instead of showing a remembered unrelated layer
+    /// — and cached metadata supplies all the geometry, so this never
+    /// changes the selection, the tiles or any pixel path; printing draws
+    /// an immutable PrintSnapshot, never this view.
     private func drawLayerBoundary() {
-        guard let layer = document.layers.first(where: { $0.id == document.activeLayer }) else { return }
-        let rect = layer.bounds
-        guard [rect.minX, rect.minY, rect.width, rect.height].allSatisfy(\.isFinite),
-              rect.width > 0, rect.height > 0 else { return }
-        let path = NSBezierPath(rect: NSRect(x: rect.minX * scale, y: rect.minY * scale,
-                                             width: rect.width * scale, height: rect.height * scale))
-        path.lineWidth = 2
+        guard let boundary = document.cachedPaintTargetBounds else { return }
+        let device = LayerBoundaryGeometry.deviceLineWidth(zoomPercent: zoomPercent, backingFactor: backingScale)
+        guard device.isFinite, device > 0 else { return }
+        let viewRect = LayerBoundaryGeometry.viewRect(for: boundary, zoomPercent: zoomPercent,
+                                                      backingFactor: backingScale)
+        guard let rect = LayerBoundaryGeometry.strokeRect(for: viewRect, backingFactor: backingScale) else { return }
+        NSGraphicsContext.saveGraphicsState()
+        // Clip to the canvas frame: a floating selection's bounds can reach
+        // past the image edge into the surround, and the outline stays
+        // inside the visible canvas.
+        NSBezierPath(rect: bounds).addClip()
+        let path = NSBezierPath(rect: rect)
+        path.lineWidth = device
+        // White underlay so the dashes read on dark images too, then the
+        // black dash pass, both one physical pixel wide.
+        NSColor.white.setStroke()
+        path.setLineDash(nil, count: 0, phase: 0)
+        path.stroke()
+        let dash = 4 * device
+        path.setLineDash([dash, dash], count: 2, phase: 0)
         NSColor.black.setStroke()
         path.stroke()
-        path.lineWidth = 1
-        path.setLineDash([4, 4], count: 2, phase: 0)
-        NSColor.yellow.setStroke()
-        path.stroke()
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     /// The image's ordinary guides as full-width/full-height lines in view

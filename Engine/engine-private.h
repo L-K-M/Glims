@@ -505,4 +505,26 @@ GlimsStatus glims_lookup_brush         (GlimsEngine *e, GlimsResourceID id, Gimp
  * caller never mutates or releases it. */
 GlimsStatus glims_lookup_pattern       (GlimsEngine *e, GlimsResourceID id, GimpPattern **out);
 
+/* resource-create.c */
+/* Creates one saved bitmap brush or pattern from owned straight-alpha
+ * RGBA pixels (facade slot 129, resource_create_pixels): validates every
+ * input before any mutation, builds a private resource, saves it with a
+ * checked gimp_data_save into a unique hidden staging subdirectory of
+ * the chosen writable save folder, promotes it to a unique UUID final
+ * file, reassociates it, and only then publishes it to the factory
+ * after an exact-name membership check. `outID` is zeroed first and on
+ * every failure. No image, history, context or clipboard is touched. */
+GlimsStatus glims_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
+                                           int32_t width, int32_t height,
+                                           const uint8_t *pixels, size_t byte_count,
+                                           uint32_t brush_spacing, GlimsResourceID *outID,
+                                           char **error);
+
+
+GlimsStatus glims_adjustment_layer_new (GlimsEngine *engine, GlimsImageID image,
+    GlimsItemID parent, int32_t index, const char *operation, const char *name,
+    GlimsItemID *layer, GlimsEffectID *effect, char **error);
+
+void glims_adjustment_projection_changed (GimpImage *image);
+
 #endif /* GLIMS_ENGINE_PRIVATE_H */

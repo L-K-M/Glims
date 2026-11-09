@@ -24,6 +24,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// Edit ▸ Stroke Selection…'s sheet, retained by this window for its
     /// lifetime the same way; nil while none is open.
     private(set) var strokeSelectionSheet: StrokeSelectionSheetController?
+    /// Edit ▸ Create Resource ▸ …'s sheet, retained by this window for its
+    /// lifetime and capturing this window's document and creation kind at
+    /// open, so two documents keep independent sheets — no global binding,
+    /// no retarget to the front window. nil while none is open.
+    private(set) var resourceSelectionSheet: ResourceSelectionSheetController?
 
     /// Image ▸ Mode ▸ Indexed…'s sheet, retained by this window for its
     /// lifetime and capturing this window's document at open, so Apply and
@@ -37,12 +42,30 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// lifetime; nil while none is open. Two documents keep independent
     /// sheets through their own controllers — no global binding.
     private(set) var gridSheet: GridSheetController?
+    /// Image ▸ Metadata…'s sheet, retained by this window for its
+    /// lifetime and capturing this window's document at open, so every
+    /// read and write acts on that document, never on the front one.
+    /// nil while none is open.
+    private(set) var metadataSheet: MetadataSheetController?
+    /// Layer ▸ New Adjustment Layer…'s creation sheet, retained by this
+    /// window for its lifetime and capturing this window's document at
+    /// open, so Create and the phase-2 editor act on that document, never
+    /// on the front one. nil while none is open.
+    private(set) var adjustmentSheet: AdjustmentLayerSheetController?
     /// View ▸ Show Grid's cached per-window state, defaulting to off.
     private(set) var gridViewState = GridViewState()
 
     /// View ▸ Show Rulers' cached per-window state, defaulting to on. Kept
     /// separate from the guides state — the two toggles never couple.
     private(set) var rulerViewState = RulerViewState()
+    /// View ▸ Show Selection Edges' cached per-window state, defaulting to
+    /// on. Hiding only stops the marching-ants drawing and its timer; the
+    /// native selection and its cached state are untouched.
+    private(set) var selectionEdgesViewState = SelectionEdgesViewState()
+    /// View ▸ Show Layer Boundary's cached per-window state, defaulting to
+    /// off. The outline is the current cached paint-target bounds, resolved
+    /// per draw; toggling never touches engine state.
+    private(set) var layerBoundaryViewState = LayerBoundaryViewState()
     /// The pixel rulers in the scroll view's native ruler slots. They read
     /// the canvas geometry through a weak reference at draw time, so no
     /// global ruler controller exists.
@@ -113,10 +136,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // existing handlers — the sheets never install their own callback.
             self?.guidesSheet?.showError(message)
             self?.strokeSelectionSheet?.showError(message)
+            self?.resourceSelectionSheet?.showError(message)
 
             self?.gridSheet?.showError(message)
 
             self?.indexedSheet?.showError(message)
+
+            self?.metadataSheet?.showError(message)
+            self?.adjustmentSheet?.showError(message)
 
         }
         // Palette picks and structural or lock changes first commit any
@@ -315,10 +342,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         previewPanel?.window?.endEditing(for: nil)
         guidesSheet?.commitFieldEdit()
         strokeSelectionSheet?.commitFieldEdit()
+        resourceSelectionSheet?.commitFieldEdit()
 
         gridSheet?.commitFieldEdit()
 
         indexedSheet?.commitFieldEdit()
+
+        metadataSheet?.commitFieldEdit()
+        adjustmentSheet?.commitFieldEdit()
 
         for paletteWindow in PaletteEditScope.windowsEditing(imageDocument) {
             paletteWindow.endEditing(for: nil)
@@ -365,10 +396,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
         guidesSheet?.documentStateDidChange()
         strokeSelectionSheet?.documentStateDidChange()
+        resourceSelectionSheet?.documentStateDidChange()
 
         gridSheet?.documentStateDidChange()
 
         indexedSheet?.documentStateDidChange()
+
+        metadataSheet?.documentStateDidChange()
+        adjustmentSheet?.documentStateDidChange()
 
     }
 
@@ -569,6 +604,25 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    /// Image ▸ Metadata…: opens this document's metadata sheet. The
+    /// sheet is owned by this window controller and captures this
+    /// document at open; its first tag-catalog read is queued as counted
+    /// document work, so opening makes no native call on the main thread.
+    /// Metadata is image-level: a mask or channel target does not
+    /// restrict it. The sheet must not stack on another sheet of this
+    /// window.
+    @objc func showMetadata(_ sender: Any?) {
+        guard let window, !imageDocument.isClosing, window.attachedSheet == nil,
+              metadataSheet == nil else { return }
+        let sheet = MetadataSheetController(document: imageDocument, hostWindow: window)
+        metadataSheet = sheet
+        window.beginSheet(sheet.panel) { [weak self, weak sheet] _ in
+            guard let self, let sheet, self.metadataSheet === sheet else { return }
+            sheet.invalidate()
+            self.metadataSheet = nil
+        }
+    }
+
     /// View ▸ Show Grid: flips this window's cached flag and redraws the
     /// canvas. Pure view state — no image pixels, file, dirty, history,
     /// selection, export or print change — so it works while the engine
@@ -596,16 +650,29 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     }
 
+    /// View ▸ Show Layer Boundary: flips this window's cached flag and
+    /// redraws the canvas. Pure view state — no engine call, no pixel,
+    /// dirty, history, selection, export or print change — so it works
+    /// while the engine is busy.
     @objc func toggleLayerBoundary(_ sender: Any?) {
         guard !imageDocument.isClosing else { return }
-        canvas.showsLayerBoundary.toggle()
-        (sender as? NSMenuItem)?.state = canvas.showsLayerBoundary ? .on : .off
+        layerBoundaryViewState.toggle()
+        canvas.showsLayerBoundary = layerBoundaryViewState.showsLayerBoundary
+        canvas.needsDisplay = true
+        if let item = sender as? NSMenuItem { item.state = layerBoundaryViewState.menuState }
     }
 
+    /// View ▸ Show Selection Edges: flips this window's cached flag and
+    /// redraws. Hiding only stops the marching-ants outline and its
+    /// timer; the native selection, its cached bounds and every command
+    /// stay unchanged. Pure view state, so it works while the engine is
+    /// busy.
     @objc func toggleSelectionEdges(_ sender: Any?) {
         guard !imageDocument.isClosing else { return }
-        canvas.showsSelectionEdges.toggle()
-        (sender as? NSMenuItem)?.state = canvas.showsSelectionEdges ? .on : .off
+        selectionEdgesViewState.toggle()
+        canvas.showsSelectionEdges = selectionEdgesViewState.showsSelectionEdges
+        canvas.needsDisplay = true
+        if let item = sender as? NSMenuItem { item.state = selectionEdgesViewState.menuState }
     }
 
     // MARK: Snap To
@@ -691,6 +758,40 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     /// Layer ▸ New Layer Group.
     @objc func newLayerGroup(_ sender: Any?) { imageDocument.createGroup() }
+
+    /// Layer ▸ New Adjustment Layer…: opens this document's creation
+    /// sheet. The open gate reads only cached state — closing, busy,
+    /// preview, another attached sheet — plus the cached color-mode gate:
+    /// RGB and grayscale only. The sheet is owned by this window and captures
+    /// this window's document, so nothing redirects to the front document.
+    @objc func newAdjustmentLayer(_ sender: Any?) {
+        guard let window, !imageDocument.isClosing, window.attachedSheet == nil,
+              adjustmentSheet == nil, imageDocument.acceptsEdits, !previewBusy,
+              !imageDocument.targetCommandIsPending, !imageDocument.floatingState.isActive else { return }
+        if let reason = AdjustmentLayerLogic.modeAdmission(imageDocument.colorInfo.mode).reason {
+            statusBar.message = reason
+            NSSound.beep()
+            return
+        }
+        let sheet = AdjustmentLayerSheetController(document: imageDocument, hostWindow: window)
+        sheet.host = self
+        adjustmentSheet = sheet
+        window.beginSheet(sheet.panel) { [weak self, weak sheet] _ in
+            guard let self, let sheet, self.adjustmentSheet === sheet else { return }
+            sheet.invalidate()
+            self.adjustmentSheet = nil
+        }
+    }
+
+    /// Phase 2 of New Adjustment Layer: opens the existing modeless
+    /// effect-parameter editor on the created effect and layer. Called
+    /// through the creation sheet's captured host, never the front window;
+    /// a host whose document or window closed before the creation
+    /// completed skips the editor — the committed adjustment layer stays.
+    func openAdjustmentEditor(effect: Int32, on layer: Int32, operationName: String) {
+        guard !closeStarted, !imageDocument.isClosing else { return }
+        editEffectParameters(effect, on: layer, operationName: operationName)
+    }
 
     // MARK: Layer mask menu
 
@@ -1092,6 +1193,38 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    /// Edit ▸ Create Resource ▸ Brush from Selection….
+    @objc func createBrushFromSelection(_ sender: Any?) {
+        presentResourceSelectionSheet(.brush)
+    }
+
+    /// Edit ▸ Create Resource ▸ Pattern from Selection….
+    @objc func createPatternFromSelection(_ sender: Any?) {
+        presentResourceSelectionSheet(.pattern)
+    }
+
+    /// Opens this document's create-resource sheet for `kind`. The sheet
+    /// captures this window's document and the kind at open; the open gate
+    /// reads only the cached document state — busy, preview, closing, no
+    /// selection or an oversized selection refuse with a reason, never a
+    /// native call on the main thread.
+    private func presentResourceSelectionSheet(_ kind: EngineSession.ResourceKind) {
+        guard let window, !imageDocument.isClosing, window.attachedSheet == nil,
+              resourceSelectionSheet == nil else { return }
+        if let reason = imageDocument.createResourceRefusal(kind: kind) {
+            imageDocument.onError?(reason)
+            NSSound.beep()
+            return
+        }
+        let sheet = ResourceSelectionSheetController(document: imageDocument, kind: kind, hostWindow: window)
+        resourceSelectionSheet = sheet
+        window.beginSheet(sheet.panel) { [weak self, weak sheet] _ in
+            guard let self, let sheet, self.resourceSelectionSheet === sheet else { return }
+            sheet.invalidate()
+            self.resourceSelectionSheet = nil
+        }
+    }
+
     /// Edit ▸ Fill Path: fills the active path's area on the current paint
     /// target using the Path tool's foreground color and fill settings.
     @objc func fillPath(_ sender: Any?) {
@@ -1249,6 +1382,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             }
             menuItem.toolTip = nil
             return !editingBlocked && !previewBusy
+        case #selector(createBrushFromSelection(_:)), #selector(createPatternFromSelection(_:)):
+            // Cached gate only — no native call while a menu validates; the
+            // refusal reason becomes the item's tool tip.
+            let kind: EngineSession.ResourceKind =
+                menuItem.action == #selector(createBrushFromSelection(_:)) ? .brush : .pattern
+            if let reason = imageDocument.createResourceRefusal(kind: kind) {
+                menuItem.toolTip = reason
+                return false
+            }
+            menuItem.toolTip = nil
+            return !editingBlocked && !previewBusy
         case #selector(floatSelectedPixels(_:)), #selector(floatACopy(_:)):
             // Cached readiness only — selection present, no active
             // floating selection, one selected layer, not busy/closing/
@@ -1299,6 +1443,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 stateBlocked: editingBlocked || previewBusy || imageDocument.targetCommandIsPending)
         case #selector(newLayerGroup(_:)):
             return !editingBlocked && !previewBusy
+        case #selector(newAdjustmentLayer(_:)):
+            // Cached mode gate only — no native call while a menu
+            // validates: adjustment layers are RGB/grayscale only, and an
+            // indexed (or unknown) image disables the item with the reason
+            // in its tooltip.
+            let admission = AdjustmentLayerLogic.modeAdmission(imageDocument.colorInfo.mode)
+            menuItem.toolTip = admission.reason
+            return admission.allowed && !editingBlocked && !previewBusy
+                && !imageDocument.targetCommandIsPending && !imageDocument.floatingState.isActive
         case #selector(layerToImageSize(_:)), #selector(trimLayerToContent(_:)):
             // Pixel layers only, from the cached list: the engine
             // refuses groups and editable text, link and vector layers,
@@ -1388,6 +1541,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // on another sheet of this window. Grid configuration is
             // image metadata: a selected channel does not restrict it.
             return !imageDocument.isClosing && window?.attachedSheet == nil
+        case #selector(showMetadata(_:)):
+            // The sheet's reads and writes are queued counted document
+            // work; validation reads only cached state, never the engine.
+            // Image metadata is image-level: no channel/mask/target or
+            // lock restriction. It must not stack on another sheet.
+            return !imageDocument.isClosing && window?.attachedSheet == nil
         case #selector(toggleShowGrid(_:)):
             // The checkmark reads the window's cached flag, never the
             // engine; toggling is view-only, so it stays available even
@@ -1407,10 +1566,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
 
         case #selector(toggleLayerBoundary(_:)):
-            menuItem.state = canvas.showsLayerBoundary ? .on : .off
+            // The checkmark reads the window's cached flag, never the
+            // engine; toggling is view-only, so it stays available even
+            // while the engine is busy.
+            menuItem.state = layerBoundaryViewState.menuState
             return !imageDocument.isClosing
         case #selector(toggleSelectionEdges(_:)):
-            menuItem.state = canvas.showsSelectionEdges ? .on : .off
+            // Same contract as Show Layer Boundary: the cached per-window
+            // flag drives the checkmark and the item never gates on the
+            // engine being busy.
+            menuItem.state = selectionEdgesViewState.menuState
             return !imageDocument.isClosing
         case #selector(toggleSnapToGuides(_:)), #selector(toggleSnapToGrid(_:)),
              #selector(toggleSnapToCanvas(_:)), #selector(toggleSnapToLayerBounds(_:)):
@@ -2009,10 +2174,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         removeRulerObservers()
         guidesSheet?.invalidate()
         strokeSelectionSheet?.invalidate()
+        resourceSelectionSheet?.invalidate()
 
         gridSheet?.invalidate()
 
         indexedSheet?.invalidate()
+
+        metadataSheet?.invalidate()
+        adjustmentSheet?.invalidate()
 
         previewPanel?.cancel()
         cancelPendingPreview()

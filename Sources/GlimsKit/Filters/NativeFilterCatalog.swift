@@ -19,6 +19,15 @@ final class NativeFilterCatalog {
         operations.first { $0.name == name }
     }
 
+    /// Installs a freshly fetched operation list into the same cache
+    /// `load` fills at engine start. The adjustment-creation sheet's
+    /// counted read uses this, so `operation(named:)` — and through it
+    /// `editEffectParameters` — resolves exactly the operation the sheet
+    /// offered. Menus are untouched: only `load` rebuilds them.
+    func install(_ operations: [EngineSession.FilterOperation]) {
+        self.operations = operations
+    }
+
     /// Properties already fetched, by operation name; enum choices included.
     private var properties: [String: [EngineSession.FilterProperty]] = [:]
     /// Fetch completions waiting on the same operation's properties.
