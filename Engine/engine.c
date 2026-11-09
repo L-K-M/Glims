@@ -2596,6 +2596,30 @@ api_resource_create_gradient (GlimsEngine *e, const char *name,
   return glims_engine_call (e, resource_create_gradient_on_engine, &a);
 }
 
+typedef struct {
+  GlimsImageID image;
+  const GlimsItemID *sources;
+  int32_t count;
+  GlimsItemID *copies;
+  char **error;
+} GlimsDuplicateLayersArgs;
+
+static GlimsStatus
+image_duplicate_layers_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsDuplicateLayersArgs *a = data;
+  return glims_image_duplicate_layers (e, a->image, a->sources, a->count, a->copies, a->error);
+}
+
+static GlimsStatus
+api_image_duplicate_layers (GlimsEngine *e, GlimsImageID image, const GlimsItemID *sources,
+                            int32_t count, GlimsItemID *copies, char **error)
+{
+  GlimsDuplicateLayersArgs a = { .image = image, .sources = sources, .count = count,
+                                  .copies = copies, .error = error };
+  return glims_engine_call (e, image_duplicate_layers_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -2743,6 +2767,7 @@ static const GlimsEngineAPI api_v1 = {
   .image_metadata_languages = api_image_metadata_languages,
   .metadata_languages_free = api_metadata_languages_free,
   .image_metadata_edit_language = api_image_metadata_edit_language,
+  .image_duplicate_layers = api_image_duplicate_layers,
 };
 
 __attribute__ ((visibility ("default")))

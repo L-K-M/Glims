@@ -3364,6 +3364,30 @@ final class EngineSession: @unchecked Sendable {
         }
     }
 
+    /// Captured ordered layer objects, duplicated as one native Undo group.
+    /// An unexpected native insertion failure may leave copies; document
+    /// callers must refresh their state even when this method throws.
+    func duplicateLayers(_ image: Int32, layers: [Int32]) throws -> [Int32] {
+        guard (1...256).contains(layers.count), layers.allSatisfy({ $0 > 0 }),
+              Set(layers).count == layers.count else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Select between 1 and 256 different layers to duplicate.")
+        }
+        var copies = [Int32](repeating: 0, count: layers.count)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = layers.withUnsafeBufferPointer { input in
+            copies.withUnsafeMutableBufferPointer { output in
+                api.image_duplicate_layers(engine, image, input.baseAddress, Int32(input.count), output.baseAddress, &error)
+            }
+        }
+        try check(status, error)
+        guard copies.allSatisfy({ $0 > 0 }), Set(copies).count == copies.count else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine returned an incomplete layer-copy list. Refresh the image before continuing.")
+        }
+        return copies
+    }
+
     /// Changes ONE existing language key of a registered XMP LangAlt
     /// root property `tag` (image_metadata_edit_language): the key must
     /// already exist in the map under the exact `language` spelling
