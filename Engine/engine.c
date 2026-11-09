@@ -16,6 +16,7 @@
 #include "resource-mutation.h"
 #include "resource-rename.h"
 #include "layer-delete.h"
+#include "filter-input.h"
 
 #include <dlfcn.h>
 #include <stdlib.h>
@@ -2694,6 +2695,28 @@ static GlimsStatus api_image_delete_layers (GlimsEngine *e, GlimsImageID image,
   return glims_engine_call (e, image_delete_layers_on_engine, &a);
 }
 
+typedef struct {
+  GlimsImageID image;
+  GlimsItemID target, source;
+  const char *operation;
+  GlimsFilterID *out;
+  char **error;
+} GlimsFilterSourceArgs;
+static GlimsStatus filter_begin_with_source_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsFilterSourceArgs *a = data;
+  return glims_filter_begin_with_source (e, a->image, a->target, a->operation, a->source, a->out, a->error);
+}
+static GlimsStatus api_filter_begin_with_source (GlimsEngine *e, GlimsImageID image,
+                                                GlimsItemID target, const char *operation,
+                                                GlimsItemID source, GlimsFilterID *out, char **error)
+{
+  if (out) *out = 0;
+  GlimsFilterSourceArgs a = { .image = image, .target = target, .source = source,
+                              .operation = operation, .out = out, .error = error };
+  return glims_engine_call (e, filter_begin_with_source_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -2846,6 +2869,7 @@ static const GlimsEngineAPI api_v1 = {
   .resource_rename = api_resource_rename,
   .resource_delete = api_resource_delete,
   .image_delete_layers = api_image_delete_layers,
+  .filter_begin_with_source = api_filter_begin_with_source,
 };
 
 __attribute__ ((visibility ("default")))

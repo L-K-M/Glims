@@ -93,6 +93,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// A begin job is queued behind pending input; while it waits, edits
     /// and file writes gate exactly as if the panel were already open.
     private var previewStartIsPending = false
+    private var filterSourceChooser: FilterSourceChooserController?
+    private var filterSourceRequest = 0
     /// An open panel or a start still queued on the input queue.
     private var previewBusy: Bool { previewPanel != nil || previewStartIsPending }
     /// A print job anywhere between Print… and the end of the run: a
@@ -494,6 +496,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         indexedSheet?.documentStateDidChange()
         ResourceDuplicateFormController.documentStateChanged(imageDocument)
         ResourceMutationFormController.documentStateChanged(imageDocument)
+        filterSourceChooser?.refresh()
 
         metadataSheet?.documentStateDidChange()
         adjustmentSheet?.documentStateDidChange()
@@ -506,7 +509,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc override func cancelOperation(_ sender: Any?) {
         if let previewPanel { previewPanel.cancel() }
         else if previewStartIsPending { cancelPendingPreview() }
-        else { super.cancelOperation(sender) }
+        // NSWindowController's superclass does not implement this optional
+        // key-binding action. An idle Escape reaching us has nothing to cancel.
     }
 
     /// Cancels a filter start still waiting behind pending input; its
@@ -527,10 +531,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// stale request unwinds the begun session instead of showing it.
     private func startPreview(title: String,
                               begin: (@escaping @MainActor (Result<ImageDocument.FilterPreviewStart, Error>) -> Void) -> Void,
+                              started: (@MainActor (Result<Void, Error>) -> Void)? = nil,
                               buildPanel: @escaping @MainActor (Int32, [String: EngineSession.FilterValue]) -> FilterPreviewPanel?) {
         // A catalog reply may arrive after windowWillClose cancels
         // previews, while rendering still drains before isClosing flips.
-        guard !closeStarted, !imageDocument.isClosing else { return }
+        guard !closeStarted, !imageDocument.isClosing else {
+            started?(.failure(ImageDocument.DocumentError.closed)); return
+        }
         previewRequest += 1
         let request = previewRequest
         previewStartIsPending = true
@@ -545,19 +552,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 if case .success(let start) = result {
                     imageDocument.finishFilter(start.filter, commit: false) { _ in }
                 }
+                started?(.failure(ImageDocument.DocumentError.closed))
                 return
             }
             self.previewStartIsPending = false
             switch result {
-            case .failure:
+            case .failure(let error):
                 self.imageDocument.filterPreviewIsOpen = false
                 self.statusBar.message = "\(title) could not start on this layer."
+                started?(.failure(error))
                 NSSound.beep()
             case .success(let start):
                 guard let panel = buildPanel(start.filter, start.values) else {
                     self.imageDocument.finishFilter(start.filter, commit: false) { _ in }
                     self.imageDocument.filterPreviewIsOpen = false
                     self.statusBar.message = "\(title) could not start on this layer."
+                    started?(.failure(ImageDocument.DocumentError.busy))
                     NSSound.beep()
                     return
                 }
@@ -567,6 +577,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 }
                 self.previewPanel = panel
                 panel.showWindow(nil)
+                started?(.success(()))
             }
         }
     }
@@ -861,6 +872,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     func openNativeFilter(_ operation: EngineSession.FilterOperation) {
         guard !previewBusy, !imageDocument.isClosing, !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
               !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
+        if operation.name == "gegl:bump-map" && operation.support == .needsAuxInput {
+            return openFilterSourceChooser(operation)
+        }
         guard operation.support == .supported else {
             if let reason = NativeFilterMenuLayout.unavailableReason(operation.support) {
                 statusBar.message = "\(operation.title) \(reason) — not supported yet."
@@ -891,6 +905,63 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     // MARK: Layer menu
+
+    private func openFilterSourceChooser(_ operation: EngineSession.FilterOperation) {
+        guard let target = imageDocument.activeLayer else { return }
+        guard imageDocument.bumpMapRefusal(target: target) == nil else {
+            statusBar.message = imageDocument.bumpMapRefusal(target: target) ?? "Choose a pixel layer first."
+            return
+        }
+        if let filterSourceChooser, !filterSourceChooser.isInvalidated { filterSourceChooser.show(); return }
+        filterSourceRequest += 1
+        let request = filterSourceRequest
+        let targetName = imageDocument.layers.first { $0.id == target }?.name ?? "Layer"
+        let chooser = FilterSourceChooserController(targetName: targetName, preferredSource: target, rows: { [weak self] in
+            guard let self else { return [] }
+            var rows: [FilterSourceChoice] = []
+            for layer in self.imageDocument.layers {
+                rows.append(.init(id: layer.id, name: layer.name))
+                if let mask = self.imageDocument.maskStates[layer.id]?.mask, mask > 0 {
+                    rows.append(.init(id: mask, name: "\(layer.name) — Mask"))
+                }
+            }
+            rows += self.imageDocument.channels.map { .init(id: $0.id, name: "\($0.name) — Channel") }
+            return rows
+        }, refusal: { [weak self] in
+            self?.imageDocument.bumpMapRefusal(target: target) ?? (self == nil ? "The document is closed." : nil)
+        }, hostWindow: window, preview: { [weak self] source, completion in
+            guard let self, self.filterSourceRequest == request, !self.closeStarted, !self.previewBusy,
+                  self.imageDocument.bumpMapRefusal(target: target) == nil else {
+                completion(.failure(ImageDocument.DocumentError.busy)); return
+            }
+            self.endPendingEdits()
+            self.imageDocument.loadFilterProperties(operation.name) { [weak self] result in
+                guard let self, self.filterSourceRequest == request, !self.closeStarted, !self.imageDocument.isClosing,
+                      self.filterSourceChooser?.isInvalidated == false else {
+                    completion(.failure(ImageDocument.DocumentError.closed)); return
+                }
+                switch result {
+                case .failure(let error): completion(.failure(error))
+                case .success(let properties):
+                    guard !self.previewBusy, self.imageDocument.bumpMapRefusal(target: target) == nil else {
+                        completion(.failure(ImageDocument.DocumentError.busy)); return
+                    }
+                    self.startPreview(title: operation.title, begin: { [imageDocument = self.imageDocument] reply in
+                        imageDocument.beginFilterPreview(operation: operation.name, properties: properties,
+                                                         target: target, source: source, completion: reply)
+                    }, started: completion) { [imageDocument = self.imageDocument] filter, values in
+                        NativeFilterPanel(document: imageDocument, operation: operation, properties: properties,
+                                          filter: filter, initialValues: values, mergesPixels: true)
+                    }
+                }
+            }
+        })
+        chooser.onClosed = { [weak self] in
+            guard let self, self.filterSourceRequest == request else { return }
+            self.filterSourceRequest += 1; self.filterSourceChooser = nil
+        }
+        filterSourceChooser = chooser; chooser.show()
+    }
 
     @objc func newLayer(_ sender: Any?) { imageDocument.layerCommand(.new) }
     @objc func duplicateLayer(_ sender: Any?) {
@@ -1833,8 +1904,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // Auxiliary-input and config operations stay listed but can't
             // open a form yet; their titles carry the reason.
             guard let command = menuItem.representedObject as? NativeFilterCommand,
-                  command.operation.support == .supported else { return false }
+                  (command.operation.support == .supported || NativeFilterMenuLayout.usesSourceChooser(command.operation)) else { return false }
             guard !editingBlocked, !previewBusy, imageDocument.activeLayer != nil else { return false }
+            if NativeFilterMenuLayout.usesSourceChooser(command.operation), let target = imageDocument.activeLayer {
+                return imageDocument.bumpMapRefusal(target: target) == nil
+            }
             return singleLayerItemAllowed(menuItem, action: command.operation.title)
         case #selector(repeatExport(_:)):
             menuItem.title = imageDocument.fileState.lastExportURL.map { "Export to \($0.lastPathComponent)" } ?? "Export Again…"
@@ -2413,6 +2487,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         indexedSheet?.invalidate()
         ResourceDuplicateFormController.documentWindowClosing(imageDocument)
         ResourceMutationFormController.documentWindowClosing(imageDocument)
+        filterSourceRequest += 1; filterSourceChooser?.invalidate(); filterSourceChooser = nil
 
         metadataSheet?.invalidate()
         if let panel = metadataSheet?.panel {

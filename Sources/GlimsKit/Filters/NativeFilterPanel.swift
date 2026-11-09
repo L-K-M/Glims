@@ -12,6 +12,7 @@ import RigiUI
 @MainActor
 final class NativeFilterPanel: FilterPreviewPanel {
     let operation: EngineSession.FilterOperation
+    private let mergesPixels: Bool
     /// Control refreshers by property name, for reads and refused writes.
     private var bindings: [String: (EngineSession.FilterValue) -> Void] = [:]
     /// Every send bumps its property's generation; only the newest
@@ -30,9 +31,11 @@ final class NativeFilterPanel: FilterPreviewPanel {
           operation: EngineSession.FilterOperation,
           properties: [EngineSession.FilterProperty],
           filter: Int32,
-          initialValues: [String: EngineSession.FilterValue]) {
-        guard operation.support == .supported else { return nil }
+          initialValues: [String: EngineSession.FilterValue], mergesPixels: Bool = false) {
+        guard (!mergesPixels && operation.support == .supported)
+                || (mergesPixels && NativeFilterMenuLayout.usesSourceChooser(operation)) else { return nil }
         self.operation = operation
+        self.mergesPixels = mergesPixels
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 200),
                             styleMask: [.titled, .closable, .utilityWindow],
                             backing: .buffered, defer: false)
@@ -125,13 +128,14 @@ final class NativeFilterPanel: FilterPreviewPanel {
 
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel))
         cancel.keyEquivalent = "\u{1b}"
-        let apply = NSButton(title: "Apply", target: self, action: #selector(apply))
+        let apply = NSButton(title: mergesPixels ? "Apply to Pixels" : "Apply", target: self, action: #selector(apply))
         apply.keyEquivalent = "\r"
         let buttons = NSStackView(views: [NSView(), cancel, apply])
         buttons.orientation = .horizontal
         buttons.spacing = 8
 
-        let stack = NSStackView(views: [scroll, statusField, buttons])
+        let note = NSTextField(wrappingLabelWithString: "Apply changes the target pixels. Undo restores them.")
+        let stack = NSStackView(views: mergesPixels ? [scroll, note, statusField, buttons] : [scroll, statusField, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
