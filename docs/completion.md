@@ -52,7 +52,8 @@ behavior, not every adjacent feature in `design.md`.
 - [x] Multi-anchor path editing with group move/delete and Undo.
 - [x] Searchable brush, pattern and gradient resource choosers, with
       thumbnails, retained identities and captured gesture settings.
-- [ ] Tool presets and resource creation/management.
+- [x] Tool preset storage and controls.
+- [ ] Resource creation and management controls.
 - [x] Color profile assignment and conversion with explicit rasterization consent.
 - [x] Indexed conversion with generated/custom palettes, dithering and
       explicit structured-source consent.
