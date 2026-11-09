@@ -154,3 +154,21 @@ reset oversized fixture metadata before the final positive read. The original
 exposed fixture errors and those earlier compile claims do not imply runtime
 acceptance. Depth, namespace and injected native failures need targeted tests
 before the typed reader is exposed publicly or used for writing.
+
+
+## Final Root runtime evidence (2026-11-09)
+
+All four engines pass155 assertions, including the known-map baseline and
+injected namespace, malformed-packet and native-error cases. Runtime uses
+fatal GLib criticals; final logs contain no critical or assertion failures.
+The boundary fixtures now include an otherwise valid target; a second empty
+Alt isolates cardinality; a real long-language native baseline isolates its
+bound. The duplicate guard has an explicit reason oracle because the native
+map-count check also refuses the impossible duplicate representation.
+
+Root repaired fixture state and language-map expectations rather than relaxing
+refusals. The test driver excludes a producer's metadata-language.o, ensuring
+it links the current helper exactly once after the helper is present in main.
+Independent complete-body production review found no important issue and the
+reviewed production fingerprints remain unchanged. This is still an internal
+reader: no public slot, typed Swift wrapper or language writer is enabled.

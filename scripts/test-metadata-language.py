@@ -71,7 +71,10 @@ def producer_for(ref: str) -> Path:
 def check_producer(producer: Path) -> dict[str, object]:
     if not producer.is_dir():
         fail(f"producer prefix {producer} is not a directory")
-    objects = sorted(glob.glob(str(producer / "obj" / "*.o")))
+    # The producer may already include this helper after it is merged.
+    # Link the current reader object exactly once, alongside frozen Core.
+    objects = [p for p in sorted(glob.glob(str(producer / "obj" / "*.o")))
+               if Path(p).name != "metadata-language.o"]
     paths = {
         "obj": objects,
         "compile_rsp": producer / "compile.rsp",
