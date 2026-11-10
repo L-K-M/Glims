@@ -69,7 +69,10 @@ extension EngineSmokeTest {
         }
         func wait(_ condition: () -> Bool) -> Bool {
             let end = Date().addingTimeInterval(15)
-            while !condition() && Date() < end { pump() }
+            while Date() < end {
+                if condition() { return true }
+                pump()
+            }
             return condition()
         }
         func require(_ value: Bool, _ message: String) throws {
@@ -209,6 +212,20 @@ extension EngineSmokeTest {
         doc.selectChannel(c2); try drain(doc)
         palette.retarget(to: doc); try drain(doc)
         let attributesHistory = try session.undoInfo(image)
+        // The existing native attribute command preserves Core's separate
+        // setter Undo entries. Measure the exact same change independently;
+        // a new menu route must not invent a grouped form transaction.
+        let attributesReference = try session.duplicateImage(image)
+        nativeOnly.append(attributesReference)
+        guard let referenceChannel = try session.channels(attributesReference).first(where: { $0.name == "Left source" }) else {
+            throw NSError(domain: "ChannelMenuFixture", code: 3)
+        }
+        let referenceHistory = try session.undoInfo(attributesReference)
+        try session.changeChannel(referenceChannel.id, image: attributesReference,
+            .init(name: "Renamed left", opacity: 0.375,
+                  color: referenceChannel.color.withAlphaComponent(0.375)))
+        let attributesUndoDelta = try session.undoInfo(attributesReference).undoCount - referenceHistory.undoCount
+        expect(attributesUndoDelta == 2, "independent native name and overlay setters create their two documented Undo entries")
         palette.perform(.editChannel(c1))
         try require(wait { button("Apply", on: a) != nil }, "clicked-row Attributes did not open")
         expect(field("Channel name", on: a)?.stringValue == "Left source", "context Attributes uses C1 while C2 is selected")
@@ -224,8 +241,8 @@ extension EngineSmokeTest {
             && abs((changed.first { $0.id == c1 }?.opacity ?? -1) - 0.375) < 0.001
             && changed.first { $0.id == c2 }?.name == "Right source",
             "Apply changes the captured C1 attributes while leaving selected C2 intact")
-        expect(try session.undoInfo(image).undoCount == attributesHistory.undoCount + 1
-            && state(other.image) == untouchedB, "captured Attributes is one A Undo and cannot mutate front B")
+        expect(try session.undoInfo(image).undoCount == attributesHistory.undoCount + attributesUndoDelta
+            && state(other.image) == untouchedB, "captured Attributes matches native setter Undo accounting and cannot mutate front B")
 
         let baselineShape = EngineSession.SelectShape.ellipse(CGRect(x: 8, y: 5, width: 17, height: 14))
         var maskResults: [ChannelMenuMask] = []
