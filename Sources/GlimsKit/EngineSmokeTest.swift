@@ -6826,9 +6826,10 @@ enum EngineSmokeTest {
         check(blurItems.first == "Gaussian Blur…" && blurItems.contains("Median Blur…"),
               "Filter ▸ Blur keeps the dedicated command and gains the catalog's operations (\(blurItems))")
         check(nativeItem("gegl:gaussian-blur") == nil, "the catalog's own Gaussian Blur stays out")
-        check(nativeItem("gegl:displace")?.title == "Displace (needs a second layer as its source)"
+        check(nativeItem("gegl:displace")?.title == "Displace…"
+                && nativeItem("gegl:oilify")?.title == "Oilify (needs a second layer as its source)"
                 && nativeItem("gimp:curves")?.title == "Curves…",
-              "auxiliary input stays gated and Curves exposes its dedicated form")
+              "Displace offers its source chooser, Oilify remains gated and Curves exposes its dedicated form")
         check(submenu(["Filter", "Render", "Pattern"])?.items.isEmpty == false,
               "the plug-in categories are intact after the native install")
 
@@ -6860,9 +6861,10 @@ enum EngineSmokeTest {
         if let item = nativeItem("gegl:median-blur") {
             check(controller.validateMenuItem(item), "a supported operation's menu item is enabled")
         } else { check(false, "Median Blur has a menu item") }
-        if let item = nativeItem("gegl:displace") {
-            check(!controller.validateMenuItem(item), "an auxiliary-input operation stays disabled")
-        } else { check(false, "Displace has a menu item") }
+        if let displaceItem = nativeItem("gegl:displace"), let oilifyItem = nativeItem("gegl:oilify") {
+            check(controller.validateMenuItem(displaceItem) && !controller.validateMenuItem(oilifyItem),
+                  "the admitted Displace chooser enables while an unhandled auxiliary operation stays disabled")
+        } else { check(false, "Displace and Oilify have menu items") }
 
         // The generic form on the same operation the dedicated panel
         // covers: number, bool and enum roundtrips through typed writes.
