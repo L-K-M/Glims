@@ -1,5 +1,14 @@
 import AppKit
 
+private struct ClosingPathNativeState: Equatable {
+    let pixels: Data
+    let paths: [EngineSession.PathInfo]
+    let selectedPaths: [Int32]
+    let selectionBounds: CGRect?
+    let selectionOutline: [EngineSession.Segment]
+    let undo: EngineSession.UndoInfo
+}
+
 /// `GLIMS_SMOKE_CASE=path-menus` (wired by root, also in the full
 /// suite): Edit ▸ New Path / Delete Path driven through the real
 /// `NSApp.mainMenu` items and `NSApp.sendAction` to the owning
@@ -272,6 +281,41 @@ extension EngineSmokeTest {
         check(docB.paths.isEmpty && docA.paths.count == aPathsBefore && errorsA.isEmpty,
               "Delete Path sent to B's controller removes only B's path")
 
+        let closingShape = VectorPath(subpaths: [.init(anchors: [
+            .init(CGPoint(x: 10, y: 10)), .init(CGPoint(x: 46, y: 10)),
+            .init(CGPoint(x: 46, y: 42)), .init(CGPoint(x: 10, y: 42))], isClosed: true)])
+        docA.selectPath(kept)
+        docA.updatePath(kept, to: closingShape)
+        docA.select(.none)
+        settle(docA)
+        guard docA.activePath == kept, try session.path(kept, image: imageA) == closingShape,
+              let selectPathItem = NSApp.mainMenu?.item(withTitle: "Select")?.submenu?.item(withTitle: "From Path"),
+              let strokePathItem = edit.item(withTitle: "Stroke Path"),
+              let fillPathItem = edit.item(withTitle: "Fill Path") else {
+            return check(false, "the close fixture has an active closed rectangle and all three older path menu commands")
+        }
+        let oldForeground = ToolState.shared.foreground
+        let oldLineWidth = ToolState.shared.pathLineWidth
+        let oldFillOpacity = ToolState.shared.pathFillOpacity
+        ToolState.shared.foreground = .black
+        ToolState.shared.pathLineWidth = 3
+        ToolState.shared.pathFillOpacity = 1
+        defer {
+            ToolState.shared.foreground = oldForeground
+            ToolState.shared.pathLineWidth = oldLineWidth
+            ToolState.shared.pathFillOpacity = oldFillOpacity
+        }
+        func closingNativeState() throws -> ClosingPathNativeState {
+            let image = try session.render(imageA, scale: 1, area: CGRect(x: 0, y: 0, width: 64, height: 64))
+            guard let pixels = image.dataProvider?.data as Data? else {
+                throw NSError(domain: "PathCloseFixture", code: 1)
+            }
+            return ClosingPathNativeState(pixels: pixels, paths: try session.paths(imageA),
+                selectedPaths: try session.selectedItems(.path, image: imageA),
+                selectionBounds: try session.selectionBounds(image: imageA),
+                selectionOutline: try session.selectionOutline(image: imageA), undo: try session.undoInfo(imageA))
+        }
+
         // Hold only the canvas queue, never the native engine lock. The
         // real window close starts immediately but cannot reach the
         // document's close guard until this barrier releases.
@@ -314,6 +358,16 @@ extension EngineSmokeTest {
                 && session.selectedItems(.path, image: imageA) == closingSelection
                 && session.undoInfo(imageA) == closingHistory && errorsA == closingErrors,
               "direct Delete Path during the close-drain gap changes no paths, selection, history or errors")
+        check(a.window?.attachedSheet == nil && !a.validateMenuItem(selectPathItem)
+                && !a.validateMenuItem(strokePathItem) && !a.validateMenuItem(fillPathItem),
+              "actual close disables all three older path items without relying on a sheet")
+        for (item, name) in [(selectPathItem, "From Path"), (strokePathItem, "Stroke Path"), (fillPathItem, "Fill Path")] {
+            let before = try closingNativeState()
+            send(item, to: a)
+            settle(docA)
+            check(try closingNativeState() == before,
+                  "direct \(name) during the close-drain gap preserves native pixels, selection, paths and history")
+        }
         renderReleased = true
         renderRelease.signal()
         wait { closed }
