@@ -70,6 +70,17 @@ checks each exported file/symlink against its committed Git blob ID. File and
 symlink SHA256 values, sizes/modes, component commit/tree IDs and selected paths
 are recorded in `manifest.json`. Symlink payloads are preserved, never followed;
 absolute/escaping targets and unsafe/special archive paths refuse collection.
+Before writing archive members, the collector validates the complete committed
+symlink graph, including mapped submodules. It substitutes links before parent
+traversals and confines each target to its owning repository's archive root,
+without consulting host filesystem targets. Contained multihop and dangling
+links remain valid. Each resolution allows at most 40 link expansions and
+4,096 path components; cycles or larger resolutions refuse collection.
+Graph lookup uses Unicode NFD normalization and case folding to account
+conservatively for Mac filename aliases. Distinct committed spellings that
+collide under that comparison, including directory names, refuse collection;
+the exported names and link payloads remain byte-exact. This does not certify
+every platform's filename aliases or extraction behavior.
 
 Tracked worktree dirtiness is observed and recorded with optional Git index
 writes disabled. Worktree content is never exported. Untracked files are neither

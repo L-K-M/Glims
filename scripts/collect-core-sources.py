@@ -7,6 +7,7 @@ The new output is a tar archive containing committed files and manifest.json.
 from __future__ import annotations
 
 import argparse
+from collections import deque
 from dataclasses import dataclass
 import hashlib
 import io
@@ -17,12 +18,15 @@ import re
 import subprocess
 import tarfile
 import tempfile
+import unicodedata
 
 MAX_NODES = 68
 MAX_DEPTH = 16
 MAX_FILES = 100_000
 MAX_SOURCE_BYTES = 4 * 1024**3
 MAX_TREE_BYTES = 32 * 1024**2
+MAX_SYMLINK_EXPANSIONS = 40
+MAX_SYMLINK_COMPONENTS = 4096
 GLIMS_PATHS = ("Engine", "Sources/CGlimsEngine", "scripts", "Resources/Info.plist", "LICENSE")
 
 
@@ -171,6 +175,72 @@ class Collector:
             self.plan(child, prefix + "/" + entry.path, self.modules[child], entry.oid, depth=depth + 1)
 
 
+def archive_component_key(component: str) -> str:
+    # Treat canonical Unicode and case aliases conservatively for Mac
+    # extraction while retaining each member's exact committed spelling.
+    return unicodedata.normalize("NFD", unicodedata.normalize("NFD", component).casefold())
+
+
+def validated_symlinks(nodes: list[Node]) -> dict[str, str]:
+    targets: dict[str, str] = {}
+    graph: dict[tuple[str, ...], tuple[str, ...]] = {}
+    roots: dict[str, tuple[str, ...]] = {}
+    spellings = {}
+    # Plan every mapped repository before resolving anything: a parent
+    # target can traverse links supplied by a nested gitlink's archive.
+    for node in nodes:
+        for entry in node.entries:
+            name = node.prefix + "/" + entry.path
+            parts = PurePosixPath(name).parts
+            branch = spellings
+            for part in parts:
+                spelling, child = branch.setdefault(archive_component_key(part), (part, {}))
+                require(spelling == part, "Source archive filename collision")
+                branch = child
+            if entry.mode != "120000":
+                continue
+            data = git(["cat-file", "blob", entry.oid], node.repo.path)
+            blob = hashlib.new(node.repo.object_format, f"blob {len(data)}\0".encode("ascii") + data).hexdigest()
+            require(len(data) == entry.size and blob == entry.oid,
+                    "Source symlink does not match its committed blob")
+            target = data.decode("utf-8")
+            require(target and not target.startswith("/") and "\\" not in target and
+                    not any(ord(c) < 32 for c in target), "Unsafe source symlink target")
+            require(name not in targets, "Duplicate source symlink")
+            targets[name] = target
+            graph[tuple(archive_component_key(part) for part in parts)] = PurePosixPath(target).parts
+            roots[name] = PurePosixPath(node.prefix).parts
+
+    for name, target in targets.items():
+        stack = [archive_component_key(part) for part in PurePosixPath(name).parent.parts]
+        root = roots[name]
+        pending = deque(PurePosixPath(target).parts)
+        require(len(pending) <= MAX_SYMLINK_COMPONENTS, "Source symlink resolution exceeds the collection limit")
+        steps = expansions = 0
+        while pending:
+            require(steps < MAX_SYMLINK_COMPONENTS, "Source symlink resolution exceeds the collection limit")
+            steps += 1
+            item = pending.popleft()
+            if item == "..":
+                require(len(stack) > len(root), "Source symlink escapes its component")
+                stack.pop()
+                continue
+            stack.append(archive_component_key(item))
+            nested = graph.get(tuple(stack))
+            if nested is not None:
+                # Substitute before consuming '..'. A repeated link is not
+                # itself a cycle (a -> '.' may appear several times); bound
+                # actual expansions and total components instead.
+                expansions += 1
+                require(expansions <= MAX_SYMLINK_EXPANSIONS,
+                        "Source symlink expansion exceeds the collection limit")
+                stack.pop()
+                require(steps + len(pending) + len(nested) <= MAX_SYMLINK_COMPONENTS,
+                        "Source symlink resolution exceeds the collection limit")
+                pending.extendleft(reversed(nested))
+    return targets
+
+
 class HashReader:
     def __init__(self, stream, size: int, object_format: str):
         self.stream = stream
@@ -186,7 +256,7 @@ class HashReader:
 
 
 def append_node(node: Node, temporary: Path, number: int, archive: tarfile.TarFile,
-                paths: dict[str, str], files: list[dict]) -> None:
+                paths: dict[str, str], files: list[dict], symlinks: dict[str, str]) -> None:
     # An isolated bare view reads only existing local objects. Its attributes
     # override export-ignore/export-subst, including input info/attributes,
     # so exported blobs must match the exact committed objects below.
@@ -227,15 +297,8 @@ def append_node(node: Node, temporary: Path, number: int, archive: tarfile.TarFi
             if member.issym():
                 require(entry.mode == "120000", "Git archive changed a file into a symlink")
                 target = member.linkname
-                require(target and not target.startswith("/") and "\\" not in target and
-                        not any(ord(c) < 32 for c in target), "Unsafe source symlink target")
-                stack = list(PurePosixPath(name).parent.parts)
-                for item in PurePosixPath(target).parts:
-                    if item == "..":
-                        require(len(stack) > len(PurePosixPath(node.prefix).parts), "Source symlink escapes its component")
-                        stack.pop()
-                    elif item != ".":
-                        stack.append(item)
+                require(name in symlinks and target == symlinks[name],
+                        "Git archive symlink differs from its validated target")
                 data = target.encode("utf-8")
                 blob = hashlib.new(node.repo.object_format, f"blob {len(data)}\0".encode("ascii") + data).hexdigest()
                 require(len(data) == entry.size and blob == entry.oid, "Git archive symlink does not match its committed blob")
@@ -271,6 +334,7 @@ def collect(components: dict[str, tuple[Path, str]], glims: tuple[Path, str],
     for node in collector.nodes:
         for root in (node.repo.path, node.repo.git_dir, node.repo.common_dir, node.repo.objects):
             require(not destination.is_relative_to(root), "Output must be outside every input repository and Git directory")
+    symlinks = validated_symlinks(collector.nodes)
     # Staging beside the destination permits atomic, exclusive hard-link
     # publication. An incomplete archive is never installed at the output.
     with tempfile.TemporaryDirectory(prefix=".glims-core-sources-", dir=destination.parent) as directory:
@@ -280,7 +344,7 @@ def collect(components: dict[str, tuple[Path, str]], glims: tuple[Path, str],
         paths: dict[str, str] = {}
         with tarfile.open(staged, "w:", format=tarfile.PAX_FORMAT) as archive:
             for index, node in enumerate(collector.nodes):
-                append_node(node, temporary, index, archive, paths, files)
+                append_node(node, temporary, index, archive, paths, files, symlinks)
             manifest = {
                 "schema_version": 1, "scope": "pinned-core-source-inputs",
                 "corresponding_source_complete": False, "source_delivery": "local_collection_only",
