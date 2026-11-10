@@ -3580,3 +3580,16 @@ path-selection state; Delete requires exactly one path, while New accepts
 an empty or multiple selection. Floating selections preserve path editing.
 The actual-menu regression reproduced the missing commands before the fix;
 all-four-engine checks and final integration are tracked in the PR.
+
+### View-local ICC soft proofing (2026-11-10 candidate)
+
+APIv1 appends slot164 with owned proof/display intents and BPC, preserving
+slot132. Window-owned setup/toggle controls capture immutable ICC bytes and
+render settings, fence stale tiles and never replace failed proof rendering
+with unproofed pixels. Counted off-main profile loading/preflight drains before
+image close. Native proof checks pass 293 per engine on all four supported
+engines, including local CMYK and actual grayscale/indexed image sources.
+An initial Babl encoding-space intent error was reproduced before correction.
+The actual form passes 23 checks on each engine; 988 units pass. Integrated
+release/CI checks and final review are pending. See `soft-proof-render.md` for the
+read-only contract and remaining physical/HDR/proof-control scope.

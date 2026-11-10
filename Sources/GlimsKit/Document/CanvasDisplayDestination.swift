@@ -87,7 +87,17 @@ struct CanvasDisplayDestination: Equatable, Sendable {
     /// request to the existing sRGB render (never retagging bytes), and every
     /// other error propagates unchanged. No profile/transform cache exists.
     static func render(_ session: EngineSession, image: Int32, scale: Double, area: CGRect,
-                       destination: CanvasDisplayDestination) throws -> CGImage {
+                       destination: CanvasDisplayDestination, proof: CanvasSoftProof? = nil) throws -> CGImage {
+        if let proof {
+            guard let icc = destination.profileICC
+                ?? (CGColorSpace(name: CGColorSpace.sRGB)?.copyICCData() as Data?) else {
+                throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                    message: "The proof view has no usable display destination profile.")
+            }
+            // A requested proof must never become ordinary, unproofed pixels
+            // when a profile or native transform fails.
+            return try session.render(image, scale: scale, area: area, destinationICC: icc, proof: proof)
+        }
         guard let icc = destination.profileICC else {
             return try session.render(image, scale: scale, area: area)
         }

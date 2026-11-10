@@ -1023,6 +1023,20 @@ typedef enum GlimsProfileIntent {
   GLIMS_PROFILE_ABSOLUTE_COLORIMETRIC = 4
 } GlimsProfileIntent;
 
+/* Display-only soft proofing options. These are facade-owned values;
+ * native color-transform flags and rendering-intent values never cross
+ * the facade. A separate render slot means proofing is enabled. */
+typedef enum GlimsProofFlags {
+  GLIMS_PROOF_BLACK_POINT_COMPENSATION = 1u
+} GlimsProofFlags;
+
+typedef struct GlimsProofSettings {
+  uint32_t struct_size;     /* >= sizeof(GlimsProofSettings); future tail ignored */
+  uint32_t proof_intent;    /* GlimsProfileIntent */
+  uint32_t display_intent;  /* GlimsProfileIntent */
+  uint32_t flags;           /* GlimsProofFlags; unknown bits are invalid */
+} GlimsProofSettings;
+
 /* The image's color state. Caller-owned: image_color_info fills the
  * struct in place; the fixed buffers are UTF-8, truncated, and need no
  * release. `component` and `trc` together are the image's precision;
@@ -3152,6 +3166,29 @@ typedef struct GlimsEngineAPI {
   void (*free_histogram_snapshot) (GlimsHistogramSnapshot *snapshot);
   GlimsStatus (*filter_levels_auto) (GlimsEngine *engine, GlimsFilterID filter,
                                     GlimsLevelsSettings *out, char **error);
+  /* Slot164: display-only ICC soft proofing. The source is the image's
+   * effective profile; destination_icc must be RGB, while proof_icc may
+   * be any valid ICC profile accepted by the native proofing constructor.
+   * Both ICC blobs are nonempty, at most 16 MiB, copied synchronously, and
+   * never retained. Settings must have the complete known prefix; both
+   * intents are GlimsProfileIntent and only the owned BPC flag is valid.
+   * NULL/short settings, invalid intents/flags, ICC lengths and render
+   * bounds are refused before writing caller output. Malformed ICC or an
+   * unsupported native transform fails explicitly, without an unproofed
+   * fallback. Output uses the same exact destination-profile premultiplied
+   * RGBA u8 and bounds/stride rules as slot132. Conversion runs on straight
+   * float colors, preserving alpha before one final premultiplication.
+   * This is a synchronous engine-thread read: no image/profile/selection,
+   * history/dirty or saved simulation settings change, and write-readiness
+   * is not required. Profiles/transforms are per-call, never cached. Use
+   * unchanged slot132 when proofing is disabled. No gamut, paper-white or
+   * black-simulation option is implied by this slot. */
+  GlimsStatus (*image_render_proofed) (GlimsEngine *engine, GlimsImageID image,
+                                      double scale, GlimsRect area,
+                                      const uint8_t *destination_icc, size_t destination_icc_length,
+                                      const uint8_t *proof_icc, size_t proof_icc_length,
+                                      const GlimsProofSettings *settings,
+                                      uint8_t *pixels, size_t stride, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
