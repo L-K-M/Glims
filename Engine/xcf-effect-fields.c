@@ -459,7 +459,8 @@ read_effect (Reader *reader, guint64 start)
   guint64 mask;
   if (!seek_record (reader, start) || !read_string (reader, &effect->name) ||
       !read_string (reader, &effect->icon) || !read_string (reader, &effect->operation) ||
-      !read_string (reader, &effect->operation_version) ||
+      (reader->version >= GLIMS_XCF_EFFECT_VERSIONED_OPERATIONS &&
+       !read_string (reader, &effect->operation_version)) ||
       !properties (reader, EFFECT_PROPERTIES, effect) || !read_offset (reader, &mask)) goto failed;
   if (mask && !claim_offset (reader, mask, TRUE)) goto failed;
   if (!finish_record (reader, start)) goto failed;
@@ -537,8 +538,9 @@ read_image (Reader *reader, GlimsXcfEffectFields *fields)
       !g_ascii_isdigit (header[11]) || !g_ascii_isdigit (header[12]))
     return fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "Malformed XCF version tag");
   fields->image.version = (header[10] - '0') * 100 + (header[11] - '0') * 10 + header[12] - '0';
-  if (fields->image.version < 22 || fields->image.version > 26)
-    return fail (reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "Only XCF versions 22 through 26 are supported");
+  if (fields->image.version < GLIMS_XCF_EFFECT_FIRST_VERSION ||
+      fields->image.version > GLIMS_XCF_EFFECT_LAST_VERSION)
+    return fail (reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "Only XCF versions 20 through 26 are supported");
   reader->version = fields->image.version;
   if (!read_u32 (reader, &fields->image.width) || !read_u32 (reader, &fields->image.height) ||
       !read_u32 (reader, &fields->image.base_type) || !read_u32 (reader, &fields->image.precision)) return FALSE;
