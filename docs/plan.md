@@ -3692,3 +3692,12 @@ no production activation defect is inferred from the earlier unlaunched host.
 See `batch-layer-rasterize.md` for exact scope, hashes and remaining validation.
 Other-engine UI, current units/integration, CI/review and merge remain pending;
 batch Restore and the broader gesture-policy item stay open.
+
+### Tool Options names and label relationships (2026-11-10 candidate)
+
+Existing setting popups and selection Mode now have explicit accessible
+names and their existing visible label association. The actual AppKit control
+regression ran two tests with ten baseline failures, then passes both after
+the five-line fix. Full private leased units, independent review, CI and
+actual keyboard/VoiceOver acceptance remain separate gates. See
+`tool-options-accessibility.md`; no new control or action was introduced.
