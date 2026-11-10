@@ -107,6 +107,38 @@ extension EngineSmokeTest {
                 && session.copyPixels(aFixture.image, merged: true).pixels == original,
               "Cancel source selection leaves pixels and all native history unchanged")
 
+        guard let bumpItem = menuItems(menu).first(where: {
+            ($0.representedObject as? NativeFilterCommand)?.operation.name == "gegl:bump-map"
+        }) else { return check(false, "the retained Bump Map menu operation exists") }
+        if let action = bumpItem.action { _ = NSApp.sendAction(action, to: controller, from: bumpItem) }
+        guard let oldChooser = NSApp.windows.first(where: {
+            $0.isVisible && $0.title == "Bump Map Source" && $0.parent === controller.window
+        }), let oldPreview = button(oldChooser.contentView, "Preview Bump Map") else {
+            return check(false, "Bump Map opens its original height-map chooser before replacement")
+        }
+        front.window?.makeKeyAndOrderFront(nil)
+        sendMenu()
+        guard let replacement = sourceWindow() else {
+            return check(false, "Variable Blur replaces the owning window's Bump Map chooser")
+        }
+        check(replacement !== oldChooser && !oldChooser.isVisible
+                && views(replacement.contentView, NSPopUpButton.self).first?.accessibilityLabel() == "Blur mask source",
+              "changing source operation invalidates the old chooser and exposes the new mask role")
+        oldPreview.performClick(nil)
+        settle(document)
+        check(!document.filterPreviewIsOpen && controller.previewPanel == nil && sourceWindow() === replacement,
+              "retained Preview from the invalidated Bump Map chooser cannot start a stale filter")
+        sendMenu()
+        check(sourceWindow() === replacement && NSApp.windows.filter {
+            $0.isVisible && $0.title == sourceTitle && $0.parent === controller.window
+        }.count == 1, "repeating Variable Blur reuses its same owned chooser")
+        button(replacement.contentView, "Cancel filter source")?.performClick(nil)
+        settle(document)
+        check(try session.undoInfo(aFixture.image) == originalHistory
+                && session.copyPixels(aFixture.image, merged: true).pixels == original
+                && session.undoInfo(imageB) == otherHistory,
+              "chooser replacement and stale Preview change neither captured A nor front document B")
+
         // Obtain a direct facade reference in a separate image. Its mask is
         // selected explicitly, rather than using the UI's preferred target.
         let oracleFixture = try fixture()

@@ -3560,3 +3560,20 @@ restore remains available. See `painting-source-consent.md` for the measured
 native text Undo/Redo issue and scope. Initial consent and two timing defects
 were reproduced before their respective fixes; final integration checks are
 in progress. The facade remains APIv1/163 and upstream sources are unchanged.
+
+
+### Captured Variable Blur mask (2026-11-10 candidate)
+
+Variable Blur uses the existing merge-only source preview contract with a
+detached same-image mask. The menu opens a captured owning-window chooser;
+its mask labels remain distinct from Bump Map's height-map role. Switching
+between those two operations replaces the old chooser and invalidates late
+callbacks, while repeating the same operation retains its explicit selection.
+The generic form exposes the installed Radius, Linear mask and High quality
+properties; manual-build Levels/Gamma controls are not invented.
+
+The native independent GEGL oracle, snapshot-lifetime, refusal and history
+checks pass on all four engines, including retained Bump Map behavior.
+The actual UI route initially reproduced a disabled menu and missing chooser.
+Final source-chooser interaction checks, review, CI and release integration
+remain pending. Other auxiliary-input operations remain unsupported.
