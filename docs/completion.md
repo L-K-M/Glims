@@ -77,6 +77,9 @@ bundle with the native and Swift build outputs inaccessible.
 - [x] Captured input histograms for Levels/Curves and native automatic Levels,
       with transfer-curve fencing and acknowledged-field admission (candidate).
 - [ ] Remaining custom filter forms and other auxiliary inputs.
+- [x] Glims XCF point-effect supplements preserve actual Curves HDR bypass
+      and explicit blend/composite fields, with bounded correspondence checks
+      and failed-write rollback (integration candidate; `xcf-effects.md`).
 - [ ] Preserve nondefault native-only effect blend/composite settings when
       opening XCF; upstream currently normalizes them to AUTO.
 - [x] Path fill, vector layers and vector style controls.

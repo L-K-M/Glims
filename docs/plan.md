@@ -3496,3 +3496,16 @@ reply fencing. Auto waits for acknowledged fields and keeps Cancel available.
 Each engine passes78 native and19 form checks;977 units and existing
 Levels/Curves focused regressions pass. See `input-histogram.md`. Final
 self-contained bundle and CI remain pending; the broader ledger stays open.
+
+
+### XCF point-effect supplements (2026-11-10 candidate)
+
+The adapter now regenerates a bounded private supplement for missing Curves
+HDR bypass and effect blend/composite state on XCF Save/Save Copy. Complete
+load correspondence is validated before mutation; both write outcomes restore
+the exact previous live carrier. Native name/mode aliases are normalized, and
+unsupported graph/mask/table states refuse before writing. APIv1 stays at163
+slots. All four engines pass121 focused checks plus the existing general
+conformance suites;75 data-only parser checks pass. See `xcf-effects.md` for
+format, ownership, external-editor limits and the remaining unsupported forms.
+Final integration review, CI and the self-contained release remain pending.

@@ -3,6 +3,7 @@
  * exporting, the layer tree and the undo history. Runs on the engine thread.
  */
 #include "engine-private.h"
+#include "effect-state.h"
 
 #include <math.h>
 #include <string.h>
@@ -361,6 +362,13 @@ glims_image_open (GlimsEngine   *engine,
 
   g_clear_error (&gerror);
 
+  GlimsStatus restore_status = glims_effect_state_load (image, error);
+  if (restore_status != GLIMS_STATUS_OK)
+    {
+      g_object_unref (image);
+      return restore_status;
+    }
+
   return glims_adopt_image (engine, image, out);
 }
 
@@ -693,6 +701,17 @@ save_with_group (GlimsEngine            *engine,
       return glims_fail (error, gerror, "No file format handles this file name.");
     }
 
+  GlimsEffectSaveState *effect_state = NULL;
+  if (saving)
+    {
+      GlimsStatus capture_status = glims_effect_state_save_begin (open->image, &effect_state, error);
+      if (capture_status != GLIMS_STATUS_OK)
+        {
+          g_object_unref (file);
+          return capture_status;
+        }
+    }
+
   /* Exporting runs a plug-in, which nests a main loop. */
   engine->busy++;
   status = file_save (engine->gimp, open->image, NULL, file, proc, GIMP_RUN_NONINTERACTIVE,
@@ -701,6 +720,7 @@ save_with_group (GlimsEngine            *engine,
                       ! saving,        /* export forward */
                       &gerror);
   engine->busy--;
+  glims_effect_state_save_end (effect_state);
 
   g_object_unref (file);
 
