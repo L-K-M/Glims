@@ -406,6 +406,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (resource selection controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "soft-proof" {
+                try exerciseSoftProof(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (soft proof)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "display-destination" {
                 try exerciseDisplayDestination(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (display destination)" : "FAILED: \(failures) failures")
@@ -524,6 +529,7 @@ enum EngineSmokeTest {
             try exerciseResourceManagement(session, work: work, documents: documents)
             try exerciseViewOverlays(session, work: work, documents: documents)
             try exerciseDisplayDestination(session, work: work, documents: documents)
+            try exerciseSoftProof(session, work: work, documents: documents)
             try exerciseCanvasRotation(session, documents: documents)
             try exerciseTrackpadNavigation(session, documents: documents)
             try exerciseOptionScroll(session, documents: documents)
