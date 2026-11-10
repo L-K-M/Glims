@@ -202,6 +202,120 @@ extension EngineSmokeTest {
                "owned mode changes restore a later external presentation baseline")
         NSApp.presentationOptions = originalOptions
 
+        func drainPresentationRefresh(_ message: String) throws {
+            // The notification synchronously queues the coordinator refresh.
+            // Wait for a later block, so an initially true policy predicate
+            // cannot skip the refresh whose ownership decision is under test.
+            var passedRefresh = false
+            NotificationCenter.default.post(name: NSWindow.didBecomeMainNotification, object: a.window)
+            DispatchQueue.main.async { passedRefresh = true }
+            try wait(message, { passedRefresh })
+        }
+
+        // Synthetic callback phase only: model the interval after AppKit has
+        // cleared .fullScreen but before its didExit callback. No native Space
+        // animation or owned mode is entered by this particular regression.
+        do {
+            let optionsBeforeSyntheticPhase = NSApp.presentationOptions
+            defer {
+                a.windowDidExitFullScreen(
+                    Notification(name: NSWindow.didExitFullScreenNotification, object: a.window))
+                try? drainPresentationRefresh("synthetic native-exit cleanup refresh")
+                NSApp.presentationOptions = optionsBeforeSyntheticPhase
+            }
+            a.window?.makeKeyAndOrderFront(nil)
+            try wait("synthetic phase has the active main owner", {
+                NSApp.isActive && NSApp.mainWindow === a.window
+            })
+            a.windowWillEnterFullScreen(
+                Notification(name: NSWindow.willEnterFullScreenNotification, object: a.window))
+            a.windowDidEnterFullScreen(
+                Notification(name: NSWindow.didEnterFullScreenNotification, object: a.window))
+            a.windowWillExitFullScreen(
+                Notification(name: NSWindow.willExitFullScreenNotification, object: a.window))
+            expect(a.screenMode == .fullScreenBare && a.screenModeState.phase == .exiting
+                && a.screenModeSnapshot == nil && !a.window!.styleMask.contains(.fullScreen),
+                   "synthetic cleared-style native exit has no owned window snapshot")
+            var nativeOptions = optionsBeforeSyntheticPhase
+            nativeOptions.remove([.fullScreen, .hideDock, .hideMenuBar,
+                                  .autoHideDock, .autoHideMenuBar, .autoHideToolbar])
+            NSApp.presentationOptions = nativeOptions
+            try drainPresentationRefresh("synthetic native-exit refresh actually executes")
+            expect(NSApp.presentationOptions == nativeOptions,
+                   "synthetic native-exit refresh leaves AppKit's unowned presentation baseline unchanged")
+            expect(!NSApp.presentationOptions.contains(.autoHideDock)
+                && !NSApp.presentationOptions.contains(.autoHideMenuBar)
+                && a.screenModeSnapshot == nil,
+                   "synthetic native-exit interval never acquires owned menu or Dock policy")
+        }
+        expect(a.screenMode == .windowed && a.screenModeState.phase == .stable
+            && NSApp.presentationOptions == originalOptions,
+               "synthetic native-exit cleanup resets callbacks and presentation options")
+
+        // A separate real native green-button action: require actual AppKit
+        // entry and exit callbacks, then prove owned modes still coexist with
+        // the restored native window. This does not use synthetic callbacks.
+        do {
+            let nativeFrame = a.window!.frame
+            let nativeStyle = a.window!.styleMask
+            let nativeCollection = a.window!.collectionBehavior
+            let nativeMovable = a.window!.isMovable
+            let nativeOptions = NSApp.presentationOptions
+            defer {
+                if a.screenModeState.phase != .stable {
+                    try? wait("native green-button cleanup drains a pending callback", {
+                        a.screenModeState.phase == .stable
+                    })
+                }
+                if a.window?.styleMask.contains(.fullScreen) == true {
+                    a.window?.toggleFullScreen(nil)
+                    try? wait("native green-button cleanup completes exit", {
+                        a.window?.styleMask.contains(.fullScreen) != true
+                            && a.screenModeState.phase == .stable
+                    })
+                }
+                try? drainPresentationRefresh("native green-button cleanup refresh")
+                NSApp.presentationOptions = nativeOptions
+            }
+            a.window?.toggleFullScreen(nil)
+            try wait("real native green-button entry completes", {
+                a.window?.styleMask.contains(.fullScreen) == true
+                    && a.screenMode == .fullScreenBare && a.screenModeState.phase == .stable
+            })
+            expect(a.screenModeSnapshot == nil && a.window!.styleMask.contains(.fullScreen),
+                   "real native fullscreen owns its transition without an owned-mode snapshot")
+            a.window?.toggleFullScreen(nil)
+            try wait("real native green-button exit completes", {
+                a.window?.styleMask.contains(.fullScreen) == false
+                    && a.screenMode == .windowed && a.screenModeState.phase == .stable
+            })
+            try drainPresentationRefresh("real native-exit presentation refresh completes")
+            expect(a.window!.styleMask == nativeStyle
+                && a.window!.collectionBehavior == nativeCollection
+                && a.window!.isMovable == nativeMovable && a.screenModeSnapshot == nil,
+                   "real native fullscreen restores window style and leaves owned policy unclaimed")
+            expect(abs(a.window!.frame.minX - nativeFrame.minX) < 2
+                && abs(a.window!.frame.minY - nativeFrame.minY) < 2
+                && abs(a.window!.frame.width - nativeFrame.width) < 2
+                && abs(a.window!.frame.height - nativeFrame.height) < 2,
+                   "real native fullscreen round trip restores its original window frame")
+            expect(NSApp.presentationOptions == nativeOptions,
+                   "real native fullscreen round trip restores AppKit's presentation options")
+            expect(try session.copyPixels(a.imageDocument.image, merged: true).pixels == originalPixels
+                && session.undoInfo(a.imageDocument.image) == originalHistory,
+                   "real native fullscreen round trip preserves native pixels and Undo history")
+            a.setScreenMode(.fullScreenWithMenu)
+            try settled(a, .fullScreenWithMenu)
+            expect(a.screenModeSnapshot != nil && !a.window!.styleMask.contains(.fullScreen)
+                && !NSApp.presentationOptions.contains(.autoHideMenuBar),
+                   "owned menu mode still acquires its own snapshot after native fullscreen")
+            a.setScreenMode(.windowed)
+            try settled(a, .windowed)
+            expect(a.screenModeSnapshot == nil && a.window!.styleMask == nativeStyle
+                && NSApp.presentationOptions == nativeOptions,
+                   "owned mode after native fullscreen releases its snapshot and restores presentation")
+        }
+
         // This deliberately invokes the optional delegate phase without a
         // native Space animation. It proves admission, not animation delivery.
         expect(a.canChangeScreenMode, "the synthetic native-exit oracle starts with stable admission")
