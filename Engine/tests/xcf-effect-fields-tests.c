@@ -198,6 +198,209 @@ insert_bytes (Spec *spec, gsize position, const guint8 *data, gsize length)
 }
 
 static void
+append_context_effect (Spec *spec, const gchar *name)
+{
+  GByteArray *bytes = spec->bytes;
+  string (bytes, name); string (bytes, "gimp-gegl"); string (bytes, "gegl:exposure"); string (bytes, "0:0");
+  property (bytes, 37, 2); property (bytes, 36, 2); property (bytes, 35, 3);
+  property (bytes, 7, 30); property (bytes, 33, 0x3f200000);
+  property (bytes, 8, 1); property (bytes, 46, 1); property (bytes, 44, 1); end (bytes);
+  gsize mask = slot (spec);
+  set64 (bytes, mask, bytes->len);
+  put32 (bytes, 4); put32 (bytes, 2); string (bytes, "Effect mask"); property (bytes, 20, 120); end (bytes);
+  gsize hierarchy = slot (spec);
+  slot (spec); /* Version26 channel FX terminator, including effect masks. */
+  set64 (bytes, hierarchy, bytes->len);
+  g_byte_array_append (bytes, (guint8 *) "M", 1);
+}
+
+static gsize
+append_context_channel (Spec *spec, const gchar *name, guint32 tattoo, gboolean selection, guint effects)
+{
+  GByteArray *bytes = spec->bytes;
+  gsize start = bytes->len;
+  put32 (bytes, 4); put32 (bytes, 2); string (bytes, name);
+  if (selection) { put32 (bytes, 4); put32 (bytes, 0); }
+  property (bytes, 20, tattoo); end (bytes);
+  gsize hierarchy = slot (spec);
+  GArray *offsets = g_array_new (FALSE, FALSE, sizeof (gsize));
+  for (guint i = 0; i < effects; i++) { gsize position = slot (spec); g_array_append_val (offsets, position); }
+  slot (spec);
+  set64 (bytes, hierarchy, bytes->len); g_byte_array_append (bytes, (guint8 *) "C", 1);
+  for (guint i = 0; i < effects; i++) {
+    set64 (bytes, g_array_index (offsets, gsize, i), bytes->len);
+    gchar *effect_name = g_strdup_printf ("%s effect%u", name, i);
+    append_context_effect (spec, effect_name); g_free (effect_name);
+  }
+  g_array_unref (offsets);
+  return start;
+}
+
+static Spec *
+context_spec (void)
+{
+  Spec *spec = g_new0 (Spec, 1);
+  spec->bytes = g_byte_array_new (); spec->slots = g_array_new (FALSE, FALSE, sizeof (gsize));
+  GByteArray *bytes = spec->bytes;
+  g_byte_array_append (bytes, (guint8 *) "gimp xcf v026\0", 14);
+  put32 (bytes, 4); put32 (bytes, 2); put32 (bytes, 0); put32 (bytes, 600); end (bytes);
+  gsize group = slot (spec), child = slot (spec); slot (spec);
+  gsize channel = slot (spec), selection = slot (spec); slot (spec);
+  gsize path = slot (spec); slot (spec);
+  set64 (bytes, group, bytes->len);
+  put32 (bytes, 4); put32 (bytes, 2); put32 (bytes, 1); string (bytes, "Group"); property (bytes, 20, 17);
+  put32 (bytes, 29); put32 (bytes, 0); end (bytes);
+  gsize hierarchy = slot (spec); slot (spec); slot (spec);
+  set64 (bytes, hierarchy, bytes->len); g_byte_array_append (bytes, (guint8 *) "H", 1);
+  set64 (bytes, child, bytes->len);
+  put32 (bytes, 4); put32 (bytes, 2); put32 (bytes, 1); string (bytes, "Child"); property (bytes, 20, 18);
+  put32 (bytes, 30); put32 (bytes, 8); put32 (bytes, 0); put32 (bytes, 0); end (bytes);
+  hierarchy = slot (spec);
+  gsize layer_mask = slot (spec), layer_effect = slot (spec); slot (spec);
+  set64 (bytes, hierarchy, bytes->len); g_byte_array_append (bytes, (guint8 *) "H", 1);
+  set64 (bytes, layer_mask, append_context_channel (spec, "Layer mask", 70, FALSE, 1));
+  set64 (bytes, layer_effect, bytes->len); append_context_effect (spec, "Child effect");
+  set64 (bytes, channel, append_context_channel (spec, "Saved channel", 91, FALSE, 2));
+  set64 (bytes, selection, append_context_channel (spec, "Selection", 92, TRUE, 0));
+  set64 (bytes, path, bytes->len); g_byte_array_append (bytes, (guint8 *) "opaque path", 11);
+  return spec;
+}
+
+static void
+test_context_specs (void)
+{
+  Spec *spec = context_spec ();
+  GError *error = NULL;
+  GlimsXcfEffectFields *fields = decode_bytes (spec->bytes->data, spec->bytes->len, &error);
+  CHECK (fields && !error && glims_xcf_effect_fields_image (fields)->version == 26,
+         "version26 context metadata decodes without interpreting any tile or path body");
+  if (!fields) { fprintf (stderr, "OBS context: %s\n", error ? error->message : "missing result"); g_clear_error (&error); spec_free (spec); return; }
+  const GlimsXcfLayerFields *group = glims_xcf_effect_fields_layer (fields, 0);
+  const GArray *path = glims_xcf_effect_fields_layer_item_path (fields, 1);
+  CHECK (group && group->kind_flags == GLIMS_XCF_LAYER_GROUP && !glims_xcf_effect_fields_layer_item_path (fields, 0) &&
+      path && path->len == 2 && g_array_index (path, guint32, 0) == 0 && g_array_index (path, guint32, 1) == 0,
+      "flat group preorder and owned child item path are explicit metadata");
+  const GlimsXcfChannelFields *mask = glims_xcf_effect_fields_layer_mask (fields, 1);
+  CHECK (mask && !strcmp (mask->name, "Layer mask") && mask->tattoo == 70 && mask->width == 4 && mask->height == 2 &&
+      glims_xcf_effect_fields_layer_mask_effect_count (fields, 1) == 1,
+      "layer mask owns its channel-shaped identity and effect stack");
+  const GlimsXcfEffectFieldsRecord *effect = glims_xcf_effect_fields_layer_mask_effect (fields, 1, 0);
+  CHECK (effect && !strcmp (effect->name, "Layer mask effect0") && effect->blend_space == 2 && effect->composite_mode == 3,
+         "version26 layer-mask effect fields and ordinary effect mask are retained");
+  const GlimsXcfChannelFields *channel = glims_xcf_effect_fields_channel (fields, 0);
+  CHECK (glims_xcf_effect_fields_channel_count (fields) == 2 && channel && !channel->is_selection && channel->tattoo == 91 &&
+      glims_xcf_effect_fields_channel_effect_count (fields, 0) == 2,
+      "image channels retain serialized order and multiple effects");
+  effect = glims_xcf_effect_fields_channel_effect (fields, 0, 1);
+  CHECK (effect && !strcmp (effect->name, "Saved channel effect1") && effect->mask_present && effect->mask_width == 4,
+         "channel effect order and effect-mask metadata remain owned");
+  channel = glims_xcf_effect_fields_channel (fields, 1);
+  CHECK (channel && channel->is_selection && channel->tattoo == 92 && !glims_xcf_effect_fields_channel_effect_count (fields, 1),
+         "selection channel remains distinguishable from ordinary image channels");
+  CHECK (!glims_xcf_effect_fields_layer_mask (fields, 0) && !glims_xcf_effect_fields_layer_mask_effect (fields, 0, 0) &&
+      !glims_xcf_effect_fields_channel (fields, 2) && !glims_xcf_effect_fields_channel_effect (fields, 0, 2),
+      "absent context and out-of-range channel/mask accessors remain empty");
+  glims_xcf_effect_fields_free (fields); g_clear_error (&error); spec_free (spec);
+  const guint32 properties[] = {29, 26, 47, 48};
+  const guint32 flags[] = {GLIMS_XCF_LAYER_GROUP, GLIMS_XCF_LAYER_TEXT, GLIMS_XCF_LAYER_VECTOR, GLIMS_XCF_LAYER_LINK};
+  for (guint i = 0; i < G_N_ELEMENTS (properties); i++) {
+    spec = spec_new (1, 1, 0);
+    GByteArray *metadata = g_byte_array_new ();
+    put32 (metadata, properties[i]); put32 (metadata, i ? 4 : 0); if (i) put32 (metadata, 1);
+    GByteArray *changed = insert_bytes (spec, spec->layer_end, metadata->data, metadata->len);
+    fields = decode_bytes (changed->data, changed->len, &error);
+    const GlimsXcfLayerFields *layer = glims_xcf_effect_fields_layer (fields, 0);
+    CHECK (layer && !error && layer->kind_flags == flags[i], "known group text vector and link markers are retained as context only");
+    glims_xcf_effect_fields_free (fields); g_clear_error (&error); g_byte_array_unref (metadata); g_byte_array_unref (changed); spec_free (spec);
+  }
+  spec = spec_new (1, 1, 0);
+  GByteArray *parasite = g_byte_array_new (), *metadata = g_byte_array_new ();
+  string (parasite, "gimp-text-layer"); put32 (parasite, 1); put32 (parasite, 5); g_byte_array_append (parasite, (guint8 *) "dummy", 5);
+  put32 (metadata, 21); put32 (metadata, parasite->len); g_byte_array_append (metadata, parasite->data, parasite->len);
+  GByteArray *changed = insert_bytes (spec, spec->layer_end, metadata->data, metadata->len);
+  fields = decode_bytes (changed->data, changed->len, &error);
+  const GlimsXcfLayerFields *text = glims_xcf_effect_fields_layer (fields, 0);
+  CHECK (text && !error && text->kind_flags == GLIMS_XCF_LAYER_TEXT,
+         "text parasite classification skips its configuration bytes without interpreting them");
+  glims_xcf_effect_fields_free (fields); g_clear_error (&error);
+  g_byte_array_unref (changed); g_byte_array_unref (metadata); g_byte_array_unref (parasite); spec_free (spec);
+}
+
+static void
+test_group_corpus (const gchar *path)
+{
+  GError *error = NULL;
+  GlimsXcfEffectFields *fields = decode_path (path, &error);
+  CHECK (fields && !error && glims_xcf_effect_fields_layer_count (fields) == 5,
+         "unchanged GIMP-made golden corpus exposes all five serialized flat layers");
+  if (!fields) { fprintf (stderr, "OBS group corpus: %s\n", error ? error->message : "missing result"); g_clear_error (&error); return; }
+  const GlimsXcfLayerFields *text = glims_xcf_effect_fields_layer (fields, 0), *group = glims_xcf_effect_fields_layer (fields, 1);
+  CHECK (text && !strcmp (text->name, "Glims") && (text->kind_flags & GLIMS_XCF_LAYER_TEXT) &&
+      group && !strcmp (group->name, "Shapes") && group->kind_flags == GLIMS_XCF_LAYER_GROUP,
+      "golden text parasite and Shapes group classify without interpreting native configs");
+  const GArray *blue = glims_xcf_effect_fields_layer_item_path (fields, 2), *red = glims_xcf_effect_fields_layer_item_path (fields, 3);
+  CHECK (blue && blue->len == 2 && g_array_index (blue, guint32, 0) == 1 && g_array_index (blue, guint32, 1) == 0 &&
+      red && red->len == 2 && g_array_index (red, guint32, 0) == 1 && g_array_index (red, guint32, 1) == 1,
+      "golden group children retain the independent [1,0] and [1,1] item paths");
+  CHECK (glims_xcf_effect_fields_effect_count (fields, 2) == 1 && glims_xcf_effect_fields_layer_mask (fields, 3) &&
+      !glims_xcf_effect_fields_layer_item_path (fields, 4),
+      "golden blur layer mask and root background retain their separate context");
+  glims_xcf_effect_fields_free (fields); g_clear_error (&error);
+}
+
+/* Expectations come from the existing native inspector logs and independent
+ * engine-tests fixture construction, not from this decoder's own output. */
+static void
+test_saved_corpus (const gchar *directory)
+{
+  const gchar *names[] = {"roundtrip.xcf", "effects.xcf", "edited-effect.xcf", "channel-filter.xcf"};
+  for (guint i = 0; i < G_N_ELEMENTS (names); i++) {
+    gchar *path = g_build_filename (directory, names[i], NULL);
+    GError *error = NULL;
+    GlimsXcfEffectFields *fields = decode_path (path, &error);
+    CHECK (fields && !error, "existing native general-suite XCF corpus decodes as pure metadata");
+    if (!fields) { fprintf (stderr, "OBS saved corpus %s: %s\n", names[i], error ? error->message : "missing result"); g_clear_error (&error); g_free (path); continue; }
+    const GlimsXcfLayerFields *layer = glims_xcf_effect_fields_layer (fields, 0);
+    const GlimsXcfEffectFieldsRecord *first = glims_xcf_effect_fields_effect (fields, 0, 0);
+    if (i == 0) {
+      CHECK (glims_xcf_effect_fields_layer_count (fields) == 1 && layer && !strcmp (layer->name, "Background") &&
+          glims_xcf_effect_fields_effect_count (fields, 0) == 1 && first && !strcmp (first->operation, "gegl:gaussian-blur"),
+          "native roundtrip corpus retains one Background and its Gaussian effect");
+      CHECK (first && first->mask_present && first->mask_width == 64 && first->mask_height == 48 &&
+          first->paint_mode == 62 && first->opacity == 1,
+          "native roundtrip corpus retains independent mask dimensions mode and opacity");
+    } else if (i == 1) {
+      const GlimsXcfEffectFieldsRecord *second = glims_xcf_effect_fields_effect (fields, 0, 1);
+      CHECK (glims_xcf_effect_fields_layer_count (fields) == 2 && layer && !strcmp (layer->name, "Layer") &&
+          glims_xcf_effect_fields_effect_count (fields, 0) == 2 && first && second &&
+          !g_strcmp0 (first->name, "Half Invert") && !strcmp (first->operation, "gegl:invert-linear") && first->opacity == .5f &&
+          !strcmp (second->operation, "gegl:brightness-contrast") && second->opacity == 1,
+          "native multi-effect corpus retains Half Invert then Brightness Contrast in native-inspected order");
+    } else if (i == 2) {
+      const GlimsXcfChannelFields *selection = glims_xcf_effect_fields_channel (fields, 0);
+      CHECK (glims_xcf_effect_fields_layer_count (fields) == 2 && layer && !strcmp (layer->name, "Layer") &&
+          glims_xcf_effect_fields_effect_count (fields, 0) == 1 && first && !strcmp (first->operation, "gegl:brightness-contrast") &&
+          first->mask_present && first->mask_width == 32 && first->mask_height == 24,
+          "native edited-effect corpus retains its mask and committed operation");
+      CHECK (glims_xcf_effect_fields_channel_count (fields) == 1 && selection && selection->is_selection &&
+          !glims_xcf_effect_fields_channel_effect_count (fields, 0),
+          "native edited-effect corpus retains its otherwise unlisted image selection channel");
+    } else {
+      const GlimsXcfChannelFields *channel = glims_xcf_effect_fields_channel (fields, 0);
+      const GlimsXcfChannelFields *selection = glims_xcf_effect_fields_channel (fields, 1);
+      CHECK (glims_xcf_effect_fields_image (fields)->version == 26 && glims_xcf_effect_fields_layer_count (fields) == 2 &&
+          glims_xcf_effect_fields_layer_mask (fields, 0) && glims_xcf_effect_fields_channel_count (fields) == 2 &&
+          channel && !g_strcmp0 (channel->name, "Filtered") && !channel->is_selection &&
+          glims_xcf_effect_fields_channel_effect_count (fields, 0) == 1,
+          "native version26 channel-filter corpus preserves layer mask and Filtered channel effect");
+      CHECK (selection && selection->is_selection && !glims_xcf_effect_fields_channel_effect_count (fields, 1),
+          "native version26 corpus keeps selection metadata separate from the saved channel");
+    }
+    glims_xcf_effect_fields_free (fields); g_clear_error (&error); g_free (path);
+  }
+}
+
+static void
 test_foreign (const gchar *path)
 {
   GError *error = NULL;
@@ -324,17 +527,24 @@ test_rejections (void)
   reject (spec, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "invalid UTF-8 metadata names are rejected");
   spec = spec_new (1, 1, 0);
   set64 (spec->bytes, spec->layer_mask, spec->mask_start);
-  reject (spec, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "ordinary-layer decoder refuses layer masks explicitly");
+  reject (spec, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "layer mask and effect mask cannot alias one metadata record");
   spec = spec_new (1, 1, 0);
   set64 (spec->bytes, spec->channel_slot, spec->mask_start);
-  reject (spec, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "ordinary-layer decoder refuses image channels explicitly");
+  reject (spec, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "malformed channel table cannot consume path terminator and layer bytes");
   spec = spec_new (1, 1, 0);
   set64 (spec->bytes, spec->path_slot, spec->mask_start);
-  reject (spec, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "ordinary-layer decoder refuses paths explicitly");
+  reject (spec, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "malformed path table cannot consume layer bytes as offsets");
   const guint32 specialized[] = {29, 30, 26, 47, 48};
   for (guint i = 0; i < G_N_ELEMENTS (specialized); i++) {
     spec = spec_new (1, 1, 0); set32 (spec->bytes, spec->layer_tattoo, specialized[i]);
-    reject (spec, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "groups nesting text vector and linked-layer markers are unsupported");
+    if (i == 1 || i == 2) set32 (spec->bytes, spec->layer_tattoo + 4, 3);
+    if (i >= 3) {
+      GByteArray *duplicate = g_byte_array_new ();
+      put32 (duplicate, specialized[i]); put32 (duplicate, 0);
+      GByteArray *changed = insert_bytes (spec, spec->layer_end, duplicate->data, duplicate->len);
+      g_byte_array_unref (duplicate); g_byte_array_unref (spec->bytes); spec->bytes = changed;
+    }
+    reject (spec, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "malformed group item-path text or duplicate vector/link context is rejected");
   }
   spec = spec_new (1, 1, 0);
   guint8 zero[8] = {0};
@@ -414,10 +624,13 @@ test_sparse_skip (void)
 int
 main (int argc, char **argv)
 {
-  if (argc != 3) return 2;
+  if (argc < 3 || argc > 5) return 2;
   work_dir = argv[2];
   test_foreign (argv[1]);
   test_valid_specs ();
+  test_context_specs ();
+  if (argc >= 4) test_group_corpus (argv[3]);
+  if (argc == 5) test_saved_corpus (argv[4]);
   test_rejections ();
   test_truncation ();
   test_sparse_skip ();

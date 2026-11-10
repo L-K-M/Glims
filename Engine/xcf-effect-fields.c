@@ -3,7 +3,7 @@
 
 /* File-format identifiers, not GIMP enum values or structure layouts. */
 enum {
-  END = 0, FLOATING = 5, MODE = 7, VISIBLE = 8, TATTOO = 20,
+  END = 0, SELECTION = 4, FLOATING = 5, MODE = 7, VISIBLE = 8, TATTOO = 20,
   PARASITES = 21, OLD_PATHS = 23, OLD_VECTORS = 25, TEXT = 26,
   GROUP = 29, ITEM_PATH = 30, GROUP_FLAGS = 31, OPACITY = 33,
   COMPOSITE_MODE = 35, COMPOSITE_SPACE = 36, BLEND_SPACE = 37,
@@ -11,13 +11,20 @@ enum {
 };
 
 typedef struct {
+  GlimsXcfChannelFields fields;
+  GPtrArray *effects;
+} Channel;
+
+typedef struct {
   GlimsXcfLayerFields fields;
   GPtrArray *effects;
+  GArray *item_path;
+  Channel *mask;
 } Layer;
 
 struct GlimsXcfEffectFields {
   GlimsXcfImageFields image;
-  GPtrArray *layers;
+  GPtrArray *layers, *channels;
   guint64 bytes_read;
 };
 
@@ -27,7 +34,7 @@ typedef struct {
   GCancellable *cancellable;
   GError **error;
   guint64 size, position, limit, spent, bytes_read;
-  guint records, properties, offset_reads;
+  guint records, properties, offset_reads, version;
   GArray *anchors, *ranges;
   GHashTable *claimed;
 } Reader;
@@ -204,11 +211,23 @@ effect_free (gpointer data)
 }
 
 static void
+channel_free (gpointer data)
+{
+  Channel *channel = data;
+  if (!channel) return;
+  g_free (channel->fields.name);
+  g_ptr_array_unref (channel->effects);
+  g_free (channel);
+}
+
+static void
 layer_free (gpointer data)
 {
   Layer *layer = data;
   g_free (layer->fields.name);
   g_ptr_array_unref (layer->effects);
+  if (layer->item_path) g_array_unref (layer->item_path);
+  channel_free (layer->mask);
   g_free (layer);
 }
 
@@ -217,13 +236,14 @@ glims_xcf_effect_fields_free (GlimsXcfEffectFields *fields)
 {
   if (!fields) return;
   g_ptr_array_unref (fields->layers);
+  g_ptr_array_unref (fields->channels);
   g_free (fields);
 }
 
-typedef enum { IMAGE_PROPERTIES, LAYER_PROPERTIES, MASK_PROPERTIES, EFFECT_PROPERTIES } PropertyKind;
+typedef enum { IMAGE_PROPERTIES, LAYER_PROPERTIES, CHANNEL_PROPERTIES, EFFECT_PROPERTIES } PropertyKind;
 
 static gboolean
-parasites (Reader *reader)
+parasites (Reader *reader, Layer *layer)
 {
   while (reader->position < reader->limit) {
     if (++reader->properties > GLIMS_XCF_EFFECT_FIELDS_MAX_PROPERTIES)
@@ -233,7 +253,7 @@ parasites (Reader *reader)
     if (!read_string (reader, &name)) return FALSE;
     gboolean text = name && (!strcmp (name, "gimp-text-layer") || !strcmp (name, "gimp-text-layer-xcf"));
     g_free (name);
-    if (text) return fail (reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "Text layers are outside the ordinary-layer decoder");
+    if (text) layer->fields.kind_flags |= GLIMS_XCF_LAYER_TEXT;
     if (!read_u32 (reader, &flags) || !read_u32 (reader, &length) || !skip_bytes (reader, length)) return FALSE;
   }
   return TRUE;
@@ -278,37 +298,82 @@ effect_property (Reader *reader, GlimsXcfEffectFieldsRecord *effect, guint32 pro
 static gboolean
 properties (Reader *reader, PropertyKind kind, gpointer target)
 {
-  gboolean tattoo_seen = FALSE;
+  gboolean tattoo_seen = FALSE, group_flags_seen = FALSE, transform_seen = FALSE;
+  guint32 markers_seen = 0;
   for (;;) {
     guint32 property, size;
     if (++reader->properties > GLIMS_XCF_EFFECT_FIELDS_MAX_PROPERTIES)
       return fail (reader, GLIMS_XCF_EFFECT_FIELDS_BUDGET, "XCF property limit exceeded");
     if (!read_u32 (reader, &property) || !read_u32 (reader, &size)) return FALSE;
-    if (property == END)
-      return size == 0 || fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "XCF END property has a payload");
+    if (property == END) {
+      if (size) return fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "XCF END property has a payload");
+      if (kind == LAYER_PROPERTIES) {
+        Layer *layer = target;
+        if ((group_flags_seen && !(layer->fields.kind_flags & GLIMS_XCF_LAYER_GROUP)) ||
+            (transform_seen && !(layer->fields.kind_flags & GLIMS_XCF_LAYER_LINK)))
+          return fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "XCF layer flags have no corresponding context marker");
+      }
+      return TRUE;
+    }
     if (!bounds (reader, size)) return FALSE;
     guint64 previous_limit = reader->limit, end = reader->position + size;
     reader->limit = end;
     gboolean success = TRUE;
     if (kind == EFFECT_PROPERTIES) success = effect_property (reader, target, property, size);
-    else if ((kind == IMAGE_PROPERTIES && (property == OLD_PATHS || property == OLD_VECTORS)) ||
-             (kind != IMAGE_PROPERTIES && (property == FLOATING || property == TEXT || property == GROUP ||
-              property == ITEM_PATH || property == GROUP_FLAGS || property == VECTOR || property == LINK || property == TRANSFORM)) ||
-             (kind == MASK_PROPERTIES && (property == ARGUMENT || property == REGION || property == CLIP)))
+    else if (kind != IMAGE_PROPERTIES && property == FLOATING)
       success = fail (reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "Nested or specialized XCF drawable metadata is unsupported");
+    else if (kind == LAYER_PROPERTIES && (property == GROUP || property == TEXT || property == VECTOR || property == LINK)) {
+      Layer *layer = target;
+      guint32 flag = property == GROUP ? GLIMS_XCF_LAYER_GROUP : property == TEXT ? GLIMS_XCF_LAYER_TEXT :
+          property == VECTOR ? GLIMS_XCF_LAYER_VECTOR : GLIMS_XCF_LAYER_LINK;
+      if ((markers_seen & flag) || (property == GROUP && size != 0) || (property == TEXT && size != 4))
+        success = fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "Duplicate or incorrectly sized XCF layer context marker");
+      else {
+        markers_seen |= flag;
+        layer->fields.kind_flags |= flag;
+        success = skip_bytes (reader, size);
+      }
+    } else if (kind == LAYER_PROPERTIES && property == GROUP_FLAGS) {
+      if (size != 4 || group_flags_seen) success = fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "Invalid XCF group flags");
+      else { group_flags_seen = TRUE; success = skip_bytes (reader, size); }
+    } else if (kind == LAYER_PROPERTIES && property == TRANSFORM) {
+      if (transform_seen) success = fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "Duplicate XCF link transform");
+      else { transform_seen = TRUE; success = skip_bytes (reader, size); }
+    } else if (kind == LAYER_PROPERTIES && property == ITEM_PATH) {
+      Layer *layer = target;
+      if (!size || size % 4 || layer->item_path) success = fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "Invalid or duplicate XCF item path");
+      else if (size / 4 > GLIMS_XCF_EFFECT_FIELDS_MAX_RECORDS) success = fail (reader, GLIMS_XCF_EFFECT_FIELDS_BUDGET, "XCF item path exceeds record limit");
+      else if (!(success = charge (reader, 2 * (guint64) size))) { /* Preserve budget failure. */ }
+      else {
+        layer->item_path = g_array_new (FALSE, FALSE, sizeof (guint32));
+        for (guint i = 0; success && i < size / 4; i++) {
+          guint32 index;
+          success = read_u32 (reader, &index);
+          if (success) g_array_append_val (layer->item_path, index);
+        }
+      }
+    } else if (kind == CHANNEL_PROPERTIES && (property == TEXT || property == GROUP || property == ITEM_PATH ||
+        property == GROUP_FLAGS || property == VECTOR || property == LINK || property == TRANSFORM ||
+        property == ARGUMENT || property == REGION || property == CLIP))
+      success = fail (reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "Layer or effect fields occur inside channel metadata");
+    else if (kind == CHANNEL_PROPERTIES && property == SELECTION) {
+      GlimsXcfChannelFields *channel = target;
+      if (size || channel->is_selection) success = fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "Duplicate or incorrectly sized selection-channel marker");
+      else channel->is_selection = TRUE;
+    }
     else if (kind != IMAGE_PROPERTIES && property == TATTOO) {
       guint32 tattoo;
       if (size != 4 || tattoo_seen) success = fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "Duplicate or incorrectly sized XCF tattoo");
       else if (!(success = read_u32 (reader, &tattoo))) { /* Preserve the read error. */ }
       else if (kind == LAYER_PROPERTIES) {
-        GlimsXcfLayerFields *layer = target;
-        layer->tattoo = tattoo; layer->has_tattoo = TRUE;
+        Layer *layer = target;
+        layer->fields.tattoo = tattoo; layer->fields.has_tattoo = TRUE;
       } else {
-        GlimsXcfEffectFieldsRecord *effect = target;
-        effect->mask_tattoo = tattoo; effect->mask_has_tattoo = TRUE;
+        GlimsXcfChannelFields *channel = target;
+        channel->tattoo = tattoo; channel->has_tattoo = TRUE;
       }
       tattoo_seen = TRUE;
-    } else if (kind != IMAGE_PROPERTIES && property == PARASITES) success = parasites (reader);
+    } else if (kind == LAYER_PROPERTIES && property == PARASITES) success = parasites (reader, target);
     else success = skip_bytes (reader, size);
     if (success && reader->position < end) success = skip_bytes (reader, end - reader->position);
     reader->limit = previous_limit;
@@ -329,31 +394,61 @@ offset_table (Reader *reader, GArray *offsets)
   return fail (reader, GLIMS_XCF_EFFECT_FIELDS_BUDGET, "XCF offset-table limit exceeded");
 }
 
-static gboolean
-effect_mask (Reader *reader, guint64 start, GlimsXcfEffectFieldsRecord *effect)
+static GlimsXcfEffectFieldsRecord *read_effect (Reader *reader, guint64 start);
+
+static Channel *
+read_channel (Reader *reader, guint64 start, gboolean allow_effects)
 {
+  Channel *channel = allocate (reader, sizeof *channel);
+  if (!channel) return NULL;
+  channel->effects = g_ptr_array_new_with_free_func (effect_free);
+  GArray *effects = g_array_new (FALSE, FALSE, sizeof (guint64));
   guint64 hierarchy;
-  if (!seek_record (reader, start) || !read_u32 (reader, &effect->mask_width) ||
-      !read_u32 (reader, &effect->mask_height)) return FALSE;
-  if (!effect->mask_width || !effect->mask_height)
-    return fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "XCF effect mask has empty dimensions");
-  if (!read_string (reader, &effect->mask_name) || !properties (reader, MASK_PROPERTIES, effect) ||
-      !read_offset (reader, &hierarchy) || !claim_offset (reader, hierarchy, FALSE)) return FALSE;
-  /* Version22/23 ordinary channels have no effects table. Also recognize a
-   * single explicit empty table, but never consume hierarchy/tile bytes in
-   * search of nested metadata. Other layouts remain an explicit scope gap. */
-  if (hierarchy != reader->position) {
-    guint64 nested;
-    if (hierarchy < reader->position)
-      return fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "Effect-mask hierarchy overlaps its metadata");
-    if (hierarchy - reader->position != 8)
-      return fail (reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "Unsupported effect-mask metadata layout");
-    if (!read_offset (reader, &nested)) return FALSE;
-    if (nested)
-      return fail (reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "Nested effects on effect masks are unsupported");
+  if (!seek_record (reader, start) || !read_u32 (reader, &channel->fields.width) ||
+      !read_u32 (reader, &channel->fields.height)) goto failed;
+  if (!channel->fields.width || !channel->fields.height) {
+    fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "XCF channel has empty dimensions"); goto failed;
   }
-  effect->mask_present = TRUE;
-  return finish_record (reader, start);
+  if (!read_string (reader, &channel->fields.name) || !properties (reader, CHANNEL_PROPERTIES, &channel->fields) ||
+      !read_offset (reader, &hierarchy) || !claim_offset (reader, hierarchy, FALSE)) goto failed;
+  if (hierarchy < reader->position) {
+    fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "Channel hierarchy overlaps its metadata"); goto failed;
+  }
+  if (reader->version >= 26) {
+    guint64 limit = reader->limit;
+    reader->limit = hierarchy;
+    gboolean valid = offset_table (reader, effects);
+    reader->limit = limit;
+    if (!valid) goto failed;
+    if (!allow_effects && effects->len) {
+      fail (reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "Nested effects on effect masks are unsupported"); goto failed;
+    }
+  } else if (!allow_effects && hierarchy != reader->position) {
+    /* The pinned writer also reserves an empty channel FX table under older
+     * headers. Native readers before26 ignore it; retain the existing strict
+     * per-effect-mask rule without interpreting hierarchy or tile bytes. */
+    guint64 nested;
+    if (hierarchy - reader->position != 8) {
+      fail (reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "Unsupported effect-mask metadata layout"); goto failed;
+    }
+    if (!read_offset (reader, &nested)) goto failed;
+    if (nested) {
+      fail (reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "Nested effects on effect masks are unsupported"); goto failed;
+    }
+  }
+  if (!finish_record (reader, start)) goto failed;
+  for (guint i = 0; i < effects->len; i++) {
+    GlimsXcfEffectFieldsRecord *effect = read_effect (reader, g_array_index (effects, guint64, i));
+    if (!effect) goto failed;
+    if (!charge (reader, sizeof (gpointer))) { effect_free (effect); goto failed; }
+    g_ptr_array_add (channel->effects, effect);
+  }
+  g_array_unref (effects);
+  return channel;
+failed:
+  g_array_unref (effects);
+  channel_free (channel);
+  return NULL;
 }
 
 static GlimsXcfEffectFieldsRecord *
@@ -368,7 +463,17 @@ read_effect (Reader *reader, guint64 start)
       !properties (reader, EFFECT_PROPERTIES, effect) || !read_offset (reader, &mask)) goto failed;
   if (mask && !claim_offset (reader, mask, TRUE)) goto failed;
   if (!finish_record (reader, start)) goto failed;
-  if (mask && !effect_mask (reader, mask, effect)) goto failed;
+  if (mask) {
+    Channel *channel = read_channel (reader, mask, FALSE);
+    if (!channel) goto failed;
+    effect->mask_present = TRUE;
+    effect->mask_name = g_steal_pointer (&channel->fields.name);
+    effect->mask_width = channel->fields.width;
+    effect->mask_height = channel->fields.height;
+    effect->mask_tattoo = channel->fields.tattoo;
+    effect->mask_has_tattoo = channel->fields.has_tattoo;
+    channel_free (channel);
+  }
   return effect;
 failed:
   effect_free (effect);
@@ -385,16 +490,19 @@ read_layer (Reader *reader, guint64 start)
   guint64 hierarchy, mask;
   if (!seek_record (reader, start) || !read_u32 (reader, &layer->fields.width) ||
       !read_u32 (reader, &layer->fields.height) || !read_u32 (reader, &layer->fields.xcf_type)) goto failed;
-  if (!layer->fields.width || !layer->fields.height) {
-    fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "XCF layer has empty dimensions"); goto failed;
+  if (!read_string (reader, &layer->fields.name) || !properties (reader, LAYER_PROPERTIES, layer)) goto failed;
+  if ((!layer->fields.width || !layer->fields.height) && !(layer->fields.kind_flags & GLIMS_XCF_LAYER_GROUP)) {
+    fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "Ordinary XCF layer has empty dimensions"); goto failed;
   }
-  if (!read_string (reader, &layer->fields.name) || !properties (reader, LAYER_PROPERTIES, &layer->fields) ||
-      !read_offset (reader, &hierarchy) || !claim_offset (reader, hierarchy, FALSE) ||
+  if (!read_offset (reader, &hierarchy) ||
+      (hierarchy && !claim_offset (reader, hierarchy, FALSE)) ||
       !read_offset (reader, &mask)) goto failed;
-  if (mask) {
-    fail (reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "Layer masks are outside the ordinary-layer decoder"); goto failed;
+  if (!hierarchy && !(layer->fields.kind_flags & GLIMS_XCF_LAYER_GROUP)) {
+    fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "Ordinary XCF layer has no hierarchy"); goto failed;
   }
+  if (mask && !claim_offset (reader, mask, TRUE)) goto failed;
   if (!offset_table (reader, effects) || !finish_record (reader, start)) goto failed;
+  if (mask && !(layer->mask = read_channel (reader, mask, TRUE))) goto failed;
   for (guint i = 0; i < effects->len; i++) {
     GlimsXcfEffectFieldsRecord *effect = read_effect (reader, g_array_index (effects, guint64, i));
     if (!effect) goto failed;
@@ -429,23 +537,26 @@ read_image (Reader *reader, GlimsXcfEffectFields *fields)
       !g_ascii_isdigit (header[11]) || !g_ascii_isdigit (header[12]))
     return fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "Malformed XCF version tag");
   fields->image.version = (header[10] - '0') * 100 + (header[11] - '0') * 10 + header[12] - '0';
-  if (fields->image.version != 22 && fields->image.version != 23)
-    return fail (reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "Only XCF versions 22 and 23 are supported");
+  if (fields->image.version < 22 || fields->image.version > 26)
+    return fail (reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "Only XCF versions 22 through 26 are supported");
+  reader->version = fields->image.version;
   if (!read_u32 (reader, &fields->image.width) || !read_u32 (reader, &fields->image.height) ||
       !read_u32 (reader, &fields->image.base_type) || !read_u32 (reader, &fields->image.precision)) return FALSE;
   if (!fields->image.width || !fields->image.height)
     return fail (reader, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "XCF image has empty dimensions");
   if (!properties (reader, IMAGE_PROPERTIES, NULL)) return FALSE;
   GArray *layers = g_array_new (FALSE, FALSE, sizeof (guint64));
+  GArray *channels = g_array_new (FALSE, FALSE, sizeof (guint64));
   gboolean success = FALSE;
-  guint64 unsupported;
-  if (!offset_table (reader, layers) || !read_offset (reader, &unsupported)) goto done;
-  if (unsupported) {
-    fail (reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "XCF channels are unsupported"); goto done;
-  }
-  if (!read_offset (reader, &unsupported)) goto done;
-  if (unsupported) {
-    fail (reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "XCF paths are unsupported"); goto done;
+  if (!offset_table (reader, layers) || !offset_table (reader, channels)) goto done;
+  for (guint i = 0; i <= GLIMS_XCF_EFFECT_FIELDS_MAX_RECORDS; i++) {
+    guint64 path;
+    if (!read_offset (reader, &path)) goto done;
+    if (!path) break;
+    if (i == GLIMS_XCF_EFFECT_FIELDS_MAX_RECORDS) {
+      fail (reader, GLIMS_XCF_EFFECT_FIELDS_BUDGET, "XCF path-offset table limit exceeded"); goto done;
+    }
+    if (!claim_offset (reader, path, FALSE)) goto done;
   }
   if (!finish_record (reader, 0)) goto done;
   for (guint i = 0; i < layers->len; i++) {
@@ -454,9 +565,16 @@ read_image (Reader *reader, GlimsXcfEffectFields *fields)
     if (!charge (reader, sizeof (gpointer))) { layer_free (layer); goto done; }
     g_ptr_array_add (fields->layers, layer);
   }
+  for (guint i = 0; i < channels->len; i++) {
+    Channel *channel = read_channel (reader, g_array_index (channels, guint64, i), TRUE);
+    if (!channel) goto done;
+    if (!charge (reader, sizeof (gpointer))) { channel_free (channel); goto done; }
+    g_ptr_array_add (fields->channels, channel);
+  }
   success = TRUE;
 done:
   g_array_unref (layers);
+  g_array_unref (channels);
   return success;
 }
 
@@ -490,6 +608,7 @@ glims_xcf_effect_fields_read (GFile *file, GCancellable *cancellable, GError **e
   fields = allocate (&reader, sizeof *fields);
   if (!fields) goto done;
   fields->layers = g_ptr_array_new_with_free_func (layer_free);
+  fields->channels = g_ptr_array_new_with_free_func (channel_free);
   if (!read_image (&reader, fields)) {
     glims_xcf_effect_fields_free (fields); fields = NULL;
   } else fields->bytes_read = reader.bytes_read;
@@ -532,6 +651,13 @@ glims_xcf_effect_fields_layer (const GlimsXcfEffectFields *fields, guint index)
   return layer ? &layer->fields : NULL;
 }
 
+const GArray *
+glims_xcf_effect_fields_layer_item_path (const GlimsXcfEffectFields *fields, guint index)
+{
+  Layer *layer = get_layer (fields, index);
+  return layer ? layer->item_path : NULL;
+}
+
 guint
 glims_xcf_effect_fields_effect_count (const GlimsXcfEffectFields *fields, guint index)
 {
@@ -544,6 +670,61 @@ glims_xcf_effect_fields_effect (const GlimsXcfEffectFields *fields, guint index,
 {
   Layer *layer = get_layer (fields, index);
   return layer && effect < layer->effects->len ? g_ptr_array_index (layer->effects, effect) : NULL;
+}
+
+const GlimsXcfChannelFields *
+glims_xcf_effect_fields_layer_mask (const GlimsXcfEffectFields *fields, guint index)
+{
+  Layer *layer = get_layer (fields, index);
+  return layer && layer->mask ? &layer->mask->fields : NULL;
+}
+
+guint
+glims_xcf_effect_fields_layer_mask_effect_count (const GlimsXcfEffectFields *fields, guint index)
+{
+  Layer *layer = get_layer (fields, index);
+  return layer && layer->mask ? layer->mask->effects->len : 0;
+}
+
+const GlimsXcfEffectFieldsRecord *
+glims_xcf_effect_fields_layer_mask_effect (const GlimsXcfEffectFields *fields, guint index, guint effect)
+{
+  Layer *layer = get_layer (fields, index);
+  return layer && layer->mask && effect < layer->mask->effects->len
+    ? g_ptr_array_index (layer->mask->effects, effect) : NULL;
+}
+
+static Channel *
+get_channel (const GlimsXcfEffectFields *fields, guint index)
+{
+  return fields && index < fields->channels->len ? g_ptr_array_index (fields->channels, index) : NULL;
+}
+
+guint
+glims_xcf_effect_fields_channel_count (const GlimsXcfEffectFields *fields)
+{
+  return fields ? fields->channels->len : 0;
+}
+
+const GlimsXcfChannelFields *
+glims_xcf_effect_fields_channel (const GlimsXcfEffectFields *fields, guint index)
+{
+  Channel *channel = get_channel (fields, index);
+  return channel ? &channel->fields : NULL;
+}
+
+guint
+glims_xcf_effect_fields_channel_effect_count (const GlimsXcfEffectFields *fields, guint index)
+{
+  Channel *channel = get_channel (fields, index);
+  return channel ? channel->effects->len : 0;
+}
+
+const GlimsXcfEffectFieldsRecord *
+glims_xcf_effect_fields_channel_effect (const GlimsXcfEffectFields *fields, guint index, guint effect)
+{
+  Channel *channel = get_channel (fields, index);
+  return channel && effect < channel->effects->len ? g_ptr_array_index (channel->effects, effect) : NULL;
 }
 
 guint64

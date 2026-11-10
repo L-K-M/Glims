@@ -1,5 +1,5 @@
 /* Read-only XCF metadata, independent of GIMP and the public facade.
- * Version22/23, ordinary layers and their ordinary effect masks only.
+ * Versions22–26, flat layer context, channels, masks and effect metadata.
  * All returned records/strings belong to the result, never the input stream. */
 #ifndef GLIMS_XCF_EFFECT_FIELDS_H
 #define GLIMS_XCF_EFFECT_FIELDS_H
@@ -35,11 +35,25 @@ typedef struct {
   guint32 version, width, height, base_type, precision;
 } GlimsXcfImageFields;
 
+typedef enum {
+  GLIMS_XCF_LAYER_GROUP = 1u << 0,
+  GLIMS_XCF_LAYER_TEXT = 1u << 1,
+  GLIMS_XCF_LAYER_VECTOR = 1u << 2,
+  GLIMS_XCF_LAYER_LINK = 1u << 3
+} GlimsXcfLayerKindFlags;
+
 typedef struct {
   gchar *name;
   guint32 tattoo, width, height, xcf_type;
+  guint32 kind_flags;
   gboolean has_tattoo;
 } GlimsXcfLayerFields;
+
+typedef struct {
+  gchar *name;
+  guint32 tattoo, width, height;
+  gboolean has_tattoo, is_selection;
+} GlimsXcfChannelFields;
 
 typedef struct {
   gchar *name, *icon, *operation, *operation_version;
@@ -69,8 +83,19 @@ void glims_xcf_effect_fields_free (GlimsXcfEffectFields *fields);
 const GlimsXcfImageFields *glims_xcf_effect_fields_image (const GlimsXcfEffectFields *fields);
 guint glims_xcf_effect_fields_layer_count (const GlimsXcfEffectFields *fields);
 const GlimsXcfLayerFields *glims_xcf_effect_fields_layer (const GlimsXcfEffectFields *fields, guint layer);
+/* NULL means no serialized item-path property. Entries are owned guint32. */
+const GArray *glims_xcf_effect_fields_layer_item_path (const GlimsXcfEffectFields *fields, guint layer);
 guint glims_xcf_effect_fields_effect_count (const GlimsXcfEffectFields *fields, guint layer);
 const GlimsXcfEffectFieldsRecord *glims_xcf_effect_fields_effect (const GlimsXcfEffectFields *fields,
                                                                guint layer, guint effect);
+const GlimsXcfChannelFields *glims_xcf_effect_fields_layer_mask (const GlimsXcfEffectFields *fields, guint layer);
+guint glims_xcf_effect_fields_layer_mask_effect_count (const GlimsXcfEffectFields *fields, guint layer);
+const GlimsXcfEffectFieldsRecord *glims_xcf_effect_fields_layer_mask_effect (const GlimsXcfEffectFields *fields,
+                                                                         guint layer, guint effect);
+guint glims_xcf_effect_fields_channel_count (const GlimsXcfEffectFields *fields);
+const GlimsXcfChannelFields *glims_xcf_effect_fields_channel (const GlimsXcfEffectFields *fields, guint channel);
+guint glims_xcf_effect_fields_channel_effect_count (const GlimsXcfEffectFields *fields, guint channel);
+const GlimsXcfEffectFieldsRecord *glims_xcf_effect_fields_channel_effect (const GlimsXcfEffectFields *fields,
+                                                                      guint channel, guint effect);
 guint64 glims_xcf_effect_fields_bytes_read (const GlimsXcfEffectFields *fields);
 #endif

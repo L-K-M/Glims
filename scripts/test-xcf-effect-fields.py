@@ -60,12 +60,17 @@ def build(args: argparse.Namespace) -> int:
 
 def run(args: argparse.Namespace) -> int:
     binary, fixture, work = args.binary.resolve(), args.fixture.resolve(), args.work.resolve()
+    context_fixture = args.context_fixture.resolve()
     if args.timeout <= 0:
         raise ValueError("timeout must be positive")
     manifest = json.loads((binary.parent / "build.json").read_text())
     if digest(binary) != manifest["binary_sha256"]:
         raise ValueError("pure test binary changed since its build manifest")
     fixture_before = digest(fixture)
+    context_before = digest(context_fixture)
+    corpus = args.saved_corpus.resolve() if args.saved_corpus else None
+    corpus_before = {name: digest(corpus / name) for name in
+        ("roundtrip.xcf", "effects.xcf", "edited-effect.xcf", "channel-filter.xcf")} if corpus else {}
     work.mkdir(parents=True, mode=0o700, exist_ok=True)
     if any(work.iterdir()):
         raise ValueError("pure test work directory must be empty; existing files are never deleted")
@@ -78,7 +83,9 @@ def run(args: argparse.Namespace) -> int:
         XDG_STATE_HOME=str(work / "state"), XDG_RUNTIME_DIR=str(work / "runtime"),
         TMPDIR=str(work / "tmp"), TMP=str(work / "tmp"), TEMP=str(work / "tmp"),
         G_DEBUG="fatal-criticals", LC_ALL="C", LANG="C")
-    command = [str(binary), str(fixture), str(work)]
+    command = [str(binary), str(fixture), str(work), str(context_fixture)]
+    if corpus:
+        command.append(str(corpus))
     print("==> pure specifications; no engine/GUI: " + shlex.join(command), flush=True)
 
     def interrupted(signum: int, frame: object) -> None:
@@ -108,10 +115,15 @@ def run(args: argparse.Namespace) -> int:
             signal.signal(signal.SIGTERM, previous)
     if digest(fixture) != fixture_before:
         raise ValueError("preserved native foreign oracle changed during pure specifications")
+    if digest(context_fixture) != context_before:
+        raise ValueError("golden native context fixture changed during pure specifications")
+    if corpus and any(digest(corpus / name) != value for name, value in corpus_before.items()):
+        raise ValueError("native saved-file corpus changed during pure specifications")
     sys.stdout.write((work / "stdout.log").read_text(errors="replace"))
     sys.stderr.write((work / "stderr.log").read_text(errors="replace"))
     (work / "run.json").write_text(json.dumps({"command": command, "exit": code, "build": manifest,
-        "fixture_sha256": fixture_before}, indent=2, sort_keys=True) + "\n")
+        "fixture_sha256": fixture_before, "context_fixture_sha256": context_before,
+        "saved_corpus_sha256": corpus_before}, indent=2, sort_keys=True) + "\n")
     return code
 
 
@@ -123,6 +135,8 @@ def main() -> int:
     p = commands.add_parser("run", help="pure metadata specifications, no engine process")
     p.add_argument("--binary", type=Path, default=DEFAULT_OUT / NAME)
     p.add_argument("--fixture", type=Path, required=True)
+    p.add_argument("--context-fixture", type=Path, default=ROOT / "Engine/tests/fixtures/composite.xcf")
+    p.add_argument("--saved-corpus", type=Path, help="optional immutable native general-suite test-work corpus")
     p.add_argument("--work", type=Path, required=True)
     p.add_argument("--timeout", type=int, default=120)
     args = parser.parse_args()
