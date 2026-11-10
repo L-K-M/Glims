@@ -18,6 +18,7 @@
 #include "layer-delete.h"
 #include "layer-fit.h"
 #include "layer-rasterize.h"
+#include "layer-restore.h"
 #include "curves-config.h"
 #include "filter-histogram.h"
 #include "filter-input.h"
@@ -2888,6 +2889,27 @@ static GlimsStatus api_image_rasterize_layers (GlimsEngine *e, GlimsImageID imag
 }
 
 typedef struct {
+  GlimsImageID image;
+  const GlimsItemID *layers;
+  int32_t count;
+  char **error;
+} GlimsRestoreLayersArgs;
+static GlimsStatus image_restore_layer_sources_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsRestoreLayersArgs *a = data;
+  return glims_image_restore_layer_sources (e, a->image, a->layers, (size_t) a->count, a->error);
+}
+static GlimsStatus api_image_restore_layer_sources (GlimsEngine *e, GlimsImageID image,
+                                                    const GlimsItemID *layers, int32_t count, char **error)
+{
+  if (error) *error = NULL;
+  /* Reject signed negative/oversized counts before conversion or vector access. */
+  if (!layers || count < 1 || count > 256) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsRestoreLayersArgs a = { .image = image, .layers = layers, .count = count, .error = error };
+  return glims_engine_call (e, image_restore_layer_sources_on_engine, &a);
+}
+
+typedef struct {
   GlimsFilterID filter;
   const GlimsCurveEdit *edit;
   uint32_t trc;
@@ -3178,6 +3200,7 @@ static const GlimsEngineAPI api_v1 = {
   .filter_levels_auto = api_filter_levels_auto,
   .image_render_proofed = api_image_render_proofed,
   .image_rasterize_layers = api_image_rasterize_layers,
+  .image_restore_layer_sources = api_image_restore_layer_sources,
 };
 
 __attribute__ ((visibility ("default")))

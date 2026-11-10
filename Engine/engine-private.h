@@ -612,6 +612,9 @@ uint32_t    glims_layer_editable_source_kind (GimpLayer *layer);
  * step; an already rasterized instance is a no-op. Readiness and locks
  * are the caller's. */
 GlimsStatus glims_layer_rasterize   (GimpImage *image, GimpLayer *layer, char **error);
+/* Nonmutating batch admission, including known missing/empty retained link
+ * file/content. Does not access external files or prove rendering succeeds. */
+GlimsStatus glims_layer_restore_source_admit (GimpLayer *layer, char **error);
 /* Restores a rasterized text/link/vector layer from its retained source as
  * one native undo step, discarding pixel edits; an already editable
  * instance is a no-op, pixel/group/missing-source layers are UNSUPPORTED
