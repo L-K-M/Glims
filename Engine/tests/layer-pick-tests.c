@@ -302,7 +302,18 @@ exercise (GlimsEngine *engine, gpointer data)
    * This setup order is not a diagnosis of the earlier one-run outlier. */
   gimp_drawable_update (GIMP_DRAWABLE (gimp_layer_get_mask (top)), 0, 0, 5, 5);
   gimp_image_flush (image);
-  CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 2, 1) == 0.25, "literal alpha is exactly quarter, not64/255");
+  {
+    gdouble first_quarter = gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 2, 1);
+    CHECK (first_quarter == 0.25, "literal alpha is exactly quarter, not64/255");
+    if (first_quarter != 0.25) {
+      gfloat raw[4] = {0};
+      gdouble mask_value = gimp_pickable_get_opacity_at (GIMP_PICKABLE (gimp_layer_get_mask (top)), 2, 1);
+      gegl_buffer_get (gimp_drawable_get_buffer (GIMP_DRAWABLE (top)), GEGL_RECTANGLE (2, 1, 1, 1),
+                       1, babl_format ("RGBA float"), raw, GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
+      printf ("QUARTER DIAGNOSTIC first=%.17g hex=%a mask=%.17g raw_alpha=%.17g\n",
+              first_quarter, first_quarter, mask_value, (gdouble) raw[3]);
+    }
+  }
   CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 3, 1) > 0.25, "next float above quarter is stored above quarter");
   CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 4, 1) < 0.25, "next float below quarter is stored below quarter");
   CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 1, 2) < 0.001,
