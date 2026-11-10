@@ -3034,9 +3034,10 @@ typedef struct GlimsEngineAPI {
                                       const GlimsItemID *layers, int32_t count,
                                       char **error);
   /* Slot 147: begin a new merge-only preview with a detached native-format
-   * snapshot of a same-image drawable's pixels and committed effects. Currently
-   * supports gegl:bump-map and its aux pad. target/source are explicit positive
-   * IDs; target must be a pixel-behaving layer, including a previously
+   * snapshot of a same-image drawable's pixels and committed effects. Supports
+   * gegl:bump-map (height map) and gegl:variable-blur (blur mask) through their
+   * single aux pad; all other operations are UNSUPPORTED. target/source are
+   * explicit positive IDs; target must be a pixel-behaving layer, including a previously
    * rasterized source. Groups and editable sources are not merge targets.
    * Indexed images are UNSUPPORTED. Existing work/floating selections, disabled
    * or frozen Undo and an open native Undo group are BUSY. Merge rechecks Undo

@@ -260,6 +260,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (tool-presets)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brush-palette-sync" {
+                try exerciseBrushPaletteSync(session, documents: documents)
+                print(failures == 0 ? "PASSED (brush-palette-sync)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "path-menus" {
                 try exercisePathMenus(session, documents: documents)
                 print(failures == 0 ? "PASSED (path-menus)" : "FAILED: \(failures) failure(s)")
@@ -354,6 +359,11 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brightness-contrast" {
                 try exerciseBrightnessContrast(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (brightness contrast)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "variable-blur-source" {
+                try exerciseVariableBlurSource(session, documents: documents)
+                print(failures == 0 ? "PASSED (variable blur source)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "filter-sources" {
@@ -497,6 +507,7 @@ enum EngineSmokeTest {
             try exercisePixelRulers(session, work: work, documents: documents)
             try exerciseGuideDragging(session, work: work, documents: documents)
             try exerciseToolPresetControls(session, work: work, documents: documents)
+            try exerciseBrushPaletteSync(session, documents: documents)
             try exerciseMenuShortcuts(session, work: work, documents: documents)
             try exerciseFloatingControls(session, work: work, documents: documents)
             try exerciseMetadataControls(session, work: work, documents: documents)
@@ -521,6 +532,7 @@ enum EngineSmokeTest {
             try exerciseBatchDelete(session, documents: documents)
             try exerciseBatchFit(session, documents: documents)
             try exerciseFilterSources(session, documents: documents)
+            try exerciseVariableBlurSource(session, documents: documents)
             try exerciseBrightnessContrast(session, work: work, documents: documents)
             try exerciseColorBalance(session, work: work, documents: documents)
             try exerciseInputHistogram(session, work: work, documents: documents)

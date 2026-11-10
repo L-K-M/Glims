@@ -283,7 +283,7 @@ filter_begin_internal (GlimsEngine    *engine,
   if (aux_source) {
     if (!gegl_node_connect_to (aux_source, "output", session->operation, "aux")) {
       glims_filters_free (session);
-      return glims_fail (error, NULL, "The height map could not be connected.");
+      return glims_fail (error, NULL, "The captured filter source could not be connected.");
     }
     session->aux_source = g_object_ref (aux_source);
     session->non_destructive = FALSE;
@@ -346,7 +346,8 @@ glims_filter_begin_with_source (GlimsEngine *engine, GlimsImageID image,
   GlimsStatus status;
   if (out) *out = 0;
   if (!out || !operation || target <= 0 || source <= 0) return GLIMS_STATUS_INVALID_ARGUMENT;
-  if (strcmp (operation, "gegl:bump-map")) return GLIMS_STATUS_UNSUPPORTED;
+  if (strcmp (operation, "gegl:bump-map") && strcmp (operation, "gegl:variable-blur"))
+    return GLIMS_STATUS_UNSUPPORTED;
   open = glims_lookup_image (engine, image);
   if (!open) return GLIMS_STATUS_NOT_FOUND;
   status = glims_edit_ready (engine, open, error);
@@ -359,7 +360,7 @@ glims_filter_begin_with_source (GlimsEngine *engine, GlimsImageID image,
   if (!drawable) return GLIMS_STATUS_NOT_FOUND;
   if (!GIMP_IS_LAYER (drawable) || GIMP_IS_GROUP_LAYER (drawable) ||
       glims_layer_editable_source_kind (GIMP_LAYER (drawable))) {
-    if (error) *error = g_strdup ("Bump Map needs a pixel layer. Rasterize the editable source first.");
+    if (error) *error = g_strdup ("Choose a pixel layer, or rasterize the target's editable content first.");
     return GLIMS_STATUS_UNSUPPORTED;
   }
   status = glims_check_item_locks (GIMP_ITEM (drawable), GLIMS_LOCK_PIXELS, error);

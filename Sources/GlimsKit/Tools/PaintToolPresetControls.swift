@@ -71,6 +71,7 @@ enum PaintToolPresetControls {
         if let color = preset.foregroundColor {
             state.foreground = NSColor(srgbRed: CGFloat(color.red), green: CGFloat(color.green),
                                        blue: CGFloat(color.blue), alpha: 1)
+            state.notifyChange()
         }
     }
 

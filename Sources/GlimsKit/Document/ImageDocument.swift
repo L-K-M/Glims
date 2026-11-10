@@ -3677,7 +3677,7 @@ final class ImageDocument {
     }
 
     /// Cached admission only. The source chooser keeps its original target.
-    func bumpMapRefusal(target: Int32) -> String? {
+    func sourceFilterRefusal(target: Int32) -> String? {
         if !acceptsEdits { return "Finish or cancel the current operation first." }
         if targetCommandIsPending { return "Wait for the layer change to finish." }
         if floatingState.isActive { return "Resolve the floating selection first." }

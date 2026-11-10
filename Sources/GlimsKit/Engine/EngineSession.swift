@@ -782,9 +782,9 @@ final class EngineSession: @unchecked Sendable {
     /// Captured same-image source pixels are detached before the preview starts.
     /// Apply merges into target pixels; the auxiliary graph is not an XCF effect.
     func beginFilter(image: Int32, drawable: Int32, operation: String, source: Int32) throws -> Int32 {
-        guard drawable > 0, source > 0, operation == "gegl:bump-map" else {
+        guard drawable > 0, source > 0, SourceFilterOperation(rawValue: operation) != nil else {
             throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
-                              message: "Choose a pixel layer and a valid Bump Map source.")
+                              message: "Choose a pixel layer and a valid source for this filter.")
         }
         var filter: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
