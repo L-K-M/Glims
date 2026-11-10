@@ -260,6 +260,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (tool-presets)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "path-menus" {
+                try exercisePathMenus(session, documents: documents)
+                print(failures == 0 ? "PASSED (path-menus)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-multiselection-controls" {
                 try exerciseLayerMultiselectionControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (layer-multiselection-controls)" : "FAILED: \(failures) failure(s)")
@@ -482,6 +487,7 @@ enum EngineSmokeTest {
             try exerciseTargetHistory(session, documents: documents)
             try exercisePreferences(session, documents: documents)
             try exercisePaths(session, documents: documents)
+            try exercisePathMenus(session, documents: documents)
             try exercisePathAnchors(session, documents: documents)
             try exercisePathFillAndVector(session, work: work, documents: documents)
             try exerciseVectorStyleForm(session, work: work, documents: documents)
