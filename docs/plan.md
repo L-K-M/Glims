@@ -3702,3 +3702,22 @@ The actual old window failed five new profile-title checks while retaining
 plus 1,015 units. See [working-profile-title.md](working-profile-title.md)
 for exact foreground-host and external AX limits. Hosted CI/review and final
 integration remain pending.
+
+### Per-document screen modes (2026-11-10 candidate)
+
+Canvas F, View > Screen Mode and the Tools palette select Windowed,
+Full Screen with Menu and Full Screen Bare. Owned modes resize the document
+in place, preserve palette visibility, and restore frame/style/presentation;
+native full-screen callbacks cannot acquire owned presentation without a
+snapshot. Rigi `13ec06a` provides explicit document focus eligibility.
+Normal File > Close routes through the existing save/cancel flow even when
+an owned borderless window has no title-bar close button.
+
+The expanded focused fixture passes 77 checks on every engine, 308 total,
+and the full XCTest run passes 1,025 tests. Every recorded process exited
+zero and released the desktop; immediate screen/AX observations report
+Finder and no dialog, without proving a complete desktop inventory.
+Earlier native-Space menu-policy and bare-window Close failures remain
+recorded. See [screen-modes.md](screen-modes.md) for behavior, source/evidence
+scope and limits. Physical interaction, multi-display/accessibility audit,
+final combined release, hosted CI/review and integration remain pending.
