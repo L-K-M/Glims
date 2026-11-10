@@ -82,11 +82,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         target: { [weak self] in self?.frontDocument },
         makeContent: { HistoryPaletteController() })
 
-    private lazy var recorderContent = RecorderPaletteController(currentDocument: { [weak self] in self?.frontDocument })
     private lazy var recorderPalette: Palette = PaletteCenter.shared.palette(
         for: RecorderPaletteController.definition,
         target: { [weak self] in self?.frontDocument },
-        makeContent: { [weak self] in self?.recorderContent ?? RecorderPaletteController() })
+        makeContent: { [weak self] in
+            RecorderPaletteController(currentDocument: { [weak self] in self?.frontDocument })
+        })
 
     private lazy var channelsPalette: Palette = PaletteCenter.shared.palette(
         for: ChannelsPaletteController.definition,
@@ -604,8 +605,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     @objc func recorderCommand(_ sender: NSMenuItem) {
         guard let action = RecorderPaletteAction(rawValue: sender.tag) else { return }
         showRecorder(sender)
-        recorderContent.retarget(to: frontDocument)
-        recorderContent.perform(action)
+        guard let document = frontDocument else { return }
+        let presentation = RecorderPalettePresentation(document: document)
+        if let refusal = presentation.refusal(for: action) {
+            document.onError?(refusal)
+            return
+        }
+        do { try action.perform(on: document) }
+        catch { document.onError?(RecorderPalettePresentation.message(for: error)) }
     }
 
     /// File ▸ Recover Documents…: the panel is never a dead end — Later

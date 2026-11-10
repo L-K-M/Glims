@@ -162,14 +162,7 @@ final class RecorderPaletteController: NSViewController, PaletteContent, NSTable
         }
         actionError = nil
         do {
-            switch action {
-            case .record: try current.startRecording()
-            case .stop: try current.stopRecording()
-            case .replay: try current.startReplay()
-            case .cancelReplay: try current.cancelReplay()
-            case .clear:
-                if !current.clearRecording() { actionError = "Cancel replay before clearing the recording." }
-            }
+            try action.perform(on: current)
         } catch { actionError = RecorderPalettePresentation.message(for: error) }
         reload()
     }

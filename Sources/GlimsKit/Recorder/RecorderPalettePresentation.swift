@@ -14,6 +14,20 @@ enum RecorderPaletteAction: Int, CaseIterable, Hashable {
         case .clear: return "Clear"
         }
     }
+
+    @MainActor
+    func perform(on document: ImageDocument) throws {
+        switch self {
+        case .record: try document.startRecording()
+        case .stop: try document.stopRecording()
+        case .replay: try document.startReplay()
+        case .cancelReplay: try document.cancelReplay()
+        case .clear:
+            guard document.clearRecording() else {
+                throw RecorderLog<SemanticImageCommand>.Refusal.replaying
+            }
+        }
+    }
 }
 
 @MainActor
