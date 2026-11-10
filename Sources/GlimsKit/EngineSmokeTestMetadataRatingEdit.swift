@@ -1,4 +1,5 @@
 import AppKit
+import CGlimsEngine
 
 private struct MetadataRatingEditSnapshot: Equatable {
     let rating: [String]
@@ -308,17 +309,46 @@ extension EngineSmokeTest {
             current = values
         }
 
-        guard setThroughDocument([""]), let empty = openForm(ownerA, values: [""]) else { return }
-        let beforeEmptyCancel = try MetadataRatingEditSnapshot(session, image: imageA)
-        check(try empty.original.string.isEmpty && empty.popup.titleOfSelectedItem == "Choose a value"
-              && !empty.apply.isEnabled && session.metadataTagInfo(imageA, tag: tag).present,
-              "a present empty singleton stays distinct from absence and explicit zero in the real form")
-        empty.cancel.performClick(nil)
-        guard dismissed(empty) else { return }
-        check(try MetadataRatingEditSnapshot(session, image: imageA) == beforeEmptyCancel,
-              "Cancel preserves a present empty singleton byte-for-byte without history")
+        // Some native metadata serializers cannot preserve a present empty
+        // XmpText through duplication/XCF. Prove the exact supported result
+        // or the adapter's atomic preservation refusal, never any error.
+        let beforeEmptyAttempt = try MetadataRatingEditSnapshot(session, image: imageA)
+        var emptyOutcome: Result<Void, Error>?
+        documentA.editMetadata(tag, .set, values: [""]) { emptyOutcome = $0 }
+        guard waitFor("empty Rating attempt completes", { emptyOutcome != nil }), settle(),
+              let emptyOutcome else { return }
+        switch emptyOutcome {
+        case .success:
+            guard let empty = openForm(ownerA, values: [""]) else { return }
+            let beforeEmptyCancel = try MetadataRatingEditSnapshot(session, image: imageA)
+            check(try empty.original.string.isEmpty && empty.popup.titleOfSelectedItem == "Choose a value"
+                  && !empty.apply.isEnabled && session.metadataTagInfo(imageA, tag: tag).present
+                  && beforeEmptyCancel.rating == [""]
+                  && beforeEmptyCancel.undo.undoCount == beforeEmptyAttempt.undo.undoCount + 1,
+                  "supported present empty singleton stays exact and unchosen in the actual typed form")
+            empty.cancel.performClick(nil)
+            guard dismissed(empty) else { return }
+            check(try MetadataRatingEditSnapshot(session, image: imageA) == beforeEmptyCancel
+                  && MetadataRatingEditSnapshot(session, image: imageB) == originalB,
+                  "supported empty-value Cancel preserves complete A/B native state and history")
+        case .failure(let error):
+            let native = error as? EngineSession.EngineError
+            let exactRefusal = native?.status == Int32(GLIMS_STATUS_UNSUPPORTED.rawValue)
+                && native?.message == "This change cannot preserve all metadata through Undo and save; the image was left untouched."
+            check(exactRefusal, "unsupported empty Rating reports the exact native serialization-preservation refusal")
+            guard exactRefusal else { return }
+            check(try MetadataRatingEditSnapshot(session, image: imageA) == beforeEmptyAttempt
+                  && MetadataRatingEditSnapshot(session, image: imageB) == originalB,
+                  "exact empty-value refusal leaves complete A/B metadata, pixels, selection and native history untouched")
+            print("     Rating empty-value form UNVERIFIED: native serialization preservation refused its seed; pure empty-value gates remain covered.")
+        }
 
-        guard let captured = openForm(ownerA, values: [""]), choose(captured, title: "3 stars") else { return }
+        guard setThroughDocument(["2.5"]), let captured = openForm(ownerA, values: ["2.5"]),
+              choose(captured, title: "3 stars") else { return }
+        let beforeCaptured = try MetadataRatingEditSnapshot(session, image: imageA)
+        check(beforeCaptured.rating == ["2.5"] && captured.original.string == "2.5"
+              && beforeCaptured.preservesImageAndArtist(from: originalA),
+              "shared captured-document scenario starts from exact supported fractional source and independent image facts")
         windowB.makeMain(); windowB.makeKeyAndOrderFront(nil)
         guard waitFor("B actually becomes main and key while A owns Rating", {
             NSApp.isActive && NSApp.mainWindow === windowB && NSApp.keyWindow === windowB
@@ -331,13 +361,13 @@ extension EngineSmokeTest {
         check(try afterCaptured.rating == ["3"] && afterCaptured.preservesImageAndArtist(from: originalA)
               && MetadataRatingEditSnapshot(session, image: imageB) == originalB,
               "Apply after genuine B focus changes only captured A and leaves B values/pixels/history identical")
-        check(afterCaptured.undo.undoCount == beforeEmptyCancel.undo.undoCount + 1,
+        check(afterCaptured.undo.undoCount == beforeCaptured.undo.undoCount + 1,
               "captured A Apply adds one native Undo despite front B")
         documentA.undo(); guard settle() else { return }
         let undone = try MetadataRatingEditSnapshot(session, image: imageA)
-        check(undone.rating == [""] && undone.preservesImageAndArtist(from: originalA)
+        check(undone.rating == ["2.5"] && undone.preservesImageAndArtist(from: originalA)
               && undone.undo.redoCount == 1,
-              "counted document Undo restores the exact present empty value without manual reload")
+              "counted document Undo restores the exact fractional source without manual reload")
         documentA.redo(); guard settle() else { return }
         check(try session.metadataValues(imageA, tag: tag) == ["3"] && session.undoInfo(imageA).redoCount == 0,
               "counted document Redo restores the exact captured rating through normal state notifications")
