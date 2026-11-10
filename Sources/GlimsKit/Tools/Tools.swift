@@ -163,6 +163,19 @@ enum ToolID: String, CaseIterable {
     }
 }
 
+/// The move tool's target selection behavior.
+enum MoveTargetMode: CaseIterable {
+    case currentLayer
+    case pickLayerOrGuide
+
+    var title: String {
+        switch self {
+        case .currentLayer: return "Current Layer"
+        case .pickLayerOrGuide: return "Pick Layer or Guide"
+        }
+    }
+}
+
 /// The current tool and every tool's settings, shared by the Tools and Tool
 /// Options palettes and the canvas. One per app, like GIMP's user context.
 @MainActor
@@ -180,6 +193,14 @@ final class ToolState {
     private(set) var selectionRevision: UInt64 = 0
     /// The tool each group shows, so a shortcut returns to the last one used.
     private var lastInGroup: [Int: ToolID] = [:]
+
+    private(set) var moveTargetMode: MoveTargetMode = .currentLayer
+
+    func setMoveTargetMode(_ mode: MoveTargetMode) {
+        guard moveTargetMode != mode else { return }
+        moveTargetMode = mode
+        notify()
+    }
 
     /// Brush settings per painting tool; `brush(for:)` fills in the tool.
     private var brushes: [ToolID: EngineSession.Brush] = [:]

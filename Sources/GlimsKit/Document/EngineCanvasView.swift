@@ -276,6 +276,7 @@ final class EngineCanvasView: NSView {
     /// Drains any in-flight read before the engine image is destroyed.
     func stopRendering(completion: @escaping @MainActor () -> Void) {
         renderingStopped = true
+        tools.cancelFloatingShape()
         tools.stopHintEvents()
         hintLifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
         hintLifecycleObservers = []
@@ -388,6 +389,8 @@ final class EngineCanvasView: NSView {
 
     override func resignFirstResponder() -> Bool {
         guard super.resignFirstResponder() else { return false }
+        tools.cancelFloatingShape()
+        tools.cancelPickedMove()
         tools.cancelSpringTools()
         tools.resetHintModifiers()
         return true
@@ -411,7 +414,11 @@ final class EngineCanvasView: NSView {
             }
         }
         swapDestinationObservers()
-        if window == nil { tools.cancelSpringTools() }
+        if window == nil {
+            tools.cancelFloatingShape()
+            tools.cancelPickedMove()
+            tools.cancelSpringTools()
+        }
         backingDidChange()
         updateAntsTimer()
     }
@@ -452,9 +459,17 @@ final class EngineCanvasView: NSView {
         let center = NotificationCenter.default
         destinationObservers = [
             center.addObserver(forName: NSWindow.didResignKeyNotification, object: window,
-                               queue: .main) { [weak self] _ in self?.tools.cancelSpringTools() },
+                               queue: .main) { [weak self] _ in
+                self?.tools.cancelFloatingShape()
+                self?.tools.cancelPickedMove()
+                self?.tools.cancelSpringTools()
+            },
             center.addObserver(forName: NSApplication.didResignActiveNotification, object: NSApp,
-                               queue: .main) { [weak self] _ in self?.tools.cancelSpringTools() },
+                               queue: .main) { [weak self] _ in
+                self?.tools.cancelFloatingShape()
+                self?.tools.cancelPickedMove()
+                self?.tools.cancelSpringTools()
+            },
             center.addObserver(forName: NSWindow.didChangeBackingPropertiesNotification, object: window,
                                queue: .main) { [weak self] _ in self?.destinationDidChange() },
             center.addObserver(forName: NSWindow.didChangeScreenNotification, object: window,

@@ -368,6 +368,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (image adjust)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "selection-anchor" {
+                try exerciseSelectionAnchor(session, documents: documents)
+                print(failures == 0 ? "PASSED (selection anchor)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "selection-drag" {
                 try exerciseSelectionDrag(session, documents: documents)
                 print(failures == 0 ? "PASSED (selection drag)" : "FAILED: \(failures) failure(s)")
@@ -376,6 +381,16 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "snapping" {
                 try exerciseSnapping(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (snapping)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "move-pick-range" {
+                try exerciseMovePickRange(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Move pick range)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "move-pick" {
+                try exerciseMovePick(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Move pick)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "floating-move" {
