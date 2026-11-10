@@ -178,4 +178,19 @@ final class SpringToolLettersStateTests: XCTestCase {
         XCTAssertEqual(state.pointerEnded(selectionRevision: 3), .move)
     }
 
+    func testReleasedDeferredKeyCanBePressedAfterNewOwnerFinishes() {
+        var state = SpringToolLettersState()
+        state.press(keyCode: 11, at: 0, previous: .move, previousRevision: 1,
+                    selected: .paintbrush, selectedRevision: 2)
+        state.pointerBegan(using: .paintbrush, selectionRevision: 2)
+        XCTAssertNil(state.release(keyCode: 11, at: 0.1, selectionRevision: 2))
+        state.press(keyCode: 37, at: 0.2, previous: .paintbrush, previousRevision: 2,
+                    selected: .lasso, selectedRevision: 3)
+        XCTAssertNil(state.pointerEnded(selectionRevision: 3))
+        XCTAssertTrue(state.canPress(keyCode: 11, isRepeat: false),
+                      "A released key must not remain orphaned behind the newer owner")
+        XCTAssertEqual(state.release(keyCode: 37, at: 0.6, selectionRevision: 3), .move,
+                       "The newer owner must retain the original chained baseline")
+    }
+
 }
