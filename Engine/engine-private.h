@@ -627,6 +627,10 @@ GlimsStatus glims_layer_restore_source_admit (GimpLayer *layer, char **error);
  * before any mutation. Readiness and locks are the caller's. */
 GlimsStatus glims_layer_restore_source (GimpImage *image, GimpLayer *layer, char **error);
 
+/* layer-pick.c */
+GlimsStatus glims_image_pick_layer (GlimsEngine *e, GlimsImageID image, GlimsPoint point,
+                                    GlimsItemID *out);
+
 /* resource.c */
 GlimsStatus glims_lookup_gradient      (GlimsEngine *e, GlimsResourceID id,
                                         GimpGradient **out);
