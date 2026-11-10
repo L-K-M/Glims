@@ -205,8 +205,10 @@ oilify_pixel_case (GlimsEngine *engine, OilifyRole role, gboolean admitted)
                                                               radius, exponent, &filter, &error);
     g_signal_handler_disconnect (stack, hook);
     NEED (status == GLIMS_STATUS_OK && filter > 0 && set_oilify_settings (engine, filter), "facade begins with the requested optional maps and scalar settings");
-    CHECK (observed.adds == 1 && observed.inactive && observed.close_status == GLIMS_STATUS_BUSY,
-           "native attachment is inactive and refuses reentrant image close");
+    printf ("OBS Oilify attachment adds=%u inactive=%d close-status=%d\n",
+            observed.adds, observed.inactive, (gint) observed.close_status);
+    CHECK (observed.adds == 1 && observed.inactive, "native attachment adds one inactive stack item");
+    CHECK (observed.close_status == GLIMS_STATUS_BUSY, "native attachment refuses reentrant image close");
     GlimsFilterValue v = {.kind = GLIMS_FILTER_VALUE_INTEGER, .integer = 101};
     CHECK (api->filter_set_property (engine, filter, "mask-radius", &v) == GLIMS_STATUS_INVALID_ARGUMENT &&
            api->filter_get_property (engine, filter, "mask-radius", &v) == GLIMS_STATUS_OK && v.integer == OILIFY_FIXTURE_RADIUS,

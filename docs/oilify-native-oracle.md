@@ -135,6 +135,7 @@ Use `--facade` with the same driver's build command to compile
 `oilify-source-tests`. Run that binary with a fresh work directory using
 the run command without `--diagnostics`. The old slot169 producer runs the
 independent reference controls and should report one missing-slot failure
-among 20 checks. The new producer predicts 172 checks. The harness tests
+among 20 checks. The new producer predicts 184 checks, including separate
+stack activity and close-fence assertions for each begin. The harness tests
 the table size before reading the new pointer and never builds producer
 objects. These counts are source expectations pending the native matrix.
