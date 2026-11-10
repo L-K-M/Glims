@@ -66,6 +66,7 @@ extension EngineSmokeTest {
         var images: [Int32] = []
         var panels: [NSWindow] = []
         let originalTool = ToolState.shared.current
+        var presentationOptionsToRestore: NSApplication.PresentationOptions?
         var complete = false
         defer {
             for owner in owners {
@@ -91,6 +92,7 @@ extension EngineSmokeTest {
                 && panels.allSatisfy { !$0.isVisible }, "teardown leaves no owned dialog or palette")
             documents.items.removeAll { candidate in owners.contains { $0.imageDocument === candidate } }
             ToolState.shared.select(originalTool)
+            if let presentationOptionsToRestore { NSApp.presentationOptions = presentationOptionsToRestore }
             expect(complete, "all screen-mode scenarios complete")
             print("     screen-mode checks: \(count)")
         }
@@ -119,6 +121,7 @@ extension EngineSmokeTest {
         a.window?.makeFirstResponder(a.canvas)
         try wait("A becomes the actual key document", { NSApp.isActive && NSApp.keyWindow === a.window })
         let originalOptions = NSApp.presentationOptions
+        presentationOptionsToRestore = originalOptions
         let palette = ToolsPaletteController()
         let panel = ClassicPaletteWindow(contentSize: ToolsPaletteController.definition.contentSize)
         panels.append(panel)
@@ -180,6 +183,35 @@ extension EngineSmokeTest {
             && a.window!.isMovable == originalMovable, "windowed mode restores style, collection and movement")
         expect(NSApp.presentationOptions == originalOptions, "windowed mode restores the prior application presentation options")
         expect(segments.selectedSegment == 0 && panel.isVisible, "palette remains visible after the full cycle")
+
+        // A later application-wide policy is a new baseline. The owned modes
+        // may set their own flags, then must restore the later external value.
+        var externalOptions = originalOptions
+        externalOptions.remove([.hideDock, .hideMenuBar])
+        externalOptions.insert([.autoHideDock, .autoHideMenuBar])
+        expect(externalOptions != originalOptions,
+               "the external-presentation oracle has a distinct valid baseline")
+        a.setScreenMode(.fullScreenWithMenu)
+        try settled(a, .fullScreenWithMenu)
+        NSApp.presentationOptions = externalOptions
+        a.setScreenMode(.fullScreenBare)
+        try settled(a, .fullScreenBare)
+        a.setScreenMode(.windowed)
+        try settled(a, .windowed)
+        expect(NSApp.presentationOptions == externalOptions,
+               "owned mode changes restore a later external presentation baseline")
+        NSApp.presentationOptions = originalOptions
+
+        // This deliberately invokes the optional delegate phase without a
+        // native Space animation. It proves admission, not animation delivery.
+        expect(a.canChangeScreenMode, "the synthetic native-exit oracle starts with stable admission")
+        a.window?.delegate?.windowWillExitFullScreen?(
+            Notification(name: NSWindow.willExitFullScreenNotification, object: a.window))
+        expect(!a.canChangeScreenMode, "synthetic native-exit begin refuses another screen-mode transition")
+        a.windowDidExitFullScreen(
+            Notification(name: NSWindow.didExitFullScreenNotification, object: a.window))
+        expect(a.canChangeScreenMode && a.screenMode == .windowed && a.screenModeState.phase == .stable,
+               "synthetic native-exit completion restores stable windowed admission")
 
         palette.retarget(to: b.imageDocument)
         for mode in [DocumentScreenMode.fullScreenWithMenu, .fullScreenBare, .windowed] {
