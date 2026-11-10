@@ -795,7 +795,8 @@ final class EngineSession: @unchecked Sendable {
     /// Captured same-image source pixels are detached before the preview starts.
     /// Apply merges into target pixels; the auxiliary graph is not an XCF effect.
     func beginFilter(image: Int32, drawable: Int32, operation: String, source: Int32) throws -> Int32 {
-        guard drawable > 0, source > 0, SourceFilterOperation(rawValue: operation) != nil else {
+        guard drawable > 0, source > 0, let sourceOperation = SourceFilterOperation(rawValue: operation),
+              sourceOperation != .displace else {
             throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
                               message: "Choose a pixel layer and a valid source for this filter.")
         }
@@ -807,6 +808,23 @@ final class EngineSession: @unchecked Sendable {
         try check(status, error)
         guard filter > 0 else {
             throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The filter preview did not start.")
+        }
+        return filter
+    }
+
+    /// Both explicit maps are snapshotted before Displace attaches its preview.
+    /// The native operation owns those copies through Apply/Cancel/close.
+    func beginDisplace(image: Int32, drawable: Int32, xSource: Int32, ySource: Int32) throws -> Int32 {
+        guard drawable > 0, xSource > 0, ySource > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a pixel layer and both Displace map sources.")
+        }
+        var filter: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_begin_displace_with_sources(engine, image, drawable, xSource, ySource, &filter, &error)
+        try check(status, error)
+        guard filter > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Displace preview did not start.")
         }
         return filter
     }
