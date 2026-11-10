@@ -52,7 +52,7 @@ storage under an unresolved caller. Timeout never counts as passing refusal.
 
 ```sh
 python3 -I scripts/test-engine-call-admission.py build \
-  --producer /absolute/immutable-main164/GIMP_3_2_8 \
+  --producer .build/call-drain-adapters/GIMP_3_2_8 \
   --out /tmp/glims-engine-call-admission-build
 
 python3 -I scripts/test-engine-call-admission.py run \
@@ -66,5 +66,14 @@ the immutable producer's `engine.o`, hashes all response/object and declared
 source/header inputs before/after, and writes `build.json`. The producer
 library is never rebuilt or relinked. Running is a separate explicit command
 with private HOME/cache/config/data/state/runtime/GIMP/tmp directories and
-bounded process-group cleanup. This source-only slice has not compiled or run
-the fixture; the 20-check result remains for Root's independent validation.
+bounded process-group cleanup.
+
+Root's actual run at `870e57b` passed **20 checks with zero failures**, using
+the current private `.build/call-drain-adapters/GIMP_3_2_8` producer, not the
+older foreign-field producer. Recorded results are A=OK, B/C=NOT_RUNNING,
+executions 1/0/0, attachments 1/1/0 and four removed transport sources. Stderr
+was empty. Build/input/binary hashes and the retained output in
+`/tmp/glims-completion/engine-call-admission-work-current` were verified.
+The C/shim/driver still match their source freeze; this document's historical
+freeze hash changes intentionally for the evidence update. Independent review,
+CI and PR integration remain pending.

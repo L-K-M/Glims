@@ -3671,3 +3671,25 @@ is explicitly not assessed: no Tcl evaluation, conditional patch inference,
 source archive or release integration is added. See
 [`installed-port-provenance.md`](installed-port-provenance.md) for usage and
 evidence limits. Independent review/integration remain pending.
+
+### Accepted RPC caller drain (2026-11-10 candidate)
+
+Native stop now closes external admission, cancels running plug-ins without
+quitting the outer context, drains registered callers through caller-side
+result acknowledgement, then quits/joins and frees control storage. Explicit
+source attachment preserves normal RPC priority; queued unstarted calls get
+NOT_RUNNING and direct internal continuations keep their behavior. One external
+owner must prevent new lifetime entry racing stop; stale handles, concurrent
+stop owners and callback reentry are not added guarantees. No facade slot or
+upstream source changed.
+
+The frozen lifetime oracle reproduced two failures among 13 checks, then passed
+13/0 with `4d39894`. Separate queued/late admission passes 20/0 at `870e57b`.
+All four native suites pass (1,917 each on 3.2.8, 3.2.0 and master; 1,703 on
+3.0.8), including the unchanged running-plug-in stop assertion. The 3.0.8
+cache-queue/two-buffer and master cached-XML diagnostics remain in the logs.
+The earlier 5037/10146 ms outliers remain unlocalized; this fix makes no claim
+to explain or resolve them. See [engine-call-drain-oracle.md](engine-call-drain-oracle.md)
+and [engine-call-admission-oracle.md](engine-call-admission-oracle.md) for exact
+ownership and evidence limits. Independent review is running; CI, PR and
+integration remain pending.
