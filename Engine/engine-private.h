@@ -56,6 +56,12 @@ struct GlimsEngine
    * reused, never reset. 0 is never issued. At UINT64_MAX the allocation
    * fails closed (no identity is handed out, none is reused). */
   guint64             next_item_set_token;
+
+  /* Transport lifetime, guarded by `lock`. A registered external caller
+   * remains counted until it consumes its result and leaves the transport,
+   * even after its engine-thread function has completed. */
+  gboolean            stopping;
+  guint               registered_callers;
 };
 
 typedef struct GlimsItemSets GlimsItemSets;

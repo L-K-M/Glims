@@ -1349,6 +1349,11 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*start)            (const GlimsEngineConfig *config,
                                     GlimsEngine            **engine,
                                     char                   **error);
+  /* One external owner calls stop once, after preventing new engine-call
+   * submissions. Already registered callers drain before their control
+   * storage is freed. Do not race a new call's initial entry with stop;
+   * the engine pointer is invalid after stop returns. Event callbacks
+   * must not call stop (or any other engine function). */
   void         (*stop)             (GlimsEngine *engine);
   void         (*free_string)      (char *string);
   /* "3.2.0" and so on; valid while the engine runs. */
