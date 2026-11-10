@@ -248,6 +248,14 @@ extension EngineSmokeTest {
         expect(try snapshot(imageA) == snapshot(reference) && snapshot(imageB) == untouchedB,
                "recorded controls preserve the independent native result and leave B unchanged")
         click(.replay)
+        try require(wait { a.pendingWork == 0 && !a.recorder.isReplaying && !EngineActivity.shared.isBusy },
+                    "replay and its accepted thumbnail reads did not drain")
+        expect(a.acceptsEdits && RecorderPalettePresentation(document: a).canPerform(.record)
+                && RecorderPalettePresentation(document: a).canPerform(.replay)
+                && button(.record)?.isEnabled == true && button(.replay)?.isEnabled == true,
+               "settled replay automatically re-enables Record and Replay after all accepted reads drain, without reload or retarget")
+        // Refresh only after the readiness assertion so an initial failure
+        // cannot cascade through the remaining independent workflow checks.
         try drain(a)
         try session.select(.all, image: reference)
         try session.transformImage(reference, .flipHorizontal)
