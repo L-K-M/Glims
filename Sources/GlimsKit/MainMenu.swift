@@ -230,6 +230,9 @@ enum MainMenu {
             item("Show Layer Boundary", #selector(DocumentWindowController.toggleLayerBoundary(_:))),
             item("Show Selection Edges", #selector(DocumentWindowController.toggleSelectionEdges(_:))),
             .separator(),
+            item("Soft Proof", #selector(DocumentWindowController.toggleSoftProof(_:))),
+            item("Soft Proof Setup…", #selector(DocumentWindowController.showSoftProofSetup(_:))),
+            .separator(),
             submenu("Snap To", [
                 item("Guides", #selector(DocumentWindowController.toggleSnapToGuides(_:))),
                 item("Grid", #selector(DocumentWindowController.toggleSnapToGrid(_:))),

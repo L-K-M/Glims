@@ -1697,6 +1697,39 @@ final class ImageDocument {
         }
     }
 
+    /// A view-only proof preflight is a counted read behind accepted input.
+    /// File access and the native transform both run off the main thread.
+    func readSoftProofProfile(at url: URL, proofIntent: EngineSession.ProfileIntent,
+                              displayIntent: EngineSession.ProfileIntent,
+                              blackPointCompensation: Bool, destination: CanvasDisplayDestination,
+                              completion: @escaping @MainActor (Result<CanvasSoftProof, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueue(on: inputQueue) { [session, image] in
+            let result = Result {
+                let proof = try CanvasSoftProof(profileICC: ICCProfileFile.read(url),
+                    profileName: url.lastPathComponent, proofIntent: proofIntent,
+                    displayIntent: displayIntent, blackPointCompensation: blackPointCompensation)
+                _ = try CanvasDisplayDestination.render(session, image: image, scale: 1,
+                    area: CGRect(x: 0, y: 0, width: 1, height: 1), destination: destination, proof: proof)
+                return proof
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func validateSoftProof(_ proof: CanvasSoftProof, destination: CanvasDisplayDestination,
+                           completion: @escaping @MainActor (Result<CanvasSoftProof, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueue(on: inputQueue) { [session, image] in
+            let result = Result {
+                _ = try CanvasDisplayDestination.render(session, image: image, scale: 1,
+                    area: CGRect(x: 0, y: 0, width: 1, height: 1), destination: destination, proof: proof)
+                return proof
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     /// The image's registered XMP LangAlt root property `tag` (its owned
     /// (language, text) pairs), queued and counted exactly like
     /// `readMetadataValues(_:)`: a plain native read on the input queue,
