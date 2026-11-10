@@ -2983,6 +2983,8 @@ api_image_render_proofed (GlimsEngine *e, GlimsImageID image, double scale, Glim
 {
   GlimsProofRenderArgs a = { image, scale, area, destination_icc, destination_icc_length,
                             proof_icc, proof_icc_length, settings, pixels, stride, error };
+  if (error)
+    *error = NULL;
   return glims_engine_call (e, image_render_proofed_on_engine, &a);
 }
 
