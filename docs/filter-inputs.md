@@ -1,13 +1,15 @@
 # Snapshot filter inputs
 
-Bump Map now has a same-image height-map chooser. The source is captured when
-Preview starts; Apply to Pixels merges into the captured target and Undo
-restores its pixels. Other auxiliary-input operations and custom-config editors
-remain separate work.
+Bump Map and Variable Blur have same-image height-map and blur-mask choosers.
+The source is captured when Preview starts; Apply to Pixels merges into the
+captured target and Undo restores its pixels. Selective Gaussian Blur's native
+contrast-reference admission is implemented; its chooser remains separate work.
+Other auxiliary-input operations and custom-config editors remain separate work.
 
 API version 1 appends slot 147, `filter_begin_with_source`. It accepts explicit
-positive target/source IDs, currently for `gegl:bump-map`. Targets are ordinary
-or previously rasterized pixel-behaving layers. Editable sources and groups
+positive target/source IDs for `gegl:bump-map`, `gegl:variable-blur`, and
+`gegl:gaussian-blur-selective`. Targets are ordinary or previously rasterized
+pixel-behaving layers. Editable sources and groups
 are readable height maps, but are not destructive targets. Attached masks and
 channels can also supply source pixels. Indexed images refuse because their
 shared mutable Babl palette would not be frozen by a tile snapshot.
@@ -52,3 +54,20 @@ The 512 MiB refusal fixture prevents tile materialization rather than allocating
 a dense image. The self-contained bundle passes 1,917 native and 2,370 app checks
 with development outputs unreadable; 871 unit tests pass. No upstream source
 is modified.
+
+## Selective Gaussian contrast reference (native candidate)
+
+`gegl:gaussian-blur-selective` has one optional aux input, used as the contrast
+reference for channelwise maximum-delta comparisons. The existing no-source
+operation uses the target as that reference. The captured-source route instead
+uses a detached snapshot through the same native-format, 512 MiB, merge-only
+contract above. It adds no live source dependency or persistent auxiliary effect.
+Multi-role and other compositor operations remain unsupported by slot 147.
+
+The private baseline executed 33 focused checks: installed operation/property
+queries and independent authentic GEGL contrast/alpha oracles passed; only
+snapshot admission failed. The minimal allowlist change follows that observed
+failure. The unchanged harness also defines Cancel, Apply, one Undo, exact
+Undo/Redo, source mutation/removal, offset and refusal cases, for 128 checks
+when admission succeeds. Post-change execution and the four-engine matrix are
+pending. No Swift descriptor or source chooser has been added in this slice.

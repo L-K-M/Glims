@@ -3570,3 +3570,13 @@ All four engines pass 149 focused native checks and 24 actual UI checks;
 existing conformance also passes. See `variable-blur.md` for the independent
 pixel oracle, refusal guards and remaining auxiliary roles. The facade keeps
 APIv1/163 and upstream sources remain unchanged. CI/review/integration follow.
+
+### Selective Gaussian contrast reference (2026-11-10 native candidate)
+
+The snapshot facade now admits the single optional contrast-reference input of
+`gegl:gaussian-blur-selective`, preserving the existing guards, snapshot bound
+and merge-only lifecycle. The private baseline executed 33 checks with exactly
+the expected admission failure; installed catalog/property and independent GEGL
+pixel/alpha oracles passed. The unchanged 128-check post-admission harness and
+four-engine regression matrix await execution. Swift descriptor/chooser wiring
+is not part of this native slice. See `filter-inputs.md` for the exact contract.
