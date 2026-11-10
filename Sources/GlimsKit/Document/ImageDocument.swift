@@ -46,7 +46,14 @@ final class ImageDocument {
 
     private enum RecorderContext {
         case target(RecorderTargetContext)
+        case layer(Int32)
         case unavailable(String)
+    }
+
+    private struct RecorderCapture {
+        let reservation: RecorderLog<SemanticImageCommand>.Reservation
+        let command: SemanticImageCommand
+        let context: RecorderContext?
     }
 
     private struct RecorderReplayError: LocalizedError, CustomStringConvertible {
@@ -2405,8 +2412,18 @@ final class ImageDocument {
         guard !refuseWhileEditingUnavailable() else {
             completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
         }
+        let semantic = SemanticImageCommand.layerProperties(.init(change))
         guard let completion else {
-            run { session, image in try session.changeLayer(layer, image: image, change) }
+            run(semantic: semantic, recorderLayer: layer) { session, image in
+                try session.changeLayer(layer, image: image, change)
+            }
+            return
+        }
+        let capture: RecorderCapture?
+        do { capture = try reserveRecording(semantic, explicitLayer: layer) }
+        catch {
+            assertionFailure("A recording log refused an admitted layer change: \(error)")
+            completion(.failure(error))
             return
         }
         let result = LayerChangeResult()
@@ -2423,10 +2440,14 @@ final class ImageDocument {
                 completion(result.value ?? .failure(DocumentError.busy))
             }
         }) { [session, image] in
+            let context = Self.confirmRecordingContext(capture?.context, session: session, image: image)
             let answer = Result { try session.changeLayer(layer, image: image, change) }
             result.value = answer
             if case .failure(let error) = answer { self.report(error) }
+            self.settleRecording(capture, result: answer, context: context)
         }
+        // Queue/count first: Recorder observers may immediately request close.
+        if capture != nil { notifyRecorderChanged() }
     }
 
     /// Moves the active drawable. While its mask is the edit target the
@@ -2606,6 +2627,18 @@ final class ImageDocument {
         guard !refuseWhileFloatingActive() else { return }
         enqueueTargetCommand { session, image in
             _ = try session.addTextLayer(image: image, text: text, settings: settings, at: position)
+        }
+    }
+
+    /// Commits a new editor's original floating expectation. The native
+    /// compound action may anchor that exact float; it never retargets to
+    /// one introduced while typing. Reconcile actual state even on failure.
+    func addText(_ text: String, settings: EngineSession.TextSettings, at position: CGPoint,
+                 expectedFloating: EngineSession.FloatingState) {
+        guard !text.isEmpty, !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
+        enqueueTargetCommand { session, image in
+            _ = try session.addTextLayer(image: image, text: text, settings: settings, at: position,
+                                        expectedFloating: expectedFloating)
         }
     }
 
@@ -4581,6 +4614,10 @@ final class ImageDocument {
                 guard let context else { throw RecorderReplayError(message: "This command has no captured target context; record it again.") }
                 switch context {
                 case .unavailable(let reason): throw RecorderReplayError(message: reason)
+                case .layer(let layer):
+                    guard layers.contains(where: { $0.id == layer }) else {
+                        throw RecorderReplayError(message: "The recorded layer is no longer in this image.")
+                    }
                 case .target:
                     guard captureRecorderContext(for: step.command).map({ Self.recorderContextsMatch($0, context) }) == true else {
                         throw RecorderReplayError(message: "The recorded layer, channel, mask or Quick Mask target has changed.")
@@ -4602,7 +4639,11 @@ final class ImageDocument {
                     throw RecorderReplayError(message: reason)
                 }
                 if let context { try Self.requireRecorderContext(context, session: session, image: image) }
-                try step.command.apply(session: session, image: image)
+                if case .layer(let layer)? = context {
+                    try step.command.apply(session: session, image: image, layer: layer)
+                } else {
+                    try step.command.apply(session: session, image: image)
+                }
             }
             DispatchQueue.main.async {
                 self.settleRecorderReplay(step.token, generation: generation, result: result)
@@ -4633,12 +4674,21 @@ final class ImageDocument {
         switch command {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
+        case .layerProperties: return true
         default: return false
         }
     }
 
-    private func captureRecorderContext(for command: SemanticImageCommand) -> RecorderContext? {
+    private func captureRecorderContext(for command: SemanticImageCommand, explicitLayer: Int32? = nil) -> RecorderContext? {
         guard Self.recorderCommandNeedsTarget(command) else { return nil }
+        if case .layerProperties = command {
+            guard let layer = explicitLayer, layer > 0 else {
+                return .unavailable("The explicit layer could not be identified when this change was recorded.")
+            }
+            // Native ownership is confirmed behind accepted input. A layer
+            // property is not bound to the current paint drawable or selection.
+            return .layer(layer)
+        }
         guard pendingTargetPick == nil, pendingLayerSelection == nil, pendingChannelSelection == nil,
               pendingTargetCommands.isEmpty, quickMaskIntent == nil,
               let target = paintTarget, let quickMask = quickMaskState else {
@@ -4667,6 +4717,12 @@ final class ImageDocument {
 
     private nonisolated static func requireRecorderContext(_ context: RecorderContext,
                                                            session: EngineSession, image: Int32) throws {
+        if case .layer(let layer) = context {
+            guard layer > 0, try session.layers(image).contains(where: { $0.id == layer }) else {
+                throw RecorderReplayError(message: "The recorded layer no longer belongs to this native image.")
+            }
+            return
+        }
         guard case .target(let expected) = context else {
             throw RecorderReplayError(message: "This recording has no executable target binding.")
         }
@@ -4689,56 +4745,59 @@ final class ImageDocument {
         }
     }
 
+    private func reserveRecording(_ command: SemanticImageCommand?, explicitLayer: Int32? = nil) throws -> RecorderCapture? {
+        guard let command, recorder.isRecording else { return nil }
+        let reservation = try recorder.reserve()
+        let context = captureRecorderContext(for: command, explicitLayer: explicitLayer)
+        if let context { recorderTargetContexts[reservation.ordinal] = context }
+        return RecorderCapture(reservation: reservation, command: command, context: context)
+    }
+
+    private nonisolated static func confirmRecordingContext(_ context: RecorderContext?,
+                                                            session: EngineSession, image: Int32) -> RecorderContext? {
+        guard let context else { return nil }
+        do { try requireRecorderContext(context, session: session, image: image); return context }
+        catch {
+            // Capture is observational: an unavailable binding may refuse later
+            // replay, but must not change the admitted live edit's behavior.
+            return .unavailable("The original native target could not be confirmed: \(error)")
+        }
+    }
+
+    private nonisolated func settleRecording(_ capture: RecorderCapture?, result: Result<Void, Error>, context: RecorderContext?) {
+        guard let capture else { return }
+        let resolution: RecorderLog<SemanticImageCommand>.Resolution
+        switch result {
+        case .success: resolution = .success(capture.command)
+        case .failure(let error): resolution = .failure(String(describing: error))
+        }
+        DispatchQueue.main.async {
+            self.resolveRecording(capture.reservation, with: resolution, context: context)
+        }
+    }
+
     @discardableResult
-    func run(effect: CommandEffect = .changesImage, semantic: SemanticImageCommand? = nil,
+    func run(effect: CommandEffect = .changesImage, semantic: SemanticImageCommand? = nil, recorderLayer: Int32? = nil,
              _ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
         guard !isClosing else { return false }
         if effect != .readsPixels && refuseWhileEditingUnavailable(forPreviewWork: effect == .changesPreview) {
             return false
         }
-        let reservation: RecorderLog<SemanticImageCommand>.Reservation?
-        if semantic != nil, recorder.isRecording {
-            do {
-                let accepted = try recorder.reserve()
-                reservation = accepted
-                if let semantic, let context = captureRecorderContext(for: semantic) {
-                    recorderTargetContexts[accepted.ordinal] = context
-                }
-            }
-            catch {
-                assertionFailure("A recording log refused an admitted command: \(error)")
-                return false
-            }
-        } else {
-            reservation = nil
+        let capture: RecorderCapture?
+        do { capture = try reserveRecording(semantic, explicitLayer: recorderLayer) }
+        catch {
+            assertionFailure("A recording log refused an admitted command: \(error)")
+            return false
         }
-        let capturedContext = reservation.flatMap { recorderTargetContexts[$0.ordinal] }
         enqueue(on: inputQueue, input: effect == .changesImage) { [session, image] in
-            var confirmedContext = capturedContext
-            if let capturedContext {
-                do { try Self.requireRecorderContext(capturedContext, session: session, image: image) }
-                catch {
-                    // Capture remains observational: an unconfirmable binding
-                    // prevents later replay, but never changes the live edit.
-                    confirmedContext = .unavailable("The original native target could not be confirmed: \(error)")
-                }
-            }
+            let context = Self.confirmRecordingContext(capture?.context, session: session, image: image)
             let result = Result { try work(session, image) }
             if case .failure(let error) = result { self.report(error) }
-            guard let reservation, let semantic else { return }
-            let resolution: RecorderLog<SemanticImageCommand>.Resolution
-            switch result {
-            case .success: resolution = .success(semantic)
-            case .failure(let error): resolution = .failure(String(describing: error))
-            }
-            let settledContext = confirmedContext
-            DispatchQueue.main.async {
-                self.resolveRecording(reservation, with: resolution, context: settledContext)
-            }
+            self.settleRecording(capture, result: result, context: context)
         }
         // Notify only after queue admission/counting: a listener may close the
         // document or start a fresh epoch, and accepted work must still drain.
-        if reservation != nil { notifyRecorderChanged() }
+        if capture != nil { notifyRecorderChanged() }
         return true
     }
 

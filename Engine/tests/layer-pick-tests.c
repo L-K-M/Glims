@@ -250,6 +250,7 @@ exercise (GlimsEngine *engine, gpointer data)
   GList *list, *selected;
   char *error = NULL;
   gfloat mask_pixels[25];
+  gdouble expected_masked_quarter = 0;
   guint8 float_pixels[16] = {220,20,40,255, 10,190,70,255, 90,50,210,0, 60,140,30,255};
   NEED (api->image_new (engine, 32, 24, &id, &error) == GLIMS_STATUS_OK, "create owned pick image");
   NEED (api->image_convert_precision (engine, id, GLIMS_COLOR_COMPONENT_FLOAT, GLIMS_COLOR_TRC_LINEAR, &error) == GLIMS_STATUS_OK,
@@ -275,13 +276,43 @@ exercise (GlimsEngine *engine, gpointer data)
    * Do not assert exact equality between a stored float and double0.001. */
   alpha_pixel (top, 1, 2, 0.0005f);
   alpha_pixel (top, 2, 2, 0.002f);
+  /* Literal unmasked controls share this fresh fixture with the later mask
+   * cases; they do not claim fresh-process isolation or a cache root cause. */
+  {
+    gfloat raw_quarter[4] = {0};
+    gegl_buffer_get (gimp_drawable_get_buffer (GIMP_DRAWABLE (top)), GEGL_RECTANGLE (2, 1, 1, 1),
+                     1, babl_format ("RGBA float"), raw_quarter, GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
+    CHECK (gimp_layer_get_mask (top) == NULL && raw_quarter[3] == 0.25f,
+           "unmasked native float storage contains the literal exact quarter alpha");
+  }
+  sample (engine, id, (GlimsPoint) {7, 5}, 7, 5,
+          GLIMS_PICK_EXPECTED_LOW_THRESHOLD ? item_id (top) : item_id (child),
+          "unmasked exact quarter follows the explicitly reviewed native threshold");
+  sample (engine, id, (GlimsPoint) {8, 5}, 8, 5, item_id (top),
+          "unmasked next float above quarter passes both reviewed thresholds");
+  sample (engine, id, (GlimsPoint) {9, 5}, 9, 5,
+          GLIMS_PICK_EXPECTED_LOW_THRESHOLD ? item_id (top) : item_id (child),
+          "unmasked next float below quarter follows the explicitly reviewed native threshold");
   NEED (api->layer_mask_add (engine, id, item_id (top), GLIMS_MASK_WHITE, FALSE, &mask_id, &error) == GLIMS_STATUS_OK,
         "attach top's real applied mask");
   for (gint i = 0; i < 25; i++) mask_pixels[i] = 1;
   mask_pixels[0] = 0;
   gegl_buffer_set (gimp_drawable_get_buffer (GIMP_DRAWABLE (gimp_layer_get_mask (top))), GEGL_RECTANGLE (0, 0, 5, 5),
                    0, babl_format ("Y float"), mask_pixels, GEGL_AUTO_ROWSTRIDE);
-  CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 2, 1) == 0.25, "literal alpha is exactly quarter, not64/255");
+  /* Finish the direct mask seed's native notification before observing it.
+   * This setup order is not a diagnosis of the earlier one-run outlier. */
+  gimp_drawable_update (GIMP_DRAWABLE (gimp_layer_get_mask (top)), 0, 0, 5, 5);
+  gimp_image_flush (image);
+  {
+    /* Preserve the first layer sample before measuring the mask separately.
+     * Core converts the mask to Y double, then multiplies it by the alpha;
+     * a converted white mask is not guaranteed to be bit-exact 1.0. */
+    gdouble first_quarter = gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 2, 1);
+    gdouble converted_mask = gimp_pickable_get_opacity_at (GIMP_PICKABLE (gimp_layer_get_mask (top)), 2, 1);
+    expected_masked_quarter = 0.25 * converted_mask;
+    CHECK (isfinite (converted_mask) && converted_mask > 0 && first_quarter == expected_masked_quarter,
+           "masked quarter equals literal alpha times the independently converted native mask");
+  }
   CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 3, 1) > 0.25, "next float above quarter is stored above quarter");
   CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 4, 1) < 0.25, "next float below quarter is stored below quarter");
   CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 1, 2) < 0.001,
@@ -293,8 +324,9 @@ exercise (GlimsEngine *engine, gpointer data)
   {
     struct { gint x, y; GlimsItemID expected; const char *label; } cases[] = {
       {5, 6, item_id (top), "top opaque pixel"}, {6, 5, item_id (child), "transparent top hole selects child, not group"},
-      {7, 5, GLIMS_PICK_EXPECTED_LOW_THRESHOLD ? item_id (top) : item_id (child),
-       "exact quarter follows the explicitly reviewed native threshold"},
+      {7, 5, expected_masked_quarter > (GLIMS_PICK_EXPECTED_LOW_THRESHOLD ? 0.001 : 0.25)
+             ? item_id (top) : item_id (child),
+       "masked quarter product follows the explicitly reviewed native threshold"},
       {8, 5, item_id (top), "next float above quarter passes both reviewed thresholds"},
       {9, 5, GLIMS_PICK_EXPECTED_LOW_THRESHOLD ? item_id (top) : item_id (child),
        "next float below quarter follows the explicitly reviewed native threshold"},

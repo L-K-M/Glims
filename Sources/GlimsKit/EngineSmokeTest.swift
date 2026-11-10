@@ -73,6 +73,12 @@ enum EngineSmokeTest {
         if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "channel-menus", !NSApp.isRunning {
             return runHostedChannelMenus()
         }
+        if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tool-color-menus", !NSApp.isRunning {
+            return runHostedToolColorMenus()
+        }
+        if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "screen-modes", !NSApp.isRunning {
+            return runHostedScreenModes()
+        }
         guard let path = EngineLibrary.configuredPath() else {
             print("FAIL no engine library; set \(EngineLibrary.environmentVariable)")
             return 2
@@ -114,6 +120,11 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tablet-eraser-proximity" {
                 try exerciseTabletEraserProximity(session, documents: documents)
                 print(failures == 0 ? "PASSED (tablet eraser proximity)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-layer-properties" {
+                try exerciseRecorderLayerProperties(session, documents: documents)
+                print(failures == 0 ? "PASSED (recorder layer properties)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents" {
@@ -262,6 +273,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (canvas overlays)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tool-hints" {
+                try exerciseToolHints(session, documents: documents)
+                print(failures == 0 ? "PASSED (tool hints)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "indexed-controls" {
                 try exerciseIndexedControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (indexed controls)" : "FAILED: \(failures) failure(s)")
@@ -289,6 +305,11 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tool-presets" {
                 try exerciseToolPresetControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (tool-presets)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "spring-tool-letters" {
+                try exerciseSpringToolLetters(session, documents: documents)
+                print(failures == 0 ? "PASSED (spring tool letters)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brush-palette-sync" {
@@ -320,6 +341,11 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "menu-shortcuts" {
                 try exerciseMenuShortcuts(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (menu shortcuts)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tool-color-menus" {
+                try exerciseToolColorMenus(session, documents: documents)
+                print(failures == 0 ? "PASSED (tool color menus)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "working-profile-title" {
@@ -562,6 +588,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (channel menus)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "screen-modes" {
+                try exerciseScreenModes(session, documents: documents)
+                print(failures == 0 ? "PASSED (screen modes)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
                 check(false, "unknown engine smoke case: \(selected)")
 
@@ -604,7 +635,9 @@ enum EngineSmokeTest {
             try exerciseGuideDragging(session, work: work, documents: documents)
             try exerciseToolPresetControls(session, work: work, documents: documents)
             try exerciseBrushPaletteSync(session, documents: documents)
+            try exerciseSpringToolLetters(session, documents: documents)
             try exerciseMenuShortcuts(session, work: work, documents: documents)
+            try exerciseToolHints(session, documents: documents)
             try exerciseFloatingControls(session, work: work, documents: documents)
             try exerciseMetadataControls(session, work: work, documents: documents)
             try exerciseMetadataCaptureDate(session, work: work, documents: documents)

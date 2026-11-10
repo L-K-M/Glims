@@ -67,6 +67,11 @@ final class EngineCanvasView: NSView {
 
     /// The current tool's handling of pointer and key events.
     private(set) lazy var tools = CanvasToolController(canvas: self)
+    private var hintLifecycleObservers: [NSObjectProtocol] = []
+
+    deinit {
+        for token in hintLifecycleObservers { NotificationCenter.default.removeObserver(token) }
+    }
 
     /// This window's guide-drag gesture (ruler-created and Move-tool),
     /// view-only until the release commits exactly one guide action.
@@ -271,6 +276,9 @@ final class EngineCanvasView: NSView {
     /// Drains any in-flight read before the engine image is destroyed.
     func stopRendering(completion: @escaping @MainActor () -> Void) {
         renderingStopped = true
+        tools.stopHintEvents()
+        hintLifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        hintLifecycleObservers = []
         removeDestinationObservers()
         antsTimer?.invalidate()
         antsTimer = nil
@@ -369,9 +377,41 @@ final class EngineCanvasView: NSView {
         visibleTileKeys().first { !failedTiles.contains($0) && (tiles[$0] == nil || staleTiles.contains($0)) }
     }
 
+    override func becomeFirstResponder() -> Bool {
+        guard super.becomeFirstResponder() else { return false }
+        // Releases can go to a field editor in this same key window. Start
+        // from the current physical flags instead of stale canvas key state.
+        tools.resetHintModifiers()
+        tools.hintModifiersChanged(NSEvent.modifierFlags)
+        return true
+    }
+
+    override func resignFirstResponder() -> Bool {
+        guard super.resignFirstResponder() else { return false }
+        tools.cancelSpringTools()
+        tools.resetHintModifiers()
+        return true
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        hintLifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        hintLifecycleObservers = []
+        tools.resetHintModifiers()
+        if let window, !renderingStopped {
+            let center = NotificationCenter.default
+            let scopes: [(Notification.Name, AnyObject?)] = [
+                (NSWindow.didResignKeyNotification, window),
+                (NSApplication.didResignActiveNotification, nil)
+            ]
+            for (name, object) in scopes {
+                hintLifecycleObservers.append(center.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.tools.resetHintModifiers() }
+                })
+            }
+        }
         swapDestinationObservers()
+        if window == nil { tools.cancelSpringTools() }
         backingDidChange()
         updateAntsTimer()
     }
@@ -411,6 +451,10 @@ final class EngineCanvasView: NSView {
         window.displaysWhenScreenProfileChanges = true
         let center = NotificationCenter.default
         destinationObservers = [
+            center.addObserver(forName: NSWindow.didResignKeyNotification, object: window,
+                               queue: .main) { [weak self] _ in self?.tools.cancelSpringTools() },
+            center.addObserver(forName: NSApplication.didResignActiveNotification, object: NSApp,
+                               queue: .main) { [weak self] _ in self?.tools.cancelSpringTools() },
             center.addObserver(forName: NSWindow.didChangeBackingPropertiesNotification, object: window,
                                queue: .main) { [weak self] _ in self?.destinationDidChange() },
             center.addObserver(forName: NSWindow.didChangeScreenNotification, object: window,
@@ -777,8 +821,20 @@ final class EngineCanvasView: NSView {
 
     override func keyDown(with event: NSEvent) {
         // Escape cancels an in-progress guide drag before anything else.
-        if guideDrag.keyDown(with: event) { return }
+        if guideDrag.keyDown(with: event) {
+            tools.cancelSpringTools()
+            return
+        }
         if tools.keyDown(with: event) { return }
+        if event.keyCode == 53,
+           event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
+           let owner = window?.windowController as? DocumentWindowController,
+           owner.screenMode != .windowed, owner.canChangeScreenMode {
+            // Native Spaces handle Escape themselves. The owned borderless
+            // presentation needs the equivalent idle canvas route explicitly.
+            owner.cancelOperation(nil)
+            return
+        }
         if event.keyCode == 51, event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
            let controller = window?.windowController as? DocumentWindowController {
             controller.deleteBackward(nil)
@@ -794,6 +850,7 @@ final class EngineCanvasView: NSView {
     override func flagsChanged(with event: NSEvent) {
         tools.selectionModifiersChanged(event.modifierFlags)
         tools.transformModifiersChanged(event.modifierFlags)
+        tools.hintModifiersChanged(event.modifierFlags)
         super.flagsChanged(with: event)
     }
 
