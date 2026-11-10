@@ -775,6 +775,15 @@ final class EngineCanvasView: NSView {
         // Escape cancels an in-progress guide drag before anything else.
         if guideDrag.keyDown(with: event) { return }
         if tools.keyDown(with: event) { return }
+        if event.keyCode == 53,
+           event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
+           let owner = window?.windowController as? DocumentWindowController,
+           owner.screenMode != .windowed, owner.canChangeScreenMode {
+            // Native Spaces handle Escape themselves. The owned borderless
+            // presentation needs the equivalent idle canvas route explicitly.
+            owner.cancelOperation(nil)
+            return
+        }
         if event.keyCode == 51, event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
            let controller = window?.windowController as? DocumentWindowController {
             controller.deleteBackward(nil)

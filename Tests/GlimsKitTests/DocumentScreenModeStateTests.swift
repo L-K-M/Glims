@@ -34,6 +34,9 @@ final class DocumentScreenModeStateTests: XCTestCase {
         var state = DocumentScreenModeState()
         state.willEnter(); state.didEnter()
         XCTAssertEqual(state.mode, .fullScreenBare)
+        state.willExit()
+        XCTAssertEqual(state.phase, .exiting)
+        XCTAssertFalse(state.request(.fullScreenWithMenu))
         XCTAssertFalse(state.didExit())
         XCTAssertEqual(state.mode, .windowed)
     }

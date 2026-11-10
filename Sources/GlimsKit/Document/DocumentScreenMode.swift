@@ -44,6 +44,12 @@ struct DocumentScreenModeState {
         phase = .stable
     }
 
+    mutating func willExit() {
+        guard !isClosed else { return }
+        if phase != .exiting { requested = .windowed }
+        phase = .exiting
+    }
+
     /// True means a specifically requested change of full-screen policy
     /// still needs a fresh native entry. External exits never bounce back.
     mutating func didExit() -> Bool {
@@ -168,6 +174,11 @@ extension DocumentWindowController {
         publishScreenMode()
     }
 
+    func windowWillExitFullScreen(_ notification: Notification) {
+        screenModeState.willExit()
+        publishScreenMode()
+    }
+
     func windowDidExitFullScreen(_ notification: Notification) {
         let reenter = screenModeState.didExit()
         publishScreenMode()
@@ -209,7 +220,8 @@ struct DocumentScreenModeSnapshot {
 
 /// Presentation flags are application-wide. Only the active main document may
 /// own them; a key palette must not steal that ownership. Restore the snapshot
-/// on resignation/close, and never overwrite a later external policy change.
+/// on resignation/close. A later external change becomes the new restoration
+/// baseline; only this document's menu/Dock policy is applied over it.
 @MainActor
 private final class DocumentScreenPresentation: NSObject {
     static let shared = DocumentScreenPresentation()
@@ -238,7 +250,10 @@ private final class DocumentScreenPresentation: NSObject {
               window.isVisible, !owner.imageDocument.isClosing,
               !owner.screenModeState.isClosed, owner.screenMode != .windowed,
               !window.styleMask.contains(.fullScreen) else { restore(); return }
-        if baseline == nil { baseline = NSApp.presentationOptions }
+        let current = NSApp.presentationOptions
+        if baseline == nil || (applied != nil && current != applied) {
+            baseline = current
+        }
         var options = baseline!
         options.remove([.fullScreen, .hideDock, .hideMenuBar, .autoHideMenuBar, .autoHideToolbar])
         options.insert(.autoHideDock)
