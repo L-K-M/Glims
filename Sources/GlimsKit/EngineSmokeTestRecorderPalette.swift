@@ -154,17 +154,42 @@ extension EngineSmokeTest {
                     && shortcuts.errors.isEmpty, "shortcut discovery collects every static tagged Recorder command")
         } else { expect(false, "the real menu exists for shortcut discovery") }
         let owner = AppController()
+        func documentIdentity(_ document: ImageDocument?) -> String {
+            guard let document else { return "nil" }
+            if document === a { return "A" }
+            if document === b { return "B" }
+            return "other:\(document.name)"
+        }
+        func routingTrace(_ stage: String) {
+            let main = NSApp.mainWindow
+            let key = NSApp.keyWindow
+            let mainDocument = (main?.windowController as? DocumentWindowController)?.imageDocument
+            let keyDocument = (key?.windowController as? DocumentWindowController)?.imageDocument
+            print("     recorder-route \(stage): ownerFront=\(documentIdentity(owner.frontDocument)) owned=\(owner.documents.count) main=\(main?.title ?? "nil") mainDocument=\(documentIdentity(mainDocument)) key=\(key?.title ?? "nil") keyDocument=\(documentIdentity(keyDocument))")
+            print("     recorder-route \(stage): A accepts=\(a.acceptsEdits) closing=\(a.isClosing) recording=\(a.recorder.isRecording) replaying=\(a.recorder.isReplaying) pending=\(a.pendingWork)/\(a.recorder.pendingCount); B accepts=\(b.acceptsEdits) closing=\(b.isClosing) recording=\(b.recorder.isRecording) replaying=\(b.recorder.isReplaying) pending=\(b.pendingWork)/\(b.recorder.pendingCount)")
+            for window in NSApp.windows where window.isVisible {
+                let fields = views(window.contentView, NSTextField.self)
+                guard let image = fields.first(where: { $0.accessibilityLabel() == "Recorder image" }) else { continue }
+                let status = fields.first { $0.accessibilityLabel() == "Recorder status" }?.stringValue ?? "missing"
+                print("     recorder-route \(stage): visible=\(window.title) image=\(image.stringValue) status=\(status)")
+            }
+            fflush(stdout)
+        }
         expect(showRecorder.map { !owner.validateMenuItem($0) } == true
                 && RecorderPaletteAction.allCases.allSatisfy { action in
                     menuItem(editRecorder, action).map { !owner.validateMenuItem($0) } == true
                 }, "a nonrunning application honestly refuses real Window/Edit Recorder menu admission")
         let initial = try snapshot(imageA), untouchedB = try snapshot(imageB)
+        routingTrace("before Window Recorder")
         if let showRecorder, let action = showRecorder.action { _ = NSApp.sendAction(action, to: owner, from: showRecorder) }
+        routingTrace("after Window Recorder")
         expect(PaletteCenter.shared.registeredPalette(for: RecorderPaletteController.definition.kind)?.isPresented == true,
                "the real Window action registers and presents the Recorder palette")
         if let item = menuItem(editRecorder, .record), let action = item.action { _ = NSApp.sendAction(action, to: owner, from: item) }
+        routingTrace("after Edit Record")
         expect(a.recorder.isRecording && !b.recorder.isRecording, "the actual Edit Record route resolves front document A")
         if let item = menuItem(editRecorder, .stop), let action = item.action { _ = NSApp.sendAction(action, to: owner, from: item) }
+        routingTrace("after Edit Stop")
         palette.reload()
         expect(!a.recorder.isRecording && (try? snapshot(imageA)) == initial,
                "the actual Edit Stop route stops recording without editing the image")
