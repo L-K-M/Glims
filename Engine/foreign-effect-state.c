@@ -113,7 +113,7 @@ mask_matches (GimpImage *image, GimpDrawableFilter *filter,
 
 static gboolean
 effect_matches (GimpImage *image, GimpDrawableFilter *filter,
-                const GlimsXcfEffectFieldsRecord *record, Target *target)
+                const GlimsXcfEffectFieldsRecord *record, guint32 xcf_version, Target *target)
 {
   const guint32 known = GLIMS_XCF_FIELD_BLEND_SPACE | GLIMS_XCF_FIELD_COMPOSITE_SPACE |
     GLIMS_XCF_FIELD_COMPOSITE_MODE | GLIMS_XCF_FIELD_PAINT_MODE | GLIMS_XCF_FIELD_OPACITY |
@@ -121,7 +121,11 @@ effect_matches (GimpImage *image, GimpDrawableFilter *filter,
   GeglNode *node = gimp_drawable_filter_get_operation (filter);
   if (!record || (record->presence & ~known) || !node || !gegl_node_get_gegl_operation (node) ||
       !record->operation || !*record->operation ||
-      g_strcmp0 (record->operation, gegl_node_get_operation (node)) ||
+      g_strcmp0 (record->operation, gegl_node_get_operation (node)))
+    return FALSE;
+  /* XCF 20 and 21 have no operation version word. Only those layouts
+   * match by operation name, as the native loader does for these files. */
+  if (xcf_version >= GLIMS_XCF_EFFECT_VERSIONED_OPERATIONS &&
       g_strcmp0 (record->operation_version, gegl_operation_get_op_version (record->operation)))
     return FALSE;
   const gchar *name = record->name && *record->name ? record->name
@@ -190,6 +194,7 @@ append_targets (GimpImage *image, GimpDrawable *drawable,
 {
   GimpContainer *filters = gimp_drawable_get_filters (drawable);
   if (!GIMP_IS_LIST (filters)) return FALSE;
+  guint32 xcf_version = glims_xcf_effect_fields_image (fields)->version;
   guint effect = 0;
   /* Native XCF writes queue-head order, prepends decoded FilterData, then
    * commits each reversed entry at the stack head, restoring that order. */
@@ -198,7 +203,7 @@ append_targets (GimpImage *image, GimpDrawable *drawable,
     Target target;
     if (effect >= expected || targets->len >= GLIMS_XCF_EFFECT_FIELDS_MAX_RECORDS ||
         gimp_drawable_filter_get_drawable (it->data) != drawable ||
-        !effect_matches (image, it->data, record_at (fields, index, effect), &target))
+        !effect_matches (image, it->data, record_at (fields, index, effect), xcf_version, &target))
       return FALSE;
     g_array_append_val (targets, target);
     effect++;
@@ -250,7 +255,8 @@ glims_foreign_effect_fields_restore (GimpImage *image, const GlimsXcfEffectField
   if (!GIMP_IS_IMAGE (image) || !fields)
     return refuse (error, "The foreign XCF effect metadata has no matching loaded image.");
   const GlimsXcfImageFields *saved = glims_xcf_effect_fields_image (fields);
-  if (!saved || saved->version < 22 || saved->version > 26 ||
+  if (!saved || saved->version < GLIMS_XCF_EFFECT_FIRST_VERSION ||
+      saved->version > GLIMS_XCF_EFFECT_LAST_VERSION ||
       saved->base_type > G_MAXINT || saved->precision > G_MAXINT ||
       !enum_valid (GIMP_TYPE_IMAGE_BASE_TYPE, (gint) saved->base_type) ||
       !enum_valid (GIMP_TYPE_PRECISION, (gint) saved->precision) ||
