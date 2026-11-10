@@ -184,6 +184,77 @@ extension EngineSmokeTest {
                 && document.undoInfo.undoCount == initialUndo + 1,
               "Redo exactly restores the spring stroke")
 
+        // Restoration ownership and accepted-input cleanup are separate:
+        // choosing the SAME current tool is a new explicit choice, but must
+        // not leave an old native stroke open when the canvas loses focus.
+        let focusBaseUndo = document.undoInfo.undoCount
+        let focusExpectedStroke = try session.beginStroke(image: expected, drawable: expectedLayer, brush: nativeBrush,
+            first: .init(x: 60, y: 48, pressure: 1, timeMilliseconds: 16_010))
+        try session.endStroke(focusExpectedStroke)
+        let expectedAfterFocus = try session.copyPixels(expected, merged: true).pixels
+        let nextExpectedStroke = try session.beginStroke(image: expected, drawable: expectedLayer, brush: nativeBrush,
+            first: .init(x: 70, y: 48, pressure: 1, timeMilliseconds: 17_000))
+        try session.continueStroke(nextExpectedStroke, points: [
+            .init(x: 80, y: 48, pressure: 1, timeMilliseconds: 17_100)
+        ])
+        try session.endStroke(nextExpectedStroke)
+        let expectedAfterNextStroke = try session.copyPixels(expected, merged: true).pixels
+        let focusField = NSTextField(string: "")
+        focusField.frame = NSRect(x: 0, y: 0, width: 100, height: 22)
+        paint.window?.contentView?.addSubview(focusField)
+        state.foreground = .black
+        state.update(.pencil) { $0 = nativeBrush }
+        state.select(.paintbrush)
+        try letter(.keyDown, "b", 11, 16, paint, flags: [.shift])
+        try pointer(.leftMouseDown, CGPoint(x: 60, y: 48), 16.01, paint)
+        check(document.strokeIsActive && state.current == .pencil,
+              "the stale-ownership focus case starts an accepted Pencil stroke")
+        state.select(.pencil) // Explicit same choice invalidates restoration.
+        paint.window?.makeFirstResponder(focusField)
+        let focusEndedStroke = !document.strokeIsActive
+        check(focusField.currentEditor() != nil && paint.window?.firstResponder !== canvas,
+              "the canvas really resigns to the field editor during the stroke")
+        check(focusEndedStroke && state.current == .pencil,
+              "focus loss ends accepted paint even when same-tool selection owns restoration")
+        (focusField.currentEditor() as? NSTextView)?.insertText("focus draft", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try letter(.keyUp, "b", 11, 16.5, paint, flags: [.shift])
+        check(state.current == .pencil && focusField.currentEditor()?.string == "focus draft",
+              "the stale letter release preserves the explicit tool choice and live field draft")
+        if focusEndedStroke {
+            settle(document)
+            let focusPixels = try session.copyPixels(image, merged: true).pixels
+            check(document.undoInfo.undoCount == focusBaseUndo + 1 && focusPixels == expectedAfterFocus,
+                  "focus cleanup finishes exactly one native stroke with independent expected pixels")
+            paint.window?.makeFirstResponder(canvas)
+            try pointer(.leftMouseDown, CGPoint(x: 70, y: 48), 17, paint)
+            check(document.strokeIsActive && state.current == .pencil,
+                  "a fresh pointer stroke is accepted after same-tool focus cleanup")
+            try pointer(.leftMouseUp, CGPoint(x: 80, y: 48), 17.1, paint)
+            settle(document)
+            let nextPixels = try session.copyPixels(image, merged: true).pixels
+            check(!document.strokeIsActive && document.undoInfo.undoCount == focusBaseUndo + 2
+                    && nextPixels == expectedAfterNextStroke,
+                  "the fresh stroke has independent expected pixels and adds one Undo")
+            document.undo(); settle(document)
+            let nextUndone = try session.copyPixels(image, merged: true).pixels
+            check(nextUndone == expectedAfterFocus && document.undoInfo.undoCount == focusBaseUndo + 1,
+                  "fresh-stroke Undo preserves the separately finished focus-loss stroke")
+            document.redo(); settle(document)
+            let nextRedone = try session.copyPixels(image, merged: true).pixels
+            check(nextRedone == expectedAfterNextStroke && document.undoInfo.undoCount == focusBaseUndo + 2,
+                  "fresh-stroke Redo restores only that one new stroke")
+        } else {
+            // RED teardown only: opening another native stroke while this
+            // one is still open can lose the old handle. Never claim the
+            // fresh-stroke oracle passed after repairing the failed cleanup.
+            document.endStroke()
+            settle(document)
+            try pointer(.leftMouseUp, CGPoint(x: 60, y: 48), 16.6, paint)
+            check(false, "fresh-stroke verification is blocked by failed focus-loss cleanup")
+        }
+        paint.window?.makeFirstResponder(canvas)
+        focusField.removeFromSuperview()
+
         // Text deliberately promotes T before the overlay takes focus. Typed
         // letters stay in the editor; releasing T must not create a layer.
         state.textSettings.font = ((try? session.fonts()) ?? []).first ?? "Sans-serif"
