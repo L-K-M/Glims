@@ -346,9 +346,37 @@ extension EngineSmokeTest {
             && a.recorderBindingDescriptions.isEmpty && native(a.image) == beforeRefusals,
                "clearing an installed log drops its sidecars and invalidates an earlier checkpoint")
 
+        func colorComponents(_ color: NSColor) -> [Double] {
+            [Double(color.redComponent), Double(color.greenComponent), Double(color.blueComponent), Double(color.alphaComponent)]
+        }
+        // The untouched B snapshot supplies the actual engine default. Keep
+        // this observation separate from the deliberately in-range role seed.
+        let defaultColor = beforeB.quickMask.color
+        print("     recorder-install default Quick Mask RGBA \(colorComponents(defaultColor))")
+        do {
+            let captured = try EngineSession.recorderColor(defaultColor)
+            let restored = NSColor(srgbRed: CGFloat(captured.red), green: CGFloat(captured.green),
+                                   blue: CGFloat(captured.blue), alpha: CGFloat(captured.alpha))
+            let components = [captured.red, captured.green, captured.blue, captured.alpha]
+            print("     recorder-install default Quick Mask capture metadata accepts \(components)")
+            print("     recorder-install default Quick Mask restored color equals native \(restored == defaultColor)")
+        } catch {
+            print("     recorder-install default Quick Mask capture metadata refuses \(error.localizedDescription)")
+            print("     recorder-install describeRecordedBinding would leave this context unavailable for file export")
+        }
+
         enum Role: String, CaseIterable { case mask, channel, quickMask }
         func roleImage(_ role: Role) throws -> (image: Int32, layer: Int32, extra: Int32, channel: Int32, mask: Int32) {
             let fixture = try image()
+            // The channel color change updates Core's stored Quick Mask color.
+            // Read it back after the final role is set and use those exact
+            // components in the file, including for disabled Quick Mask.
+            try session.setQuickMask(fixture.image, enabled: true)
+            let quick = try session.quickMask(fixture.image)
+            try require(quick.enabled && quick.channel > 0, "Could not seed the native Quick Mask color")
+            try session.changeChannel(quick.channel, image: fixture.image,
+                                      .init(color: NSColor(srgbRed: 0.25, green: 0.5, blue: 0.75, alpha: 0.625)))
+            try session.setQuickMask(fixture.image, enabled: false)
             let mask = try session.addLayerMask(fixture.primary, image: fixture.image, source: .white, edit: false)
             try session.select(.all, image: fixture.image)
             let channel = try session.channelFromSelection(fixture.image, name: "Saved alpha")
@@ -360,6 +388,9 @@ extension EngineSmokeTest {
             case .channel: try session.selectItems([channel], kind: .channel, image: fixture.image)
             case .quickMask: try session.setQuickMask(fixture.image, enabled: true)
             }
+            let measured = colorComponents(try session.quickMask(fixture.image).color)
+            try require(measured.allSatisfy { $0.isFinite && $0 > 0 && $0 < 1 },
+                        "Quick Mask fixture color did not round-trip inside the file domain: \(measured)")
             return (fixture.image, fixture.primary, fixture.extra, channel, mask)
         }
         for role in Role.allCases {
@@ -399,8 +430,8 @@ extension EngineSmokeTest {
                 channels = "[\"\(quickText)\"]"
                 quickSymbolField = ",\"symbol\":\"\(quickText)\""
             }
-            let color = before.quickMask.color
-            let colorJSON = "{\"space\":\"srgb\",\"red\":\(Double(color.redComponent)),\"green\":\(Double(color.greenComponent)),\"blue\":\(Double(color.blueComponent)),\"alpha\":\(Double(color.alphaComponent))}"
+            let color = colorComponents(before.quickMask.color)
+            let colorJSON = "{\"space\":\"srgb\",\"red\":\(color[0]),\"green\":\(color[1]),\"blue\":\(color[2]),\"alpha\":\(color[3])}"
             let quick = "{\"enabled\":\(role == .quickMask),\"inverted\":\(before.quickMask.inverted),\"color\":\(colorJSON)\(quickSymbolField)}"
             let context = "{\"kind\":\"context\",\"context\":{\"layers\":\(layers),\"channels\":\(channels),\"target\":\(target),\"masks\":[\(maskRows)],\"quickMask\":\(quick)}}"
             let row = #"{"ordinal":0,"outcome":"success","command":{"tag":"selectColor","point":{"x":9,"y":9},"options":{"operation":"replace","antialias":true,"feather":0,"cornerRadius":0,"threshold":0.18,"contiguous":true,"sampleMerged":false}},"binding":"# + context + "}"
