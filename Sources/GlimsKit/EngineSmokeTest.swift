@@ -105,6 +105,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-capture" {
+                try exerciseRecorderCapture(session, documents: documents)
+                print(failures == 0 ? "PASSED (recorder capture)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-language-controls" {
                 try exerciseMetadataLanguageControls(session, documents: documents)
                 print(failures == 0 ? "PASSED (metadata language controls)" : "FAILED: \(failures) failures")
@@ -535,6 +540,7 @@ enum EngineSmokeTest {
             try exerciseCanvasOverlays(session, documents: documents)
             try exercisePendingEditScope(session, documents: documents)
             try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
+            try exerciseRecorderCapture(session, documents: documents)
             try exercisePlugInCommands(session, documents: documents)
             try exerciseNativeFilterForms(session, work: work, documents: documents)
             try exerciseFilterStackInterface(session, work: work, documents: documents)
