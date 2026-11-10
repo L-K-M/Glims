@@ -18,6 +18,7 @@ import time
 
 ROOT = Path(__file__).resolve().parent.parent
 HARNESS = ROOT / "Engine/tests/oilify-native-oracle-tests.c"
+FACADE_HARNESS = ROOT / "Engine/tests/oilify-source-tests.c"
 DIAGNOSTICS = ROOT / "Engine/tests/oilify-native-oracle-diagnostics.h"
 FIXTURE = ROOT / "Engine/tests/filter-input-tests.c"
 RESPONSE_HELPER = ROOT / "scripts/test-displace-source.py"
@@ -44,7 +45,7 @@ def write_json(path: Path, value: dict) -> None:
         stream.write("\n")
 
 
-def build(producer: Path, output: Path) -> None:
+def build(producer: Path, output: Path, facade: bool = False) -> None:
     producer, output = producer.resolve(), output.resolve()
     require(producer.is_dir() and disjoint(output, producer), "producer and output must be disjoint directories")
     objects = sorted((producer / "obj").glob("*.o"))
@@ -53,25 +54,29 @@ def build(producer: Path, output: Path) -> None:
     inputs = set(objects)
     responses = ("compile.rsp", "objects.rsp", "link.rsp")
     expanded = {name: response_tokens(producer / name, inputs, set()) for name in responses}
-    inputs.update({HARNESS, DIAGNOSTICS, FIXTURE, RESPONSE_HELPER, Path(__file__).resolve(),
+    harness = FACADE_HARNESS if facade else HARNESS
+    binary_name = "oilify-source-tests" if facade else BINARY_NAME
+    inputs.update({harness, FIXTURE, RESPONSE_HELPER, Path(__file__).resolve(),
                    ROOT / "Engine/engine-private.h", ROOT / "Engine/filter-input.h",
                    ROOT / "Sources/CGlimsEngine/include/glims_engine.h"})
+    if not facade:
+        inputs.add(DIAGNOSTICS)
     inputs = {path.resolve() for path in inputs}
     require(all(path.is_file() for path in inputs), "an immutable input is missing")
     require(all(disjoint(output, path.parent) for path in inputs),
             "output must be disjoint from declared input directories")
     before = {str(path): digest(path) for path in sorted(inputs)}
     fresh_directory(output)
-    write_json(output / "inputs.json", {"producer": str(producer), "source": str(HARNESS), "inputs": before})
+    write_json(output / "inputs.json", {"producer": str(producer), "source": str(harness), "inputs": before})
 
     normalized = {name: output / ("normalized-" + name) for name in responses}
     for name, path in normalized.items():
         path.write_text(shlex.join(expanded[name]) + "\n")
-    obj, binary = output / (BINARY_NAME + ".o"), output / BINARY_NAME
+    obj, binary = output / (binary_name + ".o"), output / binary_name
     commands = [
         ["xcrun", "clang", f"@{normalized['compile.rsp']}", "-I", str(ROOT / "Sources/CGlimsEngine/include"),
          "-I", str(ROOT / "Engine"), "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
-         "-c", str(HARNESS), "-o", str(obj)],
+         "-c", str(harness), "-o", str(obj)],
         ["xcrun", "clang++", "-o", str(binary), str(obj), *map(str, objects),
          f"@{normalized['objects.rsp']}", f"@{normalized['link.rsp']}"],
     ]
@@ -138,6 +143,7 @@ def main() -> None:
     build_parser = subparsers.add_parser("build", help="compile/link only using an existing producer")
     build_parser.add_argument("--producer", type=Path, required=True)
     build_parser.add_argument("--out", type=Path, required=True)
+    build_parser.add_argument("--facade", action="store_true", help="build the slot170 facade suite")
     run_parser = subparsers.add_parser("run", help="explicitly run the fixture with private settings")
     run_parser.add_argument("--binary", type=Path, required=True)
     run_parser.add_argument("--work", type=Path, required=True)
@@ -145,7 +151,7 @@ def main() -> None:
     run_parser.add_argument("--diagnostics", action="store_true", help="retain projection and graph comparisons")
     args = parser.parse_args()
     if args.command == "build":
-        build(args.producer, args.out)
+        build(args.producer, args.out, args.facade)
     else:
         if args.timeout <= 0:
             parser.error("--timeout must be positive")

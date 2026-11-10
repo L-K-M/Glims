@@ -100,3 +100,41 @@ It records the refreshed projection separately because those reads can warm
 the graph. The diagnostic predicts 187 setup, capture and lifecycle checks
 and 112 extra frames. Pixel differences are observations. The original 73
 assertions run first and keep their separate result count.
+
+## Slot170 facade fixture
+
+`filter_begin_oilify_with_sources` accepts two independently optional map
+IDs. Both zero IDs give plain Oilify. This entry always merges into raw pixel
+storage beneath any existing target effects. The filter attaches inactive,
+moves to the raw-input end of the stack, freezes the selection and then
+enables its preview. These steps use the early-freeze behavior measured by
+the direct oracle. The legacy generic begin and effect editor keep their
+existing contracts.
+
+Admission checks the target placement and the raw, translated and cropped
+input bounds with the native map extents and abyss rectangles. The envelope
+allows the pinned 100-pixel radius halo and must fit GEGL's signed
+four-component count. Finite-sample validation reads raw target RGBA and
+luminance plus detached map luminance in the target space, in chunks of at
+most 1024 pixels. The 512 MiB map budget counts distinct native snapshots.
+
+The facade fixture compares exact drawable, raw and image projection bytes
+against independent Core graphs for plain, radius-only, exponent-only,
+both maps, a shared map and a target used as its own map. The paired case
+includes a committed source effect and a downstream target effect. It edits
+one source and detaches the other, then changes and restores a scalar to
+force reevaluation. It also checks an inactive native attachment under the
+busy fence, Cancel, one Apply Undo/Redo, refusal while Undo is frozen,
+source lifetime and image close. Refusal controls use real nonfinite float
+samples, stale and foreign source IDs, skinny maps whose halo exceeds the
+native product bound, and guarded sparse maps that exceed the combined
+snapshot budget. A refusal must leave the target bytes and history intact
+and emit no filter-stack add.
+
+Use `--facade` with the same driver's build command to compile
+`oilify-source-tests`. Run that binary with a fresh work directory using
+the run command without `--diagnostics`. The old slot169 producer runs the
+independent reference controls and should report one missing-slot failure
+among 20 checks. The new producer predicts 172 checks. The harness tests
+the table size before reading the new pointer and never builds producer
+objects. These counts are source expectations pending the native matrix.
