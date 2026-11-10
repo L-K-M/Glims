@@ -309,7 +309,7 @@ extension EngineSmokeTest {
                         && document.activeLayer == fixture.top && owner.canvas.tools.hasPendingInteraction
                         && picked.content.composite == before.content.composite
                         && picked.content.drawables == before.content.drawables
-                        && picked.content.coverage == before.content.coverage
+                        && picked.content.selection == before.content.selection
                         && picked.undo == before.undo && picked.history == before.history,
                        "native Pick acknowledges B from A with no pixel, mask or history change")
 
