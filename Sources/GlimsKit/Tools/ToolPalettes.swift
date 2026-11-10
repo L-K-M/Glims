@@ -573,15 +573,20 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
                     committedText = field.stringValue
                 }
                 let editor = field.currentEditor()
-                guard editor == nil || editor?.string == committedText else { return }
+                let rawText = editor?.string
+                let hasDraft = rawText.map { $0 != committedText } ?? false
                 let selection = editor?.selectedRange
                 let selectedAll = selection == NSRange(location: 0, length: (editor?.string as NSString?)?.length ?? 0)
+                // Advance Rigi's silent baseline even under a preserved draft:
+                // an explicit commit equal to the old value must still emit
+                // onChange when the external model has changed meanwhile.
                 slider.value = readBrush(brush)
                 committedValue = slider.value
                 committedText = field.stringValue
                 if let editor, let selection {
-                    editor.string = committedText
-                    let count = (committedText as NSString).length
+                    let text = hasDraft ? rawText ?? committedText : committedText
+                    editor.string = text
+                    let count = (text as NSString).length
                     let start = min(selection.location, count)
                     editor.selectedRange = selectedAll ? NSRange(location: 0, length: count)
                         : NSRange(location: start, length: min(selection.length, count - start))

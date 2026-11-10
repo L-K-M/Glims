@@ -250,5 +250,24 @@ extension EngineSmokeTest {
         } else {
             check(false, "the Size field can start a partial-draft edit")
         }
+
+        // Rigi suppresses onChange when parsed input equals its earlier
+        // control value. The user's explicit commit must still win over an
+        // external model change received while that exact draft was kept.
+        state.update(.paintbrush) { $0.size = 81 }
+        if let equalField = field("Size"), optionsWindow.makeFirstResponder(equalField),
+           let equalEditor = equalField.currentEditor() {
+            equalEditor.string = "81.00"
+            state.update(.paintbrush) { $0.size = 92 }
+            check(equalEditor.string == "81.00" && equalField.currentEditor() === equalEditor
+                    && optionsWindow.firstResponder === equalEditor,
+                  "an equal-value draft keeps its exact text and focus during an external change")
+            optionsWindow.makeFirstResponder(nil)
+            spin()
+            check(state.brush(for: .paintbrush).size == 81 && displayed("Size", equals: 81),
+                  "ending the explicit 81.00 draft commits 81 over the external 92 value")
+        } else {
+            check(false, "the Size field can start an equal-value commit edit")
+        }
     }
 }
