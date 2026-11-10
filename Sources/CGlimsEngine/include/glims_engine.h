@@ -3236,6 +3236,29 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_restore_layer_sources) (GlimsEngine *engine, GlimsImageID image,
                                              const GlimsItemID *layers, int32_t count,
                                              char **error);
+  /* Slot167: read-only layer pick at `point` in image coordinates. Uses the
+   * engine's own gimp_image_pick_layer hit test (topmost layer with sampled
+   * opacity strictly above that engine's native threshold). Reviewed stable
+   * GIMP3.0.8/3.2.0/3.2.8 use 0.25; reviewed master3.3.1 at
+   * 5374deeec14a0366df4b17b6e5c6f9aff63db2ca uses 0.001. No threshold is
+   * inferred for unreviewed builds. Core honors visibility, raw pixel alpha,
+   * applied layer masks and offsets; groups follow the engine's native
+   * pick behavior.
+   * Coordinates are truncated toward zero and the truncated value must fit in
+   * a signed 32-bit sample coordinate. Non-finite/out-of-range coordinates,
+   * missing `out`, or any sample-minus-layer-offset subtraction that cannot
+   * fit that range are INVALID_ARGUMENT. The arithmetic check covers Core's
+   * actual layer traversal, including groups and children; it does not clamp
+   * to image bounds or approximate a hit. Ordinary finite out-of-canvas points
+   * remain valid when those conversions are safe. *out
+   * is set to 0 before every failure path (including public dispatch) and on
+   * a miss, otherwise to the positive item id of the hit layer. Unknown/stale
+   * image is NOT_FOUND. Refuses with BUSY while another engine operation holds
+   * the engine busy. This is a read-only image/tree/selection/history/dirty
+   * query, but not a promise that the Core pick never performs I/O or buffer
+   * reads. */
+  GlimsStatus (*image_pick_layer) (GlimsEngine *engine, GlimsImageID image,
+                                   GlimsPoint point, GlimsItemID *out);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

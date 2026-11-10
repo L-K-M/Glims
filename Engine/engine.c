@@ -2316,6 +2316,7 @@ MARSHAL (image_guides, return glims_image_guides (e, a->image, a->out, a->capaci
 MARSHAL (guide_put, return glims_guide_put (e, a->image, a->in, a->out, a->error);)
 MARSHAL (guide_remove, return glims_guide_remove (e, a->image, a->width, a->error);)
 MARSHAL (layer_source_info, return glims_layer_source_info (e, a->image, a->item, a->out, a->error);)
+MARSHAL (image_pick_layer, { const GlimsPoint *point = a->in; return glims_image_pick_layer (e, a->image, *point, a->out); })
 MARSHAL (image_convert_indexed, return glims_image_convert_indexed (e, a->image, a->in,
                                                                     a->in2, a->capacity, a->error);)
 MARSHAL (image_grid, return glims_image_grid (e, a->image, a->out, a->error);)
@@ -2383,6 +2384,16 @@ api_layer_source_info (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
 {
   GlimsArgs a = { .image = image, .item = layer, .out = out, .error = error };
   return glims_engine_call (e, layer_source_info_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_pick_layer (GlimsEngine *e, GlimsImageID image, GlimsPoint point, GlimsItemID *out)
+{
+  GlimsArgs a = { .image = image, .in = &point, .out = out };
+  if (out)
+    *out = 0;
+  if (!out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  return glims_engine_call (e, image_pick_layer_on_engine, &a);
 }
 
 static GlimsStatus
@@ -3286,6 +3297,7 @@ static const GlimsEngineAPI api_v1 = {
   .image_render_proofed = api_image_render_proofed,
   .image_rasterize_layers = api_image_rasterize_layers,
   .image_restore_layer_sources = api_image_restore_layer_sources,
+  .image_pick_layer = api_image_pick_layer,
 };
 
 __attribute__ ((visibility ("default")))
