@@ -3570,3 +3570,14 @@ All four engines pass 149 focused native checks and 24 actual UI checks;
 existing conformance also passes. See `variable-blur.md` for the independent
 pixel oracle, refusal guards and remaining auxiliary roles. The facade keeps
 APIv1/163 and upstream sources remain unchanged. CI/review/integration follow.
+
+
+### Exposure in Image Adjust (2026-11-10 candidate)
+
+Exposure now joins Image > Adjust through the existing generic native filter
+route, preserving Filter > Color and loaded-operation support gates. The actual
+29-check menu/form fixture first reproduced exactly one failure, the missing
+Adjust placement; its other 28 pixel, alpha, effect, Undo/Redo, XCF, ownership
+and admission checks passed. The one-entry mapping change leaves those oracles
+unchanged and builds with `swift build -j 2`; all-four GREEN runtime, review and
+integration remain pending. See `image-adjust.md` for scope.

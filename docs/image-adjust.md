@@ -18,5 +18,20 @@ sRGB encoded inversion, linear-light inversion and unchanged alpha, plus
 captured-document preview, Cancel, one Undo/Redo and XCF pixels. Independent
 source review found no important issue. A first nested plug-in category may
 lack a dividing separator until native refresh; this cosmetic detail is
-deferred. Other custom adjustment forms and final integrated release checks
+deferred. Additional Adjust placements and final integrated release checks
 remain separate work.
+
+## Exposure (2026-11-10 candidate)
+
+Image > Adjust > Exposure… now routes the loaded `gegl:exposure` operation
+through its existing generic native preview. Exposure and Black level keep
+their current controls; Filter > Color retains its existing entry. Missing or
+unsupported operations remain omitted from Adjust.
+
+Before adding this placement, the focused `exposure-adjust` actual-menu case
+ran all 29 checks: only the missing Adjust item failed. The other 28 passed,
+including independent linear-RGB exposure and alpha math, a separate native
+pixel reference, actual field and Apply/Cancel actions, existing-effect edits,
+last-field Apply, Undo/Redo, XCF, two-document ownership and admission guards.
+The same fixture and oracles are unchanged. The mapping now builds; all-four
+engine GREEN runs, review and integration are still pending.
