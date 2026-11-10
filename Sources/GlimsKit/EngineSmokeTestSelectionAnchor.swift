@@ -418,7 +418,7 @@ extension EngineSmokeTest {
         }
 
         ToolState.shared.select(.rectangleSelect)
-        let ordinary = try scene("No float")
+        let ordinary = try scene("No float", floating: false)
         try front(ordinary.owner)
         let plainRef = try seed(floating: false)
         try session.select(.none, image: plainRef.image)
