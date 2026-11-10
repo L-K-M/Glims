@@ -486,6 +486,12 @@ GlimsStatus glims_fonts          (GlimsEngine *e, char **names);
 GlimsStatus glims_text_layer_new (GlimsEngine *e, GlimsImageID image, const char *text,
                                   const GlimsTextSettings *settings, GlimsPoint position,
                                   GlimsItemID *layer, char **error);
+GlimsStatus glims_text_layer_new_captured (GlimsEngine *e, GlimsImageID image,
+                                           const GlimsFloatingState *expected,
+                                           const char *text,
+                                           const GlimsTextSettings *settings,
+                                           GlimsPoint position,
+                                           GlimsItemID *out, char **error);
 GlimsStatus glims_text_layer_get (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                   char **text, GlimsTextSettings *settings);
 GlimsStatus glims_text_layer_set (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
@@ -626,6 +632,10 @@ GlimsStatus glims_layer_restore_source_admit (GimpLayer *layer, char **error);
  * instance is a no-op, pixel/group/missing-source layers are UNSUPPORTED
  * before any mutation. Readiness and locks are the caller's. */
 GlimsStatus glims_layer_restore_source (GimpImage *image, GimpLayer *layer, char **error);
+
+/* layer-pick.c */
+GlimsStatus glims_image_pick_layer (GlimsEngine *e, GlimsImageID image, GlimsPoint point,
+                                    GlimsItemID *out);
 
 /* resource.c */
 GlimsStatus glims_lookup_gradient      (GlimsEngine *e, GlimsResourceID id,
