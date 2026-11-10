@@ -257,6 +257,9 @@ final class ImageDocument {
     private var pendingInput = 0
     /// Once the image starts closing, nothing new is queued.
     private(set) var isClosing = false
+    /// Closing admission may precede the canvas render drain. Native
+    /// teardown is scheduled separately, after the controller releases it.
+    private var nativeCloseIsScheduled = false
     private(set) var isTransferringClipboard = false
     private(set) var isSavingForClose = false
     private var onQueueDrained: (() -> Void)?
@@ -1647,6 +1650,39 @@ final class ImageDocument {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         enqueue(on: inputQueue) { [session, image] in
             let result = Result { try session.metadataValues(image, tag: tag) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// A view-only proof preflight is a counted read behind accepted input.
+    /// File access and the native transform both run off the main thread.
+    func readSoftProofProfile(at url: URL, proofIntent: EngineSession.ProfileIntent,
+                              displayIntent: EngineSession.ProfileIntent,
+                              blackPointCompensation: Bool, destination: CanvasDisplayDestination,
+                              completion: @escaping @MainActor (Result<CanvasSoftProof, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueue(on: inputQueue) { [session, image] in
+            let result = Result {
+                let proof = try CanvasSoftProof(profileICC: ICCProfileFile.read(url),
+                    profileName: url.lastPathComponent, proofIntent: proofIntent,
+                    displayIntent: displayIntent, blackPointCompensation: blackPointCompensation)
+                _ = try CanvasDisplayDestination.render(session, image: image, scale: 1,
+                    area: CGRect(x: 0, y: 0, width: 1, height: 1), destination: destination, proof: proof)
+                return proof
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func validateSoftProof(_ proof: CanvasSoftProof, destination: CanvasDisplayDestination,
+                           completion: @escaping @MainActor (Result<CanvasSoftProof, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        enqueue(on: inputQueue) { [session, image] in
+            let result = Result {
+                _ = try CanvasDisplayDestination.render(session, image: image, scale: 1,
+                    area: CGRect(x: 0, y: 0, width: 1, height: 1), destination: destination, proof: proof)
+                return proof
+            }
             DispatchQueue.main.async { completion(result) }
         }
     }
@@ -3610,14 +3646,22 @@ final class ImageDocument {
         }
     }
 
-    /// Stops taking work and destroys the engine image once everything
-    /// queued has run, so a close never tears the image from under a job.
-    /// The teardown cannot rely on `self` — the controller may already be
-    /// gone — so the session and image id travel in the closure.
-    func closeImageWhenDrained(completion: @escaping @MainActor () -> Void = {}) {
+    /// Stops accepting edits immediately, without destroying the image.
+    /// A document window calls this before its renderer begins draining;
+    /// accepted input and teardown remain counted until native close.
+    func beginClosing() {
         guard !isClosing else { return }
         if strokeIsActive { endStroke() }
         isClosing = true
+    }
+
+    /// Destroys the engine image once accepted work and teardown drain.
+    /// A window calls this only after its renderer has stopped. Bare
+    /// document callers begin closing here without a separate render phase.
+    func closeImageWhenDrained(completion: @escaping @MainActor () -> Void = {}) {
+        guard !nativeCloseIsScheduled else { return }
+        beginClosing()
+        nativeCloseIsScheduled = true
         let close = { [session, image] in
             EngineActivity.shared.closeImage(image, session: session) { result in
                 if case .failure(let error) = result { self.onError?(String(describing: error)) }

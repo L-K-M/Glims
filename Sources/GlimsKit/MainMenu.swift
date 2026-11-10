@@ -56,6 +56,8 @@ enum MainMenu {
             .separator(),
             item("Fill…", #selector(DocumentWindowController.fill(_:))),
             item("Stroke Selection…", #selector(DocumentWindowController.strokeSelection(_:))),
+            item("New Path", #selector(DocumentWindowController.newPath(_:))),
+            item("Delete Path", #selector(DocumentWindowController.deletePath(_:))),
             item("Stroke Path", #selector(DocumentWindowController.strokePath(_:))),
             item("Fill Path", #selector(DocumentWindowController.fillPath(_:))),
             item("To Vector Layer", #selector(DocumentWindowController.toVectorLayer(_:))),
@@ -221,6 +223,9 @@ enum MainMenu {
             item("Show Grid", #selector(DocumentWindowController.toggleShowGrid(_:))),
             item("Show Layer Boundary", #selector(DocumentWindowController.toggleLayerBoundary(_:))),
             item("Show Selection Edges", #selector(DocumentWindowController.toggleSelectionEdges(_:))),
+            .separator(),
+            item("Soft Proof", #selector(DocumentWindowController.toggleSoftProof(_:))),
+            item("Soft Proof Setup…", #selector(DocumentWindowController.showSoftProofSetup(_:))),
             .separator(),
             submenu("Snap To", [
                 item("Guides", #selector(DocumentWindowController.toggleSnapToGuides(_:))),
