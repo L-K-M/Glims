@@ -306,6 +306,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (menu shortcuts)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-opacity" {
+                try exerciseLayerOpacity(session, documents: documents)
+                print(failures == 0 ? "PASSED (layer opacity)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "image-adjust" {
                 try exerciseImageAdjust(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (image adjust)" : "FAILED: \(failures) failure(s)")
@@ -559,6 +564,7 @@ enum EngineSmokeTest {
             try exerciseSavedSetControls(session, work: work, documents: documents)
             try exerciseAdjustmentControls(session, work: work, documents: documents)
             try exerciseLayerMultiselectionControls(session, work: work, documents: documents)
+            try exerciseLayerOpacity(session, documents: documents)
             try exerciseBatchDuplicate(session, documents: documents)
             try exerciseBatchDelete(session, documents: documents)
             try exerciseBatchFit(session, documents: documents)
