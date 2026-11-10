@@ -147,6 +147,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Recorder file UI)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-consent-ui" {
+                try exerciseRecorderConsentUI(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Recorder consent UI)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-quick-mask-color" {
                 try exerciseRecorderQuickMaskColor(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (recorder Quick Mask color)" : "FAILED: \(failures) failure(s)")
