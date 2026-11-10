@@ -19,7 +19,7 @@ struct CanvasSoftProof: Equatable, Sendable {
          blackPointCompensation: Bool = false) throws {
         guard (1...Self.maximumICCBytes).contains(profileICC.count) else {
             throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
-                message: "The proof profile must contain at most 16 MiB of ICC data.")
+                message: "The proof profile must contain between 1 byte and 16 MiB of ICC data.")
         }
         // Profile class/transform compatibility remains the native proofing
         // constructor's decision, including CMYK profiles Quartz can open.

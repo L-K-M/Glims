@@ -18,7 +18,7 @@ enum ICCProfileFile {
             throw ReadError(errorDescription: "Choose a regular ICC profile file.")
         }
         guard info.st_size > 0, info.st_size <= CanvasSoftProof.maximumICCBytes else {
-            throw ReadError(errorDescription: "The proof profile must contain at most 16 MiB of ICC data.")
+            throw ReadError(errorDescription: "The proof profile must contain between 1 byte and 16 MiB of ICC data.")
         }
         var data = Data()
         while data.count <= CanvasSoftProof.maximumICCBytes {
