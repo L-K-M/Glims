@@ -6,7 +6,7 @@ import Foundation
 struct RecorderLog<Command> {
     struct Reservation: Equatable {
         fileprivate let epoch: UUID
-        fileprivate let ordinal: Int
+        let ordinal: Int
     }
 
     enum Resolution {
