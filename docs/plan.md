@@ -3692,3 +3692,12 @@ no production activation defect is inferred from the earlier unlaunched host.
 See `batch-layer-rasterize.md` for exact scope, hashes and remaining validation.
 Other-engine UI, current units/integration, CI/review and merge remain pending;
 batch Restore and the broader gesture-policy item stay open.
+
+### Layer opacity in Layers (2026-11-10 candidate)
+
+A persistent captured-owner percent field/slider now gives opacity its planned
+home in Layers. The modal Properties duplicate alone is removed. Native
+property gates, draft/retarget ownership and counted reconciliation preserve
+paint targets and close lifetime. Old rowless baseline6/1; actual all-four
+controls74each and1,012 private leased units pass. See`layer-opacity-controls.md`
+for source, branch counts, AX gaps and remaining hardware/accessibility review.
