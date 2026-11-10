@@ -776,7 +776,8 @@ final class CanvasToolController {
                 onStatus?("\(tool.name) hardness \(Int((hardness * 100).rounded()))%")
             } else {
                 ToolState.shared.update(tool) { brush in
-                    brush.size = max(1, min(500, increased ? brush.size * 1.25 : brush.size / 1.25)).rounded()
+                    brush.size = max(1, min(PaintToolPresetLimits.maxSize,
+                                           increased ? brush.size * 1.25 : brush.size / 1.25)).rounded()
                 }
                 onStatus?("\(tool.name) size \(Int(ToolState.shared.brush(for: tool).size)) px")
             }
