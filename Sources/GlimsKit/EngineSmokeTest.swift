@@ -427,6 +427,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (negative darkroom source)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "displace-source" {
+                try exerciseDisplaceSource(session, documents: documents)
+                print(failures == 0 ? "PASSED (displace source)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "variable-blur-source" {
                 try exerciseVariableBlurSource(session, documents: documents)
                 print(failures == 0 ? "PASSED (variable blur source)" : "FAILED: \(failures) failure(s)")
