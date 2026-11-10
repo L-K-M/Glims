@@ -149,6 +149,14 @@ final class CanvasToolController {
     private static let handleReach: Double = 6
     /// The Text tool's editor while text is being typed.
     private(set) var textEditor: TextEditorOverlay?
+    private struct NewTextContext {
+        let document: ImageDocument
+        weak var window: NSWindow?
+        let expectedFloating: EngineSession.FloatingState
+    }
+    /// New text owns the state seen when its editor opened, never a float
+    /// or document chosen again by a later finish callback.
+    private var newTextContext: NewTextContext?
     /// The Path tool's state: the subpath being drawn, the selected anchor.
     private(set) lazy var pathTool: PathTool = {
         let tool = PathTool(canvas: canvas)
@@ -1084,19 +1092,33 @@ final class CanvasToolController {
     private func beginTextEditing(at point: CGPoint) {
         let hit = document.layers.first { $0.kind == .text && $0.isVisible && $0.bounds.contains(point) }
         let editor: TextEditorOverlay
+        let context: NewTextContext?
         if let hit, let current = document.textLayer(hit.id) {
+            context = nil
             document.selectLayer(hit.id)
             editor = TextEditorOverlay(layer: hit.id, text: current.text, origin: hit.bounds.origin,
                                        settings: current.settings, scale: canvas.scale)
         } else {
+            guard !document.targetCommandIsPending, document.acceptsEdits,
+                  let window = canvas.window else {
+                onStatus?(ImageDocument.DocumentError.busy.localizedDescription)
+                return
+            }
+            context = NewTextContext(document: document, window: window, expectedFloating: document.floatingState)
             var settings = ToolState.shared.textSettings
             settings.color = ToolState.shared.foreground
             editor = TextEditorOverlay(layer: nil, text: "", origin: point, settings: settings, scale: canvas.scale)
         }
-        editor.onFinish = { [weak self] in self?.finishTextEditing() }
-        canvas.addSubview(editor)
-        canvas.window?.makeFirstResponder(editor)
+        editor.onFinish = { [weak self, weak editor] in
+            guard let self, let editor, self.textEditor === editor else { return }
+            self.finishTextEditing()
+        }
+        newTextContext = context
         textEditor = editor
+        canvas.addSubview(editor)
+        guard textEditor === editor else { return }
+        canvas.window?.makeFirstResponder(editor)
+        guard textEditor === editor else { return }
         onStatus?("Type the text. Escape or a click outside applies it.")
     }
 
@@ -1104,10 +1126,17 @@ final class CanvasToolController {
     /// layer gets its new text, and nothing changes otherwise.
     func finishTextEditing() {
         guard let editor = textEditor else { return }
+        let context = newTextContext
         textEditor = nil
+        newTextContext = nil
         let text = editor.string
         editor.removeFromSuperview()
-        canvas.window?.makeFirstResponder(canvas)
+        if editor.textLayer != nil {
+            canvas.window?.makeFirstResponder(canvas)
+        } else if let context, let window = context.window,
+                  canvas.window === window, !context.document.isClosing {
+            window.makeFirstResponder(canvas)
+        }
 
         if let layer = editor.textLayer {
             guard editor.hasChanges else { return }
@@ -1118,9 +1147,15 @@ final class CanvasToolController {
             }
             document.updateText(layer, text: text, settings: nil)
         } else if !text.isEmpty {
+            guard let context, let window = context.window, canvas.window === window,
+                  document === context.document, !context.document.isClosing else {
+                onStatus?("The original image window is no longer available for this text edit.")
+                return
+            }
             var settings = ToolState.shared.textSettings
             settings.color = ToolState.shared.foreground
-            document.addText(text, settings: settings, at: editor.origin)
+            context.document.addText(text, settings: settings, at: editor.origin,
+                                     expectedFloating: context.expectedFloating)
         }
     }
 
