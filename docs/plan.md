@@ -3851,3 +3851,14 @@ all-four UI56 and 1,016 private leased units pass. A preserved initial fixture
 failure led to exact native multi-setter history comparison and a latched wait,
 not changed production semantics. See `channel-menu-parity.md` for scope and
 remaining independent review, CI and combined-release gates.
+
+### Captured floating Text creation (2026-11-10 candidate)
+
+A new editor owns its complete original floating expectation. Native168
+prepares before anchoring and inserts in one normal Text Undo; stale or
+unsafe requests refuse, with truthful reconciliation after late failure.
+The old frontend fails18 of51 checks; the unchanged fixture now passes51 on
+every engine, plus1,050 units. Native170 checks per engine and all7,454
+general checks pass. See [text-floating-creation.md](text-floating-creation.md)
+for scope and the existing Escape Apply/close policy. Hosted CI/current
+feedback, combined integration and final release remain separate gates.
