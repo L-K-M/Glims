@@ -3871,3 +3871,12 @@ and engine diagnostics are preserved. Physical hardware, combined integration,
 latest-head CI, publication review and merge remain open. See
 `tablet-eraser-proximity.md` for the event ownership contract, exact run IDs and
 aggregate receipt path.
+
+### Spring-loaded tool letters (2026-11-10 candidate)
+
+Tap selects; Shift+letter cycles; hold or use an interaction temporarily
+selects until its captured interaction finishes. New explicit selections and
+text focus retain priority. A measured focus-loss regression (two failures)
+is corrected; all four engines pass 83 interface checks, plus 18 state tests
+and 1,033 isolated full-suite tests. See [spring-tool-letters.md](spring-tool-letters.md)
+for exact revisions, review scope and remaining physical-input/release gates.

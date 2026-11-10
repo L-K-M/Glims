@@ -2875,6 +2875,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             window?.endSheet(alert.window, returnCode: .abort)
         }
         batchRestoreAlert = nil
+        canvas.tools.cancelSpringTools()
         // A closing window cancels any in-progress guide drag: the ghost is
         // cleared and no guide action is committed; late events afterwards
         // are ignored by the gesture's captured window/document identity.

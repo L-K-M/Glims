@@ -372,6 +372,7 @@ final class EngineCanvasView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         swapDestinationObservers()
+        if window == nil { tools.cancelSpringTools() }
         backingDidChange()
         updateAntsTimer()
     }
@@ -411,6 +412,10 @@ final class EngineCanvasView: NSView {
         window.displaysWhenScreenProfileChanges = true
         let center = NotificationCenter.default
         destinationObservers = [
+            center.addObserver(forName: NSWindow.didResignKeyNotification, object: window,
+                               queue: .main) { [weak self] _ in self?.tools.cancelSpringTools() },
+            center.addObserver(forName: NSApplication.didResignActiveNotification, object: NSApp,
+                               queue: .main) { [weak self] _ in self?.tools.cancelSpringTools() },
             center.addObserver(forName: NSWindow.didChangeBackingPropertiesNotification, object: window,
                                queue: .main) { [weak self] _ in self?.destinationDidChange() },
             center.addObserver(forName: NSWindow.didChangeScreenNotification, object: window,
@@ -755,6 +760,12 @@ final class EngineCanvasView: NSView {
             timeMilliseconds: UInt32(truncatingIfNeeded: Int(event.timestamp * 1000)))
     }
 
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        if accepted { tools.cancelSpringTools() }
+        return accepted
+    }
+
     override func mouseDown(with event: NSEvent) {
         guard !TabletEraserProximity.isProximityEvent(event) else { return }
         guard !document.isClosing else {
@@ -777,7 +788,10 @@ final class EngineCanvasView: NSView {
 
     override func keyDown(with event: NSEvent) {
         // Escape cancels an in-progress guide drag before anything else.
-        if guideDrag.keyDown(with: event) { return }
+        if guideDrag.keyDown(with: event) {
+            tools.cancelSpringTools()
+            return
+        }
         if tools.keyDown(with: event) { return }
         if event.keyCode == 51, event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
            let controller = window?.windowController as? DocumentWindowController {
