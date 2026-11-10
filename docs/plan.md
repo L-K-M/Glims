@@ -3628,3 +3628,29 @@ is explicitly not assessed: no Tcl evaluation, conditional patch inference,
 source archive or release integration is added. See
 [`installed-port-provenance.md`](installed-port-provenance.md) for usage and
 evidence limits. Independent review/integration remain pending.
+
+### Foreign XCF effect fields (2026-11-10 candidate)
+
+Read-only plain XCF v22–26 metadata now binds to the complete unpublished
+native layer/group/mask/channel tree before restoring blend space, composite
+space and composite mode. Whole-image validation precedes every setter;
+source files, raw buffers, Undo and supplement state are unchanged. Native
+negative-AUTO encodings and the pinned writer's identical unregistered
+triplet have separate, narrow compatibility rules. Size/ETag and available
+device/inode comparisons detect observable source changes, without claiming
+an FD-bound or adversarial ABA attestation.
+
+The ordinary baseline reproduced four failures among 41 checks. Expanded
+admission passes 61 checks and the pure decoder passes 75. A separate
+3.2.8/v26 native complex oracle reproduced eight failures among 43 checks,
+then passed all 43 with four literal 2/2/3 triplets and zero float deltas.
+General conformance passes 1,917 checks on 3.2.8/3.2.0/master and 1,703 on
+3.0.8; the existing 121-check supplement suite passes on all four. The actual
+Selective Gaussian menu smoke passes 28 checks against the context prefix;
+normal foreign-file GUI acceptance is separate. An earlier strict decoder
+and native-writer interpretation caused ten general failures, fixed before
+this matrix. Source-only loader/binding audits are recorded; this authored
+documentation is not another independent approval. See `xcf-effect-fields.md`
+for hashes, oracle scope and remaining compressed/v20/v21/nested-mask limits.
+CI, review, GUI acceptance and integration remain pending; the
+broader completion item stays open.

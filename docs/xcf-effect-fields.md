@@ -3,8 +3,8 @@
 `Engine/xcf-effect-fields.{c,h}` is a pure GLib/GIO metadata decoder. It
 does not include GIMP headers, load an engine, interpret native enums,
 restore effects, or modify a file or image. Native matching,
-validation, restoration and load admission remain separate work; no
-load hook, facade or input mutation is implemented by this module.
+validation, restoration and load admission belong to the separate services
+described below; this module implements no load hook, facade or input mutation.
 
 The owned opaque result exposes const views of the image header,
 ordered layers in serialized preorder, each layer's ordered effects,
@@ -92,3 +92,77 @@ oracle evaluates restoration and rendered pixels. No native restoration
 or all-engine fidelity result follows from this pure suite. Compressed
 containers and effects nested on per-effect masks remain outside this
 decoder's scope.
+
+## Native restoration and recorded validation (2026-11-10 candidate)
+
+The separate `foreign-effect-load` and `foreign-effect-state` services now
+recover these three fields before a foreign image is adopted. The binder
+matches the complete loaded image, serialized layer preorder and item paths,
+layer masks, channels, ordered real effects, operation versions, unchanged
+settings and normalized effect-mask ownership/dimensions. It collects every
+target before applying any field setter; a mismatch refuses the unpublished
+image. It adds no Undo, supplement, pixel/mask edit or source-file write.
+Glims-authored supplements continue through their existing validated loader.
+
+Registered nonnegative words retain their native enum values. A negative
+effective enum returns to AUTO only when the loaded mode still has that default;
+otherwise it becomes explicit. INT32_MIN is refused before negation. There
+is one narrow native-writer compatibility case: three present, identical
+words whose absolute value is unregistered in both native enum types may
+retain three already-loaded AUTO values. The pinned writer can emit that
+uninterpretable triplet through a varargs mismatch. This does not recover
+unknown values, admit mixed invalid words, or replace registered explicit
+values with AUTO.
+
+The loader compares pre-load and post-decode file size, required ETag and
+available device/inode attributes. This detects ordinary observable source
+changes; it is not an FD-bound snapshot, content-hash attestation or protection
+against an adversarial ABA replacement with the same metadata. Missing
+required identity evidence refuses recovery. The reader's bounds and
+unsupported formats remain admission limits: plain XCF v22–26 only, with no compressed
+outer containers, v20/v21 recovery, effects nested on effect masks, or general
+promise to recover effects discarded by native loading.
+
+The preserved native runs, checked against their manifests at source
+`946ded1`, record:
+
+| Evidence | Result and scope |
+| --- | --- |
+| Pure metadata suite | 75/75; empty stderr, unchanged fixture hashes. |
+| Ordinary foreign oracle | Original native baseline: 37/41, with the three literal fields and rendered pixels failing. Its unchanged 41 checks are included in the passing admission suite. |
+| Native admission v2 | 61/61 on 3.2.8; atomic refusal, invalid/absent/negative fields and the exact writer-compatibility boundary. |
+| Independent complex oracle | Same harness: original 3.2.8 producer 35/43; context-aware producer 43/43. |
+| General conformance | 1,917 each on 3.2.8, 3.2.0 and master; 1,703 on 3.0.8, all with zero failures. |
+| Existing XCF supplement fidelity | 121/121 on each of those four engines. |
+| Actual-menu compatibility smoke | Selective Gaussian Blur: 28 checks on the context-aware 3.2.8 prefix, exit 0; app exited and desktop released. This is not a foreign-file GUI test. |
+
+The complex oracle is specifically native 3.2.8/XCF v26. Its independently
+configured source has a group/child tree, two noncommuting child effects,
+layer-mask and saved-channel effects, and four native effect masks. Its
+test-only walker patches only the twelve serialized field payloads to
+literal `2, 2, 3`; expected pixels come from the configured native source,
+not the production decoder. All four reopened triplets equal those literals.
+Five raw planes and every captured rendered plane match their own pre-save
+source byte for byte; child, layer-mask, channel, group and composite float
+deltas are all zero. Source/file/history checks also pass. Different runs
+generate their own source files and expectations; native indeterminate writer
+words and cross-run source hashes are not expected to match. See the
+[complex oracle specification](foreign-xcf-complex-effect-fields-oracle.md).
+
+An initial strict implementation failed ten general checks by rejecting
+existing group/channel fixtures and the native writer's invalid triplets.
+Those compatibility failures were fixed before the passing matrix above.
+The original 41-check fixture, admission v2 fixture and pure 75-check fixture
+remain unchanged after the complex addition; `9d8a1d8` had already moved
+admission work onto the existing engine worker without changing its oracles.
+Production bytes are unchanged since `7498267`.
+
+Local evidence is indexed in
+`/tmp/glims-completion/foreign-xcf-context-complex-results.json`, including
+the prior all-four manifest, per-run logs/hashes and source-only audits.
+Separate loader and context-binding audits found no additional confirmed
+important issues within their recorded scopes. This documentation/evidence
+pass is not another independent approval: its author wrote the initial
+binder. Normal foreign-file GUI acceptance, latest-head CI/review and PR
+integration remain separate gates; the broader foreign-preservation ledger
+item stays open.
