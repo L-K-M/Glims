@@ -1374,7 +1374,7 @@ enum EngineSmokeTest {
                 && !document.colorInfo.hasEmbeddedProfile
                 && !document.colorInfo.profileLabel.isEmpty,
               "a fresh document caches RGB u8 non-linear state and the builtin profile")
-        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision))",
+        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision) · \(document.colorInfo.profileLabel))",
               "the title reports the cached mode and precision")
 
         // The Mode items check the cached mode — RGB here — and
@@ -1401,7 +1401,7 @@ enum EngineSmokeTest {
               "the reload reports the image grayscale")
         check(document.undoInfo.undoCount == undoBefore + 1, "the conversion is one undo step")
         check(document.hasUnsavedChanges, "the converted image is dirty")
-        check(controller.window?.title == "• Color @ 100% (Grayscale, \(document.info.precision))",
+        check(controller.window?.title == "• Color @ 100% (Grayscale, \(document.info.precision) · \(document.colorInfo.profileLabel))",
               "the title follows the conversion")
         _ = controller.validateMenuItem(modeRGB)
         _ = controller.validateMenuItem(modeGray)
@@ -1521,7 +1521,7 @@ enum EngineSmokeTest {
         check(document.colorInfo.component == .half && document.colorInfo.trc == .linear,
               "the form's choice converts to 16-bit float linear")
         check(document.undoInfo.undoCount == undoBefore + 1, "the precision conversion is one undo step")
-        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision))",
+        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision) · \(document.colorInfo.profileLabel))",
               "the title shows the new precision")
 
         // Undo and redo carry the color state; the title follows both.
@@ -1530,7 +1530,7 @@ enum EngineSmokeTest {
         spin()
         check(document.colorInfo.component == .u8 && document.colorInfo.trc == .nonlinear,
               "undo restores the earlier precision")
-        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision))",
+        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision) · \(document.colorInfo.profileLabel))",
               "the title follows undo")
         document.redo()
         wait { document.pendingWork == 0 }
@@ -1568,7 +1568,7 @@ enum EngineSmokeTest {
         let reopenedController = DocumentWindowController(document: reopenedDocument)
         reopenedController.showWindow(nil)
         defer { reopenedController.window?.close() }
-        check(reopenedController.window?.title == "Color @ 100% (RGB, \(reopenedDocument.info.precision))",
+        check(reopenedController.window?.title == "Color @ 100% (RGB, \(reopenedDocument.info.precision) · \(reopenedDocument.colorInfo.profileLabel))",
               "a reopened document titles from its own state")
 
         // Asking for the mode the image already has is a no-op: no
