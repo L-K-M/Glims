@@ -3852,12 +3852,22 @@ failure led to exact native multi-setter history comparison and a latched wait,
 not changed production semantics. See `channel-menu-parity.md` for scope and
 remaining independent review, CI and combined-release gates.
 
-### Temporary hardware eraser (2026-11-10 source candidate)
+### Temporary hardware eraser (2026-11-10 verified candidate)
 
 Per-device proximity may borrow Eraser for a matching pointer press without
 replacing ToolState selection. Space/Command/Option and captured-stroke behavior
-remain in their existing paths; no facade, axes or coalescing changes. Eight
-pure tests and a launched synthetic-event/native-pixel fixture (predicted21
-checks) are source only, uncompiled and unexecuted. Physical hardware, actual
-all-four proof, combined integration and review remain open. See
-`tablet-eraser-proximity.md` for the exact event/dedup ownership contract.
+remain in their existing paths; no facade, axes or coalescing changes. At
+`ca815e1`, the actual launched synthetic-event/native-pixel case passed 21 checks
+on each of GIMP 3.2.8, 3.2.0, 3.0.8 and master (84 checks, zero failures), all
+with recorded exit 0. A private full-unit run passed 1,059 tests, including nine
+tablet tests. The original eight policy passes did not expose a tracking-event
+subtype exception; its incomplete/terminated launches and the correction are
+retained separately, not relabelled as successful eraser runs.
+
+Focused post-run AX captures and all desktop-release receipts succeeded. The
+full-unit immediate AX capture failed with window-not-found despite exit 0 and
+release, so that cleanup-verification gap remains explicit. Existing launcher
+and engine diagnostics are preserved. Physical hardware, combined integration,
+latest-head CI, publication review and merge remain open. See
+`tablet-eraser-proximity.md` for the event ownership contract, exact run IDs and
+aggregate receipt path.
