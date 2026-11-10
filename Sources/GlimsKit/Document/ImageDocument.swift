@@ -44,12 +44,18 @@ final class ImageDocument {
     private var recorderReplayGeneration = UUID()
     private var recorderReplayWaitingGeneration: UUID?
 
-    private struct RecorderTargetContext: Equatable {
+    private struct RecorderTargetContext {
         let layers: [Int32]
         let channels: [Int32]
         let target: PaintTarget
         let masks: [Int32: EngineSession.MaskState]
         let quickMask: EngineSession.QuickMaskState
+
+        func matches(_ expected: Self) -> Bool {
+            layers == expected.layers && channels == expected.channels
+                && target == expected.target && masks == expected.masks
+                && RecorderQuickMaskColor.matches(quickMask, expected.quickMask)
+        }
     }
 
     private enum RecorderContext {
@@ -4990,7 +4996,7 @@ final class ImageDocument {
     }
 
     private nonisolated static func recorderContextsMatch(_ first: RecorderContext, _ second: RecorderContext) -> Bool {
-        if case .target(let a) = first, case .target(let b) = second { return a == b }
+        if case .target(let actual) = first, case .target(let expected) = second { return actual.matches(expected) }
         return false
     }
 
@@ -5018,8 +5024,8 @@ final class ImageDocument {
                 target = .mask(layer: layer, drawable: mask.mask)
             } else { target = .layer(layer) }
         } else { target = nil }
-        guard layers == expected.layers, channels == expected.channels, masks == expected.masks,
-              quickMask == expected.quickMask, target == expected.target else {
+        guard let target, RecorderTargetContext(layers: layers, channels: channels, target: target,
+                                                 masks: masks, quickMask: quickMask).matches(expected) else {
             throw RecorderReplayError(message: "The native layer, channel, mask or Quick Mask target differs from the recording.")
         }
     }
@@ -5172,7 +5178,7 @@ final class ImageDocument {
             else { quickMaskSymbol = nil }
             let quickMask = RecorderBindingDescription.QuickMask(enabled: expected.quickMask.enabled,
                 symbol: quickMaskSymbol,
-                inverted: expected.quickMask.inverted, color: try EngineSession.recorderColor(expected.quickMask.color))
+                inverted: expected.quickMask.inverted, color: try RecorderQuickMaskColor.canonical(expected.quickMask))
             return .context(.init(layers: try expected.layers.map { try symbol(.layer($0)) },
                 channels: try expected.channels.map { try symbol(.channel($0)) }, target: target, masks: masks, quickMask: quickMask))
         }
