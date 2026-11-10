@@ -3571,6 +3571,21 @@ existing conformance also passes. See `variable-blur.md` for the independent
 pixel oracle, refusal guards and remaining auxiliary roles. The facade keeps
 APIv1/163 and upstream sources remain unchanged. CI/review/integration follow.
 
+### Legacy Select Color source ownership (2026-11-10 candidate)
+
+GIMP 3.0.8's seeded/by-color region algorithms retain an owned source buffer.
+An exact-version adapter helper now materializes that buffer and runs the
+unchanged algorithm through a private Pickable with owned, counted getters;
+it balances only the references that legacy code omits. Modern engines keep
+their native path, and upstream sources/facade slots remain unchanged.
+The lifetime oracle reproduced one/two surviving buffers for one/two
+selections before the fix; patched 3.0.8 passes all 12 ownership cases and 1,703
+conformance checks. All 128 actual mask/history files match the immutable
+original across 16 bounded RGBA fixtures. See
+[`legacy-select-color-ownership.md`](legacy-select-color-ownership.md) for
+ownership reasoning, controls and parity limits. Modern validation of the
+patched source and independent review remain pending.
+
 ### Selective Gaussian contrast reference (2026-11-10 candidate)
 
 Selective Gaussian Blur now has a captured contrast-reference chooser and the
@@ -3593,6 +3608,34 @@ path-selection state; Delete requires exactly one path, while New accepts
 an empty or multiple selection. Floating selections preserve path editing.
 The actual-menu regression reproduced the missing commands before the fix;
 all-four-engine checks and final integration are tracked in the PR.
+
+
+### Recorder capture, replay and palette (2026-11-10 candidate)
+
+The first Recorder slice captures seven selection/image command families:
+shape selection, color selection, selection commands, image transforms, scale,
+canvas resize and crop. Immutable values settle in acceptance order behind
+counted input; Stop fences new capture without dropping accepted work. Replay
+uses the same image, revalidates drawable-sensitive bindings and floating
+policy, and preserves normal native Undo behavior rather than guaranteeing an
+entry for a no-op. Failure and Cancel stop later scheduling; accepted work may
+finish and earlier changes remain.
+
+The palette and Edit/Window menus show the supported scope, pending capture,
+ordered outcomes and indexed replay failures. Removable Recorder subscriptions
+preserve existing image-state/error callbacks and reject stale retarget replies.
+All four engines pass the distinct capture36 (`f03ef62`), replay61 (`6cae7bb`)
+and palette43 (`4e3189f`) matrices. The capture logs retain older engine resource
+and cache diagnostics; this is not a clean resource-audit claim. See
+[recorder.md](recorder.md) for behavior, scope and verification limits.
+
+The subsequent Undo-copy correction awaits integrated validation. Combined
+latest-Main/early-close/API164 builds, release checks and the final interactive
+accessibility/layout pass remain pending. Long status clipping is an unverified
+accessibility check, not a confirmed defect. Strokes, layer/effect capture and
+recording persistence/cross-image binding are still open; the broad Recorder
+completion item remains unchecked.
+
 
 ### View-local ICC soft proofing (2026-11-10 candidate)
 

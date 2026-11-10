@@ -30,6 +30,31 @@ final class ImageDocument {
     /// it touches neither the image nor the file state.
     var printInfo = (NSPrintInfo.shared.copy() as? NSPrintInfo) ?? NSPrintInfo()
 
+    /// The document owns its frontend command log; engine handles remain outside it.
+    private(set) var recorder = RecorderLog<SemanticImageCommand>()
+    private var recorderTargetContexts: [Int: RecorderContext] = [:]
+    private var recorderReplayGeneration = UUID()
+    private var recorderReplayWaitingGeneration: UUID?
+
+    private struct RecorderTargetContext: Equatable {
+        let layers: [Int32]
+        let channels: [Int32]
+        let target: PaintTarget
+        let masks: [Int32: EngineSession.MaskState]
+        let quickMask: EngineSession.QuickMaskState
+    }
+
+    private enum RecorderContext {
+        case target(RecorderTargetContext)
+        case unavailable(String)
+    }
+
+    private struct RecorderReplayError: LocalizedError, CustomStringConvertible {
+        let message: String
+        var errorDescription: String? { message }
+        var description: String { message }
+    }
+
     private(set) var info: EngineSession.ImageInfo
     private(set) var layers: [EngineSession.Layer] = []
     private(set) var undoInfo = EngineSession.UndoInfo(undoCount: 0, redoCount: 0, nextUndo: "", nextRedo: "")
@@ -92,7 +117,7 @@ final class ImageDocument {
     /// Bumped by every reload; thumbnail caches key on it so a result
     /// read for an older state never lands on a newer row.
     private(set) var stateVersion = 0
-    private enum PaintTarget {
+    private enum PaintTarget: Equatable {
         case layer(Int32)
         case mask(layer: Int32, drawable: Int32)
         case channel(Int32)
@@ -228,6 +253,15 @@ final class ImageDocument {
 
     /// Called after layers or undo state changed.
     var onStateChange: (() -> Void)?
+    /// Recorder admission and completion use their own notification so observing
+    /// the log never replaces the window's image-state handler.
+    var onRecorderChange: (() -> Void)?
+    enum RecorderObserverScope: Equatable { case commands, presentation }
+    private struct RecorderObserver {
+        let scope: RecorderObserverScope
+        let callback: () -> Void
+    }
+    private var recorderObservers: [UUID: RecorderObserver] = [:]
     /// Called with the changed area in image pixels.
     var onProjectionChange: ((CGRect) -> Void)?
     /// Called with engine errors that the interface should show.
@@ -264,10 +298,12 @@ final class ImageDocument {
     private(set) var isSavingForClose = false
     private var onQueueDrained: (() -> Void)?
 
-    var acceptsEdits: Bool {
+    private var acceptsImageReads: Bool {
         !isClosing && !isSavingForClose && !isTransferringClipboard && !PlugInCommands.isRunning
             && !filterPreviewIsOpen && !EngineActivity.shared.isBusy
     }
+
+    var acceptsEdits: Bool { acceptsImageReads && !recorder.isReplaying }
 
     /// A queued target command's drawable is still unknown. Menu
     /// validation reads this cached flag instead of asking the engine.
@@ -934,17 +970,20 @@ final class ImageDocument {
 
     func select(_ shape: EngineSession.SelectShape, options: EngineSession.SelectOptions) {
         guard !refuseWhileEditingUnavailable() else { return }
-        run { session, image in try session.select(shape, image: image, options: options) }
+        let command = SemanticImageCommand.selectionShape(shape, options: options)
+        run(semantic: command, command.apply)
     }
 
     func selectColor(at point: CGPoint, options: EngineSession.SelectOptions) {
         guard !refuseWhileEditingUnavailable() else { return }
-        run { session, image in try session.selectColor(at: point, image: image, options: options) }
+        let command = SemanticImageCommand.selectColor(point, options: options)
+        run(semantic: command, command.apply)
     }
 
     func select(_ command: EngineSession.SelectCommand, radius: Double = 0) {
         guard !refuseWhileEditingUnavailable() else { return }
-        run { session, image in try session.select(command, image: image, radius: radius) }
+        let semantic = SemanticImageCommand.selectCommand(command, radius: radius)
+        run(semantic: semantic, semantic.apply)
     }
 
     /// Strokes the selection's boundary on the active layer with `brush`,
@@ -1058,7 +1097,8 @@ final class ImageDocument {
     /// paint target, its source kind or layer locks: the capture reads the
     /// merged image, which is valid for any target.
     func createResourceRefusal(kind: EngineSession.ResourceKind) -> String? {
-        ResourceSelectionFormValidation.menuRefusal(
+        if recorder.isReplaying { return "Cancel Recorder replay before changing resources." }
+        return ResourceSelectionFormValidation.menuRefusal(
             engineActivity: PlugInCommands.isRunning ? nil : EngineActivity.shared.label,
             plugInLabel: PlugInCommands.running.map { $0.procedure.label.replacingOccurrences(of: "…", with: "") },
             isClosing: isClosing,
@@ -1160,7 +1200,8 @@ final class ImageDocument {
     /// engine — so the choosers' validation and the form's Create gate make
     /// no synchronous native call on the main thread.
     func duplicateResourceRefusal(kind: EngineSession.ResourceKind) -> String? {
-        ResourceDuplicateValidation.gate(
+        if recorder.isReplaying { return "Cancel Recorder replay before changing resources." }
+        return ResourceDuplicateValidation.gate(
             engineActivity: PlugInCommands.isRunning ? nil : EngineActivity.shared.label,
             plugInLabel: PlugInCommands.running.map { $0.procedure.label.replacingOccurrences(of: "…", with: "") },
             isClosing: isClosing,
@@ -1269,6 +1310,7 @@ final class ImageDocument {
     }
 
     func resourceMutationRefusal() -> String? {
+        if recorder.isReplaying { return "Cancel Recorder replay before changing resources." }
         if isClosing { return DocumentError.closed.localizedDescription }
         if isSavingForClose || isTransferringClipboard { return DocumentError.busy.localizedDescription }
         if PlugInCommands.isRunning { return "Finish or cancel the running plug-in first." }
@@ -1345,7 +1387,8 @@ final class ImageDocument {
     /// selection, the paint target, layer or channel targets, a floating
     /// selection or the file state.
     func createGradientRefusal() -> String? {
-        GradientCreateValidation.gate(
+        if recorder.isReplaying { return "Cancel Recorder replay before changing resources." }
+        return GradientCreateValidation.gate(
             engineActivity: PlugInCommands.isRunning ? nil : EngineActivity.shared.label,
             plugInLabel: PlugInCommands.running.map { $0.procedure.label.replacingOccurrences(of: "…", with: "") },
             isClosing: isClosing,
@@ -2021,6 +2064,7 @@ final class ImageDocument {
     func rasterizeLayerSource(_ layer: Int32,
                               paintStateVersion: Int? = nil,
                               completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else {
             onError?(DocumentError.closed.localizedDescription)
             return completion(.failure(DocumentError.closed))
@@ -2071,6 +2115,7 @@ final class ImageDocument {
     /// `onError`.
     func restoreLayerSource(_ layer: Int32,
                             completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else {
             onError?(DocumentError.closed.localizedDescription)
             return completion(.failure(DocumentError.closed))
@@ -2253,7 +2298,8 @@ final class ImageDocument {
     func transformImage(_ transform: EngineSession.Transform) {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
-        run { session, image in try session.transformImage(image, transform) }
+        let command = SemanticImageCommand.transformImage(transform)
+        run(semantic: command, command.apply)
     }
 
     func transformActiveLayer(_ transform: EngineSession.Transform) {
@@ -2444,19 +2490,23 @@ final class ImageDocument {
     func scale(toWidth width: Int, height: Int) {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
-        run { session, image in try session.scaleImage(image, width: width, height: height) }
+        let command = SemanticImageCommand.scale(width: width, height: height)
+        run(semantic: command, command.apply)
     }
 
     func resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: NSColor) {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
-        run { session, image in try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill) }
+        let capturedFill = (fill.copy() as? NSColor) ?? fill
+        let command = SemanticImageCommand.resizeCanvas(width: width, height: height, offset: offset, fill: capturedFill)
+        run(semantic: command, command.apply)
     }
 
     func crop(to rect: CGRect) {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
-        run { session, image in try session.crop(image: image, to: rect) }
+        let command = SemanticImageCommand.crop(rect)
+        run(semantic: command, command.apply)
     }
 
     // MARK: Color mode and precision
@@ -2471,6 +2521,7 @@ final class ImageDocument {
     /// busy without queuing either.
     func convertMode(to mode: EngineSession.ColorMode,
                      completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
               !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
@@ -2497,6 +2548,7 @@ final class ImageDocument {
     /// leaves the image exactly as it was.
     func convertPrecision(component: EngineSession.ColorComponent, trc: EngineSession.ColorTRC,
                           completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
               !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
@@ -2527,6 +2579,7 @@ final class ImageDocument {
     /// consent retries with `allowRasterize`.
     func convertToIndexed(settings: EngineSession.IndexedSettings,
                           completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
               !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
@@ -2557,6 +2610,7 @@ final class ImageDocument {
     /// `fileState` through the reload.
     func assignProfile(path: String?,
                        completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
               !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
@@ -2587,6 +2641,7 @@ final class ImageDocument {
                         blackPointCompensation: Bool,
                         policy: EngineSession.ProfileConversionPolicy = .preserveEditableLayers,
                         completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
               !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
@@ -2989,7 +3044,7 @@ final class ImageDocument {
     /// asks the app for an independent copy of this image opened as a new
     /// document.
     func newSnapshot() {
-        guard !refuseWhileEditingUnavailable(), let snapshotHandler else { return }
+        guard !refuseWhileEditingUnavailable(allowingReplayRead: true), let snapshotHandler else { return }
         snapshotHandler(self)
     }
 
@@ -3000,9 +3055,9 @@ final class ImageDocument {
     /// so a close waits for it before freeing this image.
     func snapshot(completion: @escaping @MainActor (Result<Int32, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
-        guard acceptsEdits else { return completion(.failure(DocumentError.busy)) }
-        endPendingUserEdits()
-        enqueueExclusive(label: "Creating a snapshot", rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
+        guard acceptsImageReads else { return completion(.failure(DocumentError.busy)) }
+        if !recorder.isReplaying { endPendingUserEdits() }
+        enqueueExclusive(effect: .readsPixels, label: "Creating a snapshot", rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
             let result = Result { try session.duplicateImage(image) }
             DispatchQueue.main.async { completion(result) }
         }
@@ -3029,8 +3084,12 @@ final class ImageDocument {
     /// while its own filter preview is open; say why instead of failing
     /// later. `forPreviewWork` lets the preview's own updates and its
     /// commit through.
-    private func refuseWhileEditingUnavailable(forPreviewWork: Bool = false) -> Bool {
+    private func refuseWhileEditingUnavailable(forPreviewWork: Bool = false, allowingReplayRead: Bool = false) -> Bool {
         onUserCommand?()
+        if recorder.isReplaying && !allowingReplayRead {
+            onError?("Cancel Recorder replay before editing the image.")
+            return true
+        }
         if let activity = EngineActivity.shared.label, !PlugInCommands.isRunning {
             onError?("\(activity)… Wait for it to finish before editing.")
             return true
@@ -3063,6 +3122,9 @@ final class ImageDocument {
     }
 
     func finishInputForEngineActivity() {
+        // Replay admission already finished fields/strokes. Read-only exclusive
+        // work must drain its accepted step without committing new user edits.
+        guard !recorder.isReplaying else { return }
         endPendingUserEdits()
         if strokeIsActive { endStroke() }
     }
@@ -3072,6 +3134,7 @@ final class ImageDocument {
     /// Whether the command can run on the selected layers. Asks the engine
     /// once per change of the image.
     func canRun(_ procedure: EngineSession.Procedure) -> Bool {
+        guard !recorder.isReplaying else { return false }
         if procedureSensitivity == nil {
             let rows = (try? session.procedures(image: image)) ?? []
             procedureSensitivity = Dictionary(rows.map { ($0.name, $0.isSensitive) }, uniquingKeysWith: { a, _ in a })
@@ -3084,7 +3147,7 @@ final class ImageDocument {
     func run(_ procedure: EngineSession.Procedure, mode: EngineSession.RunMode,
              completion: @escaping @MainActor (Result<EngineSession.RunOutcome, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
-        guard !isTransferringClipboard, !isSavingForClose, !EngineActivity.shared.isBusy else { return completion(.failure(DocumentError.busy)) }
+        guard !isTransferringClipboard, !isSavingForClose, !EngineActivity.shared.isBusy, !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         // A plug-in runs on the engine's whole selected-layer list; under
         // a multi-selection that would be a batch operation, so it refuses.
         if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count,
@@ -3124,6 +3187,7 @@ final class ImageDocument {
     /// After Save was chosen on close, stop accepting new edits until
     /// the write either fails/cancels or the image is destroyed.
     func beginCloseSave() -> Bool {
+        if recorder.isReplaying { try? cancelReplay() }
         guard !refuseWhileEditingUnavailable() else { return false }
         isSavingForClose = true
         onStateChange?()
@@ -3144,6 +3208,7 @@ final class ImageDocument {
                     consume: @escaping @MainActor (ClipboardImage.Encoded) throws -> Void,
                     completion: @escaping @MainActor (Error?) -> Void) {
         guard !isClosing else { return completion(DocumentError.closed) }
+        guard operation != .cutLayer || !recorder.isReplaying else { return completion(DocumentError.busy) }
         // Copy/Cut of the active layer would silently read only the
         // primary layer under a multi-selection; Copy Merged reads the
         // whole composite and stays available.
@@ -3468,7 +3533,7 @@ final class ImageDocument {
     func export(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
         guard !isClosing else { return completion(DocumentError.closed) }
         guard !isTransferringClipboard, !PlugInCommands.isRunning else { return completion(DocumentError.busy) }
-        enqueueExclusive(label: "Exporting \(url.lastPathComponent)", rejected: { completion(DocumentError.busy) }) { [session, image] in
+        enqueueExclusive(effect: .readsPixels, label: "Exporting \(url.lastPathComponent)", rejected: { completion(DocumentError.busy) }) { [session, image] in
             let result: Error?
             do { try session.export(image, to: url.path); result = nil } catch { result = error }
             DispatchQueue.main.async {
@@ -3481,7 +3546,7 @@ final class ImageDocument {
     func save(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
         guard !isClosing else { return completion(DocumentError.closed) }
         guard !isTransferringClipboard, !PlugInCommands.isRunning else { return completion(DocumentError.busy) }
-        enqueueExclusive(label: "Saving \(url.lastPathComponent)", rejected: { completion(DocumentError.busy) }) { [session, image] in
+        enqueueExclusive(effect: .readsPixels, label: "Saving \(url.lastPathComponent)", rejected: { completion(DocumentError.busy) }) { [session, image] in
             let result: Error?
             do { try session.save(image, to: url.path); result = nil } catch { result = error }
             DispatchQueue.main.async { completion(result) }
@@ -3493,7 +3558,7 @@ final class ImageDocument {
     func saveCopy(to url: URL, label: String = "Saving a copy", completion: @escaping @MainActor (Error?) -> Void) {
         guard !isClosing else { return completion(DocumentError.closed) }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning else { return completion(DocumentError.busy) }
-        enqueueExclusive(label: label, rejected: { completion(DocumentError.busy) }) { [session, image] in
+        enqueueExclusive(effect: .readsPixels, label: label, rejected: { completion(DocumentError.busy) }) { [session, image] in
             let result: Error?
             do { try session.saveCopy(image, to: url.path); result = nil } catch { result = error }
             DispatchQueue.main.async { completion(result) }
@@ -3563,6 +3628,7 @@ final class ImageDocument {
     /// native error reaches the caller.
     private func importFile(_ url: URL, asLink: Bool,
                             completion: @escaping @MainActor (Result<ImportOutcome, Error>) -> Void) {
+        guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning else {
             return completion(.failure(DocumentError.busy))
@@ -3630,8 +3696,8 @@ final class ImageDocument {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard !isTransferringClipboard, !isSavingForClose, !PlugInCommands.isRunning,
               !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
-        endPendingUserEdits()
-        enqueueExclusive(label: "Preparing to print",
+        if !recorder.isReplaying { endPendingUserEdits() }
+        enqueueExclusive(effect: .readsPixels, label: "Preparing to print",
                          rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
             let result = Result {
                 let info = try session.info(image)
@@ -3653,6 +3719,7 @@ final class ImageDocument {
         guard !isClosing else { return }
         if strokeIsActive { endStroke() }
         isClosing = true
+        if recorder.isReplaying { try? cancelReplay() }
     }
 
     /// Destroys the engine image once accepted work and teardown drain.
@@ -3728,6 +3795,7 @@ final class ImageDocument {
     func beginFilterPreview(operation: String, properties: [EngineSession.FilterProperty],
                             target: Int32, source: Int32,
                             completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
+        guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard !isSavingForClose, !isTransferringClipboard, !PlugInCommands.isRunning,
               !EngineActivity.shared.isBusy, !targetCommandIsPending,
@@ -3821,6 +3889,7 @@ final class ImageDocument {
     /// just created still keeps the close drain waiting.
     func beginFilterPreview(operation: String, properties: [EngineSession.FilterProperty],
                             completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
+        guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         // A filter preview would run on the primary layer alone.
         if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Apply a filter") {
@@ -3855,6 +3924,7 @@ final class ImageDocument {
                             properties: [EngineSession.FilterProperty],
                             operation: String? = nil,
                             completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
+        guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard canChangeEffect(effect, on: drawable) else {
             return completion(.failure(DocumentError.targetChanged))
@@ -4206,16 +4276,294 @@ final class ImageDocument {
         guard paintTargetIsValid else { throw DocumentError.targetChanged }
     }
 
+    /// Recorder-specific UI subscriptions leave the existing single callback
+    /// intact. A snapshot permits listeners to detach or retarget reentrantly.
+    func addRecorderObserver(scope: RecorderObserverScope = .commands, _ observer: @escaping () -> Void) -> UUID {
+        let token = UUID()
+        recorderObservers[token] = RecorderObserver(scope: scope, callback: observer)
+        return token
+    }
+
+    func removeRecorderObserver(_ token: UUID) {
+        recorderObservers.removeValue(forKey: token)
+    }
+
+    private func notifyRecorderChanged() {
+        let observers = recorderObservers.values.map(\.callback)
+        onRecorderChange?()
+        observers.forEach { $0() }
+    }
+
+    private func notifyRecorderPresentationChanged() {
+        let observers = recorderObservers.values.filter { $0.scope == .presentation }.map(\.callback)
+        observers.forEach { $0() }
+    }
+
+    func startRecording() throws {
+        guard !isClosing else { throw DocumentError.closed }
+        try recorder.startRecording()
+        recorderTargetContexts.removeAll()
+        notifyRecorderChanged()
+    }
+
+    func stopRecording() throws {
+        try recorder.stopRecording()
+        notifyRecorderChanged()
+    }
+
     @discardableResult
-    func run(effect: CommandEffect = .changesImage, _ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
+    func clearRecording() -> Bool {
+        guard !recorder.isReplaying else {
+            onError?("Cancel Recorder replay before clearing the recording.")
+            return false
+        }
+        recorder.clear()
+        recorderTargetContexts.removeAll()
+        notifyRecorderChanged()
+        return true
+    }
+
+    /// Replay uses this document's current native image only. Each step keeps
+    /// its normal Undo entry; earlier successful steps are not rolled back.
+    func startReplay() throws {
+        if let reason = recorderReplayBlockReason() { throw RecorderReplayError(message: reason) }
+        endPendingUserEdits()
+        if let reason = recorderReplayBlockReason() { throw RecorderReplayError(message: reason) }
+        try recorder.beginReplay()
+        recorderReplayGeneration = UUID()
+        recorderReplayWaitingGeneration = nil
+        let generation = recorderReplayGeneration
+        notifyRecorderChanged()
+        continueRecorderReplay(generation: generation)
+    }
+
+    func cancelReplay() throws {
+        try recorder.cancelReplay()
+        recorderReplayGeneration = UUID()
+        recorderReplayWaitingGeneration = nil
+        notifyRecorderChanged()
+    }
+
+    var replayStatus: RecorderLog<SemanticImageCommand>.ReplayStatus { recorder.replayStatus }
+
+    private func recorderReplayBlockReason(continuing: Bool = false) -> String? {
+        if isClosing { return DocumentError.closed.localizedDescription }
+        if recorder.isReplaying && !continuing { return "Recorder replay is already running." }
+        if EngineActivity.shared.isBusy || PlugInCommands.isRunning || filterPreviewIsOpen
+            || isSavingForClose || isTransferringClipboard {
+            return "Finish the current engine, filter, save or clipboard operation before replaying."
+        }
+        if strokeIsActive { return "Finish the current stroke before replaying." }
+        if endingPendingEdits { return "Finish pending field edits before replaying." }
+        if pendingWork != 0 || pendingTargetPick != nil || pendingLayerSelection != nil
+            || pendingChannelSelection != nil || pendingPathSelection != nil
+            || !pendingTargetCommands.isEmpty || quickMaskIntent != nil
+            || !componentIntents.isEmpty || !channelVisibilityIntents.isEmpty {
+            return "Wait for accepted image and target changes to finish before replaying."
+        }
+        return nil
+    }
+
+    private func continueRecorderReplay(generation: UUID) {
+        guard generation == recorderReplayGeneration, recorder.isReplaying, !isClosing else { return }
+        if pendingWork != 0 {
+            // Counted reads may remain available during replay. They finish
+            // before the next semantic edit, without claiming another step.
+            recorderReplayWaitingGeneration = generation
+            return
+        }
+        let step: RecorderLog<SemanticImageCommand>.ReplayStep
+        do { step = try recorder.nextReplayStep() }
+        catch {
+            assertionFailure("Recorder could not obtain its next replay step: \(error)")
+            return
+        }
+        let context = recorderTargetContexts[step.index]
+        do {
+            if let reason = recorderReplayBlockReason(continuing: true) { throw RecorderReplayError(message: reason) }
+            if step.command.requiresResolvedFloatingSelection,
+               let reason = FloatingControlsLogic.resolveFirstGate(floatingState) {
+                throw RecorderReplayError(message: reason)
+            }
+            if Self.recorderCommandNeedsTarget(step.command) {
+                guard let context else { throw RecorderReplayError(message: "This command has no captured target context; record it again.") }
+                switch context {
+                case .unavailable(let reason): throw RecorderReplayError(message: reason)
+                case .target:
+                    guard captureRecorderContext(for: step.command).map({ Self.recorderContextsMatch($0, context) }) == true else {
+                        throw RecorderReplayError(message: "The recorded layer, channel, mask or Quick Mask target has changed.")
+                    }
+                }
+            }
+        } catch {
+            settleRecorderReplay(step.token, generation: generation, result: .failure(error))
+            return
+        }
+        // This private route bypasses only the live-edit replay gate. All other
+        // admission gates above and native target checks below remain in force.
+        enqueue(on: inputQueue, input: true, afterFinish: { [weak self] in
+            DispatchQueue.main.async { self?.continueRecorderReplay(generation: generation) }
+        }) { [session, image] in
+            let result = Result {
+                if step.command.requiresResolvedFloatingSelection,
+                   let reason = FloatingControlsLogic.resolveFirstGate(try session.floatingSelection(image)) {
+                    throw RecorderReplayError(message: reason)
+                }
+                if let context { try Self.requireRecorderContext(context, session: session, image: image) }
+                try step.command.apply(session: session, image: image)
+            }
+            DispatchQueue.main.async {
+                self.settleRecorderReplay(step.token, generation: generation, result: result)
+            }
+        }
+    }
+
+    private func settleRecorderReplay(_ token: RecorderLog<SemanticImageCommand>.ReplayToken,
+                                      generation: UUID, result: Result<Void, Error>) {
+        // Cancellation/close do not interrupt already accepted native work.
+        // Its result still reaches the error channel but cannot restart replay.
+        if case .failure(let error) = result { onError?(String(describing: error)) }
+        guard generation == recorderReplayGeneration, recorder.isReplaying, !isClosing else { return }
+        let outcome: RecorderLog<SemanticImageCommand>.ReplayOutcome
+        switch result {
+        case .success: outcome = .success
+        case .failure(let error): outcome = .failure(String(describing: error))
+        }
+        do { try recorder.acknowledgeReplay(token, outcome: outcome) }
+        catch {
+            assertionFailure("Recorder could not acknowledge its accepted replay step: \(error)")
+            return
+        }
+        notifyRecorderChanged()
+    }
+
+    private nonisolated static func recorderCommandNeedsTarget(_ command: SemanticImageCommand) -> Bool {
+        switch command {
+        case .selectColor(_, let options): return !options.sampleMerged
+        case .selectCommand(.fromAlpha, _): return true
+        default: return false
+        }
+    }
+
+    private func captureRecorderContext(for command: SemanticImageCommand) -> RecorderContext? {
+        guard Self.recorderCommandNeedsTarget(command) else { return nil }
+        guard pendingTargetPick == nil, pendingLayerSelection == nil, pendingChannelSelection == nil,
+              pendingTargetCommands.isEmpty, quickMaskIntent == nil,
+              let target = paintTarget, let quickMask = quickMaskState else {
+            return .unavailable("The target was not settled when this command was recorded; record it again after target changes finish.")
+        }
+        var masks: [Int32: EngineSession.MaskState] = [:]
+        for layer in selectedLayerIDs {
+            guard let row = layers.first(where: { $0.id == layer }) else {
+                return .unavailable("The recorded layer target could not be identified; record this command again.")
+            }
+            if row.hasMask {
+                guard let mask = maskStates[layer] else {
+                    return .unavailable("The layer-mask target was unavailable when this command was recorded.")
+                }
+                masks[layer] = mask
+            } else { masks[layer] = EngineSession.MaskState() }
+        }
+        return .target(RecorderTargetContext(layers: selectedLayerIDs, channels: selectedChannelIDs,
+                                            target: target, masks: masks, quickMask: quickMask))
+    }
+
+    private nonisolated static func recorderContextsMatch(_ first: RecorderContext, _ second: RecorderContext) -> Bool {
+        if case .target(let a) = first, case .target(let b) = second { return a == b }
+        return false
+    }
+
+    private nonisolated static func requireRecorderContext(_ context: RecorderContext,
+                                                           session: EngineSession, image: Int32) throws {
+        guard case .target(let expected) = context else {
+            throw RecorderReplayError(message: "This recording has no executable target binding.")
+        }
+        let layers = try session.selectedLayers(image)
+        let channels = try session.selectedItems(.channel, image: image)
+        let quickMask = try session.quickMask(image)
+        var masks: [Int32: EngineSession.MaskState] = [:]
+        for layer in layers { masks[layer] = try session.layerMask(layer, image: image) }
+        let target: PaintTarget?
+        if let channel = channels.first {
+            target = .channel(channel)
+        } else if let layer = layers.first {
+            if layers.count == 1, let mask = masks[layer], mask.mask != 0, mask.editing {
+                target = .mask(layer: layer, drawable: mask.mask)
+            } else { target = .layer(layer) }
+        } else { target = nil }
+        guard layers == expected.layers, channels == expected.channels, masks == expected.masks,
+              quickMask == expected.quickMask, target == expected.target else {
+            throw RecorderReplayError(message: "The native layer, channel, mask or Quick Mask target differs from the recording.")
+        }
+    }
+
+    @discardableResult
+    func run(effect: CommandEffect = .changesImage, semantic: SemanticImageCommand? = nil,
+             _ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
         guard !isClosing else { return false }
         if effect != .readsPixels && refuseWhileEditingUnavailable(forPreviewWork: effect == .changesPreview) {
             return false
         }
-        enqueue(on: inputQueue, input: effect == .changesImage) { [session, image] in
-            do { try work(session, image) } catch { self.report(error) }
+        let reservation: RecorderLog<SemanticImageCommand>.Reservation?
+        if semantic != nil, recorder.isRecording {
+            do {
+                let accepted = try recorder.reserve()
+                reservation = accepted
+                if let semantic, let context = captureRecorderContext(for: semantic) {
+                    recorderTargetContexts[accepted.ordinal] = context
+                }
+            }
+            catch {
+                assertionFailure("A recording log refused an admitted command: \(error)")
+                return false
+            }
+        } else {
+            reservation = nil
         }
+        let capturedContext = reservation.flatMap { recorderTargetContexts[$0.ordinal] }
+        enqueue(on: inputQueue, input: effect == .changesImage) { [session, image] in
+            var confirmedContext = capturedContext
+            if let capturedContext {
+                do { try Self.requireRecorderContext(capturedContext, session: session, image: image) }
+                catch {
+                    // Capture remains observational: an unconfirmable binding
+                    // prevents later replay, but never changes the live edit.
+                    confirmedContext = .unavailable("The original native target could not be confirmed: \(error)")
+                }
+            }
+            let result = Result { try work(session, image) }
+            if case .failure(let error) = result { self.report(error) }
+            guard let reservation, let semantic else { return }
+            let resolution: RecorderLog<SemanticImageCommand>.Resolution
+            switch result {
+            case .success: resolution = .success(semantic)
+            case .failure(let error): resolution = .failure(String(describing: error))
+            }
+            let settledContext = confirmedContext
+            DispatchQueue.main.async {
+                self.resolveRecording(reservation, with: resolution, context: settledContext)
+            }
+        }
+        // Notify only after queue admission/counting: a listener may close the
+        // document or start a fresh epoch, and accepted work must still drain.
+        if reservation != nil { notifyRecorderChanged() }
         return true
+    }
+
+    private func resolveRecording(_ reservation: RecorderLog<SemanticImageCommand>.Reservation,
+                                  with resolution: RecorderLog<SemanticImageCommand>.Resolution,
+                                  context: RecorderContext?) {
+        do {
+            try recorder.resolve(reservation, with: resolution)
+            // Resolve verifies the epoch first; stale callbacks must never
+            // replace a newer recording's binding at the same ordinal.
+            if let context { recorderTargetContexts[reservation.ordinal] = context }
+            notifyRecorderChanged()
+        } catch RecorderLog<SemanticImageCommand>.Refusal.staleReservation {
+            // Clear/start deliberately invalidate older callbacks.
+        } catch {
+            assertionFailure("An accepted Recorder reservation could not settle: \(error)")
+        }
     }
 
     /// Queues engine work; the document counts it until it ran so a close
@@ -4224,24 +4572,32 @@ final class ImageDocument {
     /// jobs (filter aborts) are cleanup: they queue and count even while
     /// closing, so the drain never destroys an image out from under them.
     private func enqueue(on queue: DispatchQueue, input: Bool = false, teardown: Bool = false,
-                       _ work: @escaping () -> Void) {
+                         afterFinish: (@MainActor () -> Void)? = nil,
+                         _ work: @escaping () -> Void) {
         guard teardown || !isClosing else { return }
         pendingWork += 1
         if input { pendingInput += 1 }
         EngineActivity.shared.whenIdle {
             queue.async {
                 work()
-                DispatchQueue.main.async { self.jobDidFinish(input: input) }
+                DispatchQueue.main.async {
+                    self.jobDidFinish(input: input)
+                    afterFinish?()
+                }
             }
         }
     }
 
     /// Count the whole exclusive operation, including its input drain,
     /// so a close cannot destroy the image while a file call is waiting.
-    private func enqueueExclusive(label: String, rejected: @escaping @MainActor () -> Void,
+    private func enqueueExclusive(effect: CommandEffect = .changesImage, label: String,
+                                  rejected: @escaping @MainActor () -> Void,
                                   _ work: @escaping () -> Void) {
-        guard !isClosing else { return rejected() }
+        guard !isClosing, !recorder.isReplaying || effect == .readsPixels else { return rejected() }
         onUserCommand?()
+        // The observer can start replay or close; reject with the original
+        // completion rather than silently dropping an admitted write.
+        guard !isClosing, !recorder.isReplaying || effect == .readsPixels else { return rejected() }
         pendingWork += 1
         let accepted = EngineActivity.shared.perform(label: label, work: work) {
             self.jobDidFinish(input: false)
@@ -4263,6 +4619,14 @@ final class ImageDocument {
             onQueueDrained = nil
             drained()
         }
+        if pendingWork == 0, let generation = recorderReplayWaitingGeneration {
+            recorderReplayWaitingGeneration = nil
+            DispatchQueue.main.async { self.continueRecorderReplay(generation: generation) }
+        }
+        // State callbacks above may have accepted thumbnail reads. Refresh
+        // only after their actual final drain, without changing command
+        // notifications or turning pointer samples into presentation events.
+        if pendingWork == 0 && !strokeIsActive { notifyRecorderPresentationChanged() }
     }
 
     private nonisolated func report(_ error: Error) {
