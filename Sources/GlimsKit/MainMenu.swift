@@ -280,6 +280,12 @@ enum MainMenu {
                     return entry
                 }(),
             ]),
+            submenu("Move Target", MoveTargetMode.allCases.map { mode in
+                let entry = item(mode.title, #selector(AppController.selectMoveTargetFromMenu(_:)))
+                entry.tag = ToolMenuCatalog.moveTargetTag(for: mode)
+                entry.keyEquivalentModifierMask = []
+                return entry
+            }),
             .separator(),
             item("Zoom In", #selector(DocumentWindowController.zoomIn(_:)), "+"),
             item("Zoom Out", #selector(DocumentWindowController.zoomOut(_:)), "-"),
