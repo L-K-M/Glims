@@ -314,6 +314,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (tool color menus)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "working-profile-title" {
+                try exerciseColorProfiles(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (working profile title)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "image-adjust" {
                 try exerciseImageAdjust(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (image adjust)" : "FAILED: \(failures) failure(s)")
@@ -1695,6 +1700,10 @@ enum EngineSmokeTest {
 
         check(!document.colorInfo.hasEmbeddedProfile && !document.colorInfo.profileLabel.isEmpty,
               "a fresh document caches the builtin profile, not an embedded one")
+        let nativeBuiltinProfile = try session.colorInfo(image).profileLabel
+        check(!nativeBuiltinProfile.isEmpty && controller.window?.isVisible == true
+                && controller.window?.title.contains(nativeBuiltinProfile) == true,
+              "the visible document title identifies its actual native built-in working profile")
         let assignItem = NSMenuItem(title: "Assign…",
                                     action: #selector(DocumentWindowController.assignColorProfile(_:)),
                                     keyEquivalent: "")
@@ -1716,6 +1725,8 @@ enum EngineSmokeTest {
         check(document.colorInfo.hasEmbeddedProfile
                 && document.colorInfo.profileLabel == "Glims Linear RGB Fixture",
               "the reload reports the embedded fixture profile")
+        check(controller.window?.title.contains("Glims Linear RGB Fixture") == true,
+              "assignment updates the visible title to the independently named working profile")
         check(document.undoInfo.undoCount == undoBefore + 1, "assignment is one undo step")
         let assigned = pixel(session, image, x: 8, y: 8) ?? []
         check(before.count == 4 && assigned.count == 4 && assigned[0] > before[0] + 30,
@@ -1725,12 +1736,17 @@ enum EngineSmokeTest {
         wait { document.pendingWork == 0 }
         spin()
         check(!document.colorInfo.hasEmbeddedProfile, "undo assignment restores the builtin profile")
+        check(controller.window?.title.contains(nativeBuiltinProfile) == true
+                && controller.window?.title.contains("Glims Linear RGB Fixture") == false,
+              "Undo restores the visible built-in profile without a stale embedded label")
         document.redo()
         wait { document.pendingWork == 0 }
         spin()
         check(document.colorInfo.hasEmbeddedProfile
                 && document.colorInfo.profileLabel == "Glims Linear RGB Fixture",
               "redo assignment restores the embedded profile")
+        check(controller.window?.title.contains("Glims Linear RGB Fixture") == true,
+              "Redo restores the visible embedded working profile")
 
         // Typed conversion to the builtin: one undo step, appearance kept.
         undoBefore = document.undoInfo.undoCount
@@ -1992,6 +2008,7 @@ enum EngineSmokeTest {
             check(secondField?.isEnabled == true, "closing one sheet preserves the other sheet's source binding")
             secondField?.stringValue = rgbICC
         }
+        let firstTitleBeforeSecondAssign = controller.window?.title
         let secondUndo = second.undoInfo.undoCount
         if let secondSheet { secondController.window?.endSheet(secondSheet, returnCode: .alertFirstButtonReturn) }
         wait { second.pendingWork == 0 && !EngineActivity.shared.isBusy }
@@ -2000,6 +2017,9 @@ enum EngineSmokeTest {
                 && second.colorInfo.profileLabel == "Glims Linear RGB Fixture"
                 && second.undoInfo.undoCount == secondUndo + 1,
               "the surviving sheet applies to its own captured document")
+        check(secondController.window?.title.contains("Glims Linear RGB Fixture") == true
+                && controller.window?.title == firstTitleBeforeSecondAssign,
+              "the second document updates only its own visible working-profile title")
 
         // The typed facade must reject NUL before withCString can select
         // the valid file prefix instead of the path the caller supplied.
