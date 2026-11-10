@@ -275,11 +275,23 @@ extension EngineSmokeTest {
         let undoDelta = afterReference.undo.undoCount - beforeReference.undo.undoCount
         expect(undoDelta > 1 && afterA.undo.undoCount - beforeA.undo.undoCount == undoDelta
             && afterA.undo.nextUndo == afterReference.undo.nextUndo, "each loaded command retains ordinary native Undo")
+        // The facade applies the property setters in order and each can push
+        // its own Undo entry. Compare the first native undo on both images.
+        func layerProperties(_ state: RecorderInstallNativeState, of id: Int32) -> EngineSession.LayerChange? {
+            guard let row = state.layers.first(where: { $0.id == id }) else { return nil }
+            return .init(name: row.name, isVisible: row.isVisible, opacity: row.opacity, mode: row.mode)
+        }
+        try session.undo(reference.image)
+        let referenceUndo = try native(reference.image)
         a.undo()
         try drain(a)
         let undone = try native(a.image)
-        expect(undone.layers.first(where: { $0.id == fixtureA.extra })?.name == "Chosen destination"
-            && undone.undo.undoCount == afterA.undo.undoCount - 1, "one Undo reverses the final bound layer change")
+        let undoneProperties = layerProperties(undone, of: fixtureA.extra)
+        expect(undoneProperties != nil && undoneProperties == layerProperties(referenceUndo, of: reference.extra)
+            && undoneProperties != layerProperties(afterA, of: fixtureA.extra)
+            && undone.undo.undoCount == afterA.undo.undoCount - 1 && undone.undo.redoCount == afterA.undo.redoCount + 1
+            && undone.undo.nextUndo == referenceUndo.undo.nextUndo && undone.undo.nextRedo == referenceUndo.undo.nextRedo,
+               "one Undo matches the direct native property transition and history")
         a.redo()
         try drain(a)
         expect(try native(a.image).layers == afterA.layers && native(b.image) == beforeB && recording(b) == oldB, "Redo restores bound properties while B remains untouched")
