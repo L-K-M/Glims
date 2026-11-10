@@ -132,6 +132,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (recorder install)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-save" {
+                try exerciseRecorderSave(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (recorder save)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents" {
                 try exerciseCloseAll(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (Close All)" : "FAILED: \(failures) failure(s)")
