@@ -40,9 +40,18 @@ extension EngineSmokeTest {
             targetBytes += [((x / 2 + y / 3) & 1) == 0 ? 19 : 231,
                             UInt8((x * 29 + y * 13) % 256), UInt8((x * 7 + y * 47) % 256),
                             UInt8(48 + (x * 11 + y * 17) % 208)]
-            maskBytes += [UInt8(x < 13 ? 20 + x * 2 + y : 190 + (x + y) % 47),
-                          UInt8(y < 19 ? 40 + y * 2 + x : 199 + x % 37),
-                          UInt8((x * 5 + y * 3) % 230), UInt8(64 + (x * 7 + y * 19) % 192)]
+            let referenceRed: Int = x < 13 ? 20 + x * 2 + y : 190 + (x + y) % 47
+            let referenceGreen: Int = y < 19 ? 40 + y * 2 + x : 199 + x % 37
+            let referenceBlue: Int = (x * 5 + y * 3) % 230
+            let referenceAlpha: Int = 64 + (x * 7 + y * 19) % 192
+            let redByte: UInt8 = UInt8(referenceRed)
+            let greenByte: UInt8 = UInt8(referenceGreen)
+            let blueByte: UInt8 = UInt8(referenceBlue)
+            let alphaByte: UInt8 = UInt8(referenceAlpha)
+            maskBytes.append(redByte)
+            maskBytes.append(greenByte)
+            maskBytes.append(blueByte)
+            maskBytes.append(alphaByte)
         } }
         let pixels = ClipboardImage(width: side, height: side, pixels: Data(targetBytes), origin: .zero)
         let maskPixels = ClipboardImage(width: side, height: side, pixels: Data(maskBytes), origin: .zero)
