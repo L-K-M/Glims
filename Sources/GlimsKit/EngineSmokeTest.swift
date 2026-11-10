@@ -105,6 +105,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-replay" {
+                try exerciseRecorderReplay(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (recorder replay)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-capture" {
                 try exerciseRecorderCapture(session, documents: documents)
                 print(failures == 0 ? "PASSED (recorder capture)" : "FAILED: \(failures) failure(s)")
@@ -541,6 +546,7 @@ enum EngineSmokeTest {
             try exercisePendingEditScope(session, documents: documents)
             try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
             try exerciseRecorderCapture(session, documents: documents)
+            try exerciseRecorderReplay(session, work: work, documents: documents)
             try exercisePlugInCommands(session, documents: documents)
             try exerciseNativeFilterForms(session, work: work, documents: documents)
             try exerciseFilterStackInterface(session, work: work, documents: documents)
