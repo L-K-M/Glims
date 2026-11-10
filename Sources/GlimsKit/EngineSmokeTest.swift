@@ -383,6 +383,16 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (snapping)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "move-pick-range" {
+                try exerciseMovePickRange(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Move pick range)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "move-pick" {
+                try exerciseMovePick(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Move pick)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "floating-move" {
                 try exerciseFloatingMove(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (floating move)" : "FAILED: \(failures) failure(s)")

@@ -161,6 +161,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
     private var shownMissingBrush: EngineSession.ResourceIdentity?
     private var shownBrushPresentationRevision = 0
     private var shownGradient: GradientPresentation?
+    private var shownMoveTargetMode: MoveTargetMode?
     private var observer: UUID?
     /// Existing controls follow external changes without replacing the active
     /// field editor. Resource presentation rebuilds wait for editing to end.
@@ -210,7 +211,8 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
                     for: state.current, choice: state.brush(for: state.current).resource))
         let gradientChanged = state.current == .gradient
             && shownGradient != Self.gradientPresentation(of: state)
-        let presentationChanged = fontsArrived || brushChanged || gradientChanged
+        let moveTargetChanged = state.current == .move && shownMoveTargetMode != state.moveTargetMode
+        let presentationChanged = fontsArrived || brushChanged || gradientChanged || moveTargetChanged
         // Keep presentation rows until the active field finishes its normal
         // commit. A tool switch still replaces the options immediately.
         if shownTool != state.current || (presentationChanged && !Self.hasFieldEditor(in: view)) {
@@ -264,6 +266,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         shownMissingBrush = BrushChooser.shared.missingIdentity(for: tool, choice: shownBrushResource)
         shownBrushPresentationRevision = BrushChooser.shared.presentationRevision
         shownGradient = tool == .gradient ? Self.gradientPresentation(of: state) : nil
+        shownMoveTargetMode = tool == .move ? state.moveTargetMode : nil
         brushRefreshers.removeAll()
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         actionBindings.removeAll()
@@ -312,9 +315,21 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
             stack.addArrangedSubview(checkbox("Sample merged", state.fillSampleMerged) { on in
                 ToolState.shared.fillSampleMerged = on
             })
+        } else if tool == .move {
+            let modes: [MoveTargetMode] = [.currentLayer, .pickLayerOrGuide]
+            let selectedIndex = modes.firstIndex(of: state.moveTargetMode) ?? 0
+            stack.addArrangedSubview(popUp("Move target", modes.map(\.title),
+                                           selected: selectedIndex,
+                                           identifier: "move-target-mode") { index in
+                guard index >= 0 && index < modes.count else { return }
+                ToolState.shared.setMoveTargetMode(modes[index])
+            })
+            let message = state.moveTargetMode == .currentLayer
+                ? "Drag to move the selected layer. Arrow keys nudge it 1 pixel, Shift-arrow 10. Guides take priority."
+                : "Drag to move the layer under the pointer. A press on another layer anchors a floating selection on release. Empty space does nothing. Guides take priority."
+            stack.addArrangedSubview(hint(message))
         } else {
             let hints: [ToolID: String] = [
-                .move: "Drag to move the selected layer. Arrow keys nudge it 1 pixel, Shift-arrow 10.",
                 .crop: "Drag the area to keep, then press Return to crop or Escape to cancel.",
                 .eyedropper: "Click the image to pick the foreground color.",
                 .hand: "Drag to scroll. Hold Space with any tool for the hand.",
@@ -661,12 +676,16 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
     /// `items` must be distinct: NSPopUpButton drops repeated titles,
     /// which would shift every index after them.
     private func popUp(_ label: String, _ items: [String], selected: Int,
+                       identifier: String? = nil,
                        readBrush: ((EngineSession.Brush) -> Int)? = nil,
                        _ onChange: @escaping (Int) -> Void) -> NSView {
         assert(Set(items).count == items.count, "repeated pop-up titles in \(label)")
         let menu = NSPopUpButton(frame: .zero, pullsDown: false)
         menu.controlSize = .small
         menu.font = .systemFont(ofSize: 11)
+        if let identifier {
+            menu.identifier = NSUserInterfaceItemIdentifier(identifier)
+        }
         menu.setAccessibilityLabel(label)
         menu.addItems(withTitles: items)
         menu.selectItem(at: selected)
