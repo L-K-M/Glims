@@ -282,16 +282,19 @@ exercise (GlimsEngine *engine, gpointer data)
   gegl_buffer_set (gimp_drawable_get_buffer (GIMP_DRAWABLE (gimp_layer_get_mask (top))), GEGL_RECTANGLE (0, 0, 5, 5),
                    0, babl_format ("Y float"), mask_pixels, GEGL_AUTO_ROWSTRIDE);
   {
+    gdouble first_effective, first_mask, after_effective, after_mask;
     gfloat raw[4] = {0};
+    first_effective = gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 2, 1);
+    first_mask = gimp_pickable_get_opacity_at (GIMP_PICKABLE (gimp_layer_get_mask (top)), 2, 1);
     gegl_buffer_get (gimp_drawable_get_buffer (GIMP_DRAWABLE (top)), GEGL_RECTANGLE (2, 1, 1, 1),
                      1, babl_format ("RGBA float"), raw, GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
-    printf ("PICK ALPHA DIAG format=%s raw=%.17g mask=%.17g effective=%.17g\n",
+    after_effective = gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 2, 1);
+    after_mask = gimp_pickable_get_opacity_at (GIMP_PICKABLE (gimp_layer_get_mask (top)), 2, 1);
+    printf ("PICK ALPHA ORDERED DIAG format=%s first=%.17g first_mask=%.17g raw=%.17g after=%.17g after_mask=%.17g\n",
             babl_get_name (gegl_buffer_get_format (gimp_drawable_get_buffer (GIMP_DRAWABLE (top)))),
-            (double) raw[3],
-            gimp_pickable_get_opacity_at (GIMP_PICKABLE (gimp_layer_get_mask (top)), 2, 1),
-            gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 2, 1));
+            first_effective, first_mask, (double) raw[3], after_effective, after_mask);
+    CHECK (first_effective == 0.25, "literal alpha is exactly quarter, not64/255");
   }
-  CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 2, 1) == 0.25, "literal alpha is exactly quarter, not64/255");
   CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 3, 1) > 0.25, "next float above quarter is stored above quarter");
   CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 4, 1) < 0.25, "next float below quarter is stored below quarter");
   CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 1, 2) < 0.001,
