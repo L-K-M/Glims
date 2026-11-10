@@ -368,6 +368,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (image adjust)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "selection-anchor" {
+                try exerciseSelectionAnchor(session, documents: documents)
+                print(failures == 0 ? "PASSED (selection anchor)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "selection-drag" {
                 try exerciseSelectionDrag(session, documents: documents)
                 print(failures == 0 ? "PASSED (selection drag)" : "FAILED: \(failures) failure(s)")
