@@ -17,11 +17,12 @@ The output parent must exist. An existing output is refused unless
 prefix is always refused, including with `--overwrite`.
 
 The registry is opened only with `mode=ro&immutable=1`, after checking that
-its WAL is absent/empty and the database is stable while hashing. Database
-hash/stat and WAL evidence must remain identical after inventory. A nonempty
-WAL is refused rather than ignored; a database or WAL change makes the whole
-report incomplete. This avoids the shared-memory bookkeeping writes that a
-normal SQLite read-only connection can still perform.
+its WAL and rollback journal are absent/empty and the database is stable while
+hashing. Database hash/stat, WAL and rollback-journal evidence must remain
+identical after inventory. A nonempty WAL or rollback journal is refused rather
+than ignored; a database or journal change makes the whole report incomplete.
+This avoids the shared-memory bookkeeping writes that a normal SQLite
+read-only connection can still perform.
 
 For each requested name, the tool requires one `ports.state='installed'`
 entry. Inactive `imaged` entries are excluded. It preserves installed epoch,
@@ -61,13 +62,16 @@ metadata; the corresponding historical tree is not fetched or verified.
 The focused tests use temporary SQLite registries and recipe/group fixtures:
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 -I -m unittest discover \
+python3 -I -B -m unittest discover \
   -s scripts/tests -p test_installed_port_provenance.py -v
 ```
 
-Fifteen checks cover original recipes versus a differing current tree,
+Nineteen tests cover original recipes versus a differing current tree,
 independent SHA/size mismatches, ambiguous installed entries, inactive images,
-missing/corrupt groups, database/WAL changes, required commit metadata and
-output protections. A read-only sample of installed aom, zlib and libidn2
-verified their exact recipes/groups; registry DB, WAL and SHM bytes and
+missing/corrupt groups, database/WAL/rollback-journal changes, required commit
+metadata and output protections. Journal regressions first reproduced a nonempty
+journal reaching SQLite open and newly created journals being marked stable;
+absent/empty controls preserve the read-only behavior. A read-only sample of
+installed aom, zlib and libidn2 verified their exact recipes/groups; registry
+DB, WAL and SHM bytes and
 modification/change timestamps were unchanged before/after that sample.

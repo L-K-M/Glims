@@ -71,6 +71,17 @@ def wal_fingerprint(database: Path) -> dict | None:
     return evidence
 
 
+def journal_fingerprint(database: Path) -> dict | None:
+    path = Path(str(database) + "-journal")
+    try:
+        evidence = file_fingerprint(path)
+    except FileNotFoundError:
+        return None
+    if evidence["size"]:
+        raise MetadataError("nonempty_journal", "Refusing immutable reads while the registry rollback journal is nonempty.", path)
+    return evidence
+
+
 def verified_file(path: Path, digest: str, size: int, issues: list) -> dict:
     evidence = {"path": str(path), "expected_sha256": digest, "expected_size": size, "verified": False}
     try:
@@ -203,9 +214,12 @@ def inventory(prefix: Path, names: list[str]) -> dict:
     evidence = report["registry"]
     try:
         evidence["wal_before"] = wal_fingerprint(database)
+        evidence["journal_before"] = journal_fingerprint(database)
         evidence["before"] = file_fingerprint(database)
         if wal_fingerprint(database) != evidence["wal_before"]:
             raise MetadataError("registry_changed", "Registry WAL changed before immutable reads.", database)
+        if journal_fingerprint(database) != evidence["journal_before"]:
+            raise MetadataError("registry_changed", "Registry rollback journal changed before immutable reads.", database)
         uri = database.as_uri() + "?mode=ro&immutable=1"
         with closing(sqlite3.connect(uri, uri=True)) as connection:
             connection.row_factory = sqlite3.Row
@@ -213,8 +227,10 @@ def inventory(prefix: Path, names: list[str]) -> dict:
             report["ports"] = [inspect_port(connection, prefix, name) for name in names]
         evidence["after"] = file_fingerprint(database)
         evidence["wal_after"] = wal_fingerprint(database)
-        if evidence["before"] != evidence["after"] or evidence["wal_before"] != evidence["wal_after"]:
-            raise MetadataError("registry_changed", "Registry database/WAL changed during inventory; results are incomplete.", database)
+        evidence["journal_after"] = journal_fingerprint(database)
+        if (evidence["before"] != evidence["after"] or evidence["wal_before"] != evidence["wal_after"] or
+                evidence["journal_before"] != evidence["journal_after"]):
+            raise MetadataError("registry_changed", "Registry database/WAL/rollback journal changed during inventory; results are incomplete.", database)
         evidence["stable"] = True
     except (MetadataError, OSError, sqlite3.Error) as error:
         report["issues"].append(error.issue if isinstance(error, MetadataError) else

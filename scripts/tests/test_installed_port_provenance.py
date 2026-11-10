@@ -157,6 +157,34 @@ class InstalledPortProvenanceTests(unittest.TestCase):
         self.assertEqual(self.prefix_bytes(), before)
         self.assert_incomplete(*self.invoke(), "nonempty_wal")
 
+    def test_nonempty_journal_is_rejected_before_sqlite_open(self):
+        journal = Path(str(self.database) + "-journal")
+        journal.write_bytes(b"pending rollback transaction")
+        Path(str(self.database) + "-wal").write_bytes(b"")
+        Path(str(self.database) + "-shm").write_bytes(b"existing shared-memory bytes")
+        before = self.prefix_bytes()
+        with mock.patch.object(inventory.sqlite3, "connect", side_effect=AssertionError("must not open")):
+            report = inventory.inventory(self.prefix, ["fixture"])
+        self.assertFalse(report["metadata_complete"])
+        self.assertFalse(report["registry"]["stable"])
+        self.assertEqual(report["issues"][0]["code"], "nonempty_journal")
+        self.assertEqual(self.prefix_bytes(), before)
+        self.assert_incomplete(*self.invoke(), "nonempty_journal")
+        self.assertEqual(self.prefix_bytes(), before)
+
+    def test_absent_and_empty_journal_allow_unchanged_inventory(self):
+        journal = Path(str(self.database) + "-journal")
+        for contents in (None, b""):
+            with self.subTest(journal=contents):
+                if contents is not None:
+                    journal.write_bytes(contents)
+                before = self.prefix_bytes()
+                report = inventory.inventory(self.prefix, ["fixture"])
+                self.assertTrue(report["metadata_complete"], report["issues"])
+                self.assertTrue(report["registry"]["stable"])
+                self.assertFalse(report["corresponding_source_complete"])
+                self.assertEqual(self.prefix_bytes(), before)
+
     def test_database_change_during_inspection_fails_consistency(self):
         original = inventory.inspect_port
         def changed(connection, prefix, name):
@@ -181,6 +209,39 @@ class InstalledPortProvenanceTests(unittest.TestCase):
         self.assertFalse(report["metadata_complete"])
         self.assertFalse(report["ports"][0]["metadata_complete"])
         self.assertEqual(report["issues"][0]["code"], "nonempty_wal")
+
+    def test_nonempty_journal_created_during_inspection_fails_consistency(self):
+        original = inventory.inspect_port
+        journal = Path(str(self.database) + "-journal")
+        payload = b"new pending rollback transaction"
+        before = self.prefix_bytes()
+        def changed(connection, prefix, name):
+            report = original(connection, prefix, name)
+            journal.write_bytes(payload)
+            return report
+        with mock.patch.object(inventory, "inspect_port", side_effect=changed):
+            report = inventory.inventory(self.prefix, ["fixture"])
+        self.assertFalse(report["metadata_complete"])
+        self.assertFalse(report["registry"]["stable"])
+        self.assertFalse(report["ports"][0]["metadata_complete"])
+        self.assertEqual(report["issues"][0]["code"], "nonempty_journal")
+        self.assertEqual(self.prefix_bytes(), before | {str(journal.relative_to(self.prefix)): sha(payload)})
+
+    def test_empty_journal_created_during_inspection_fails_consistency(self):
+        original = inventory.inspect_port
+        journal = Path(str(self.database) + "-journal")
+        before = self.prefix_bytes()
+        def changed(connection, prefix, name):
+            report = original(connection, prefix, name)
+            journal.write_bytes(b"")
+            return report
+        with mock.patch.object(inventory, "inspect_port", side_effect=changed):
+            report = inventory.inventory(self.prefix, ["fixture"])
+        self.assertFalse(report["metadata_complete"])
+        self.assertFalse(report["registry"]["stable"])
+        self.assertFalse(report["ports"][0]["metadata_complete"])
+        self.assertEqual(report["issues"][0]["code"], "registry_changed")
+        self.assertEqual(self.prefix_bytes(), before | {str(journal.relative_to(self.prefix)): sha(b"")})
 
     def test_missing_ports_commit_is_incomplete(self):
         (self.image / "+CONTENTS").write_text(self.contents.replace("@ports_commit " + "a" * 40 + "\n", ""))
