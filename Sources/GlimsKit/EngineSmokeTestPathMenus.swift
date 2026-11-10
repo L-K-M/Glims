@@ -272,13 +272,50 @@ extension EngineSmokeTest {
         check(docB.paths.isEmpty && docA.paths.count == aPathsBefore && errorsA.isEmpty,
               "Delete Path sent to B's controller removes only B's path")
 
-        var stopped = false
-        a.canvas.stopRendering { stopped = true }
-        wait { stopped }
+        // Hold only the canvas queue, never the native engine lock. The
+        // real window close starts immediately but cannot reach the
+        // document's close guard until this barrier releases.
+        let renderReady = DispatchSemaphore(value: 0), renderRelease = DispatchSemaphore(value: 0)
+        var renderReleased = false
+        defer { if !renderReleased { renderRelease.signal() } }
+        a.canvas.enqueueRenderBarrier {
+            renderReady.signal()
+            _ = renderRelease.wait(timeout: .now() + 30)
+        }
+        var renderHeld = false
+        let renderDeadline = Date().addingTimeInterval(10)
+        while !renderHeld && Date() < renderDeadline {
+            renderHeld = renderReady.wait(timeout: .now()) == .success
+            if !renderHeld { spin(0.01) }
+        }
+        check(renderHeld, "a bounded canvas barrier holds the actual window close before its document drain")
+        guard renderHeld else { return }
+        let closingPaths = try session.paths(imageA)
+        let closingSelection = try session.selectedItems(.path, image: imageA)
+        let closingHistory = try session.undoInfo(imageA)
+        let closingErrors = errorsA
         var closed = false
-        docA.closeImageWhenDrained { closed = true }
+        let previousClose = a.onClose
+        a.onClose = { controller in previousClose?(controller); closed = true }
+        a.window?.close()
+        check(a.closeStarted && !docA.isClosing && !closed,
+              "the real window close exposes the held render-drain gap before document closing")
         check(!a.validateMenuItem(newItem) && !a.validateMenuItem(deleteItem),
               "both path menu commands disable as their captured document closes")
+        send(newItem, to: a)
+        settle(docA)
+        check(try session.paths(imageA) == closingPaths
+                && session.selectedItems(.path, image: imageA) == closingSelection
+                && session.undoInfo(imageA) == closingHistory && errorsA == closingErrors,
+              "direct New Path during the close-drain gap changes no paths, selection, history or errors")
+        send(deleteItem, to: a)
+        settle(docA)
+        check(try session.paths(imageA) == closingPaths
+                && session.selectedItems(.path, image: imageA) == closingSelection
+                && session.undoInfo(imageA) == closingHistory && errorsA == closingErrors,
+              "direct Delete Path during the close-drain gap changes no paths, selection, history or errors")
+        renderReleased = true
+        renderRelease.signal()
         wait { closed }
         check(closed && (try? session.info(imageA)) == nil,
               "the path-menu document completes its close drain")
