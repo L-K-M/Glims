@@ -275,26 +275,34 @@ exercise (GlimsEngine *engine, gpointer data)
    * Do not assert exact equality between a stored float and double0.001. */
   alpha_pixel (top, 1, 2, 0.0005f);
   alpha_pixel (top, 2, 2, 0.002f);
+  /* Literal unmasked controls share this fresh fixture with the later mask
+   * cases; they do not claim fresh-process isolation or a cache root cause. */
+  {
+    gfloat raw_quarter[4] = {0};
+    gegl_buffer_get (gimp_drawable_get_buffer (GIMP_DRAWABLE (top)), GEGL_RECTANGLE (2, 1, 1, 1),
+                     1, babl_format ("RGBA float"), raw_quarter, GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
+    CHECK (gimp_layer_get_mask (top) == NULL && raw_quarter[3] == 0.25f,
+           "unmasked native float storage contains the literal exact quarter alpha");
+  }
+  sample (engine, id, (GlimsPoint) {7, 5}, 7, 5,
+          GLIMS_PICK_EXPECTED_LOW_THRESHOLD ? item_id (top) : item_id (child),
+          "unmasked exact quarter follows the explicitly reviewed native threshold");
+  sample (engine, id, (GlimsPoint) {8, 5}, 8, 5, item_id (top),
+          "unmasked next float above quarter passes both reviewed thresholds");
+  sample (engine, id, (GlimsPoint) {9, 5}, 9, 5,
+          GLIMS_PICK_EXPECTED_LOW_THRESHOLD ? item_id (top) : item_id (child),
+          "unmasked next float below quarter follows the explicitly reviewed native threshold");
   NEED (api->layer_mask_add (engine, id, item_id (top), GLIMS_MASK_WHITE, FALSE, &mask_id, &error) == GLIMS_STATUS_OK,
         "attach top's real applied mask");
   for (gint i = 0; i < 25; i++) mask_pixels[i] = 1;
   mask_pixels[0] = 0;
   gegl_buffer_set (gimp_drawable_get_buffer (GIMP_DRAWABLE (gimp_layer_get_mask (top))), GEGL_RECTANGLE (0, 0, 5, 5),
                    0, babl_format ("Y float"), mask_pixels, GEGL_AUTO_ROWSTRIDE);
-  {
-    gdouble first_effective, first_mask, after_effective, after_mask;
-    gfloat raw[4] = {0};
-    first_effective = gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 2, 1);
-    first_mask = gimp_pickable_get_opacity_at (GIMP_PICKABLE (gimp_layer_get_mask (top)), 2, 1);
-    gegl_buffer_get (gimp_drawable_get_buffer (GIMP_DRAWABLE (top)), GEGL_RECTANGLE (2, 1, 1, 1),
-                     1, babl_format ("RGBA float"), raw, GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
-    after_effective = gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 2, 1);
-    after_mask = gimp_pickable_get_opacity_at (GIMP_PICKABLE (gimp_layer_get_mask (top)), 2, 1);
-    printf ("PICK ALPHA ORDERED DIAG format=%s first=%.17g first_mask=%.17g raw=%.17g after=%.17g after_mask=%.17g\n",
-            babl_get_name (gegl_buffer_get_format (gimp_drawable_get_buffer (GIMP_DRAWABLE (top)))),
-            first_effective, first_mask, (double) raw[3], after_effective, after_mask);
-    CHECK (first_effective == 0.25, "literal alpha is exactly quarter, not64/255");
-  }
+  /* Finish the direct mask seed's native notification before observing it.
+   * This setup order is not a diagnosis of the earlier one-run outlier. */
+  gimp_drawable_update (GIMP_DRAWABLE (gimp_layer_get_mask (top)), 0, 0, 5, 5);
+  gimp_image_flush (image);
+  CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 2, 1) == 0.25, "literal alpha is exactly quarter, not64/255");
   CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 3, 1) > 0.25, "next float above quarter is stored above quarter");
   CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 4, 1) < 0.25, "next float below quarter is stored below quarter");
   CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 1, 2) < 0.001,
