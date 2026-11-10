@@ -256,6 +256,7 @@ final class ImageDocument {
     /// Recorder admission and completion use their own notification so observing
     /// the log never replaces the window's image-state handler.
     var onRecorderChange: (() -> Void)?
+    private var recorderObservers: [UUID: () -> Void] = [:]
     /// Called with the changed area in image pixels.
     var onProjectionChange: ((CGRect) -> Void)?
     /// Called with engine errors that the interface should show.
@@ -4226,16 +4227,34 @@ final class ImageDocument {
         guard paintTargetIsValid else { throw DocumentError.targetChanged }
     }
 
+    /// Recorder-specific UI subscriptions leave the existing single callback
+    /// intact. A snapshot permits listeners to detach or retarget reentrantly.
+    func addRecorderObserver(_ observer: @escaping () -> Void) -> UUID {
+        let token = UUID()
+        recorderObservers[token] = observer
+        return token
+    }
+
+    func removeRecorderObserver(_ token: UUID) {
+        recorderObservers.removeValue(forKey: token)
+    }
+
+    private func notifyRecorderChanged() {
+        let observers = Array(recorderObservers.values)
+        onRecorderChange?()
+        observers.forEach { $0() }
+    }
+
     func startRecording() throws {
         guard !isClosing else { throw DocumentError.closed }
         try recorder.startRecording()
         recorderTargetContexts.removeAll()
-        onRecorderChange?()
+        notifyRecorderChanged()
     }
 
     func stopRecording() throws {
         try recorder.stopRecording()
-        onRecorderChange?()
+        notifyRecorderChanged()
     }
 
     @discardableResult
@@ -4246,7 +4265,7 @@ final class ImageDocument {
         }
         recorder.clear()
         recorderTargetContexts.removeAll()
-        onRecorderChange?()
+        notifyRecorderChanged()
         return true
     }
 
@@ -4260,7 +4279,7 @@ final class ImageDocument {
         recorderReplayGeneration = UUID()
         recorderReplayWaitingGeneration = nil
         let generation = recorderReplayGeneration
-        onRecorderChange?()
+        notifyRecorderChanged()
         continueRecorderReplay(generation: generation)
     }
 
@@ -4268,7 +4287,7 @@ final class ImageDocument {
         try recorder.cancelReplay()
         recorderReplayGeneration = UUID()
         recorderReplayWaitingGeneration = nil
-        onRecorderChange?()
+        notifyRecorderChanged()
     }
 
     var replayStatus: RecorderLog<SemanticImageCommand>.ReplayStatus { recorder.replayStatus }
@@ -4361,7 +4380,7 @@ final class ImageDocument {
             assertionFailure("Recorder could not acknowledge its accepted replay step: \(error)")
             return
         }
-        onRecorderChange?()
+        notifyRecorderChanged()
     }
 
     private nonisolated static func recorderCommandNeedsTarget(_ command: SemanticImageCommand) -> Bool {
@@ -4473,7 +4492,7 @@ final class ImageDocument {
         }
         // Notify only after queue admission/counting: a listener may close the
         // document or start a fresh epoch, and accepted work must still drain.
-        if reservation != nil { onRecorderChange?() }
+        if reservation != nil { notifyRecorderChanged() }
         return true
     }
 
@@ -4485,7 +4504,7 @@ final class ImageDocument {
             // Resolve verifies the epoch first; stale callbacks must never
             // replace a newer recording's binding at the same ordinal.
             if let context { recorderTargetContexts[reservation.ordinal] = context }
-            onRecorderChange?()
+            notifyRecorderChanged()
         } catch RecorderLog<SemanticImageCommand>.Refusal.staleReservation {
             // Clear/start deliberately invalidate older callbacks.
         } catch {

@@ -82,6 +82,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         target: { [weak self] in self?.frontDocument },
         makeContent: { HistoryPaletteController() })
 
+    private lazy var recorderContent = RecorderPaletteController(currentDocument: { [weak self] in self?.frontDocument })
+    private lazy var recorderPalette: Palette = PaletteCenter.shared.palette(
+        for: RecorderPaletteController.definition,
+        target: { [weak self] in self?.frontDocument },
+        makeContent: { [weak self] in self?.recorderContent ?? RecorderPaletteController() })
+
     private lazy var channelsPalette: Palette = PaletteCenter.shared.palette(
         for: ChannelsPaletteController.definition,
         target: { [weak self] in self?.frontDocument },
@@ -98,7 +104,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     /// The first-launch layout (docs/design.md, section 2): Tools at the
     /// top left with Tool Options docked under it as one column, Layers at
-    /// the top right. History shares Layers' and Paths' group rather than
+    /// the top right. History and Recorder share Layers' and Paths' group rather than
     /// adding a column. Rigi keeps whatever the person arranges since, and
     /// a frame saved by an earlier build still places its palette once.
     static let defaultPaletteLayout = [
@@ -107,7 +113,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                             placement: .docked(below: ToolsPaletteController.definition.kind)),
         PaletteGroupDefault([LayersPaletteController.definition.kind, ChannelsPaletteController.definition.kind,
                              PathsPaletteController.definition.kind,
-                             HistoryPaletteController.definition.kind],
+                             HistoryPaletteController.definition.kind, RecorderPaletteController.definition.kind],
                             placement: .topTrailing),
     ]
 
@@ -398,9 +404,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         // new document's frame. Fitting before this point used the old
         // viewport and could leave the canvas underneath palette columns.
         PaletteCenter.shared.setDefaultLayout(Self.defaultPaletteLayout)
-        // Paths and History before Layers, so Layers is the tab their
+        // Paths, History and Recorder before Layers, so Layers is the tab their
         // shared group shows.
-        for palette in [toolsPalette, toolOptionsPalette, channelsPalette, pathsPalette, historyPalette, layersPalette]
+        for palette in [toolsPalette, toolOptionsPalette, channelsPalette, pathsPalette, historyPalette, recorderPalette, layersPalette]
         where !palette.isPresented {
             palette.showPanel()
         }
@@ -589,6 +595,17 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     @objc func showHistory(_ sender: Any?) {
         historyPalette.isPresented ? historyPalette.bringToFront() : historyPalette.showPanel()
+    }
+
+    @objc func showRecorder(_ sender: Any?) {
+        recorderPalette.isPresented ? recorderPalette.bringToFront() : recorderPalette.showPanel()
+    }
+
+    @objc func recorderCommand(_ sender: NSMenuItem) {
+        guard let action = RecorderPaletteAction(rawValue: sender.tag) else { return }
+        showRecorder(sender)
+        recorderContent.retarget(to: frontDocument)
+        recorderContent.perform(action)
     }
 
     /// File ▸ Recover Documents…: the panel is never a dead end — Later
@@ -911,7 +928,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             return session != nil && !PlugInCommands.isRunning && !terminationRequested
         case #selector(recoverDocuments(_:)):
             return session != nil && !terminationRequested
-        case #selector(showLayers(_:)), #selector(showChannels(_:)), #selector(showPaths(_:)), #selector(showHistory(_:)),
+        case #selector(recorderCommand(_:)):
+            guard session != nil, !terminationRequested,
+                  let action = RecorderPaletteAction(rawValue: menuItem.tag) else { return false }
+            return RecorderPalettePresentation(document: frontDocument).canPerform(action)
+        case #selector(showLayers(_:)), #selector(showChannels(_:)), #selector(showPaths(_:)), #selector(showHistory(_:)), #selector(showRecorder(_:)),
              #selector(showTools(_:)), #selector(showToolOptions(_:)):
             return session != nil
         case #selector(togglePaletteVisibility(_:)):

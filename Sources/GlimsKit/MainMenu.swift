@@ -67,6 +67,12 @@ enum MainMenu {
                 item("Pattern from Selection…", #selector(DocumentWindowController.createPatternFromSelection(_:))),
                 item("Gradient…", #selector(DocumentWindowController.createGradient(_:))),
             ]),
+            .separator(),
+            submenu("Recorder", RecorderPaletteAction.allCases.map { action in
+                let command = item(action.title, #selector(AppController.recorderCommand(_:)))
+                command.tag = action.rawValue
+                return command
+            }),
         ])
         // Plug-in commands are appended to Image, Layer and Select (PlugInMenus).
         let mode = NSMenuItem(title: "Mode", action: nil, keyEquivalent: "")
@@ -253,6 +259,7 @@ enum MainMenu {
             item("Channels", #selector(AppController.showChannels(_:))),
             item("Paths", #selector(AppController.showPaths(_:))),
             item("History", #selector(AppController.showHistory(_:))),
+            item("Recorder", #selector(AppController.showRecorder(_:))),
             item("Hide Palettes", #selector(AppController.togglePaletteVisibility(_:))),
             item("Reset Palettes", #selector(AppController.resetPaletteLayout(_:))),
             WorkspaceMenu.shared.makeItem(),
