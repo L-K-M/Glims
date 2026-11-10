@@ -2625,6 +2625,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     func windowWillClose(_ notification: Notification) {
         closeStarted = true
+        imageDocument.beginClosing()
         if let alert = viewAngleAlert, window?.attachedSheet === alert.window {
             window?.endSheet(alert.window, returnCode: .abort)
         }

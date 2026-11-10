@@ -317,8 +317,8 @@ extension EngineSmokeTest {
         }
 
         // Hold only the canvas queue, never the native engine lock. The
-        // real window close starts immediately but cannot reach the
-        // document's close guard until this barrier releases.
+        // real window close stops document admission immediately, but
+        // native destruction must wait until this barrier releases.
         let renderReady = DispatchSemaphore(value: 0), renderRelease = DispatchSemaphore(value: 0)
         var renderReleased = false
         defer { if !renderReleased { renderRelease.signal() } }
@@ -342,8 +342,9 @@ extension EngineSmokeTest {
         let previousClose = a.onClose
         a.onClose = { controller in previousClose?(controller); closed = true }
         a.window?.close()
-        check(a.closeStarted && !docA.isClosing && !closed,
-              "the real window close exposes the held render-drain gap before document closing")
+        check(a.closeStarted && docA.isClosing && !docA.acceptsEdits && !closed
+                && (try? session.info(imageA)) != nil,
+              "window close stops document admission while the native image waits for the held render drain")
         check(!a.validateMenuItem(newItem) && !a.validateMenuItem(deleteItem),
               "both path menu commands disable as their captured document closes")
         send(newItem, to: a)
