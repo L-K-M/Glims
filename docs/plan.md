@@ -3702,3 +3702,12 @@ The actual old window failed five new profile-title checks while retaining
 plus 1,015 units. See [working-profile-title.md](working-profile-title.md)
 for exact foreground-host and external AX limits. Hosted CI/review and final
 integration remain pending.
+
+### Spring-loaded tool letters (2026-11-10 candidate)
+
+Tap selects; Shift+letter cycles; hold or use an interaction temporarily
+selects until its captured interaction finishes. New explicit selections and
+text focus retain priority. A measured focus-loss regression (two failures)
+is corrected; all four engines pass 83 interface checks, plus 18 state tests
+and 1,033 isolated full-suite tests. See [spring-tool-letters.md](spring-tool-letters.md)
+for exact revisions, review scope and remaining physical-input/release gates.
