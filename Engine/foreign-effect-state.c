@@ -5,6 +5,7 @@
 #include "core/gimpchannel.h"
 #include "core/gimpcontainer.h"
 #include "core/gimpdrawable.h"
+#include "core/gimpdrawable-filters.h"
 #include "core/gimpdrawablefilter.h"
 #include "core/gimpdrawablefiltermask.h"
 #include "core/gimpfilter.h"
@@ -14,6 +15,7 @@
 #include "core/gimplist.h"
 #include "core/gimpviewable.h"
 #include "gegl/gimp-babl.h"
+#include "gegl/gimp-babl-compat.h"
 #include "operations/operations-enums.h"
 #include "operations/layer-modes/gimp-layer-modes.h"
 #include <math.h>
