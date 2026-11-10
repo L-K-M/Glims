@@ -3571,6 +3571,19 @@ existing conformance also passes. See `variable-blur.md` for the independent
 pixel oracle, refusal guards and remaining auxiliary roles. The facade keeps
 APIv1/163 and upstream sources remain unchanged. CI/review/integration follow.
 
+### Exposure in Image Adjust (2026-11-10 candidate)
+
+Exposure now joins Image > Adjust through the existing generic native filter
+route, preserving Filter > Color and loaded-operation support gates. The actual
+29-check menu/form fixture first reproduced exactly one failure, the missing
+Adjust placement; its other 28 pixel, alpha, effect, Undo/Redo, XCF, ownership
+and admission checks passed. The one-entry mapping change leaves those oracles
+unchanged. Source `ddcabd4` passes29 actual checks on each engine with external
+API165 producers and1,012 proper private leased units. Prior completed review
+rounds cover byte-identical feature/fixture inputs; a subsequent reviewer
+timeout is explicitly not approval. Latest integration CI and combined release
+acceptance remain separate. See `image-adjust.md` for scope and evidence.
+
 ### Legacy Select Color source ownership (2026-11-10 candidate)
 
 GIMP 3.0.8's seeded/by-color region algorithms retain an owned source buffer.
