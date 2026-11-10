@@ -24,6 +24,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import time
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PINNED_REF = "GIMP_3_2_8"
@@ -180,35 +181,71 @@ def run(args: argparse.Namespace) -> int:
     command = [str(binary)]
     print(f"==> run synthetic GLib transport oracle with throwaway settings in {work}", flush=True)
     print_command(command)
+    interruption = None
+
     def interrupted(signum: int, frame: object) -> None:
-        raise InterruptedError(f"interrupted by signal {signum}")
+        nonlocal interruption
+        interruption = signum
 
     with (work / "stdout.log").open("wb") as stdout, (work / "stderr.log").open("wb") as stderr:
-        process = subprocess.Popen(command, env=environment, cwd=work, stdin=subprocess.DEVNULL,
-            stdout=stdout, stderr=stderr, start_new_session=True)
-        previous_term = signal.signal(signal.SIGTERM, interrupted)
+        process = None
+        previous_handlers = {}
         try:
-            code = process.wait(timeout=args.timeout)
-        except (subprocess.TimeoutExpired, KeyboardInterrupt, InterruptedError):
+            # A signal during Popen records cancellation without abandoning
+            # ownership before the newly created process can be returned.
+            for number in (signal.SIGTERM, signal.SIGINT):
+                previous_handlers[number] = signal.signal(number, interrupted)
+            process = subprocess.Popen(command, env=environment, cwd=work, stdin=subprocess.DEVNULL,
+                stdout=stdout, stderr=stderr, start_new_session=True)
+            deadline = time.monotonic() + args.timeout
+            cancelled = False
             try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    print("test-engine-call-drain: process did not reap after SIGKILL", file=sys.stderr)
-            print("test-engine-call-drain: timed out/interrupted; private files preserved", file=sys.stderr)
-            code = 124
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if interruption is not None or remaining <= 0:
+                        cancelled = True
+                        code = 124
+                        break
+                    try:
+                        code = process.wait(timeout=min(remaining, 0.1))
+                        break
+                    except subprocess.TimeoutExpired:
+                        pass
+            except (KeyboardInterrupt, InterruptedError):
+                cancelled = True
+                code = 124
+            if interruption is not None:
+                cancelled = True
+                code = 124
+            if cancelled:
+                print("test-engine-call-drain: timed out/interrupted; private files preserved", file=sys.stderr)
         finally:
-            signal.signal(signal.SIGTERM, previous_term)
+            try:
+                if process is not None and process.poll() is None:
+                    try:
+                        try:
+                            os.killpg(process.pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            pass
+                    finally:
+                        if process.poll() is None:
+                            try:
+                                os.killpg(process.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            try:
+                                process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                print("test-engine-call-drain: process did not reap after SIGKILL", file=sys.stderr)
+            finally:
+                # Keep nonraising handlers through TERM/KILL/reap, including
+                # repeated signals; restore both even when spawning fails.
+                for number, handler in previous_handlers.items():
+                    signal.signal(number, handler)
     if digest(binary) != manifest["binary_sha256"] or any(
             not path.is_file() or digest(path) != expected for path, expected in inputs.items()):
         fail("immutable binary/producer/source inputs changed during the oracle run")
