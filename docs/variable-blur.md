@@ -8,8 +8,9 @@ GEGL properties. Apply to Pixels merges the result as one native Undo step.
 Cancel preserves the target and its history. No live auxiliary graph is stored
 as an XCF effect.
 
-The facade's existing slot 147 admits only Bump Map and Variable Blur. Positive
-explicit target/source IDs, image ownership, pixel-layer admission, locks,
+The facade's existing slot 147 admits Bump Map, Variable Blur and Selective
+Gaussian Blur. Positive explicit target/source IDs, image ownership,
+pixel-layer admission, locks,
 Undo availability, floating-selection and indexed-image guards are retained.
 Read-only source content is allowed. The detached snapshot has the existing
 512 MiB bound; later source edits or deletion cannot change the preview.
