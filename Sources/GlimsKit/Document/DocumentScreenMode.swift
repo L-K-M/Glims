@@ -1,4 +1,5 @@
 import AppKit
+import RigiUI
 
 enum DocumentScreenMode: Int, CaseIterable {
     case windowed, fullScreenWithMenu, fullScreenBare
@@ -14,9 +15,8 @@ enum DocumentScreenMode: Int, CaseIterable {
     var next: Self { Self(rawValue: (rawValue + 1) % Self.allCases.count)! }
 }
 
-/// Native Spaces transitions finish asynchronously. Changing the menu policy
-/// exits and re-enters through AppKit's delegate options, without changing
-/// application-wide presentation flags or overwriting a saved window frame.
+/// Owned screen modes apply in place. Native green-button transitions remain
+/// asynchronous and cannot overlap an owned transition or a document close.
 struct DocumentScreenModeState {
     enum Phase: Equatable { case stable, entering, exiting }
     private(set) var mode = DocumentScreenMode.windowed
@@ -33,7 +33,7 @@ struct DocumentScreenModeState {
 
     mutating func willEnter() {
         guard !isClosed else { return }
-        if phase == .stable { requested = .fullScreenWithMenu }
+        if phase == .stable { requested = .fullScreenBare }
         phase = .entering
     }
 
@@ -62,6 +62,12 @@ struct DocumentScreenModeState {
         phase = .stable
     }
 
+    mutating func didApplyOwnedMode() {
+        guard !isClosed else { return }
+        mode = requested
+        phase = .stable
+    }
+
     mutating func close() { isClosed = true; phase = .stable; requested = .windowed }
 }
 
@@ -86,8 +92,65 @@ extension DocumentWindowController {
 
     func setScreenMode(_ mode: DocumentScreenMode) {
         guard canChangeScreenMode, screenModeState.request(mode), let window else { return }
+        if window.styleMask.contains(.fullScreen) {
+            publishScreenMode()
+            window.toggleFullScreen(nil)
+        } else {
+            applyOwnedScreenMode()
+        }
+    }
+
+    private func applyOwnedScreenMode() {
+        guard let window = window as? ClassicWindow, !screenModeState.isClosed else { return }
+        let mode = screenModeState.requested
+        let responder = window.firstResponder
+        if mode == .windowed {
+            restoreScreenModeWindow()
+        } else {
+            guard let screen = window.screen ?? NSScreen.main else {
+                screenModeState.failed(isFullScreen: false)
+                publishScreenMode()
+                return
+            }
+            if screenModeSnapshot == nil {
+                screenModeSnapshot = DocumentScreenModeSnapshot(window)
+            }
+            window.borderlessFocusPolicy = .document
+            window.styleMask = [.borderless, .closable]
+            window.collectionBehavior = [.fullScreenNone]
+            window.isMovable = false
+            window.isMovableByWindowBackground = false
+            var frame = screen.frame
+            if mode == .fullScreenWithMenu {
+                let menuHeight = max(NSApp.mainMenu?.menuBarHeight ?? NSStatusBar.system.thickness,
+                                     screen.safeAreaInsets.top)
+                frame.size.height = max(1, frame.height - menuHeight)
+            }
+            window.setFrame(frame, display: true)
+        }
+        screenModeState.didApplyOwnedMode()
+        window.makeKeyAndOrderFront(nil)
+        if let responder { _ = window.makeFirstResponder(responder) }
+        DocumentScreenPresentation.shared.refresh()
         publishScreenMode()
-        window.toggleFullScreen(nil)
+    }
+
+    private func restoreScreenModeWindow() {
+        guard let window = window as? ClassicWindow, let saved = screenModeSnapshot else { return }
+        screenModeSnapshot = nil
+        window.styleMask = saved.style
+        window.collectionBehavior = saved.collection
+        window.isMovable = saved.movable
+        window.isMovableByWindowBackground = saved.movableByBackground
+        window.borderlessFocusPolicy = saved.focus
+        window.setFrame(saved.frame, display: true)
+    }
+
+    func closeScreenMode() {
+        screenModeState.close()
+        restoreScreenModeWindow()
+        DocumentScreenPresentation.shared.refresh()
+        publishScreenMode()
     }
 
     func publishScreenMode() {
@@ -99,13 +162,6 @@ extension DocumentWindowController {
         publishScreenMode()
     }
 
-    func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions) -> NSApplication.PresentationOptions {
-        var options = proposedOptions
-        options.remove([.hideDock, .hideMenuBar, .autoHideMenuBar])
-        options.insert([.fullScreen, .autoHideDock])
-        if screenModeState.requested == .fullScreenBare { options.insert(.autoHideMenuBar) }
-        return options
-    }
 
     func windowDidEnterFullScreen(_ notification: Notification) {
         screenModeState.didEnter()
@@ -119,7 +175,7 @@ extension DocumentWindowController {
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.imageDocument.isClosing, !self.screenModeState.isClosed,
                   self.screenModeState.phase == .entering else { return }
-            self.window?.toggleFullScreen(nil)
+            self.applyOwnedScreenMode()
         }
     }
 
@@ -129,5 +185,71 @@ extension DocumentWindowController {
     private func screenModeFailed(_ window: NSWindow) {
         screenModeState.failed(isFullScreen: window.styleMask.contains(.fullScreen))
         publishScreenMode()
+    }
+}
+
+
+@MainActor
+struct DocumentScreenModeSnapshot {
+    let frame: NSRect
+    let style: NSWindow.StyleMask
+    let collection: NSWindow.CollectionBehavior
+    let movable: Bool
+    let movableByBackground: Bool
+    let focus: ClassicWindow.BorderlessFocusPolicy
+
+    init(_ window: ClassicWindow) {
+        frame = window.frame; style = window.styleMask
+        collection = window.collectionBehavior
+        movable = window.isMovable
+        movableByBackground = window.isMovableByWindowBackground
+        focus = window.borderlessFocusPolicy
+    }
+}
+
+/// Presentation flags are application-wide. Only the active main document may
+/// own them; a key palette must not steal that ownership. Restore the snapshot
+/// on resignation/close, and never overwrite a later external policy change.
+@MainActor
+private final class DocumentScreenPresentation: NSObject {
+    static let shared = DocumentScreenPresentation()
+    private var baseline: NSApplication.PresentationOptions?
+    private var applied: NSApplication.PresentationOptions?
+
+    override init() {
+        super.init()
+        let center = NotificationCenter.default
+        for name in [NSApplication.didBecomeActiveNotification,
+                     NSApplication.didResignActiveNotification,
+                     NSWindow.didBecomeMainNotification, NSWindow.didResignMainNotification,
+                     NSWindow.willCloseNotification] {
+            center.addObserver(self, selector: #selector(changed(_:)), name: name, object: nil)
+        }
+    }
+
+    @objc private func changed(_ notification: Notification) {
+        if notification.name == NSApplication.didResignActiveNotification { restore(); return }
+        DispatchQueue.main.async { [weak self] in self?.refresh() }
+    }
+
+    func refresh() {
+        guard NSApp.isActive, let window = NSApp.mainWindow,
+              let owner = window.delegate as? DocumentWindowController,
+              window.isVisible, !owner.imageDocument.isClosing,
+              !owner.screenModeState.isClosed, owner.screenMode != .windowed,
+              !window.styleMask.contains(.fullScreen) else { restore(); return }
+        if baseline == nil { baseline = NSApp.presentationOptions }
+        var options = baseline!
+        options.remove([.fullScreen, .hideDock, .hideMenuBar, .autoHideMenuBar, .autoHideToolbar])
+        options.insert(.autoHideDock)
+        if owner.screenMode == .fullScreenBare { options.insert(.autoHideMenuBar) }
+        applied = options
+        NSApp.presentationOptions = options
+    }
+
+    private func restore() {
+        if let baseline, NSApp.presentationOptions == applied { NSApp.presentationOptions = baseline }
+        baseline = nil
+        applied = nil
     }
 }

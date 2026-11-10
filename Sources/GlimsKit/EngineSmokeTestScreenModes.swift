@@ -110,6 +110,9 @@ extension EngineSmokeTest {
         let otherPixels = try session.copyPixels(b.imageDocument.image, merged: true).pixels
         let otherHistory = try session.undoInfo(b.imageDocument.image)
         let originalFrame = a.window!.frame
+        let originalStyle = a.window!.styleMask
+        let originalCollection = a.window!.collectionBehavior
+        let originalMovable = a.window!.isMovable
         ToolState.shared.select(.hand)
         NSApp.activate(ignoringOtherApps: true)
         a.window?.makeKeyAndOrderFront(nil)
@@ -147,35 +150,34 @@ extension EngineSmokeTest {
         func settled(_ owner: DocumentWindowController, _ mode: DocumentScreenMode) throws {
             try wait("native screen transition reaches \(mode.title)", {
                 owner.screenMode == mode && owner.screenModeState.phase == .stable
-                    && owner.window?.styleMask.contains(.fullScreen) == (mode != .windowed)
+                    && owner.window?.styleMask.contains(.fullScreen) == false
+                    && owner.window?.styleMask.contains(.titled) == (mode == .windowed)
             })
         }
         try key("f", code: 3)
         try settled(a, .fullScreenWithMenu)
-        print("SCREEN DIAG delegate=\(a.responds(to: Selector(("window:willUseFullScreenPresentationOptions:")))) policy=\(a.window(a.window!, willUseFullScreenPresentationOptions: NSApp.presentationOptions).rawValue) requested=\(NSApp.presentationOptions.rawValue) effective=\(NSApp.currentSystemPresentationOptions.rawValue) menuVisible=\(NSMenu.menuBarVisible())")
-        if ProcessInfo.processInfo.environment["GLIMS_TEST_MENU_EXPERIMENT"] == "1" {
-            NSMenu.setMenuBarVisible(true)
-            print("SCREEN EXPERIMENT requested=\(NSApp.presentationOptions.rawValue) effective=\(NSApp.currentSystemPresentationOptions.rawValue) menuVisible=\(NSMenu.menuBarVisible())")
-        }
-        if let phasePath = ProcessInfo.processInfo.environment["GLIMS_TEST_CAPTURE"] {
-            try "menu".write(toFile: phasePath, atomically: true, encoding: .utf8)
-            try wait("external menu-mode pixel capture", { FileManager.default.fileExists(atPath: phasePath + ".ack") })
-        }
         expect(!NSApp.presentationOptions.contains(.autoHideMenuBar)
-            && !NSApp.presentationOptions.contains(.hideMenuBar), "first F enters native full screen with menu available")
+            && !NSApp.presentationOptions.contains(.hideMenuBar) && NSMenu.menuBarVisible(),
+               "first F fills the screen while the menu remains visible")
+        expect(a.window!.canBecomeKey && a.window!.canBecomeMain && NSApp.mainWindow === a.window,
+               "borderless document keeps actual key/main command ownership")
+        expect(a.window!.frame.maxY <= a.window!.screen!.frame.maxY - NSStatusBar.system.thickness + 1,
+               "menu mode reserves the actual menu strip above the document")
         expect(segments.selectedSegment == 1 && panel.isVisible, "palette follows its owning mode without changing visibility")
         expect(b.screenMode == .windowed && b.window?.styleMask.contains(.fullScreen) == false,
                "A's native mode change leaves B windowed")
         try key("f", code: 3)
         try settled(a, .fullScreenBare)
-        expect(NSApp.presentationOptions.contains(.autoHideMenuBar), "second F enters native bare mode with auto-hidden menu")
+        expect(NSApp.presentationOptions.contains(.autoHideMenuBar), "second F enters bare mode with auto-hidden menu")
         expect(segments.selectedSegment == 2 && panel.isVisible, "bare mode preserves the user's visible palette")
         try key("f", code: 3)
         try settled(a, .windowed)
         expect(abs(a.window!.frame.minX - originalFrame.minX) < 2
             && abs(a.window!.frame.minY - originalFrame.minY) < 2
             && abs(a.window!.frame.width - originalFrame.width) < 2
-            && abs(a.window!.frame.height - originalFrame.height) < 2, "third F restores the native original window frame")
+            && abs(a.window!.frame.height - originalFrame.height) < 2, "third F restores the original window frame")
+        expect(a.window!.styleMask == originalStyle && a.window!.collectionBehavior == originalCollection
+            && a.window!.isMovable == originalMovable, "windowed mode restores style, collection and movement")
         expect(NSApp.presentationOptions == originalOptions, "windowed mode restores the prior application presentation options")
         expect(segments.selectedSegment == 0 && panel.isVisible, "palette remains visible after the full cycle")
 
@@ -214,7 +216,7 @@ extension EngineSmokeTest {
         try settled(a, .fullScreenBare)
         try key("\u{1b}", code: 53)
         try settled(a, .windowed)
-        expect(!a.window!.styleMask.contains(.fullScreen), "idle Escape leaves native bare mode")
+        expect(!a.window!.styleMask.contains(.fullScreen), "idle Escape leaves bare mode")
         expect(try session.copyPixels(a.imageDocument.image, merged: true).pixels == originalPixels
             && session.undoInfo(a.imageDocument.image) == originalHistory,
                "all view and keyboard mode changes preserve A's native pixels and history")
@@ -229,8 +231,8 @@ extension EngineSmokeTest {
         try wait("closing native full-screen window completes", {
             a.closeStarted && a.screenModeState.isClosed && a.window?.isVisible != true
         })
-        expect(a.screenModeState.isClosed && !panel.isVisible,
-               "closing cancels pending policy reentry and preserves a hidden palette")
+        expect(a.screenModeState.isClosed && !panel.isVisible && NSApp.presentationOptions == originalOptions,
+               "closing restores presentation and preserves a hidden palette")
         complete = true
     }
 }

@@ -11,6 +11,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     let canvas: EngineCanvasView
     let rotationView: CanvasRotationView
     var screenModeState = DocumentScreenModeState()
+    var screenModeSnapshot: DocumentScreenModeSnapshot?
     private var viewAngleAlert: NSAlert?
     private var paintSourceAlert: NSAlert?
     private var batchRasterizeAlert: NSAlert?
@@ -2745,8 +2746,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func windowWillClose(_ notification: Notification) {
-        screenModeState.close()
-        publishScreenMode()
+        closeScreenMode()
         closeStarted = true
         imageDocument.beginClosing()
         softProofController?.invalidate()

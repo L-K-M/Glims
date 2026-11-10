@@ -33,7 +33,7 @@ final class DocumentScreenModeStateTests: XCTestCase {
     func testExternalFullScreenExitNeverReenters() {
         var state = DocumentScreenModeState()
         state.willEnter(); state.didEnter()
-        XCTAssertEqual(state.mode, .fullScreenWithMenu)
+        XCTAssertEqual(state.mode, .fullScreenBare)
         XCTAssertFalse(state.didExit())
         XCTAssertEqual(state.mode, .windowed)
     }
@@ -52,6 +52,15 @@ final class DocumentScreenModeStateTests: XCTestCase {
         state.failed(isFullScreen: true)
         XCTAssertEqual(state.mode, .fullScreenBare)
         XCTAssertEqual(state.requested, .fullScreenBare)
+    }
+    func testOwnedModesApplySynchronouslyWithoutNativeSpaceReentry() {
+        var state = DocumentScreenModeState()
+        for mode in [DocumentScreenMode.fullScreenWithMenu, .fullScreenBare, .windowed] {
+            XCTAssertTrue(state.request(mode))
+            state.didApplyOwnedMode()
+            XCTAssertEqual(state.mode, mode)
+            XCTAssertEqual(state.phase, .stable)
+        }
     }
     func testClosePreventsLateReentryAndFurtherCommands() {
         var state = DocumentScreenModeState()
