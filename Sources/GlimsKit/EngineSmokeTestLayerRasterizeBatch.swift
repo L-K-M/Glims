@@ -63,6 +63,12 @@ extension EngineSmokeTest {
                 if condition() { return true }
                 spin(0.01)
             }
+            print("focus active=\(NSApp.isActive) main=\(NSApp.mainWindow?.windowNumber ?? -1) key=\(NSApp.keyWindow?.windowNumber ?? -1)")
+            for controller in controllers {
+                guard let window = controller.window else { continue }
+                let sheet = window.attachedSheet
+                print("focus owned=\(window.windowNumber) visible=\(window.isVisible) canMain=\(window.canBecomeMain) canKey=\(window.canBecomeKey) sheet=\(sheet?.windowNumber ?? -1) sheetVisible=\(sheet?.isVisible == true) sheetKey=\(sheet?.isKeyWindow == true)")
+            }
             check(false, "Timed out: \(message)")
             return false
         }
@@ -214,9 +220,17 @@ extension EngineSmokeTest {
         check(controller.validateMenuItem(item) && item.title == "Rasterize Layers…",
               "the actual Layer menu admits plural Rasterize from cached retained-source state")
         func openSheet() -> NSWindow? {
+            // Engine smoke uses an accessory application without interactive
+            // startup's activation. Establish actual AppKit focus explicitly.
+            NSApp.activate(ignoringOtherApps: true)
+            controller.window?.makeMainWindow()
             controller.window?.makeKeyAndOrderFront(nil)
+            guard waitFor("batch Rasterize application activates", { NSApp.isActive }) else { return nil }
             _ = NSApp.sendAction(#selector(DocumentWindowController.rasterizeLayer(_:)), to: controller, from: item)
-            guard waitFor("owned batch Rasterize confirmation opens", { controller.window?.attachedSheet != nil }) else { return nil }
+            guard waitFor("owned batch Rasterize confirmation opens", {
+                guard let sheet = controller.window?.attachedSheet else { return false }
+                return sheet.isVisible && sheet.sheetParent === controller.window && NSApp.keyWindow === sheet
+            }) else { return nil }
             return controller.window?.attachedSheet
         }
         guard let cancelledSheet = openSheet(), let cancel = button(cancelledSheet, "Cancel") else {
@@ -237,8 +251,11 @@ extension EngineSmokeTest {
         check(sourceNames.allSatisfy { displayed.contains($0) } && displayed.contains("Rasterize 2 Layers?"),
               "the owned plural sheet describes both captured source names and count")
         docA.selectLayer(plain); guard settle() else { return }
+        front.window?.makeMainWindow()
         front.window?.makeKeyAndOrderFront(nil)
-        guard waitFor("B becomes frontmost while A owns its sheet", { NSApp.mainWindow === front.window }) else { return }
+        guard waitFor("B becomes frontmost while A owns its sheet", {
+            NSApp.isActive && NSApp.mainWindow === front.window && NSApp.keyWindow === front.window
+        }) else { return }
         check(try session.selectedLayers(imageA) == [plain] && docA.selectedLayerIDs == [plain]
               && NSApp.mainWindow === front.window, "A's ordinary third layer is selected behind the sheet while B becomes frontmost")
         apply.performClick(nil)
