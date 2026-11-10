@@ -30,6 +30,9 @@ final class ImageDocument {
     /// it touches neither the image nor the file state.
     var printInfo = (NSPrintInfo.shared.copy() as? NSPrintInfo) ?? NSPrintInfo()
 
+    /// The document owns its frontend command log; engine handles remain outside it.
+    private(set) var recorder = RecorderLog<SemanticImageCommand>()
+
     private(set) var info: EngineSession.ImageInfo
     private(set) var layers: [EngineSession.Layer] = []
     private(set) var undoInfo = EngineSession.UndoInfo(undoCount: 0, redoCount: 0, nextUndo: "", nextRedo: "")
@@ -228,6 +231,9 @@ final class ImageDocument {
 
     /// Called after layers or undo state changed.
     var onStateChange: (() -> Void)?
+    /// Recorder admission and completion use their own notification so observing
+    /// the log never replaces the window's image-state handler.
+    var onRecorderChange: (() -> Void)?
     /// Called with the changed area in image pixels.
     var onProjectionChange: ((CGRect) -> Void)?
     /// Called with engine errors that the interface should show.
@@ -931,17 +937,20 @@ final class ImageDocument {
 
     func select(_ shape: EngineSession.SelectShape, options: EngineSession.SelectOptions) {
         guard !refuseWhileEditingUnavailable() else { return }
-        run { session, image in try session.select(shape, image: image, options: options) }
+        let command = SemanticImageCommand.selectionShape(shape, options: options)
+        run(semantic: command, command.apply)
     }
 
     func selectColor(at point: CGPoint, options: EngineSession.SelectOptions) {
         guard !refuseWhileEditingUnavailable() else { return }
-        run { session, image in try session.selectColor(at: point, image: image, options: options) }
+        let command = SemanticImageCommand.selectColor(point, options: options)
+        run(semantic: command, command.apply)
     }
 
     func select(_ command: EngineSession.SelectCommand, radius: Double = 0) {
         guard !refuseWhileEditingUnavailable() else { return }
-        run { session, image in try session.select(command, image: image, radius: radius) }
+        let semantic = SemanticImageCommand.selectCommand(command, radius: radius)
+        run(semantic: semantic, semantic.apply)
     }
 
     /// Strokes the selection's boundary on the active layer with `brush`,
@@ -2217,7 +2226,8 @@ final class ImageDocument {
     func transformImage(_ transform: EngineSession.Transform) {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
-        run { session, image in try session.transformImage(image, transform) }
+        let command = SemanticImageCommand.transformImage(transform)
+        run(semantic: command, command.apply)
     }
 
     func transformActiveLayer(_ transform: EngineSession.Transform) {
@@ -2408,19 +2418,23 @@ final class ImageDocument {
     func scale(toWidth width: Int, height: Int) {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
-        run { session, image in try session.scaleImage(image, width: width, height: height) }
+        let command = SemanticImageCommand.scale(width: width, height: height)
+        run(semantic: command, command.apply)
     }
 
     func resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: NSColor) {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
-        run { session, image in try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill) }
+        let capturedFill = (fill.copy() as? NSColor) ?? fill
+        let command = SemanticImageCommand.resizeCanvas(width: width, height: height, offset: offset, fill: capturedFill)
+        run(semantic: command, command.apply)
     }
 
     func crop(to rect: CGRect) {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
-        run { session, image in try session.crop(image: image, to: rect) }
+        let command = SemanticImageCommand.crop(rect)
+        run(semantic: command, command.apply)
     }
 
     // MARK: Color mode and precision
@@ -4162,16 +4176,68 @@ final class ImageDocument {
         guard paintTargetIsValid else { throw DocumentError.targetChanged }
     }
 
+    func startRecording() throws {
+        guard !isClosing else { throw DocumentError.closed }
+        try recorder.startRecording()
+        onRecorderChange?()
+    }
+
+    func stopRecording() throws {
+        try recorder.stopRecording()
+        onRecorderChange?()
+    }
+
+    func clearRecording() {
+        recorder.clear()
+        onRecorderChange?()
+    }
+
     @discardableResult
-    func run(effect: CommandEffect = .changesImage, _ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
+    func run(effect: CommandEffect = .changesImage, semantic: SemanticImageCommand? = nil,
+             _ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
         guard !isClosing else { return false }
         if effect != .readsPixels && refuseWhileEditingUnavailable(forPreviewWork: effect == .changesPreview) {
             return false
         }
-        enqueue(on: inputQueue, input: effect == .changesImage) { [session, image] in
-            do { try work(session, image) } catch { self.report(error) }
+        let reservation: RecorderLog<SemanticImageCommand>.Reservation?
+        if semantic != nil, recorder.isRecording {
+            do { reservation = try recorder.reserve() }
+            catch {
+                assertionFailure("A recording log refused an admitted command: \(error)")
+                return false
+            }
+        } else {
+            reservation = nil
         }
+        enqueue(on: inputQueue, input: effect == .changesImage) { [session, image] in
+            let result = Result { try work(session, image) }
+            if case .failure(let error) = result { self.report(error) }
+            guard let reservation, let semantic else { return }
+            let resolution: RecorderLog<SemanticImageCommand>.Resolution
+            switch result {
+            case .success: resolution = .success(semantic)
+            case .failure(let error): resolution = .failure(String(describing: error))
+            }
+            DispatchQueue.main.async {
+                self.resolveRecording(reservation, with: resolution)
+            }
+        }
+        // Notify only after queue admission/counting: a listener may close the
+        // document or start a fresh epoch, and accepted work must still drain.
+        if reservation != nil { onRecorderChange?() }
         return true
+    }
+
+    private func resolveRecording(_ reservation: RecorderLog<SemanticImageCommand>.Reservation,
+                                  with resolution: RecorderLog<SemanticImageCommand>.Resolution) {
+        do {
+            try recorder.resolve(reservation, with: resolution)
+            onRecorderChange?()
+        } catch RecorderLog<SemanticImageCommand>.Refusal.staleReservation {
+            // Clear/start deliberately invalidate older callbacks.
+        } catch {
+            assertionFailure("An accepted Recorder reservation could not settle: \(error)")
+        }
     }
 
     /// Queues engine work; the document counts it until it ran so a close

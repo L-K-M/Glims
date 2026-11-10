@@ -1,0 +1,70 @@
+import AppKit
+
+/// Frontend values captured when a document admits an image/selection edit.
+/// Select Alpha and color selection can read the active drawable. Replay needs
+/// explicit context bindings before these values can reproduce another edit.
+enum SemanticImageCommand {
+    case selectionShape(EngineSession.SelectShape, options: EngineSession.SelectOptions)
+    case selectColor(CGPoint, options: EngineSession.SelectOptions)
+    case selectCommand(EngineSession.SelectCommand, radius: Double)
+    case transformImage(EngineSession.Transform)
+    case scale(width: Int, height: Int)
+    case resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: NSColor)
+    case crop(CGRect)
+
+    var title: String {
+        switch self {
+        case .selectionShape(let shape, _):
+            switch shape {
+            case .rectangle: return "Rectangle Selection"
+            case .ellipse: return "Ellipse Selection"
+            case .polygon: return "Polygon Selection"
+            }
+        case .selectColor: return "Select Color"
+        case .selectCommand(let command, _):
+            switch command {
+            case .all: return "Select All"
+            case .none: return "Select None"
+            case .invert: return "Invert Selection"
+            case .feather: return "Feather Selection"
+            case .grow: return "Grow Selection"
+            case .shrink: return "Shrink Selection"
+            case .border: return "Border Selection"
+            case .sharpen: return "Sharpen Selection"
+            case .fromAlpha: return "Select Alpha"
+            }
+        case .transformImage(let transform):
+            switch transform {
+            case .rotate90: return "Rotate Image 90°"
+            case .rotate180: return "Rotate Image 180°"
+            case .rotate270: return "Rotate Image 270°"
+            case .flipHorizontal: return "Flip Image Horizontally"
+            case .flipVertical: return "Flip Image Vertically"
+            }
+        case .scale: return "Scale Image"
+        case .resizeCanvas: return "Resize Canvas"
+        case .crop: return "Crop Image"
+        }
+    }
+
+    /// Execute only on the document's engine queue. The image handle is supplied
+    /// for this execution and is never retained in the semantic command.
+    func apply(session: EngineSession, image: Int32) throws {
+        switch self {
+        case .selectionShape(let shape, let options):
+            try session.select(shape, image: image, options: options)
+        case .selectColor(let point, let options):
+            try session.selectColor(at: point, image: image, options: options)
+        case .selectCommand(let command, let radius):
+            try session.select(command, image: image, radius: radius)
+        case .transformImage(let transform):
+            try session.transformImage(image, transform)
+        case .scale(let width, let height):
+            try session.scaleImage(image, width: width, height: height)
+        case .resizeCanvas(let width, let height, let offset, let fill):
+            try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill)
+        case .crop(let rect):
+            try session.crop(image: image, to: rect)
+        }
+    }
+}
