@@ -3445,6 +3445,20 @@ bundle contains the original AOM text and passes1,917 native and2,418 app
 checks with build trees inaccessible. Corresponding-source delivery,
 remaining components and signed public distribution remain separate work.
 
+### Required engine license text (2026-11-10 candidate)
+
+Engine notices now require a nonempty body beyond generated file headings
+for every MacPorts component and GIMP/GEGL/babl. Blank installed/archive files
+are skipped so discovery can continue; old heading-only caches are rejected
+or replaced from usable source text. The error names the component and version
+before replacing Engine-Notices.txt. Valid text retains the existing output;
+AOM's verified commit/digest path is unchanged. Offline fixtures reproduced
+the missing-lookup acceptance and the empty-body bypass before their fixes.
+All 35 Python packaging checks now pass, including eleven notice-publication
+fixtures and the ten AOM checks; valid fixture output is byte-identical before
+and after. No engine or app was built or run for this slice. Corresponding-source
+delivery and public release checks remain open.
+
 
 ### Typed capture-date metadata (2026-11-09 candidate)
 
