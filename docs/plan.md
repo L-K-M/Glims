@@ -3692,3 +3692,13 @@ no production activation defect is inferred from the earlier unlaunched host.
 See `batch-layer-rasterize.md` for exact scope, hashes and remaining validation.
 Other-engine UI, current units/integration, CI/review and merge remain pending;
 batch Restore and the broader gesture-policy item stay open.
+
+### Visible working-profile state (2026-11-10 candidate)
+
+Document titles now include the effective working-profile label from the
+existing color-state cache, separate from display/proof configuration.
+The actual old window failed five new profile-title checks while retaining
+50 existing passes; the corrected window passes all 55 on every engine,
+plus 1,015 units. See [working-profile-title.md](working-profile-title.md)
+for exact foreground-host and external AX limits. Hosted CI/review and final
+integration remain pending.
