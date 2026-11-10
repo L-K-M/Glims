@@ -1502,6 +1502,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         imageDocument.run(procedure, mode: mode) { [weak self] result in
             PlugInCommands.didRun(procedure, outcome: try? result.get())
             guard let self else { return }
+            self.statusProgressActive = false
             self.statusBar.hideProgress()
             switch result {
             case .success(.completed): self.stateDidChange()
