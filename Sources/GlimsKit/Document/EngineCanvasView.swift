@@ -376,6 +376,21 @@ final class EngineCanvasView: NSView {
         visibleTileKeys().first { !failedTiles.contains($0) && (tiles[$0] == nil || staleTiles.contains($0)) }
     }
 
+    override func becomeFirstResponder() -> Bool {
+        guard super.becomeFirstResponder() else { return false }
+        // Releases can go to a field editor in this same key window. Start
+        // from the current physical flags instead of stale canvas key state.
+        tools.resetHintModifiers()
+        tools.hintModifiersChanged(NSEvent.modifierFlags)
+        return true
+    }
+
+    override func resignFirstResponder() -> Bool {
+        guard super.resignFirstResponder() else { return false }
+        tools.resetHintModifiers()
+        return true
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         hintLifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
