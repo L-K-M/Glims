@@ -310,7 +310,7 @@ final class RecorderFileStoreTests: XCTestCase {
                 XCTAssertEqual($0 as? RecorderFileStore.StoreError, .backgroundRequired)
             }
         }
-        if Thread.isMainThread { check() } else { DispatchQueue.main.sync(execute: check) }
+        if Thread.isMainThread { try check() } else { try DispatchQueue.main.sync(execute: check) }
         XCTAssertEqual(try contents(url), old)
         XCTAssertEqual(try entries(), [url.lastPathComponent])
     }
