@@ -3851,3 +3851,14 @@ all-four UI56 and 1,016 private leased units pass. A preserved initial fixture
 failure led to exact native multi-setter history comparison and a latched wait,
 not changed production semantics. See `channel-menu-parity.md` for scope and
 remaining independent review, CI and combined-release gates.
+
+### Recorder layer property commands (2026-11-10 candidate)
+
+Accepted name, visibility, opacity and mode changes now capture immutable
+semantic values with a freshly checked explicit same-document layer
+binding. Both write routes retain counted reconciliation/callback order.
+The actual old opacity control produces the expected zero-capture RED;
+new36 checks and the unchanged Recorder capture/replay/palette checks pass
+on all four engines (712 total), plus1,050 unit tests. See
+[recorder-layer-properties.md](recorder-layer-properties.md). Persistence,
+other command families, hosted CI/review and final integration remain open.
