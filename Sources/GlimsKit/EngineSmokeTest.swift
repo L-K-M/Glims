@@ -377,6 +377,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (layer restore batch)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "text-floating-create" {
+                try exerciseTextFloatingCreate(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (text floating create)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "batch-delete" {
                 try exerciseBatchDelete(session, documents: documents)
                 print(failures == 0 ? "PASSED (batch delete)" : "FAILED: \(failures) failures")
