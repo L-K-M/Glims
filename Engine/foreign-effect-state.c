@@ -56,6 +56,29 @@ resolve_field (gint32 raw, GType type, gint effective, gint automatic, gint *out
   return TRUE;
 }
 
+/* The pinned native effect writer passes one vararg to a property writer
+ * that consumes two. Its three properties can therefore contain the same
+ * unregistered word instead of any saved enum. Those words have no native
+ * interpretation: retain the loader's AUTO values, as ordinary XCF opening
+ * did before recovery. Never use this compatibility case for a registered
+ * value, mixed words, missing fields or an already explicit loaded setting. */
+static gboolean
+writer_omitted_fields (const GlimsXcfEffectFieldsRecord *record,
+                       gint blend, gint composite, gint combination)
+{
+  const guint32 all = GLIMS_XCF_FIELD_BLEND_SPACE | GLIMS_XCF_FIELD_COMPOSITE_SPACE |
+                      GLIMS_XCF_FIELD_COMPOSITE_MODE;
+  gint32 raw = record->blend_space;
+  if ((record->presence & all) != all || raw == G_MININT32 ||
+      raw != record->composite_space || raw != record->composite_mode ||
+      blend != GIMP_LAYER_COLOR_SPACE_AUTO || composite != GIMP_LAYER_COLOR_SPACE_AUTO ||
+      combination != GIMP_LAYER_COMPOSITE_AUTO)
+    return FALSE;
+  gint value = raw < 0 ? -raw : raw;
+  return !enum_valid (GIMP_TYPE_LAYER_COLOR_SPACE, value) &&
+         !enum_valid (GIMP_TYPE_LAYER_COMPOSITE_MODE, value);
+}
+
 static gboolean
 mask_matches (GimpImage *image, GimpDrawableFilter *filter,
               const GlimsXcfEffectFieldsRecord *record)
@@ -131,6 +154,10 @@ effect_matches (GimpImage *image, GimpDrawableFilter *filter,
   if (!enum_valid (GIMP_TYPE_LAYER_COLOR_SPACE, blend) ||
       !enum_valid (GIMP_TYPE_LAYER_COLOR_SPACE, composite) ||
       !enum_valid (GIMP_TYPE_LAYER_COMPOSITE_MODE, combination)) return FALSE;
+  if (writer_omitted_fields (record, blend, composite, combination)) {
+    *target = (Target) { filter, mode, blend, composite, combination };
+    return TRUE;
+  }
   if ((record->presence & GLIMS_XCF_FIELD_BLEND_SPACE) &&
       !resolve_field (record->blend_space, GIMP_TYPE_LAYER_COLOR_SPACE,
                      gimp_layer_mode_get_blend_space (mode), GIMP_LAYER_COLOR_SPACE_AUTO, &blend))
