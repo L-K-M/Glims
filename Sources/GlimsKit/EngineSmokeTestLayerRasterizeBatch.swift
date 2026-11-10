@@ -223,7 +223,7 @@ extension EngineSmokeTest {
             // Engine smoke uses an accessory application without interactive
             // startup's activation. Establish actual AppKit focus explicitly.
             NSApp.activate(ignoringOtherApps: true)
-            controller.window?.makeMainWindow()
+            controller.window?.makeMain()
             controller.window?.makeKeyAndOrderFront(nil)
             guard waitFor("batch Rasterize application activates", { NSApp.isActive }) else { return nil }
             _ = NSApp.sendAction(#selector(DocumentWindowController.rasterizeLayer(_:)), to: controller, from: item)
@@ -251,7 +251,7 @@ extension EngineSmokeTest {
         check(sourceNames.allSatisfy { displayed.contains($0) } && displayed.contains("Rasterize 2 Layers?"),
               "the owned plural sheet describes both captured source names and count")
         docA.selectLayer(plain); guard settle() else { return }
-        front.window?.makeMainWindow()
+        front.window?.makeMain()
         front.window?.makeKeyAndOrderFront(nil)
         guard waitFor("B becomes frontmost while A owns its sheet", {
             NSApp.isActive && NSApp.mainWindow === front.window && NSApp.keyWindow === front.window
