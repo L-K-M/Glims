@@ -5,7 +5,7 @@ import XCTest
 @MainActor
 final class ScreenModeControlsTests: XCTestCase {
     func testViewMenuExposesAllThreeModesWithoutTakingThePlainFKey() throws {
-        let menu = MainMenu.build()
+        let menu = MainMenu.make()
         let view = try XCTUnwrap(menu.item(withTitle: "View")?.submenu)
         let modes = try XCTUnwrap(view.item(withTitle: "Screen Mode")?.submenu)
         XCTAssertEqual(modes.items.map(\.title), ["Windowed", "Full Screen with Menu", "Full Screen Bare"])
