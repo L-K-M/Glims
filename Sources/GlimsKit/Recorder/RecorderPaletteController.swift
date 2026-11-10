@@ -220,7 +220,7 @@ final class RecorderPaletteController: NSViewController, PaletteContent, NSTable
         switch action {
         case .record: return "Start a new recording, replacing this image's recorded commands."
         case .stop: return "Stop recording. Accepted commands remain pending until they finish."
-        case .replay: return "Replay supported commands in this image. Earlier changes remain if a later command fails."
+        case .replay: return "Replay supported commands in this image with their normal Undo behavior. Earlier changes remain if a later command fails."
         case .cancelReplay: return "Stop replay after any command already running."
         case .clear: return "Remove the recorded commands without editing the image."
         }

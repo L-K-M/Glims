@@ -3560,3 +3560,30 @@ restore remains available. See `painting-source-consent.md` for the measured
 native text Undo/Redo issue and scope. Initial consent and two timing defects
 were reproduced before their respective fixes; final integration checks are
 in progress. The facade remains APIv1/163 and upstream sources are unchanged.
+
+
+### Recorder capture, replay and palette (2026-11-10 candidate)
+
+The first Recorder slice captures seven selection/image command families:
+shape selection, color selection, selection commands, image transforms, scale,
+canvas resize and crop. Immutable values settle in acceptance order behind
+counted input; Stop fences new capture without dropping accepted work. Replay
+uses the same image, revalidates drawable-sensitive bindings and floating
+policy, and preserves normal native Undo behavior rather than guaranteeing an
+entry for a no-op. Failure and Cancel stop later scheduling; accepted work may
+finish and earlier changes remain.
+
+The palette and Edit/Window menus show the supported scope, pending capture,
+ordered outcomes and indexed replay failures. Removable Recorder subscriptions
+preserve existing image-state/error callbacks and reject stale retarget replies.
+All four engines pass the distinct capture36 (`f03ef62`), replay61 (`6cae7bb`)
+and palette43 (`4e3189f`) matrices. The capture logs retain older engine resource
+and cache diagnostics; this is not a clean resource-audit claim. See
+[recorder.md](recorder.md) for behavior, scope and verification limits.
+
+The subsequent Undo-copy correction awaits integrated validation. Combined
+latest-Main/early-close/API164 builds, release checks and the final interactive
+accessibility/layout pass remain pending. Long status clipping is an unverified
+accessibility check, not a confirmed defect. Strokes, layer/effect capture and
+recording persistence/cross-image binding are still open; the broad Recorder
+completion item remains unchecked.

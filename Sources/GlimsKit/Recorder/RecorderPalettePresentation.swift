@@ -24,7 +24,7 @@ struct RecorderPalettePresentation {
     }
 
     static let coverage = "Supported actions: selections, image rotation and flips, image size, canvas size, and crop. Replay uses this image only."
-    static let replayPolicy = "Replay keeps one Undo step per command. On failure, earlier changes remain."
+    static let replayPolicy = "Replay uses each command's normal Undo behavior. On failure, earlier changes remain."
 
     let documentName: String
     let rows: [Row]
