@@ -12,6 +12,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     let rotationView: CanvasRotationView
     private var viewAngleAlert: NSAlert?
     private var paintSourceAlert: NSAlert?
+    private var batchRasterizeAlert: NSAlert?
     private(set) var softProofController: SoftProofController?
     private var savedSoftProof: CanvasSoftProof?
     private let preferences: EditorPreferences
@@ -1655,10 +1656,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         VectorStyleForm.present(in: imageDocument, layer: id, on: window)
     }
 
-    /// Layer ▸ Rasterize Layer…: the per-window confirmation sheet that
-    /// turns the active genuine text, link or vector layer into pixels
-    /// while its source is retained.
+    /// Layer ▸ Rasterize Layer… / Rasterize Layers…: source-preserving
+    /// confirmation for one layer or a captured ordered selection.
     @objc func rasterizeLayer(_ sender: Any?) {
+        if imageDocument.hasMultipleSelectedLayers {
+            presentBatchRasterizeConfirmation()
+            return
+        }
         presentLayerSourceConfirmation(.rasterize)
     }
 
@@ -1667,6 +1671,64 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// edits.
     @objc func restoreLayerSource(_ sender: Any?) {
         presentLayerSourceConfirmation(.restore)
+    }
+
+    /// This window owns the sheet and its complete source vector. Capture
+    /// IDs and displayed names before committing fields can change selection.
+    /// Apply uses that document/vector; Cancel never calls its edit service.
+    private func presentBatchRasterizeConfirmation() {
+        let document = imageDocument
+        let ids = document.selectedLayerIDs
+        let rows = Dictionary(document.layers.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let names = ids.compactMap { rows[$0] }
+        guard let window, window.attachedSheet == nil, batchRasterizeAlert == nil,
+              !closeStarted, !previewBusy else { return }
+        if let reason = document.rasterizeLayerSourcesRefusal(ids) {
+            document.onError?(reason)
+            NSSound.beep()
+            return
+        }
+        guard names.count == ids.count else { return }
+        endPendingEdits()
+        guard !closeStarted, !previewBusy, imageDocument === document,
+              window.attachedSheet == nil, batchRasterizeAlert == nil else { return }
+        if let reason = document.rasterizeLayerSourcesRefusal(ids) {
+            document.onError?(reason)
+            NSSound.beep()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Rasterize \(ids.count) Layers?"
+        // Keep large selections/names within the sheet's readable bounds.
+        let shownNames = names.prefix(3).map { name -> String in
+            let displayed = name.count > 80 ? String(name.prefix(80)) + "…" : name
+            return "\u{201C}\(displayed)\u{201D}"
+        }.joined(separator: ", ")
+        let remaining = names.count > 3 ? " and \(names.count - 3) more layers" : ""
+        alert.informativeText = shownNames + remaining + ".\n\n"
+            + "Editable text, link or path content becomes pixels, as one undo step. "
+            + "Sources are retained, so Restore Layer Source can bring them back individually. "
+            + "Rasterized linked layers stop following changes to their files."
+        alert.addButton(withTitle: "Rasterize")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.forEach { $0.setAccessibilityLabel($0.title) }
+        batchRasterizeAlert = alert
+        alert.beginSheetModal(for: window) { [weak self, weak alert] response in
+            guard let self, let alert, self.batchRasterizeAlert === alert else { return }
+            self.batchRasterizeAlert = nil
+            guard response == .alertFirstButtonReturn, !self.closeStarted,
+                  self.imageDocument === document, !document.isClosing else { return }
+            guard !self.previewBusy else {
+                document.onError?(ImageDocument.DocumentError.busy.localizedDescription)
+                return
+            }
+            if let reason = document.rasterizeLayerSourcesRefusal(ids) {
+                document.onError?(reason)
+                NSSound.beep()
+                return
+            }
+            document.rasterizeLayerSources(ids)
+        }
     }
 
     /// A refused paint gesture has already ended. Consent only rasterizes
@@ -1910,6 +1972,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 && imageDocument.supportsVectorLayers != false
                 && singleLayerItemAllowed(menuItem, action: "Vector Style")
         case #selector(rasterizeLayer(_:)), #selector(restoreLayerSource(_:)):
+            if menuItem.action == #selector(rasterizeLayer(_:)) {
+                menuItem.title = imageDocument.hasMultipleSelectedLayers ? "Rasterize Layers…" : "Rasterize Layer…"
+                menuItem.toolTip = nil
+                if imageDocument.hasMultipleSelectedLayers {
+                    let reason = imageDocument.rasterizeLayerSourcesRefusal(imageDocument.selectedLayerIDs)
+                    menuItem.toolTip = reason
+                    return reason == nil && !closeStarted && !editingBlocked && !previewBusy
+                }
+            }
             // Cached source state only — never a synchronous native call:
             // Rasterize on genuine unrasterized text/link/vector with its
             // source retained, Restore on a rasterized retained source.
@@ -2676,6 +2747,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             window?.endSheet(alert.window, returnCode: .abort)
         }
         paintSourceAlert = nil
+        if let alert = batchRasterizeAlert, window?.attachedSheet === alert.window {
+            window?.endSheet(alert.window, returnCode: .abort)
+        }
+        batchRasterizeAlert = nil
         // A closing window cancels any in-progress guide drag: the ghost is
         // cleared and no guide action is committed; late events afterwards
         // are ignored by the gesture's captured window/document identity.
