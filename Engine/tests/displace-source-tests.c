@@ -56,11 +56,11 @@ set_displace (GlimsEngine *engine, GlimsFilterID filter, const DisplaceSettings 
   if (api->filter_set_property (engine, filter, "amount-x", &v) != GLIMS_STATUS_OK) return FALSE;
   v.number = s->amount_y;
   if (api->filter_set_property (engine, filter, "amount-y", &v) != GLIMS_STATUS_OK) return FALSE;
-  v.kind = GLIMS_FILTER_VALUE_ENUM; v.string = s->displace_mode;
+  v.kind = GLIMS_FILTER_VALUE_ENUM; g_strlcpy (v.string, s->displace_mode, sizeof v.string);
   if (api->filter_set_property (engine, filter, "displace-mode", &v) != GLIMS_STATUS_OK) return FALSE;
-  v.string = s->sampler_type;
+  g_strlcpy (v.string, s->sampler_type, sizeof v.string);
   if (api->filter_set_property (engine, filter, "sampler-type", &v) != GLIMS_STATUS_OK) return FALSE;
-  v.string = s->abyss_policy;
+  g_strlcpy (v.string, s->abyss_policy, sizeof v.string);
   if (api->filter_set_property (engine, filter, "abyss-policy", &v) != GLIMS_STATUS_OK) return FALSE;
   v.kind = GLIMS_FILTER_VALUE_BOOL; v.boolean = s->do_center;
   if (api->filter_set_property (engine, filter, "center", &v) != GLIMS_STATUS_OK) return FALSE;
@@ -464,7 +464,7 @@ refuse_pair (Fixture *f, GlimsImageID image, GlimsItemID target, GlimsItemID x,
 }
 
 static GlimsStatus
-refusal_cases (GlimsEngine *engine, gpointer unused)
+displace_refusal_cases (GlimsEngine *engine, gpointer unused)
 {
   (void) unused;
   Fixture f = {0}, other = {0}; char *error = NULL; GlimsFilterID filter = 0;
@@ -593,7 +593,7 @@ main (int argc, char **argv)
   if (displace_admitted) {
     for (gint mode = 0; mode < 5; mode++) CHECK (glims_engine_call (engine, pixel_case, GINT_TO_POINTER (mode)) == GLIMS_STATUS_OK, "independent native pixel and history case executes");
     for (gint role = 0; role < 2; role++) CHECK (glims_engine_call (engine, lifetime_case, GINT_TO_POINTER (role)) == GLIMS_STATUS_OK, "each captured-map lifetime case executes");
-    CHECK (glims_engine_call (engine, refusal_cases, NULL) == GLIMS_STATUS_OK, "ordinary refusal and retained-preview suite executes");
+    CHECK (glims_engine_call (engine, displace_refusal_cases, NULL) == GLIMS_STATUS_OK, "ordinary refusal and retained-preview suite executes");
     CHECK (glims_engine_call (engine, budget_and_close, NULL) == GLIMS_STATUS_OK, "aggregate-budget and close suite executes");
   } else printf ("OBS slot169-dependent suites NOT RUN after the explicit baseline RED\n");
   api->stop (engine);
