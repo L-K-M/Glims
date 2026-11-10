@@ -62,6 +62,10 @@ bundle with the native and Swift build outputs inaccessible.
       exact selection preservation and whole-request admission (#135).
 - [x] Captured Rasterize/Cancel before layer-target painting, fills and gradients,
       with masks/channels exempt and fresh queued-source admission (candidate).
+- [x] Explicit captured batch Rasterize with an owned plural confirmation,
+      whole-request admission, retained sources, one Undo and counted close
+      drain (candidate; `batch-layer-rasterize.md`). Native text-source
+      fixtures pass 96 checks on all four engines; pinned actual UI passes 51.
 - [ ] Remaining batch operations and consistent gesture-time rasterize/revert policy.
 - [x] Adjustment layer creation as an empty pass-through group with a filter,
       explicit placement and editable filter settings.
