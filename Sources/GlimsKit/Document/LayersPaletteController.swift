@@ -199,6 +199,13 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         menu.addItem(.separator())
         menu.addItem(withTitle: "Layer Properties…", action: #selector(DocumentWindowController.layerProperties(_:)),
                      keyEquivalent: "")
+        for (title, tag) in [("Rasterize Layer…", 0), ("Restore Layer Source…", 1)] {
+            let item = NSMenuItem(title: title, action: #selector(runSourceCommand(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = tag
+            item.representedObject = document
+            menu.addItem(item)
+        }
         menu.addItem(.separator())
         menu.addItem(commandItem("Bring Forward", .raise))
         menu.addItem(commandItem("Send Backward", .lower))
@@ -247,6 +254,27 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         item.target = self
         item.tag = Int(command.rawValue)
         return item
+    }
+
+    private func sourceAction(_ item: NSMenuItem) -> Selector {
+        item.tag == 0 ? #selector(DocumentWindowController.rasterizeLayer(_:))
+            : #selector(DocumentWindowController.restoreLayerSource(_:))
+    }
+
+    private func sourceWindow(for captured: ImageDocument) -> DocumentWindowController? {
+        NSApp.windows.compactMap { $0.windowController as? DocumentWindowController }
+            .first { $0.imageDocument === captured && !$0.closeStarted }
+    }
+
+    /// Consent belongs to the window for the document this menu captured.
+    /// A front-document switch cannot redirect the palette's source command.
+    @objc private func runSourceCommand(_ sender: NSMenuItem) {
+        guard let captured = sender.representedObject as? ImageDocument,
+              document === captured, let owner = sourceWindow(for: captured),
+              validateMenuItem(sender) else { return }
+        owner.window?.deminiaturize(nil)
+        owner.showWindow(nil)
+        NSApp.sendAction(sourceAction(sender), to: owner, from: sender)
     }
 
     @objc private func runLayerCommand(_ sender: NSMenuItem) {
@@ -452,6 +480,14 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             return validateEffectItem(menuItem, item)
         }
         switch menuItem.action {
+        case #selector(runSourceCommand(_:)):
+            guard let captured = menuItem.representedObject as? ImageDocument,
+                  document === captured, let owner = sourceWindow(for: captured) else { return false }
+            let probe = NSMenuItem(title: menuItem.title, action: sourceAction(menuItem), keyEquivalent: "")
+            let enabled = owner.validateMenuItem(probe)
+            menuItem.title = probe.title
+            menuItem.toolTip = probe.toolTip
+            return enabled
         case #selector(runFloatingCommand(_:)):
             // Cached-state validation only: eligibility includes the
             // floating state, the target's cached pixel/source kind, and

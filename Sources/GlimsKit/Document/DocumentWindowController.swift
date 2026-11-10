@@ -13,6 +13,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var viewAngleAlert: NSAlert?
     private var paintSourceAlert: NSAlert?
     private var batchRasterizeAlert: NSAlert?
+    private var batchRestoreAlert: NSAlert?
     private(set) var softProofController: SoftProofController?
     private var savedSoftProof: CanvasSoftProof?
     private let preferences: EditorPreferences
@@ -1671,7 +1672,54 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// rasterized layer from its retained source and discarding its pixel
     /// edits.
     @objc func restoreLayerSource(_ sender: Any?) {
+        if imageDocument.hasMultipleSelectedLayers {
+            presentBatchRestoreConfirmation()
+            return
+        }
         presentLayerSourceConfirmation(.restore)
+    }
+
+    private func presentBatchRestoreConfirmation() {
+        let document = imageDocument
+        let ids = document.selectedLayerIDs
+        let rows = Dictionary(document.layers.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let names = ids.compactMap { rows[$0] }
+        guard let window, window.attachedSheet == nil, batchRestoreAlert == nil,
+              !closeStarted, !previewBusy else { return }
+        if let reason = document.restoreLayerSourcesRefusal(ids) {
+            document.onError?(reason)
+            NSSound.beep()
+            return
+        }
+        guard names.count == ids.count else { return }
+        // Capture names and IDs before committing fields can retarget the
+        // document. This window, never the front window, owns the consent.
+        endPendingEdits()
+        guard !closeStarted, !previewBusy, imageDocument === document,
+              window.attachedSheet == nil, batchRestoreAlert == nil else { return }
+        if let reason = document.restoreLayerSourcesRefusal(ids) {
+            document.onError?(reason)
+            NSSound.beep()
+            return
+        }
+        let alert = LayerRestoreSheet.makeAlert(names: names)
+        batchRestoreAlert = alert
+        alert.beginSheetModal(for: window) { [weak self, weak alert] response in
+            guard let self, let alert, self.batchRestoreAlert === alert else { return }
+            self.batchRestoreAlert = nil
+            guard response == .alertFirstButtonReturn, !self.closeStarted,
+                  self.imageDocument === document, !document.isClosing else { return }
+            guard !self.previewBusy else {
+                document.onError?(ImageDocument.DocumentError.busy.localizedDescription)
+                return
+            }
+            if let reason = document.restoreLayerSourcesRefusal(ids, request: .explicitCommand) {
+                document.onError?(reason)
+                NSSound.beep()
+                return
+            }
+            document.restoreLayerSources(ids)
+        }
     }
 
     /// This window owns the sheet and its complete source vector. Capture
@@ -1978,6 +2026,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 menuItem.toolTip = nil
                 if imageDocument.hasMultipleSelectedLayers {
                     let reason = imageDocument.rasterizeLayerSourcesRefusal(imageDocument.selectedLayerIDs)
+                    menuItem.toolTip = reason
+                    return reason == nil && !closeStarted && !editingBlocked && !previewBusy
+                }
+            }
+            if menuItem.action == #selector(restoreLayerSource(_:)) {
+                menuItem.title = imageDocument.hasMultipleSelectedLayers ? "Restore Layer Sources…" : "Restore Layer Source…"
+                menuItem.toolTip = nil
+                if imageDocument.hasMultipleSelectedLayers {
+                    let reason = imageDocument.restoreLayerSourcesRefusal(imageDocument.selectedLayerIDs)
                     menuItem.toolTip = reason
                     return reason == nil && !closeStarted && !editingBlocked && !previewBusy
                 }
@@ -2752,6 +2809,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             window?.endSheet(alert.window, returnCode: .abort)
         }
         batchRasterizeAlert = nil
+        if let alert = batchRestoreAlert, window?.attachedSheet === alert.window {
+            window?.endSheet(alert.window, returnCode: .abort)
+        }
+        batchRestoreAlert = nil
         // A closing window cancels any in-progress guide drag: the ghost is
         // cleared and no guide action is committed; late events afterwards
         // are ignored by the gesture's captured window/document identity.

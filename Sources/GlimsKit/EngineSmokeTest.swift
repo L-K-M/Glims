@@ -346,6 +346,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (layer rasterize batch)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-restore-batch" {
+                try exerciseLayerRestoreBatch(session, documents: documents)
+                print(failures == 0 ? "PASSED (layer restore batch)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "batch-delete" {
                 try exerciseBatchDelete(session, documents: documents)
                 print(failures == 0 ? "PASSED (batch delete)" : "FAILED: \(failures) failures")

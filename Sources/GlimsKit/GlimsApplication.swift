@@ -41,7 +41,7 @@ public enum GlimsApplication {
             workspace.window?.orderFront(nil)
             return SmokeTest.run(workspace)
         case .engineSmokeTest:
-            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-rasterize-batch" {
+            if ["layer-rasterize-batch", "layer-restore-batch"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? "") {
                 return EngineSmokeTest.runHostedLayerRasterizeBatch()
             }
             return EngineSmokeTest.run()
