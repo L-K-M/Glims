@@ -1220,7 +1220,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         return notes.isEmpty ? nil : "\(LayerRowView.lockNames(lock).capitalized): \(notes.joined(separator: "; "))"
     }
 
-    /// Name, opacity, blend mode and visibility of the selected layer.
+    /// Name, blend mode and visibility of the selected layer.
     @objc func layerProperties(_ sender: Any?) {
         guard let window, let id = imageDocument.activeLayer,
               let layer = imageDocument.layers.first(where: { $0.id == id }) else { return }
@@ -1228,7 +1228,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // multi-selection it refuses instead of editing the primary alone.
         guard !imageDocument.refuseSingleLayerCommand("Layer Properties") else { return }
         let name = NSTextField(string: layer.name)
-        let opacity = NSTextField(string: String(Int((layer.opacity * 100).rounded())))
         let mode = NSPopUpButton(frame: .zero, pullsDown: false)
         mode.addItems(withTitles: Self.blendModes)
         mode.selectItem(withTitle: layer.mode)
@@ -1236,7 +1235,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         visible.state = layer.isVisible ? .on : .off
         let grid = NSGridView(views: [
             [NSTextField(labelWithString: "Name:"), name],
-            [NSTextField(labelWithString: "Opacity (%):"), opacity],
             [NSTextField(labelWithString: "Mode:"), mode],
             [NSGridCell.emptyContentView, visible],
         ])
@@ -1253,8 +1251,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             guard response == .alertFirstButtonReturn, let self else { return }
             var change = EngineSession.LayerChange()
             if name.stringValue != layer.name, !name.stringValue.isEmpty { change.name = name.stringValue }
-            let newOpacity = min(max(opacity.doubleValue, 0), 100) / 100
-            if abs(newOpacity - layer.opacity) > 0.001 { change.opacity = newOpacity }
             if let title = mode.titleOfSelectedItem, title != layer.mode { change.mode = title }
             if (visible.state == .on) != layer.isVisible { change.isVisible = visible.state == .on }
             if change != EngineSession.LayerChange() { self.imageDocument.changeLayer(id, change) }

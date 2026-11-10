@@ -2390,10 +2390,43 @@ final class ImageDocument {
         setLayerLocks(item, lock, to: !(layerLocks[item]?.local.contains(lock) ?? false))
     }
 
-    func changeLayer(_ layer: Int32, _ change: EngineSession.LayerChange) {
-        guard !refuseWhileEditingUnavailable() else { return }
+    private final class LayerChangeResult: @unchecked Sendable {
+        // Written on inputQueue, read only by its dispatched afterFinish.
+        var value: Result<Void, Error>?
+    }
+
+    func changeLayer(_ layer: Int32, _ change: EngineSession.LayerChange,
+                     completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
+        guard !refuseWhileEditingUnavailable() else {
+            completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
+        }
         endPendingUserEdits()
-        run { session, image in try session.changeLayer(layer, image: image, change) }
+        // Finishing a field can close the document or start exclusive work.
+        guard !refuseWhileEditingUnavailable() else {
+            completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
+        }
+        guard let completion else {
+            run { session, image in try session.changeLayer(layer, image: image, change) }
+            return
+        }
+        let result = LayerChangeResult()
+        // Keep reconciliation alive even if another document starts exclusive
+        // work between this input and its callback. Close drains both stages.
+        pendingWork += 1
+        enqueue(on: inputQueue, input: true, afterFinish: {
+            EngineActivity.shared.whenIdle {
+                if !self.isClosing {
+                    do { try self.reload() }
+                    catch { self.onError?("The layer state could not be refreshed: \(error)") }
+                }
+                self.jobDidFinish(input: false)
+                completion(result.value ?? .failure(DocumentError.busy))
+            }
+        }) { [session, image] in
+            let answer = Result { try session.changeLayer(layer, image: image, change) }
+            result.value = answer
+            if case .failure(let error) = answer { self.report(error) }
+        }
     }
 
     /// Moves the active drawable. While its mask is the edit target the

@@ -3812,3 +3812,12 @@ exclusive close draining. All-four focused native163/163/114/163, general
 The independently measured native linked-file Redo display/source ordering
 is explicit. No atomic rollback or self-contained release claim is inferred.
 See`batch-layer-restore.md` for exact source/proof scope, AX and fault gaps.
+
+### Layer opacity in Layers (2026-11-10 candidate)
+
+A persistent captured-owner percent field/slider now gives opacity its planned
+home in Layers. The modal Properties duplicate alone is removed. Native
+property gates, draft/retarget ownership and counted reconciliation preserve
+paint targets and close lifetime. Old rowless baseline6/1; actual all-four
+controls74each and1,012 private leased units pass. See`layer-opacity-controls.md`
+for source, branch counts, AX gaps and remaining hardware/accessibility review.
