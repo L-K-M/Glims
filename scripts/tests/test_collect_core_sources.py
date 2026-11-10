@@ -84,6 +84,17 @@ class CoreSourceCollectionTests(unittest.TestCase):
             links = {m.name: m.linkname for m in archive if m.issym()}
         return manifest, files, links
 
+    def collect_cli(self, name="cli-result.tar"):
+        output = self.root / name
+        command = [sys.executable, "-I", "-B", str(SCRIPT)]
+        for component in ("gimp", "gegl", "babl"):
+            repo, revision = self.components[component]
+            command += ["--" + component, str(repo), revision]
+        command += ["--glims", str(self.glims[0]), self.glims[1], "--output", str(output)]
+        result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
+                                text=True, timeout=120)
+        return result, output
+
     def test_committed_payload_recipe_selection_hashes_and_incomplete_scope(self):
         output = self.collect()
         manifest, files, _ = self.contents(output)
@@ -256,6 +267,60 @@ class CoreSourceCollectionTests(unittest.TestCase):
     def test_same_commits_produce_identical_archives(self):
         first, second = self.collect("one.tar"), self.collect("two.tar")
         self.assertEqual(hashlib.sha256(first.read_bytes()).digest(), hashlib.sha256(second.read_bytes()).digest())
+
+    def test_composed_symlink_escape_cli_refuses_before_publication(self):
+        repo = self.repos["gimp"]
+        (repo / "a").symlink_to(".")
+        (repo / "b").symlink_to("a/a/a/../../..")
+        revision = self.commit(repo)
+        self.components["gimp"] = (repo, revision)
+        self.assertEqual(self.git(repo, "cat-file", "blob", revision + ":a"), ".")
+        self.assertEqual(self.git(repo, "cat-file", "blob", revision + ":b"), "a/a/a/../../..")
+
+        # Every a resolves to the component root, so the three parent
+        # traversals escape even though lexical cancellation appears safe.
+        # Never extract or resolve links from the resulting unsafe archive.
+        result, output = self.collect_cli()
+        self.assertEqual(result.returncode, 1, result.stderr or result.stdout)
+        self.assertIn("symlink escapes", result.stderr)
+        self.assertFalse(os.path.lexists(output))
+        self.assertFalse(list(self.root.glob(".glims-core-sources-*")))
+
+    def test_contained_multihop_symlinks_cli_preserve_exact_targets(self):
+        repo = self.repos["gegl"]
+        targets = {"a": ".", "b": "a/a/source.c", "c": "b"}
+        for name, target in targets.items():
+            (repo / name).symlink_to(target)
+        self.components["gegl"] = (repo, self.commit(repo))
+        self.assertEqual((repo / "c").resolve(strict=True), repo / "source.c")
+
+        result, output = self.collect_cli()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest, files, links = self.contents(output)
+        for name, target in targets.items():
+            path = "sources/gegl/" + name
+            self.assertEqual(links[path], target)
+            record = next(item for item in manifest["files"] if item["path"] == path)
+            self.assertEqual(record["sha256"], hashlib.sha256(target.encode("utf-8")).hexdigest())
+        self.assertEqual(files["sources/gegl/source.c"], b"/* committed gegl source */\n")
+        self.assertFalse(list(self.root.glob(".glims-core-sources-*")))
+
+    def test_contained_dangling_symlinks_cli_preserve_exact_targets(self):
+        repo = self.repos["babl"]
+        targets = {"a": "missing/future.c", "b": "a"}
+        for name, target in targets.items():
+            (repo / name).symlink_to(target)
+        self.components["babl"] = (repo, self.commit(repo))
+        self.assertFalse((repo / "a").exists())
+        self.assertFalse((repo / "b").exists())
+
+        result, output = self.collect_cli()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        _, files, links = self.contents(output)
+        for name, target in targets.items():
+            self.assertEqual(links["sources/babl/" + name], target)
+        self.assertNotIn("sources/babl/missing/future.c", files)
+        self.assertFalse(list(self.root.glob(".glims-core-sources-*")))
 
 
 if __name__ == "__main__":
