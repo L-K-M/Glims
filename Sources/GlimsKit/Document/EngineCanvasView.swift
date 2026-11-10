@@ -776,6 +776,7 @@ final class EngineCanvasView: NSView {
 
     override func flagsChanged(with event: NSEvent) {
         tools.selectionModifiersChanged(event.modifierFlags)
+        tools.transformModifiersChanged(event.modifierFlags)
         super.flagsChanged(with: event)
     }
 

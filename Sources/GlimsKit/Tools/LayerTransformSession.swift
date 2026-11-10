@@ -98,6 +98,14 @@ struct LayerTransformSession: Equatable {
     /// Follows `drag` to `point`. `constrained` (Shift) keeps a corner's
     /// proportions and snaps rotation to 15°.
     mutating func update(_ drag: Drag, to point: CGPoint, constrained: Bool) {
+        // A handle can be picked within a tolerance of its exact position.
+        // Stationary modifiers and a click/release must keep the captured
+        // geometry; returning to the press restores it after movement too.
+        if point == drag.start {
+            box = drag.box
+            angle = drag.angle
+            return
+        }
         switch drag.handle {
         case .move:
             box = drag.box.offsetBy(dx: point.x - drag.start.x, dy: point.y - drag.start.y)
