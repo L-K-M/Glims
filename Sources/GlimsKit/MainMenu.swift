@@ -21,6 +21,8 @@ enum MainMenu {
             item("Hide \(AppIdentity.name)", #selector(NSApplication.hide(_:)), "h"),
             item("Quit \(AppIdentity.name)", #selector(NSApplication.terminate(_:)), "q"),
         ])
+        let closeAll = item("Close All", #selector(AppController.closeAllDocuments(_:)), "w")
+        closeAll.keyEquivalentModifierMask = [.command, .option]
         add(menu, "File", [
             item("New…", #selector(AppController.newDocument(_:)), "n"),
             item("Open…", #selector(AppController.openDocument(_:)), "o"),
@@ -30,6 +32,7 @@ enum MainMenu {
             item("Recover Documents…", #selector(AppController.recoverDocuments(_:))),
             .separator(),
             item("Close", #selector(NSWindow.performClose(_:)), "w"),
+            closeAll,
             item("Save", #selector(DocumentWindowController.saveDocument(_:)), "s"),
             item("Save As…", #selector(DocumentWindowController.saveDocumentAs(_:)), "S"),
             item("Save a Copy…", #selector(DocumentWindowController.saveDocumentCopy(_:))),

@@ -3791,3 +3791,14 @@ Owned processes exit zero and desktop leases are released. The 3.0.8 batch
 case's immediate external AX snapshot was incomplete; its owned teardown and
 later final desktop checks pass. Present-empty seed refusal remains explicit,
 and current hosted CI/completed independent review remain pending.
+
+### Captured Close All (2026-11-10 candidate)
+
+File > Close All uses the existing sequential close/save/drain flow for a
+captured document set and stops on Cancel or failed Save without quitting.
+A later Quit joins the in-flight close request. The old menu/validation
+baseline failed three assertions; the corrected source passes 1,014 units
+and all 26 focused checks on every engine. See
+[close-all-documents.md](close-all-documents.md) for exact host/review limits
+and remaining real responder/Quit/file-completion acceptance. Hosted gates
+and final integration remain pending.
