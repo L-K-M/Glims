@@ -135,6 +135,22 @@ extension EngineSmokeTest {
         func menuItem(_ menu: NSMenu?, _ action: RecorderPaletteAction) -> NSMenuItem? {
             menu?.items.first { $0.tag == action.rawValue }
         }
+        // Opening the real default palettes accepts counted thumbnail reads.
+        // Wait for those jobs and target preparation, rather than assuming
+        // the application is ready in the same turn as owner.open.
+        let startupReady = wait {
+            [a, b].allSatisfy { $0.pendingWork == 0 && !$0.targetCommandIsPending
+                && !$0.strokeIsActive && $0.acceptsEdits }
+                && !EngineActivity.shared.isBusy
+                && RecorderPalettePresentation(document: a).canPerform(.record)
+        }
+        expect(startupReady, "startup palette reads and target preparation drain before Recorder ready-state assertions")
+        if !startupReady {
+            let reason = RecorderPalettePresentation(document: a).refusal(for: .record) ?? "none"
+            throw NSError(domain: "RecorderPaletteFixture", code: 3, userInfo: [NSLocalizedDescriptionKey:
+                "Recorder startup refused: \(reason); A pending=\(a.pendingWork), target=\(a.targetCommandIsPending), stroke=\(a.strokeIsActive), accepts=\(a.acceptsEdits); B pending=\(b.pendingWork), target=\(b.targetCommandIsPending), stroke=\(b.strokeIsActive), accepts=\(b.acceptsEdits); activity=\(EngineActivity.shared.label ?? "idle")"])
+        }
+        palette.reload()
         let titleMenu = palette.paletteMenu
         expect(RecorderPaletteAction.allCases.allSatisfy { button($0) != nil }, "all five real actions have distinct accessible buttons")
         expect(label("Supported Recorder actions")?.stringValue == RecorderPalettePresentation.coverage
@@ -275,7 +291,8 @@ extension EngineSmokeTest {
         click(.record); a.select(.fromAlpha); click(.stop); try drain(a)
         let replacement = try session.pastePixels(imageA, pixels: pixels, at: .zero)
         try session.selectItems([replacement], kind: .layer, image: imageA)
-        try a.reload(); palette.reload()
+        try a.reload()
+        try drain(a) // The new target's visible layer row accepts another counted thumbnail read.
         let beforeRefusedReplay = try snapshot(imageA)
         click(.replay); try drain(a)
         if case .failed(let index, let reason) = a.replayStatus {
