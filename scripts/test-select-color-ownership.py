@@ -60,7 +60,7 @@ def build(args: argparse.Namespace) -> None:
     obj = out / "select-color-ownership-tests.o"
     binary = out / "select-color-ownership-tests"
     commands = [
-        ["xcrun", "clang", f"@{responses[0]}", "-x", "c", "-std=c11", "-O2",
+        ["xcrun", "clang", f"@{responses[0]}", "-std=c11", "-O2",
          "-Wall", "-Wextra", "-Werror", "-I", str(ROOT / "Sources/CGlimsEngine/include"),
          "-I", str(ROOT / "Engine"), "-c", str(SOURCE), "-o", str(obj)],
         ["xcrun", "clang++", "-o", str(binary), str(obj), *map(str, objects),
