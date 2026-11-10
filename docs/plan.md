@@ -3571,6 +3571,16 @@ existing conformance also passes. See `variable-blur.md` for the independent
 pixel oracle, refusal guards and remaining auxiliary roles. The facade keeps
 APIv1/163 and upstream sources remain unchanged. CI/review/integration follow.
 
+### Path lifecycle menu commands (2026-11-10 candidate)
+
+Edit now exposes New Path and Delete Path beside Stroke Path and Fill Path.
+Each responder action uses its owning document's existing path service,
+including default names and native Undo. Validation reads cached edit and
+path-selection state; Delete requires exactly one path, while New accepts
+an empty or multiple selection. Floating selections preserve path editing.
+The actual-menu regression reproduced the missing commands before the fix;
+all-four-engine checks and final integration are tracked in the PR.
+
 ### Installed MacPorts recipe inventory (2026-11-10 candidate)
 
 The standalone `scripts/installed-port-provenance.py` inventories requested
