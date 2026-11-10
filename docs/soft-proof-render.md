@@ -79,7 +79,7 @@ local system Generic CMYK Profile may be supplied for local tests only.
 
 Existing slot 132 tests remain unchanged. Current native conformance passes
 1,917 checks on GIMP 3.2.8, 3.2.0 and master, and 1,703 on 3.0.8. The focused
-proof harness passes 291 checks on each engine with the local CMYK fixture.
+proof harness passes 293 checks on each engine with the local CMYK fixture.
 The initial display-intent lookup defect was observed as 96 failures before
 the encoding-only Babl lookup was corrected.
 
