@@ -3774,3 +3774,20 @@ driver interruption-cleanup gap; eight tests reproduced it before correction
 and now pass, with all 62 packaging checks. See the drain oracle's integration
 section for exact source/producer limits. Latest-head hosted gates remain
 pending after the driver fix.
+
+### Typed XMP Rating controls (2026-11-10 candidate)
+
+Image Metadata adds explicit absent, zero, rejected and one-through-five
+choices while retaining unknown original text until an explicit choice.
+Fresh scalar descriptor checks and independent SET/REMOVE gates use the
+existing counted preservation writer. The focused Rating and batch Rasterize
+fixtures share the launched AppKit host. See [metadata-rating.md](metadata-rating.md)
+for exact scope, prior checks and current runtime/review gaps. This does not
+close the remaining typed metadata or final integration items.
+
+The Main165 Rating integration passes 1,028 units, all 54 actual typed-edit
+checks and all 51 shared-host batch Rasterize checks on each of four engines.
+Owned processes exit zero and desktop leases are released. The 3.0.8 batch
+case's immediate external AX snapshot was incomplete; its owned teardown and
+later final desktop checks pass. Present-empty seed refusal remains explicit,
+and current hosted CI/completed independent review remain pending.

@@ -411,6 +411,16 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (metadata rights)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-rating" {
+                try exerciseMetadataRating(session, documents: documents)
+                print(failures == 0 ? "PASSED (metadata rating)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-rating-edit" {
+                try exerciseMetadataRatingEdit(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (metadata rating edit)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-capture-date" {
                 try exerciseMetadataCaptureDate(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (metadata capture date)" : "FAILED: \(failures) failure(s)")
