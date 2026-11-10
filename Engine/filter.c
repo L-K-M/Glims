@@ -326,7 +326,12 @@ filter_begin_internal (GlimsEngine    *engine,
    * editing filters — XCF skips temporary filters, and drawable_effects
    * counts only committed ones. Commit flips the flag back. */
   gimp_drawable_filter_set_temporary (session->filter, TRUE);
-  if (owned_oilify) gimp_drawable_filter_set_preview (session->filter, FALSE);
+  if (owned_oilify) {
+    /* Preview toggles the applicator bypass, separately from whether the
+     * native stack connects the filter's node. Keep both disabled here. */
+    gimp_drawable_filter_set_preview (session->filter, FALSE);
+    gimp_filter_set_active (GIMP_FILTER (session->filter), FALSE);
+  }
   gimp_drawable_filter_apply (session->filter, NULL);
   if (!owned_oilify) gimp_drawable_filter_set_preview (session->filter, TRUE);
   if (merges_pixels) {
@@ -348,6 +353,7 @@ filter_begin_internal (GlimsEngine    *engine,
         goto failed;
       }
       gimp_drawable_filter_set_preview (session->filter, TRUE);
+      gimp_filter_set_active (GIMP_FILTER (session->filter), TRUE);
     }
     gimp_drawable_update (drawable, 0, 0, -1, -1);
   }
