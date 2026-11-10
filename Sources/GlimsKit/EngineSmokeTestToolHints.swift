@@ -40,6 +40,8 @@ extension EngineSmokeTest {
     /// can be overlaid on old Main to witness absent live hints independently.
     static func exerciseToolHints(_ session: EngineSession, documents: DocumentList) throws {
         let savedTool = ToolState.shared.current
+        let savedForeground = ToolState.shared.foreground
+        let savedPencil = ToolState.shared.brush(for: .pencil)
         var ownedImages: [Int32] = [], ownedDocuments: [ImageDocument] = []
         var controllers: [DocumentWindowController] = []
         var gates: [DispatchSemaphore] = []
@@ -56,6 +58,8 @@ extension EngineSmokeTest {
         }
         defer {
             gates.forEach { $0.signal() }
+            ToolState.shared.foreground = savedForeground
+            ToolState.shared.update(.pencil) { $0 = savedPencil }
             ToolState.shared.select(savedTool)
             var stoppedAll = true
             for controller in controllers {
@@ -216,6 +220,95 @@ extension EngineSmokeTest {
         check(owner.statusBar.message == "Selection cancelled.", "an actual new cancellation action can replace its own document's prior refusal")
         check(try ToolHintNativeState(session, a.image) == beforeA && ToolHintNativeState(session, b.image) == beforeB,
               "error, busy and progress presentation leaves native pixels, selection, targets, tree, dirty state and history unchanged")
+        // Real modifier flags must not survive a same-window field-editor
+        // detour. Each case has a fresh document and independent native pixel
+        // oracle, so a failed first case cannot contaminate the next case.
+        let focusCases: [(String, NSEvent.ModifierFlags, UInt16)] = [
+            ("Option", .option, 58), ("Command", .command, 55)
+        ]
+        for (name, modifier, code) in focusCases {
+            let (focusedDocument, focusedOwner) = try fixture("Hint focus \(name)", red: 31)
+            guard let window = focusedOwner.window else {
+                return check(false, "the \(name) focus fixture has an owning window")
+            }
+            let canvas = focusedOwner.canvas
+            let field = NSTextField(string: "")
+            field.frame = NSRect(x: 0, y: 0, width: 160, height: 22)
+            window.contentView?.addSubview(field)
+            window.makeFirstResponder(canvas)
+            let keyWindowBefore = window.isKeyWindow
+            let targetLayers = try session.layers(focusedDocument.image)
+            let targets = try session.selectedLayers(focusedDocument.image)
+            let beforeUndo = try session.undoInfo(focusedDocument.image).undoCount
+
+            // Literal seed/configuration, not ToolHintPolicy or a controller's
+            // computed brush, supplies the expected native pencil pixels.
+            var seed: [UInt8] = []
+            for index in 0..<(32 * 24) {
+                seed += [31, UInt8((index * 7) % 256), UInt8((index * 19) % 256), 255]
+            }
+            let expected = try session.newImage(pixels: ClipboardImage(width: 32, height: 24,
+                pixels: Data(seed), origin: .zero))
+            ownedImages.append(expected)
+            try session.select(.rectangle(CGRect(x: 3, y: 4, width: 11, height: 8)), image: expected)
+            guard let expectedTarget = try session.layers(expected).first?.id else {
+                return check(false, "the \(name) independent native oracle has a paint target")
+            }
+            var brush = EngineSession.Brush()
+            brush.tool = .pencil; brush.size = 5; brush.opacity = 1
+            brush.pressureSize = false; brush.hardness = 1
+            let stroke = try session.beginStroke(image: expected, drawable: expectedTarget, brush: brush,
+                first: .init(x: 8, y: 8, pressure: 1, timeMilliseconds: 1000))
+            try session.endStroke(stroke)
+            let expectedPixels = try ToolHintNativeState(session, expected).fullRender
+            ToolState.shared.foreground = .black
+            ToolState.shared.update(.pencil) { $0 = brush }
+            ToolState.shared.select(.pencil)
+
+            guard let down = key(focusedOwner, type: .flagsChanged, code: code, flags: modifier),
+                  let release = key(focusedOwner, type: .flagsChanged, code: code, flags: []) else {
+                return check(false, "the \(name) field-focus modifier events can be constructed")
+            }
+            canvas.flagsChanged(with: down)
+            window.makeFirstResponder(field)
+            guard let editor = field.currentEditor() as? NSTextView else {
+                return check(false, "the \(name) focus fixture creates a real field editor")
+            }
+            check(window.firstResponder === editor && window.isKeyWindow == keyWindowBefore,
+                  "\(name) release moves keyboard focus within the same window")
+            editor.insertText("modifier release here", replacementRange: NSRange(location: NSNotFound, length: 0))
+            // Deliver release to its actual field first responder. Sending it
+            // back to the canvas would mask the lost-release regression.
+            window.firstResponder?.flagsChanged(with: release)
+            check(window.firstResponder === editor && editor.string == "modifier release here",
+                  "the field owns \(name) release and preserves its typing draft")
+            window.makeFirstResponder(canvas)
+            check(window.firstResponder === canvas && focusedOwner.statusBar.message.hasPrefix("Drag to apply pencil."),
+                  "return from a field clears the stale \(name) temporary-tool hint")
+            func paintPointer(_ type: NSEvent.EventType) throws {
+                guard let event = NSEvent.mouseEvent(with: type,
+                    location: canvas.convert(CGPoint(x: 8 * canvas.scale, y: 8 * canvas.scale), to: nil),
+                    modifierFlags: [], timestamp: 1, windowNumber: window.windowNumber, context: nil,
+                    eventNumber: 1, clickCount: 1, pressure: 1) else {
+                    throw NSError(domain: "ToolHintFocusFixture", code: 1)
+                }
+                if type == .leftMouseDown { canvas.mouseDown(with: event) }
+                else { canvas.mouseUp(with: event) }
+            }
+            try paintPointer(.leftMouseDown)
+            check(focusedDocument.strokeIsActive,
+                  "a modifier-free press after field \(name) release accepts paint, not a temporary tool")
+            try paintPointer(.leftMouseUp)
+            focusedDocument.inputQueue.sync {}
+            wait { focusedDocument.pendingWork == 0 && !EngineActivity.shared.isBusy }
+            let after = try ToolHintNativeState(session, focusedDocument.image)
+            check(!focusedDocument.strokeIsActive && after.fullRender == expectedPixels
+                    && after.history.undoCount == beforeUndo + 1,
+                  "\(name) field-focus recovery paints independent expected pixels as one native Undo")
+            check(after.layers == targetLayers && after.selected == targets && field.stringValue == "modifier release here",
+                  "\(name) focus recovery preserves the captured layer target and field text")
+            field.removeFromSuperview()
+        }
         completed = true
     }
 }
