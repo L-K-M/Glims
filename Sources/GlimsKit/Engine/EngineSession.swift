@@ -2940,11 +2940,25 @@ final class EngineSession: @unchecked Sendable {
         try check(api.image_scale(engine, image, Int32(width), Int32(height), &error), error)
     }
 
-    func resizeCanvas(_ image: Int32, width: Int, height: Int, offset: CGPoint, fill: NSColor) throws {
-        var color = try Self.color(fill)
+    /// Resolves the caller's color once, at execution, and returns the exact
+    /// owned value used by the native call for semantic recording.
+    @discardableResult
+    func resizeCanvas(_ image: Int32, width: Int, height: Int, offset: CGPoint, fill: NSColor) throws -> RecorderColor {
+        let captured = try Self.recorderColor(fill)
+        try resizeCanvas(image, width: width, height: height, offset: offset, fill: captured)
+        return captured
+    }
+
+    func resizeCanvas(_ image: Int32, width: Int, height: Int, offset: CGPoint, fill: RecorderColor) throws {
+        var color = GlimsColor(red: fill.red, green: fill.green, blue: fill.blue, alpha: fill.alpha)
         var error: UnsafeMutablePointer<CChar>?
         try check(api.image_resize_canvas(engine, image, Int32(width), Int32(height),
                                           Int32(offset.x), Int32(offset.y), &color, &error), error)
+    }
+
+    static func recorderColor(_ color: NSColor) throws -> RecorderColor {
+        let value = try Self.color(color)
+        return try RecorderColor(red: value.red, green: value.green, blue: value.blue, alpha: value.alpha)
     }
 
     private static func color(_ color: NSColor) throws -> GlimsColor {
