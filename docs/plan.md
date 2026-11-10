@@ -3361,7 +3361,7 @@ and exact coverage.
 The source chooser captures a same-image drawable into owned native-format
 tiles before creating the target preview. Bump Map applies to pixels with
 one native Undo step; existing target effects remain above it. API v1
-appends slot 147. Other auxiliary/config operations remain unavailable.
+appends slot147. Other auxiliary/config operations remain unavailable.
 See `filter-inputs.md` for policy and coverage. The expanded private/public
 harness passes228 checks on all four engines; the actual chooser/editor
 passes20 per engine. The self-contained bundle passes1,917 native and2,370
@@ -3499,7 +3499,7 @@ Curves candidate (2026-11-09): facade v1 appends157..160 for owned five-channel
 snapshots, one-channel point/sample patches and global TRC updates. The dedicated
 graph/numeric form and native immutable replacement are under acceptance; see
 `curves.md`. Levels and Curves share exact native TRC binding installation.
-Main #135 has merged captured batch Fit; its accepted bundle passes 1,917 native
+Main #135 has merged captured batch Fit; its accepted bundle passes1917 native
 and2542 app checks. This checkpoint does not close the remaining completion ledger.
 
 
@@ -3560,23 +3560,6 @@ restore remains available. See `painting-source-consent.md` for the measured
 native text Undo/Redo issue and scope. Initial consent and two timing defects
 were reproduced before their respective fixes; final integration checks are
 in progress. The facade remains APIv1/163 and upstream sources are unchanged.
-
-
-### Captured Variable Blur mask (2026-11-10 candidate)
-
-Variable Blur uses the existing merge-only source preview contract with a
-detached same-image mask. The menu opens a captured owning-window chooser;
-its mask labels remain distinct from Bump Map's height-map role. Switching
-between those two operations replaces the old chooser and invalidates late
-callbacks, while repeating the same operation retains its explicit selection.
-The generic form exposes the installed Radius, Linear mask and High quality
-properties; manual-build Levels/Gamma controls are not invented.
-
-The native independent GEGL oracle, snapshot-lifetime, refusal and history
-checks pass on all four engines, including retained Bump Map behavior.
-The actual UI route initially reproduced a disabled menu and missing chooser.
-Final source-chooser interaction checks, review, CI and release integration
-remain pending. Other auxiliary-input operations remain unsupported.
 
 ### Captured Variable Blur mask (2026-11-10 candidate)
 
