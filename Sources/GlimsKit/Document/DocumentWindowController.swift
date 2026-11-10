@@ -408,14 +408,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         scrollView.reflectScrolledClipView(clip)
     }
 
-    /// Classic title and status: `name @ 100% (RGB, u8-non-linear)`.
-    /// The mode comes from the document's cached color info, so a
-    /// grayscale or indexed image — or one a conversion just made — no
-    /// longer titles itself RGB.
+    /// The title shows cached working-image color state, independently of
+    /// the window's display destination and soft-proof settings.
     static func title(name: String, zoomPercent: Int, isDirty: Bool,
-                      mode: EngineSession.ColorMode, precision: String, viewRotation: Double = 0) -> String {
+                      mode: EngineSession.ColorMode, precision: String,
+                      profileLabel: String? = nil, viewRotation: Double = 0) -> String {
+        let profile = profileLabel.map { " · \($0.isEmpty ? "Profile unavailable" : $0)" } ?? ""
         let rotation = viewRotation == 0 ? "" : " · View \(viewRotation.formatted(.number.precision(.fractionLength(0...2))))°"
-        return "\(isDirty ? "• " : "")\(name) @ \(zoomPercent)% (\(mode.title), \(precision))\(rotation)"
+        return "\(isDirty ? "• " : "")\(name) @ \(zoomPercent)% (\(mode.title), \(precision)\(profile))\(rotation)"
     }
 
     /// While true the status bar shows a refusal the user should read;
@@ -492,6 +492,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                    isDirty: imageDocument.hasUnsavedChanges,
                                    mode: imageDocument.colorInfo.mode,
                                    precision: imageDocument.info.precision,
+                                   profileLabel: imageDocument.colorInfo.profileLabel,
                                    viewRotation: rotationView.rotationDegrees)
         refreshIdleStatus(.stateChange)
         (PaletteCenter.shared.registeredPalette(for: LayersPaletteController.definition.kind))?.retarget()
