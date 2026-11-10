@@ -949,7 +949,8 @@ regression (GlimsEngine *engine, gpointer unused)
         "oracle manifest records original and patched hashes twelve patch locations source identities getters and complete float-plane hashes");
   NEED (api->image_open (engine, foreign_path, &opened, &error) == GLIMS_STATUS_OK,
         "public image_open accepts the complex foreign file without a Glims carrier");
-  loaded.engine = engine; loaded.id = opened; loaded.image = glims_lookup_image (engine, opened);
+  GlimsOpenImage *loaded_open = glims_lookup_image (engine, opened);
+  loaded.engine = engine; loaded.id = opened; loaded.image = loaded_open ? loaded_open->image : NULL;
   NEED (loaded.image && capture (&loaded, &observed), "public reopen retains mandatory exact native group tree layer-mask and saved-channel owners with four ordered genuine effects and finite planes");
   CHECK (public_tree (&loaded), "public reopen exposes exact group child background saved-channel and effect counts");
   CHECK (all_explicit (&observed), "all four reopened native effects preserve every explicit field and independent operation config");
