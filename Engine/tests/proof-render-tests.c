@@ -474,11 +474,22 @@ main (int argc, char **argv)
   api = glims_engine_get_api (GLIMS_ENGINE_API_VERSION);
   if (!api || api->struct_size < sizeof *api || !api->image_render_proofed)
     { fprintf (stderr, "fresh API164 producer required; old engine.o is not a valid harness input\n"); return 2; }
+  /* A sentinel detects untouched output without ever dereferencing or
+   * freeing it. The facade must define optional error output on failures
+   * both before dispatch and during native argument validation. */
+  char *refused_error = (char *) api;
+  CHECK (api->image_render_proofed (NULL, 0, 1, (GlimsRect) { 0, 0, 1, 1 },
+    NULL, 0, NULL, 0, NULL, NULL, 0, &refused_error) == GLIMS_STATUS_NOT_RUNNING &&
+    refused_error == NULL, "proof error output is cleared before rejected engine dispatch");
   gchar *user = g_build_filename (argv[1], "user", NULL), *cache = g_build_filename (argv[1], "cache", NULL);
   GlimsEngineConfig config = { .struct_size = sizeof config, .user_directory = user, .cache_directory = cache };
   GlimsEngine *engine = NULL; char *error = NULL;
   if (api->start (&config, &engine, &error) != GLIMS_STATUS_OK)
     { fprintf (stderr, "start: %s\n", error ? error : "failed"); clear_error (&error); g_free (user); g_free (cache); return 2; }
+  refused_error = (char *) api;
+  CHECK (api->image_render_proofed (engine, 0, 1, (GlimsRect) { 0, 0, 1, 1 },
+    NULL, 0, NULL, 0, NULL, NULL, 0, &refused_error) == GLIMS_STATUS_INVALID_ARGUMENT &&
+    refused_error == NULL, "proof error output is cleared before native argument refusal");
   CHECK (glims_engine_call (engine, regression, NULL) == GLIMS_STATUS_OK, "native proof regression executes on the engine worker");
   api->stop (engine); g_free (user); g_free (cache);
   printf ("OBS total native proof checks: %d\n", checks);
