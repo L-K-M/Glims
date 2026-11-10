@@ -247,7 +247,7 @@ private final class DocumentScreenPresentation: NSObject {
     func refresh() {
         guard NSApp.isActive, let window = NSApp.mainWindow,
               let owner = window.delegate as? DocumentWindowController,
-              window.isVisible, !owner.imageDocument.isClosing,
+              window.isVisible, owner.screenModeSnapshot != nil, !owner.imageDocument.isClosing,
               !owner.screenModeState.isClosed, owner.screenMode != .windowed,
               !window.styleMask.contains(.fullScreen) else { restore(); return }
         let current = NSApp.presentationOptions
