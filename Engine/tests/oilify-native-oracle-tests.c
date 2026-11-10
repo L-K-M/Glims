@@ -346,6 +346,8 @@ run_oilify_oracle (GlimsEngine *engine, gpointer unused)
   return GLIMS_STATUS_OK;
 }
 
+#include "oilify-native-oracle-diagnostics.h"
+
 static gboolean
 private_environment (const gchar *root)
 {
@@ -363,7 +365,8 @@ private_environment (const gchar *root)
 int
 main (int argc, char **argv)
 {
-  if (argc != 2 || !g_path_is_absolute (argv[1]) || !private_environment (argv[1])) {
+  gboolean diagnostics = argc == 3 && !strcmp (argv[2], "--diagnostics");
+  if ((argc != 2 && !diagnostics) || !g_path_is_absolute (argv[1]) || !private_environment (argv[1])) {
     fprintf (stderr, "Run this fixture with test-oilify-native-oracle.py run and a private work directory.\n");
     return 2;
   }
@@ -381,8 +384,13 @@ main (int argc, char **argv)
     return 2;
   }
   CHECK (glims_engine_call (engine, run_oilify_oracle, NULL) == GLIMS_STATUS_OK, "direct native cases execute on the engine thread");
+  if (diagnostics && !failures) {
+    PROBE (glims_engine_call (engine, run_oilify_diagnostics, NULL) == GLIMS_STATUS_OK,
+           "comparison controls execute on the engine thread");
+    printf ("Oilify diagnostic checks: %d, failures: %d\n", oilify_diagnostic_checks, oilify_diagnostic_failures);
+  }
   api->stop (engine);
   g_free (user); g_free (cache); g_free (oilify_artifacts);
   printf ("%s: %d Oilify oracle checks, %d failures\n", failures ? "FAILED" : "PASSED", oilify_checks, failures);
-  return failures != 0;
+  return failures != 0 || oilify_diagnostic_failures != 0;
 }

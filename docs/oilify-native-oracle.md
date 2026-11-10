@@ -59,3 +59,44 @@ fixture logs operation extents, center samples, alpha and history facts, and
 timing for the small raw cases. These are source expectations pending actual
 execution on all four producers. Captured-map admission, immutable source
 lifetime, precision refusal and budget tests belong to the later facade work.
+
+## Projection and merge diagnostic
+
+The four original `17d4543` runs each passed 73 checks. Their retained
+drawable previews differ from raw Apply at 188 pixels for plain Oilify and
+33 for the mapped case. The largest channel deltas are `(7,7,0,19)` and
+`(1,1,0,19)` respectively. The mapped differences lie within two pixels of
+the selection edge. These are drawable reads, so the actual image projection
+needs a separate measurement.
+
+Add `--diagnostics` to the run command and choose a new work directory. The
+diagnostic runs after the original assertions. Each fresh 32 × 32 scene hides
+the white background so the image projection exposes target alpha. It saves
+raw and with-effects bytes in drawable-local coordinates and saves the
+adapter's scale-one `image_render` projection as premultiplied RGBA in image
+coordinates. Comparisons stay within one representation. The test records
+changed pixel counts, per-channel maximum deltas and difference bounds.
+
+GIMP's `gimp_drawable_filter_layer_mask_freeze` sets a mask property whose
+setter can resync the graph after attachment. `gimp_drawable_filter_sync_region`
+checks whether the filter is first in the stack when selecting its input
+crop. The native merge also reads the applicator's valid cache rectangles,
+then processes the remainder in the clipped rectangle. The diagnostic logs
+the actual Oilify input producer and bounds, selection intersection, region,
+clip request, frozen-mask presence, cache rectangles and format at the
+attached, preview and pre-commit stages.
+
+| Paired controls | What the observations decide |
+| --- | --- |
+| Late, early and omitted freeze with the same selection | A changed crop and fresh drawable bytes immediately after freeze establish a graph change before Apply. Early freeze can show whether the preview matches that graph. |
+| Same region resynced after attachment, with a live unfrozen selection | Matching early-freeze pixels here implicates region resync independently of copying the mask. |
+| Empty selection and selected drawable-region control | A result that depends on selection-region input bounds can be separated from the presence of a selection mask. |
+| Cache disabled, selection-sized projection read first, and drawable-only pre-Apply reads | Cache metadata and same-stage bytes show whether those particular cache or read-rectangle changes affect the result. |
+| Late-freeze probe with lazy projection, refreshed adapter projection and eager Core projection | The eager read uses the same image rectangle and premultiplied format after explicit invalidation. Differences here distinguish projection freshness or rendering from changes already present in fresh drawable bytes. |
+| Mapped late and early freeze | The same timing comparison tests the source-mapped case. |
+
+Only the late-freeze probe reads pixels between late freeze and Apply.
+It records the refreshed projection separately because those reads can warm
+the graph. The diagnostic predicts 187 setup, capture and lifecycle checks
+and 112 extra frames. Pixel differences are observations. The original 73
+assertions run first and keep their separate result count.
