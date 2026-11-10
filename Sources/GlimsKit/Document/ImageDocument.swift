@@ -2597,8 +2597,17 @@ final class ImageDocument {
     }
 
     func restoreMoveSelection(_ owned: MoveSelectionOwnership) {
-        guard acceptsEdits, !strokeIsActive, !floatingState.isActive,
+        guard !isClosing, !strokeIsActive, !floatingState.isActive,
               ownsMoveSelection(owned), pendingTargetPick == nil else { return }
+        if EngineActivity.shared.isBusy {
+            EngineActivity.shared.whenIdle { [weak self] in
+                // Let the exclusive operation finish its MainActor cleanup.
+                // Recheck ownership before submitting a new native selection.
+                DispatchQueue.main.async { self?.restoreMoveSelection(owned) }
+            }
+            return
+        }
+        guard acceptsEdits else { return }
         // Every route below increments an existing target version before
         // notifying observers, so a second cancel cannot submit twice.
         if !owned.previousChannels.isEmpty {

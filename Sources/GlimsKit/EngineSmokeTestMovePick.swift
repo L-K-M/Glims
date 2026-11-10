@@ -46,7 +46,7 @@ extension EngineSmokeTest {
     /// Tests only: finds the future mode through actual UI, never a future
     /// Swift property/type. Missing mode on the old frontend is explicit RED.
     static func exerciseMovePick(_ session: EngineSession, work: URL,
-                                 documents: DocumentList) throws {
+                                 documents: DocumentList, busyRestoreOnly: Bool = false) throws {
         var count = 0
         func expect(_ value: Bool, _ message: String) { count += 1; check(value, "Move pick: \(message)") }
         func require(_ value: Bool, _ message: String) throws {
@@ -110,7 +110,8 @@ extension EngineSmokeTest {
             documents.items.removeAll { doc in owners.contains { $0.imageDocument === doc } }
             ToolState.shared.select(priorTool)
             board.releaseGlobally()
-            print("     move-pick checks: \(count)")
+            let smokeCase = busyRestoreOnly ? "move-pick-busy-restore" : "move-pick"
+            print("     \(smokeCase) checks: \(count)")
         }
         func drain(_ document: ImageDocument) throws {
             try require(wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }, "accepted Move work did not drain")
@@ -292,6 +293,86 @@ extension EngineSmokeTest {
         expect(initial.itemTitles == ["Current Layer", "Pick Layer or Guide"] && initial.selectedItem?.title == "Current Layer",
                "the honest full Move mode defaults to the existing Current Layer behavior")
         try selectMode("Pick Layer or Guide")
+
+        if busyRestoreOnly {
+            func cancelDuringActivity(_ fixture: Scene, newerChoice: (Int32, MovePickSnapshot)? = nil) throws {
+                let owner = fixture.owner
+                let document = owner.imageDocument
+                let image = document.image
+                _ = try front(owner)
+                try selected(owner, fixture.bottom)
+                let before = try snapshot(image)
+                try mouse(owner, .leftMouseDown, opaque)
+                try selected(owner, fixture.top)
+                let picked = try snapshot(image)
+                expect(before.content.selected == [fixture.bottom] && picked.content.selected == [fixture.top]
+                        && document.activeLayer == fixture.top && owner.canvas.tools.hasPendingInteraction
+                        && picked.content.composite == before.content.composite
+                        && picked.content.drawables == before.content.drawables
+                        && picked.content.selection == before.content.selection
+                        && picked.undo == before.undo && picked.history == before.history,
+                       "native Pick acknowledges B from A with no pixel, mask or history change")
+
+                let activity = EngineActivity.shared
+                let gate = MovePickInputHold()
+                holds.append(gate)
+                var activityFinished = false
+                let label = "Move Pick cancellation activity"
+                try require(activity.perform(label: label, work: { gate.block() }, completion: { activityFinished = true }),
+                            "exclusive activity was not admitted")
+                defer { gate.release.signal() }
+                try started(gate)
+                let heldTarget = try session.selectedLayers(image)
+                expect(activity.label == label && !activityFinished && !document.acceptsEdits
+                        && heldTarget == [fixture.top],
+                       "real exclusive activity holds edit admission with native B still selected")
+
+                var explicitChoiceRan = false
+                if let (id, _) = newerChoice {
+                    // The new user intent was submitted after Pick. Use the
+                    // real idle queue to admit it before deferred restoration.
+                    activity.whenIdle {
+                        document.selectLayer(id)
+                        explicitChoiceRan = true
+                    }
+                }
+                try key(owner, code: 53, characters: "\u{1b}")
+                let cancelledTarget = try session.selectedLayers(image)
+                expect(activity.isBusy && !owner.canvas.tools.hasPendingInteraction
+                        && cancelledTarget == [fixture.top],
+                       "Escape retires the gesture while the native target is still held")
+
+                gate.release.signal()
+                try require(wait { activityFinished }, "exclusive activity did not complete")
+                try drain(document)
+                let settled = try snapshot(image)
+                if let (id, expected) = newerChoice {
+                    expect(explicitChoiceRan && settled.content.selected == [id] && settled == expected,
+                           "the newer explicit target wins before deferred restore, with exact pixels and Undo")
+                } else {
+                    expect(settled == before && document.activeLayer == fixture.bottom,
+                           "after busy Escape, idle cleanup restores native A with exact pixels, mask and Undo")
+                }
+
+                try mouse(owner, .leftMouseUp, end(opaque, delta))
+                try drain(document)
+                expect(try snapshot(image) == settled, "late release after busy cancellation stays inert")
+            }
+
+            try cancelDuringActivity(first)
+            let superseded = try scene("Busy cancellation superseded")
+            let document = superseded.owner.imageDocument
+            guard let later = try session.layerCommand(.new, image: document.image) else {
+                throw NSError(domain: "MovePickFixture", code: 15)
+            }
+            try session.selectLayer(later, image: document.image)
+            let expected = try snapshot(document.image)
+            try session.selectLayer(superseded.bottom, image: document.image)
+            try document.reload()
+            try drain(document)
+            try cancelDuringActivity(superseded, newerChoice: (later, expected))
+            return
+        }
 
         // Inactive: the actual native hit is selected/acknowledged at PRESS.
         _ = try front(first.owner)
@@ -538,7 +619,14 @@ extension EngineSmokeTest {
             // Paint Options may accept resource reads when the tool changes.
             // Wait for those real reads before testing pointer admission.
             try drain(first.owner.imageDocument); try drain(command.owner.imageDocument)
-            if variant == 2 { try key(command.owner, code: 55, characters: "") }
+            if variant == 2 {
+                // Key-down can reach the canvas only after it owns focus.
+                // Becoming first responder must discard keys from an old owner.
+                try require(command.owner.window?.makeFirstResponder(command.owner.canvas) == true &&
+                            command.owner.window?.firstResponder === command.owner.canvas,
+                            "held Command fixture must deliver key-down to the focused canvas")
+                try key(command.owner, code: 55, characters: "")
+            }
             let flags: NSEvent.ModifierFlags = variant == 2 ? [] : [.command]
             try mouse(command.owner, .leftMouseDown, CGPoint(x: 60, y: 40), flags: flags)
             expect(command.owner.imageDocument.pendingWork == 0, "temporary/selected/held Command uses Current without even queuing a pick")
@@ -553,6 +641,9 @@ extension EngineSmokeTest {
         ToolState.shared.select(.move)
         let space = try scene("Space beats Command", floating: true); _ = try front(space.owner)
         let beforeSpace = try snapshot(space.owner.imageDocument.image)
+        try require(space.owner.window?.makeFirstResponder(space.owner.canvas) == true &&
+                    space.owner.window?.firstResponder === space.owner.canvas,
+                    "held Space fixture must deliver key-down to the focused canvas")
         try key(space.owner, code: 49, characters: " ")
         try mouse(space.owner, .leftMouseDown, hole, flags: [.command]); try mouse(space.owner, .leftMouseUp, end(hole, delta), flags: [.command])
         try key(space.owner, down: false, code: 49, characters: " "); try drain(space.owner.imageDocument)
