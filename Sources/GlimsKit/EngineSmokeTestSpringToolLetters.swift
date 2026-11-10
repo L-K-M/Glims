@@ -133,6 +133,39 @@ extension EngineSmokeTest {
                 && document.undoInfo.undoCount == initialUndo,
               "tap, hold, repeat and overlap change no native pixels or history")
 
+        // H's released/deferred hold must not survive a newer owner. Drive
+        // the real Hand drag so a fresh H press proves its key is reusable.
+        settle(document)
+        let overlapPixels = try session.copyPixels(image, merged: true).pixels
+        let overlapUndo = try session.undoInfo(image), overlapHistory = try session.history(image)
+        let overlapLayers = try session.layers(image), overlapSelected = try session.selectedLayers(image)
+        let overlapFloating = try session.floatingSelection(image)
+        state.select(.move); state.select(.paintbrush)
+        try letter(.keyDown, "h", 4, 7.1, paint)
+        check(state.current == .hand, "deferred-overlap H selects Hand before the pointer press")
+        try pointer(.leftMouseDown, CGPoint(x: 32, y: 24), 7.11, paint)
+        try pointer(.leftMouseDragged, CGPoint(x: 38, y: 28), 7.12, paint)
+        try letter(.keyUp, "h", 4, 7.15, paint)
+        check(state.current == .hand && canvas.tools.hasPendingInteraction,
+              "released H defers its restoration while the accepted Hand drag remains active")
+        try letter(.keyDown, "v", 9, 7.2, paint)
+        check(state.current == .move && canvas.tools.hasPendingInteraction,
+              "V becomes the newer shortcut owner without replacing the captured Hand drag")
+        try pointer(.leftMouseUp, CGPoint(x: 38, y: 28), 7.25, paint)
+        check(state.current == .move && !canvas.tools.hasPendingInteraction,
+              "Hand release ends only the captured pointer interaction and leaves V owned")
+        try letter(.keyUp, "v", 9, 7.6, paint)
+        check(state.current == .paintbrush, "the newer long-held V restores the original Paintbrush baseline")
+        try letter(.keyDown, "h", 4, 7.7, paint)
+        check(state.current == .hand, "a fresh H press works after the older deferred H handed off ownership")
+        try letter(.keyUp, "h", 4, 8.05, paint)
+        check(state.current == .paintbrush, "the fresh long-held H restores its baseline normally")
+        check(try session.copyPixels(image, merged: true).pixels == overlapPixels
+                && session.undoInfo(image) == overlapUndo && session.history(image) == overlapHistory
+                && session.layers(image) == overlapLayers && session.selectedLayers(image) == overlapSelected
+                && session.floatingSelection(image) == overlapFloating && document.pendingWork == 0,
+              "deferred Hand/Move overlap and fresh H leave native pixels, targets and complete history unchanged")
+
         // Independently configure the native pencil oracle. Its literal brush
         // and samples do not read ToolState or any captured canvas settings.
         let expected = try session.newImage(width: 96, height: 64)
