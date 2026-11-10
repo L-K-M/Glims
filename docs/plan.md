@@ -3599,5 +3599,18 @@ read-only contract and remaining physical/HDR/proof-control scope.
 Glims stages Rigi revision `a5801f2` for the saved palette-group width growth
 fix. Rigi's 134 unit tests, gallery smoke, release build and independent review
 passed at that revision. Rigi PR #19 is pushed and awaiting merge; it must merge
-before Glims merges this consumer adoption. Glims consumer unit/UI checks, CI and adoption
-merge remain pending.
+before Glims merges this consumer adoption. Glims passes 988 unit tests and 2,771 engine-backed app checks with this pin.
+Consumer CI, review and adoption merge remain pending.
+
+### Installed MacPorts recipe inventory (2026-11-10 candidate)
+
+The standalone `scripts/installed-port-provenance.py` inventories requested
+installed recipes and recorded PortGroups through immutable SQLite reads,
+checking exact original hashes/sizes and database/WAL/rollback-journal stability. It refuses
+implicit output overwrites and never writes inside the source prefix.
+Nineteen temporary-registry fixtures pass; a read-only aom/zlib/libidn2 sample
+verified metadata with the registry DB/WAL/SHM unchanged. Source completeness
+is explicitly not assessed: no Tcl evaluation, conditional patch inference,
+source archive or release integration is added. See
+[`installed-port-provenance.md`](installed-port-provenance.md) for usage and
+evidence limits. Independent review/integration remain pending.
