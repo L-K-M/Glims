@@ -26,12 +26,17 @@
  * deterministic: straight color through the transform, alpha unchanged,
  * then one premultiplication.
  *
- * Policy is fixed: relative colorimetric SDR with no flags (no proofing,
+ * Slot132 policy is fixed: relative colorimetric SDR with no flags (no proofing,
  * no gamut check, no black point compensation, no optimize change). No
  * transform or profile is cached: everything is created, used and released
  * on this engine thread within the call. The call is a read: it never
  * checks write readiness and never touches pixels, profile, history or
  * dirty state. Runs on the engine thread.
+ *
+ * Slot164 uses the same read/premultiply path with an explicit native
+ * proofing transform. Its separate entry validates facade-owned settings
+ * and both ICC blobs before calling the shared renderer. No missing or
+ * unusable proof can select the unproofed branch through that entry.
  */
 #include "engine-private.h"
 
@@ -50,13 +55,18 @@
 /* The one documented SDR transform policy of slot 132. */
 #define DISPLAY_RENDER_INTENT GIMP_COLOR_RENDERING_INTENT_RELATIVE_COLORIMETRIC
 
-GlimsStatus
-glims_image_render_to_profile (GlimsEngine   *engine,
+static GlimsStatus
+display_render (GlimsEngine   *engine,
                                GlimsImageID    id,
                                double          scale,
                                GlimsRect       area,
                                const uint8_t  *destination_icc,
                                size_t          destination_icc_length,
+                               const uint8_t  *proof_icc,
+                               size_t          proof_icc_length,
+                               GimpColorRenderingIntent proof_intent,
+                               GimpColorRenderingIntent display_intent,
+                               GimpColorTransformFlags flags,
                                uint8_t        *pixels,
                                size_t          stride,
                                char          **error)
@@ -66,6 +76,7 @@ glims_image_render_to_profile (GlimsEngine   *engine,
   GimpImageBaseType   base_type;
   GimpColorProfile   *src_profile;
   GimpColorProfile   *dest_profile = NULL;
+  GimpColorProfile   *proof_profile = NULL;
   GimpColorTransform *transform = NULL;
   GError             *gerror = NULL;
   GeglBuffer         *buffer = NULL;
@@ -182,6 +193,9 @@ glims_image_render_to_profile (GlimsEngine   *engine,
       return GLIMS_STATUS_UNSUPPORTED;
     }
 
+  /* This space only associates and quantizes values already converted by
+   * LCMS. A relative space supplies the profile's primaries/TRC without
+   * asking Babl to implement the proof's saturation/absolute intents. */
   dest_space = gimp_color_profile_get_space (dest_profile, DISPLAY_RENDER_INTENT, &gerror);
   if (! dest_space)
     {
@@ -197,16 +211,38 @@ glims_image_render_to_profile (GlimsEngine   *engine,
    * the pair, the constructor falls back to LCMS — either way malformed
    * or unsupported combinations already failed above or return NULL here. */
   dest_plain = babl_format ("R'G'B'A float");
-  transform = gimp_color_transform_new (src_profile, babl_format (src_encoding),
-                                        dest_profile, dest_plain,
-                                        DISPLAY_RENDER_INTENT,
-                                        (GimpColorTransformFlags) 0);
+  if (proof_icc)
+    {
+      proof_profile = gimp_color_profile_new_from_icc_profile (proof_icc,
+                                                               proof_icc_length,
+                                                               &gerror);
+      if (! proof_profile)
+        {
+          status = glims_fail (error, g_steal_pointer (&gerror),
+                               "The proof data is not a valid ICC color profile.");
+          goto out;
+        }
+      /* No RGB restriction on the proof: the native LCMS-backed constructor
+       * decides which profile/intent combinations it can represent. It
+       * always enables proofing and copies alpha on all supported engines. */
+      transform = gimp_color_transform_new_proofing (src_profile, babl_format (src_encoding),
+                                                     dest_profile, dest_plain, proof_profile,
+                                                     proof_intent, display_intent, flags);
+    }
+  else
+    {
+      /* Keep slot132's constructor, policy and flags exactly as before. */
+      transform = gimp_color_transform_new (src_profile, babl_format (src_encoding),
+                                            dest_profile, dest_plain,
+                                            DISPLAY_RENDER_INTENT,
+                                            (GimpColorTransformFlags) 0);
+    }
   if (! transform)
     {
       status = glims_fail (error, NULL,
-                           "The engine could not build a transform to the destination profile.");
-      g_object_unref (dest_profile);
-      return status;
+                           proof_icc ? "The engine could not build the requested ICC proofing transform."
+                                     : "The engine could not build a transform to the destination profile.");
+      goto out;
     }
 
   /* Premultiply exactly once, inside the destination space, with babl's
@@ -292,5 +328,79 @@ out:
     g_object_unref (transform);
   if (dest_profile)
     g_object_unref (dest_profile);
+  if (proof_profile)
+    g_object_unref (proof_profile);
   return status;
+}
+
+GlimsStatus
+glims_image_render_to_profile (GlimsEngine   *engine,
+                               GlimsImageID    id,
+                               double          scale,
+                               GlimsRect       area,
+                               const uint8_t  *destination_icc,
+                               size_t          destination_icc_length,
+                               uint8_t        *pixels,
+                               size_t          stride,
+                               char          **error)
+{
+  return display_render (engine, id, scale, area, destination_icc, destination_icc_length,
+                         NULL, 0, DISPLAY_RENDER_INTENT, DISPLAY_RENDER_INTENT,
+                         (GimpColorTransformFlags) 0, pixels, stride, error);
+}
+
+static gboolean
+proof_render_intent (uint32_t value, GimpColorRenderingIntent *intent)
+{
+  switch (value)
+    {
+    case GLIMS_PROFILE_PERCEPTUAL:
+      *intent = GIMP_COLOR_RENDERING_INTENT_PERCEPTUAL; return TRUE;
+    case GLIMS_PROFILE_RELATIVE_COLORIMETRIC:
+      *intent = GIMP_COLOR_RENDERING_INTENT_RELATIVE_COLORIMETRIC; return TRUE;
+    case GLIMS_PROFILE_SATURATION:
+      *intent = GIMP_COLOR_RENDERING_INTENT_SATURATION; return TRUE;
+    case GLIMS_PROFILE_ABSOLUTE_COLORIMETRIC:
+      *intent = GIMP_COLOR_RENDERING_INTENT_ABSOLUTE_COLORIMETRIC; return TRUE;
+    default:
+      return FALSE;
+    }
+}
+
+GlimsStatus
+glims_image_render_proofed (GlimsEngine             *engine,
+                            GlimsImageID              id,
+                            double                    scale,
+                            GlimsRect                 area,
+                            const uint8_t            *destination_icc,
+                            size_t                    destination_icc_length,
+                            const uint8_t            *proof_icc,
+                            size_t                    proof_icc_length,
+                            const GlimsProofSettings *settings,
+                            uint8_t                  *pixels,
+                            size_t                    stride,
+                            char                    **error)
+{
+  GimpColorRenderingIntent proof_intent;
+  GimpColorRenderingIntent display_intent;
+  GimpColorTransformFlags flags = 0;
+
+  /* Check size before reading any later field. Larger future tails are
+   * ignored, while unknown owned flags and intent values are refused. */
+  if (! settings || settings->struct_size < sizeof *settings)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if ((settings->flags & ~((uint32_t) GLIMS_PROOF_BLACK_POINT_COMPENSATION)) != 0 ||
+      ! proof_render_intent (settings->proof_intent, &proof_intent) ||
+      ! proof_render_intent (settings->display_intent, &display_intent))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (! destination_icc || destination_icc_length == 0 ||
+      destination_icc_length > GLIMS_MAX_ICC_PROFILE_BYTES ||
+      ! proof_icc || proof_icc_length == 0 || proof_icc_length > GLIMS_MAX_ICC_PROFILE_BYTES)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (settings->flags & GLIMS_PROOF_BLACK_POINT_COMPENSATION)
+    flags |= GIMP_COLOR_TRANSFORM_FLAGS_BLACK_POINT_COMPENSATION;
+
+  return display_render (engine, id, scale, area, destination_icc, destination_icc_length,
+                         proof_icc, proof_icc_length, proof_intent, display_intent,
+                         flags, pixels, stride, error);
 }
