@@ -180,10 +180,16 @@ extension EngineSmokeTest {
             }
         }
         let seed = ClipboardImage(width: width, height: height, pixels: Data(seedBytes), origin: .zero)
+        var payloadBytes: [UInt8] = []
+        for i in 0..<80 {
+            let red = UInt8(230 - i % 91)
+            let green = UInt8((i * 19) % 256)
+            let blue = UInt8(20 + i % 201)
+            let alpha: UInt8 = i % 7 == 0 ? 0 : 190
+            payloadBytes.append(contentsOf: [red, green, blue, alpha])
+        }
         let payload = ClipboardImage(width: 10, height: 8,
-            pixels: Data((0..<80).flatMap { i -> [UInt8] in
-                [UInt8(230 - i % 91), UInt8((i * 19) % 256), UInt8(20 + i % 201), UInt8(i % 7 == 0 ? 0 : 190)]
-            }), origin: CGPoint(x: 9, y: 11))
+            pixels: Data(payloadBytes), origin: CGPoint(x: 9, y: 11))
         try payload.write(to: board)
         var selectOptions = EngineSession.SelectOptions(); selectOptions.antialias = false
         func seedImage() throws -> Int32 {
