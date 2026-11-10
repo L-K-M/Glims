@@ -3695,8 +3695,12 @@ and native-writer interpretation caused ten general failures, fixed before
 this matrix. Source-only loader/binding audits are recorded; this authored
 documentation is not another independent approval. See `xcf-effect-fields.md`
 for hashes, oracle scope and remaining compressed/v20/v21/nested-mask limits.
-CI, review, GUI acceptance and integration remain pending; the
-broader completion item stays open.
+Fresh API165 integration source`c0acf2d` repeats all-four general conformance
+and pinned original41/complex43 checks. Independent Glyph review covers the
+unchanged seven production files; the earlier hosted timeout is not approval.
+A separate ordinary LaunchServices foreign-file event passed; the actual
+File Open chooser and final integrated release remain unverified. Required
+latest-head CI/review/integration and broader preservation work stay open.
 
 ### Captured batch Rasterize (2026-11-10 candidate)
 

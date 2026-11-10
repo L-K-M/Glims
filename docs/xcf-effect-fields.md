@@ -166,3 +166,29 @@ pass is not another independent approval: its author wrote the initial
 binder. Normal foreign-file GUI acceptance, latest-head CI/review and PR
 integration remain separate gates; the broader foreign-preservation ledger
 item stays open.
+
+## API165 integration verification (2026-11-10)
+
+Fresh immutable adapters from `c0acf2d` append the inherited batch slot165
+without changing the seven foreign-reader/binder production files from
+`2de536b`. General conformance again passes1,917/1,917/1,703/1,917 checks
+on3.2.8/3.2.0/3.0.8/master. The original41-check and complex43-check
+foreign oracles pass again on the new pinned3.2.8 tuple. This is not a fresh
+all-four complex-oracle claim; earlier61/75/121 results retain their original
+producer scope. Logs/hashes are in
+`/tmp/glims-completion/foreign165-integration-verification.json`.
+
+A bounded independent Glyph source review at`2de536b` covered all seven
+foreign production files and all19 changed-file fingerprints without a
+confirmed important finding. Its source parity scope excludes authentic
+GIMP loader ordering, covered separately by the recorded loader/binding
+audits. The hosted reviewer at`2de536b` timed out before publication; no
+partial hidden findings are claimed reviewed and the timeout is not approval.
+Latest Main integration adds only source collectors.
+
+A separate ordinary LaunchServices document-open event accepted the complex
+8×6 foreign file with three layers in the app, then exited cleanly. The
+File > Open panel choose-file route remains unverified; this event does not
+stand in for that interaction or a final self-contained release workflow.
+Compressed/v20/v21/nested-effect-mask support and stronger file attestation
+remain outside this change.
