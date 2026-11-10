@@ -23,7 +23,10 @@ only, and effects nested on per-effect masks remain unsupported in this
 bounded slice.
 
 The scope is a seekable regular local file with an uncompressed XCF
-container version 22 through 26. Version 26 carries per-channel
+container version 20 through 26. Versions 20 and 21 have no serialized
+operation version. On those versions the native correspondence check still
+requires the exact operation name and all other existing fields. Versions
+22 and later retain the operation-version check. Version 26 carries per-channel
 effect-offset tables. Earlier readers do not interpret them, although the
 pinned writer can reserve an empty table. Flat serialized
 layer preorder retains ordinary, group, text, vector and link context
@@ -119,8 +122,8 @@ available device/inode attributes. This detects ordinary observable source
 changes; it is not an FD-bound snapshot, content-hash attestation or protection
 against an adversarial ABA replacement with the same metadata. Missing
 required identity evidence refuses recovery. The reader's bounds and
-unsupported formats remain admission limits: plain XCF v22–26 only, with no compressed
-outer containers, v20/v21 recovery, effects nested on effect masks, or general
+unsupported formats remain admission limits: plain XCF v20–26 only, with no compressed
+outer containers, effects nested on effect masks, or general
 promise to recover effects discarded by native loading.
 
 The preserved native runs, checked against their manifests at source
@@ -190,5 +193,18 @@ A separate ordinary LaunchServices document-open event accepted the complex
 8×6 foreign file with three layers in the app, then exited cleanly. The
 File > Open panel choose-file route remains unverified; this event does not
 stand in for that interaction or a final self-contained release workflow.
-Compressed/v20/v21/nested-effect-mask support and stronger file attestation
-remain outside this change.
+Compressed containers, nested effect masks and stronger file attestation
+remain outside the current scope.
+
+## Legacy effect records
+
+The pinned native oracle constructs versions 20 and 21 from its validated
+version 22 fixture by omitting the operation-version string. It keeps the
+effect TLVs, mask location and pixel payloads. Direct GIMP loading accepts
+both inputs and identifies the native effect. On the old adapter, both
+Glims opens refuse. The corrected 3.2.8 adapter passes all 61 native checks,
+including the original 41 checks. Legacy results match the independently
+configured native effect, source and rendered pixels, retain the mask,
+start with empty Undo/Redo, and leave the files unchanged. The pure suite
+passes 78 checks with the preserved native corpus. The other engine builds
+exercise general conformance; the legacy native oracle is pinned to 3.2.8.

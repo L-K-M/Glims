@@ -1,9 +1,13 @@
 /* Read-only XCF metadata, independent of GIMP and the public facade.
- * Versions22–26, flat layer context, channels, masks and effect metadata.
+ * Versions 20–26, flat layer context, channels, masks and effect metadata.
  * All returned records/strings belong to the result, never the input stream. */
 #ifndef GLIMS_XCF_EFFECT_FIELDS_H
 #define GLIMS_XCF_EFFECT_FIELDS_H
 #include <gio/gio.h>
+
+#define GLIMS_XCF_EFFECT_FIRST_VERSION 20u
+#define GLIMS_XCF_EFFECT_VERSIONED_OPERATIONS 22u
+#define GLIMS_XCF_EFFECT_LAST_VERSION 26u
 
 #define GLIMS_XCF_EFFECT_FIELDS_MAX_BYTES (8u * 1024u * 1024u)
 #define GLIMS_XCF_EFFECT_FIELDS_MAX_STRING (64u * 1024u)
