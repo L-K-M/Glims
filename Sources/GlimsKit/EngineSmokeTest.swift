@@ -262,6 +262,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (canvas overlays)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tool-hints" {
+                try exerciseToolHints(session, documents: documents)
+                print(failures == 0 ? "PASSED (tool hints)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "indexed-controls" {
                 try exerciseIndexedControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (indexed controls)" : "FAILED: \(failures) failure(s)")
@@ -601,6 +606,7 @@ enum EngineSmokeTest {
             try exerciseBrushPaletteSync(session, documents: documents)
             try exerciseSpringToolLetters(session, documents: documents)
             try exerciseMenuShortcuts(session, work: work, documents: documents)
+            try exerciseToolHints(session, documents: documents)
             try exerciseFloatingControls(session, work: work, documents: documents)
             try exerciseMetadataControls(session, work: work, documents: documents)
             try exerciseMetadataCaptureDate(session, work: work, documents: documents)

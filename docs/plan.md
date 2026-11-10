@@ -3880,3 +3880,11 @@ text focus retain priority. A measured focus-loss regression (two failures)
 is corrected; all four engines pass 83 interface checks, plus 18 state tests
 and 1,033 isolated full-suite tests. See [spring-tool-letters.md](spring-tool-letters.md)
 for exact revisions, review scope and remaining physical-input/release gates.
+
+### Live canvas tool hints (2026-11-10 candidate)
+
+Stationary modifier/tool changes update useful hints while preserving error,
+progress and activity priority. Same-window field focus clears lost modifier
+releases; its measured six-failure regression is fixed. All four engines pass
+51 interface checks and the full isolated suite passes 1,022 tests. See
+[live-tool-hints.md](live-tool-hints.md) for scope, AX and integration limits.

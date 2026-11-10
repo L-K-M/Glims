@@ -188,6 +188,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             self?.statusIsError = false
             self?.statusBar.message = message
         }
+        canvas.tools.onHintChange = { [weak self] reason in self?.refreshIdleStatus(reason) }
         canvas.tools.onZoom = { [weak self] zoomIn, point in
             guard let self else { return }
             self.zoom(to: zoomIn ? ZoomLadder.zoomIn(from: self.canvas.zoomPercent)
@@ -421,6 +422,23 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// While true the status bar shows a refusal the user should read;
     /// generic state reloads leave it alone until the next command.
     private var statusIsError = false
+    private var statusProgressActive = false
+    private var lastIdleStatus: String?
+
+    private func refreshIdleStatus(_ reason: ToolHintPolicy.Refresh) {
+        let undo = imageDocument.undoInfo.nextUndo.isEmpty ? "" : " · Undo \(imageDocument.undoInfo.nextUndo)"
+        let summary = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(imageDocument.info.layerCount) layer\(imageDocument.info.layerCount == 1 ? "" : "s")\(undo)"
+        let current = statusBar.message
+        let message = ToolHintPolicy.status(current: current, isError: statusIsError,
+            progressActive: statusProgressActive, activity: EngineActivity.shared.label,
+            actionIsVisible: current != lastIdleStatus, refresh: reason,
+            hint: canvas.tools.hint, summary: summary)
+        if message != current { statusBar.message = message }
+        if !statusIsError, !statusProgressActive, EngineActivity.shared.label == nil,
+           !(reason == .afterAction && current != lastIdleStatus) {
+            lastIdleStatus = message
+        }
+    }
 
     private func showStatusError(_ message: String) {
         statusIsError = true
@@ -477,10 +495,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                    precision: imageDocument.info.precision,
                                    profileLabel: imageDocument.colorInfo.profileLabel,
                                    viewRotation: rotationView.rotationDegrees)
-        let undo = imageDocument.undoInfo.nextUndo.isEmpty ? "" : " · Undo \(imageDocument.undoInfo.nextUndo)"
-        if !statusIsError {
-            statusBar.message = EngineActivity.shared.label.map { "\($0)…" } ?? "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(imageDocument.info.layerCount) layer\(imageDocument.info.layerCount == 1 ? "" : "s")\(undo)"
-        }
+        refreshIdleStatus(.stateChange)
         (PaletteCenter.shared.registeredPalette(for: LayersPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: ChannelsPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: PathsPaletteController.definition.kind))?.retarget()
@@ -1539,6 +1554,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         imageDocument.run(procedure, mode: mode) { [weak self] result in
             PlugInCommands.didRun(procedure, outcome: try? result.get())
             guard let self else { return }
+            self.statusProgressActive = false
             self.statusBar.hideProgress()
             switch result {
             case .success(.completed): self.stateDidChange()
@@ -1550,7 +1566,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     /// Progress of the plug-in command running on this document.
     func showProgress(_ progress: EngineSession.Progress?) {
-        guard let progress else { return statusBar.hideProgress() }
+        statusProgressActive = progress != nil
+        guard let progress else {
+            statusBar.hideProgress()
+            refreshIdleStatus(.stateChange)
+            return
+        }
         statusBar.showProgress(fraction: progress.fraction) { [weak self] in
             _ = self?.imageDocument.session.cancelProcedure()
         }

@@ -119,6 +119,9 @@ final class CanvasToolController {
     private var springLetters = SpringToolLettersState()
     private var selectingSpringTool = false
     private var observedSelectionRevision = ToolState.shared.selectionRevision
+    private var hintFlags: NSEvent.ModifierFlags = []
+    private var toolObserver: UUID?
+    private var hintEventsStopped = false
     /// The crop rectangle waiting for Return (image pixels).
     private(set) var pendingCrop: CGRect?
     /// The Transform tool's pending transform, waiting for Return.
@@ -155,6 +158,46 @@ final class CanvasToolController {
 
     /// Shows a short message in the document's status strip.
     var onStatus: ((String) -> Void)?
+    /// View-only refreshes never use onStatus, which clears error latches.
+    var onHintChange: ((ToolHintPolicy.Refresh) -> Void)?
+
+    var hint: String {
+        let tool = dragTool ?? pointerTool(for: hintFlags)
+        var flags = hintFlags
+        if keyboard.optionIsDown(flags: hintFlags) { flags.insert(.option) }
+        let phase: ToolHintPolicy.Phase
+        if dragTool != nil { phase = .dragging }
+        else if tool == .text, textEditor != nil { phase = .textEditing }
+        else if tool == .crop, let crop = pendingCrop { phase = .cropReady(width: Int(crop.width), height: Int(crop.height)) }
+        else if tool == .transform, transformSession?.isIdentity == false { phase = .transformReady }
+        else { phase = .idle }
+        return ToolHintPolicy.hint(tool: tool, phase: phase, flags: flags)
+    }
+
+    private func hintChanged(_ reason: ToolHintPolicy.Refresh) {
+        if !hintEventsStopped { onHintChange?(reason) }
+    }
+
+    /// Physical modifiers can lose their release event when focus leaves.
+    /// This changes presentation/held keys only, never accepted native work.
+    func resetHintModifiers() {
+        keyboard = CanvasKeyboardState()
+        hintFlags = []
+        hintChanged(.context)
+    }
+
+    func stopHintEvents() {
+        resetHintModifiers()
+        hintEventsStopped = true
+        if let toolObserver { ToolState.shared.removeObserver(toolObserver) }
+        toolObserver = nil
+    }
+
+    func hintModifiersChanged(_ flags: NSEvent.ModifierFlags) {
+        hintFlags = flags
+        keyboard.modifiersChanged(flags)
+        hintChanged(.context)
+    }
     /// Asks the window to zoom one step in or out, keeping `point` (image
     /// pixels) in view.
     var onZoom: ((_ zoomIn: Bool, _ point: CGPoint) -> Void)?
@@ -171,7 +214,7 @@ final class CanvasToolController {
         self.canvas = canvas
         // The Transform tool's box shows as soon as the tool is picked, and
         // an unapplied transform goes away when another tool is.
-        ToolState.shared.observe { [weak self] in
+        toolObserver = ToolState.shared.observe { [weak self] in
             guard let self else { return }
             let changed = self.observedSelectionRevision != ToolState.shared.selectionRevision
             self.observedSelectionRevision = ToolState.shared.selectionRevision
@@ -183,7 +226,7 @@ final class CanvasToolController {
                 return
             }
             if ToolState.shared.current != .transform, self.transformSession != nil {
-                self.cancelTransform(message: "Transform cancelled.")
+                self.cancelTransform(message: nil)
             }
             if ToolState.shared.current != .text, self.textEditor != nil {
                 self.finishTextEditing()
@@ -196,6 +239,15 @@ final class CanvasToolController {
             self.cancelMoveSnap()
             self.cancelFloatingMove()
             self.canvas.needsDisplay = true
+            self.hintChanged(.context)
+        }
+    }
+
+    deinit {
+        // Fallback for a canvas discarded without its normal renderer close.
+        // Do not retain the controller while crossing to the main actor.
+        if let token = toolObserver {
+            Task { @MainActor in ToolState.shared.removeObserver(token) }
         }
     }
 
@@ -209,6 +261,9 @@ final class CanvasToolController {
     // MARK: Pointer
 
     func mouseDown(with event: NSEvent) {
+        hintFlags = event.modifierFlags
+        hintChanged(.context)
+        defer { hintChanged(.afterAction) }
         let point = canvas.imagePoint(for: event)
         let tool = pointerTool(for: event)
         let optionDown = keyboard.optionIsDown(flags: event.modifierFlags)
@@ -323,6 +378,8 @@ final class CanvasToolController {
     }
 
     func mouseDragged(with event: NSEvent) {
+        hintFlags = event.modifierFlags
+        defer { hintChanged(.afterAction) }
         // A guide drag owns the gesture: view-only ghost, no native call.
         if canvas.guideDrag.mouseDragged(with: event) { return }
         guard let tool = dragTool else { return }
@@ -372,6 +429,7 @@ final class CanvasToolController {
     }
 
     func mouseUp(with event: NSEvent) {
+        hintFlags = event.modifierFlags
         defer {
             dragTool = nil
             dragStart = nil
@@ -387,6 +445,7 @@ final class CanvasToolController {
             floatingMoveWasRequested = false
             canvas.needsDisplay = true
             finishSpringInteractionIfReady()
+            hintChanged(.afterAction)
         }
         // An intentional release of a guide drag commits exactly one
         // addGuide/moveGuide/removeGuide action.
@@ -688,6 +747,8 @@ final class CanvasToolController {
     /// Temporary-tool modifiers, tool shortcuts, Space for the hand, digits,
     /// brackets and arrows. Returns false for keys it does not handle.
     func keyDown(with event: NSEvent) -> Bool {
+        hintFlags = event.modifierFlags
+        defer { hintChanged(.afterAction) }
         let keyCode = Int(event.keyCode)
         // Field editors and the on-canvas text overlay own ordinary typing,
         // including Space, digits and the color/Quick Mask letters.
@@ -707,6 +768,7 @@ final class CanvasToolController {
         // state before the plain-key guard below rejects their flags.
         if CanvasKeyboardPolicy.isTemporaryModifierKey(keyCode: keyCode) {
             keyboard.keyDown(keyCode)
+            hintChanged(.context)
             return true
         }
 
@@ -785,6 +847,7 @@ final class CanvasToolController {
 
         if key == " " {
             keyboard.keyDown(CanvasKeyboardPolicy.spaceKeyCode)
+            hintChanged(.context)
             if !event.isARepeat { NSCursor.openHand.set() }
             return true
         }
@@ -830,6 +893,7 @@ final class CanvasToolController {
     }
 
     func keyUp(with event: NSEvent) -> Bool {
+        hintFlags = event.modifierFlags
         let keyCode = Int(event.keyCode)
         if springLetters.isHeld(keyCode: keyCode) {
             restoreSpringTool(springLetters.release(keyCode: keyCode, at: event.timestamp,
@@ -838,10 +902,12 @@ final class CanvasToolController {
         }
         if CanvasKeyboardPolicy.isTemporaryModifierKey(keyCode: keyCode) {
             keyboard.keyUp(keyCode)
+            hintChanged(.context)
             return true
         }
         guard event.charactersIgnoringModifiers == " " else { return false }
         keyboard.keyUp(CanvasKeyboardPolicy.spaceKeyCode)
+        hintChanged(.context)
         NSCursor.arrow.set()
         return true
     }
