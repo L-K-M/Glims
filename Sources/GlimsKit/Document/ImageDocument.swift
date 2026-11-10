@@ -4647,6 +4647,25 @@ final class ImageDocument {
         return RecorderInstallCheckpoint(owner: recoveryID, revision: recorderRevision)
     }
 
+    /// Read and validate the complete file away from MainActor. Preparing a
+    /// file never chooses targets or changes this document's current log.
+    func prepareRecordingFile(at url: URL, checkpoint: RecorderInstallCheckpoint,
+                              completion: @escaping @MainActor (Result<RecorderFileSemanticBridge.PreparedRecording, Error>) -> Void) {
+        do { try requireRecorderReadiness(checkpoint, holding: 0) }
+        catch { return completion(.failure(error)) }
+        pendingWork += 1
+        Self.recorderFileQueue.async {
+            let prepared = Result { try RecorderFileSemanticBridge.prepare(RecorderFileStore.load(from: url)) }
+            DispatchQueue.main.async {
+                defer { self.jobDidFinish(input: false) }
+                completion(Result {
+                    try self.requireRecorderReadiness(checkpoint, holding: 1)
+                    return try prepared.get()
+                })
+            }
+        }
+    }
+
     /// Save the admitted revision to the chosen URL. The file name and the
     /// recording's intrinsic name are independent. An accepted write can
     /// finish after an edit or close request, with its result reported once

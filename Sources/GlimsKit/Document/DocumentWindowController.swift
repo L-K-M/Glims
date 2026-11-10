@@ -24,6 +24,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// readable for the smoke test's native-slot checks.
     let scrollView = CanvasScrollView()
     private lazy var engineUndoManager = EngineUndoManager(document: imageDocument)
+    private lazy var recorderFiles = RecorderFileCoordinator(owner: self)
+
+    var canPresentRecorderFileSheet: Bool { recorderFiles.canPresent }
+
+    func presentRecorderFileAction(_ action: RecorderPaletteAction) throws {
+        try recorderFiles.perform(action)
+    }
     /// The open filter preview, generic or dedicated; one at a time.
     private(set) var previewPanel: FilterPreviewPanel?
     /// Image ▸ Guides…'s sheet, retained by this window for its lifetime;

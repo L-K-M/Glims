@@ -1,9 +1,17 @@
 import Foundation
 
-/// The five user commands share their names and gates across the palette
+/// The user commands share their names and gates across the palette
 /// buttons, its title menu and Edit > Recorder.
 enum RecorderPaletteAction: Int, CaseIterable, Hashable {
     case record, stop, replay, cancelReplay, clear
+    case nameRecording, saveRecording, loadRecording
+
+    var needsFileSheet: Bool {
+        switch self {
+        case .nameRecording, .saveRecording, .loadRecording: return true
+        default: return false
+        }
+    }
 
     var title: String {
         switch self {
@@ -12,6 +20,9 @@ enum RecorderPaletteAction: Int, CaseIterable, Hashable {
         case .replay: return "Replay"
         case .cancelReplay: return "Cancel Replay"
         case .clear: return "Clear"
+        case .nameRecording: return "Name Recording…"
+        case .saveRecording: return "Save Recording…"
+        case .loadRecording: return "Load Recording…"
         }
     }
 
@@ -26,6 +37,8 @@ enum RecorderPaletteAction: Int, CaseIterable, Hashable {
             guard document.clearRecording() else {
                 throw RecorderLog<SemanticImageCommand>.Refusal.replaying
             }
+        case .nameRecording, .saveRecording, .loadRecording:
+            throw RecorderFileCoordinator.Refusal.windowUnavailable
         }
     }
 }
@@ -41,6 +54,7 @@ struct RecorderPalettePresentation {
     static let replayPolicy = "Replay uses each command's normal Undo behavior. On failure, earlier changes remain."
 
     let documentName: String
+    let recordingName: String
     let rows: [Row]
     let pendingText: String
     let status: String
@@ -49,6 +63,7 @@ struct RecorderPalettePresentation {
     init(document: ImageDocument?, actionError: String? = nil) {
         guard let document else {
             documentName = "No image"
+            recordingName = ""
             rows = []
             pendingText = "No commands pending."
             status = actionError ?? "Open an image to use Recorder."
@@ -57,6 +72,7 @@ struct RecorderPalettePresentation {
         }
         let log = document.recorder
         documentName = document.name
+        recordingName = document.recorderFileMetadata.name + (document.hasUnsavedRecordingChanges ? " (Unsaved)" : "")
         rows = log.records.map { record in
             let prefix = "\(record.ordinal + 1). "
             switch record.resolution {
@@ -101,7 +117,22 @@ struct RecorderPalettePresentation {
             if log.isReplaying { gates[.clear] = "Cancel replay before clearing the recording." }
             else if log.isRecording { gates[.clear] = "Stop recording before clearing it." }
             else if log.pendingCount > 0 { gates[.clear] = "Wait for accepted commands before clearing the recording." }
-            else if log.records.isEmpty && log.replayStatus == .idle { gates[.clear] = "The recording is already empty." }
+            else if log.records.isEmpty && log.replayStatus == .idle && document.recorderLoadedFile == nil &&
+                        !document.hasUnsavedRecordingChanges { gates[.clear] = "The recording is already empty." }
+
+            let fileReason: String?
+            if log.isRecording { fileReason = "Stop recording before using Recorder files." }
+            else if log.isReplaying { fileReason = "Cancel replay before using Recorder files." }
+            else if log.pendingCount > 0 || document.pendingWork > 0 || document.targetCommandIsPending {
+                fileReason = "Wait for accepted commands to finish."
+            } else if !document.acceptsEdits || document.strokeIsActive {
+                fileReason = "Finish the current image operation before using Recorder files."
+            } else { fileReason = nil }
+            for action in RecorderPaletteAction.allCases where action.needsFileSheet { gates[action] = fileReason }
+            if fileReason == nil && log.records.isEmpty && document.recorderLoadedFile == nil &&
+                !document.hasUnsavedRecordingChanges {
+                gates[.saveRecording] = "Record a command or name this recording first."
+            }
         }
         refusals = gates
     }

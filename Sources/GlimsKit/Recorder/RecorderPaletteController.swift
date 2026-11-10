@@ -18,8 +18,10 @@ final class RecorderPaletteController: NSViewController, PaletteContent, NSTable
     private var observerToken: UUID?
     private var observationGeneration = UUID()
     private let currentDocument: @MainActor () -> ImageDocument?
+    private let performAction: @MainActor (RecorderPaletteAction, ImageDocument) throws -> Void
     private let table = NSTableView()
     private let documentLabel = NSTextField(labelWithString: "")
+    private let recordingLabel = NSTextField(labelWithString: "")
     private let pendingLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private var actionButtons: [RecorderPaletteAction: NSButton] = [:]
@@ -28,8 +30,11 @@ final class RecorderPaletteController: NSViewController, PaletteContent, NSTable
 
     init(currentDocument: @escaping @MainActor () -> ImageDocument? = {
         (NSApp.mainWindow?.windowController as? DocumentWindowController)?.imageDocument
+    }, performAction: @escaping @MainActor (RecorderPaletteAction, ImageDocument) throws -> Void = {
+        try $0.perform(on: $1)
     }) {
         self.currentDocument = currentDocument
+        self.performAction = performAction
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -48,6 +53,9 @@ final class RecorderPaletteController: NSViewController, PaletteContent, NSTable
         documentLabel.font = .systemFont(ofSize: 12, weight: .semibold)
         documentLabel.lineBreakMode = .byTruncatingTail
         documentLabel.setAccessibilityLabel("Recorder image")
+        recordingLabel.font = .systemFont(ofSize: 11)
+        recordingLabel.lineBreakMode = .byTruncatingTail
+        recordingLabel.setAccessibilityLabel("Recording name and save state")
         let coverage = NSTextField(wrappingLabelWithString: RecorderPalettePresentation.coverage)
         coverage.font = .systemFont(ofSize: 11)
         coverage.setAccessibilityLabel("Supported Recorder actions")
@@ -83,14 +91,19 @@ final class RecorderPaletteController: NSViewController, PaletteContent, NSTable
         }
         let firstRow = NSStackView(views: [RecorderPaletteAction.record, .stop, .replay].compactMap { actionButtons[$0] })
         let secondRow = NSStackView(views: [RecorderPaletteAction.cancelReplay, .clear].compactMap { actionButtons[$0] })
+        let fileRow = NSStackView(views: [RecorderPaletteAction.saveRecording, .loadRecording].compactMap { actionButtons[$0] })
+        let recordingHeader = NSStackView(views: [recordingLabel])
+        if let nameButton = actionButtons[.nameRecording] { recordingHeader.addArrangedSubview(nameButton) }
+        recordingLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         firstRow.spacing = 6
         secondRow.spacing = 6
-        let stack = NSStackView(views: [documentLabel, coverage, policy, scroll, pendingLabel, statusLabel, firstRow, secondRow])
+        fileRow.spacing = 6
+        let stack = NSStackView(views: [documentLabel, recordingHeader, coverage, policy, scroll, pendingLabel, statusLabel, firstRow, secondRow, fileRow])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
         stack.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
-        let fullWidthViews: [NSView] = [documentLabel, coverage, policy, scroll, pendingLabel, statusLabel]
+        let fullWidthViews: [NSView] = [documentLabel, recordingHeader, coverage, policy, scroll, pendingLabel, statusLabel]
         for child in fullWidthViews {
             child.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -16).isActive = true
         }
@@ -162,7 +175,7 @@ final class RecorderPaletteController: NSViewController, PaletteContent, NSTable
         }
         actionError = nil
         do {
-            try action.perform(on: current)
+            try performAction(action, current)
         } catch { actionError = RecorderPalettePresentation.message(for: error) }
         reload()
     }
@@ -172,6 +185,8 @@ final class RecorderPaletteController: NSViewController, PaletteContent, NSTable
         guard isViewLoaded else { return }
         documentLabel.stringValue = displayed.documentName
         documentLabel.toolTip = displayed.documentName
+        recordingLabel.stringValue = displayed.recordingName
+        recordingLabel.toolTip = displayed.recordingName
         pendingLabel.stringValue = displayed.pendingText
         statusLabel.stringValue = displayed.status
         statusLabel.toolTip = displayed.status
@@ -216,6 +231,9 @@ final class RecorderPaletteController: NSViewController, PaletteContent, NSTable
         case .replay: return "Replay supported commands in this image with their normal Undo behavior. Earlier changes remain if a later command fails."
         case .cancelReplay: return "Stop replay after any command already running."
         case .clear: return "Remove the recorded commands without editing the image."
+        case .nameRecording: return "Change the recording's name without renaming a file."
+        case .saveRecording: return "Save this recording and its original target descriptions."
+        case .loadRecording: return "Load a recording and choose its targets in this image."
         }
     }
 }
