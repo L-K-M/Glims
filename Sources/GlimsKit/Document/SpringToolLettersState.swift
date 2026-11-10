@@ -42,6 +42,9 @@ struct SpringToolLettersState {
             baselinePrevious = previous
             baselinePreviousRevision = previousRevision
         }
+        // Released deferred owners have handed their baseline to this press.
+        // Only the newest owner can finish on pointer release.
+        holds = holds.filter { !$0.value.deferredRestore }
         holds[keyCode] = Hold(keyCode: keyCode, time: time, selected: selected,
                               selectedRevision: selectedRevision,
                               previous: baselinePrevious,
