@@ -62,6 +62,8 @@ final class ToolHintPolicyTests: XCTestCase {
     }
 
     func testActualTemporaryToolPrecedenceAndModifierRelease() {
+        XCTAssertFalse(CanvasKeyboardPolicy.allowsPlainKey([.command, .option]),
+                       "Command-Space remains reserved; hold plain Space before adding Command")
         var keys = CanvasKeyboardState()
         keys.keyDown(CanvasKeyboardPolicy.spaceKeyCode)
         keys.modifiersChanged([.command, .option])

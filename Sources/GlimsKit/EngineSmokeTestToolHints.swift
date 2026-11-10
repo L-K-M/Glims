@@ -136,7 +136,11 @@ extension EngineSmokeTest {
         check(other.statusBar.message == otherIdle, "modifier events on A leave B's status untouched")
         flags(owner, [.command, .option])
         check(owner.statusBar.message.hasPrefix("Drag a layer or guide."), "Command Move outranks paint Option sampling")
-        press(owner, type: .keyDown, code: 49, text: " ", flags: [.command, .option])
+        // Cmd-Space is reserved by the system. Hold plain Space first, then
+        // add modifiers, matching the temporary-tool precedence contract.
+        flags(owner, [])
+        press(owner, type: .keyDown, code: 49, text: " ")
+        flags(owner, [.command, .option])
         check(owner.statusBar.message.hasPrefix("Drag to pan the view."), "Space Hand outranks Command Move")
         press(owner, type: .keyUp, code: 49, text: " ", flags: [.command, .option])
         check(owner.statusBar.message.hasPrefix("Drag a layer or guide."), "Space release restores held Command Move")
