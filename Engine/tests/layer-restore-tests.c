@@ -540,6 +540,29 @@ modern_pixels_match (GimpLayer *layer, const gchar *expected, gboolean offsets)
   g_free (actual); return equal;
 }
 
+/* Compare the retained link input separately from its displayed drawable.
+ * The independent single-Core reference proves Redo reloads that input before
+ * drawable-mod Undo reinstalls the previous restored drawable and mask. */
+static gboolean
+modern_retained_pixels_match (GimpLayer *layer, const gchar *expected)
+{
+  GeglBuffer *buffer = gimp_link_get_buffer (gimp_link_layer_get_link (GIMP_LINK_LAYER (layer)));
+  if (!buffer) return FALSE;
+  const GeglRectangle *extent = gegl_buffer_get_extent (buffer);
+  if (extent->x || extent->y || extent->width <= 0 || extent->height <= 0) return FALSE;
+  GString *state = g_string_new (NULL);
+  g_string_append_printf (state, "0,0,%d,%d;", extent->width, extent->height);
+  gsize length = (gsize) extent->width * extent->height * 4;
+  guint8 *pixels = g_malloc (length);
+  gegl_buffer_get (buffer, extent, 1, babl_format ("R'G'B'A u8"), pixels,
+                   GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
+  g_string_append_len (state, (const gchar *) pixels, length);
+  gchar *actual = g_compute_checksum_for_data (G_CHECKSUM_SHA256,
+                                               (const guchar *) state->str, state->len);
+  gboolean equal = actual && expected && !strcmp (actual, expected);
+  g_free (actual); g_free (pixels); g_string_free (state, TRUE); return equal;
+}
+
 /* Topology excludes legitimate regeneration geometry/name changes. */
 static gchar *
 modern_topology (GimpImage *image)
@@ -773,10 +796,13 @@ modern_sources_worker (GlimsEngine *engine, gpointer work)
   NEED (modern_export_reference (engine, file, 13, 8, 151, &scratch, &reference, &link_v3, &error) == GLIMS_STATUS_OK,
         "the frozen link's file changes a third time before Redo");
   NEED (api->image_redo (engine, id) == GLIMS_STATUS_OK, "changed-file modern Restore redoes once");
-  CHECK (modern_pixels_match (link, link_v3, FALSE) && !modern_pixels_match (link, link_v2, FALSE) &&
-         gimp_item_get_width (GIMP_ITEM (link)) == 13 && gimp_item_get_height (GIMP_ITEM (link)) == 8 &&
+  CHECK (modern_pixels_match (link, link_v2, FALSE) && !modern_pixels_match (link, link_v3, FALSE) &&
+         modern_retained_pixels_match (link, link_v3) &&
+         gimp_item_get_width (GIMP_ITEM (link)) == 11 && gimp_item_get_height (GIMP_ITEM (link)) == 7 &&
+         mask && item_id (mask) == mask_id && gimp_item_get_width (GIMP_ITEM (mask)) == 11 &&
+         gimp_item_get_height (GIMP_ITEM (mask)) == 7 &&
          modern_source_states (engine, id, ids, FALSE, FALSE, FALSE) && modern_topology_matches (image, topology),
-         "native Redo reloads the third current file rather than promising immutable second-file content");
+         "native Redo retains current third-file input but restores saved second-file drawable/mask, matching direct Core Undo ordering");
 
   /* A real paint stroke stops monitoring without setting the generic
    * rasterizable flag. This exercises the existing alternate link Restore
