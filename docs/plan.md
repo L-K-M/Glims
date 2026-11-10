@@ -3702,3 +3702,11 @@ The actual old window failed five new profile-title checks while retaining
 plus 1,015 units. See [working-profile-title.md](working-profile-title.md)
 for exact foreground-host and external AX limits. Hosted CI/review and final
 integration remain pending.
+
+### Live canvas tool hints (2026-11-10 candidate)
+
+Stationary modifier/tool changes update useful hints while preserving error,
+progress and activity priority. Same-window field focus clears lost modifier
+releases; its measured six-failure regression is fixed. All four engines pass
+51 interface checks and the full isolated suite passes 1,022 tests. See
+[live-tool-hints.md](live-tool-hints.md) for scope, AX and integration limits.
