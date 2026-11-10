@@ -19,6 +19,9 @@ struct SpringToolLettersState {
     private var holds: [Int: Hold] = [:]
     private var ownerKey: Int?
     private var pointerActive = false
+    /// Captured when input is accepted, independently of later selection
+    /// ownership. Explicit tool picks invalidate restoration, not cleanup.
+    private(set) var ownsInteraction = false
 
     func canPress(keyCode: Int, isRepeat: Bool) -> Bool {
         !isRepeat && holds[keyCode] == nil
@@ -48,8 +51,10 @@ struct SpringToolLettersState {
 
     mutating func pointerBegan(using tool: ToolID, selectionRevision: UInt64) {
         pointerActive = true
+        ownsInteraction = false
         guard let ownerKey, var owner = holds[ownerKey] else { return }
         if tool == owner.selected && selectionRevision == owner.selectedRevision {
+            ownsInteraction = true
             owner.used = true
             holds[ownerKey] = owner
         }
@@ -57,6 +62,7 @@ struct SpringToolLettersState {
 
     mutating func pointerEnded(selectionRevision: UInt64) -> ToolID? {
         pointerActive = false
+        ownsInteraction = false
         guard let ownerKey, let owner = holds[ownerKey], owner.deferredRestore else { return nil }
         holds.removeValue(forKey: ownerKey)
         self.ownerKey = nil
@@ -97,6 +103,7 @@ struct SpringToolLettersState {
         holds.removeAll()
         ownerKey = nil
         pointerActive = false
+        ownsInteraction = false
         guard let owned, selectionRevision == owned.selectedRevision else { return nil }
         return owned.previous
     }
@@ -105,6 +112,7 @@ struct SpringToolLettersState {
         holds.removeAll()
         ownerKey = nil
         pointerActive = false
+        ownsInteraction = false
     }
 
     private func shouldRestore(hold: Hold, at time: Double) -> Bool {

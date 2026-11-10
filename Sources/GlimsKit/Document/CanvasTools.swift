@@ -862,22 +862,27 @@ final class CanvasToolController {
     }
 
     /// Focus, window close and Escape abandon held shortcut ownership. Existing
-    /// accepted paint is ended; local previews cancel without a native move or
+    /// accepted spring paint is ended; local previews cancel without a native move or
     /// an implicit floating anchor. A promoted text editor has no held owner.
     @discardableResult
     func cancelSpringTools() -> Bool {
         keyboard = CanvasKeyboardState()
-        guard let prior = springLetters.cancel(selectionRevision: ToolState.shared.selectionRevision) else { return false }
-        canvas.guideDrag.cancel()
-        cancelMoveSnap(); cancelFloatingMove()
-        if dragTool?.paintTool != nil, document.strokeIsActive { document.endStroke() }
-        dragTool = nil; dragStart = nil; dragCurrent = nil
-        lassoPoints = []; handOrigin = nil; gradientCapture = nil
-        selectionDragFlags = []; pendingCrop = nil
-        cancelTransform(message: nil)
+        let ownsInteraction = springLetters.ownsInteraction
+        let prior = springLetters.cancel(selectionRevision: ToolState.shared.selectionRevision)
+        // A newer explicit selection owns the tool, but the accepted spring
+        // gesture still needs its own teardown. Ordinary gestures stay intact.
+        if ownsInteraction {
+            canvas.guideDrag.cancel()
+            cancelMoveSnap(); cancelFloatingMove()
+            if dragTool?.paintTool != nil, document.strokeIsActive { document.endStroke() }
+            dragTool = nil; dragStart = nil; dragCurrent = nil
+            lassoPoints = []; handOrigin = nil; gradientCapture = nil
+            selectionDragFlags = []; pendingCrop = nil
+            cancelTransform(message: nil)
+            canvas.needsDisplay = true
+        }
         restoreSpringTool(prior)
-        canvas.needsDisplay = true
-        return true
+        return ownsInteraction || prior != nil
     }
 
     // MARK: Overlay
