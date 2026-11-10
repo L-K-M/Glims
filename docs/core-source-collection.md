@@ -111,3 +111,13 @@ output overlap/overwrite/race protection (including external object-store
 symlinks and alternate stores), bounds, configured-filter refusal and
 deterministic archives. They do not execute or build the app/engine, access the
 real dependency registry, or establish completeness of the real source set.
+
+On 2026-11-10, all 73 packaging-script tests passed, including 19 collector
+fixtures. A real offline collection of the pinned GIMP 3.2.8, GEGL 0.4.72,
+babl 0.1.128 and exact GIMP data gitlink, with Glims recipes from `b425e320`,
+produced a 281,620,480-byte archive. An independent pass verified all 8,760
+file/symlink payloads against their manifest SHA256 and committed Git blob IDs.
+The archive SHA256 is
+`bd39ed0efa1f7132568b7806e64175811edca86f6911aea4f5b966c48c22f0a6`.
+The manifest still records `corresponding_source_complete: false`; these checks
+do not cover the omitted dependencies or bind this archive to a released binary.
