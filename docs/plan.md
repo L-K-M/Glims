@@ -3571,6 +3571,21 @@ existing conformance also passes. See `variable-blur.md` for the independent
 pixel oracle, refusal guards and remaining auxiliary roles. The facade keeps
 APIv1/163 and upstream sources remain unchanged. CI/review/integration follow.
 
+### Legacy Select Color source ownership (2026-11-10 candidate)
+
+GIMP 3.0.8's seeded/by-color region algorithms retain an owned source buffer.
+An exact-version adapter helper now materializes that buffer and runs the
+unchanged algorithm through a private Pickable with owned, counted getters;
+it balances only the references that legacy code omits. Modern engines keep
+their native path, and upstream sources/facade slots remain unchanged.
+The lifetime oracle reproduced one/two surviving buffers for one/two
+selections before the fix; patched 3.0.8 passes all 12 ownership cases and 1,703
+conformance checks. All 128 actual mask/history files match the immutable
+original across 16 bounded RGBA fixtures. See
+[`legacy-select-color-ownership.md`](legacy-select-color-ownership.md) for
+ownership reasoning, controls and parity limits. Modern validation of the
+patched source and independent review remain pending.
+
 ### Selective Gaussian contrast reference (2026-11-10 candidate)
 
 Selective Gaussian Blur now has a captured contrast-reference chooser and the

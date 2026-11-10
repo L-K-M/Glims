@@ -10,6 +10,7 @@
  * (app/config/gimpdialogconfig.c).
  */
 #include "engine-private.h"
+#include "select-color-legacy.h"
 
 #include <math.h>
 #include <string.h>
@@ -236,17 +237,33 @@ glims_select_color (GlimsEngine              *engine,
           y -= offset_y;
         }
 
+#if GIMP_MAJOR_VERSION == 3 && GIMP_MINOR_VERSION == 0 && GIMP_MICRO_VERSION == 8
+      {
+        GimpPickable *pickable = settings.sample_merged ? GIMP_PICKABLE (image) : GIMP_PICKABLE (drawable);
+        GeglBuffer *add_on = glims_select_color_legacy_mask (pickable, TRUE, settings.antialias,
+                                                           (gfloat) settings.threshold, x, y, NULL);
+        gint offset_x = 0, offset_y = 0;
+
+        if (!add_on)
+          return glims_fail (error, NULL, "Cannot read the color selection source.");
+        if (!settings.sample_merged)
+          gimp_item_get_offset (GIMP_ITEM (drawable), &offset_x, &offset_y);
+        gimp_channel_select_buffer (mask, C_("undo-type", "Fuzzy Select"), add_on, offset_x, offset_y,
+                                    glims_channel_op (settings.operation), feather, settings.feather, settings.feather);
+        g_object_unref (add_on);
+      }
+#else
       gimp_channel_select_fuzzy (mask, drawable, settings.sample_merged, x, y,
                                  (gfloat) settings.threshold, TRUE,
                                  GIMP_SELECT_CRITERION_COMPOSITE, FALSE,
                                  glims_channel_op (settings.operation), settings.antialias,
                                  feather, settings.feather, settings.feather);
+#endif
     }
   else
     {
       GimpPickable *pickable;
       GeglColor    *color;
-      GList        *drawables;
       gint          x = (gint) floor (point.x);
       gint          y = (gint) floor (point.y);
 
@@ -269,13 +286,35 @@ glims_select_color (GlimsEngine              *engine,
       if (! color)
         return glims_fail (error, NULL, "The point is outside the layer.");
 
-      drawables = g_list_prepend (NULL, drawable);
-      gimp_channel_select_by_color (mask, drawables, settings.sample_merged, color,
-                                    (gfloat) settings.threshold, TRUE,
-                                    GIMP_SELECT_CRITERION_COMPOSITE,
-                                    glims_channel_op (settings.operation), settings.antialias,
-                                    feather, settings.feather, settings.feather);
-      g_list_free (drawables);
+#if GIMP_MAJOR_VERSION == 3 && GIMP_MINOR_VERSION == 0 && GIMP_MICRO_VERSION == 8
+      {
+        GeglBuffer *add_on = glims_select_color_legacy_mask (pickable, FALSE, settings.antialias,
+                                                           (gfloat) settings.threshold, x, y, color);
+        gint offset_x = 0, offset_y = 0;
+
+        if (!add_on)
+          {
+            g_object_unref (color);
+            return glims_fail (error, NULL, "Cannot read the color selection source.");
+          }
+        if (!settings.sample_merged)
+          gimp_item_get_offset (GIMP_ITEM (drawable), &offset_x, &offset_y);
+        gimp_channel_select_buffer (mask, C_("undo-type", "Select by Color"), add_on, offset_x, offset_y,
+                                    glims_channel_op (settings.operation), feather, settings.feather, settings.feather);
+        g_object_unref (add_on);
+      }
+#else
+      {
+        GList *drawables = g_list_prepend (NULL, drawable);
+
+        gimp_channel_select_by_color (mask, drawables, settings.sample_merged, color,
+                                      (gfloat) settings.threshold, TRUE,
+                                      GIMP_SELECT_CRITERION_COMPOSITE,
+                                      glims_channel_op (settings.operation), settings.antialias,
+                                      feather, settings.feather, settings.feather);
+        g_list_free (drawables);
+      }
+#endif
       g_object_unref (color);
     }
 
