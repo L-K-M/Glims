@@ -4647,10 +4647,21 @@ final class ImageDocument {
         }
     }
 
-    /// Identifies the owning document and current settled recording revision.
+    /// Identifies the current content even when accepted commands are still settling.
+    func recorderContentCheckpoint() -> RecorderInstallCheckpoint {
+        RecorderInstallCheckpoint(owner: recoveryID, revision: recorderRevision)
+    }
+
+    /// Identifies the owning document and current settled, stopped recording.
     func recorderInstallCheckpoint() throws -> RecorderInstallCheckpoint {
         try requireRecorderReadiness(holding: 0)
-        return RecorderInstallCheckpoint(owner: recoveryID, revision: recorderRevision)
+        return recorderContentCheckpoint()
+    }
+
+    /// Close or revert consent can opt in to a settled, still-active recording.
+    func recorderSaveCheckpoint(allowActiveRecording: Bool = false) throws -> RecorderInstallCheckpoint {
+        try requireRecorderReadiness(holding: 0, allowActiveRecording: allowActiveRecording)
+        return recorderContentCheckpoint()
     }
 
     /// Read and validate the complete file away from MainActor. Preparing a
@@ -4677,8 +4688,9 @@ final class ImageDocument {
     /// finish after an edit or close request, with its result reported once
     /// while the work count still holds the document.
     func saveRecording(to url: URL, checkpoint: RecorderInstallCheckpoint,
+                       allowActiveRecording: Bool = false,
                        completion: @escaping @MainActor (Result<RecorderSaveOutcome, Error>) -> Void) {
-        do { try requireRecorderReadiness(checkpoint, holding: 0) }
+        do { try requireRecorderReadiness(checkpoint, holding: 0, allowActiveRecording: allowActiveRecording) }
         catch { return completion(.failure(error)) }
 
         let metadata = recorderFileMetadata
@@ -4692,7 +4704,10 @@ final class ImageDocument {
                 let file: RecorderFileValue
                 if let loaded { file = metadata.namedCopy(of: loaded) }
                 else {
-                    file = try RecorderFileCodec.snapshot(log, recordingID: metadata.recordingID, name: metadata.name,
+                    // Use a detached stopped log with its own epoch. The live
+                    // recording keeps accepting commands while the file writes.
+                    let stopped = log.isRecording ? try RecorderLog(settledRecords: log.records) : log
+                    file = try RecorderFileCodec.snapshot(stopped, recordingID: metadata.recordingID, name: metadata.name,
                                                           origin: metadata.origin, descriptions: descriptions, bindings: bindings)
                 }
                 try RecorderFileStore.save(file, to: url)
@@ -4755,13 +4770,13 @@ final class ImageDocument {
     }
 
     private func requireRecorderReadiness(_ checkpoint: RecorderInstallCheckpoint? = nil,
-                                          holding workCount: Int) throws {
+                                          holding workCount: Int, allowActiveRecording: Bool = false) throws {
         guard !isClosing else { throw DocumentError.closed }
         if let checkpoint {
             guard checkpoint.owner == recoveryID else { throw RecorderInstallError.wrongDocument }
             guard checkpoint.revision == recorderRevision else { throw RecorderInstallError.staleRecording }
         }
-        guard !recorder.isRecording, !recorder.isReplaying, recorder.pendingCount == 0 else {
+        guard (allowActiveRecording || !recorder.isRecording), !recorder.isReplaying, recorder.pendingCount == 0 else {
             throw RecorderInstallError.unsettled
         }
         guard acceptsImageReads, !strokeIsActive, !endingPendingEdits,
