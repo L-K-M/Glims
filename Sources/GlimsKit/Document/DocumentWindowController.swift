@@ -2665,6 +2665,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     func windowWillClose(_ notification: Notification) {
         closeStarted = true
+        imageDocument.beginClosing()
         softProofController?.invalidate()
         softProofController = nil
         if let alert = viewAngleAlert, window?.attachedSheet === alert.window {
