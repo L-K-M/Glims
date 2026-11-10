@@ -1044,6 +1044,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         guard let target = imageDocument.activeLayer,
               let sourceOperation = SourceFilterOperation(rawValue: operation.name),
               NativeFilterMenuLayout.usesSourceChooser(operation) else { return }
+        if sourceOperation == .displace { return openDisplaceSourceChooser(operation, target: target) }
         guard imageDocument.sourceFilterRefusal(target: target) == nil else {
             statusBar.message = imageDocument.sourceFilterRefusal(target: target) ?? "Choose a pixel layer first."
             return
@@ -1088,6 +1089,67 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                     self.startPreview(title: operation.title, begin: { [imageDocument = self.imageDocument] reply in
                         imageDocument.beginFilterPreview(operation: operation.name, properties: properties,
                                                          target: target, source: source, completion: reply)
+                    }, started: completion) { [imageDocument = self.imageDocument] start in
+                        NativeFilterPanel(document: imageDocument, operation: operation, properties: properties,
+                                          filter: start.filter, initialValues: start.values, mergesPixels: true)
+                    }
+                }
+            }
+        })
+        chooser.onClosed = { [weak self] in
+            guard let self, self.filterSourceRequest == request else { return }
+            self.filterSourceRequest += 1; self.filterSourceChooser = nil
+        }
+        filterSourceChooser = chooser; chooser.show()
+    }
+
+    /// Owns its original document, target and explicit two-map choices. A
+    /// parameter-catalog reply never follows the front window or selection.
+    private func openDisplaceSourceChooser(_ operation: EngineSession.FilterOperation, target: Int32) {
+        guard imageDocument.sourceFilterRefusal(target: target) == nil else {
+            statusBar.message = imageDocument.sourceFilterRefusal(target: target) ?? "Choose a pixel layer first."
+            return
+        }
+        if let filterSourceChooser, !filterSourceChooser.isInvalidated {
+            if filterSourceChooser.operation == .displace { filterSourceChooser.show(); return }
+            filterSourceChooser.invalidate()
+        }
+        filterSourceRequest += 1
+        let request = filterSourceRequest
+        let targetName = imageDocument.layers.first { $0.id == target }?.name ?? "Layer"
+        let chooser = FilterSourceChooserController(displaceTargetName: targetName, rows: { [weak self] in
+            guard let self else { return [] }
+            var rows: [FilterSourceChoice] = []
+            for layer in self.imageDocument.layers {
+                rows.append(.init(id: layer.id, name: layer.name))
+                if let mask = self.imageDocument.maskStates[layer.id]?.mask, mask > 0 {
+                    rows.append(.init(id: mask, name: "\(layer.name) — Mask"))
+                }
+            }
+            rows += self.imageDocument.channels.map { .init(id: $0.id, name: "\($0.name) — Channel") }
+            return rows
+        }, refusal: { [weak self] in
+            self?.imageDocument.sourceFilterRefusal(target: target) ?? (self == nil ? "The document is closed." : nil)
+        }, hostWindow: window, previewDisplace: { [weak self] xSource, ySource, completion in
+            guard let self, self.filterSourceRequest == request, !self.closeStarted, !self.previewBusy,
+                  self.imageDocument.sourceFilterRefusal(target: target) == nil else {
+                completion(.failure(ImageDocument.DocumentError.busy)); return
+            }
+            self.endPendingEdits()
+            self.imageDocument.loadFilterProperties(operation.name) { [weak self] result in
+                guard let self, self.filterSourceRequest == request, !self.closeStarted, !self.imageDocument.isClosing,
+                      self.filterSourceChooser?.isInvalidated == false else {
+                    completion(.failure(ImageDocument.DocumentError.closed)); return
+                }
+                switch result {
+                case .failure(let error): completion(.failure(error))
+                case .success(let properties):
+                    guard !self.previewBusy, self.imageDocument.sourceFilterRefusal(target: target) == nil else {
+                        completion(.failure(ImageDocument.DocumentError.busy)); return
+                    }
+                    self.startPreview(title: operation.title, begin: { [imageDocument = self.imageDocument] reply in
+                        imageDocument.beginDisplacePreview(properties: properties, target: target,
+                                                           xSource: xSource, ySource: ySource, completion: reply)
                     }, started: completion) { [imageDocument = self.imageDocument] start in
                         NativeFilterPanel(document: imageDocument, operation: operation, properties: properties,
                                           filter: start.filter, initialValues: start.values, mergesPixels: true)

@@ -3982,6 +3982,36 @@ final class ImageDocument {
         }
     }
 
+    /// Displace's captured pair follows the same counted preview start as the
+    /// single-source filters. Native169 freshly validates all three identities.
+    func beginDisplacePreview(properties: [EngineSession.FilterProperty], target: Int32,
+                              xSource: Int32, ySource: Int32,
+                              completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
+        guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !isSavingForClose, !isTransferringClipboard, !PlugInCommands.isRunning,
+              !EngineActivity.shared.isBusy, !targetCommandIsPending,
+              selectedLayerIDs == [target], activeDrawable == target else {
+            return completion(.failure(DocumentError.busy))
+        }
+        pendingWork += 1
+        inputQueue.async { [session, image] in
+            let result = Result<FilterPreviewStart, Error> {
+                try self.requirePaintTarget()
+                let filter = try session.beginDisplace(image: image, drawable: target, xSource: xSource, ySource: ySource)
+                var values: [String: EngineSession.FilterValue] = [:]
+                for property in properties where property.kind.isEditable {
+                    values[property.name] = try? session.filterProperty(filter, property.name)
+                }
+                return FilterPreviewStart(filter: filter, values: values)
+            }
+            DispatchQueue.main.async {
+                defer { self.jobDidFinish(input: false) }
+                completion(result)
+            }
+        }
+    }
+
     /// Read initial settings on the worker; failed typed reads abort the new session.
     private nonisolated static func previewValues(_ filter: Int32, operation: String?,
                                                   properties: [EngineSession.FilterProperty],
