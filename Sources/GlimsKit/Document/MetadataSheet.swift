@@ -171,6 +171,20 @@ enum MetadataSheetLogic {
                                isReadOnly: readOnly, refusal: refusal)
     }
 
+    static let rightsMarkerTag = "Xmp.xmpRights.Marked"
+
+    static func rightsInitialValues(tag: String?, descriptor: EngineSession.MetadataTagInfo?,
+                                    valuesReady: Bool, values: [String], draftIsDirty: Bool) -> [String]? {
+        guard tag == rightsMarkerTag, valuesReady, let info = descriptor,
+              info.valueKind == .single, !info.supportsMultiple, info.typeName == "XmpText",
+              info.formatPolicy.contains(.supportsSet) || info.formatPolicy.contains(.supportsRemove) else { return nil }
+        // A blank new-tag row has no persisted value. Existing unknown text
+        // remains exact and opens with no implicit replacement selected.
+        if !info.present && values == [""] { return [] }
+        guard !draftIsDirty, values.count <= 1, info.present == (values.count == 1) else { return nil }
+        return values
+    }
+
     static let captureDateTag = "Exif.Photo.DateTimeOriginal"
 
     static func captureDateInitialValues(tag: String?, descriptor: EngineSession.MetadataTagInfo?,
@@ -310,6 +324,8 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     private let editCaptureDateButton = NSButton(title: "Edit Date…", target: nil, action: nil)
     private let typedEditorActions = NSStackView()
     private(set) var captureDateEditor: MetadataCaptureDateEditor?
+    private let editRightsButton = NSButton(title: "Edit Rights Marker…", target: nil, action: nil)
+    private(set) var rightsEditor: MetadataRightsEditor?
     private let noteLabel = NSTextField(labelWithString: "")
     private let messageLabel = NSTextField(labelWithString: "")
     private let descriptorTitleLabel = NSTextField(labelWithString: "")
@@ -473,6 +489,9 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         editCaptureDateButton.setAccessibilityLabel("Edit capture date and time")
         editCaptureDateButton.target = self
         editCaptureDateButton.action = #selector(editCaptureDate(_:))
+        editRightsButton.setAccessibilityLabel("Edit XMP rights marker")
+        editRightsButton.target = self
+        editRightsButton.action = #selector(editRights(_:))
         noteLabel.setAccessibilityLabel("Metadata note")
         messageLabel.setAccessibilityLabel("Metadata message")
         hintLabel.setAccessibilityLabel("Metadata hint")
@@ -545,6 +564,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         typedEditorActions.spacing = 8
         typedEditorActions.addArrangedSubview(editLanguageButton)
         typedEditorActions.addArrangedSubview(editCaptureDateButton)
+        typedEditorActions.addArrangedSubview(editRightsButton)
         let buttonRow = NSStackView(views: [addValueButton, removeValueButton, applyButton,
                                              removeTagButton, closeButton])
         buttonRow.orientation = .horizontal
@@ -696,6 +716,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         guard !isInvalidated else { return }
         languageEditor?.documentStateDidChange()
         captureDateEditor?.documentStateDidChange()
+        rightsEditor?.documentStateDidChange()
         if lastDocumentStateVersion != document.stateVersion, !isApplying {
             lastDocumentStateVersion = document.stateVersion
             loadTags()
@@ -724,6 +745,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         panel.endEditing(for: nil)
         languageEditor?.commitFieldEdit()
         captureDateEditor?.commitFieldEdit()
+        rightsEditor?.commitFieldEdit()
     }
 
     /// Close cleanup: no later callback may update or reopen the sheet.
@@ -736,6 +758,8 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         languageEditor = nil
         captureDateEditor?.invalidate()
         captureDateEditor = nil
+        rightsEditor?.invalidate()
+        rightsEditor = nil
         tagLoadGeneration += 1
         valuesGeneration += 1
         descriptorGeneration += 1
@@ -813,16 +837,23 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         closeButton.isEnabled = !isInvalidated
         editLanguageButton.isHidden = tagDescriptor?.valueKind != .langAlt
         editLanguageButton.isEnabled = canNavigate && descriptorKnown && valuesReady
-            && tagDescriptor?.valueKind == .langAlt && languageEditor == nil && !document.isClosing
+            && tagDescriptor?.valueKind == .langAlt && languageEditor == nil && captureDateEditor == nil && rightsEditor == nil && !document.isClosing
         editCaptureDateButton.isHidden = selectedTag != MetadataSheetLogic.captureDateTag
-        editCaptureDateButton.isEnabled = canWrite && captureDateEditor == nil && languageEditor == nil
+        editCaptureDateButton.isEnabled = canWrite && captureDateEditor == nil && languageEditor == nil && rightsEditor == nil
             && MetadataSheetLogic.captureDateInitialValues(tag: selectedTag,
                 descriptor: descriptorKnown ? tagDescriptor : nil,
                 valuesReady: valuesReady && !valuesAreLoading,
                 values: draft, draftIsDirty: draftIsDirty) != nil
         editCaptureDateButton.toolTip = draftIsDirty
             ? "Apply the text draft before opening the date editor." : nil
-        typedEditorActions.isHidden = editCaptureDateButton.isHidden && editLanguageButton.isHidden
+        editRightsButton.isHidden = selectedTag != MetadataSheetLogic.rightsMarkerTag
+        editRightsButton.isEnabled = canWrite && rightsEditor == nil && captureDateEditor == nil && languageEditor == nil
+            && MetadataSheetLogic.rightsInitialValues(tag: selectedTag,
+                descriptor: descriptorKnown ? tagDescriptor : nil,
+                valuesReady: valuesReady && !valuesAreLoading,
+                values: draft, draftIsDirty: draftIsDirty) != nil
+        editRightsButton.toolTip = draftIsDirty ? "Apply the text draft before opening the rights editor." : nil
+        typedEditorActions.isHidden = editCaptureDateButton.isHidden && editLanguageButton.isHidden && editRightsButton.isHidden
         updateDescriptorDisplay()
         if let tag = selectedTag, descriptorKnown, tagDescriptor?.valueKind == .langAlt {
             // LangAlt is visibly read-only from the descriptor itself,
@@ -1069,7 +1100,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     /// Opens a typed editor for this captured tag and document. The raw
     /// value-list editor keeps its conservative whole-tag write gates.
     @objc private func editLanguage(_ sender: Any?) {
-        guard !isInvalidated, !isApplying, languageEditor == nil,
+        guard !isInvalidated, !isApplying, languageEditor == nil, rightsEditor == nil, captureDateEditor == nil,
               !descriptorIsLoading, valuesReady, tagDescriptor?.valueKind == .langAlt,
               let tag = selectedTag, !document.isClosing else { return }
         let editor = MetadataLanguageEditorController(document: document, tag: tag)
@@ -1088,7 +1119,7 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
     }
 
     @objc private func editCaptureDate(_ sender: Any?) {
-        guard !isInvalidated, !isApplying, captureDateEditor == nil, languageEditor == nil,
+        guard !isInvalidated, !isApplying, captureDateEditor == nil, languageEditor == nil, rightsEditor == nil,
               !descriptorIsLoading, !valuesAreLoading, writeRefusal == nil,
               let values = MetadataSheetLogic.captureDateInitialValues(tag: selectedTag, descriptor: tagDescriptor,
                 valuesReady: valuesReady, values: draft, draftIsDirty: draftIsDirty),
@@ -1098,6 +1129,29 @@ final class MetadataSheetController: NSObject, NSTableViewDataSource, NSTableVie
         editor.onClosed = { [weak self, weak editor] in
             guard let self, self.captureDateEditor === editor else { return }
             self.captureDateEditor = nil
+            guard !self.isInvalidated else { return }
+            if self.selectedTag == tag {
+                self.loadTags()
+                self.loadValues(for: tag)
+                self.loadDescriptor(for: tag)
+            }
+            self.updateControlStates()
+        }
+        editor.present(on: panel)
+        updateControlStates()
+    }
+
+    @objc private func editRights(_ sender: Any?) {
+        guard !isInvalidated, !isApplying, rightsEditor == nil, captureDateEditor == nil, languageEditor == nil,
+              !descriptorIsLoading, !valuesAreLoading, writeRefusal == nil,
+              let values = MetadataSheetLogic.rightsInitialValues(tag: selectedTag, descriptor: tagDescriptor,
+                valuesReady: valuesReady, values: draft, draftIsDirty: draftIsDirty),
+              let editor = MetadataRightsEditor(document: document, values: values) else { return }
+        let tag = MetadataSheetLogic.rightsMarkerTag
+        rightsEditor = editor
+        editor.onClosed = { [weak self, weak editor] in
+            guard let self, self.rightsEditor === editor else { return }
+            self.rightsEditor = nil
             guard !self.isInvalidated else { return }
             if self.selectedTag == tag {
                 self.loadTags()

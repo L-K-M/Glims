@@ -3523,3 +3523,13 @@ first reproduced four missing routes; review then found the near-handle click
 regression, reproduced with event and model checks before correction. All978
 units pass, and36 actual-event checks pass on each of all four engines.
 Independent final review and CI are pending.
+
+
+### Typed XMP rights marker (2026-11-10 candidate)
+
+The existing metadata sheet opens a captured scalar marker editor for
+Xmp.xmpRights.Marked. Unknown text stays exact until an explicit choice;
+absence remains distinct from False. Per-Apply descriptor reads, independent
+SET/REMOVE gates and document-version checks precede the counted native edit.
+All984 units and19 actual form checks per engine pass. See metadata-rights.md;
+remaining metadata forms, review, CI and the final bundle are still open.

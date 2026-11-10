@@ -127,6 +127,8 @@ bundle with the native and Swift build outputs inaccessible.
       Invert, with shared plug-in categories (current candidate).
 - [x] Typed capture-date metadata, descriptor-gated and preserving timezone
       and subsecond companions (#132).
+- [x] Typed scalar XMP rights marker with distinct absent/True/False states,
+      current native descriptor gates and queued close/refusal handling (candidate).
 - [ ] Remaining typed metadata editors, Image Adjust commands, proof view controls
       and complete menu/keyboard coverage.
 - [ ] Recorder and semantic command replay.
