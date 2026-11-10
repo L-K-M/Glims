@@ -29,13 +29,19 @@ Paint tools use the constrain-only modifier for temporary color picking
 (`gimppainttool.c:471–488`). Glims' Command-Move is its own input mapping;
 it must not be presented as an identical native universal tool switch.
 
-Glims currently provides explicit Anchor, New Layer and Discard, preserves
-floating selections across tool choices, and refuses conflicting target
-changes. Captured floating movement has separate implementation evidence.
-Move-pick anchoring and the other automatic anchor interactions above remain
-front-end work. Their eventual implementation must capture the document and
-floating identity, preserve cancellation, drain accepted input and record the
-appropriate single undo operation. The correction does not mark those
-interactions implemented or waive their runtime checks.
+Glims provides explicit Anchor, New Layer and Discard and preserves a float
+across tool choices. Move defaults to Current Layer. Choose Pick Layer or
+Guide from Tool Options or View > Move Target to use the layer under the
+pointer. A guide takes priority. An opaque hit on the floating selection
+moves it. A press on another layer anchors the float on release.
+A miss leaves it alone. Escape cancels. If Pick temporarily selected another
+layer, cancellation restores the prior target when the engine is free, unless
+a newer choice already took ownership. Holding Command keeps Current Layer
+behavior; Space still pans.
+
+The Move candidate passes 1,712 focused checks across four engines and 1,115
+unit tests. The busy-cancellation fixture reproduced the missed restore
+before the fix and passes afterward. Other selection-tool anchor behaviors
+have separate implementation and verification.
 
 No upstream source is modified or GUI library linked by this policy note.
