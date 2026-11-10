@@ -3692,3 +3692,13 @@ no production activation defect is inferred from the earlier unlaunched host.
 See `batch-layer-rasterize.md` for exact scope, hashes and remaining validation.
 Other-engine UI, current units/integration, CI/review and merge remain pending;
 batch Restore and the broader gesture-policy item stay open.
+
+### Typed XMP Rating controls (2026-11-10 candidate)
+
+Image Metadata adds explicit absent, zero, rejected and one-through-five
+choices while retaining unknown original text until an explicit choice.
+Fresh scalar descriptor checks and independent SET/REMOVE gates use the
+existing counted preservation writer. The focused Rating and batch Rasterize
+fixtures share the launched AppKit host. See [metadata-rating.md](metadata-rating.md)
+for exact scope, prior checks and current runtime/review gaps. This does not
+close the remaining typed metadata or final integration items.
