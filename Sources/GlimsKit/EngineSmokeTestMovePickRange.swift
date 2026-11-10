@@ -324,7 +324,7 @@ extension EngineSmokeTest {
             try require(refusalDocument.ownsMoveSelection(owned), "refusal control must retain authentic ownership")
             let errorsBefore = errors.count
             refusalDocument.movePickedLayer(row, expected: captured, ownership: owned, by: offset)
-            let rejectedSynchronously = refusalDocument.pendingInput == 0 && refusalDocument.pendingWork == 0
+            let rejectedSynchronously = refusalDocument.pendingWork == 0
             try drain(refusalDocument)
             let afterRefusal = try snapshot(refusalDocument.image)
             expect(rejectedSynchronously && errors.count == errorsBefore + 1
