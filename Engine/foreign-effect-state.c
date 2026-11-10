@@ -9,15 +9,22 @@
 #include "core/gimpdrawablefilter.h"
 #include "core/gimpdrawablefiltermask.h"
 #include "core/gimpfilter.h"
+#include "core/gimpgrouplayer.h"
 #include "core/gimpimage.h"
 #include "core/gimpitem.h"
 #include "core/gimplayer.h"
+#include "core/gimplayermask.h"
 #include "core/gimplist.h"
 #include "core/gimpviewable.h"
 #include "gegl/gimp-babl.h"
 #include "gegl/gimp-babl-compat.h"
 #include "operations/operations-enums.h"
 #include "operations/layer-modes/gimp-layer-modes.h"
+#include "text/gimptextlayer.h"
+#if GIMP_CHECK_VERSION (3, 2, 0)
+#include "core/gimplinklayer.h"
+#include "path/gimpvectorlayer.h"
+#endif
 #include <math.h>
 
 typedef struct {
@@ -174,6 +181,68 @@ effect_matches (GimpImage *image, GimpDrawableFilter *filter,
   return TRUE;
 }
 
+typedef const GlimsXcfEffectFieldsRecord * (*EffectAt) (const GlimsXcfEffectFields *, guint, guint);
+
+static gboolean
+append_targets (GimpImage *image, GimpDrawable *drawable,
+                const GlimsXcfEffectFields *fields, guint index,
+                guint expected, EffectAt record_at, GArray *targets)
+{
+  GimpContainer *filters = gimp_drawable_get_filters (drawable);
+  if (!GIMP_IS_LIST (filters)) return FALSE;
+  guint effect = 0;
+  /* Native XCF writes queue-head order, prepends decoded FilterData, then
+   * commits each reversed entry at the stack head, restoring that order. */
+  for (GList *it = GIMP_LIST (filters)->queue->head; it; it = it->next) {
+    if (!GIMP_IS_DRAWABLE_FILTER (it->data) || gimp_drawable_filter_get_temporary (it->data)) continue;
+    Target target;
+    if (effect >= expected || targets->len >= GLIMS_XCF_EFFECT_FIELDS_MAX_RECORDS ||
+        gimp_drawable_filter_get_drawable (it->data) != drawable ||
+        !effect_matches (image, it->data, record_at (fields, index, effect), &target))
+      return FALSE;
+    g_array_append_val (targets, target);
+    effect++;
+  }
+  return effect == expected;
+}
+
+static guint32
+layer_kind (GimpLayer *layer)
+{
+  guint32 flags = 0;
+  if (GIMP_IS_GROUP_LAYER (layer)) flags |= GLIMS_XCF_LAYER_GROUP;
+  if (GIMP_IS_TEXT_LAYER (layer)) flags |= GLIMS_XCF_LAYER_TEXT;
+#if GIMP_CHECK_VERSION (3, 2, 0)
+  if (GIMP_IS_VECTOR_LAYER (layer)) flags |= GLIMS_XCF_LAYER_VECTOR;
+  if (GIMP_IS_LINK_LAYER (layer)) flags |= GLIMS_XCF_LAYER_LINK;
+#endif
+  return flags;
+}
+
+static gboolean
+layer_path_matches (GimpItem *item, const GArray *saved)
+{
+  if (!saved) return gimp_item_get_parent (item) == NULL;
+  GList *path = gimp_item_get_path (item);
+  gboolean same = g_list_length (path) == saved->len;
+  guint i = 0;
+  for (GList *it = path; same && it; it = it->next, i++)
+    same = GPOINTER_TO_UINT (it->data) == g_array_index (saved, guint32, i);
+  g_list_free (path);
+  return same;
+}
+
+static gboolean
+channel_matches (GimpChannel *channel, const GlimsXcfChannelFields *saved,
+                 gboolean normalized_name)
+{
+  return channel && saved &&
+    (!saved->has_tattoo || saved->tattoo == gimp_item_get_tattoo (GIMP_ITEM (channel))) &&
+    saved->width == (guint32) gimp_item_get_width (GIMP_ITEM (channel)) &&
+    saved->height == (guint32) gimp_item_get_height (GIMP_ITEM (channel)) &&
+    (normalized_name || !g_strcmp0 (saved->name, gimp_object_get_name (GIMP_OBJECT (channel))));
+}
+
 GlimsStatus
 glims_foreign_effect_fields_restore (GimpImage *image, const GlimsXcfEffectFields *fields, char **error)
 {
@@ -181,7 +250,7 @@ glims_foreign_effect_fields_restore (GimpImage *image, const GlimsXcfEffectField
   if (!GIMP_IS_IMAGE (image) || !fields)
     return refuse (error, "The foreign XCF effect metadata has no matching loaded image.");
   const GlimsXcfImageFields *saved = glims_xcf_effect_fields_image (fields);
-  if (!saved || (saved->version != 22 && saved->version != 23) ||
+  if (!saved || saved->version < 22 || saved->version > 26 ||
       saved->base_type > G_MAXINT || saved->precision > G_MAXINT ||
       !enum_valid (GIMP_TYPE_IMAGE_BASE_TYPE, (gint) saved->base_type) ||
       !enum_valid (GIMP_TYPE_PRECISION, (gint) saved->precision) ||
@@ -190,52 +259,69 @@ glims_foreign_effect_fields_restore (GimpImage *image, const GlimsXcfEffectField
       saved->base_type != (guint32) gimp_image_get_base_type (image) ||
       saved->precision != (guint32) gimp_image_get_precision (image))
     return refuse (error, "The foreign XCF image dimensions, color model or precision do not match its metadata.");
-  if (gimp_image_get_floating_selection (image) ||
-      gimp_container_get_n_children (gimp_image_get_channels (image)) != 0 ||
-      gimp_container_get_n_children (gimp_image_get_paths (image)) != 0)
-    return refuse (error, "Foreign XCF effect restoration currently supports ordinary layers without channels, paths or floating selections.");
+  if (gimp_image_get_floating_selection (image))
+    return refuse (error, "Resolve the floating selection before preserving this file's effect settings.");
   guint count = glims_xcf_effect_fields_layer_count (fields);
-  GimpContainer *layers = gimp_image_get_layers (image);
-  if (count > GLIMS_XCF_EFFECT_FIELDS_MAX_RECORDS ||
-      gimp_container_get_n_children (layers) != (gint) count)
-    return refuse (error, "The foreign XCF's loaded layer count does not match its metadata.");
-
+  GList *layers = gimp_image_get_layer_list (image);
   GArray *targets = g_array_new (FALSE, FALSE, sizeof (Target));
   GlimsStatus status = GLIMS_STATUS_UNSUPPORTED;
-  for (guint index = 0; index < count; index++) {
-    GimpObject *object = gimp_container_get_child_by_index (layers, index);
+  if (count > GLIMS_XCF_EFFECT_FIELDS_MAX_RECORDS || g_list_length (layers) != count) {
+    refuse (error, "The foreign XCF's loaded layer count does not match its metadata."); goto done;
+  }
+  guint index = 0;
+  for (GList *it = layers; it; it = it->next, index++) {
+    GimpObject *object = it->data;
     const GlimsXcfLayerFields *layer = glims_xcf_effect_fields_layer (fields, index);
-    if (!object || G_OBJECT_TYPE (object) != GIMP_TYPE_LAYER || !layer ||
-        !layer->has_tattoo || layer->tattoo != gimp_item_get_tattoo (GIMP_ITEM (object)) ||
+    if (!GIMP_IS_LAYER (object) || !layer ||
+        (layer->has_tattoo && layer->tattoo != gimp_item_get_tattoo (GIMP_ITEM (object))) ||
         g_strcmp0 (layer->name, gimp_object_get_name (object)) ||
+        layer->kind_flags != layer_kind (GIMP_LAYER (object)) ||
+        !layer_path_matches (GIMP_ITEM (object), glims_xcf_effect_fields_layer_item_path (fields, index)) ||
         layer->width != (guint32) gimp_item_get_width (GIMP_ITEM (object)) ||
         layer->height != (guint32) gimp_item_get_height (GIMP_ITEM (object)) ||
         layer->xcf_type > G_MAXINT || !enum_valid (GIMP_TYPE_IMAGE_TYPE, (gint) layer->xcf_type) ||
-        layer->xcf_type != (guint32) gimp_babl_format_get_image_type (gimp_drawable_get_format (GIMP_DRAWABLE (object))) ||
-        gimp_layer_get_mask (GIMP_LAYER (object))) {
+        layer->xcf_type != (guint32) gimp_babl_format_get_image_type (gimp_drawable_get_format (GIMP_DRAWABLE (object)))) {
       refuse (error, "A foreign XCF layer's order, type, name, tattoo or dimensions do not match the loaded image."); goto done;
     }
-    GimpContainer *filters = gimp_drawable_get_filters (GIMP_DRAWABLE (object));
-    if (!GIMP_IS_LIST (filters)) {
-      refuse (error, "The foreign XCF effect stack has an unsupported native representation."); goto done;
+    if (!append_targets (image, GIMP_DRAWABLE (object), fields, index,
+                          glims_xcf_effect_fields_effect_count (fields, index),
+                          glims_xcf_effect_fields_effect, targets)) {
+      refuse (error, "A foreign XCF effect's order, operation, unchanged settings or mask do not match the loaded image."); goto done;
     }
-    guint effect = 0, expected = glims_xcf_effect_fields_effect_count (fields, index);
-    /* Native XCF writes queue->head order, prepends FilterData while loading,
-     * then adds/commits each reversed entry at the stack head, restoring it. */
-    for (GList *it = GIMP_LIST (filters)->queue->head; it; it = it->next) {
-      if (!GIMP_IS_DRAWABLE_FILTER (it->data) || gimp_drawable_filter_get_temporary (it->data)) continue;
-      Target target;
-      if (effect >= expected || targets->len >= GLIMS_XCF_EFFECT_FIELDS_MAX_RECORDS ||
-          gimp_drawable_filter_get_drawable (it->data) != GIMP_DRAWABLE (object) ||
-          !effect_matches (image, it->data, glims_xcf_effect_fields_effect (fields, index, effect), &target)) {
-        refuse (error, "A foreign XCF effect's order, operation, unchanged settings or mask do not match the loaded image."); goto done;
-      }
-      g_array_append_val (targets, target);
-      effect++;
+    GimpLayerMask *mask = gimp_layer_get_mask (GIMP_LAYER (object));
+    const GlimsXcfChannelFields *mask_fields = glims_xcf_effect_fields_layer_mask (fields, index);
+    /* Native set_layer gives masks the localized owner's name, retaining
+     * the raw tattoo/dimensions. Compare the owner rather than that name. */
+    if ((mask != NULL) != (mask_fields != NULL) ||
+        (mask && (gimp_layer_mask_get_layer (mask) != GIMP_LAYER (object) ||
+          !channel_matches (GIMP_CHANNEL (mask), mask_fields, TRUE) ||
+          !append_targets (image, GIMP_DRAWABLE (mask), fields, index,
+                           glims_xcf_effect_fields_layer_mask_effect_count (fields, index),
+                           glims_xcf_effect_fields_layer_mask_effect, targets)))) {
+      refuse (error, "A foreign XCF layer mask or its effects do not match the loaded image."); goto done;
     }
-    if (effect != expected) {
-      refuse (error, "The foreign XCF's loaded effect count does not match its metadata."); goto done;
+  }
+  GimpContainer *channels = gimp_image_get_channels (image);
+  guint channel_index = 0;
+  gboolean saw_selection = FALSE;
+  for (guint i = 0; i < glims_xcf_effect_fields_channel_count (fields); i++) {
+    const GlimsXcfChannelFields *record = glims_xcf_effect_fields_channel (fields, i);
+    GimpChannel *channel = NULL;
+    if (record && record->is_selection) {
+      if (saw_selection) { refuse (error, "The foreign XCF contains duplicate selection records."); goto done; }
+      saw_selection = TRUE;
+      channel = gimp_image_get_mask (image);
+    } else if (channel_index < (guint) gimp_container_get_n_children (channels))
+      channel = GIMP_CHANNEL (gimp_container_get_child_by_index (channels, channel_index++));
+    if (!channel_matches (channel, record, record && record->is_selection) ||
+        !append_targets (image, GIMP_DRAWABLE (channel), fields, i,
+                          glims_xcf_effect_fields_channel_effect_count (fields, i),
+                          glims_xcf_effect_fields_channel_effect, targets)) {
+      refuse (error, "A foreign XCF channel or its effects do not match the loaded image."); goto done;
     }
+  }
+  if (channel_index != (guint) gimp_container_get_n_children (channels)) {
+    refuse (error, "The foreign XCF's loaded channel count does not match its metadata."); goto done;
   }
 
   /* No setter runs until every layer/effect has validated. The native setter
@@ -248,6 +334,7 @@ glims_foreign_effect_fields_restore (GimpImage *image, const GlimsXcfEffectField
   }
   status = GLIMS_STATUS_OK;
 done:
+  g_list_free (layers);
   g_array_unref (targets);
   return status;
 }
