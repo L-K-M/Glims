@@ -187,17 +187,18 @@ final class CanvasToolController {
         }
     }
 
-    /// The tool a pointer press uses: Space is the temporary hand, Command
-    /// moves the layer, otherwise the current tool.
-    private func pointerTool(for flags: NSEvent.ModifierFlags) -> ToolID {
-        keyboard.pointerTool(current: ToolState.shared.current, flags: flags)
+    /// Space is the temporary hand, Command moves the layer, then a matching
+    /// hardware eraser may override the user's selected tool for this press.
+    private func pointerTool(for event: NSEvent) -> ToolID {
+        let tool = TabletEraserProximity.shared.effectiveTool(selected: ToolState.shared.current, event: event)
+        return keyboard.pointerTool(current: tool, flags: event.modifierFlags)
     }
 
     // MARK: Pointer
 
     func mouseDown(with event: NSEvent) {
         let point = canvas.imagePoint(for: event)
-        let tool = pointerTool(for: event.modifierFlags)
+        let tool = pointerTool(for: event)
         let optionDown = keyboard.optionIsDown(flags: event.modifierFlags)
         guard document.acceptsEdits || [.hand, .zoom, .eyedropper].contains(tool) else {
             onStatus?("Finish the current operation before editing the image.")
