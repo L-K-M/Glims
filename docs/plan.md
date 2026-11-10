@@ -3578,8 +3578,11 @@ route, preserving Filter > Color and loaded-operation support gates. The actual
 29-check menu/form fixture first reproduced exactly one failure, the missing
 Adjust placement; its other 28 pixel, alpha, effect, Undo/Redo, XCF, ownership
 and admission checks passed. The one-entry mapping change leaves those oracles
-unchanged and builds with `swift build -j 2`; all-four GREEN runtime, review and
-integration remain pending. See `image-adjust.md` for scope.
+unchanged. Source `ddcabd4` passes29 actual checks on each engine with external
+API165 producers and1,012 proper private leased units. Prior completed review
+rounds cover byte-identical feature/fixture inputs; a subsequent reviewer
+timeout is explicitly not approval. Latest integration CI and combined release
+acceptance remain separate. See `image-adjust.md` for scope and evidence.
 
 ### Legacy Select Color source ownership (2026-11-10 candidate)
 

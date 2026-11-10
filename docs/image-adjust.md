@@ -33,5 +33,17 @@ ran all 29 checks: only the missing Adjust item failed. The other 28 passed,
 including independent linear-RGB exposure and alpha math, a separate native
 pixel reference, actual field and Apply/Cancel actions, existing-effect edits,
 last-field Apply, Undo/Redo, XCF, two-document ownership and admission guards.
-The same fixture and oracles are unchanged. The mapping now builds; all-four
-engine GREEN runs, review and integration are still pending.
+The same fixture and oracles are unchanged. Fresh integration source
+`ddcabd4` passes all 29 checks on each of 3.2.8, 3.2.0, 3.0.8 and master
+with immutable external API165 producers, plus 1,012 unit tests in a private
+leased run. Each owned app exited0; all four final AX snapshots reported no
+dialog and released the desktop. These temporary signed shells are not
+self-contained release bundles. The earlier unleased unit invocation is
+not desktop evidence; the proper private leased repeat is the reported run.
+
+Four completed review rounds through `21790a9` cover the byte-identical
+catalog and dedicated fixture. The later `2713769` reviewer integration timed
+out before publishing; that failure is not approval. The latest Main merge
+adds only collector scripts/tests/docs. Required latest-head CI and final
+combined release acceptance remain separate gates. Verification paths and
+hashes are in `/tmp/glims-completion/exposure-main165-all-four-results.json`.
