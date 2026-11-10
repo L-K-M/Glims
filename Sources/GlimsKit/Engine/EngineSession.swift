@@ -2571,6 +2571,25 @@ final class EngineSession: @unchecked Sendable {
         return layer
     }
 
+    /// Creates text while consuming only the floating state captured by its
+    /// editor, including an explicitly inactive state. Native168 prepares
+    /// text before anchoring and owns the single Text Undo group.
+    func addTextLayer(image: Int32, text: String, settings: TextSettings, at position: CGPoint,
+                      expectedFloating: FloatingState) throws -> Int32 {
+        var expected = GlimsFloatingState()
+        expected.struct_size = UInt32(MemoryLayout<GlimsFloatingState>.size)
+        expected.active = expectedFloating.isActive
+        expected.floating = expectedFloating.floating
+        expected.target = expectedFloating.target
+        expected.target_kind = expectedFloating.targetKind?.rawValue ?? 0
+        var values = try Self.textSettings(settings)
+        var layer: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.text_layer_new_captured(engine, image, &expected, text, &values,
+                                             GlimsPoint(x: position.x, y: position.y), &layer, &error), error)
+        return layer
+    }
+
     func textLayer(image: Int32, layer: Int32) throws -> (text: String, settings: TextSettings) {
         var values = GlimsTextSettings()
         values.struct_size = UInt32(MemoryLayout<GlimsTextSettings>.size)
