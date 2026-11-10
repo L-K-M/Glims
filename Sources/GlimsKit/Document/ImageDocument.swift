@@ -2545,7 +2545,7 @@ final class ImageDocument {
             previousChannels: selectedChannelIDs, previousMask: previousMask)
         queueTargetPick(.layer(row.id), validate: { session, image in
             guard try session.floatingSelection(image) == expected,
-                  session.layers(image).contains(where: { $0.id == row.id && $0.bounds == row.bounds }) else {
+                  try session.layers(image).contains(where: { $0.id == row.id && $0.bounds == row.bounds }) else {
                 throw DocumentError.targetChanged
             }
         }, acknowledged: { result in completion(result.map { _ in owned }) })
@@ -2608,8 +2608,8 @@ final class ImageDocument {
         }
         run { session, image in
             guard try session.floatingSelection(image) == expected,
-                  session.layers(image).contains(where: { $0.id == row.id && $0.bounds == row.bounds }),
-                  session.selectedLayers(image) == [row.id] else {
+                  try session.layers(image).contains(where: { $0.id == row.id && $0.bounds == row.bounds }),
+                  try session.selectedLayers(image) == [row.id] else {
                 throw DocumentError.targetChanged
             }
             if !expected.isActive, !(try session.selectedItems(.channel, image: image)).isEmpty {
