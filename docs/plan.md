@@ -3621,3 +3621,16 @@ An initial Babl encoding-space intent error was reproduced before correction.
 The actual form passes 23 checks on each engine; 988 units pass. Integrated
 release/CI checks and final review are pending. See `soft-proof-render.md` for the
 read-only contract and remaining physical/HDR/proof-control scope.
+
+### Installed MacPorts recipe inventory (2026-11-10 candidate)
+
+The standalone `scripts/installed-port-provenance.py` inventories requested
+installed recipes and recorded PortGroups through immutable SQLite reads,
+checking exact original hashes/sizes and database/WAL stability. It refuses
+implicit output overwrites and never writes inside the source prefix.
+Fifteen temporary-registry fixtures pass; a read-only aom/zlib/libidn2 sample
+verified metadata with the registry DB/WAL/SHM unchanged. Source completeness
+is explicitly not assessed: no Tcl evaluation, conditional patch inference,
+source archive or release integration is added. See
+[`installed-port-provenance.md`](installed-port-provenance.md) for usage and
+evidence limits. Independent review/integration remain pending.
