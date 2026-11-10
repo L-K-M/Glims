@@ -3851,3 +3851,14 @@ all-four UI56 and 1,016 private leased units pass. A preserved initial fixture
 failure led to exact native multi-setter history comparison and a latched wait,
 not changed production semantics. See `channel-menu-parity.md` for scope and
 remaining independent review, CI and combined-release gates.
+
+### Native layer picking (2026-11-10 candidate)
+
+An additive facade query delegates read-only hit testing to Core, with
+checked coordinates/offset arithmetic and reset-on-failure output. The
+focused fixture passes 156 checks per engine, old166 reports the expected
+missing-slot failure, and all four general runs pass 7,454 checks. Exact
+source-bound threshold expectations and the measured converted-mask test
+correction are documented in [native-layer-picking.md](native-layer-picking.md).
+Canvas gesture consumers, hosted CI/review and final integration remain
+pending.
