@@ -3821,3 +3821,13 @@ property gates, draft/retarget ownership and counted reconciliation preserve
 paint targets and close lifetime. Old rowless baseline6/1; actual all-four
 controls74each and1,012 private leased units pass. See`layer-opacity-controls.md`
 for source, branch counts, AX gaps and remaining hardware/accessibility review.
+
+### Tool Options names and label relationships (2026-11-10 candidate)
+
+Existing setting popups and selection Mode now have explicit accessible
+names and their existing visible label association. The actual AppKit control
+regression ran two tests with ten baseline failures, then passes both after
+the five-line fix; all 1,014 private leased units also pass with final clean
+AX snapshot and lease release. Independent review, CI and actual keyboard/
+VoiceOver acceptance remain separate gates. See
+`tool-options-accessibility.md`; no new control or action was introduced.
