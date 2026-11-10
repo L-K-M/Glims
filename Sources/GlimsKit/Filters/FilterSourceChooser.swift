@@ -5,12 +5,14 @@ enum SourceFilterOperation: String, Sendable {
     case bumpMap = "gegl:bump-map"
     case variableBlur = "gegl:variable-blur"
     case selectiveGaussianBlur = "gegl:gaussian-blur-selective"
+    case negativeDarkroom = "gegl:negative-darkroom"
 
     var title: String {
         switch self {
         case .bumpMap: return "Bump Map"
         case .variableBlur: return "Variable Blur"
         case .selectiveGaussianBlur: return "Selective Gaussian Blur"
+        case .negativeDarkroom: return "Negative Darkroom"
         }
     }
 
@@ -19,6 +21,7 @@ enum SourceFilterOperation: String, Sendable {
         case .bumpMap: return "Bump map"
         case .variableBlur: return "Variable blur"
         case .selectiveGaussianBlur: return "Selective Gaussian blur"
+        case .negativeDarkroom: return "Negative darkroom"
         }
     }
 
@@ -27,6 +30,7 @@ enum SourceFilterOperation: String, Sendable {
         case .bumpMap: return "Height map"
         case .variableBlur: return "Blur mask"
         case .selectiveGaussianBlur: return "Contrast reference"
+        case .negativeDarkroom: return "Dodge/burn map"
         }
     }
 }
