@@ -245,6 +245,42 @@ enum MainMenu {
             item("Quick Mask", #selector(DocumentWindowController.toggleQuickMask(_:))),
         ])
         add(menu, "View", [
+            submenu("Tools", ToolMenuCatalog.slotGroups.map { group in
+                if group.isMultiChoice {
+                    let title = group.tools.first?.name ?? "Tools"
+                    let submenu = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                    submenu.submenu = NSMenu(title: title)
+                    for tool in group.tools {
+                        let entry = item(tool.name, #selector(AppController.selectToolFromMenu(_:)))
+                        entry.tag = ToolMenuCatalog.tag(for: tool)
+                        entry.keyEquivalentModifierMask = []
+                        submenu.submenu?.addItem(entry)
+                    }
+                    return submenu
+                } else if let tool = group.tools.first {
+                    let entry = item(tool.name, #selector(AppController.selectToolFromMenu(_:)))
+                    entry.tag = ToolMenuCatalog.tag(for: tool)
+                    entry.keyEquivalentModifierMask = []
+                    return entry
+                } else {
+                    return NSMenuItem(title: "", action: nil, keyEquivalent: "")
+                }
+            } + [
+                .separator(),
+                {
+                    let entry = item("Swap Colors", #selector(AppController.swapColorsFromMenu(_:)))
+                    entry.tag = ToolMenuCatalog.swapColorsTag
+                    entry.keyEquivalentModifierMask = []
+                    return entry
+                }(),
+                {
+                    let entry = item("Default Colors", #selector(AppController.resetColorsFromMenu(_:)))
+                    entry.tag = ToolMenuCatalog.defaultColorsTag
+                    entry.keyEquivalentModifierMask = []
+                    return entry
+                }(),
+            ]),
+            .separator(),
             item("Zoom In", #selector(DocumentWindowController.zoomIn(_:)), "+"),
             item("Zoom Out", #selector(DocumentWindowController.zoomOut(_:)), "-"),
             item("Fit Image", #selector(DocumentWindowController.fitImage(_:)), "0"),

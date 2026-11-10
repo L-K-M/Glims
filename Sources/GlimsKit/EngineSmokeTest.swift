@@ -73,6 +73,9 @@ enum EngineSmokeTest {
         if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "channel-menus", !NSApp.isRunning {
             return runHostedChannelMenus()
         }
+        if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tool-color-menus", !NSApp.isRunning {
+            return runHostedToolColorMenus()
+        }
         guard let path = EngineLibrary.configuredPath() else {
             print("FAIL no engine library; set \(EngineLibrary.environmentVariable)")
             return 2
@@ -330,6 +333,11 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "menu-shortcuts" {
                 try exerciseMenuShortcuts(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (menu shortcuts)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tool-color-menus" {
+                try exerciseToolColorMenus(session, documents: documents)
+                print(failures == 0 ? "PASSED (tool color menus)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "working-profile-title" {

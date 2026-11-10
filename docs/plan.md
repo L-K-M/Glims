@@ -3888,3 +3888,11 @@ progress and activity priority. Same-window field focus clears lost modifier
 releases; its measured six-failure regression is fixed. All four engines pass
 51 interface checks and the full isolated suite passes 1,022 tests. See
 [live-tool-hints.md](live-tool-hints.md) for scope, AX and integration limits.
+
+### Tool and color menu parity (2026-11-10 candidate)
+
+View > Tools exposes all 26 existing tools plus shared Swap/Default Colors,
+with stable command IDs and no factory canvas-letter equivalents. All four
+engines pass 106 actual menu/field/native-invariance checks; 1,021 isolated
+unit tests pass. See [tool-color-menus.md](tool-color-menus.md) for the scoped
+key-equivalent oracle correction and remaining CI/integration limits.
