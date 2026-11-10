@@ -3571,7 +3571,6 @@ existing conformance also passes. See `variable-blur.md` for the independent
 pixel oracle, refusal guards and remaining auxiliary roles. The facade keeps
 APIv1/163 and upstream sources remain unchanged. CI/review/integration follow.
 
-
 ### Exposure in Image Adjust (2026-11-10 candidate)
 
 Exposure now joins Image > Adjust through the existing generic native filter
@@ -3581,6 +3580,19 @@ Adjust placement; its other 28 pixel, alpha, effect, Undo/Redo, XCF, ownership
 and admission checks passed. The one-entry mapping change leaves those oracles
 unchanged and builds with `swift build -j 2`; all-four GREEN runtime, review and
 integration remain pending. See `image-adjust.md` for scope.
+
+### Selective Gaussian contrast reference (2026-11-10 candidate)
+
+Selective Gaussian Blur now has a captured contrast-reference chooser and the
+installed numeric property form, using the existing snapshot guards, 512 MiB
+bound and merge-only lifecycle. The native baseline reproduced one admission
+failure among 33 checks; the actual-menu baseline reproduced one chooser failure
+among three checks. All four engines now pass 128 focused native and 28 actual
+UI checks, plus general conformance (1,917 checks on 3.2/master; 1,703 on 3.0.8).
+Xcode 26 CI then exposed a Swift 6.2 type-checker limit in the fixture generator;
+the expression is split into typed byte intermediates without changing its
+pixels or oracles. CI rerun and final integration remain pending. Other auxiliary
+roles remain separate work. See `filter-inputs.md` for the exact contract.
 
 ### Path lifecycle menu commands (2026-11-10 candidate)
 
