@@ -22,6 +22,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <zlib.h>
 
 #pragma clang diagnostic ignored "-Wdeclaration-after-statement"
 
@@ -506,6 +507,199 @@ cleanup:
   g_free (path);
 }
 
+/* The input bytes come from the existing direct native XCF oracle. zlib
+ * writes a separate gzip member, and a round-trip checks the exact payload
+ * before any native or facade open. */
+static gboolean
+gzip_write_oracle (const gchar *path, const guint8 *bytes, gsize size)
+{
+  if (!size || size > MAX_FILE_BYTES) return FALSE;
+  gzFile stream = gzopen (path, "wb");
+  if (!stream) return FALSE;
+  int count = gzwrite (stream, bytes, (unsigned) size);
+  int closed = gzclose (stream);
+  if (count != (int) size || closed != Z_OK) return FALSE;
+
+  stream = gzopen (path, "rb");
+  if (!stream) return FALSE;
+  guint8 *decoded = g_malloc (size);
+  guint8 extra;
+  count = gzread (stream, decoded, (unsigned) size);
+  int eof = gzread (stream, &extra, 1);
+  closed = gzclose (stream);
+  gboolean matches = count == (int) size && eof == 0 && closed == Z_OK &&
+      !memcmp (decoded, bytes, size);
+  g_free (decoded);
+  return matches;
+}
+
+static gboolean
+original_gzip_file (GimpImage *image, GFile *file)
+{
+  GFile *identity = image ? gimp_image_get_file (image) : NULL;
+  return identity && g_file_equal (identity, file);
+}
+
+static gboolean
+gzip_direct_native_control (GlimsEngine *engine, GFile *file, gboolean has_effect)
+{
+  GimpPDBStatusType status;
+  gboolean vector = FALSE;
+  const gchar *mime = NULL;
+  GError *error = NULL;
+  engine->busy++;
+  GimpImage *image = file_open_image (engine->gimp, gimp_get_user_context (engine->gimp), NULL, file,
+      0, 0, FALSE, FALSE, NULL, GIMP_RUN_NONINTERACTIVE, &vector, &status, &mime, &error);
+  engine->busy--;
+  GList *layers = image ? gimp_image_get_layer_list (image) : NULL;
+  GimpContainer *filters = layers && !layers->next && GIMP_IS_LAYER (layers->data)
+      ? gimp_drawable_get_filters (GIMP_DRAWABLE (layers->data)) : NULL;
+  GList *effects = GIMP_IS_LIST (filters) ? GIMP_LIST (filters)->queue->head : NULL;
+  gboolean valid = image && status == GIMP_PDB_SUCCESS && !error && !vector &&
+      !g_strcmp0 (mime, "image/x-xcf") && original_gzip_file (image, file) && GIMP_IS_LIST (filters);
+  if (valid && has_effect) {
+    GimpDrawableFilter *filter = effects && !effects->next && GIMP_IS_DRAWABLE_FILTER (effects->data)
+        ? GIMP_DRAWABLE_FILTER (effects->data) : NULL;
+    valid = filter && !g_strcmp0 (gimp_object_get_name (GIMP_OBJECT (filter)), SENTINEL) &&
+        !g_strcmp0 (gegl_node_get_operation (gimp_drawable_filter_get_operation (filter)), OPERATION);
+  } else if (valid) {
+    valid = effects == NULL;
+  }
+  printf ("OBS native gzip MIME=%s original_file=%d\n",
+      mime ? mime : "(none)", original_gzip_file (image, file));
+  if (error) fprintf (stderr, "OBS native gzip open: %s\n", error->message);
+  g_list_free (layers);
+  g_clear_error (&error);
+  g_clear_object (&image);
+  return valid;
+}
+
+static gboolean
+read_effect_mask (GimpDrawableFilter *effect, gfloat pixels[WIDTH * HEIGHT])
+{
+  GimpDrawableFilterMask *mask = effect ? gimp_drawable_filter_get_mask (effect) : NULL;
+  if (!mask || gimp_item_get_width (GIMP_ITEM (mask)) != WIDTH ||
+      gimp_item_get_height (GIMP_ITEM (mask)) != HEIGHT) return FALSE;
+  GeglBuffer *buffer = gimp_drawable_get_buffer (GIMP_DRAWABLE (mask));
+  if (!buffer) return FALSE;
+  gegl_buffer_get (buffer, GEGL_RECTANGLE (0, 0, WIDTH, HEIGHT), 1, babl_format ("Y float"),
+                   pixels, GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
+  return TRUE;
+}
+
+static gboolean
+gzip_unchanged (const gchar *path, const gchar *before, gsize size)
+{
+  gchar *after = NULL;
+  gsize after_size = 0;
+  gboolean same = read_file (path, &after, &after_size) && after_size == size &&
+      !memcmp (after, before, size);
+  g_free (after);
+  return same;
+}
+
+static void
+gzip_open_case (GlimsEngine *engine, const gchar *plain_name, const gchar *gzip_name,
+                const gfloat rendered[COMPONENTS], const gfloat mask[WIDTH * HEIGHT])
+{
+  const gboolean has_effect = rendered != NULL;
+  Fixture loaded = {0};
+  GlimsImageID opened = 0;
+  char *error = NULL;
+  gchar *plain_path = g_build_filename (work_dir, plain_name, NULL);
+  gchar *gzip_path = g_build_filename (work_dir, gzip_name, NULL);
+  GFile *file = g_file_new_for_path (gzip_path);
+  gchar *plain = NULL, *compressed = NULL;
+  gsize size = 0, compressed_size = 0;
+  gfloat actual[COMPONENTS], actual_mask[WIDTH * HEIGHT];
+  printf ("OBS gzip case=%s\n", gzip_name);
+  NEED (read_file (plain_path, &plain, &size) && no_glims_namespace ((guint8 *) plain, size),
+        "gzip input is the retained native XCF oracle without a Glims carrier");
+  NEED (gzip_write_oracle (gzip_path, (guint8 *) plain, size) &&
+        read_file (gzip_path, &compressed, &compressed_size) && compressed_size >= 18 &&
+        !memcmp (compressed, "\037\213\010", 3),
+        "independent gzip member decodes to the exact source XCF bytes");
+  gchar *plain_sha = g_compute_checksum_for_data (G_CHECKSUM_SHA256, (guint8 *) plain, size);
+  gchar *gzip_sha = g_compute_checksum_for_data (G_CHECKSUM_SHA256, (guint8 *) compressed, compressed_size);
+  printf ("OBS gzip=%s xcf_sha256=%s gzip_sha256=%s\n", gzip_name, plain_sha, gzip_sha);
+  g_free (plain_sha);
+  g_free (gzip_sha);
+
+  NEED (gzip_direct_native_control (engine, file, has_effect),
+        "direct GIMP gzip open reports inner XCF, keeps original GFile and loads the expected stack");
+  GlimsStatus status = api->image_open (engine, gzip_path, &opened, &error);
+  printf ("OBS gzip facade status=%d image=%d\n", (int) status, (int) opened);
+  CHECK (status == GLIMS_STATUS_OK && opened != 0 && !error,
+         has_effect ? "facade accepts a gzip foreign XCF with explicit effect fields"
+                    : "facade passes through a gzip XCF without effects");
+  CHECK (gzip_unchanged (gzip_path, compressed, compressed_size),
+         "facade open leaves the original gzip file byte-identical");
+  if (status != GLIMS_STATUS_OK || !opened) {
+    CHECK (!opened, "refused gzip open does not publish an image");
+    goto cleanup;
+  }
+  NEED (opened_fixture (engine, opened, &loaded),
+        "gzip facade open retains one ordinary FLOAT_LINEAR alpha layer");
+  CHECK (original_gzip_file (loaded.image, file) && clean_open (&loaded),
+         "gzip facade open keeps original GFile identity and starts clean without a carrier or history");
+  CHECK (read_pixels (&loaded, FALSE, actual) && !memcmp (actual, source_pixels, sizeof actual),
+         "gzip facade open preserves exact raw FLOAT_LINEAR pixels");
+  if (has_effect) {
+    GimpDrawableFilter *effect = one_effect (&loaded);
+    CHECK (effect && explicit_fields (effect) &&
+           !g_strcmp0 (gimp_object_get_name (GIMP_OBJECT (effect)), SENTINEL) &&
+           !g_strcmp0 (gegl_node_get_operation (gimp_drawable_filter_get_operation (effect)), OPERATION),
+           "gzip facade open preserves the exact operation and three explicit fields");
+    CHECK (read_effect_mask (effect, actual_mask) && !memcmp (actual_mask, mask, sizeof actual_mask),
+           "gzip facade open retains exact native effect-mask coverage");
+    CHECK (read_pixels (&loaded, TRUE, actual) && pixel_delta (actual, rendered) < 2e-4,
+           "gzip facade open matches the independent effect-rendered float oracle");
+  } else {
+    GlimsEffectInfo row = {0};
+    gint32 count = -1;
+    CHECK (api->drawable_effects (engine, opened, gimp_item_get_id (GIMP_ITEM (loaded.layer)),
+           &row, 1, &count) == GLIMS_STATUS_OK && count == 0,
+           "ordinary gzip pass-through introduces no effect");
+  }
+
+cleanup:
+  if (error) fprintf (stderr, "OBS gzip facade open: %s\n", error);
+  if (opened) CHECK (api->image_close (engine, opened) == GLIMS_STATUS_OK, "owned gzip image closes");
+  clear_error (&error);
+  g_object_unref (file);
+  g_free (compressed);
+  g_free (plain);
+  g_free (gzip_path);
+  g_free (plain_path);
+}
+
+static void
+gzip_invalid_inner_control (GlimsEngine *engine)
+{
+  /* A valid member with a truncated inner header after an invalid image
+   * type. GIMP refuses the XCF without depending on missing integer reads. */
+  static const guint8 invalid[] = {
+    'g','i','m','p',' ','x','c','f',' ','v','0','2','0',0,
+    0,0,0,4, 0,0,0,2, 0xff,0xff,0xff,0xff
+  };
+  gchar *path = g_build_filename (work_dir, "foreign-invalid-inner.xcf.gz", NULL);
+  gchar *compressed = NULL;
+  gsize size = 0;
+  GlimsImageID opened = 0;
+  char *error = NULL;
+  NEED (gzip_write_oracle (path, invalid, sizeof invalid) && read_file (path, &compressed, &size),
+        "malformed inner XCF is wrapped in a complete gzip member");
+  GlimsStatus status = api->image_open (engine, path, &opened, &error);
+  CHECK (status != GLIMS_STATUS_OK && !opened && error,
+         "malformed inner gzip XCF refuses without publishing an image");
+  CHECK (gzip_unchanged (path, compressed, size), "malformed gzip refusal leaves its source byte-identical");
+cleanup:
+  if (opened) api->image_close (engine, opened);
+  clear_error (&error);
+  g_free (compressed);
+  g_free (path);
+}
+
 static GlimsStatus
 regression (GlimsEngine *engine, gpointer unused)
 {
@@ -632,6 +826,10 @@ regression (GlimsEngine *engine, gpointer unused)
          "opening the foreign document leaves the original native source and oracle unchanged");
   legacy_control (engine, 20, patched, size, &encoded, expected);
   legacy_control (engine, 21, patched, size, &encoded, expected);
+  gfloat mask[WIDTH * HEIGHT];
+  NEED (read_effect_mask (filter, mask), "independent source has full native effect-mask coverage");
+  gzip_open_case (engine, "foreign-explicit-effect-v20.xcf", "foreign-explicit-effect-v20.xcf.gz", expected, mask);
+  gzip_open_case (engine, "foreign-explicit-effect-v21.xcf", "foreign-explicit-effect-v21.xcfgz", expected, mask);
 cleanup:
   if (file_error) fprintf (stderr, "OBS oracle write: %s\n", file_error->message);
   if (error) fprintf (stderr, "OBS public open: %s\n", error);
@@ -648,6 +846,8 @@ cleanup:
   g_free (patched);
   g_free (reread);
   plain_control (engine);
+  gzip_open_case (engine, "foreign-plain-control.xcf", "foreign-plain-control.xcf.gz", NULL, NULL);
+  gzip_invalid_inner_control (engine);
   return GLIMS_STATUS_OK;
 }
 
