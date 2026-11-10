@@ -116,6 +116,9 @@ final class CanvasToolController {
     /// Held temporary-tool modifiers: Space for the hand, Command for the
     /// move tool, Option for color sampling.
     private var keyboard = CanvasKeyboardState()
+    private var springLetters = SpringToolLettersState()
+    private var selectingSpringTool = false
+    private var observedSelectionRevision = ToolState.shared.selectionRevision
     /// The crop rectangle waiting for Return (image pixels).
     private(set) var pendingCrop: CGRect?
     /// The Transform tool's pending transform, waiting for Return.
@@ -170,6 +173,15 @@ final class CanvasToolController {
         // an unapplied transform goes away when another tool is.
         ToolState.shared.observe { [weak self] in
             guard let self else { return }
+            let changed = self.observedSelectionRevision != ToolState.shared.selectionRevision
+            self.observedSelectionRevision = ToolState.shared.selectionRevision
+            guard changed else { self.canvas.needsDisplay = true; return }
+            // A spring selection affects the next press, never an accepted
+            // drag/compound preview whose tool and settings were captured.
+            if self.selectingSpringTool && (self.hasPendingInteraction || self.canvas.guideDrag.isActive) {
+                self.canvas.needsDisplay = true
+                return
+            }
             if ToolState.shared.current != .transform, self.transformSession != nil {
                 self.cancelTransform(message: "Transform cancelled.")
             }
@@ -204,6 +216,7 @@ final class CanvasToolController {
             return
         }
         dragTool = tool
+        springLetters.pointerBegan(using: tool, selectionRevision: ToolState.shared.selectionRevision)
         if tool != .transform, transformSession != nil {
             // Another tool took over: the unapplied transform goes away.
             cancelTransform(message: nil)
@@ -261,6 +274,10 @@ final class CanvasToolController {
         case .transform:
             beginTransformDrag(at: point, clickCount: event.clickCount)
         case .text:
+            // Text entry owns subsequent letters. Do this before the overlay
+            // takes first responder so focus cleanup cannot restore another
+            // tool and prematurely finish the editor being created.
+            springLetters.promote()
             beginTextEditing(at: point)
             dragTool = nil
         case .path:
@@ -368,6 +385,7 @@ final class CanvasToolController {
             floatingMove = nil
             floatingMoveWasRequested = false
             canvas.needsDisplay = true
+            finishSpringInteractionIfReady()
         }
         // An intentional release of a guide drag commits exactly one
         // addGuide/moveGuide/removeGuide action.
@@ -670,6 +688,9 @@ final class CanvasToolController {
     /// brackets and arrows. Returns false for keys it does not handle.
     func keyDown(with event: NSEvent) -> Bool {
         let keyCode = Int(event.keyCode)
+        // Field editors and the on-canvas text overlay own ordinary typing,
+        // including Space, digits and the color/Quick Mask letters.
+        if textEditor != nil || canvas.window?.firstResponder is NSTextView { return false }
 
         if keyCode == Self.escapeKey,
            dragTool == .rectangleSelect || dragTool == .ellipseSelect || dragTool == .lasso {
@@ -677,6 +698,7 @@ final class CanvasToolController {
             selectionDragFlags = []; lassoPoints = []
             canvas.needsDisplay = true
             onStatus?("Selection cancelled.")
+            cancelSpringTools()
             return true
         }
 
@@ -695,6 +717,7 @@ final class CanvasToolController {
         }
         if transformSession != nil, keyCode == Self.escapeKey {
             cancelTransform(message: "Transform cancelled.")
+            cancelSpringTools()
             return true
         }
         if (moveSnap != nil || floatingMove != nil), keyCode == Self.escapeKey {
@@ -703,6 +726,7 @@ final class CanvasToolController {
             cancelMoveSnap()
             cancelFloatingMove()
             onStatus?("Move cancelled.")
+            cancelSpringTools()
             return true
         }
         // Only while the canvas has focus: a text field keeps Tab for itself.
@@ -714,12 +738,14 @@ final class CanvasToolController {
             document.crop(to: rect)
             pendingCrop = nil
             canvas.needsDisplay = true
+            finishSpringInteractionIfReady()
             return true
         }
         if pendingCrop != nil, keyCode == Self.escapeKey {
             pendingCrop = nil
             canvas.needsDisplay = true
             onStatus?("Crop cancelled.")
+            cancelSpringTools()
             return true
         }
         if ToolState.shared.current == .path, pathTool.keyDown(keyCode: keyCode) {
@@ -762,7 +788,15 @@ final class CanvasToolController {
             return true
         }
         if ToolID.group(forShortcut: key) != nil {
-            ToolState.shared.select(shortcut: key, cycle: event.modifierFlags.contains(.shift))
+            guard springLetters.canPress(keyCode: keyCode, isRepeat: event.isARepeat) else { return true }
+            let state = ToolState.shared
+            let previous = state.current, revision = state.selectionRevision
+            selectingSpringTool = true
+            state.select(shortcut: key, cycle: event.modifierFlags.contains(.shift))
+            selectingSpringTool = false
+            springLetters.press(keyCode: keyCode, at: event.timestamp, previous: previous,
+                                previousRevision: revision, selected: state.current,
+                                selectedRevision: state.selectionRevision)
             return true
         }
         if CanvasKeyboardPolicy.isLeftBracket(key) || CanvasKeyboardPolicy.isRightBracket(key) {
@@ -790,11 +824,17 @@ final class CanvasToolController {
             onStatus?("\(tool.name) opacity \(Int((opacity * 100).rounded()))%")
             return true
         }
+        if keyCode == Self.escapeKey { return cancelSpringTools() }
         return false
     }
 
     func keyUp(with event: NSEvent) -> Bool {
         let keyCode = Int(event.keyCode)
+        if springLetters.isHeld(keyCode: keyCode) {
+            restoreSpringTool(springLetters.release(keyCode: keyCode, at: event.timestamp,
+                                                    selectionRevision: ToolState.shared.selectionRevision))
+            return true
+        }
         if CanvasKeyboardPolicy.isTemporaryModifierKey(keyCode: keyCode) {
             keyboard.keyUp(keyCode)
             return true
@@ -802,6 +842,41 @@ final class CanvasToolController {
         guard event.charactersIgnoringModifiers == " " else { return false }
         keyboard.keyUp(CanvasKeyboardPolicy.spaceKeyCode)
         NSCursor.arrow.set()
+        return true
+    }
+
+    private func restoreSpringTool(_ tool: ToolID?) {
+        guard let tool else { return }
+        selectingSpringTool = true
+        ToolState.shared.select(tool)
+        selectingSpringTool = false
+    }
+
+    private func finishSpringInteractionIfReady() {
+        // Crop and Transform are compound gestures: Return/Cancel, rather
+        // than mouse-up, finishes the accepted preview.
+        guard dragTool == nil, pendingCrop == nil,
+              transformSession?.isIdentity != false, textEditor == nil,
+              !canvas.guideDrag.isActive else { return }
+        restoreSpringTool(springLetters.pointerEnded(selectionRevision: ToolState.shared.selectionRevision))
+    }
+
+    /// Focus, window close and Escape abandon held shortcut ownership. Existing
+    /// accepted paint is ended; local previews cancel without a native move or
+    /// an implicit floating anchor. A promoted text editor has no held owner.
+    @discardableResult
+    func cancelSpringTools() -> Bool {
+        keyboard = CanvasKeyboardState()
+        guard let prior = springLetters.cancel(selectionRevision: ToolState.shared.selectionRevision) else { return false }
+        canvas.guideDrag.cancel()
+        cancelMoveSnap(); cancelFloatingMove()
+        if dragTool?.paintTool != nil, document.strokeIsActive { document.endStroke() }
+        dragTool = nil; dragStart = nil; dragCurrent = nil
+        lassoPoints = []; handOrigin = nil; gradientCapture = nil
+        selectionDragFlags = []; pendingCrop = nil
+        cancelTransform(message: nil)
+        restoreSpringTool(prior)
+        canvas.needsDisplay = true
         return true
     }
 
@@ -1041,6 +1116,7 @@ final class CanvasToolController {
             transformSession = nil
             transformDrag = nil
             canvas.needsDisplay = true
+            finishSpringInteractionIfReady()
         }
         guard let session = transformSession, !session.isIdentity else { return }
         // The box describes the layer as it was when the drag began; an
