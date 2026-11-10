@@ -68,8 +68,8 @@ raw_blur_oracle (const guint8 target[BYTES], const guint8 mask[BYTES],
     gegl_node_set (blur, "high-quality", settings->high_quality, NULL);
   if (has_native_property ("levels")) gegl_node_set (blur, "levels", settings->levels, NULL);
   if (has_native_property ("gamma")) gegl_node_set (blur, "gamma", settings->gamma, NULL);
-  if (!gegl_node_connect_to (input_node, "output", blur, "input") ||
-      !gegl_node_connect_to (mask_node, "output", blur, "aux")) goto cleanup;
+  if (!gegl_node_connect (input_node, "output", blur, "input") ||
+      !gegl_node_connect (mask_node, "output", blur, "aux")) goto cleanup;
   gegl_node_blit (blur, 1.0, GEGL_RECTANGLE (0, 0, SIDE, SIDE), babl_format ("R'G'B'A u8"),
                   output, GEGL_AUTO_ROWSTRIDE, GEGL_BLIT_DEFAULT);
   ok = TRUE;
