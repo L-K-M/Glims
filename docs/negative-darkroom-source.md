@@ -32,8 +32,9 @@ parameter Cancel, opaque Apply/one Undo/no auxiliary effect, exact alpha Undo,
 Redo, B ownership, busy, deleted-source refusal and close/late Preview cleanup.
 
 Each owned app exited0 and released the desktop. The 3.2.0 immediate external
-AX read was incomplete; the other three and final unit snapshot reported no
-dialog. B ownership is established by the captured controller/native state;
+AX read and its full-unit after-read were incomplete; the other three engine
+snapshots and the later Tool Options full-unit snapshot reported no dialog.
+Those later reads do not attest the earlier instants. B ownership is established by the captured controller/native state;
 this fixture does not claim real B foreground focus. Temporary signed shells
 load immutable external producers; they are not release bundles.
 
