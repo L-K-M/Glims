@@ -3593,3 +3593,11 @@ An initial Babl encoding-space intent error was reproduced before correction.
 The actual form passes 23 checks on each engine; 988 units pass. Integrated
 release/CI checks and final review are pending. See `soft-proof-render.md` for the
 read-only contract and remaining physical/HDR/proof-control scope.
+
+### Rigi saved-group width growth adoption (2026-11-10 candidate)
+
+Glims stages Rigi revision `a5801f2` for the saved palette-group width growth
+fix. Rigi's 134 unit tests, gallery smoke, release build and independent review
+passed at that revision. Rigi PR #19 is pushed and awaiting merge; it must merge
+before Glims merges this consumer adoption. Glims consumer unit/UI checks, CI and adoption
+merge remain pending.
