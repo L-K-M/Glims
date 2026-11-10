@@ -3573,3 +3573,13 @@ An initial Babl encoding-space intent error was reproduced before correction.
 The actual form passes 23 checks on each engine; 988 units pass. Integrated
 release/CI checks and final review are pending. See `soft-proof-render.md` for the
 read-only contract and remaining physical/HDR/proof-control scope.
+
+### Path lifecycle menu commands (2026-11-10 candidate)
+
+Edit now exposes New Path and Delete Path beside Stroke Path and Fill Path.
+Each responder action uses its owning document's existing path service,
+including default names and native Undo. Validation reads cached edit and
+path-selection state; Delete requires exactly one path, while New accepts
+an empty or multiple selection. Floating selections preserve path editing.
+The actual-menu regression reproduced the missing commands before the fix;
+all-four-engine checks and final integration are tracked in the PR.
