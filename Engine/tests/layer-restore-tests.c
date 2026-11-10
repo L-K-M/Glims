@@ -483,6 +483,8 @@ cleanup:
   clear_error (&error); g_free (fixture.expected); if (fixture.image) api->image_close (engine, fixture.image);
 }
 
+static void modern_cases (GlimsEngine *engine, const gchar *work);
+
 int
 main (int argc, char **argv)
 {
@@ -500,7 +502,406 @@ main (int argc, char **argv)
   CHECK (glims_engine_call (engine, success_cases, NULL) == GLIMS_STATUS_OK, "Restore success fixtures execute on engine worker");
   CHECK (glims_engine_call (engine, refusal_cases, NULL) == GLIMS_STATUS_OK, "Restore refusal fixtures execute on engine worker");
   public_cases (engine);
+  modern_cases (engine, argv[1]);
   api->stop (engine); g_free (user); g_free (cache);
   printf ("%s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);
   return failures != 0;
+}
+
+/* Additional modern-source oracles. Everything above retains the original
+ * 109 assertions; only the declaration/call adds this separate source phase. */
+#if GIMP_CHECK_VERSION (3, 2, 0)
+#include "core/gimplink.h"
+#include "core/gimplinklayer.h"
+#include "core/gimprasterizable.h"
+#include "path/gimpvectorlayer.h"
+
+static gchar *
+modern_pixels (GimpLayer *layer, gboolean offsets)
+{
+  GString *state = g_string_new (NULL);
+  gint x = 0, y = 0;
+  if (offsets) gimp_item_get_offset (GIMP_ITEM (layer), &x, &y);
+  g_string_append_printf (state, "%d,%d,%d,%d;", x, y,
+                          gimp_item_get_width (GIMP_ITEM (layer)),
+                          gimp_item_get_height (GIMP_ITEM (layer)));
+  append_pixels (state, GIMP_DRAWABLE (layer), FALSE);
+  gchar *digest = g_compute_checksum_for_data (G_CHECKSUM_SHA256,
+                                               (const guchar *) state->str, state->len);
+  g_string_free (state, TRUE);
+  return digest;
+}
+
+static gboolean
+modern_pixels_match (GimpLayer *layer, const gchar *expected, gboolean offsets)
+{
+  gchar *actual = modern_pixels (layer, offsets);
+  gboolean equal = actual && expected && !strcmp (actual, expected);
+  g_free (actual); return equal;
+}
+
+/* Topology excludes legitimate regeneration geometry/name changes. */
+static gchar *
+modern_topology (GimpImage *image)
+{
+  GString *state = g_string_new (NULL);
+  GList *rows = gimp_image_get_layer_list (image); /* Owned nodes. */
+  for (GList *it = rows; it; it = it->next)
+    {
+      GimpLayer *layer = it->data, *parent = gimp_layer_get_parent (layer);
+      GimpLayerMask *mask = gimp_layer_get_mask (layer);
+      g_string_append_printf (state, "%d,%d,%d,%d;", item_id (layer),
+                              parent ? item_id (parent) : 0, gimp_item_get_index (GIMP_ITEM (layer)),
+                              mask ? item_id (mask) : 0);
+    }
+  g_list_free (rows);
+  for (GList *it = gimp_image_get_selected_layers (image); it; it = it->next)
+    g_string_append_printf (state, "selected:%d;", item_id (it->data)); /* Borrowed. */
+  for (GList *it = gimp_image_get_selected_channels (image); it; it = it->next)
+    g_string_append_printf (state, "channel:%d;", item_id (it->data)); /* Borrowed. */
+  gchar *digest = g_compute_checksum_for_string (G_CHECKSUM_SHA256, state->str, state->len);
+  g_string_free (state, TRUE); return digest;
+}
+
+static gboolean
+modern_topology_matches (GimpImage *image, const gchar *expected)
+{
+  gchar *actual = modern_topology (image);
+  gboolean equal = actual && expected && !strcmp (actual, expected);
+  g_free (actual); return equal;
+}
+
+static gboolean
+modern_source_states (GlimsEngine *engine, GlimsImageID image,
+                      const GlimsItemID ids[3], gboolean text, gboolean link, gboolean vector)
+{
+  const uint32_t kinds[] = { GLIMS_LAYER_TEXT, GLIMS_LAYER_LINK, GLIMS_LAYER_VECTOR };
+  const gboolean rasterized[] = { text, link, vector };
+  for (guint i = 0; i < 3; i++)
+    {
+      GlimsLayerSourceInfo info = { .struct_size = sizeof info };
+      if (api->layer_source_info (engine, image, ids[i], &info, NULL) != GLIMS_STATUS_OK ||
+          info.source_kind != kinds[i] || !info.has_source || info.is_rasterized != rasterized[i])
+        return FALSE;
+    }
+  return TRUE;
+}
+
+static gboolean
+modern_source_identity (GimpLayer *link, GimpLayer *vector, GlimsItemID path, const gchar *filename)
+{
+  GimpPath *retained_path = gimp_vector_layer_get_path (GIMP_VECTOR_LAYER (vector));
+  GimpLink *retained_link = gimp_link_layer_get_link (GIMP_LINK_LAYER (link));
+  GFile *file = retained_link ? gimp_link_get_file (retained_link, NULL, NULL) : NULL;
+  GFile *expected = g_file_new_for_path (filename);
+  gboolean equal = retained_path && item_id (retained_path) == path && file && g_file_equal (file, expected);
+  g_object_unref (expected); return equal;
+}
+
+/* Export a known asymmetric opaque pattern, then load that PNG independently
+ * as a normal image. The expected digest never comes from Restore or a link. */
+static GlimsStatus
+modern_export_reference (GlimsEngine *engine, const gchar *filename, gint width, gint height,
+                          guint seed, GlimsImageID *scratch, GlimsImageID *reference,
+                          gchar **expected, char **error)
+{
+  GlimsStatus status = api->image_new (engine, width, height, scratch, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  GimpImage *image = glims_lookup_image (engine, *scratch)->image;
+  GList *rows = gimp_image_get_layer_list (image);
+  GimpLayer *layer = rows ? rows->data : NULL;
+  g_list_free (rows);
+  if (!layer) return GLIMS_STATUS_FAILED;
+  guint8 *bytes = g_malloc ((gsize) width * height * 4);
+  for (gint y = 0; y < height; y++) for (gint x = 0; x < width; x++)
+    {
+      guint8 *pixel = bytes + ((gsize) y * width + x) * 4;
+      pixel[0] = 20 + (x * 17 + y * 3 + seed) % 210;
+      pixel[1] = 30 + (x * 5 + y * 23 + seed) % 200;
+      pixel[2] = 40 + (x * 11 + y * 7 + seed) % 190; pixel[3] = 255;
+    }
+  gegl_buffer_set (gimp_drawable_get_buffer (GIMP_DRAWABLE (layer)),
+                   GEGL_RECTANGLE (0, 0, width, height), 0, babl_format ("R'G'B'A u8"),
+                   bytes, GEGL_AUTO_ROWSTRIDE);
+  g_free (bytes); gimp_drawable_update (GIMP_DRAWABLE (layer), 0, 0, width, height);
+  gimp_image_flush (image);
+  status = api->image_export (engine, *scratch, filename, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = api->image_close (engine, *scratch);
+  if (status != GLIMS_STATUS_OK) return status;
+  *scratch = 0;
+  status = api->image_open (engine, filename, reference, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  image = glims_lookup_image (engine, *reference)->image;
+  rows = gimp_image_get_layer_list (image); layer = rows ? rows->data : NULL;
+  g_list_free (rows);
+  if (!layer) return GLIMS_STATUS_FAILED;
+  g_free (*expected); *expected = modern_pixels (layer, FALSE);
+  status = api->image_close (engine, *reference);
+  if (status == GLIMS_STATUS_OK) *reference = 0;
+  return *expected ? status : GLIMS_STATUS_FAILED;
+}
+
+static GlimsStatus
+modern_sources_worker (GlimsEngine *engine, gpointer work)
+{
+  /* Only this pre-admission entry may be retried by the host. Returning BUSY
+   * lets an already-running monitor loader's outer loop actually unwind. */
+  if (engine->busy) return GLIMS_STATUS_BUSY;
+  GlimsImageID id = 0, scratch = 0, reference = 0;
+  GlimsStrokeID stroke = 0;
+  GlimsItemID path = 0, vector_id = 0, link_id = 0, mask_id = 0;
+  char *error = NULL;
+  gchar *file = g_build_filename (work, "batch-restore-current.png", NULL);
+  gchar *link_v1 = NULL, *link_v2 = NULL, *link_v3 = NULL;
+  gchar *text_source = NULL, *vector_source = NULL, *topology = NULL;
+  gchar *damaged_text = NULL, *damaged_link = NULL, *damaged_vector = NULL, *noop = NULL;
+  gchar *mixed_text = NULL, *mixed_link = NULL, *mixed_vector = NULL;
+  gchar *changed_text = NULL, *changed_link = NULL, *changed_vector = NULL, *missing_damage = NULL;
+  gchar *painted_link = NULL;
+  NEED (modern_export_reference (engine, file, 17, 9, 13, &scratch, &reference, &link_v1, &error) == GLIMS_STATUS_OK,
+        "modern link source PNG has an independent normal-image pixel oracle");
+  NEED (api->image_new (engine, 32, 24, &id, &error) == GLIMS_STATUS_OK, "mixed modern source image starts");
+  GimpImage *image = glims_lookup_image (engine, id)->image;
+  GimpLayer *group = gimp_group_layer_new (image);
+  NEED (group && gimp_image_add_layer (image, group, NULL, 0, FALSE), "modern source fixture has a real parent group");
+  GimpLayer *text = add_text (engine, image, group, "T", 2, 3);
+  GlimsSubpath subpath = { .count = 4, .closed = TRUE };
+  GlimsPathPoint points[] = {
+    { {3, 3}, {3, 3}, {3, 3} }, { {12, 3}, {12, 3}, {12, 3} },
+    { {12, 10}, {12, 10}, {12, 10} }, { {3, 10}, {3, 10}, {3, 10} }
+  };
+  NEED (text && api->path_set (engine, id, 0, "Retained shape", &subpath, 1, points, 4, &path, &error) == GLIMS_STATUS_OK &&
+        api->path_to_vector_layer (engine, id, path, "Retained vector", &vector_id, &error) == GLIMS_STATUS_OK && vector_id,
+        "installed modern engine creates a genuine vector from the explicit closed native path");
+  NEED (api->image_place_link (engine, id, file, &link_id, &error) == GLIMS_STATUS_OK && link_id,
+        "installed modern engine creates a genuine monitored linked layer from the known PNG");
+  GimpLayer *link = GIMP_LAYER (gimp_item_get_by_id (engine->gimp, link_id));
+  GimpLayer *vector = GIMP_LAYER (gimp_item_get_by_id (engine->gimp, vector_id));
+  GlimsItemID ids[] = { item_id (text), link_id, vector_id };
+  NEED (api->layer_mask_add (engine, id, link_id, GLIMS_MASK_WHITE, FALSE, &mask_id, &error) == GLIMS_STATUS_OK,
+        "linked source owns a real mask before regeneration geometry changes");
+  GList *selected = g_list_append (NULL, vector);
+  selected = g_list_append (selected, text); selected = g_list_append (selected, link);
+  gimp_image_set_selected_layers (image, selected); g_list_free (selected);
+  GList *actual = gimp_image_get_selected_layers (image); /* Borrowed. */
+  CHECK (actual && actual->data == vector && actual->next && actual->next->data == text &&
+         actual->next->next && actual->next->next->data == link && !actual->next->next->next,
+         "modern native selected order intentionally differs from captured text/link/vector order");
+  CHECK (modern_source_states (engine, id, ids, FALSE, FALSE, FALSE) &&
+         modern_source_identity (link, vector, path, file) && modern_pixels_match (link, link_v1, FALSE),
+         "actual native source predicates, retained path/file and independent linked PNG pixels are established");
+  topology = modern_topology (image);
+  text_source = modern_pixels (text, FALSE); vector_source = modern_pixels (vector, FALSE);
+  NEED (text_source && vector_source && topology && gimp_item_get_width (GIMP_ITEM (vector)) > 0 &&
+        gimp_item_get_height (GIMP_ITEM (vector)) > 0 &&
+        glims_layer_rasterize (image, text, &error) == GLIMS_STATUS_OK &&
+        glims_layer_rasterize (image, link, &error) == GLIMS_STATUS_OK &&
+        glims_layer_rasterize (image, vector, &error) == GLIMS_STATUS_OK,
+        "all three real structured sources rasterize while their original native pixel oracles remain independent");
+  damage (text, 31); damage (link, 79); damage (vector, 113); gimp_image_flush (image); gimp_image_clean_all (image);
+  damaged_text = modern_pixels (text, TRUE); damaged_link = modern_pixels (link, TRUE);
+  damaged_vector = modern_pixels (vector, TRUE);
+  CHECK (modern_source_states (engine, id, ids, TRUE, TRUE, TRUE) &&
+         !modern_pixels_match (text, text_source, FALSE) && !modern_pixels_match (link, link_v1, FALSE) &&
+         !modern_pixels_match (vector, vector_source, FALSE),
+         "every mixed member has demonstrably damaged pixels and an actual retained raster source");
+  GlimsUndoInfo before = {0}, after = {0};
+  NEED (api->image_undo_info (engine, id, &before) == GLIMS_STATUS_OK &&
+        api->image_restore_layer_sources (engine, id, ids, 3, &error) == GLIMS_STATUS_OK,
+        "one captured text/link/vector batch restores all modern sources");
+  CHECK (modern_source_states (engine, id, ids, FALSE, FALSE, FALSE) && modern_source_identity (link, vector, path, file),
+         "modern Restore returns real editability and retains the same path/file association");
+  CHECK (modern_pixels_match (text, text_source, FALSE) && modern_pixels_match (vector, vector_source, FALSE) &&
+         modern_pixels_match (link, link_v1, FALSE) && modern_topology_matches (image, topology),
+         "mixed Restore regenerates each independent native source and preserves IDs/tree/mask attachment/ordered selection");
+  CHECK (api->image_undo_info (engine, id, &after) == GLIMS_STATUS_OK && after.undo_count == before.undo_count + 1 &&
+         engine->busy == 0 && !gimp_image_get_undo_group_count (image),
+         "mixed modern regeneration shares exactly one balanced Undo and releases busy");
+  noop = fingerprint (engine, id, TRUE, TRUE);
+  CHECK (api->image_restore_layer_sources (engine, id, ids, 3, &error) == GLIMS_STATUS_OK &&
+         matches (engine, id, noop, TRUE, TRUE), "all three editable modern sources form a full native history/dirty no-op");
+  NEED (api->image_undo (engine, id) == GLIMS_STATUS_OK, "modern mixed Restore undoes once");
+  CHECK (modern_pixels_match (text, damaged_text, TRUE) && modern_pixels_match (link, damaged_link, TRUE) &&
+         modern_pixels_match (vector, damaged_vector, TRUE) && modern_topology_matches (image, topology) &&
+         modern_source_states (engine, id, ids, TRUE, TRUE, TRUE) &&
+         !gimp_image_is_dirty (image), "one modern Undo returns exact damaged buffers, source states, selection and clean mark");
+  NEED (api->image_redo (engine, id) == GLIMS_STATUS_OK, "modern mixed Restore redoes once");
+  CHECK (modern_pixels_match (text, text_source, FALSE) && modern_pixels_match (vector, vector_source, FALSE) &&
+         modern_pixels_match (link, link_v1, FALSE) && modern_source_states (engine, id, ids, FALSE, FALSE, FALSE),
+         "unchanged-file Redo regenerates all three independently established native sources");
+  NEED (api->image_undo (engine, id) == GLIMS_STATUS_OK &&
+        glims_layer_restore_source (image, text, &error) == GLIMS_STATUS_OK,
+        "modern mixed-no-op fixture leaves text editable and link/vector damaged");
+  mixed_text = modern_pixels (text, TRUE); mixed_link = modern_pixels (link, TRUE);
+  mixed_vector = modern_pixels (vector, TRUE);
+  NEED (api->image_undo_info (engine, id, &before) == GLIMS_STATUS_OK &&
+        api->image_restore_layer_sources (engine, id, ids, 3, &error) == GLIMS_STATUS_OK,
+        "editable text plus two rasterized modern members restores as one batch");
+  CHECK (api->image_undo_info (engine, id, &after) == GLIMS_STATUS_OK && after.undo_count == before.undo_count + 1 &&
+         modern_pixels_match (text, text_source, FALSE) && modern_pixels_match (vector, vector_source, FALSE) &&
+         modern_pixels_match (link, link_v1, FALSE), "mixed modern no-op/changed members add only one Undo and regenerate exact source pixels");
+  NEED (api->image_undo (engine, id) == GLIMS_STATUS_OK, "mixed modern no-op batch undoes once");
+  CHECK (modern_pixels_match (text, mixed_text, TRUE) && modern_pixels_match (link, mixed_link, TRUE) &&
+         modern_pixels_match (vector, mixed_vector, TRUE) && modern_topology_matches (image, topology) &&
+         modern_source_states (engine, id, ids, FALSE, TRUE, TRUE),
+         "mixed modern Undo changes only members that needed restoration");
+
+  /* The link is frozen here. Rewrite the actual file to new dimensions and
+   * independently open it, rather than assuming retained bytes are current. */
+  changed_text = modern_pixels (text, TRUE); changed_link = modern_pixels (link, TRUE);
+  changed_vector = modern_pixels (vector, TRUE);
+  NEED (modern_export_reference (engine, file, 11, 7, 83, &scratch, &reference, &link_v2, &error) == GLIMS_STATUS_OK,
+        "a changed-size second PNG is independently loaded while the target link stays rasterized");
+  NEED (api->image_undo_info (engine, id, &before) == GLIMS_STATUS_OK &&
+        api->image_restore_layer_sources (engine, id, ids, 3, &error) == GLIMS_STATUS_OK,
+        "captured mixed Restore reloads the current changed external file");
+  GimpLayerMask *mask = gimp_layer_get_mask (link);
+  CHECK (modern_pixels_match (link, link_v2, FALSE) && !modern_pixels_match (link, link_v1, FALSE) &&
+         gimp_item_get_width (GIMP_ITEM (link)) == 11 && gimp_item_get_height (GIMP_ITEM (link)) == 7,
+         "restored link uses current second-file bytes and dimensions, not the retained first-file snapshot");
+  CHECK (mask && item_id (mask) == mask_id && gimp_item_get_width (GIMP_ITEM (mask)) == 11 &&
+         gimp_item_get_height (GIMP_ITEM (mask)) == 7 && modern_topology_matches (image, topology),
+         "native link regeneration preserves attachment/ordered topology while legitimately resizing its mask");
+  CHECK (api->image_undo_info (engine, id, &after) == GLIMS_STATUS_OK && after.undo_count == before.undo_count + 1 &&
+         modern_source_states (engine, id, ids, FALSE, FALSE, FALSE) && modern_source_identity (link, vector, path, file),
+         "changed-file regeneration remains one Undo with actual retained editable source identities");
+  NEED (api->image_undo (engine, id) == GLIMS_STATUS_OK, "changed-file modern Restore undoes once");
+  CHECK (modern_pixels_match (text, changed_text, TRUE) && modern_pixels_match (link, changed_link, TRUE) &&
+         modern_pixels_match (vector, changed_vector, TRUE) && modern_source_states (engine, id, ids, FALSE, TRUE, TRUE),
+         "changed-file Undo restores exact previous damaged buffers/offsets and mixed raster states");
+  NEED (modern_export_reference (engine, file, 13, 8, 151, &scratch, &reference, &link_v3, &error) == GLIMS_STATUS_OK,
+        "the frozen link's file changes a third time before Redo");
+  NEED (api->image_redo (engine, id) == GLIMS_STATUS_OK, "changed-file modern Restore redoes once");
+  CHECK (modern_pixels_match (link, link_v3, FALSE) && !modern_pixels_match (link, link_v2, FALSE) &&
+         gimp_item_get_width (GIMP_ITEM (link)) == 13 && gimp_item_get_height (GIMP_ITEM (link)) == 8 &&
+         modern_source_states (engine, id, ids, FALSE, FALSE, FALSE) && modern_topology_matches (image, topology),
+         "native Redo reloads the third current file rather than promising immutable second-file content");
+
+  /* A real paint stroke stops monitoring without setting the generic
+   * rasterizable flag. This exercises the existing alternate link Restore
+   * path without manufacturing private flags or incomplete GObjects. */
+  gint link_x, link_y;
+  gimp_item_get_offset (GIMP_ITEM (link), &link_x, &link_y);
+  GlimsBrushSettings brush = { .struct_size = sizeof brush, .tool = GLIMS_PAINT_PENCIL,
+    .size = 3, .opacity = 1, .hardness = -1, .rate = -1, .flow = -1, .exposure = -1 };
+  GlimsStrokePoint first = { link_x + 2, link_y + 2, 1, 0, 0, 0 };
+  GlimsStrokePoint last = { link_x + 9, link_y + 4, 1, 0, 0, 16 };
+  NEED (api->stroke_begin (engine, id, link_id, &brush, &first, &stroke, &error) == GLIMS_STATUS_OK &&
+        api->stroke_continue (engine, stroke, &last, 1) == GLIMS_STATUS_OK &&
+        api->stroke_end (engine, stroke) == GLIMS_STATUS_OK,
+        "a real native stroke edits the monitored link without explicit rasterization"); stroke = 0;
+  painted_link = modern_pixels (link, TRUE);
+  g_free (topology); topology = modern_topology (image);
+  CHECK (modern_source_states (engine, id, ids, FALSE, TRUE, FALSE) &&
+         !gimp_rasterizable_is_rasterized (GIMP_RASTERIZABLE (link)) &&
+         !modern_pixels_match (link, link_v3, FALSE),
+         "painted link genuinely stops monitoring with generic flag false and changed native pixels");
+  NEED (api->image_undo_info (engine, id, &before) == GLIMS_STATUS_OK &&
+        api->image_restore_layer_sources (engine, id, ids, 3, &error) == GLIMS_STATUS_OK,
+        "mixed batch restores the actual unmonitored flag-false link path");
+  CHECK (modern_pixels_match (link, link_v3, FALSE) && modern_source_states (engine, id, ids, FALSE, FALSE, FALSE) &&
+         modern_topology_matches (image, topology) && api->image_undo_info (engine, id, &after) == GLIMS_STATUS_OK &&
+         after.undo_count == before.undo_count + 1,
+         "painted-link Restore regenerates current file in one Undo while preserving post-stroke ordered topology");
+  NEED (api->image_undo (engine, id) == GLIMS_STATUS_OK, "painted-link mixed Restore undoes once");
+  CHECK (modern_pixels_match (link, painted_link, TRUE) && modern_source_states (engine, id, ids, FALSE, TRUE, FALSE) &&
+         !gimp_rasterizable_is_rasterized (GIMP_RASTERIZABLE (link)),
+         "painted-link Undo returns exact painted pixels and actual unmonitored flag-false state");
+  NEED (api->image_redo (engine, id) == GLIMS_STATUS_OK, "painted-link mixed Restore redoes once");
+  CHECK (modern_pixels_match (link, link_v3, FALSE) && modern_source_states (engine, id, ids, FALSE, FALSE, FALSE) &&
+         modern_source_identity (link, vector, path, file) && modern_topology_matches (image, topology),
+         "painted-link Redo restores the current source and its real monitored/editable state");
+
+  NEED (glims_layer_rasterize (image, link, &error) == GLIMS_STATUS_OK, "missing-file fixture freezes the genuine retained link");
+  damage (link, 197); gimp_image_flush (image);
+  missing_damage = modern_pixels (link, TRUE);
+  NEED (remove (file) == 0, "the retained link file is genuinely removed before Restore");
+  NEED (api->image_undo_info (engine, id, &before) == GLIMS_STATUS_OK &&
+        api->image_restore_layer_sources (engine, id, ids, 3, &error) == GLIMS_STATUS_OK,
+        "missing-file mixed Restore uses native retained-buffer semantics without a fabricated file preflight");
+  CHECK (modern_pixels_match (link, link_v3, FALSE) && modern_source_states (engine, id, ids, FALSE, FALSE, FALSE) &&
+         modern_source_identity (link, vector, path, file) && modern_topology_matches (image, topology) &&
+         api->image_undo_info (engine, id, &after) == GLIMS_STATUS_OK && after.undo_count == before.undo_count + 1,
+         "missing-file Restore remonitors the retained source, restores last loaded native bytes and adds one Undo");
+  NEED (api->image_undo (engine, id) == GLIMS_STATUS_OK, "missing-file mixed Restore undoes once");
+  CHECK (modern_pixels_match (link, missing_damage, TRUE) && modern_pixels_match (text, text_source, FALSE) &&
+         modern_pixels_match (vector, vector_source, FALSE) && modern_topology_matches (image, topology) &&
+         modern_source_states (engine, id, ids, FALSE, TRUE, FALSE),
+         "missing-file Undo restores exact damaged link pixels and its retained raster state");
+  NEED (api->image_redo (engine, id) == GLIMS_STATUS_OK, "missing-file mixed Restore redoes once");
+  CHECK (modern_pixels_match (link, link_v3, FALSE) && modern_source_states (engine, id, ids, FALSE, FALSE, FALSE),
+         "missing-file Redo uses the surviving native source buffer again");
+  g_free (noop); noop = fingerprint (engine, id, TRUE, TRUE);
+  CHECK (api->image_restore_layer_sources (engine, id, ids, 3, &error) == GLIMS_STATUS_OK &&
+         matches (engine, id, noop, TRUE, TRUE), "already-editable modern no-op does not stat a missing file or change history/dirty state");
+cleanup:
+  if (error) fprintf (stderr, "modern source fixture: %s\n", error);
+  clear_error (&error);
+  if (stroke) api->stroke_end (engine, stroke);
+  if (reference) api->image_close (engine, reference);
+  if (scratch) api->image_close (engine, scratch);
+  if (id) CHECK (api->image_close (engine, id) == GLIMS_STATUS_OK, "modern fixture closes its monitored/Undo-owned image");
+  remove (file); g_free (file);
+  g_free (link_v1); g_free (link_v2); g_free (link_v3); g_free (text_source); g_free (vector_source);
+  g_free (topology); g_free (damaged_text); g_free (damaged_link); g_free (damaged_vector); g_free (noop);
+  g_free (mixed_text); g_free (mixed_link); g_free (mixed_vector);
+  g_free (changed_text); g_free (changed_link); g_free (changed_vector); g_free (missing_damage);
+  g_free (painted_link);
+  return GLIMS_STATUS_OK;
+}
+#else
+static GlimsStatus
+legacy_source_capabilities (GlimsEngine *engine, gpointer work)
+{
+  (void) work;
+  if (engine->busy) return GLIMS_STATUS_BUSY;
+  GlimsImageID id = 0; GlimsItemID path = 0, vector = 0, link = 0; char *error = NULL;
+  gchar *before = NULL;
+  GlimsSubpath subpath = { .count = 4, .closed = TRUE };
+  GlimsPathPoint points[] = {
+    { {3, 3}, {3, 3}, {3, 3} }, { {12, 3}, {12, 3}, {12, 3} },
+    { {12, 10}, {12, 10}, {12, 10} }, { {3, 10}, {3, 10}, {3, 10} }
+  };
+  NEED (api->image_new (engine, 32, 24, &id, &error) == GLIMS_STATUS_OK &&
+        api->path_set (engine, id, 0, "Legacy path", &subpath, 1, points, 4, &path, &error) == GLIMS_STATUS_OK,
+        "legacy source capability fixture has a real path and image");
+  before = fingerprint (engine, id, TRUE, TRUE);
+  CHECK (api->path_to_vector_layer (engine, id, path, "Vector", &vector, &error) == GLIMS_STATUS_UNSUPPORTED &&
+         vector == 0 && matches (engine, id, before, TRUE, TRUE),
+         "legacy engine explicitly refuses vector capability without changing native image/history"); clear_error (&error);
+  CHECK (api->image_place_link (engine, id, "not-loaded-on-legacy.png", &link, &error) == GLIMS_STATUS_UNSUPPORTED &&
+         link == 0 && matches (engine, id, before, TRUE, TRUE),
+         "legacy engine explicitly refuses linked capability rather than treating modern scenarios as passed");
+cleanup:
+  clear_error (&error); g_free (before); if (id) api->image_close (engine, id);
+  return GLIMS_STATUS_OK;
+}
+#endif
+
+static void
+modern_cases (GlimsEngine *engine, const gchar *work)
+{
+  gint major = 0, minor = 0;
+  gboolean parsed = sscanf (api->engine_version (engine), "%d.%d", &major, &minor) == 2;
+#if GIMP_CHECK_VERSION (3, 2, 0)
+  CHECK (parsed && (major > 3 || (major == 3 && minor >= 2)), "modern fixture headers match the loaded engine capability family");
+  if (!parsed || (major == 3 && minor < 2) || major < 3) return;
+#else
+  CHECK (parsed && major == 3 && minor < 2, "legacy fixture headers match the loaded engine capability family");
+  if (!parsed || major != 3 || minor >= 2) return;
+#endif
+  GlimsStatus status;
+  gint64 end = g_get_monotonic_time () + 10 * G_TIME_SPAN_SECOND;
+  do
+    {
+#if GIMP_CHECK_VERSION (3, 2, 0)
+      status = glims_engine_call (engine, modern_sources_worker, (gpointer) work);
+#else
+      status = glims_engine_call (engine, legacy_source_capabilities, (gpointer) work);
+#endif
+      if (status == GLIMS_STATUS_BUSY) g_usleep (10000);
+    }
+  while (status == GLIMS_STATUS_BUSY && g_get_monotonic_time () < end);
+  CHECK (status == GLIMS_STATUS_OK, "additional source fixtures execute on the engine worker after any prior loader drains");
 }
