@@ -3841,3 +3841,13 @@ general1,917/1,917/1,703/1,917, actual UI39 each and 1,015 private leased
 units pass. No new facade slot or upstream patch. See
 `negative-darkroom-source.md` for independent native references, ownership,
 Undo and remaining review/AX/final-release gates.
+
+### Channel main-menu parity (2026-11-10 candidate)
+
+Eight existing channel actions now have main-menu routes with shared cached
+single-saved-channel and pending-work gates; context clicked-row behavior is
+unchanged. Old Main reproduced two missing-submenu failures. Corrected actual
+all-four UI56 and 1,016 private leased units pass. A preserved initial fixture
+failure led to exact native multi-setter history comparison and a latched wait,
+not changed production semantics. See `channel-menu-parity.md` for scope and
+remaining independent review, CI and combined-release gates.

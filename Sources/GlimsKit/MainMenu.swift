@@ -117,6 +117,12 @@ enum MainMenu {
             item("Flatten Image", #selector(DocumentWindowController.flattenImage(_:))),
             item("New Snapshot", #selector(DocumentWindowController.newSnapshot(_:))),
             .separator(),
+            submenu("Channels", [
+                item("Channel Attributes…", #selector(DocumentWindowController.channelAttributesMenu(_:))),
+                item("Duplicate Channel", #selector(DocumentWindowController.duplicateChannelMenu(_:))),
+                item("Delete Channel", #selector(DocumentWindowController.deleteChannelMenu(_:))),
+                item("Return to Layers", #selector(DocumentWindowController.returnToLayersMenu(_:))),
+            ]),
             item("Guides…", #selector(DocumentWindowController.showGuides(_:))),
             item("Configure Grid…", #selector(DocumentWindowController.configureGrid(_:))),
             item("Metadata…", #selector(DocumentWindowController.showMetadata(_:))),
@@ -193,6 +199,28 @@ enum MainMenu {
         ])
         let inverse = item("Inverse", #selector(DocumentWindowController.selectInverse(_:)), "i")
         inverse.keyEquivalentModifierMask = [.command, .shift]
+        let fromChannel = submenu("From Channel", [
+            {
+                let op = item("Replace Selection", #selector(DocumentWindowController.channelToSelectionMenu(_:)))
+                op.tag = Int(EngineSession.SelectOperation.replace.rawValue)
+                return op
+            }(),
+            {
+                let op = item("Add to Selection", #selector(DocumentWindowController.channelToSelectionMenu(_:)))
+                op.tag = Int(EngineSession.SelectOperation.add.rawValue)
+                return op
+            }(),
+            {
+                let op = item("Subtract from Selection", #selector(DocumentWindowController.channelToSelectionMenu(_:)))
+                op.tag = Int(EngineSession.SelectOperation.subtract.rawValue)
+                return op
+            }(),
+            {
+                let op = item("Intersect with Selection", #selector(DocumentWindowController.channelToSelectionMenu(_:)))
+                op.tag = Int(EngineSession.SelectOperation.intersect.rawValue)
+                return op
+            }(),
+        ])
         add(menu, "Select", [
             item("All", #selector(DocumentWindowController.selectAll(_:)), "a"),
             item("Deselect", #selector(DocumentWindowController.selectNone(_:)), "d"),
@@ -206,6 +234,7 @@ enum MainMenu {
             .separator(),
             item("From Layer Transparency", #selector(DocumentWindowController.selectFromAlpha(_:))),
             item("From Path", #selector(DocumentWindowController.selectFromPath(_:))),
+            fromChannel,
             .separator(),
             // No shortcuts: Float works on whatever selection and target
             // are current, so the items stay plain menu entries.
