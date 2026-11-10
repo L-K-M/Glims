@@ -117,6 +117,9 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
     private var shownBrushPresentationRevision = 0
     private var shownGradient: GradientPresentation?
     private var observer: UUID?
+    /// Existing controls follow external changes without replacing the active
+    /// field editor. Resource presentation rebuilds wait for editing to end.
+    private var brushRefreshers: [(EngineSession.Brush) -> Void] = []
     /// The front document, retained (weakly) as the resource choosers'
     /// session and loading source.
     private weak var document: ImageDocument?
@@ -147,21 +150,48 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         stack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
         view = stack
         rebuild()
-        observer = ToolState.shared.observe { [weak self] in
-            guard let self else { return }
-            let state = ToolState.shared
-            let fontsArrived = self.shownTool == .text && self.shownFontCount != state.fontNames.count
-            let brushChanged = state.current.paintTool != nil
-                && (self.shownBrushResource != state.brush(for: state.current).resource
-                    || self.shownBrushPresentationRevision != BrushChooser.shared.presentationRevision
-                    || self.shownMissingBrush != BrushChooser.shared.missingIdentity(
-                        for: state.current, choice: state.brush(for: state.current).resource))
-            let gradientChanged = state.current == .gradient
-                && self.shownGradient != Self.gradientPresentation(of: state)
-            guard self.shownTool != state.current || fontsArrived || brushChanged || gradientChanged else { return }
-            self.rebuild()
+        observer = ToolState.shared.observe { [weak self] in self?.stateChanged() }
+        NotificationCenter.default.addObserver(self, selector: #selector(fieldEditingEnded(_:)),
+                                               name: NSControl.textDidEndEditingNotification, object: nil)
+    }
+
+    private func stateChanged() {
+        let state = ToolState.shared
+        let fontsArrived = shownTool == .text && shownFontCount != state.fontNames.count
+        let brushChanged = state.current.paintTool != nil
+            && (shownBrushResource != state.brush(for: state.current).resource
+                || shownBrushPresentationRevision != BrushChooser.shared.presentationRevision
+                || shownMissingBrush != BrushChooser.shared.missingIdentity(
+                    for: state.current, choice: state.brush(for: state.current).resource))
+        let gradientChanged = state.current == .gradient
+            && shownGradient != Self.gradientPresentation(of: state)
+        if shownTool != state.current || fontsArrived || gradientChanged
+            || (brushChanged && !Self.hasFieldEditor(in: view)) {
+            rebuild()
+        } else if state.current.paintTool != nil {
+            let brush = state.brush(for: state.current)
+            brushRefreshers.forEach { $0(brush) }
         }
     }
+
+    private static func hasFieldEditor(in root: NSView) -> Bool {
+        if let field = root as? NSTextField, field.currentEditor() != nil { return true }
+        return root.subviews.contains { hasFieldEditor(in: $0) }
+    }
+
+    private static func numberField(in root: NSView) -> NSTextField? {
+        if let field = root as? NSTextField, field.isEditable { return field }
+        return root.subviews.lazy.compactMap { numberField(in: $0) }.first
+    }
+
+    @objc private func fieldEditingEnded(_ notification: Notification) {
+        guard let field = notification.object as? NSTextField, field.isDescendant(of: view) else { return }
+        // Rigi owns the parser and commit delegate. Reconcile after it has
+        // processed the end event, including invalid drafts that emit no edit.
+        DispatchQueue.main.async { [weak self] in self?.stateChanged() }
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
 
     func retarget(to target: ImageDocument?) {
         // A different (or closing) document invalidates an open chooser, so
@@ -187,6 +217,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         shownMissingBrush = BrushChooser.shared.missingIdentity(for: tool, choice: shownBrushResource)
         shownBrushPresentationRevision = BrushChooser.shared.presentationRevision
         shownGradient = tool == .gradient ? Self.gradientPresentation(of: state) : nil
+        brushRefreshers.removeAll()
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         actionBindings.removeAll()
 
@@ -282,38 +313,47 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
 
     private func addPaintRows(for tool: ToolID, brush: EngineSession.Brush) {
         stack.addArrangedSubview(brushRow(for: tool, brush: brush))
-        stack.addArrangedSubview(slider("Size", 1...500, brush.size, unit: "px", fractionDigits: 1) { value in
+        stack.addArrangedSubview(slider("Size", 1...PaintToolPresetLimits.maxSize, brush.size,
+                                       unit: "px", fractionDigits: 1, readBrush: { $0.size }) { value in
             ToolState.shared.update(tool) { $0.size = value }
         })
-        stack.addArrangedSubview(slider("Opacity", 0...100, brush.opacity * 100, unit: "%") { value in
+        stack.addArrangedSubview(slider("Opacity", 0...100, brush.opacity * 100, unit: "%",
+                                       readBrush: { $0.opacity * 100 }) { value in
             ToolState.shared.update(tool) { $0.opacity = value / 100 }
         })
-        stack.addArrangedSubview(slider("Hardness", 0...100, (brush.hardness ?? 0.5) * 100, unit: "%") { value in
+        stack.addArrangedSubview(slider("Hardness", 0...100, (brush.hardness ?? 0.5) * 100, unit: "%",
+                                       readBrush: { ($0.hardness ?? 0.5) * 100 }) { value in
             ToolState.shared.update(tool) { $0.hardness = value / 100 }
         })
 
         switch tool {
         case .airbrush, .smudge:
-            stack.addArrangedSubview(slider("Rate", 0...100, brush.rate ?? 50, unit: "") { value in
+            stack.addArrangedSubview(slider("Rate", 0...100, brush.rate ?? 50, unit: "",
+                                           readBrush: { $0.rate ?? 50 }) { value in
                 ToolState.shared.update(tool) { $0.rate = value }
             })
-            stack.addArrangedSubview(slider("Flow", 0...100, brush.flow ?? (tool == .airbrush ? 10 : 0), unit: "") { value in
+            stack.addArrangedSubview(slider("Flow", 0...100, brush.flow ?? (tool == .airbrush ? 10 : 0), unit: "",
+                                           readBrush: { $0.flow ?? (tool == .airbrush ? 10 : 0) }) { value in
                 ToolState.shared.update(tool) { $0.flow = value }
             })
         case .blur, .sharpen:
-            stack.addArrangedSubview(slider("Rate", 0...100, brush.rate ?? 50, unit: "") { value in
+            stack.addArrangedSubview(slider("Rate", 0...100, brush.rate ?? 50, unit: "",
+                                           readBrush: { $0.rate ?? 50 }) { value in
                 ToolState.shared.update(tool) { $0.rate = value }
             })
         case .dodge, .burn:
-            stack.addArrangedSubview(slider("Exposure", 0...100, brush.exposure ?? 50, unit: "") { value in
+            stack.addArrangedSubview(slider("Exposure", 0...100, brush.exposure ?? 50, unit: "",
+                                           readBrush: { $0.exposure ?? 50 }) { value in
                 ToolState.shared.update(tool) { $0.exposure = value }
             })
             stack.addArrangedSubview(popUp("Range", ["Shadows", "Midtones", "Highlights"],
-                                           selected: [.shadows: 0, .midtones: 1, .highlights: 2][brush.tones] ?? 1) { index in
+                                           selected: [.shadows: 0, .midtones: 1, .highlights: 2][brush.tones] ?? 1,
+                                           readBrush: { [.shadows: 0, .midtones: 1, .highlights: 2][$0.tones] ?? 1 }) { index in
                 ToolState.shared.update(tool) { $0.tones = [.shadows, .midtones, .highlights][index] }
             })
         case .eraser:
-            stack.addArrangedSubview(checkbox("Anti-erase (restore)", brush.antiErase) { on in
+            stack.addArrangedSubview(checkbox("Anti-erase (restore)", brush.antiErase,
+                                             readBrush: { $0.antiErase }) { on in
                 ToolState.shared.update(tool) { $0.antiErase = on }
             })
         case .clone, .heal:
@@ -322,7 +362,8 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
             break
         }
 
-        stack.addArrangedSubview(checkbox("Pen pressure sets size", brush.pressureSize) { on in
+        stack.addArrangedSubview(checkbox("Pen pressure sets size", brush.pressureSize,
+                                         readBrush: { $0.pressureSize }) { on in
             ToolState.shared.update(tool) { $0.pressureSize = on }
         })
         stack.addArrangedSubview(presetsRow())
@@ -512,33 +553,72 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
     /// Pixel measures take tenths, as the engine does; percentages, rates
     /// and thresholds stay whole.
     private func slider(_ label: String, _ range: ClosedRange<Double>, _ value: Double, unit: String,
-                        fractionDigits: Int = 0, _ onChange: @escaping (Double) -> Void) -> NSView {
+                        fractionDigits: Int = 0, readBrush: ((EngineSession.Brush) -> Double)? = nil,
+                        _ onChange: @escaping (Double) -> Void) -> NSView {
         let slider = ClassicValueSlider(title: label, range: range, value: value, unit: unit,
                                         fractionDigits: fractionDigits)
         slider.titleWidth = Self.labelWidth
         slider.onChange = { value, _ in onChange(value) }
+        if let readBrush {
+            // Capture Rigi's actual committed formatting, including its
+            // precision. A focused but untouched field can follow the model;
+            // partial, invalid and numerically equivalent drafts stay intact.
+            var committedValue = slider.value
+            var committedText = Self.numberField(in: slider)?.stringValue ?? ""
+            brushRefreshers.append { [weak slider] brush in
+                guard let slider, let field = Self.numberField(in: slider) else { return }
+                if slider.value != committedValue {
+                    // Rigi committed a local edit before invoking onChange.
+                    committedValue = slider.value
+                    committedText = field.stringValue
+                }
+                let editor = field.currentEditor()
+                guard editor == nil || editor?.string == committedText else { return }
+                let selection = editor?.selectedRange
+                let selectedAll = selection == NSRange(location: 0, length: (editor?.string as NSString?)?.length ?? 0)
+                slider.value = readBrush(brush)
+                committedValue = slider.value
+                committedText = field.stringValue
+                if let editor, let selection {
+                    editor.string = committedText
+                    let count = (committedText as NSString).length
+                    let start = min(selection.location, count)
+                    editor.selectedRange = selectedAll ? NSRange(location: 0, length: count)
+                        : NSRange(location: start, length: min(selection.length, count - start))
+                }
+            }
+        }
         return slider
     }
 
-    private func checkbox(_ title: String, _ on: Bool, _ onChange: @escaping (Bool) -> Void) -> NSView {
+    private func checkbox(_ title: String, _ on: Bool, readBrush: ((EngineSession.Brush) -> Bool)? = nil,
+                          _ onChange: @escaping (Bool) -> Void) -> NSView {
         let box = NSButton(checkboxWithTitle: title, target: nil, action: nil)
         box.controlSize = .small
         box.font = .systemFont(ofSize: 11)
         box.state = on ? .on : .off
         let binding = ActionBinding(control: box) { control in onChange((control as! NSButton).state == .on) }
         actionBindings.append(binding)
+        if let readBrush {
+            brushRefreshers.append { [weak box] brush in box?.state = readBrush(brush) ? .on : .off }
+        }
         return box
     }
 
     /// `items` must be distinct: NSPopUpButton drops repeated titles,
     /// which would shift every index after them.
-    private func popUp(_ label: String, _ items: [String], selected: Int, _ onChange: @escaping (Int) -> Void) -> NSView {
+    private func popUp(_ label: String, _ items: [String], selected: Int,
+                       readBrush: ((EngineSession.Brush) -> Int)? = nil,
+                       _ onChange: @escaping (Int) -> Void) -> NSView {
         assert(Set(items).count == items.count, "repeated pop-up titles in \(label)")
         let menu = NSPopUpButton(frame: .zero, pullsDown: false)
         menu.controlSize = .small
         menu.font = .systemFont(ofSize: 11)
         menu.addItems(withTitles: items)
         menu.selectItem(at: selected)
+        if let readBrush {
+            brushRefreshers.append { [weak menu] brush in menu?.selectItem(at: readBrush(brush)) }
+        }
         return row(label, menu) { control in onChange((control as! NSPopUpButton).indexOfSelectedItem) }
     }
 

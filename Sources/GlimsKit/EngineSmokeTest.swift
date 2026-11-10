@@ -260,6 +260,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (tool-presets)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brush-palette-sync" {
+                try exerciseBrushPaletteSync(session, documents: documents)
+                print(failures == 0 ? "PASSED (brush-palette-sync)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-multiselection-controls" {
                 try exerciseLayerMultiselectionControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (layer-multiselection-controls)" : "FAILED: \(failures) failure(s)")
@@ -491,6 +496,7 @@ enum EngineSmokeTest {
             try exercisePixelRulers(session, work: work, documents: documents)
             try exerciseGuideDragging(session, work: work, documents: documents)
             try exerciseToolPresetControls(session, work: work, documents: documents)
+            try exerciseBrushPaletteSync(session, documents: documents)
             try exerciseMenuShortcuts(session, work: work, documents: documents)
             try exerciseFloatingControls(session, work: work, documents: documents)
             try exerciseMetadataControls(session, work: work, documents: documents)
