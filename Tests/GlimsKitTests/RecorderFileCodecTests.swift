@@ -160,6 +160,29 @@ final class RecorderFileCodecTests: XCTestCase {
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(success(replace(smallGrow, "0.1", "0"))))))
     }
 
+    func testNegativeCropSizePreservesPayloadAndCoreGraphicsExtents() throws {
+        let crop = CGRect(x: 9, y: 11, width: -3, height: -5)
+        XCTAssertEqual(crop.size.width, -3)
+        XCTAssertEqual(crop.size.height, -5)
+        XCTAssertEqual([crop.minX, crop.minY, crop.width, crop.height], [6, 6, 3, 5])
+        let literal = document(success(#"{"tag":"crop","rect":{"x":9,"y":11,"width":-3,"height":-5}}"#))
+        let expected = try RecorderFileCodec.decode(bytes(literal))
+        guard case .success(.crop(let rectangle), .none) = expected.records[0].outcome else {
+            return XCTFail("Negative crop payload was lost")
+        }
+        XCTAssertEqual(rectangle, .init(x: 9, y: 11, width: -3, height: -5))
+
+        var log = RecorderLog<SemanticImageCommand>()
+        try log.startRecording()
+        let token = try log.reserve()
+        try log.resolve(token, with: .success(.crop(crop)))
+        try log.stopRecording()
+        let snapshot = try RecorderFileCodec.snapshot(log, recordingID: recordingID, name: "Named", origin: origin,
+                                                       descriptions: .init(), bindings: [:])
+        XCTAssertEqual(snapshot, expected)
+        XCTAssertEqual(try RecorderFileCodec.decode(RecorderFileCodec.encode(snapshot)), expected)
+    }
+
     func testEveryResourcePolicyLimitIsEnforced() throws {
         rejects(String(repeating: " ", count: RecorderFileLimits.bytes + 1), reason: "16 MiB")
         XCTAssertNoThrow(try RecorderFileCodec.decode(bytes(document("", name: String(repeating: "é", count: RecorderFileLimits.stringBytes / 2)))))
