@@ -232,6 +232,9 @@ final class ImageDocument {
     var onProjectionChange: ((CGRect) -> Void)?
     /// Called with engine errors that the interface should show.
     var onError: ((String) -> Void)?
+    /// A refused pixel edit asks its owning window for explicit rasterization.
+    /// The gesture is consumed; it is never replayed after the sheet closes.
+    var onPaintNeedsRasterize: ((_ layer: Int32, _ stateVersion: Int) -> Void)?
     /// Called after the selection changed.
     var onSelectionChange: (() -> Void)?
     /// Called after the image's size changed (crop, canvas size, undo).
@@ -892,10 +895,12 @@ final class ImageDocument {
             NSSound.beep()
             return
         }
+        guard let target = paintTarget, !refuseStructuredPaint(on: target) else { return }
         strokeIsActive = true
         enqueue(on: inputQueue, input: true) { [session, image] in
             do {
                 try self.requirePaintTarget()
+                try self.requireRasterizedPaintTarget(target)
                 self.currentStroke = try session.beginStroke(image: image, drawable: drawable, brush: brush, first: point)
             } catch {
                 self.currentStroke = nil
@@ -1978,6 +1983,7 @@ final class ImageDocument {
     /// the main actor exactly once; failures are also reported through
     /// `onError`. A closing or busy document refuses without queueing.
     func rasterizeLayerSource(_ layer: Int32,
+                              paintStateVersion: Int? = nil,
                               completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
         guard !isClosing else {
             onError?(DocumentError.closed.localizedDescription)
@@ -1993,6 +1999,15 @@ final class ImageDocument {
                 LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Rasterize Layer")!)))
         }
         endPendingUserEdits()
+        // Ending a field/text edit can itself enqueue a mutation. Paint
+        // consent must still describe exactly the idle state it displayed.
+        if let version = paintStateVersion,
+           stateVersion != version || pendingWork != 0 || isClosing
+            || selectedLayerIDs != [layer] || activeDrawable != layer
+            || isMaskTargetActive || isChannelTargetActive {
+            onError?(DocumentError.targetChanged.localizedDescription)
+            return completion(.failure(DocumentError.targetChanged))
+        }
         enqueue(on: inputQueue, input: true) { [session, image] in
             let result = Result<Void, Error> { _ = try session.layerCommand(.rasterize, image: image, layer: layer) }
             DispatchQueue.main.async {
@@ -4090,9 +4105,55 @@ final class ImageDocument {
             onError?(DocumentError.targetChanged.localizedDescription)
             return false
         }
+        guard let target = paintTarget, !refuseStructuredPaint(on: target) else { return false }
         return run { session, image in
             try self.requirePaintTarget()
+            try self.requireRasterizedPaintTarget(target)
             try work(session, image)
+        }
+    }
+
+    /// Masks and channels have their own pixels. Only painting the layer
+    /// itself can replace its structured source with raster content.
+    private func refuseStructuredPaint(on target: PaintTarget) -> Bool {
+        guard case .layer(let layer) = target else { return false }
+        guard let source = layerSources[layer] else {
+            onError?("The layer's source state is unavailable. Select the layer again before painting.")
+            return true
+        }
+        guard Self.paintNeedsRasterize(source) else { return false }
+        guard pendingWork == 0 else {
+            onError?(DocumentError.busy.localizedDescription)
+            return true
+        }
+        guard source.hasSource else {
+            onError?("The layer's editable source is unavailable. Select another paint target.")
+            return true
+        }
+        if layerLocks[layer]?.effective.isDisjoint(with: [.pixels, .position]) == false {
+            onError?("Unlock the layer's pixels and position before rasterizing it for painting.")
+            return true
+        }
+        if let request = onPaintNeedsRasterize {
+            request(layer, stateVersion)
+        } else {
+            onError?("Rasterize the layer before painting (Layer > Rasterize Layer).")
+        }
+        return true
+    }
+
+    private nonisolated static func paintNeedsRasterize(_ source: EngineSession.LayerSource) -> Bool {
+        !source.isRasterized && (source.kind == .text || source.kind == .link || source.kind == .vector)
+    }
+
+    /// Recheck behind accepted input: an Undo queued before this edit can
+    /// restore editable source after the main-thread cache admitted it.
+    private nonisolated func requireRasterizedPaintTarget(_ target: PaintTarget) throws {
+        guard case .layer(let layer) = target else { return }
+        let source = try session.layerSource(layer, image: image)
+        guard !Self.paintNeedsRasterize(source) else {
+            throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                message: "Rasterize the layer before painting (Layer > Rasterize Layer).")
         }
     }
 
