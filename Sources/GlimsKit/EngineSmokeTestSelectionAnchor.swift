@@ -41,11 +41,13 @@ private final class SelectionAnchorQueueHold: @unchecked Sendable {
 
 @MainActor
 extension EngineSmokeTest {
-    static func exerciseSelectionAnchor(_ session: EngineSession, documents: DocumentList) throws {
+    static func exerciseSelectionAnchor(_ session: EngineSession, documents: DocumentList,
+                                        lassoOnly: Bool = false) throws {
         var count = 0
         func expect(_ value: Bool, _ message: String) {
             count += 1
-            check(value, "Selection anchor: \(message)")
+            let label = lassoOnly ? "Lasso anchor" : "Selection anchor"
+            check(value, "\(label): \(message)")
         }
         func fixtureError(_ message: String) -> NSError {
             NSError(domain: "SelectionAnchorFixture", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
@@ -88,7 +90,8 @@ extension EngineSmokeTest {
             documents.items.removeAll { doc in owners.contains { $0.imageDocument === doc } }
             ToolState.shared.selectOptions = priorOptions
             ToolState.shared.select(priorTool)
-            print("     selection-anchor checks: \(count)")
+            let smokeCase = lassoOnly ? "lasso-anchor" : "selection-anchor"
+            print("     \(smokeCase) checks: \(count)")
         }
 
         func hold(_ owner: DocumentWindowController) throws -> SelectionAnchorQueueHold {
@@ -280,6 +283,194 @@ extension EngineSmokeTest {
         let movedPoint = CGPoint(x: 33, y: 30)
         expect(NSApp.isRunning, "actual AppKit host is running")
         let anchoredReference = try anchorReference()
+
+        if lassoOnly {
+            ToolState.shared.select(.lasso)
+
+            for stationaryLong in [false, true] {
+                let point = stationaryLong ? hole : miss
+                let active = try scene(stationaryLong ? "Lasso long stationary" : "Lasso short click")
+                try front(active.owner)
+                let before = try snapshot(active.native.image)
+                if stationaryLong {
+                    let pending = try hold(active.owner)
+                    try pointer(active, .leftMouseDown, point)
+                    expect(active.owner.imageDocument.pendingWork > 0, "long stationary press admits the counted opacity read")
+                    try pointer(active, .leftMouseUp, point, elapsed: long)
+                    expect(try snapshot(active.native.image) == before,
+                           "release held before the native reply leaves the original float intact")
+                    pending.release.signal()
+                } else {
+                    try pointer(active, .leftMouseDown, point)
+                    try drain(active.owner)
+                    expect(try snapshot(active.native.image) == before, "short-click press changes no native state")
+                    try pointer(active, .leftMouseUp, point, elapsed: short)
+                }
+                try drain(active.owner)
+                let after = try snapshot(active.native.image)
+                expect(try matches(active.native, anchoredReference),
+                       stationaryLong ? "long stationary release at a float hole matches direct Anchor"
+                                      : "short click in empty image space matches direct Anchor")
+                expect(!after.content.floating.isActive && after.content.selected == [active.native.target]
+                        && after.undo.undoCount == before.undo.undoCount + 1,
+                       "the original float resolves into its attachment in one Undo")
+                active.owner.imageDocument.undo()
+                try drain(active.owner)
+                expect(try snapshot(active.native.image).content == before.content, "Undo restores the exact float, attachment and mask")
+                active.owner.imageDocument.redo()
+                try drain(active.owner)
+                expect(try snapshot(active.native.image).content == after.content, "Redo restores the same native result")
+                try retire(active)
+            }
+
+            let line = CGPoint(x: 88, y: 60)
+            let tiny = CGPoint(x: 80.125, y: 60.125)
+            let motions: [(String, CGPoint?, CGPoint)] = [
+                ("one-axis line", line, line),
+                ("tiny release", nil, tiny),
+                ("delivered stationary drag", miss, miss),
+                ("drag return with too few polygon points", line, miss)
+            ]
+            for (name, drag, end) in motions {
+                let moving = try scene("Lasso \(name)")
+                try front(moving.owner)
+                let before = try snapshot(moving.native.image)
+                let deliveredStart = try pointer(moving, .leftMouseDown, miss)
+                if let drag { try pointer(moving, .leftMouseDragged, drag, elapsed: short / 2) }
+                let deliveredEnd = try pointer(moving, .leftMouseUp, end, elapsed: short)
+                try drain(moving.owner)
+                if end == tiny { expect(deliveredEnd != deliveredStart, "tiny release has a distinct image coordinate") }
+                expect(try snapshot(moving.native.image) == before,
+                       "\(name) preserves float, selection and exact history")
+                try retire(moving)
+            }
+
+            let triangle = [CGPoint(x: 50, y: 38), CGPoint(x: 66, y: 39), CGPoint(x: 61, y: 51)]
+            let add = [opaque, CGPoint(x: 45, y: 25), CGPoint(x: 56, y: 42)]
+            let subtract = [opaque, CGPoint(x: 39, y: 26), CGPoint(x: 33, y: 39)]
+            func dragPolygon(_ owner: Scene, _ points: [CGPoint], press: NSEvent.ModifierFlags = []) throws {
+                try pointer(owner, .leftMouseDown, points[0], flags: press)
+                for point in points.dropFirst() {
+                    try pointer(owner, .leftMouseDragged, point, elapsed: short / 2)
+                }
+            }
+            let cancelled = try scene("Lasso Escape after a real polygon")
+            try front(cancelled.owner)
+            let beforeCancel = try snapshot(cancelled.native.image)
+            try dragPolygon(cancelled, triangle)
+            try escape(cancelled)
+            try pointer(cancelled, .leftMouseUp, triangle[0], elapsed: short)
+            try drain(cancelled.owner)
+            expect(try snapshot(cancelled.native.image) == beforeCancel, "Escape retires a valid polygon and ignores the late release")
+            try retire(cancelled)
+
+            let polygons: [([CGPoint], NSEvent.ModifierFlags, EngineSession.SelectOperation)] = [
+                (triangle, [], .replace), (add, .shift, .add), (subtract, .option, .subtract)
+            ]
+            for (points, flags, operation) in polygons {
+                let polygon = try scene("Lasso captured \(operation)")
+                try front(polygon.owner)
+                let before = try snapshot(polygon.native.image)
+                try dragPolygon(polygon, points, press: flags)
+                // The release returns to the start after real polygon motion.
+                try pointer(polygon, .leftMouseUp, points[0], elapsed: short)
+                try drain(polygon.owner)
+                let reference = try seed()
+                var nativeOptions = options
+                nativeOptions.operation = operation
+                try session.select(.polygon(points), image: reference.image, options: nativeOptions)
+                let after = try snapshot(polygon.native.image)
+                expect(try matches(polygon.native, reference) && after.content.floating == before.content.floating
+                        && after.content.coverage != before.content.coverage && after.undo.undoCount == before.undo.undoCount + 1,
+                       "returning polygon uses captured \(operation) and matches the literal native mask")
+                try retire(polygon)
+            }
+
+            for flags in [NSEvent.ModifierFlags.shift, .option] {
+                let modified = try scene("Lasso modified opaque click")
+                try front(modified.owner)
+                try click(modified, opaque, press: flags)
+                expect(try matches(modified.native, anchoredReference), "physical Shift or Option suppresses opaque handoff and permits stationary Anchor")
+                try retire(modified)
+            }
+
+            var subtractMode = options
+            subtractMode.operation = .subtract
+            ToolState.shared.selectOptions = subtractMode
+            let movingFloat = try scene("Lasso opaque move with empty mask", emptyMask: true)
+            try front(movingFloat.owner)
+            let beforeMove = try snapshot(movingFloat.native.image)
+            try click(movingFloat, opaque)
+            expect(try snapshot(movingFloat.native.image) == beforeMove, "opaque still click is a zero-displacement Move")
+            try pointer(movingFloat, .leftMouseDown, opaque)
+            try pointer(movingFloat, .leftMouseDragged, movedPoint, elapsed: short / 2)
+            expect(try snapshot(movingFloat.native.image) == beforeMove, "opaque movement preview is view-only")
+            try pointer(movingFloat, .leftMouseUp, movedPoint, elapsed: short)
+            try drain(movingFloat.owner)
+            let moved = try snapshot(movingFloat.native.image)
+            let movedReference = try seed(emptyMask: true)
+            try session.moveLayer(movedReference.float, image: movedReference.image, by: CGSize(width: 7, height: 4))
+            expect(try matches(movingFloat.native, movedReference) && moved.content.floating == beforeMove.content.floating
+                    && moved.content.coverage == beforeMove.content.coverage && moved.undo.undoCount == beforeMove.undo.undoCount + 1,
+                   "opaque float movement matches native translation with one Undo despite an empty Subtract mask")
+            movingFloat.owner.imageDocument.undo()
+            try drain(movingFloat.owner)
+            expect(try snapshot(movingFloat.native.image).content == beforeMove.content, "movement Undo restores the exact original float")
+            movingFloat.owner.imageDocument.redo()
+            try drain(movingFloat.owner)
+            expect(try snapshot(movingFloat.native.image).content == moved.content, "movement Redo restores the exact translated result")
+            try retire(movingFloat)
+            ToolState.shared.selectOptions = options
+
+            for stationary in [true, false] {
+                // Keep the direct native intervention out of this owner's event relay.
+                let refused = try scene("Lasso fresh Subtract mask", observeEvents: false)
+                try front(refused.owner)
+                try pointer(refused, .leftMouseDown, opaque, flags: .option)
+                try drain(refused.owner)
+                try session.select(.none, image: refused.native.image)
+                expect(try session.selectionBounds(image: refused.native.image) == nil
+                        && refused.owner.imageDocument.selectionBounds != nil,
+                       "the original mask became empty after press while the owner cache still reports coverage")
+                let empty = try snapshot(refused.native.image)
+                if !stationary {
+                    for point in subtract.dropFirst() {
+                        try pointer(refused, .leftMouseDragged, point, elapsed: short / 2)
+                    }
+                }
+                try pointer(refused, .leftMouseUp, opaque, elapsed: stationary ? long : short)
+                try drain(refused.owner)
+                expect(try snapshot(refused.native.image) == empty,
+                       stationary ? "long no-motion Subtract refuses a fresh empty mask after Option release"
+                                  : "a normal Subtract polygon refuses the same fresh empty mask")
+                try retire(refused)
+            }
+
+            var intersect = options
+            intersect.operation = .intersect
+            ToolState.shared.selectOptions = intersect
+            let emptyIntersect = try scene("Lasso empty Intersect", emptyMask: true)
+            try front(emptyIntersect.owner)
+            let beforeIntersect = try snapshot(emptyIntersect.native.image)
+            try click(emptyIntersect, hole)
+            expect(try snapshot(emptyIntersect.native.image) == beforeIntersect, "configured Intersect refuses a short Anchor on an empty mask")
+            try retire(emptyIntersect)
+            ToolState.shared.selectOptions = options
+
+            let ordinary = try scene("Ordinary Lasso without float", floating: false)
+            try front(ordinary.owner)
+            let plain = try seed(floating: false)
+            try session.select(.none, image: plain.image)
+            try click(ordinary, miss)
+            expect(try matches(ordinary.native, plain), "ordinary Lasso click keeps the existing no-float deselect behavior")
+            try dragPolygon(ordinary, triangle)
+            try pointer(ordinary, .leftMouseUp, triangle[0], elapsed: short)
+            try drain(ordinary.owner)
+            try session.select(.polygon(triangle), image: plain.image, options: options)
+            expect(try matches(ordinary.native, plain), "ordinary no-float Lasso still matches the native polygon")
+            try retire(ordinary)
+            return
+        }
 
         for tool in [ToolID.rectangleSelect, .ellipseSelect] {
             ToolState.shared.select(tool)
