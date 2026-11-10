@@ -3189,6 +3189,24 @@ typedef struct GlimsEngineAPI {
                                       const uint8_t *proof_icc, size_t proof_icc_length,
                                       const GlimsProofSettings *settings,
                                       uint8_t *pixels, size_t stride, char **error);
+  /* Slot165: rasterize the captured ordered vector of 1..256 distinct positive
+   * layer ids in this image. Every member must be attached, retain a text,
+   * link or vector source, and have effective PIXELS/POSITION locks clear.
+   * Rasterized structured members with retained sources are eligible no-ops;
+   * ordinary pixel layers, groups, masks, channels and missing sources refuse.
+   * Requires write readiness, no floating selection, enabled/unfrozen Undo
+   * and no open Undo group. The entire vector is validated and strongly held
+   * before mutation; ordinary refusals change nothing. Changed members share
+   * one native "Rasterize Layers" Undo group. An all-no-op request leaves
+   * history/dirty state unchanged. Pixels, source data, identities, topology,
+   * offsets, masks/effects and ordered selection stay with their layers.
+   * Unexpected Core failure may leave a changed prefix in that one Undo;
+   * failure reports this explicitly and refreshes authoritative image state,
+   * rather than promising rollback. The vector is borrowed only for this
+   * synchronous call and never retained. */
+  GlimsStatus (*image_rasterize_layers) (GlimsEngine *engine, GlimsImageID image,
+                                        const GlimsItemID *layers, int32_t count,
+                                        char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
