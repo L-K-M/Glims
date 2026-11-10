@@ -2003,6 +2003,7 @@ final class ImageDocument {
         // consent must still describe exactly the idle state it displayed.
         if let version = paintStateVersion,
            stateVersion != version || pendingWork != 0 || isClosing
+            || !acceptsEdits || targetCommandIsPending || strokeIsActive
             || selectedLayerIDs != [layer] || activeDrawable != layer
             || isMaskTargetActive || isChannelTargetActive {
             onError?(DocumentError.targetChanged.localizedDescription)

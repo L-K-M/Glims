@@ -34,6 +34,7 @@ extension EngineSmokeTest {
         var paintErrors: [String] = []
         let priorError = document.onError
         document.onError = { message in priorError?(message); paintErrors.append(message) }
+        defer { document.onError = priorError }
         func settle() {
             document.inputQueue.sync {}
             other.inputQueue.sync {}
@@ -52,11 +53,13 @@ extension EngineSmokeTest {
                 var stopped = false
                 item.canvas.stopRendering { stopped = true }
                 wait { stopped }
+                check(stopped, "paint-consent teardown drains the window's renderer")
             }
             for item in [document, other] where !item.isClosing {
                 var closed = false
                 item.closeImageWhenDrained { closed = true }
                 wait { closed }
+                check(closed, "paint-consent teardown closes the native document")
             }
             documents.items.removeAll { $0 === document || $0 === other }
         }
@@ -206,7 +209,7 @@ extension EngineSmokeTest {
         let release = DispatchSemaphore(value: 0)
         var released = false
         defer { if !released { release.signal() } }
-        document.inputQueue.async { held.signal(); release.wait() }
+        document.inputQueue.async { held.signal(); _ = release.wait(timeout: .now() + 30) }
         guard held.wait(timeout: .now() + 5) == .success else {
             return check(false, "the input queue is held before queuing the concurrent edit")
         }
@@ -241,7 +244,10 @@ extension EngineSmokeTest {
                 try session.editMetadata(image, tag: "Exif.Image.Artist", .set, values: ["Field commit fixture"])
             }
         }
-        button(commitSheet, "Rasterize")?.performClick(nil)
+        guard let commitApply = button(commitSheet, "Rasterize") else {
+            return check(false, "the field-commit sheet exposes its Rasterize action")
+        }
+        commitApply.performClick(nil)
         wait { commitQueued }
         document.onWillChangeLayers = priorEndEdits
         settle()
@@ -250,6 +256,30 @@ extension EngineSmokeTest {
                 && session.layerSource(text, image: imageA) == editable
                 && session.copyPixels(imageA, merged: true).pixels == beforePixels,
               "a real field-commit edit invalidates paint consent before rasterization is enqueued")
+
+        guard let busySheet = consent(), let busyApply = button(busySheet, "Rasterize") else {
+            return check(false, "consent opens before an exclusive activity starts during field commit")
+        }
+        let busyUndo = try session.undoInfo(imageA)
+        let busyRelease = DispatchSemaphore(value: 0)
+        var activityStarted = false, activityFinished = false
+        document.onWillChangeLayers = {
+            priorEndEdits?()
+            activityStarted = EngineActivity.shared.perform(label: "Consent field activity", work: {
+                _ = busyRelease.wait(timeout: .now() + 15)
+            }, completion: { activityFinished = true })
+        }
+        busyApply.performClick(nil)
+        wait { activityStarted && EngineActivity.shared.isBusy }
+        document.onWillChangeLayers = priorEndEdits
+        let queuedDuringActivity = document.pendingWork
+        busyRelease.signal()
+        wait { activityFinished }
+        settle()
+        check(try activityStarted && queuedDuringActivity == 0
+                && session.layerSource(text, image: imageA) == editable
+                && session.undoInfo(imageA) == busyUndo,
+              "an exclusive activity started by field commit refuses consent before any rasterization queues")
 
         guard let pixel = document.layers.first(where: { $0.id != text && $0.kind == .pixel })?.id,
               let retargetSheet = consent() else { return check(false, "consent opens for a target change") }
@@ -309,7 +339,7 @@ extension EngineSmokeTest {
         let fenceHeld = DispatchSemaphore(value: 0), fenceRelease = DispatchSemaphore(value: 0)
         var fenceReleased = false
         defer { if !fenceReleased { fenceRelease.signal() } }
-        document.inputQueue.async { fenceHeld.signal(); fenceRelease.wait() }
+        document.inputQueue.async { fenceHeld.signal(); _ = fenceRelease.wait(timeout: .now() + 30) }
         guard fenceHeld.wait(timeout: .now() + 5) == .success else { return check(false, "the stale-cache fixture holds input") }
         _ = document.run { session, image in try session.undo(image) }
         document.beginStroke(at: .init(x: row.bounds.midX, y: row.bounds.midY, pressure: 1), brush: brush)
@@ -331,8 +361,9 @@ extension EngineSmokeTest {
         let maskBytes = try drawableBytes(mask)
         let maskUndo = try session.undoInfo(imageA).undoCount
         dab()
+        let paintedMaskBytes = try drawableBytes(mask)
         check(try document.isMaskTargetActive && controller.window?.attachedSheet == nil && maskBytes != nil
-                && drawableBytes(mask) != maskBytes && drawableBytes(text) == textBytes
+                && paintedMaskBytes != nil && paintedMaskBytes != maskBytes && drawableBytes(text) == textBytes
                 && session.layerSource(text, image: imageA) == editable
                 && session.textLayer(image: imageA, layer: text).text == beforeText
                 && session.undoInfo(imageA).undoCount == maskUndo + 1,
@@ -344,8 +375,10 @@ extension EngineSmokeTest {
         let channelBytes = try drawableBytes(channel)
         let channelUndo = try session.undoInfo(imageA).undoCount
         dab()
+        let paintedChannelBytes = try drawableBytes(channel)
         check(try document.activeChannel == channel && controller.window?.attachedSheet == nil && channelBytes != nil
-                && drawableBytes(channel) != channelBytes && session.layerSource(text, image: imageA) == editable
+                && paintedChannelBytes != nil && paintedChannelBytes != channelBytes
+                && session.layerSource(text, image: imageA) == editable
                 && session.undoInfo(imageA).undoCount == channelUndo + 1,
               "saved channel painting bypasses layer consent and keeps the editable text source")
         let pixelUndo = try session.undoInfo(imageB).undoCount
