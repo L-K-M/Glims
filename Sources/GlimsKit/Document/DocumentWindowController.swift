@@ -1475,6 +1475,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         imageDocument.selectFromPath(path)
     }
 
+    @objc func newPath(_ sender: Any?) {
+        imageDocument.addPath(VectorPath())
+    }
+
+    @objc func deletePath(_ sender: Any?) {
+        guard let path = imageDocument.activePath else { return }
+        imageDocument.deletePath(path)
+    }
+
     /// Edit ▸ Stroke Path: draws the active path on the active layer in the
     /// foreground color at the Path tool's stroke width.
     @objc func strokePath(_ sender: Any?) {
@@ -1780,6 +1789,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(cut(_:)), #selector(copy(_:)), #selector(copyMerged(_:)),
              #selector(paste(_:)), #selector(pasteInPlace(_:)), #selector(deleteBackward(_:)):
             return canPerformClipboardCommand(menuItem.action)
+        case #selector(newPath(_:)):
+            return !editingBlocked && !previewBusy
+        case #selector(deletePath(_:)):
+            return imageDocument.activePath != nil && !editingBlocked && !previewBusy
         case #selector(selectFromPath(_:)), #selector(strokePath(_:)), #selector(fillPath(_:)):
             return imageDocument.activePath != nil && !editingBlocked
         case #selector(fill(_:)):
