@@ -1,5 +1,38 @@
 import AppKit
 
+/// The focused fixture needs launched AppKit and actual window-server events.
+/// It deliberately installs no AppController and starts only its smoke engine.
+@MainActor
+private final class LayerRasterizeBatchSmokeHost: NSObject, NSApplicationDelegate {
+    private(set) var result: Int32 = 1
+    private(set) var completed = false
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // A run-loop selector lets finishLaunching return before the checks.
+        // Do not hold a main-dispatch block across their nested completion waits.
+        perform(#selector(runChecks(_:)), with: nil, afterDelay: 0)
+    }
+
+    @objc private func runChecks(_ unused: Any?) {
+        defer {
+            completed = true
+            NSApp.stop(nil)
+            // Wake nextEvent after stop during nested run-loop servicing.
+            if let wake = NSEvent.otherEvent(with: .applicationDefined, location: .zero,
+                                            modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                            context: nil, subtype: 0, data1: 0, data2: 0) {
+                NSApp.postEvent(wake, atStart: true)
+            }
+        }
+        guard NSApp.isRunning else {
+            print("FAIL batch Rasterize AppKit event loop did not start")
+            return
+        }
+        print("batch Rasterize host finishedLaunching=true running=true")
+        result = EngineSmokeTest.run()
+    }
+}
+
 /// Read-only session oracles for refusal checks. These never change a target
 /// or finish pending input, so mask/channel admission cannot be hidden by the
 /// test's own snapshot. The selected IDs and history are native, not caches.
@@ -50,6 +83,32 @@ private struct LayerRasterizeBatchPixels: Equatable {
 
 @MainActor
 extension EngineSmokeTest {
+    static func runHostedLayerRasterizeBatch() -> Int32 {
+        let app = NSApplication.shared
+        guard !app.isRunning, app.delegate == nil,
+              !NSRunningApplication.current.isFinishedLaunching else {
+            print("FAIL batch Rasterize requires its own unlaunched AppKit host")
+            return 1
+        }
+        let previousPolicy = app.activationPolicy()
+        guard app.setActivationPolicy(.regular) else {
+            print("FAIL batch Rasterize AppKit host could not become regular")
+            return 1
+        }
+        let host = LayerRasterizeBatchSmokeHost()
+        app.delegate = host
+        defer {
+            app.delegate = nil
+            _ = app.setActivationPolicy(previousPolicy)
+        }
+        app.run() // Calls finishLaunching, then dispatches AppKit events.
+        guard host.completed else {
+            print("FAIL batch Rasterize AppKit host stopped before its checks completed")
+            return 1
+        }
+        return host.result
+    }
+
     /// Focused source-only fixture at authoring time. Production preceded this
     /// fixture; an independent old-menu RED has not yet been witnessed here.
     static func exerciseLayerRasterizeBatch(_ session: EngineSession, documents: DocumentList) throws {
@@ -57,11 +116,25 @@ extension EngineSmokeTest {
         var controllers: [DocumentWindowController] = []
         var unmanagedImages: [Int32] = []
         var gates: [DispatchSemaphore] = []
+        func pumpApplicationEvents() {
+            let end = Date().addingTimeInterval(0.01)
+            repeat {
+                // The synchronous fixture suspends NSApp.run's outer dispatch.
+                // Deliver real events instead of synthesizing key/main callbacks.
+                while Date() < end,
+                      let event = NSApp.nextEvent(matching: .any, until: Date(),
+                                                 inMode: .default, dequeue: true) {
+                    NSApp.sendEvent(event)
+                }
+                NSApp.updateWindows()
+                _ = RunLoop.main.run(mode: .default, before: end)
+            } while Date() < end
+        }
         func waitFor(_ message: String, _ condition: () -> Bool) -> Bool {
             let end = Date().addingTimeInterval(15)
             while Date() < end {
                 if condition() { return true }
-                spin(0.01)
+                pumpApplicationEvents()
             }
             print("focus active=\(NSApp.isActive) main=\(NSApp.mainWindow?.windowNumber ?? -1) key=\(NSApp.keyWindow?.windowNumber ?? -1)")
             for controller in controllers {
@@ -220,8 +293,8 @@ extension EngineSmokeTest {
         check(controller.validateMenuItem(item) && item.title == "Rasterize Layers…",
               "the actual Layer menu admits plural Rasterize from cached retained-source state")
         func openSheet() -> NSWindow? {
-            // Engine smoke uses an accessory application without interactive
-            // startup's activation. Establish actual AppKit focus explicitly.
+            // The focused smoke host has completed the normal AppKit launch.
+            // Activation and key/main ownership remain observable preconditions.
             NSApp.activate(ignoringOtherApps: true)
             controller.window?.makeMain()
             controller.window?.makeKeyAndOrderFront(nil)

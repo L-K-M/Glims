@@ -41,6 +41,9 @@ public enum GlimsApplication {
             workspace.window?.orderFront(nil)
             return SmokeTest.run(workspace)
         case .engineSmokeTest:
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-rasterize-batch" {
+                return EngineSmokeTest.runHostedLayerRasterizeBatch()
+            }
             return EngineSmokeTest.run()
         case .interactive, .printVersion:
             let controller = AppController()
