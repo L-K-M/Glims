@@ -18,6 +18,7 @@
 #include "layer-delete.h"
 #include "layer-fit.h"
 #include "curves-config.h"
+#include "filter-histogram.h"
 #include "filter-input.h"
 
 #include <dlfcn.h>
@@ -2913,6 +2914,40 @@ static GlimsStatus api_filter_curves_set_trc (GlimsEngine *e, GlimsFilterID filt
   return glims_engine_call (e, filter_curves_set_trc_on_engine, &a);
 }
 
+typedef struct {
+  GlimsFilterID filter;
+  GlimsHistogramSnapshot *histogram;
+  GlimsLevelsSettings *levels;
+  char **error;
+} GlimsHistogramArgs;
+static GlimsStatus filter_histogram_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsHistogramArgs *a = data;
+  return glims_filter_input_histogram (e, a->filter, a->histogram, a->error);
+}
+static GlimsStatus filter_levels_auto_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsHistogramArgs *a = data;
+  return glims_filter_levels_auto (e, a->filter, a->levels, a->error);
+}
+static GlimsStatus api_filter_input_histogram (GlimsEngine *e, GlimsFilterID filter,
+                                              GlimsHistogramSnapshot *out, char **error)
+{
+  glims_histogram_snapshot_clear (out);
+  GlimsHistogramArgs a = { .filter = filter, .histogram = out, .error = error };
+  return glims_engine_call (e, filter_histogram_on_engine, &a);
+}
+static GlimsStatus api_filter_levels_auto (GlimsEngine *e, GlimsFilterID filter,
+                                          GlimsLevelsSettings *out, char **error)
+{
+  if (out && out->struct_size >= sizeof *out) {
+    out->trc = out->clamp_input = out->clamp_output = 0;
+    out->value = out->red = out->green = out->blue = out->alpha = (GlimsLevelsChannel) {0};
+  }
+  GlimsHistogramArgs a = { .filter = filter, .levels = out, .error = error };
+  return glims_engine_call (e, filter_levels_auto_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -3079,6 +3114,9 @@ static const GlimsEngineAPI api_v1 = {
   .free_curves_snapshot = glims_curves_snapshot_free,
   .filter_curves_edit = api_filter_curves_edit,
   .filter_curves_set_trc = api_filter_curves_set_trc,
+  .filter_input_histogram = api_filter_input_histogram,
+  .free_histogram_snapshot = glims_histogram_snapshot_free,
+  .filter_levels_auto = api_filter_levels_auto,
 };
 
 __attribute__ ((visibility ("default")))

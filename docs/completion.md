@@ -74,8 +74,9 @@ bundle with the native and Swift build outputs inaccessible.
       Undo/Redo and XCF (reviewed integration candidates #129/#131/#133/#134).
 - [x] Dedicated Curves graph, point/sample controls and immutable channel edits,
       with all-four-engine native and actual-form checks (current candidate).
-- [ ] Remaining custom filter forms, histogram/automatic Levels controls
-      and other auxiliary inputs.
+- [x] Captured input histograms for Levels/Curves and native automatic Levels,
+      with transfer-curve fencing and acknowledged-field admission (candidate).
+- [ ] Remaining custom filter forms and other auxiliary inputs.
 - [ ] Preserve nondefault native-only effect blend/composite settings when
       opening XCF; upstream currently normalizes them to AUTO.
 - [x] Path fill, vector layers and vector style controls.

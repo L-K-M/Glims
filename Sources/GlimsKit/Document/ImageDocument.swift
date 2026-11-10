@@ -3906,6 +3906,35 @@ final class ImageDocument {
         }
     }
 
+    func loadInputHistogram(_ filter: Int32,
+                            completion: @escaping @MainActor (Result<EngineSession.InputHistogram, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        pendingWork += 1
+        inputQueue.async { [session] in
+            let result = Result { try session.inputHistogram(filter) }
+            DispatchQueue.main.async {
+                EngineActivity.shared.whenIdle {
+                    defer { self.jobDidFinish(input: false) }
+                    completion(self.isClosing ? .failure(DocumentError.closed) : result)
+                }
+            }
+        }
+    }
+
+    func autoLevels(_ filter: Int32,
+                    completion: @escaping @MainActor (Result<EngineSession.LevelsSettings, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if refuseWhileEditingUnavailable(forPreviewWork: true) { return completion(.failure(DocumentError.busy)) }
+        pendingWork += 1
+        inputQueue.async { [session] in
+            let result = Result { try session.autoLevels(filter) }
+            DispatchQueue.main.async {
+                completion(result)
+                self.jobDidFinish(input: false)
+            }
+        }
+    }
+
     func setCurves(_ filter: Int32, patch: CurvesDraft.Patch,
                    completion: @escaping @MainActor (Result<EngineSession.CurvesSettings, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }

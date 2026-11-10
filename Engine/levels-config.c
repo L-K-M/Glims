@@ -5,6 +5,7 @@
 #include <math.h>
 #include <string.h>
 
+#include "core/gimphistogram.h"
 #include "operations/operations-types.h"
 #include "operations/gimplevelsconfig.h"
 #include "operations/gimpoperationlevels.h"
@@ -297,5 +298,54 @@ glims_levels_config_set (GeglNode *node, const GlimsLevelsSettings *settings,
   status = install_config (point, copy, error);
   g_object_unref (copy);
   if (status == GLIMS_STATUS_OK) *changed = TRUE;
+  return status;
+}
+
+GlimsStatus
+glims_levels_config_auto (GeglNode *node, GimpHistogram *histogram,
+                          gboolean is_color, GlimsLevelsSettings *out,
+                          gboolean *changed, char **error)
+{
+  GimpOperationPointFilter *point;
+  GimpLevelsConfig *copy, *source;
+  GlimsLevelsSettings current = { .struct_size = sizeof current };
+  GlimsLevelsSettings result = { .struct_size = sizeof result };
+  GlimsStatus status;
+  if (changed) *changed = FALSE;
+  if (!out || out->struct_size < sizeof *out)
+    return levels_error (GLIMS_STATUS_INVALID_ARGUMENT, error, "A full Levels output is required.");
+  clear_fields (out);
+  if (!changed || !GIMP_IS_HISTOGRAM (histogram))
+    return levels_error (GLIMS_STATUS_INVALID_ARGUMENT, error, "A native histogram and change output are required.");
+  status = checked_point (node, FALSE, &point, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  source = GIMP_LEVELS_CONFIG (point->config);
+  status = read_config (source, &current, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  copy = gimp_config_duplicate (GIMP_CONFIG (source));
+  if (!copy)
+    return levels_error (GLIMS_STATUS_FAILED, error, "The Levels configuration could not be copied.");
+  if (copy == source || G_OBJECT_TYPE (copy) != GIMP_TYPE_LEVELS_CONFIG) {
+    g_object_unref (copy);
+    return levels_error (GLIMS_STATUS_FAILED, error, "The private Levels configuration is invalid.");
+  }
+  gimp_levels_config_stretch (copy, histogram, is_color);
+  status = read_config (copy, &result, error);
+  if (status != GLIMS_STATUS_OK) goto done;
+  if (copy->channel != source->channel || result.trc != current.trc ||
+      result.clamp_input != current.clamp_input || result.clamp_output != current.clamp_output ||
+      !equal_channel (&result.alpha, &current.alpha)) {
+    status = levels_error (GLIMS_STATUS_FAILED, error, "Automatic Levels did not preserve the untouched settings.");
+    goto done;
+  }
+  if (!equal_settings (&current, &result)) {
+    status = install_config (point, copy, error);
+    if (status != GLIMS_STATUS_OK) goto done;
+    *changed = TRUE;
+  }
+  result.struct_size = out->struct_size;
+  *out = result;
+done:
+  g_object_unref (copy);
   return status;
 }

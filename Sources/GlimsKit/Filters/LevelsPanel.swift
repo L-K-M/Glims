@@ -6,6 +6,15 @@ import AppKit
 @MainActor
 final class LevelsPanel: FilterPreviewPanel, NSTextFieldDelegate {
     typealias Settings = EngineSession.LevelsSettings
+    let histogramView = InputHistogramView()
+    let automaticButton = NSButton(title: "Auto Input Levels", target: nil, action: nil)
+    private let histogramLogButton = NSButton(checkboxWithTitle: "Log scale", target: nil, action: nil)
+    private var inputHistogram: FilterInputHistogram?
+    private var autoRequest: Int?
+    private var automaticSubmitted = false
+    private var preparingAutomatic = false
+    private var automaticPrerequisiteError: Error?
+    private var applyButton: NSButton?
     let channelPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let trcPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let clampInputButton = NSButton(checkboxWithTitle: "Clamp input", target: nil, action: nil)
@@ -28,6 +37,7 @@ final class LevelsPanel: FilterPreviewPanel, NSTextFieldDelegate {
     private var invalidFieldDuringCommit = false
     private var displayed: [String] = Array(repeating: "", count: 5)
     private let writeSettings: @MainActor (Int32, Settings, @escaping @MainActor (Result<Void, Error>) -> Void) -> Void
+    private let automaticWrite: @MainActor (Int32, @escaping @MainActor (Result<Settings, Error>) -> Void) -> Void
     private(set) var lastError: String?
 
     private enum ChannelOption: Int, CaseIterable {
@@ -43,7 +53,8 @@ final class LevelsPanel: FilterPreviewPanel, NSTextFieldDelegate {
         [lowInputField, highInputField, gammaField, lowOutputField, highOutputField]
     }
     init?(document: ImageDocument, filter: Int32, settings: Settings,
-          write: (@MainActor (Int32, Settings, @escaping @MainActor (Result<Void, Error>) -> Void) -> Void)? = nil) {
+          write: (@MainActor (Int32, Settings, @escaping @MainActor (Result<Void, Error>) -> Void) -> Void)? = nil,
+          automatic: (@MainActor (Int32, @escaping @MainActor (Result<Settings, Error>) -> Void) -> Void)? = nil) {
         guard settings.isValid else { return nil }
         draft = settings
         accepted = settings
@@ -51,17 +62,24 @@ final class LevelsPanel: FilterPreviewPanel, NSTextFieldDelegate {
             guard let document else { return reply(.failure(ImageDocument.DocumentError.closed)) }
             document.setLevels(filter, value, completion: reply)
         }
+        automaticWrite = automatic ?? { [weak document] filter, reply in
+            guard let document else { return reply(.failure(ImageDocument.DocumentError.closed)) }
+            document.autoLevels(filter, completion: reply)
+        }
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 470, height: 360),
                             styleMask: [.titled, .closable, .utilityWindow], backing: .buffered, defer: false)
         panel.title = "Levels"
         panel.isFloatingPanel = true
         super.init(document: document, panel: panel, filter: filter)
+        inputHistogram = FilterInputHistogram(document: document, filter: filter, view: histogramView,
+                                               isActive: { [weak self] in self?.filter == filter })
         formatter.numberStyle = .decimal
         formatter.usesGroupingSeparator = false
         formatter.minimumFractionDigits = 0
         formatter.maximumFractionDigits = 6
         buildContent(in: panel)
         display(settings)
+        inputHistogram?.refreshIfNeeded()
         panel.center()
     }
     @available(*, unavailable)
@@ -69,6 +87,7 @@ final class LevelsPanel: FilterPreviewPanel, NSTextFieldDelegate {
     override func showError(_ message: String) {
         guard filter != nil else { return }
         lastError = message.isEmpty ? nil : message
+        statusField.textColor = .systemRed
         statusField.stringValue = message
     }
     private func buildContent(in panel: NSPanel) {
@@ -80,6 +99,17 @@ final class LevelsPanel: FilterPreviewPanel, NSTextFieldDelegate {
         trcPopup.target = self
         trcPopup.action = #selector(optionsChanged(_:))
         trcPopup.setAccessibilityLabel("Levels transfer curve")
+        automaticButton.target = self
+        automaticButton.action = #selector(automaticLevels(_:))
+        histogramLogButton.target = self
+        histogramLogButton.action = #selector(histogramScaleChanged(_:))
+        let refresh = NSButton(title: "Refresh", target: self, action: #selector(refreshHistogram(_:)))
+        let histogramOptions = NSStackView(views: [NSTextField(labelWithString: "Input histogram"), histogramLogButton, refresh, automaticButton])
+        histogramOptions.spacing = 8
+        histogramView.translatesAutoresizingMaskIntoConstraints = false
+        histogramView.widthAnchor.constraint(equalToConstant: 440).isActive = true
+        histogramView.heightAnchor.constraint(equalToConstant: 130).isActive = true
+        histogramView.toolTip = "Before filters; weighted by the selection and source transparency."
         let selectors = NSStackView(views: [NSTextField(labelWithString: "Channel:"), channelPopup,
                                           NSTextField(labelWithString: "Curve:"), trcPopup])
         selectors.spacing = 8
@@ -111,9 +141,10 @@ final class LevelsPanel: FilterPreviewPanel, NSTextFieldDelegate {
         cancelButton.keyEquivalent = "\u{1b}"
         let applyButton = NSButton(title: "Apply", target: self, action: #selector(commit))
         applyButton.keyEquivalent = "\r"
+        self.applyButton = applyButton
         let buttons = NSStackView(views: [NSView(), cancelButton, applyButton])
         buttons.spacing = 8
-        let stack = NSStackView(views: [selectors, grid, clamps, statusField, buttons])
+        let stack = NSStackView(views: [selectors, histogramOptions, histogramView, grid, clamps, statusField, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
@@ -164,6 +195,9 @@ final class LevelsPanel: FilterPreviewPanel, NSTextFieldDelegate {
         trcPopup.selectItem(at: EngineSession.ColorTRC.conversionChoices.firstIndex(of: value.trc) ?? 0)
         clampInputButton.state = value.clampInput ? .on : .off
         clampOutputButton.state = value.clampOutput ? .on : .off
+        let channels: [EngineSession.HistogramChannel] = [.value, .red, .green, .blue, .alpha]
+        inputHistogram?.show(channel: channels[selectedChannel.rawValue], trc: value.trc)
+        updateParameterAvailability()
     }
     private func displayPreservingFieldDrafts(_ value: Settings) {
         FilterFieldDrafts.preserve(Array(zip(fields, displayed))) { display(value) }
@@ -187,7 +221,7 @@ final class LevelsPanel: FilterPreviewPanel, NSTextFieldDelegate {
     func controlTextDidEndEditing(_ notification: Notification) { _ = commitFields() }
     @discardableResult
     private func commitFields() -> Bool {
-        guard filter != nil else { return false }
+        guard filter != nil, autoRequest == nil else { return false }
         guard let n = parsedFields() else { rejectLocalInput(); return false }
         let value = replacingShownChannel(of: draft, with: .init(lowInput: n[0], highInput: n[1],
             gamma: n[2], lowOutput: n[3], highOutput: n[4]))
@@ -196,7 +230,7 @@ final class LevelsPanel: FilterPreviewPanel, NSTextFieldDelegate {
         return true
     }
     @objc func channelChanged(_ sender: NSPopUpButton) {
-        guard filter != nil, let channel = ChannelOption(rawValue: sender.indexOfSelectedItem),
+        guard filter != nil, autoRequest == nil, let channel = ChannelOption(rawValue: sender.indexOfSelectedItem),
               channel != selectedChannel else { return }
         invalidFieldDuringCommit = false
         window?.endEditing(for: nil)
@@ -208,7 +242,7 @@ final class LevelsPanel: FilterPreviewPanel, NSTextFieldDelegate {
         display(draft)
     }
     @objc func optionsChanged(_ sender: Any?) {
-        guard filter != nil else { return }
+        guard filter != nil, autoRequest == nil else { return }
         // Capture the requested controls before ending text editing: a
         // synchronous refusal may refresh them while fields are committed.
         let curveIndex = trcPopup.indexOfSelectedItem
@@ -238,7 +272,7 @@ final class LevelsPanel: FilterPreviewPanel, NSTextFieldDelegate {
     }
 
     private func submit(_ value: Settings) {
-        guard let filter, value.isValid else { return }
+        guard let filter, autoRequest == nil, value.isValid else { return }
         guard value != draft else { return }
         draft = value
         display(value)
@@ -251,6 +285,12 @@ final class LevelsPanel: FilterPreviewPanel, NSTextFieldDelegate {
         writeSettings(filter, value) { [weak self] result in
             guard let self, self.filter == filter else { return }
             self.pending.removeValue(forKey: request)
+            let waitingForAutomatic = self.autoRequest.map {
+                request < $0 && !self.automaticSubmitted
+            } ?? false
+            if self.preparingAutomatic || waitingForAutomatic, case .failure(let error) = result {
+                self.automaticPrerequisiteError = error
+            }
             // An older accepted write stays the engine's state when a newer
             // write fails. Record it before filtering replies for display.
             if case .success = result, request > self.acceptedGeneration {
@@ -272,6 +312,7 @@ final class LevelsPanel: FilterPreviewPanel, NSTextFieldDelegate {
             }
             if self.generation == request { self.latestReply = (request, result) }
             self.resolveLatestReply()
+            self.startAutomaticIfReady()
         }
     }
 
@@ -294,13 +335,91 @@ final class LevelsPanel: FilterPreviewPanel, NSTextFieldDelegate {
                 showError(error.localizedDescription)
             }
         }
+        inputHistogram?.refreshIfNeeded()
+    }
+
+    private func updateParameterAvailability() {
+        let enabled = autoRequest == nil
+        for field in fields { field.isEnabled = enabled }
+        for popup in [channelPopup, trcPopup] { popup.isEnabled = enabled }
+        for button in [clampInputButton, clampOutputButton, automaticButton] { button.isEnabled = enabled }
+        applyButton?.isEnabled = enabled
+    }
+    @objc func refreshHistogram(_ sender: Any?) { inputHistogram?.refresh() }
+    @objc func histogramScaleChanged(_ sender: NSButton) { histogramView.logarithmic = sender.state == .on }
+
+    @objc func automaticLevels(_ sender: Any?) {
+        guard filter != nil, autoRequest == nil, !preparingAutomatic else { return }
+        automaticPrerequisiteError = nil
+        preparingAutomatic = true
+        invalidFieldDuringCommit = false
+        window?.endEditing(for: nil)
+        let fieldsAccepted = !invalidFieldDuringCommit && commitFields()
+        preparingAutomatic = false
+        guard fieldsAccepted else { return }
+        if let error = automaticPrerequisiteError {
+            showError(error.localizedDescription)
+            return
+        }
+        generation += 1
+        let request = generation
+        autoRequest = request
+        draftGeneration = request
+        latestReply = nil
+        showError("")
+        statusField.stringValue = "Adjusting input levels…"
+        statusField.textColor = .secondaryLabelColor
+        automaticSubmitted = false
+        updateParameterAvailability()
+        startAutomaticIfReady()
+    }
+    private func startAutomaticIfReady() {
+        guard let filter, let request = autoRequest, !automaticSubmitted, pending.isEmpty else { return }
+        // Auto must not hide a refused final numeric write (notably Alpha,
+        // which Auto preserves). Wait for its acknowledgements before work.
+        if let error = automaticPrerequisiteError {
+            finishAutomatic(request, result: .failure(error))
+            return
+        }
+        automaticSubmitted = true
+        automaticWrite(filter) { [weak self] result in
+            self?.finishAutomatic(request, result: result)
+        }
+    }
+    private func finishAutomatic(_ request: Int, result: Result<Settings, Error>) {
+        guard filter != nil, autoRequest == request else { return }
+        autoRequest = nil
+        automaticSubmitted = false
+        automaticPrerequisiteError = nil
+        updateParameterAvailability()
+        switch result {
+        case .success(let value) where value.isValid:
+            if request > self.acceptedGeneration {
+                self.accepted = value
+                self.acceptedGeneration = request
+            }
+            if self.draftGeneration <= request {
+                self.draft = value
+                self.draftGeneration = request
+                self.displayPreservingFieldDrafts(value)
+            }
+            if self.generation == request { self.latestReply = (request, .success(())) }
+        case .success:
+            self.latestReply = (request, .failure(AutomaticError()))
+        case .failure(let error):
+            if self.generation == request { self.latestReply = (request, .failure(error)) }
+        }
+        self.resolveLatestReply()
+    }
+    private struct AutomaticError: LocalizedError {
+        var errorDescription: String? { "Automatic levels returned invalid settings." }
     }
 
     /// Field focus loss queues the final complete settings on the counted
     /// queue before the shared finish; an invalid form blocks Apply and the
     /// base keeps a second Apply from racing the commit.
     @objc override func commit() {
-        guard filter != nil else { return }
+        guard filter != nil, autoRequest == nil else { return }
         invalidFieldDuringCommit = false
         window?.endEditing(for: nil)
         guard !invalidFieldDuringCommit, commitFields() else { return }

@@ -1045,12 +1045,7 @@ final class EngineSession: @unchecked Sendable {
         }
     }
 
-    func levelsSettings(_ filter: Int32) throws -> LevelsSettings {
-        var raw = GlimsLevelsSettings()
-        raw.struct_size = UInt32(MemoryLayout<GlimsLevelsSettings>.size)
-        var error: UnsafeMutablePointer<CChar>?
-        let status = api.filter_levels_get(engine, filter, &raw, &error)
-        try check(status, error)
+    private func decodeLevels(_ raw: GlimsLevelsSettings) throws -> LevelsSettings {
         guard let trc = ColorTRC(rawValue: raw.trc), trc != .unknown,
               raw.clamp_input <= 1, raw.clamp_output <= 1 else {
             throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
@@ -1068,6 +1063,15 @@ final class EngineSession: @unchecked Sendable {
                               message: "The Levels settings could not be read.")
         }
         return value
+    }
+
+    func levelsSettings(_ filter: Int32) throws -> LevelsSettings {
+        var raw = GlimsLevelsSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsLevelsSettings>.size)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_levels_get(engine, filter, &raw, &error)
+        try check(status, error)
+        return try decodeLevels(raw)
     }
 
     func setLevelsSettings(_ filter: Int32, to value: LevelsSettings) throws {
@@ -1089,6 +1093,50 @@ final class EngineSession: @unchecked Sendable {
         var error: UnsafeMutablePointer<CChar>?
         let status = api.filter_levels_set(engine, filter, &raw, &error)
         try check(status, error)
+    }
+
+    func inputHistogram(_ filter: Int32) throws -> InputHistogram {
+        var raw = GlimsHistogramSnapshot()
+        raw.struct_size = UInt32(MemoryLayout<GlimsHistogramSnapshot>.size)
+        defer { api.free_histogram_snapshot(&raw) }
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_input_histogram(engine, filter, &raw, &error)
+        try check(status, error)
+        func malformed() -> EngineError {
+            EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The input histogram could not be read.")
+        }
+        guard raw.bin_count <= 4096, raw.channels & ~UInt32(63) == 0,
+              let trc = ColorTRC(rawValue: raw.trc), trc != .unknown else { throw malformed() }
+        let pointers: [(HistogramChannel, UnsafeMutablePointer<Double>?)] = [
+            (.value, raw.value), (.red, raw.red), (.green, raw.green),
+            (.blue, raw.blue), (.alpha, raw.alpha), (.luminance, raw.luminance)
+        ]
+        var channels: [HistogramChannel: [Double]] = [:]
+        for (channel, pointer) in pointers {
+            if raw.channels & channel.rawValue == 0 {
+                guard pointer == nil else { throw malformed() }
+                continue
+            }
+            if raw.bin_count == 0 {
+                guard pointer == nil else { throw malformed() }
+                channels[channel] = []
+            } else {
+                guard let pointer else { throw malformed() }
+                channels[channel] = Array(UnsafeBufferPointer(start: pointer, count: Int(raw.bin_count)))
+            }
+        }
+        let value = InputHistogram(trc: trc, binCount: Int(raw.bin_count), channels: channels)
+        guard value.isValid else { throw malformed() }
+        return value
+    }
+
+    func autoLevels(_ filter: Int32) throws -> LevelsSettings {
+        var raw = GlimsLevelsSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsLevelsSettings>.size)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = api.filter_levels_auto(engine, filter, &raw, &error)
+        try check(status, error)
+        return try decodeLevels(raw)
     }
 
     private func decodeCurves(_ raw: GlimsCurvesSnapshot) throws -> CurvesSettings {
