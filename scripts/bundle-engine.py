@@ -100,6 +100,17 @@ def run(*args, **kwargs):
     return result.stdout
 
 
+def _has_license_body(text):
+    """Whether notice text contains more than generated file headings."""
+    return any(line.strip() and not line.startswith("--- ") for line in text.splitlines())
+
+
+def _require_license_body(name, version, text):
+    if not _has_license_body(text):
+        raise SystemExit(f"{name} {version}: required license text unavailable. Restore matching "
+                         "license documentation, source tree/archive or notice cache before bundling.")
+
+
 def is_macho(path):
     if os.path.islink(path) or not os.path.isfile(path):
         return False
@@ -483,7 +494,9 @@ class Bundler:
         cache = os.path.normpath(cache)
         if os.path.exists(cache):
             with open(cache, encoding="utf-8") as handle:
-                return handle.read()
+                cached = handle.read()
+            if _has_license_body(cached):
+                return cached
 
         texts = []
         docs = os.path.join(self.prefix, "share/doc", name)
@@ -492,17 +505,19 @@ class Bundler:
                 path = os.path.join(docs, entry)
                 if LICENSE_FILE.match(entry) and os.path.isfile(path):
                     with open(path, encoding="utf-8", errors="replace") as handle:
-                        texts.append((entry, handle.read()))
+                        text = handle.read()
+                    if text.strip():
+                        texts.append((entry, text))
         if not texts:
             # Subports keep their archives under the parent's name; ask.
             out = run(os.path.join(self.prefix, "bin/port"), "-q", "distfiles", name)
             for archive in re.findall(r"^\[[^\]]*\] (\S+)$", out, re.M):
                 if os.path.isfile(archive):
-                    texts += self.archive_licenses(archive)
+                    texts += [(entry, text) for entry, text in self.archive_licenses(archive) if text.strip()]
                 if texts:
                     break
         result = "".join(f"--- {entry}\n\n{text.strip()}\n\n" for entry, text in texts)
-        if result:
+        if _has_license_body(result):
             os.makedirs(os.path.dirname(cache), exist_ok=True)
             with open(cache, "w", encoding="utf-8") as handle:
                 handle.write(result)
@@ -623,15 +638,15 @@ class Bundler:
                     with open(os.path.join(root, entry), encoding="utf-8", errors="replace") as handle:
                         texts.append(f"--- {entry}\n\n{handle.read().strip()}\n\n")
             version = run("git", "-C", root, "describe", "--tags", "--always").strip()
-            sections.append((title, version, license_field, homepage, "".join(texts)))
+            text = "".join(texts)
+            _require_license_body(title, version, text)
+            sections.append((title, version, license_field, homepage, text))
 
         for name, (version, license_field, homepage) in sorted(self.port_info().items()):
             if not self.compatible(license_field):
                 problems.append(f"{name} {version}: license \"{license_field}\" is not on the compatible list")
             texts = self.license_texts(name, version)
-            if not texts:
-                texts = f"(No license file found in the port's documentation or source archive; " \
-                        f"its license is {license_field}, see {homepage}.)\n\n"
+            _require_license_body(name, version, texts)
             sections.append((name, version, license_field, homepage, texts))
         if problems:
             raise SystemExit("review these licenses before bundling (COMPATIBLE_LICENSES):\n  " + "\n  ".join(problems))
