@@ -61,9 +61,9 @@ final class NativeFilterCatalogTests: XCTestCase {
     }
 
     func testUnavailableOperationsStayListedWithReasons() {
-        let aux = operation("gegl:displace", title: "Displace", categories: ["map"], support: .needsAuxInput)
+        let aux = operation("fixture:unhandled-map", title: "Unhandled Map", categories: ["map"], support: .needsAuxInput)
         let config = operation("gimp:future-config", title: "Future", categories: [], support: .needsConfig)
-        XCTAssertEqual(NativeFilterMenuLayout.itemTitle(aux), "Displace (needs a second layer as its source)")
+        XCTAssertEqual(NativeFilterMenuLayout.itemTitle(aux), "Unhandled Map (needs a second layer as its source)")
         XCTAssertEqual(NativeFilterMenuLayout.itemTitle(config), "Future (needs a dedicated editor)")
         XCTAssertEqual(NativeFilterMenuLayout.itemTitle(operation("gegl:waves", title: "Waves")), "Waves…")
         let layout = NativeFilterMenuLayout(operations: [aux, config])
@@ -90,10 +90,10 @@ final class NativeFilterCatalogTests: XCTestCase {
                        ["Gaussian Blur…", "Median Blur…"],
                        "the catalog's blurs merge into Filter ▸ Blur next to the dedicated command")
         let displace = filter.item(withTitle: "Map")?.submenu?.items.first
-        XCTAssertEqual(displace?.title, "Displace (needs a second layer as its source)")
+        XCTAssertEqual(displace?.title, "Displace…")
         XCTAssertEqual(displace?.action, #selector(DocumentWindowController.runNativeFilter(_:)))
         XCTAssertEqual((displace?.representedObject as? NativeFilterCommand)?.operation.name, "gegl:displace")
-        XCTAssertNotNil(displace?.toolTip)
+        XCTAssertNil(displace?.toolTip, "the admitted source chooser needs no unavailable-operation reason")
         XCTAssertEqual(titles(filter.item(withTitle: "Render")?.submenu),
                        ["Waves…", "—", "Pattern"],
                        "native operations share a category with plug-in submenus")
