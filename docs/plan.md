@@ -3714,3 +3714,10 @@ no production activation defect is inferred from the earlier unlaunched host.
 See `batch-layer-rasterize.md` for exact scope, hashes and remaining validation.
 Other-engine UI, current units/integration, CI/review and merge remain pending;
 batch Restore and the broader gesture-policy item stay open.
+
+The Main165 transport integration also passes fresh all-four conformance
+and unchanged 13/20 transport fixtures. Completed review identified a test
+driver interruption-cleanup gap; eight tests reproduced it before correction
+and now pass, with all 62 packaging checks. See the drain oracle's integration
+section for exact source/producer limits. Latest-head hosted gates remain
+pending after the driver fix.

@@ -130,3 +130,23 @@ rerunning any engine. The original source-freeze document hash is historical:
 this document was intentionally updated with runtime evidence; executable
 fixture inputs remain unchanged. Independent review is in progress, with CI,
 PR and integration pending.
+
+## Main165 integration and driver interruption regression
+
+After integrating merged batch Rasterize, fresh private slot165 producers
+pass all four conformance suites: 1,917 checks each on 3.2.8, 3.2.0 and
+master, and 1,703 on 3.0.8. The reported final running-plug-in stop samples
+were 57, 92, 51 and 113 ms respectively. These new samples do not explain
+the retained earlier outliers.
+
+Completed review found a Python test-driver cleanup gap: a second signal
+could escape cleanup, and a signal while Popen returned could precede child
+ownership. Eight deterministic fake-child cases first failed on both old
+drivers. The corrected drivers install nonraising TERM and INT handlers
+before spawning, record cancellation, retain ownership through bounded
+TERM/KILL/reaping and always restore both dispositions. All eight now pass,
+as do all 62 current packaging tests. The original native C fixtures are
+byte-identical. Fresh private linkage against the slot165 producer passes
+the 13-check drain and 20-check admission oracles. Driver/source hashes are
+bound to their new manifests; older manifests and producer bytes remain
+preserved. Latest-head hosted CI and review remain pending after this fix.
