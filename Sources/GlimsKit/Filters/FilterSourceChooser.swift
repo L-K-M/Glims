@@ -25,6 +25,13 @@ enum SourceFilterOperation: String, Sendable {
         }
     }
 
+    var sourceExplanation: String {
+        if self == .negativeDarkroom {
+            return "Preview uses a snapshot of this source. Apply makes filtered pixels opaque; Undo restores them."
+        }
+        return "Preview uses a snapshot of this source. Apply changes the target pixels; Undo restores them."
+    }
+
     var sourceLabel: String {
         switch self {
         case .bumpMap: return "Height map"
@@ -126,8 +133,7 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
         targetLabel.setAccessibilityLabel("\(operation.accessibilityName) target")
         targetLabel.lineBreakMode = .byWordWrapping
 
-        let explanation = NSTextField(labelWithString:
-            "Preview uses a snapshot of this source. Apply changes the target pixels; Undo restores them.")
+        let explanation = NSTextField(labelWithString: operation.sourceExplanation)
         explanation.setAccessibilityLabel("\(operation.accessibilityName) source explanation")
         explanation.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         explanation.lineBreakMode = .byWordWrapping

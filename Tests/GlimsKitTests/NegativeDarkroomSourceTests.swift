@@ -10,6 +10,8 @@ final class NegativeDarkroomSourceTests: XCTestCase {
         XCTAssertEqual(SourceFilterOperation.negativeDarkroom.title, "Negative Darkroom")
         XCTAssertEqual(SourceFilterOperation.negativeDarkroom.accessibilityName, "Negative darkroom")
         XCTAssertEqual(SourceFilterOperation.negativeDarkroom.sourceLabel, "Dodge/burn map")
+        XCTAssertEqual(SourceFilterOperation.negativeDarkroom.sourceExplanation,
+                       "Preview uses a snapshot of this source. Apply makes filtered pixels opaque; Undo restores them.")
     }
 
     func testExistingSourceOperationsRemainUnchanged() {
@@ -30,6 +32,10 @@ final class NegativeDarkroomSourceTests: XCTestCase {
         XCTAssertEqual(selective.title, "Selective Gaussian Blur")
         XCTAssertEqual(selective.accessibilityName, "Selective Gaussian blur")
         XCTAssertEqual(selective.sourceLabel, "Contrast reference")
+        for operation in [bump, variable, selective] {
+            XCTAssertEqual(operation.sourceExplanation,
+                           "Preview uses a snapshot of this source. Apply changes the target pixels; Undo restores them.")
+        }
     }
 
     func testUnknownOrIncorrectSourceSupportIsRefused() {
