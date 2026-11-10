@@ -261,8 +261,16 @@ extension EngineSmokeTest {
         }) else { return }
         check(try session.selectedLayers(imageA) == [plain] && docA.selectedLayerIDs == [plain]
               && NSApp.mainWindow === front.window, "A's ordinary third layer is selected behind the sheet while B becomes frontmost")
+        let errorsBeforeApply = errors.count
         apply.performClick(nil)
-        guard waitFor("batch Rasterize Apply dismisses", { controller.window?.attachedSheet == nil }), settle() else { return }
+        // Sheet detachment precedes NSAlert's completion callback. Keep
+        // dispatching AppKit events until the actual service outcome exists,
+        // before another selection or the explicit no-op can perform work.
+        guard waitFor("batch Rasterize Apply completion reaches its captured sources", {
+            if errors.count != errorsBeforeApply { return true }
+            return controller.window?.attachedSheet == nil && docA.pendingWork == 0
+                && docA.layerSources[first] == rasterized && docA.layerSources[second] == rasterized
+        }), settle() else { return }
         let applied = try LayerRasterizeBatchSnapshot(session, image: imageA, sources: captured, masked: first)
         check(applied.sources == rasterizedSources && docA.layerSources[first] == rasterized
               && docA.layerSources[second] == rasterized,
