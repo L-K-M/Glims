@@ -67,6 +67,9 @@ enum EngineSmokeTest {
     }
 
     static func run() -> Int32 {
+        if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents", !NSApp.isRunning {
+            return runHostedCloseAll()
+        }
         guard let path = EngineLibrary.configuredPath() else {
             print("FAIL no engine library; set \(EngineLibrary.environmentVariable)")
             return 2
@@ -105,6 +108,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents" {
+                try exerciseCloseAll(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Close All)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-palette" {
                 try exerciseRecorderPalette(session, documents: documents)
                 print(failures == 0 ? "PASSED (recorder palette)" : "FAILED: \(failures) failure(s)")

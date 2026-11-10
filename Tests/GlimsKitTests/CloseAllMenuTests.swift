@@ -19,17 +19,20 @@ final class CloseAllMenuTests: XCTestCase {
     }
 
     func testNoDocumentCloseAllIsDisabledAndQueuesNothing() {
+        let application = NSApplication.shared
         let owner = AppController()
         let item = NSMenuItem(title: "Close All", action: action, keyEquivalent: "w")
         XCTAssertFalse(owner.validateMenuItem(item))
         guard owner.responds(to: action) else {
             return XCTFail("Close All has no application command route")
         }
-        let wasRunning = NSApp.isRunning
-        XCTAssertTrue(NSApp.sendAction(action, to: owner, from: item))
+        let wasRunning = application.isRunning
+        XCTAssertTrue(application.sendAction(action, to: owner, from: item))
         XCTAssertTrue(owner.documents.isEmpty)
         XCTAssertFalse(owner.validateMenuItem(item))
-        XCTAssertEqual(NSApp.isRunning, wasRunning)
+        XCTAssertEqual(application.isRunning, wasRunning)
+        XCTAssertEqual(owner.applicationShouldTerminate(application), .terminateNow,
+                       "Close All left a pending Quit request behind")
         if case .starting = owner.state {} else { XCTFail("Close All changed engine startup state") }
     }
 }
