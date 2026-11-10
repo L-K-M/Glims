@@ -108,8 +108,23 @@ the cached ports archive marker `4c08b016c1c498b30295f05d72c40921fee87b5a`
 are not substitutes; a failed historical lookup establishes no patch identity.
 Deduplication does not imply coverage of all 119 bundled components.
 
-Synthetic unittest source covers opaque-byte copying, shared bindings,
+All 36 synthetic tests pass, covering opaque-byte copying, shared bindings,
 determinism, aliases, schema/bounds, symlink/path swaps, output containment,
-concurrent publication and injected I/O failure/interruption. This source
-freeze has not run those tests or collected actual installed inputs. The
-initial real spec is an external review artifact, not a committed source bundle.
+concurrent publication and injected I/O failure/interruption. The full local
+packaging suite passes 90 tests on this source revision.
+
+An actual offline collection on 2026-11-10 read the explicit three-port
+inventory and all 19 declared source aliases. It produced 16 unique payloads
+(120,378,775 bytes), plus the exact request and manifest, in an archive of
+120,422,400 bytes. SHA256:
+`1b82db9fb6073024dbd8fd17ec527e2571a8ec7b617dc548192974bd565dd3ce`.
+Independent tar streaming verified all 18 regular members, normalized headers,
+exact request bytes, every expected payload size/SHA, source alias hashes,
+component bindings and the mandatory partial-scope flags. No archive was
+unpacked. The first external verifier incorrectly required the manifest's
+sorted binding lists to retain request order; its comparison was corrected
+without changing the collector or archive.
+
+The initial spec, archive and verification receipt remain local review
+artifacts, not a public source download or released-binary binding.
+Independent code review, hosted CI and integration remain pending.
