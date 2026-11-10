@@ -23,11 +23,18 @@ extension EngineSmokeTest {
         let originalBackground = state.background
         let originalSource = state.cloneSource
         let originalStore = state.brushStore
+        let originalGradientStore = state.gradientStore
+        let originalFonts = state.fontNames
+        let originalTextSettings = state.textSettings
         let suite = "ch.lkmc.Glims.smoke.brush-palette-sync.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         state.brushStore = BrushSelectionStore(defaults: defaults)
+        state.gradientStore = GradientToolStore(defaults: defaults)
         defer {
             state.brushStore = originalStore
+            state.gradientStore = originalGradientStore
+            state.setEngineFonts(originalFonts)
+            state.textSettings = originalTextSettings
             state.update(.paintbrush) { $0 = originalBrush }
             state.foreground = originalForeground
             state.background = originalBackground
@@ -85,6 +92,13 @@ extension EngineSmokeTest {
             guard let field = field(label) else { return false }
             return abs(field.doubleValue - value) < 0.001
         }
+        func popUp(_ label: String) -> NSPopUpButton? {
+            let title = views(options.view, as: NSTextField.self).first {
+                !$0.isEditable && $0.stringValue == label
+            }
+            return (title?.superview as? NSStackView)?.arrangedSubviews
+                .compactMap { $0 as? NSPopUpButton }.first
+        }
         func observeSize(_ stage: String) {
             let sizeField = field("Size")
             let value = views(options.view, as: ClassicValueSlider.self).first { $0.accessibilityTitle == "Size" }?.value
@@ -112,8 +126,8 @@ extension EngineSmokeTest {
         observeSize("initial")
         key("]", code: 30)
         observeSize("right bracket")
-        check(displayed("Size", equals: state.brush(for: .paintbrush).size),
-              "canvas right-bracket immediately refreshes the displayed Size")
+        check(state.brush(for: .paintbrush).size == 13 && displayed("Size", equals: 13),
+              "canvas right-bracket increases Size from 10 to 13 and immediately refreshes its display")
         check(untouchedEditor != nil && field("Size")?.currentEditor() === untouchedEditor
                 && optionsWindow.firstResponder === untouchedEditor,
               "refreshing an untouched focused Size field preserves its editor and focus")
@@ -167,8 +181,11 @@ extension EngineSmokeTest {
         state.foreground = .blue
         state.notifyChange()
         panel.open()
-        table?.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-        apply?.performClick(nil)
+        views(panel.window?.contentView, as: NSTableView.self).first?
+            .selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        views(panel.window?.contentView, as: NSButton.self).first {
+            $0.accessibilityLabel() == "Apply selected preset"
+        }?.performClick(nil)
         observeSize("preset 1000")
         check(state.brush(for: .paintbrush).size == 1000 && displayed("Size", equals: 1000),
               "a valid 1000-pixel preset displays its actual size without clamping to 500")
@@ -268,6 +285,81 @@ extension EngineSmokeTest {
                   "ending the explicit 81.00 draft commits 81 over the external 92 value")
         } else {
             check(false, "the Size field can start an equal-value commit edit")
+        }
+
+        // Font loading finishes independently of the Text tool's editable
+        // numeric options. Its new menu must wait for their draft to commit.
+        state.setEngineFonts([])
+        state.textSettings.size = 60
+        state.select(.text)
+        if let textField = field("Size"), optionsWindow.makeFirstResponder(textField),
+           let textEditor = textField.currentEditor() {
+            textEditor.string = "81.00"
+            let selection = NSRange(location: 1, length: 3)
+            textEditor.selectedRange = selection
+            let arrivingFonts = [originalFonts.first ?? originalTextSettings.font]
+            state.setEngineFonts(arrivingFonts)
+            state.notifyChange()
+            print("OBS late fonts: count=\(state.fontNames.count), menu=\(popUp("Font")?.itemTitles ?? []), "
+                + "model=\(state.textSettings.size), fieldSurvives=\(field("Size") === textField), "
+                + "raw=\(textEditor.string), selection=\(textEditor.selectedRange)")
+            check(field("Size") === textField && textField.currentEditor() === textEditor
+                    && optionsWindow.firstResponder === textEditor && textEditor.string == "81.00"
+                    && textEditor.selectedRange == selection,
+                  "late engine fonts preserve the Text Size draft, selection, field editor and focus")
+            check(state.fontNames == arrivingFonts && popUp("Font") == nil,
+                  "the late font menu waits while the Text Size field is being edited")
+            optionsWindow.makeFirstResponder(nil)
+            spin()
+            let refreshedField = field("Size")
+            check(state.textSettings.size == 81 && displayed("Size", equals: 81)
+                    && refreshedField != nil && refreshedField !== textField
+                    && popUp("Font")?.itemTitles == arrivingFonts,
+                  "ending Text Size editing commits its draft and installs the deferred font menu")
+            state.notifyChange()
+            spin()
+            check(refreshedField != nil && field("Size") === refreshedField,
+                  "the font presentation is reconciled once and stays stable on another notification")
+        } else {
+            check(false, "the Text Size field can start a late-font draft edit")
+        }
+
+        // A late catalog notification changes the gradient presentation
+        // revision without changing the setting the person is editing.
+        let gradientIdentity = EngineSession.ResourceIdentity(
+            name: "Unresolved smoke draft gradient", collection: nil, isInternal: false)
+        state.gradientOpacity = 0.6
+        state.setGradientResource(gradientIdentity)
+        state.select(.gradient)
+        if let opacityField = field("Opacity"), optionsWindow.makeFirstResponder(opacityField),
+           let opacityEditor = opacityField.currentEditor() {
+            opacityEditor.string = "81.00"
+            let selection = NSRange(location: 1, length: 3)
+            opacityEditor.selectedRange = selection
+            let previousRevision = GradientChooser.shared.presentationRevision
+            ResourceCatalogChanges.publish(.init(kind: .gradient, oldIdentity: gradientIdentity, newIdentity: nil))
+            print("OBS late gradient: revision=\(previousRevision)->\(GradientChooser.shared.presentationRevision), "
+                + "opacity=\(state.gradientOpacity), resourceUnchanged=\(state.gradientResource == gradientIdentity), "
+                + "fieldSurvives=\(field("Opacity") === opacityField), raw=\(opacityEditor.string)")
+            check(GradientChooser.shared.presentationRevision > previousRevision
+                    && state.gradientResource == gradientIdentity && state.gradientOpacity == 0.6,
+                  "a gradient catalog notification leaves the current Opacity draft uncommitted until editing ends")
+            check(field("Opacity") === opacityField && opacityField.currentEditor() === opacityEditor
+                    && optionsWindow.firstResponder === opacityEditor && opacityEditor.string == "81.00"
+                    && opacityEditor.selectedRange == selection,
+                  "late gradient presentation preserves the Opacity draft, selection, field editor and focus")
+            optionsWindow.makeFirstResponder(nil)
+            spin()
+            let refreshedField = field("Opacity")
+            check(abs(state.gradientOpacity - 0.81) < 0.001 && displayed("Opacity", equals: 81)
+                    && refreshedField != nil && refreshedField !== opacityField,
+                  "ending Opacity editing commits its draft and rebuilds the deferred gradient presentation")
+            state.notifyChange()
+            spin()
+            check(refreshedField != nil && field("Opacity") === refreshedField,
+                  "the gradient presentation is reconciled once and stays stable on another notification")
+        } else {
+            check(false, "the gradient Opacity field can start a late-presentation draft edit")
         }
     }
 }

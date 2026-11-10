@@ -165,8 +165,10 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
                     for: state.current, choice: state.brush(for: state.current).resource))
         let gradientChanged = state.current == .gradient
             && shownGradient != Self.gradientPresentation(of: state)
-        if shownTool != state.current || fontsArrived || gradientChanged
-            || (brushChanged && !Self.hasFieldEditor(in: view)) {
+        let presentationChanged = fontsArrived || brushChanged || gradientChanged
+        // Keep presentation rows until the active field finishes its normal
+        // commit. A tool switch still replaces the options immediately.
+        if shownTool != state.current || (presentationChanged && !Self.hasFieldEditor(in: view)) {
             rebuild()
         } else if state.current.paintTool != nil {
             let brush = state.brush(for: state.current)
