@@ -17,6 +17,7 @@
 #include "resource-rename.h"
 #include "layer-delete.h"
 #include "layer-fit.h"
+#include "layer-rasterize.h"
 #include "curves-config.h"
 #include "filter-histogram.h"
 #include "filter-input.h"
@@ -2954,6 +2955,24 @@ static GlimsStatus api_image_fit_layers_to_image (GlimsEngine *e, GlimsImageID i
 }
 
 typedef struct {
+  GlimsImageID image;
+  const GlimsItemID *layers;
+  int32_t count;
+  char **error;
+} GlimsRasterizeLayersArgs;
+static GlimsStatus image_rasterize_layers_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsRasterizeLayersArgs *a = data;
+  return glims_image_rasterize_layers (e, a->image, a->layers, (size_t) a->count, a->error);
+}
+static GlimsStatus api_image_rasterize_layers (GlimsEngine *e, GlimsImageID image,
+                                             const GlimsItemID *layers, int32_t count, char **error)
+{
+  GlimsRasterizeLayersArgs a = { .image = image, .layers = layers, .count = count, .error = error };
+  return glims_engine_call (e, image_rasterize_layers_on_engine, &a);
+}
+
+typedef struct {
   GlimsFilterID filter;
   const GlimsCurveEdit *edit;
   uint32_t trc;
@@ -3243,6 +3262,7 @@ static const GlimsEngineAPI api_v1 = {
   .free_histogram_snapshot = glims_histogram_snapshot_free,
   .filter_levels_auto = api_filter_levels_auto,
   .image_render_proofed = api_image_render_proofed,
+  .image_rasterize_layers = api_image_rasterize_layers,
 };
 
 __attribute__ ((visibility ("default")))
