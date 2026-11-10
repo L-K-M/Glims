@@ -18,6 +18,7 @@ enum RecorderFileStore {
         case oversized(String)
         case changed(String)
         case io(operation: String, path: String, code: Int32)
+        case unconfirmedStage(destination: String, temporaryName: String, code: Int32)
 
         var errorDescription: String? {
             switch self {
@@ -29,6 +30,9 @@ enum RecorderFileStore {
             case .io(let operation, let path, let code):
                 let reason = POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO).localizedDescription
                 return "Could not \(operation) recording file \(path): \(reason)"
+            case .unconfirmedStage(let destination, let temporaryName, let code):
+                let reason = POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO).localizedDescription
+                return "Could not inspect the staged recording: \(reason) (errno \(code)). This save did not replace \(destination). A staging file named \(temporaryName) may remain in its folder."
             }
         }
     }
@@ -98,7 +102,12 @@ enum RecorderFileStore {
         do { identity = try status(descriptor: descriptor, path: location.path) }
         catch {
             Darwin.close(descriptor)
-            temporary.withCString { _ = Darwin.unlinkat(parent, $0, 0) }
+            // Creation-time ownership cannot establish the entry's current
+            // identity if this first fstat failed. Leave an unconfirmed name
+            // alone rather than unlinking a possible concurrent replacement.
+            if let issue = error as? StoreError, case .io(_, _, let code) = issue {
+                throw StoreError.unconfirmedStage(destination: location.path, temporaryName: temporary, code: code)
+            }
             throw error
         }
         var committed = false
