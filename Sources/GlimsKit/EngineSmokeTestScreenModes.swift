@@ -153,6 +153,10 @@ extension EngineSmokeTest {
         try key("f", code: 3)
         try settled(a, .fullScreenWithMenu)
         print("SCREEN DIAG delegate=\(a.responds(to: Selector(("window:willUseFullScreenPresentationOptions:")))) policy=\(a.window(a.window!, willUseFullScreenPresentationOptions: NSApp.presentationOptions).rawValue) requested=\(NSApp.presentationOptions.rawValue) effective=\(NSApp.currentSystemPresentationOptions.rawValue) menuVisible=\(NSMenu.menuBarVisible())")
+        if ProcessInfo.processInfo.environment["GLIMS_TEST_MENU_EXPERIMENT"] == "1" {
+            NSMenu.setMenuBarVisible(true)
+            print("SCREEN EXPERIMENT requested=\(NSApp.presentationOptions.rawValue) effective=\(NSApp.currentSystemPresentationOptions.rawValue) menuVisible=\(NSMenu.menuBarVisible())")
+        }
         if let phasePath = ProcessInfo.processInfo.environment["GLIMS_TEST_CAPTURE"] {
             try "menu".write(toFile: phasePath, atomically: true, encoding: .utf8)
             try wait("external menu-mode pixel capture", { FileManager.default.fileExists(atPath: phasePath + ".ack") })
