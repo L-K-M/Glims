@@ -202,6 +202,7 @@ enum NativeFilterMenus {
     /// each gets. Operations the engine does not list are simply omitted,
     /// and the support gates stay — a gated operation never appears here.
     private static let adjustOperations: [(name: String, title: String)] = [
+        ("gegl:exposure", "Exposure"),
         ("gimp:brightness-contrast", "Brightness/Contrast"),
         ("gimp:color-balance", "Color Balance"),
         ("gimp:hue-saturation", "Hue/Saturation"),

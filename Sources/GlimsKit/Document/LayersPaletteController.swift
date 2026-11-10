@@ -19,8 +19,8 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     static let definition = PaletteDefinition(
         kind: PaletteKind("ch.lkmc.Glims.layers"),
         title: "Layers",
-        contentSize: NSSize(width: 240, height: 300),
-        sizing: .resizable(minimumContentSize: NSSize(width: 200, height: 160)),
+        contentSize: NSSize(width: 260, height: 300),
+        sizing: .resizable(minimumContentSize: NSSize(width: 260, height: 186)),
         frameAutosaveName: "Glims.palette.layers")
 
     /// The pasteboard type drags inside the outline write: the layer id.
@@ -30,6 +30,36 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     private let outline = NSOutlineView()
     private var reloading = false
     private var snapshot = LayerListSnapshot(document: nil, layers: [])
+    private let opacityControl = ClassicValueSlider(title: "Opacity", range: 0...100,
+                                                     value: 100, unit: "%", fractionDigits: 1)
+    @MainActor
+    private struct OpacityTarget {
+        weak var document: ImageDocument?
+        let owner: ObjectIdentifier
+        let layer: Int32
+        init(_ document: ImageDocument, _ layer: Int32) {
+            self.document = document; owner = ObjectIdentifier(document); self.layer = layer
+        }
+        func matches(_ other: OpacityTarget?) -> Bool {
+            guard let other else { return false }
+            return document === other.document && other.owner == owner && other.layer == layer
+        }
+        var isAvailable: Bool {
+            guard let document else { return false }
+            return document.acceptsEdits && !document.targetCommandIsPending
+                && document.layers.contains { $0.id == layer }
+        }
+    }
+    private var opacityTarget: OpacityTarget?
+    private var opacityTrackingTarget: OpacityTarget?
+    private var opacityWrite: UUID?
+    private var opacityWriteTarget: OpacityTarget?
+    private var syncingOpacity = false
+    private var targetGeneration = 0
+    private var opacityCommittedValue = 100.0
+    private var opacityCommittedText = "100.0"
+    private var opacityMouseUpMonitor: Any?
+
     /// Which document the outline's rows currently show, for expansion
     /// memory; groups reopen after a reload and after a retarget back.
     private var displayedDocument: ObjectIdentifier?
@@ -143,14 +173,135 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         scroll.hasVerticalScroller = true
         scroll.borderType = .noBorder
 
-        let stack = NSStackView(views: [scroll, floatingBar, buttonBar])
+        opacityControl.accessibilityTitle = "Layer opacity"
+        opacityControl.isEnabled = false
+        opacityControl.onChange = { [weak self] value, phase in self?.opacityChanged(value, phase: phase) }
+        let opacityRow = NSStackView(views: [opacityControl])
+        opacityRow.orientation = .horizontal
+        opacityRow.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
+        opacityRow.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
+        // Rigi may suppress its release callback if readiness disabled the
+        // control during a drag. After the mouse-up has dispatched, discard
+        // that uncommitted local presentation; this never writes native state.
+        opacityMouseUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
+            DispatchQueue.main.async {
+                guard let self, self.opacityTrackingTarget != nil else { return }
+                self.opacityTrackingTarget = nil
+                self.syncOpacity()
+            }
+            return event
+        }
+        let stack = NSStackView(views: [opacityRow, scroll, floatingBar, buttonBar])
         stack.orientation = .vertical
         stack.spacing = 0
         stack.alignment = .leading
+        opacityRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         scroll.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         floatingBar.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         buttonBar.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         view = stack
+    }
+
+    deinit {
+        if let opacityMouseUpMonitor { NSEvent.removeMonitor(opacityMouseUpMonitor) }
+    }
+
+    private var opacityField: NSTextField? {
+        func field(in root: NSView) -> NSTextField? {
+            if let field = root as? NSTextField, field.isEditable { return field }
+            return root.subviews.lazy.compactMap { field(in: $0) }.first
+        }
+        return field(in: opacityControl)
+    }
+
+    private func finishOpacityField() {
+        guard let field = opacityField, field.currentEditor() != nil else { return }
+        // End only this control's field, while its old explicit owner remains
+        // bound. Never finish a field belonging to another grouped palette.
+        field.window?.endEditing(for: field)
+    }
+
+    private func currentOpacityTarget() -> OpacityTarget? {
+        guard let document, document.selectedLayerIDs.count == 1,
+              let id = document.selectedLayerIDs.first,
+              document.layers.contains(where: { $0.id == id }) else { return nil }
+        return OpacityTarget(document, id)
+    }
+
+    private func syncOpacity() {
+        guard isViewLoaded, !syncingOpacity else { return }
+        syncingOpacity = true
+        defer { syncingOpacity = false }
+        if let tracking = opacityTrackingTarget {
+            // A drag's local value and explicit owner survive asynchronous
+            // reloads/retargets. The release commits to that owner only.
+            opacityControl.isEnabled = opacityWrite == nil && tracking.isAvailable
+            return
+        }
+        var next = currentOpacityTarget()
+        if !(opacityTarget?.matches(next) ?? (next == nil)) {
+            finishOpacityField()
+            next = currentOpacityTarget()
+            opacityTarget = next
+        }
+        opacityControl.isEnabled = opacityWrite == nil && next?.isAvailable == true
+        // An accepted write owns the displayed value until its counted
+        // completion reconciles the actual cache. Other targets still show
+        // their own cache even while this palette's single write drains.
+        if opacityWrite != nil, opacityWriteTarget?.matches(next) == true { return }
+        let value = next.flatMap { target in
+            target.document?.layers.first { $0.id == target.layer }?.opacity
+        }.map { $0 * 100 } ?? 100
+        guard let field = opacityField else { return }
+        if opacityControl.value != opacityCommittedValue {
+            opacityCommittedValue = opacityControl.value
+            opacityCommittedText = field.stringValue
+        }
+        let editor = field.currentEditor()
+        let raw = editor?.string
+        let hasDraft = raw.map { $0 != opacityCommittedText } ?? false
+        let selection = editor?.selectedRange
+        let allSelected = selection == NSRange(location: 0, length: (raw as NSString?)?.length ?? 0)
+        // Advance Rigi's silent baseline even under a draft. An explicit
+        // commit equal to the old baseline must emit after external changes.
+        opacityControl.value = value
+        opacityCommittedValue = opacityControl.value
+        opacityCommittedText = field.stringValue
+        if let editor, let selection {
+            let text = hasDraft ? raw ?? opacityCommittedText : opacityCommittedText
+            editor.string = text
+            let count = (text as NSString).length, start = min(selection.location, (text as NSString).length)
+            editor.selectedRange = allSelected ? NSRange(location: 0, length: count)
+                : NSRange(location: start, length: min(selection.length, count - start))
+        }
+    }
+
+    private func opacityChanged(_ percent: Double, phase: ClassicValueSlider.Phase) {
+        if phase == .tracking {
+            guard opacityWrite == nil, opacityControl.isEnabled, let target = opacityTarget else { return }
+            if opacityTrackingTarget == nil { opacityTrackingTarget = target }
+            return
+        }
+        let captured = opacityTrackingTarget ?? opacityTarget
+        opacityTrackingTarget = nil
+        guard opacityWrite == nil, percent.isFinite, let captured, captured.isAvailable,
+              let owner = captured.document,
+              let layer = owner.layers.first(where: { $0.id == captured.layer }) else {
+            syncOpacity(); return
+        }
+        let opacity = min(max(percent, 0), 100) / 100
+        guard abs(layer.opacity - opacity) > 0.000000000001 else { syncOpacity(); return }
+        let token = UUID()
+        opacityWrite = token
+        opacityWriteTarget = captured
+        opacityControl.isEnabled = false
+        owner.changeLayer(captured.layer, .init(opacity: opacity)) { [weak self] _ in
+            guard let self, self.opacityWrite == token else { return }
+            self.opacityWrite = nil
+            self.opacityWriteTarget = nil
+            // Never assign the old owner's value to a newly aimed row.
+            self.syncOpacity()
+        }
     }
 
     /// The title bar triangle's menu: the layer commands, on the document
@@ -199,6 +350,13 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         menu.addItem(.separator())
         menu.addItem(withTitle: "Layer Properties…", action: #selector(DocumentWindowController.layerProperties(_:)),
                      keyEquivalent: "")
+        for (title, tag) in [("Rasterize Layer…", 0), ("Restore Layer Source…", 1)] {
+            let item = NSMenuItem(title: title, action: #selector(runSourceCommand(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = tag
+            item.representedObject = document
+            menu.addItem(item)
+        }
         menu.addItem(.separator())
         menu.addItem(commandItem("Bring Forward", .raise))
         menu.addItem(commandItem("Send Backward", .lower))
@@ -247,6 +405,27 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         item.target = self
         item.tag = Int(command.rawValue)
         return item
+    }
+
+    private func sourceAction(_ item: NSMenuItem) -> Selector {
+        item.tag == 0 ? #selector(DocumentWindowController.rasterizeLayer(_:))
+            : #selector(DocumentWindowController.restoreLayerSource(_:))
+    }
+
+    private func sourceWindow(for captured: ImageDocument) -> DocumentWindowController? {
+        NSApp.windows.compactMap { $0.windowController as? DocumentWindowController }
+            .first { $0.imageDocument === captured && !$0.closeStarted }
+    }
+
+    /// Consent belongs to the window for the document this menu captured.
+    /// A front-document switch cannot redirect the palette's source command.
+    @objc private func runSourceCommand(_ sender: NSMenuItem) {
+        guard let captured = sender.representedObject as? ImageDocument,
+              document === captured, let owner = sourceWindow(for: captured),
+              validateMenuItem(sender) else { return }
+        owner.window?.deminiaturize(nil)
+        owner.showWindow(nil)
+        NSApp.sendAction(sourceAction(sender), to: owner, from: sender)
     }
 
     @objc private func runLayerCommand(_ sender: NSMenuItem) {
@@ -452,6 +631,14 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             return validateEffectItem(menuItem, item)
         }
         switch menuItem.action {
+        case #selector(runSourceCommand(_:)):
+            guard let captured = menuItem.representedObject as? ImageDocument,
+                  document === captured, let owner = sourceWindow(for: captured) else { return false }
+            let probe = NSMenuItem(title: menuItem.title, action: sourceAction(menuItem), keyEquivalent: "")
+            let enabled = owner.validateMenuItem(probe)
+            menuItem.title = probe.title
+            menuItem.toolTip = probe.toolTip
+            return enabled
         case #selector(runFloatingCommand(_:)):
             // Cached-state validation only: eligibility includes the
             // floating state, the target's cached pixel/source kind, and
@@ -567,6 +754,11 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         // also runs for every state change of the shown document, and
         // resetting then would reopen its collapsed ancestors each time.
         if target !== document {
+            targetGeneration += 1
+            let generation = targetGeneration
+            finishOpacityField()
+            // A field-end callback can itself retarget the palette.
+            guard generation == targetGeneration else { return }
             lastSyncedSelectionIDs = []
             selectedEffect = nil
             effectSelectionIsNew = false
@@ -576,6 +768,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     }
 
     func reload() {
+        syncOpacity()
         // Cancel obsolete reads before rebuilding rows. Workers consult
         // only this synchronized token; document and view state stays on
         // the main actor.
@@ -761,7 +954,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
 
     // MARK: PaletteEditScope
 
-    /// The document a name edit in this palette belongs to.
+    /// The document the palette's name and opacity fields belong to.
     var editTarget: ImageDocument? { document }
 
     /// The outline's double-click: edit a layer row's name in place;

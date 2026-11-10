@@ -18,6 +18,7 @@
 #include "layer-delete.h"
 #include "layer-fit.h"
 #include "layer-rasterize.h"
+#include "layer-restore.h"
 #include "curves-config.h"
 #include "filter-histogram.h"
 #include "filter-input.h"
@@ -64,26 +65,42 @@ typedef struct
   gpointer         data;
   GlimsStatus      status;
   gboolean         done;
+  gboolean         allow_during_stop;
 } GlimsCall;
 
 static gboolean
 call_dispatch (gpointer user_data)
 {
-  GlimsCall *call = user_data;
+  GlimsCall *call   = user_data;
+  gboolean   nested = g_main_depth () > 1;
+  gboolean   execute;
+
+  g_mutex_lock (&call->engine->lock);
+  execute = call->allow_during_stop || ! call->engine->stopping;
+  g_mutex_unlock (&call->engine->lock);
+
   /* A dispatch at main depth > 1 means the engine thread sits inside a
    * nested main loop — a plug-in call or another long operation that
    * iterates the context, such as a link layer reloading its changed
    * file. Not every native path raises `busy` itself (the link monitor's
    * reload runs with no facade call around it), so raise it for this
    * call's duration: mutation gates refuse while reads and cancellation
-   * remain deliverable. This does not discard or block RPC dispatch. */
-  gboolean   nested = g_main_depth () > 1;
+   * remain deliverable. Nesting itself never blocks RPC dispatch. */
 
-  if (nested)
-    call->engine->busy++;
-  call->status = call->func (call->engine, call->data);
-  if (nested)
-    call->engine->busy--;
+  if (execute)
+    {
+      if (nested)
+        call->engine->busy++;
+      call->status = call->func (call->engine, call->data);
+      if (nested)
+        call->engine->busy--;
+    }
+  else
+    {
+      /* Accepted but not started: shutdown must not launch another long
+       * operation after its plug-in cancellation sweep. */
+      call->status = GLIMS_STATUS_NOT_RUNNING;
+    }
 
   g_mutex_lock (&call->engine->lock);
   call->done = TRUE;
@@ -93,29 +110,76 @@ call_dispatch (gpointer user_data)
   return G_SOURCE_REMOVE;
 }
 
+static GlimsStatus
+call_on_engine (GlimsEngine     *engine,
+                GlimsEngineFunc  func,
+                gpointer         data,
+                gboolean         allow_during_stop,
+                gint             priority)
+{
+  GlimsCall   call = { engine, func, data, GLIMS_STATUS_FAILED, FALSE,
+                       allow_during_stop };
+  GSource    *source;
+  guint       source_id;
+  GlimsStatus status;
+
+  if (! engine)
+    return GLIMS_STATUS_NOT_RUNNING;
+
+  /* Engine-internal continuations stay on their enclosing call's stack.
+   * They must not queue onto themselves or fail halfway through cleanup.
+   * Public event callbacks still may not call back into the engine. */
+  if (g_thread_self () == engine->thread)
+    return engine->gimp ? func (engine, data) : GLIMS_STATUS_NOT_RUNNING;
+
+  g_mutex_lock (&engine->lock);
+  if ((! allow_during_stop && engine->stopping) || ! engine->gimp)
+    {
+      g_mutex_unlock (&engine->lock);
+      return GLIMS_STATUS_NOT_RUNNING;
+    }
+
+  if (! allow_during_stop)
+    engine->registered_callers++;
+
+  /* Attach while holding admission: stop must see both the registered
+   * caller and its queued source. Unlike invoke_full(), attach never calls
+   * inline under this mutex. Preserve ordinary RPCs' default priority. */
+  source = g_idle_source_new ();
+  g_source_set_priority (source, priority);
+  g_source_set_callback (source, call_dispatch, &call, NULL);
+  source_id = g_source_attach (source, NULL);
+  g_source_unref (source);
+  if (! source_id)
+    {
+      if (! allow_during_stop)
+        engine->registered_callers--;
+      g_cond_broadcast (&engine->cond);
+      g_mutex_unlock (&engine->lock);
+      return GLIMS_STATUS_FAILED;
+    }
+
+  while (! call.done)
+    g_cond_wait (&engine->cond, &engine->lock);
+
+  status = call.status;
+  if (! allow_during_stop)
+    {
+      engine->registered_callers--;
+      g_cond_broadcast (&engine->cond);
+    }
+  g_mutex_unlock (&engine->lock);
+
+  /* No engine access after acknowledgement: stop may now release it. */
+  return status;
+}
+
 GlimsStatus
 glims_engine_call (GlimsEngine     *engine,
                    GlimsEngineFunc  func,
                    gpointer         data)
 {
-  GlimsCall call = { engine, func, data, GLIMS_STATUS_FAILED, FALSE };
-
-  if (! engine || ! engine->gimp)
-    return GLIMS_STATUS_NOT_RUNNING;
-
-  /* Already on the engine thread (an event callback that calls back in, or
-   * a call made while a nested loop runs): run directly. */
-  if (g_thread_self () == engine->thread)
-    return func (engine, data);
-
-  g_main_context_invoke_full (NULL, G_PRIORITY_DEFAULT, call_dispatch, &call, NULL);
-
-  g_mutex_lock (&engine->lock);
-  while (! call.done)
-    g_cond_wait (&engine->cond, &engine->lock);
-  g_mutex_unlock (&engine->lock);
-
-  return call.status;
+  return call_on_engine (engine, func, data, FALSE, G_PRIORITY_DEFAULT);
 }
 
 /* ---- Shared helpers ---------------------------------------------------- */
@@ -937,18 +1001,26 @@ api_start (const GlimsEngineConfig  *config,
 }
 
 static GlimsStatus
-quit_loop (GlimsEngine *engine,
-           gpointer     data)
+cancel_open_plug_ins (GlimsEngine *engine,
+                     gpointer     data)
 {
   GimpPlugInManager *manager = engine->gimp->plug_in_manager;
 
   /* A running plug-in (a dialog left open) holds the engine thread in a
    * nested loop, so the main loop would not end until the user closed it.
    * Close every plug-in first, as gimp_plug_in_manager_exit() does on
-   * GIMP's own exit; that ends their loops and the call that waits. */
+   * GIMP's own exit. Their nested loops unwind while the outer loop stays
+   * alive for accepted RPCs and their external callers to finish. */
   while (manager->open_plug_ins)
     gimp_plug_in_close (manager->open_plug_ins->data, TRUE);
 
+  return GLIMS_STATUS_OK;
+}
+
+static GlimsStatus
+quit_loop (GlimsEngine *engine,
+           gpointer     data)
+{
   g_main_loop_quit (engine->loop);
 
   return GLIMS_STATUS_OK;
@@ -960,7 +1032,21 @@ api_stop (GlimsEngine *engine)
   if (! engine)
     return;
 
-  glims_engine_call (engine, quit_loop, NULL);
+  /* The sole external owner has stopped submitting new calls. Waiting on
+   * this thread lets an enclosing plug-in RPC unwind its nested loop; doing
+   * the drain inside that loop's cancellation callback would deadlock. */
+  g_mutex_lock (&engine->lock);
+  engine->stopping = TRUE;
+  g_mutex_unlock (&engine->lock);
+
+  call_on_engine (engine, cancel_open_plug_ins, NULL, TRUE, G_PRIORITY_HIGH);
+
+  g_mutex_lock (&engine->lock);
+  while (engine->registered_callers)
+    g_cond_wait (&engine->cond, &engine->lock);
+  g_mutex_unlock (&engine->lock);
+
+  call_on_engine (engine, quit_loop, NULL, TRUE, G_PRIORITY_DEFAULT);
   g_thread_join (engine->thread);
 
   g_hash_table_unref (engine->images);
@@ -2888,6 +2974,27 @@ static GlimsStatus api_image_rasterize_layers (GlimsEngine *e, GlimsImageID imag
 }
 
 typedef struct {
+  GlimsImageID image;
+  const GlimsItemID *layers;
+  int32_t count;
+  char **error;
+} GlimsRestoreLayersArgs;
+static GlimsStatus image_restore_layer_sources_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsRestoreLayersArgs *a = data;
+  return glims_image_restore_layer_sources (e, a->image, a->layers, (size_t) a->count, a->error);
+}
+static GlimsStatus api_image_restore_layer_sources (GlimsEngine *e, GlimsImageID image,
+                                                    const GlimsItemID *layers, int32_t count, char **error)
+{
+  if (error) *error = NULL;
+  /* Reject signed negative/oversized counts before conversion or vector access. */
+  if (!layers || count < 1 || count > 256) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsRestoreLayersArgs a = { .image = image, .layers = layers, .count = count, .error = error };
+  return glims_engine_call (e, image_restore_layer_sources_on_engine, &a);
+}
+
+typedef struct {
   GlimsFilterID filter;
   const GlimsCurveEdit *edit;
   uint32_t trc;
@@ -3178,6 +3285,7 @@ static const GlimsEngineAPI api_v1 = {
   .filter_levels_auto = api_filter_levels_auto,
   .image_render_proofed = api_image_render_proofed,
   .image_rasterize_layers = api_image_rasterize_layers,
+  .image_restore_layer_sources = api_image_restore_layer_sources,
 };
 
 __attribute__ ((visibility ("default")))

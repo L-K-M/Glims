@@ -3571,6 +3571,19 @@ existing conformance also passes. See `variable-blur.md` for the independent
 pixel oracle, refusal guards and remaining auxiliary roles. The facade keeps
 APIv1/163 and upstream sources remain unchanged. CI/review/integration follow.
 
+### Exposure in Image Adjust (2026-11-10 candidate)
+
+Exposure now joins Image > Adjust through the existing generic native filter
+route, preserving Filter > Color and loaded-operation support gates. The actual
+29-check menu/form fixture first reproduced exactly one failure, the missing
+Adjust placement; its other 28 pixel, alpha, effect, Undo/Redo, XCF, ownership
+and admission checks passed. The one-entry mapping change leaves those oracles
+unchanged. Source `ddcabd4` passes29 actual checks on each engine with external
+API165 producers and1,012 proper private leased units. Prior completed review
+rounds cover byte-identical feature/fixture inputs; a subsequent reviewer
+timeout is explicitly not approval. Latest integration CI and combined release
+acceptance remain separate. See `image-adjust.md` for scope and evidence.
+
 ### Legacy Select Color source ownership (2026-11-10 candidate)
 
 GIMP 3.0.8's seeded/by-color region algorithms retain an owned source buffer.
@@ -3672,6 +3685,58 @@ source archive or release integration is added. See
 [`installed-port-provenance.md`](installed-port-provenance.md) for usage and
 evidence limits. Independent review/integration remain pending.
 
+### Foreign XCF effect fields (2026-11-10 candidate)
+
+Read-only plain XCF v22–26 metadata now binds to the complete unpublished
+native layer/group/mask/channel tree before restoring blend space, composite
+space and composite mode. Whole-image validation precedes every setter;
+source files, raw buffers, Undo and supplement state are unchanged. Native
+negative-AUTO encodings and the pinned writer's identical unregistered
+triplet have separate, narrow compatibility rules. Size/ETag and available
+device/inode comparisons detect observable source changes, without claiming
+an FD-bound or adversarial ABA attestation.
+
+The ordinary baseline reproduced four failures among 41 checks. Expanded
+admission passes 61 checks and the pure decoder passes 75. A separate
+3.2.8/v26 native complex oracle reproduced eight failures among 43 checks,
+then passed all 43 with four literal 2/2/3 triplets and zero float deltas.
+General conformance passes 1,917 checks on 3.2.8/3.2.0/master and 1,703 on
+3.0.8; the existing 121-check supplement suite passes on all four. The actual
+Selective Gaussian menu smoke passes 28 checks against the context prefix;
+normal foreign-file GUI acceptance is separate. An earlier strict decoder
+and native-writer interpretation caused ten general failures, fixed before
+this matrix. Source-only loader/binding audits are recorded; this authored
+documentation is not another independent approval. See `xcf-effect-fields.md`
+for hashes, oracle scope and remaining compressed/v20/v21/nested-mask limits.
+Fresh API165 integration source`c0acf2d` repeats all-four general conformance
+and pinned original41/complex43 checks. Independent Glyph review covers the
+unchanged seven production files; the earlier hosted timeout is not approval.
+A separate ordinary LaunchServices foreign-file event passed; the actual
+File Open chooser and final integrated release remain unverified. Required
+latest-head CI/review/integration and broader preservation work stay open.
+
+### Accepted RPC caller drain (2026-11-10 candidate)
+
+Native stop now closes external admission, cancels running plug-ins without
+quitting the outer context, drains registered callers through caller-side
+result acknowledgement, then quits/joins and frees control storage. Explicit
+source attachment preserves normal RPC priority; queued unstarted calls get
+NOT_RUNNING and direct internal continuations keep their behavior. One external
+owner must prevent new lifetime entry racing stop; stale handles, concurrent
+stop owners and callback reentry are not added guarantees. No facade slot or
+upstream source changed.
+
+The frozen lifetime oracle reproduced two failures among 13 checks, then passed
+13/0 with `4d39894`. Separate queued/late admission passes 20/0 at `870e57b`.
+All four native suites pass (1,917 each on 3.2.8, 3.2.0 and master; 1,703 on
+3.0.8), including the unchanged running-plug-in stop assertion. The 3.0.8
+cache-queue/two-buffer and master cached-XML diagnostics remain in the logs.
+The earlier 5037/10146 ms outliers remain unlocalized; this fix makes no claim
+to explain or resolve them. See [engine-call-drain-oracle.md](engine-call-drain-oracle.md)
+and [engine-call-admission-oracle.md](engine-call-admission-oracle.md) for exact
+ownership and evidence limits. Independent review is running; CI, PR and
+integration remain pending.
+
 ### Captured batch Rasterize (2026-11-10 candidate)
 
 API v1 appends slot165 for an explicit ordered retained-source vector. The
@@ -3702,3 +3767,87 @@ The actual old window failed five new profile-title checks while retaining
 plus 1,015 units. See [working-profile-title.md](working-profile-title.md)
 for exact foreground-host and external AX limits. Hosted CI/review and final
 integration remain pending.
+
+The Main165 transport integration also passes fresh all-four conformance
+and unchanged 13/20 transport fixtures. Completed review identified a test
+driver interruption-cleanup gap; eight tests reproduced it before correction
+and now pass, with all 62 packaging checks. See the drain oracle's integration
+section for exact source/producer limits. Latest-head hosted gates remain
+pending after the driver fix.
+
+### Typed XMP Rating controls (2026-11-10 candidate)
+
+Image Metadata adds explicit absent, zero, rejected and one-through-five
+choices while retaining unknown original text until an explicit choice.
+Fresh scalar descriptor checks and independent SET/REMOVE gates use the
+existing counted preservation writer. The focused Rating and batch Rasterize
+fixtures share the launched AppKit host. See [metadata-rating.md](metadata-rating.md)
+for exact scope, prior checks and current runtime/review gaps. This does not
+close the remaining typed metadata or final integration items.
+
+The Main165 Rating integration passes 1,028 units, all 54 actual typed-edit
+checks and all 51 shared-host batch Rasterize checks on each of four engines.
+Owned processes exit zero and desktop leases are released. The 3.0.8 batch
+case's immediate external AX snapshot was incomplete; its owned teardown and
+later final desktop checks pass. Present-empty seed refusal remains explicit,
+and current hosted CI/completed independent review remain pending.
+
+### Captured Close All (2026-11-10 candidate)
+
+File > Close All uses the existing sequential close/save/drain flow for a
+captured document set and stops on Cancel or failed Save without quitting.
+A later Quit joins the in-flight close request. The old menu/validation
+baseline failed three assertions; the corrected source passes 1,014 units
+and all 26 focused checks on every engine. See
+[close-all-documents.md](close-all-documents.md) for exact host/review limits
+and remaining real responder/Quit/file-completion acceptance. Hosted gates
+and final integration remain pending.
+
+### Captured batch Restore sources (2026-11-10 candidate)
+
+The Layer menu and Layers palette confirm a captured ordered source vector,
+then regenerate it through appended slot166 as one native Undo with counted
+exclusive close draining. All-four focused native163/163/114/163, general
+1,917/1,917/1,703/1,917, actual UI48each and1,020 private leased units pass.
+The independently measured native linked-file Redo display/source ordering
+is explicit. No atomic rollback or self-contained release claim is inferred.
+See`batch-layer-restore.md` for exact source/proof scope, AX and fault gaps.
+
+### Layer opacity in Layers (2026-11-10 candidate)
+
+A persistent captured-owner percent field/slider now gives opacity its planned
+home in Layers. The modal Properties duplicate alone is removed. Native
+property gates, draft/retarget ownership and counted reconciliation preserve
+paint targets and close lifetime. Old rowless baseline6/1; actual all-four
+controls74each and1,012 private leased units pass. See`layer-opacity-controls.md`
+for source, branch counts, AX gaps and remaining hardware/accessibility review.
+
+### Tool Options names and label relationships (2026-11-10 candidate)
+
+Existing setting popups and selection Mode now have explicit accessible
+names and their existing visible label association. The actual AppKit control
+regression ran two tests with ten baseline failures, then passes both after
+the five-line fix; all 1,014 private leased units also pass with final clean
+AX snapshot and lease release. Independent review, CI and actual keyboard/
+VoiceOver acceptance remain separate gates. See
+`tool-options-accessibility.md`; no new control or action was introduced.
+
+### Negative Darkroom captured source (2026-11-10 candidate)
+
+The existing source chooser now offers a detached dodge/burn map for Negative
+Darkroom and explains that Apply makes filtered pixels opaque. Old source
+admission failed exactly one native check; corrected all-four focused194,
+general1,917/1,917/1,703/1,917, actual UI39 each and 1,015 private leased
+units pass. No new facade slot or upstream patch. See
+`negative-darkroom-source.md` for independent native references, ownership,
+Undo and remaining review/AX/final-release gates.
+
+### Channel main-menu parity (2026-11-10 candidate)
+
+Eight existing channel actions now have main-menu routes with shared cached
+single-saved-channel and pending-work gates; context clicked-row behavior is
+unchanged. Old Main reproduced two missing-submenu failures. Corrected actual
+all-four UI56 and 1,016 private leased units pass. A preserved initial fixture
+failure led to exact native multi-setter history comparison and a latched wait,
+not changed production semantics. See `channel-menu-parity.md` for scope and
+remaining independent review, CI and combined-release gates.

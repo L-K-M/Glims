@@ -1,7 +1,7 @@
 # Snapshot filter inputs
 
-Bump Map, Variable Blur and Selective Gaussian Blur have same-image height-map,
-blur-mask and contrast-reference choosers. The source is captured when Preview
+Bump Map, Variable Blur, Selective Gaussian Blur and Negative Darkroom have
+same-image height-map, blur-mask, contrast-reference and dodge/burn map choosers. The source is captured when Preview
 starts; Apply to Pixels merges into the captured target and Undo restores its
 pixels.
 Other auxiliary-input operations and custom-config editors remain separate work.
@@ -81,3 +81,12 @@ limit in the fixture's combined array expression; explicitly typed byte
 intermediates preserve the fixture while its CI rerun remains pending.
 Other auxiliary roles, including multiple-role Displace and Oilify inputs,
 remain outside this source contract.
+
+## Negative Darkroom dodge/burn map (candidate)
+
+The existing single-aux snapshot path now admits exactly `gegl:negative-darkroom`.
+Its native output makes filtered pixels opaque; the chooser explicitly explains
+that behavior and Undo restores the original alpha. All-four focused native
+194 and actual chooser/form39 checks, plus 1,015 private leased units pass.
+See `negative-darkroom-source.md` for source/reference boundaries and review,
+AX, foreground-focus and final release gaps. Multi-role operations stay separate.

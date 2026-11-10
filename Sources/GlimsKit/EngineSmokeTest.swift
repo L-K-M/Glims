@@ -67,6 +67,12 @@ enum EngineSmokeTest {
     }
 
     static func run() -> Int32 {
+        if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents", !NSApp.isRunning {
+            return runHostedCloseAll()
+        }
+        if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "channel-menus", !NSApp.isRunning {
+            return runHostedChannelMenus()
+        }
         guard let path = EngineLibrary.configuredPath() else {
             print("FAIL no engine library; set \(EngineLibrary.environmentVariable)")
             return 2
@@ -105,6 +111,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents" {
+                try exerciseCloseAll(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Close All)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-palette" {
                 try exerciseRecorderPalette(session, documents: documents)
                 print(failures == 0 ? "PASSED (recorder palette)" : "FAILED: \(failures) failure(s)")
@@ -311,6 +322,16 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (working profile title)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "exposure-adjust" {
+                try exerciseExposureAdjust(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (exposure adjust)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-opacity" {
+                try exerciseLayerOpacity(session, documents: documents)
+                print(failures == 0 ? "PASSED (layer opacity)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "image-adjust" {
                 try exerciseImageAdjust(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (image adjust)" : "FAILED: \(failures) failure(s)")
@@ -349,6 +370,11 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-rasterize-batch" {
                 try exerciseLayerRasterizeBatch(session, documents: documents)
                 print(failures == 0 ? "PASSED (layer rasterize batch)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-restore-batch" {
+                try exerciseLayerRestoreBatch(session, documents: documents)
+                print(failures == 0 ? "PASSED (layer restore batch)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "batch-delete" {
@@ -391,6 +417,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (selective gaussian source)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "negative-darkroom-source" {
+                try exerciseNegativeDarkroomSource(session, documents: documents)
+                print(failures == 0 ? "PASSED (negative darkroom source)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "variable-blur-source" {
                 try exerciseVariableBlurSource(session, documents: documents)
                 print(failures == 0 ? "PASSED (variable blur source)" : "FAILED: \(failures) failure(s)")
@@ -404,6 +435,16 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-rights" {
                 try exerciseMetadataRights(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (metadata rights)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-rating" {
+                try exerciseMetadataRating(session, documents: documents)
+                print(failures == 0 ? "PASSED (metadata rating)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-rating-edit" {
+                try exerciseMetadataRatingEdit(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (metadata rating edit)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-capture-date" {
@@ -501,6 +542,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (adjustment catalog failure)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "channel-menus" {
+                try exerciseChannelMenus(session, documents: documents)
+                print(failures == 0 ? "PASSED (channel menus)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
                 check(false, "unknown engine smoke case: \(selected)")
 
@@ -564,11 +610,13 @@ enum EngineSmokeTest {
             try exerciseSavedSetControls(session, work: work, documents: documents)
             try exerciseAdjustmentControls(session, work: work, documents: documents)
             try exerciseLayerMultiselectionControls(session, work: work, documents: documents)
+            try exerciseLayerOpacity(session, documents: documents)
             try exerciseBatchDuplicate(session, documents: documents)
             try exerciseBatchDelete(session, documents: documents)
             try exerciseBatchFit(session, documents: documents)
             try exerciseFilterSources(session, documents: documents)
             try exerciseVariableBlurSource(session, documents: documents)
+            try exerciseNegativeDarkroomSource(session, documents: documents)
             try exerciseSelectiveGaussianSource(session, documents: documents)
             try exerciseBrightnessContrast(session, work: work, documents: documents)
             try exerciseColorBalance(session, work: work, documents: documents)
@@ -578,6 +626,7 @@ enum EngineSmokeTest {
             try exerciseHueSaturation(session, work: work, documents: documents)
             try exerciseSelectionDrag(session, documents: documents)
             try exerciseImageAdjust(session, work: work, documents: documents)
+            try exerciseExposureAdjust(session, work: work, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)
             try exerciseFloatingMove(session, work: work, documents: documents)
             try exerciseFloatSelectedPixels(session, work: work, documents: documents)
@@ -1325,7 +1374,7 @@ enum EngineSmokeTest {
                 && !document.colorInfo.hasEmbeddedProfile
                 && !document.colorInfo.profileLabel.isEmpty,
               "a fresh document caches RGB u8 non-linear state and the builtin profile")
-        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision))",
+        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision) · \(document.colorInfo.profileLabel))",
               "the title reports the cached mode and precision")
 
         // The Mode items check the cached mode — RGB here — and
@@ -1352,7 +1401,7 @@ enum EngineSmokeTest {
               "the reload reports the image grayscale")
         check(document.undoInfo.undoCount == undoBefore + 1, "the conversion is one undo step")
         check(document.hasUnsavedChanges, "the converted image is dirty")
-        check(controller.window?.title == "• Color @ 100% (Grayscale, \(document.info.precision))",
+        check(controller.window?.title == "• Color @ 100% (Grayscale, \(document.info.precision) · \(document.colorInfo.profileLabel))",
               "the title follows the conversion")
         _ = controller.validateMenuItem(modeRGB)
         _ = controller.validateMenuItem(modeGray)
@@ -1472,7 +1521,7 @@ enum EngineSmokeTest {
         check(document.colorInfo.component == .half && document.colorInfo.trc == .linear,
               "the form's choice converts to 16-bit float linear")
         check(document.undoInfo.undoCount == undoBefore + 1, "the precision conversion is one undo step")
-        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision))",
+        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision) · \(document.colorInfo.profileLabel))",
               "the title shows the new precision")
 
         // Undo and redo carry the color state; the title follows both.
@@ -1481,7 +1530,7 @@ enum EngineSmokeTest {
         spin()
         check(document.colorInfo.component == .u8 && document.colorInfo.trc == .nonlinear,
               "undo restores the earlier precision")
-        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision))",
+        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision) · \(document.colorInfo.profileLabel))",
               "the title follows undo")
         document.redo()
         wait { document.pendingWork == 0 }
@@ -1519,7 +1568,7 @@ enum EngineSmokeTest {
         let reopenedController = DocumentWindowController(document: reopenedDocument)
         reopenedController.showWindow(nil)
         defer { reopenedController.window?.close() }
-        check(reopenedController.window?.title == "Color @ 100% (RGB, \(reopenedDocument.info.precision))",
+        check(reopenedController.window?.title == "Color @ 100% (RGB, \(reopenedDocument.info.precision) · \(reopenedDocument.colorInfo.profileLabel))",
               "a reopened document titles from its own state")
 
         // Asking for the mode the image already has is a no-op: no

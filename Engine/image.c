@@ -4,6 +4,7 @@
  */
 #include "engine-private.h"
 #include "effect-state.h"
+#include "foreign-effect-load.h"
 
 #include <math.h>
 #include <string.h>
@@ -338,6 +339,9 @@ glims_image_open (GlimsEngine   *engine,
 
   file = g_file_new_for_path (path);
 
+  GFileInfo *source_info = g_file_query_info (file, GLIMS_FOREIGN_SOURCE_ATTRIBUTES,
+                                             G_FILE_QUERY_INFO_NONE, NULL, NULL);
+
   /* Loading a non-XCF file runs a plug-in, which nests a main loop. */
   engine->busy++;
   vector_guard = glims_vector_load_guard_begin (engine, NULL);
@@ -355,14 +359,21 @@ glims_image_open (GlimsEngine   *engine,
   glims_vector_load_guard_end (vector_guard);
   engine->busy--;
 
-  g_object_unref (file);
-
   if (! image)
-    return glims_fail (error, gerror, "The file could not be opened.");
+    {
+      g_clear_object (&source_info);
+      g_object_unref (file);
+      return glims_fail (error, gerror, "The file could not be opened.");
+    }
 
   g_clear_error (&gerror);
 
-  GlimsStatus restore_status = glims_effect_state_load (image, error);
+  GlimsStatus restore_status = glims_foreign_effects_load (image, file, mime_type,
+                                                          source_info, error);
+  if (restore_status == GLIMS_STATUS_OK)
+    restore_status = glims_effect_state_load (image, error);
+  g_clear_object (&source_info);
+  g_object_unref (file);
   if (restore_status != GLIMS_STATUS_OK)
     {
       g_object_unref (image);

@@ -1349,6 +1349,11 @@ typedef struct GlimsEngineAPI {
   GlimsStatus  (*start)            (const GlimsEngineConfig *config,
                                     GlimsEngine            **engine,
                                     char                   **error);
+  /* One external owner calls stop once, after preventing new engine-call
+   * submissions. Already registered callers drain before their control
+   * storage is freed. Do not race a new call's initial entry with stop;
+   * the engine pointer is invalid after stop returns. Event callbacks
+   * must not call stop (or any other engine function). */
   void         (*stop)             (GlimsEngine *engine);
   void         (*free_string)      (char *string);
   /* "3.2.0" and so on; valid while the engine runs. */
@@ -3049,8 +3054,9 @@ typedef struct GlimsEngineAPI {
                                       char **error);
   /* Slot 147: begin a new merge-only preview with a detached native-format
    * snapshot of a same-image drawable's pixels and committed effects. Supports
-   * gegl:bump-map (height map), gegl:variable-blur (blur mask), and
-   * gegl:gaussian-blur-selective (contrast reference) through their single aux
+   * gegl:bump-map (height map), gegl:variable-blur (blur mask),
+   * gegl:gaussian-blur-selective (contrast reference), and
+   * gegl:negative-darkroom (dodge/burn map) through their single aux
    * pad; all other operations are UNSUPPORTED. target/source are
    * explicit positive IDs; target must be a pixel-behaving layer, including a previously
    * rasterized source. Groups and editable sources are not merge targets.
@@ -3208,6 +3214,28 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_rasterize_layers) (GlimsEngine *engine, GlimsImageID image,
                                         const GlimsItemID *layers, int32_t count,
                                         char **error);
+  /* Slot166: restore the captured ordered vector of 1..256 distinct positive
+   * attached same-image layer ids from retained text/link/vector sources.
+   * Ordinary pixels, groups, masks/channels and missing sources refuse. Every
+   * member, including already-editable no-ops, must pass effective PIXELS and
+   * POSITION locks, write readiness, no floating selection, enabled/unfrozen
+   * Undo and zero open Undo groups. Known missing/empty retained link file or
+   * buffer is refused using in-memory facts; admission never stats/loads files.
+   * The whole vector is validated and strongly held before mutation. Changed
+   * members share one native Restore Layer Sources Undo; all-no-op requests
+   * change no history/dirty state. Identities, topology and ordered selection
+   * stay with the layers, but regeneration may resize/reposition pixels and
+   * masks or rename layers. Links reload current external content; Undo/Redo
+   * is not an immutable linked-file snapshot. Void native setters do not
+   * report rendering success: postchecks confirm retained source kind and
+   * editable behavior, not pixel correctness. Detected Core/load/monitor
+   * failure may leave changes inside the one Undo group; errors explicitly
+   * warn some layers may have changed/use Undo and refresh authoritative state,
+   * with no rollback promise. Ordinary admission refusals change nothing.
+   * The vector is borrowed for this synchronous engine-thread call only. */
+  GlimsStatus (*image_restore_layer_sources) (GlimsEngine *engine, GlimsImageID image,
+                                             const GlimsItemID *layers, int32_t count,
+                                             char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

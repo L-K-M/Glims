@@ -13,6 +13,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var viewAngleAlert: NSAlert?
     private var paintSourceAlert: NSAlert?
     private var batchRasterizeAlert: NSAlert?
+    private var batchRestoreAlert: NSAlert?
     private(set) var softProofController: SoftProofController?
     private var savedSoftProof: CanvasSoftProof?
     private let preferences: EditorPreferences
@@ -1180,6 +1181,61 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         endPendingEdits()
         ChannelForms.edit(id, in: imageDocument, on: window)
     }
+
+    // MARK: Channel menu
+
+    // Known channel picks are mirrored before they settle and do not set
+    // targetCommandIsPending. Counted work must drain before resolving a
+    // main-menu target; explicit palette row commands retain their own IDs.
+    private var channelMenuBaseAllowed: Bool {
+        ChannelMenuPolicy.baseEditingAllowed(
+            acceptsEdits: imageDocument.acceptsEdits,
+            isBusy: EngineActivity.shared.isBusy || PlugInCommands.isRunning
+                || imageDocument.pendingWork != 0,
+            previewBusy: previewBusy,
+            sheetAttached: window?.attachedSheet != nil,
+            isClosing: closeStarted || imageDocument.isClosing,
+            targetCommandIsPending: imageDocument.targetCommandIsPending)
+    }
+
+    private var selectedSavedChannelMenuTarget: EngineSession.Channel? {
+        ChannelMenuPolicy.savedTarget(in: imageDocument.channels, selectedIDs: imageDocument.selectedChannelIDs)
+    }
+
+    @objc func channelAttributesMenu(_ sender: Any?) {
+        guard channelMenuBaseAllowed, !imageDocument.floatingState.isActive,
+              let channel = selectedSavedChannelMenuTarget else { return }
+        editChannelAttributes(channel.id)
+    }
+
+    @objc func duplicateChannelMenu(_ sender: Any?) {
+        guard channelMenuBaseAllowed, !imageDocument.floatingState.isActive,
+              let channel = selectedSavedChannelMenuTarget else { return }
+        imageDocument.duplicateChannel(channel.id)
+    }
+
+    @objc func deleteChannelMenu(_ sender: Any?) {
+        guard channelMenuBaseAllowed, !imageDocument.floatingState.isActive,
+              let channel = selectedSavedChannelMenuTarget else { return }
+        imageDocument.deleteChannel(channel.id)
+    }
+
+    @objc func returnToLayersMenu(_ sender: Any?) {
+        guard canReturnToLayersFromMenu else { return }
+        imageDocument.returnToLayers()
+    }
+
+    private var canReturnToLayersFromMenu: Bool {
+        channelMenuBaseAllowed && imageDocument.isChannelTargetActive
+            && imageDocument.activeLayer != nil && !imageDocument.floatingState.isActive
+    }
+
+    @objc func channelToSelectionMenu(_ sender: NSMenuItem) {
+        guard channelMenuBaseAllowed, let channel = selectedSavedChannelMenuTarget,
+              let tag = UInt32(exactly: sender.tag),
+              let operation = EngineSession.SelectOperation(rawValue: tag) else { return }
+        imageDocument.channelToSelection(channel.id, operation: operation)
+    }
     @objc func toggleMaskShowing(_ sender: Any?) { imageDocument.toggleMaskShowing() }
 
     /// Layer ▸ Mask ▸ Mask to Selection ▸ …; the item's tag carries the
@@ -1219,7 +1275,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         return notes.isEmpty ? nil : "\(LayerRowView.lockNames(lock).capitalized): \(notes.joined(separator: "; "))"
     }
 
-    /// Name, opacity, blend mode and visibility of the selected layer.
+    /// Name, blend mode and visibility of the selected layer.
     @objc func layerProperties(_ sender: Any?) {
         guard let window, let id = imageDocument.activeLayer,
               let layer = imageDocument.layers.first(where: { $0.id == id }) else { return }
@@ -1227,7 +1283,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // multi-selection it refuses instead of editing the primary alone.
         guard !imageDocument.refuseSingleLayerCommand("Layer Properties") else { return }
         let name = NSTextField(string: layer.name)
-        let opacity = NSTextField(string: String(Int((layer.opacity * 100).rounded())))
         let mode = NSPopUpButton(frame: .zero, pullsDown: false)
         mode.addItems(withTitles: Self.blendModes)
         mode.selectItem(withTitle: layer.mode)
@@ -1235,7 +1290,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         visible.state = layer.isVisible ? .on : .off
         let grid = NSGridView(views: [
             [NSTextField(labelWithString: "Name:"), name],
-            [NSTextField(labelWithString: "Opacity (%):"), opacity],
             [NSTextField(labelWithString: "Mode:"), mode],
             [NSGridCell.emptyContentView, visible],
         ])
@@ -1252,8 +1306,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             guard response == .alertFirstButtonReturn, let self else { return }
             var change = EngineSession.LayerChange()
             if name.stringValue != layer.name, !name.stringValue.isEmpty { change.name = name.stringValue }
-            let newOpacity = min(max(opacity.doubleValue, 0), 100) / 100
-            if abs(newOpacity - layer.opacity) > 0.001 { change.opacity = newOpacity }
             if let title = mode.titleOfSelectedItem, title != layer.mode { change.mode = title }
             if (visible.state == .on) != layer.isVisible { change.isVisible = visible.state == .on }
             if change != EngineSession.LayerChange() { self.imageDocument.changeLayer(id, change) }
@@ -1672,7 +1724,54 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// rasterized layer from its retained source and discarding its pixel
     /// edits.
     @objc func restoreLayerSource(_ sender: Any?) {
+        if imageDocument.hasMultipleSelectedLayers {
+            presentBatchRestoreConfirmation()
+            return
+        }
         presentLayerSourceConfirmation(.restore)
+    }
+
+    private func presentBatchRestoreConfirmation() {
+        let document = imageDocument
+        let ids = document.selectedLayerIDs
+        let rows = Dictionary(document.layers.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let names = ids.compactMap { rows[$0] }
+        guard let window, window.attachedSheet == nil, batchRestoreAlert == nil,
+              !closeStarted, !previewBusy else { return }
+        if let reason = document.restoreLayerSourcesRefusal(ids) {
+            document.onError?(reason)
+            NSSound.beep()
+            return
+        }
+        guard names.count == ids.count else { return }
+        // Capture names and IDs before committing fields can retarget the
+        // document. This window, never the front window, owns the consent.
+        endPendingEdits()
+        guard !closeStarted, !previewBusy, imageDocument === document,
+              window.attachedSheet == nil, batchRestoreAlert == nil else { return }
+        if let reason = document.restoreLayerSourcesRefusal(ids) {
+            document.onError?(reason)
+            NSSound.beep()
+            return
+        }
+        let alert = LayerRestoreSheet.makeAlert(names: names)
+        batchRestoreAlert = alert
+        alert.beginSheetModal(for: window) { [weak self, weak alert] response in
+            guard let self, let alert, self.batchRestoreAlert === alert else { return }
+            self.batchRestoreAlert = nil
+            guard response == .alertFirstButtonReturn, !self.closeStarted,
+                  self.imageDocument === document, !document.isClosing else { return }
+            guard !self.previewBusy else {
+                document.onError?(ImageDocument.DocumentError.busy.localizedDescription)
+                return
+            }
+            if let reason = document.restoreLayerSourcesRefusal(ids, request: .explicitCommand) {
+                document.onError?(reason)
+                NSSound.beep()
+                return
+            }
+            document.restoreLayerSources(ids)
+        }
     }
 
     /// This window owns the sheet and its complete source vector. Capture
@@ -1885,6 +1984,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return !editingBlocked && !previewBusy
         case #selector(saveSelectionAsChannel(_:)):
             return !editingBlocked && !previewBusy
+        case #selector(channelAttributesMenu(_:)), #selector(duplicateChannelMenu(_:)),
+             #selector(deleteChannelMenu(_:)):
+            return channelMenuBaseAllowed && selectedSavedChannelMenuTarget != nil
+                && !imageDocument.floatingState.isActive
+        case #selector(channelToSelectionMenu(_:)):
+            guard let tag = UInt32(exactly: menuItem.tag),
+                  EngineSession.SelectOperation(rawValue: tag) != nil else { return false }
+            return channelMenuBaseAllowed && selectedSavedChannelMenuTarget != nil
+        case #selector(returnToLayersMenu(_:)):
+            return canReturnToLayersFromMenu
         case #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)):
             return !imageDocument.isClosing
         case #selector(rotateViewClockwise(_:)), #selector(rotateViewCounterclockwise(_:)), #selector(setViewAngle(_:)):
@@ -1979,6 +2088,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 menuItem.toolTip = nil
                 if imageDocument.hasMultipleSelectedLayers {
                     let reason = imageDocument.rasterizeLayerSourcesRefusal(imageDocument.selectedLayerIDs)
+                    menuItem.toolTip = reason
+                    return reason == nil && !closeStarted && !editingBlocked && !previewBusy
+                }
+            }
+            if menuItem.action == #selector(restoreLayerSource(_:)) {
+                menuItem.title = imageDocument.hasMultipleSelectedLayers ? "Restore Layer Sources…" : "Restore Layer Source…"
+                menuItem.toolTip = nil
+                if imageDocument.hasMultipleSelectedLayers {
+                    let reason = imageDocument.restoreLayerSourcesRefusal(imageDocument.selectedLayerIDs)
                     menuItem.toolTip = reason
                     return reason == nil && !closeStarted && !editingBlocked && !previewBusy
                 }
@@ -2753,6 +2871,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             window?.endSheet(alert.window, returnCode: .abort)
         }
         batchRasterizeAlert = nil
+        if let alert = batchRestoreAlert, window?.attachedSheet === alert.window {
+            window?.endSheet(alert.window, returnCode: .abort)
+        }
+        batchRestoreAlert = nil
         // A closing window cancels any in-progress guide drag: the ghost is
         // cleared and no guide action is committed; late events afterwards
         // are ignored by the gesture's captured window/document identity.
