@@ -3831,3 +3831,13 @@ the five-line fix; all 1,014 private leased units also pass with final clean
 AX snapshot and lease release. Independent review, CI and actual keyboard/
 VoiceOver acceptance remain separate gates. See
 `tool-options-accessibility.md`; no new control or action was introduced.
+
+### Negative Darkroom captured source (2026-11-10 candidate)
+
+The existing source chooser now offers a detached dodge/burn map for Negative
+Darkroom and explains that Apply makes filtered pixels opaque. Old source
+admission failed exactly one native check; corrected all-four focused194,
+general1,917/1,917/1,703/1,917, actual UI39 each and 1,015 private leased
+units pass. No new facade slot or upstream patch. See
+`negative-darkroom-source.md` for independent native references, ownership,
+Undo and remaining review/AX/final-release gates.

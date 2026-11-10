@@ -5,12 +5,14 @@ enum SourceFilterOperation: String, Sendable {
     case bumpMap = "gegl:bump-map"
     case variableBlur = "gegl:variable-blur"
     case selectiveGaussianBlur = "gegl:gaussian-blur-selective"
+    case negativeDarkroom = "gegl:negative-darkroom"
 
     var title: String {
         switch self {
         case .bumpMap: return "Bump Map"
         case .variableBlur: return "Variable Blur"
         case .selectiveGaussianBlur: return "Selective Gaussian Blur"
+        case .negativeDarkroom: return "Negative Darkroom"
         }
     }
 
@@ -19,7 +21,15 @@ enum SourceFilterOperation: String, Sendable {
         case .bumpMap: return "Bump map"
         case .variableBlur: return "Variable blur"
         case .selectiveGaussianBlur: return "Selective Gaussian blur"
+        case .negativeDarkroom: return "Negative darkroom"
         }
+    }
+
+    var sourceExplanation: String {
+        if self == .negativeDarkroom {
+            return "Preview uses a snapshot of this source. Apply makes filtered pixels opaque; Undo restores them."
+        }
+        return "Preview uses a snapshot of this source. Apply changes the target pixels; Undo restores them."
     }
 
     var sourceLabel: String {
@@ -27,6 +37,7 @@ enum SourceFilterOperation: String, Sendable {
         case .bumpMap: return "Height map"
         case .variableBlur: return "Blur mask"
         case .selectiveGaussianBlur: return "Contrast reference"
+        case .negativeDarkroom: return "Dodge/burn map"
         }
     }
 }
@@ -122,8 +133,7 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
         targetLabel.setAccessibilityLabel("\(operation.accessibilityName) target")
         targetLabel.lineBreakMode = .byWordWrapping
 
-        let explanation = NSTextField(labelWithString:
-            "Preview uses a snapshot of this source. Apply changes the target pixels; Undo restores them.")
+        let explanation = NSTextField(labelWithString: operation.sourceExplanation)
         explanation.setAccessibilityLabel("\(operation.accessibilityName) source explanation")
         explanation.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         explanation.lineBreakMode = .byWordWrapping
