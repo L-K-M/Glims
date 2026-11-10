@@ -12,6 +12,14 @@ enum SemanticImageCommand {
     case resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: NSColor)
     case crop(CGRect)
 
+    /// The same resolve-first policy used by these live image services.
+    var requiresResolvedFloatingSelection: Bool {
+        switch self {
+        case .transformImage, .scale, .resizeCanvas, .crop: return true
+        case .selectionShape, .selectColor, .selectCommand: return false
+        }
+    }
+
     var title: String {
         switch self {
         case .selectionShape(let shape, _):

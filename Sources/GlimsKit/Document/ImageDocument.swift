@@ -4308,6 +4308,10 @@ final class ImageDocument {
         let context = recorderTargetContexts[step.index]
         do {
             if let reason = recorderReplayBlockReason(continuing: true) { throw RecorderReplayError(message: reason) }
+            if step.command.requiresResolvedFloatingSelection,
+               let reason = FloatingControlsLogic.resolveFirstGate(floatingState) {
+                throw RecorderReplayError(message: reason)
+            }
             if Self.recorderCommandNeedsTarget(step.command) {
                 guard let context else { throw RecorderReplayError(message: "This command has no captured target context; record it again.") }
                 switch context {
@@ -4328,6 +4332,10 @@ final class ImageDocument {
             DispatchQueue.main.async { self?.continueRecorderReplay(generation: generation) }
         }) { [session, image] in
             let result = Result {
+                if step.command.requiresResolvedFloatingSelection,
+                   let reason = FloatingControlsLogic.resolveFirstGate(try session.floatingSelection(image)) {
+                    throw RecorderReplayError(message: reason)
+                }
                 if let context { try Self.requireRecorderContext(context, session: session, image: image) }
                 try step.command.apply(session: session, image: image)
             }

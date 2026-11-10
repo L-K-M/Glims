@@ -238,11 +238,17 @@ extension EngineSmokeTest {
             if closeInstead { try require(wait { closed == 1 }, "close observer did not complete") }
             else { try drain(item) }
             spin(0.03)
+            let afterSettlement: RecorderReplayNativeState?
+            if closeInstead { afterSettlement = observed }
+            else { afterSettlement = try snapshot(item.image) }
             expect(acted && item.replayStatus == .cancelled(index: 1) && errors.isEmpty && item.pendingWork == 0,
                    "\(closeInstead ? "Close" : "Cancel") from first-settlement observer fences every later step")
             expect(observed?.pixels == expectedFirst.pixels && observed?.info.width == before.info.width
                     && observed?.info.height == before.info.height && observed?.undo.undoCount == before.undo.undoCount + 1
-                    && (!closeInstead || closed == 1), "observer sees exactly one completed native edit before cancellation/close")
+                    && afterSettlement?.pixels == expectedFirst.pixels
+                    && afterSettlement?.info.width == before.info.width && afterSettlement?.info.height == before.info.height
+                    && afterSettlement?.undo.undoCount == before.undo.undoCount + 1
+                    && (!closeInstead || closed == 1), "observer and drained state contain exactly one native edit before cancellation/close")
             item.onRecorderChange = nil
         }
         let cancelled = try document("Replay cancel at start")
@@ -260,6 +266,34 @@ extension EngineSmokeTest {
         expect(cancelledAtStart && cancelled.replayStatus == .cancelled(index: 0), "start observer cancels before the first queue admission")
         expect(try snapshot(cancelled.image) == beforeCancel, "start cancellation produces no pixels, selection or Undo change")
         cancelled.onRecorderChange = nil
+
+        // Cancellation cannot undo an already accepted job, but its late
+        // acknowledgment must neither advance nor schedule the second command.
+        do {
+            let item = try document("Replay Cancel with native work held")
+            try record(item) { item.transformImage(.flipHorizontal); item.transformImage(.rotate90) }
+            let before = try snapshot(item.image)
+            let expectedImage = try session.duplicateImage(item.image)
+            loose.append(expectedImage)
+            try session.transformImage(expectedImage, .flipHorizontal)
+            let expectedFirst = try snapshot(expectedImage)
+            let release = try hold(item)
+            defer { release.signal() }
+            var errors: [String] = []
+            item.onError = { errors.append($0) }
+            try item.startReplay()
+            try item.cancelReplay()
+            expect(item.replayStatus == .cancelled(index: 0) && item.pendingWork == 1 && commands(item).count == 2,
+                   "in-flight Cancel fences scheduling while the accepted native job remains counted")
+            release.signal()
+            try drain(item)
+            let final = try snapshot(item.image)
+            expect(final.pixels == expectedFirst.pixels && final.info.width == before.info.width
+                    && final.info.height == before.info.height && final.undo.undoCount == before.undo.undoCount + 1
+                    && item.replayStatus == .cancelled(index: 0) && item.pendingWork == 0 && errors.isEmpty
+                    && commands(item).count == 2,
+                   "accepted native job finishes after Cancel, with no second edit or late replay restart")
+        }
 
         // Hold an already-admitted replay step, then exercise real read and
         // manual-write entrypoints before releasing its native queue.
@@ -416,6 +450,25 @@ extension EngineSmokeTest {
             let refused = try attempt(item)
             expect(try refused && snapshot(item.image) == before && session.floatingSelection(item.image) == beforeFloating,
                    "recorded \(operation) also refuses floating selection before any mutation (policy RED)")
+        }
+        do {
+            let item = try document("Fresh-native floating policy")
+            var errors: [String] = []
+            item.onError = { errors.append($0) }
+            try record(item) { item.scale(toWidth: 31, height: 23) }
+            let layer = try session.selectedLayers(item.image)[0]
+            try session.select(.rectangle(CGRect(x: 3, y: 3, width: 8, height: 7)), image: item.image)
+            _ = try session.floatSelection(item.image, target: layer, mode: .copy)
+            let before = try snapshot(item.image)
+            let beforeFloating = try session.floatingSelection(item.image)
+            // No reload or main-runloop spin: cached false must pass the main
+            // gate so the queued fresh native query supplies this refusal.
+            let cacheWasInactive = !item.floatingState.isActive
+            let refused = try attempt(item)
+            expect(try cacheWasInactive && beforeFloating.isActive && refused && failedFirst(item)
+                    && errors == [FloatingControlsLogic.resolveFirstReason]
+                    && snapshot(item.image) == before && session.floatingSelection(item.image) == beforeFloating,
+                   "fresh-native floating selection refuses before mutation despite an inactive cached state")
         }
     }
 }
