@@ -2589,12 +2589,7 @@ final class ImageDocument {
     func movePickedLayer(_ row: EngineSession.Layer, expected: EngineSession.FloatingState,
                          ownership: MoveSelectionOwnership?, by offset: CGSize) {
         guard offset != .zero else { return }
-        let proposed = row.bounds.offsetBy(dx: offset.width, dy: offset.height)
-        guard offset.width.isFinite, offset.height.isFinite,
-              abs(offset.width) <= 524_288, abs(offset.height) <= 524_288,
-              FloatingControlsLogic.usableMoveBounds(proposed),
-              abs(proposed.minX) <= 524_288, abs(proposed.minY) <= 524_288,
-              abs(proposed.maxX) <= 524_288, abs(proposed.maxY) <= 524_288,
+        guard PickedMoveGeometry.canTranslate(row, in: layers, by: offset),
               acceptsEdits, !strokeIsActive, pendingInput == 0, !targetCommandIsPending,
               floatingState == expected, ownership.map(ownsMoveSelection) ?? expected.isActive else {
             onError?(DocumentError.targetChanged.localizedDescription)
@@ -2602,13 +2597,17 @@ final class ImageDocument {
         }
         endPendingUserEdits()
         guard acceptsEdits, !strokeIsActive, pendingInput == 0, !targetCommandIsPending,
-              floatingState == expected, ownership.map(ownsMoveSelection) ?? expected.isActive else {
+              floatingState == expected, ownership.map(ownsMoveSelection) ?? expected.isActive,
+              PickedMoveGeometry.canTranslate(row, in: layers, by: offset) else {
             onError?(DocumentError.targetChanged.localizedDescription)
             return
         }
         run { session, image in
-            guard try session.floatingSelection(image) == expected,
-                  try session.layers(image).contains(where: { $0.id == row.id && $0.bounds == row.bounds }),
+            guard try session.floatingSelection(image) == expected else {
+                throw DocumentError.targetChanged
+            }
+            let fresh = try session.layers(image)
+            guard PickedMoveGeometry.canTranslate(row, in: fresh, by: offset),
                   try session.selectedLayers(image) == [row.id] else {
                 throw DocumentError.targetChanged
             }

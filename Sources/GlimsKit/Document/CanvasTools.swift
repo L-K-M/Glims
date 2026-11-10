@@ -773,9 +773,8 @@ final class CanvasToolController {
             return cancelPickedMove()
         }
         let raw = row.bounds.offsetBy(dx: request.latest.x - request.start.x, dy: request.latest.y - request.start.y)
-        guard Self.isUsableRect(raw), abs(raw.minX) <= 524_288, abs(raw.minY) <= 524_288,
-              abs(raw.maxX) <= 524_288, abs(raw.maxY) <= 524_288 else {
-            onStatus?("That move is outside the supported image coordinates.")
+        guard Self.isUsableRect(raw) else {
+            onStatus?("That move is outside the supported layer coordinates.")
             return cancelPickedMove()
         }
         let plan: CanvasSnapPlanner.Result
@@ -790,6 +789,13 @@ final class CanvasToolController {
         }
         let preview = SnapTargetCache.pixelMove(bounds: row.bounds,
             proposed: raw.offsetBy(dx: plan.dx, dy: plan.dy), plan: plan)
+        let offset = CGSize(width: preview.rect.minX - row.bounds.minX,
+                            height: preview.rect.minY - row.bounds.minY)
+        guard Self.isUsableRect(preview.rect),
+              PickedMoveGeometry.canTranslate(row, in: request.document.layers, by: offset) else {
+            onStatus?("That move is outside the supported layer coordinates.")
+            return cancelPickedMove()
+        }
         request.proposed = preview.rect; request.plan = preview.plan
         canvas.needsDisplay = true
     }
