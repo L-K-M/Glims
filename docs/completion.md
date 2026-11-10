@@ -99,7 +99,9 @@ bundle with the native and Swift build outputs inaccessible.
       explicit structured-source consent.
 - [x] Per-window RGB destination-ICC canvas rendering, stale-generation
       rejection and independent wide-source pixel-preservation checks.
-- [ ] LUT/physical-display and higher-precision verification, HDR and soft proofing.
+- [x] Window-owned ICC proof setup/toggle, strict proof rendering, captured
+      intents/BPC and counted cancellation/close (integration candidate).
+- [ ] LUT/physical-display and higher-precision verification, HDR and remaining proof controls.
 - [x] Native guides with undo/XCF persistence, per-document management
       sheets and a per-window Show Guides overlay toggle.
 - [x] Pixel rulers, grid controls/overlay and canvas guide dragging.
