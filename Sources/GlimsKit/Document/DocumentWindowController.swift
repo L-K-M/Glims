@@ -12,6 +12,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     let rotationView: CanvasRotationView
     private var viewAngleAlert: NSAlert?
     private var paintSourceAlert: NSAlert?
+    private(set) var softProofController: SoftProofController?
+    private var savedSoftProof: CanvasSoftProof?
     private let preferences: EditorPreferences
     let statusBar = StatusBarView(frame: .zero)
     /// The scroll view hosting the canvas and its native ruler slots;
@@ -887,6 +889,34 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         if let item = sender as? NSMenuItem { item.state = selectionEdgesViewState.menuState }
     }
 
+    @objc func toggleSoftProof(_ sender: Any?) {
+        guard !closeStarted, !imageDocument.isClosing, window?.attachedSheet == nil else { return }
+        if canvas.softProof != nil {
+            canvas.setSoftProof(nil)
+        } else if let proof = savedSoftProof {
+            canvas.setSoftProof(proof)
+        } else {
+            showSoftProofSetup(sender)
+        }
+        if let item = sender as? NSMenuItem { item.state = canvas.softProof == nil ? .off : .on }
+    }
+
+    @objc func showSoftProofSetup(_ sender: Any?) {
+        guard let window, !closeStarted, !imageDocument.isClosing,
+              window.attachedSheet == nil, softProofController == nil else { return }
+        let document = imageDocument
+        let controller = SoftProofController(document: document, initial: savedSoftProof,
+            destination: { [weak self] in CanvasDisplayDestination.snapshot(window: self?.window) },
+            onApply: { [weak self] proof in
+                guard let self, !self.closeStarted, !document.isClosing,
+                      self.imageDocument === document else { return }
+                self.savedSoftProof = proof
+                self.canvas.setSoftProof(proof)
+            }, onDismiss: { [weak self] in self?.softProofController = nil })
+        softProofController = controller
+        controller.present(on: window)
+    }
+
     // MARK: Snap To
 
     /// View ▸ Snap To ▸ Guides: flips this window's cached snap entry and
@@ -1725,6 +1755,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
             || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || EngineActivity.shared.isBusy || window?.attachedSheet != nil
         switch menuItem.action {
+        case #selector(toggleSoftProof(_:)):
+            menuItem.state = canvas.softProof == nil ? .off : .on
+            return !closeStarted && !imageDocument.isClosing && window?.attachedSheet == nil
+        case #selector(showSoftProofSetup(_:)):
+            return !closeStarted && !imageDocument.isClosing && window?.attachedSheet == nil
         case #selector(duplicateLayer(_:)):
             let ids = imageDocument.selectedLayerIDs
             menuItem.title = ids.count > 1 ? "Duplicate Layers" : "Duplicate Layer"
@@ -2604,6 +2639,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     func windowWillClose(_ notification: Notification) {
         closeStarted = true
+        softProofController?.invalidate()
+        softProofController = nil
         if let alert = viewAngleAlert, window?.attachedSheet === alert.window {
             window?.endSheet(alert.window, returnCode: .abort)
         }
