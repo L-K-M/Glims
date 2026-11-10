@@ -53,8 +53,16 @@ selective_oracle (const guint8 target[BYTES], const guint8 reference[BYTES],
   GeglNode *contrast = gegl_node_new_child (graph, "operation", "gegl:buffer-source", "buffer", aux, NULL);
   GeglNode *blur = gegl_node_new_child (graph, "operation", SELECTIVE,
                                       "blur-radius", settings->radius, "max-delta", settings->delta, NULL);
-  if (!source || !contrast || !blur || !gegl_node_connect_to (source, "output", blur, "input")) goto cleanup;
-  if (connect_reference && !gegl_node_connect_to (contrast, "output", blur, "aux")) goto cleanup;
+  if (!source || !contrast || !blur) goto cleanup;
+  gboolean connected;
+  /* Retain the legacy connection API across supported GEGL headers.
+   * Limit its deprecation suppression to these two oracle connections. */
+  G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+  connected = gegl_node_connect_to (source, "output", blur, "input");
+  if (connected && connect_reference)
+    connected = gegl_node_connect_to (contrast, "output", blur, "aux");
+  G_GNUC_END_IGNORE_DEPRECATIONS
+  if (!connected) goto cleanup;
   gegl_node_blit (blur, 1, GEGL_RECTANGLE (0, 0, SIDE, SIDE), babl_format ("R'G'B'A u8"),
                   out, GEGL_AUTO_ROWSTRIDE, GEGL_BLIT_DEFAULT);
   ok = TRUE;
