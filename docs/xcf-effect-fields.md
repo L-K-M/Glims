@@ -22,8 +22,9 @@ Ordinary effect-mask presence, dimensions, name and tattoo are metadata
 only, and effects nested on per-effect masks remain unsupported in this
 bounded slice.
 
-The scope is a seekable regular local file with an uncompressed XCF
-container version 20 through 26. Versions 20 and 21 have no serialized
+The metadata reader accepts a seekable regular local XCF from version
+20 through 26. The gzip recovery path stages the inner XCF for this
+same reader. Versions 20 and 21 have no serialized
 operation version. On those versions the native correspondence check still
 requires the exact operation name and all other existing fields. Versions
 22 and later retain the operation-version check. Version 26 carries per-channel
@@ -121,10 +122,11 @@ The loader compares pre-load and post-decode file size, required ETag and
 available device/inode attributes. This detects ordinary observable source
 changes; it is not an FD-bound snapshot, content-hash attestation or protection
 against an adversarial ABA replacement with the same metadata. Missing
-required identity evidence refuses recovery. The reader's bounds and
-unsupported formats remain admission limits: plain XCF v20–26 only, with no compressed
-outer containers, effects nested on effect masks, or general
-promise to recover effects discarded by native loading.
+required identity evidence refuses recovery. The reader's bounds apply
+to plain XCF v20–26 and to the inner XCF of a single gzip member.
+Bzip2, xz, nested compressed wrappers and effects nested on effect masks
+remain outside recovery. The native loader may discard unsupported effects
+before recovery can run.
 
 The preserved native runs, checked against their manifests at source
 `946ded1`, record:
@@ -193,8 +195,8 @@ A separate ordinary LaunchServices document-open event accepted the complex
 8×6 foreign file with three layers in the app, then exited cleanly. The
 File > Open panel choose-file route remains unverified; this event does not
 stand in for that interaction or a final self-contained release workflow.
-Compressed containers, nested effect masks and stronger file attestation
-remain outside the current scope.
+Nested effect masks and stronger file attestation remain outside the
+current scope.
 
 ## Legacy effect records
 
@@ -208,3 +210,20 @@ configured native effect, source and rendered pixels, retain the mask,
 start with empty Undo/Redo, and leave the files unchanged. The pure suite
 passes 78 checks with the preserved native corpus. The other engine builds
 exercise general conformance; the legacy native oracle is pinned to 3.2.8.
+
+## Gzip-wrapped effect records
+
+GIMP opens the original compressed file and reports the inner XCF MIME.
+Effect recovery checks the original gzip signature after the native
+load. Glims supplements and images without effects keep their existing
+paths. Recovery checks the regular source descriptor against the
+original size, device and inode, then retains the same-file stamp check
+before native effect settings can change.
+
+Recovery decodes one complete gzip member into a private temporary
+file. It checks the trailer, rejects trailing data and limits input
+and decoded output separately to 4 GiB. The bounded XCF reader parses
+the staged copy. The recovery pass deletes the temporary file and
+directory before binding effects. GIMP's first decompression still
+uses its own loader. Native image identity, Save and Revert refer to
+the original file.
