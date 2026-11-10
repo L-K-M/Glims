@@ -22,6 +22,9 @@ static gint oilify_source_checks;
 typedef enum { OILIFY_PLAIN, OILIFY_RADIUS, OILIFY_EXPONENT, OILIFY_BOTH, OILIFY_SAME_MAP, OILIFY_TARGET_MAP } OilifyRole;
 typedef struct { Fixture f; GimpLayer *radius, *exponent; } OilifyCase;
 typedef struct { guint8 drawable[BYTES], projection[BYTES]; } OilifyFrame;
+/* In the cropped 14x15 input, a radius of six times the dark linear
+ * luminance can stay below one and sample only the center. */
+enum { OILIFY_FIXTURE_RADIUS = 32 };
 
 static gboolean
 has_oilify_sources (void)
@@ -39,6 +42,7 @@ native_brightness (GimpLayer *layer, gdouble value)
   gboolean ok = FALSE;
   if (filter) {
     gimp_drawable_filter_apply (filter, NULL);
+    gimp_drawable_filter_layer_mask_freeze (filter);
     ok = gimp_drawable_filter_commit (filter, TRUE, NULL, FALSE);
     if (!ok) gimp_drawable_filter_abort (filter);
   }
@@ -73,7 +77,14 @@ setup_oilify_case (GlimsEngine *engine, OilifyCase *c, OilifyRole role)
   if (role == OILIFY_BOTH && (!native_brightness (c->f.source, 0.2) || !native_brightness (target, -0.15))) return FALSE;
   const GlimsPoint points[] = {{9, 11}, {23, 26}};
   GlimsSelectOptions options = {.struct_size = sizeof options, .operation = GLIMS_SELECT_REPLACE};
-  return api->select_shape (engine, c->f.id, GLIMS_SHAPE_RECTANGLE, points, 2, &options) == GLIMS_STATUS_OK;
+  if (api->select_shape (engine, c->f.id, GLIMS_SHAPE_RECTANGLE, points, 2, &options) != GLIMS_STATUS_OK) return FALSE;
+  if (role == OILIFY_BOTH) {
+    guint8 stored[BYTES], rendered[BYTES];
+    const guint sample = (4 * SIDE + 4) * 4;
+    return read_pixels (c->f.source, FALSE, stored) && read_pixels (c->f.source, TRUE, rendered) &&
+           memcmp (stored + sample, rendered + sample, 4) != 0;
+  }
+  return TRUE;
 }
 
 static gboolean
@@ -99,7 +110,7 @@ reference_map (GimpLayer *source)
 static gboolean
 reference_oilify (OilifyCase *c, OilifyFrame *preview, OilifyFrame *applied, guint8 raw[BYTES])
 {
-  GeglNode *op = gegl_node_new_child (NULL, "operation", "gegl:oilify", "mask-radius", 6,
+  GeglNode *op = gegl_node_new_child (NULL, "operation", "gegl:oilify", "mask-radius", OILIFY_FIXTURE_RADIUS,
                                     "exponent", 8, "intensities", 16, "use-inten", TRUE, NULL);
   GeglBuffer *buffers[2] = {NULL, NULL};
   GeglNode *nodes[2] = {NULL, NULL};
@@ -142,7 +153,7 @@ cleanup:
 static gboolean
 set_oilify_settings (GlimsEngine *engine, GlimsFilterID filter)
 {
-  GlimsFilterValue v = {.kind = GLIMS_FILTER_VALUE_INTEGER, .integer = 6};
+  GlimsFilterValue v = {.kind = GLIMS_FILTER_VALUE_INTEGER, .integer = OILIFY_FIXTURE_RADIUS};
   if (api->filter_set_property (engine, filter, "mask-radius", &v) != GLIMS_STATUS_OK) return FALSE;
   v.integer = 8;
   if (api->filter_set_property (engine, filter, "exponent", &v) != GLIMS_STATUS_OK) return FALSE;
@@ -198,7 +209,7 @@ oilify_pixel_case (GlimsEngine *engine, OilifyRole role, gboolean admitted)
            "native attachment is inactive and refuses reentrant image close");
     GlimsFilterValue v = {.kind = GLIMS_FILTER_VALUE_INTEGER, .integer = 101};
     CHECK (api->filter_set_property (engine, filter, "mask-radius", &v) == GLIMS_STATUS_INVALID_ARGUMENT &&
-           api->filter_get_property (engine, filter, "mask-radius", &v) == GLIMS_STATUS_OK && v.integer == 6,
+           api->filter_get_property (engine, filter, "mask-radius", &v) == GLIMS_STATUS_OK && v.integer == OILIFY_FIXTURE_RADIUS,
            "ordinary scalar validation retains the accepted radius");
     NEED (capture_oilify_frame (&c.f, &after) && !memcmp (&after, &expected_preview, sizeof after),
           "drawable and image projection match the independent native preview exactly");
