@@ -111,6 +111,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-layer-properties" {
+                try exerciseRecorderLayerProperties(session, documents: documents)
+                print(failures == 0 ? "PASSED (recorder layer properties)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents" {
                 try exerciseCloseAll(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (Close All)" : "FAILED: \(failures) failure(s)")
