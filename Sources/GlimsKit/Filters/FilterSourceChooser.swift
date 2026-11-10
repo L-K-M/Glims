@@ -1,6 +1,33 @@
 import AppKit
 
-/// One selectable height-map source offered to the Bump Map filter: the
+/// Operations admitted by the facade's single captured-source contract.
+enum SourceFilterOperation: String, Sendable {
+    case bumpMap = "gegl:bump-map"
+    case variableBlur = "gegl:variable-blur"
+
+    var title: String {
+        switch self {
+        case .bumpMap: return "Bump Map"
+        case .variableBlur: return "Variable Blur"
+        }
+    }
+
+    var accessibilityName: String {
+        switch self {
+        case .bumpMap: return "Bump map"
+        case .variableBlur: return "Variable blur"
+        }
+    }
+
+    var sourceLabel: String {
+        switch self {
+        case .bumpMap: return "Height map"
+        case .variableBlur: return "Blur mask"
+        }
+    }
+}
+
+/// One selectable source offered to a captured-source filter: the
 /// engine's source ID and its display name.
 @MainActor
 struct FilterSourceChoice: Equatable {
@@ -8,7 +35,7 @@ struct FilterSourceChoice: Equatable {
     let name: String
 }
 
-/// The modeless Bump Map source chooser: a popup of the offered sources
+/// The modeless source chooser: a popup of the offered sources
 /// with a Preview/Cancel pair. Preview runs the owner's snapshot preview
 /// for the selected source; its success invalidates (closes) the panel,
 /// its failure keeps the selection and shows the error inline for a
@@ -29,6 +56,8 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
     private weak var hostWindow: NSWindow?
     private let targetName: String
     private let preferredSource: Int32
+    /// Cached identity lets the owner replace a chooser for another filter.
+    let operation: SourceFilterOperation
     private let rows: () -> [FilterSourceChoice]
     private let refusal: () -> String?
     private let preview: (Int32, @escaping (Result<Void, Error>) -> Void) -> Void
@@ -57,13 +86,14 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
     private var lastError: String?
     var onClosed: (() -> Void)?
 
-    init(targetName: String, preferredSource: Int32,
+    init(targetName: String, preferredSource: Int32, operation: SourceFilterOperation = .bumpMap,
          rows: @escaping () -> [FilterSourceChoice],
          refusal: @escaping () -> String?,
          hostWindow: NSWindow?,
          preview: @escaping (Int32, @escaping (Result<Void, Error>) -> Void) -> Void) {
         self.targetName = targetName
         self.preferredSource = preferredSource
+        self.operation = operation
         self.rows = rows
         self.refusal = refusal
         self.hostWindow = hostWindow
@@ -72,7 +102,7 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
                         styleMask: [.titled, .closable, .utilityWindow],
                         backing: .buffered, defer: false)
         super.init()
-        panel.title = "Bump Map Source"
+        panel.title = "\(operation.title) Source"
         panel.isReleasedWhenClosed = false
         panel.delegate = self
         buildContent()
@@ -85,26 +115,26 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
 
     private func buildContent() {
         let targetLabel = NSTextField(labelWithString: "Target: \(targetName)")
-        targetLabel.setAccessibilityLabel("Bump map target")
+        targetLabel.setAccessibilityLabel("\(operation.accessibilityName) target")
         targetLabel.lineBreakMode = .byWordWrapping
 
         let explanation = NSTextField(labelWithString:
             "Preview uses a snapshot of this source. Apply changes the target pixels; Undo restores them.")
-        explanation.setAccessibilityLabel("Bump map source explanation")
+        explanation.setAccessibilityLabel("\(operation.accessibilityName) source explanation")
         explanation.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         explanation.lineBreakMode = .byWordWrapping
         explanation.maximumNumberOfLines = 3
 
-        sourcePopup.setAccessibilityLabel("Height map source")
+        sourcePopup.setAccessibilityLabel("\(operation.sourceLabel) source")
         sourcePopup.target = self
         sourcePopup.action = #selector(sourceChanged(_:))
 
-        statusLabel.setAccessibilityLabel("Bump map source status")
+        statusLabel.setAccessibilityLabel("\(operation.accessibilityName) source status")
         statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         statusLabel.lineBreakMode = .byWordWrapping
         statusLabel.maximumNumberOfLines = 3
 
-        previewButton.setAccessibilityLabel("Preview Bump Map")
+        previewButton.setAccessibilityLabel("Preview \(operation.title)")
         previewButton.keyEquivalent = "\r"
         previewButton.target = self
         previewButton.action = #selector(previewPressed(_:))
@@ -114,7 +144,7 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
         cancelButton.action = #selector(cancelPressed(_:))
 
         let grid = NSGridView(views: [
-            [NSTextField(labelWithString: "Height map:"), sourcePopup],
+            [NSTextField(labelWithString: "\(operation.sourceLabel):"), sourcePopup],
         ])
         grid.rowAlignment = .firstBaseline
         let buttons = NSStackView(views: [previewButton, cancelButton])
