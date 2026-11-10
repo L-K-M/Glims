@@ -15,7 +15,7 @@ final class CloseAllMenuTests: XCTestCase {
         XCTAssertEqual(item.keyEquivalentModifierMask, [.command, .option])
         let closeIndex = try XCTUnwrap(file.items.firstIndex { $0.action == #selector(NSWindow.performClose(_:)) })
         XCTAssertTrue(file.items[closeIndex + 1] === item)
-        XCTAssertEqual(MenuShortcutBridge.collect(menu).records.filter { $0.item === item }.count, 1)
+        XCTAssertEqual(MenuShortcutBridge.collect(from: menu).records.filter { $0.item === item }.count, 1)
     }
 
     func testNoDocumentCloseAllIsDisabledAndQueuesNothing() {
