@@ -19,7 +19,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/L-K-M/Rigi.git",
-                 revision: "30047b9f5c5d0973c2df2cc3918b676f02fab8a0")
+                 revision: "a5801f241c40f9cbe34a0ecc0f7702a0b0cef0c3")
     ],
     targets: [
         // The engine facade header, shared with the C adapter in Engine/.
