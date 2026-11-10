@@ -3608,3 +3608,25 @@ An initial Babl encoding-space intent error was reproduced before correction.
 The actual form passes 23 checks on each engine; 988 units pass. Integrated
 release/CI checks and final review are pending. See `soft-proof-render.md` for the
 read-only contract and remaining physical/HDR/proof-control scope.
+
+### Rigi saved-group width growth adoption (2026-11-10 candidate)
+
+Glims stages Rigi revision `a5801f2` for the saved palette-group width growth
+fix. Rigi's 134 unit tests, gallery smoke, release build and independent review
+passed at that revision. Rigi PR #19 is merged after CI and completed review;
+this pin is its exact tested head, now an ancestor of Rigi main. Glims passes
+988 unit tests and 2,771 engine-backed app checks with this pin.
+Consumer CI, review and adoption merge remain pending.
+
+### Installed MacPorts recipe inventory (2026-11-10 candidate)
+
+The standalone `scripts/installed-port-provenance.py` inventories requested
+installed recipes and recorded PortGroups through immutable SQLite reads,
+checking exact original hashes/sizes and database/WAL/rollback-journal stability. It refuses
+implicit output overwrites and never writes inside the source prefix.
+Nineteen temporary-registry fixtures pass; a read-only aom/zlib/libidn2 sample
+verified metadata with the registry DB/WAL/SHM unchanged. Source completeness
+is explicitly not assessed: no Tcl evaluation, conditional patch inference,
+source archive or release integration is added. See
+[`installed-port-provenance.md`](installed-port-provenance.md) for usage and
+evidence limits. Independent review/integration remain pending.
