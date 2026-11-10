@@ -3580,3 +3580,13 @@ the expected admission failure; installed catalog/property and independent GEGL
 pixel/alpha oracles passed. The unchanged 128-check post-admission harness and
 four-engine regression matrix await execution. Swift descriptor/chooser wiring
 is not part of this native slice. See `filter-inputs.md` for the exact contract.
+
+### Path lifecycle menu commands (2026-11-10 candidate)
+
+Edit now exposes New Path and Delete Path beside Stroke Path and Fill Path.
+Each responder action uses its owning document's existing path service,
+including default names and native Undo. Validation reads cached edit and
+path-selection state; Delete requires exactly one path, while New accepts
+an empty or multiple selection. Floating selections preserve path editing.
+The actual-menu regression reproduced the missing commands before the fix;
+all-four-engine checks and final integration are tracked in the PR.
