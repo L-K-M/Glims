@@ -4,11 +4,13 @@ import AppKit
 enum SourceFilterOperation: String, Sendable {
     case bumpMap = "gegl:bump-map"
     case variableBlur = "gegl:variable-blur"
+    case selectiveGaussianBlur = "gegl:gaussian-blur-selective"
 
     var title: String {
         switch self {
         case .bumpMap: return "Bump Map"
         case .variableBlur: return "Variable Blur"
+        case .selectiveGaussianBlur: return "Selective Gaussian Blur"
         }
     }
 
@@ -16,6 +18,7 @@ enum SourceFilterOperation: String, Sendable {
         switch self {
         case .bumpMap: return "Bump map"
         case .variableBlur: return "Variable blur"
+        case .selectiveGaussianBlur: return "Selective Gaussian blur"
         }
     }
 
@@ -23,6 +26,7 @@ enum SourceFilterOperation: String, Sendable {
         switch self {
         case .bumpMap: return "Height map"
         case .variableBlur: return "Blur mask"
+        case .selectiveGaussianBlur: return "Contrast reference"
         }
     }
 }
@@ -351,13 +355,13 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
         } else if let selectionID, !live {
             statusLabel.textColor = .secondaryLabelColor
             let name = knownNames[selectionID] ?? "The selected source"
-            statusLabel.stringValue = "\(name) is no longer available. Choose another height map source, then press Preview."
+            statusLabel.stringValue = "\(name) is no longer available. Choose another \(operation.sourceLabel.lowercased()) source, then press Preview."
         } else if let gate {
             statusLabel.textColor = .secondaryLabelColor
             statusLabel.stringValue = gate
         } else if currentRows.isEmpty {
             statusLabel.textColor = .secondaryLabelColor
-            statusLabel.stringValue = "No height map sources are available."
+            statusLabel.stringValue = "No \(operation.sourceLabel.lowercased()) sources are available."
         } else {
             statusLabel.textColor = .secondaryLabelColor
             statusLabel.stringValue = ""
