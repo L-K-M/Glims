@@ -538,7 +538,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                               started: (@MainActor (Result<Void, Error>) -> Void)? = nil,
                               buildPanel: @escaping @MainActor (ImageDocument.FilterPreviewStart) -> FilterPreviewPanel?) {
         // A catalog reply may arrive after windowWillClose cancels
-        // previews, while rendering still drains before isClosing flips.
+        // previews, while rendering drains after document admission stops.
         guard !closeStarted, !imageDocument.isClosing else {
             started?(.failure(ImageDocument.DocumentError.closed)); return
         }

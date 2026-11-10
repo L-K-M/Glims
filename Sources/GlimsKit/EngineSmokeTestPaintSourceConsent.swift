@@ -131,8 +131,8 @@ extension EngineSmokeTest {
         settle()
         check(originalStateIsIntact(), "paint-consent Cancel preserves the editable source and every captured native state")
 
-        // Window close begins before its asynchronous render drain marks
-        // the document closing. A late sheet response must lose that race.
+        // Window close stops document admission while its asynchronous
+        // render drain retains the native image. A late response must refuse.
         let closingImage = try session.newImage(width: 160, height: 100)
         let closingText = try session.addTextLayer(image: closingImage, text: "Closing", settings: settings,
                                                    at: CGPoint(x: 12, y: 12))
@@ -172,19 +172,21 @@ extension EngineSmokeTest {
               let lateRasterize = button(closingSheet, "Rasterize") else {
             return check(false, "the fresh closing document owns a paint consent sheet")
         }
-        closingController.canvas.enqueueRenderBarrier { renderHeld.signal(); renderRelease.wait() }
+        closingController.canvas.enqueueRenderBarrier { renderHeld.signal(); _ = renderRelease.wait(timeout: .now() + 30) }
         guard renderHeld.wait(timeout: .now() + 5) == .success else {
             return check(false, "the render drain is held before the window close begins")
         }
         closingController.windowWillClose(Notification(name: NSWindow.willCloseNotification,
                                                         object: closingController.window))
-        check(closingController.closeStarted && !closingDocument.isClosing,
-              "window close starts while the native image remains alive behind the render barrier")
+        check(closingController.closeStarted && closingDocument.isClosing && !closingDocument.acceptsEdits
+                && (try? session.info(closingImage)) != nil,
+              "window close stops admission while the native image remains alive behind the render barrier")
         lateRasterize.performClick(nil)
         spin(0.03)
         closingDocument.inputQueue.sync {}
         wait { closingDocument.pendingWork == 0 }
-        check(try !closingDocument.isClosing && closingDocument.pendingWork == 0
+        check(try closingDocument.isClosing && !closingDocument.acceptsEdits && closingDocument.pendingWork == 0
+                && (try? session.info(closingImage)) != nil
                 && session.layerSource(closingText, image: closingImage) == editable
                 && session.undoInfo(closingImage) == closingUndo
                 && session.copyPixels(closingImage, merged: true).pixels == closingPixels,
