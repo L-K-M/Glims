@@ -322,6 +322,60 @@ class CoreSourceCollectionTests(unittest.TestCase):
         self.assertNotIn("sources/babl/missing/future.c", files)
         self.assertFalse(list(self.root.glob(".glims-core-sources-*")))
 
+    def test_case_alias_composed_symlink_escape_cli_refuses_before_publication(self):
+        repo = self.repos["gimp"]
+        (repo / "a").symlink_to(".")
+        (repo / "b").symlink_to("A/A/A/../../..")
+        self.components["gimp"] = (repo, self.commit(repo))
+
+        result, output = self.collect_cli()
+        self.assertEqual(result.returncode, 1, result.stderr or result.stdout)
+        self.assertIn("symlink escapes", result.stderr)
+        self.assertFalse(os.path.lexists(output))
+        self.assertFalse(list(self.root.glob(".glims-core-sources-*")))
+
+    def test_unicode_alias_composed_symlink_escape_cli_refuses_before_publication(self):
+        repo = self.repos["gimp"]
+        (repo / "e\u0301").symlink_to(".")
+        (repo / "escape").symlink_to("\u00e9/\u00e9/\u00e9/../../..")
+        self.components["gimp"] = (repo, self.commit(repo))
+
+        result, output = self.collect_cli()
+        self.assertEqual(result.returncode, 1, result.stderr or result.stdout)
+        self.assertIn("symlink escapes", result.stderr)
+        self.assertFalse(os.path.lexists(output))
+        self.assertFalse(list(self.root.glob(".glims-core-sources-*")))
+
+    def test_case_alias_committed_path_collision_cli_refuses_before_publication(self):
+        repo = self.repos["gimp"]
+        blob = self.git(repo, "rev-parse", self.revisions["gimp"] + ":source.c")
+        # Plumbing creates both committed spellings even on a filesystem
+        # that cannot materialize two case-distinct working files.
+        self.git(repo, "update-index", "--add", "--cacheinfo", f"100644,{blob},SOURCE.c")
+        self.git(repo, "commit", "-m", "Synthetic case-colliding tree")
+        self.components["gimp"] = (repo, self.git(repo, "rev-parse", "HEAD"))
+
+        result, output = self.collect_cli()
+        self.assertEqual(result.returncode, 1, result.stderr or result.stdout)
+        self.assertIn("filename collision", result.stderr)
+        self.assertFalse(os.path.lexists(output))
+        self.assertFalse(list(self.root.glob(".glims-core-sources-*")))
+
+    def test_contained_case_alias_symlinks_cli_preserve_exact_targets(self):
+        repo = self.repos["gegl"]
+        targets = {"a": ".", "b": "A/A/SOURCE.C", "c": "B"}
+        for name, target in targets.items():
+            (repo / name).symlink_to(target)
+        self.components["gegl"] = (repo, self.commit(repo))
+
+        result, output = self.collect_cli()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        _, files, links = self.contents(output)
+        for name, target in targets.items():
+            self.assertEqual(links["sources/gegl/" + name], target)
+        self.assertEqual(files["sources/gegl/source.c"], b"/* committed gegl source */\n")
+        self.assertFalse(list(self.root.glob(".glims-core-sources-*")))
+
 
 if __name__ == "__main__":
     unittest.main()
