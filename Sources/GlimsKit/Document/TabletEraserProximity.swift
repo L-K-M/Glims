@@ -21,8 +21,7 @@ final class TabletEraserProximity {
         // Observe those too, returning every original event exactly once.
         let mask: NSEvent.EventTypeMask = [.tabletProximity, .leftMouseDown, .leftMouseUp,
             .leftMouseDragged, .rightMouseDown, .rightMouseUp, .rightMouseDragged,
-            .otherMouseDown, .otherMouseUp, .otherMouseDragged, .mouseMoved,
-            .mouseEntered, .mouseExited, .cursorUpdate]
+            .otherMouseDown, .otherMouseUp, .otherMouseDragged, .mouseMoved]
         monitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
             self?.observeProximity(event)
             return event
@@ -58,11 +57,13 @@ final class TabletEraserProximity {
     }
 
     private static func isMouseEvent(_ event: NSEvent) -> Bool {
+        // Tracking events (entered/exited/cursorUpdate) do not support subtype.
+        // AppKit raises NSInternalInconsistencyException if it is queried.
+
         switch event.type {
         case .leftMouseDown, .leftMouseUp, .leftMouseDragged,
              .rightMouseDown, .rightMouseUp, .rightMouseDragged,
-             .otherMouseDown, .otherMouseUp, .otherMouseDragged,
-             .mouseMoved, .mouseEntered, .mouseExited, .cursorUpdate: return true
+             .otherMouseDown, .otherMouseUp, .otherMouseDragged, .mouseMoved: return true
         default: return false
         }
     }

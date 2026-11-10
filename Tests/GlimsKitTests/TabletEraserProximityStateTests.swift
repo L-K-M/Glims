@@ -117,4 +117,15 @@ final class TabletEraserProximityStateTests: XCTestCase {
         XCTAssertTrue(keyboard.optionIsDown(flags: .option))
         XCTAssertEqual(tablet.effectiveTool(selected: selected, tabletDeviceID: 30), .paintbrush)
     }
+    @MainActor
+    func testTrackingEventsDoNotReadMouseOnlySubtype() throws {
+        for type: NSEvent.EventType in [.mouseEntered, .mouseExited] {
+            let event = try XCTUnwrap(NSEvent.enterExitEvent(with: type, location: .zero,
+                modifierFlags: [], timestamp: 1, windowNumber: 0, context: nil,
+                eventNumber: 1, trackingNumber: 0, userData: nil))
+            XCTAssertFalse(TabletEraserProximity.isProximityEvent(event))
+            XCTAssertEqual(TabletEraserProximity.shared.effectiveTool(selected: .pencil, event: event), .pencil)
+        }
+    }
+
 }
