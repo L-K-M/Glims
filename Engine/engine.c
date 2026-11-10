@@ -2948,6 +2948,44 @@ static GlimsStatus api_filter_levels_auto (GlimsEngine *e, GlimsFilterID filter,
   return glims_engine_call (e, filter_levels_auto_on_engine, &a);
 }
 
+/* Two ICC blobs keep their full size_t lengths across synchronous dispatch;
+ * no borrowed pointer or profile escapes the completed call. */
+typedef struct {
+  GlimsImageID image;
+  double scale;
+  GlimsRect area;
+  const uint8_t *destination_icc;
+  size_t destination_icc_length;
+  const uint8_t *proof_icc;
+  size_t proof_icc_length;
+  const GlimsProofSettings *settings;
+  uint8_t *pixels;
+  size_t stride;
+  char **error;
+} GlimsProofRenderArgs;
+
+static GlimsStatus
+image_render_proofed_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsProofRenderArgs *a = data;
+  return glims_image_render_proofed (e, a->image, a->scale, a->area,
+                                    a->destination_icc, a->destination_icc_length,
+                                    a->proof_icc, a->proof_icc_length, a->settings,
+                                    a->pixels, a->stride, a->error);
+}
+
+static GlimsStatus
+api_image_render_proofed (GlimsEngine *e, GlimsImageID image, double scale, GlimsRect area,
+                          const uint8_t *destination_icc, size_t destination_icc_length,
+                          const uint8_t *proof_icc, size_t proof_icc_length,
+                          const GlimsProofSettings *settings,
+                          uint8_t *pixels, size_t stride, char **error)
+{
+  GlimsProofRenderArgs a = { image, scale, area, destination_icc, destination_icc_length,
+                            proof_icc, proof_icc_length, settings, pixels, stride, error };
+  return glims_engine_call (e, image_render_proofed_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -3117,6 +3155,7 @@ static const GlimsEngineAPI api_v1 = {
   .filter_input_histogram = api_filter_input_histogram,
   .free_histogram_snapshot = glims_histogram_snapshot_free,
   .filter_levels_auto = api_filter_levels_auto,
+  .image_render_proofed = api_image_render_proofed,
 };
 
 __attribute__ ((visibility ("default")))

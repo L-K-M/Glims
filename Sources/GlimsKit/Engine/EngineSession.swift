@@ -543,7 +543,8 @@ final class EngineSession: @unchecked Sendable {
                 stride, stride * Int(height))
     }
 
-    func render(_ image: Int32, scale: Double, area: CGRect, destinationICC: Data) throws -> CGImage {
+    func render(_ image: Int32, scale: Double, area: CGRect, destinationICC: Data,
+                proof: CanvasSoftProof? = nil) throws -> CGImage {
         let layout = try Self.destinationRenderLayout(scale: scale, area: area,
                                                       iccByteCount: destinationICC.count)
         // Parse ICC only after its byte cap and the output bounds are checked.
@@ -558,11 +559,23 @@ final class EngineSession: @unchecked Sendable {
         }
         var error: UnsafeMutablePointer<CChar>?
         try destinationICC.withUnsafeBytes { icc in
-            try check(api.image_render_to_profile(engine, image, scale, rect,
+            if let proof {
+                var settings = GlimsProofSettings(struct_size: UInt32(MemoryLayout<GlimsProofSettings>.size),
+                    proof_intent: proof.proofIntent.rawValue, display_intent: proof.displayIntent.rawValue,
+                    flags: proof.blackPointCompensation ? GLIMS_PROOF_BLACK_POINT_COMPENSATION.rawValue : 0)
+                try proof.profileICC.withUnsafeBytes { simulation in
+                    try check(api.image_render_proofed(engine, image, scale, rect,
+                        icc.baseAddress?.assumingMemoryBound(to: UInt8.self), destinationICC.count,
+                        simulation.baseAddress?.assumingMemoryBound(to: UInt8.self), proof.profileICC.count,
+                        &settings, data.mutableBytes.assumingMemoryBound(to: UInt8.self), stride, &error), error)
+                }
+            } else {
+                try check(api.image_render_to_profile(engine, image, scale, rect,
                                                   icc.baseAddress?.assumingMemoryBound(to: UInt8.self),
                                                   destinationICC.count,
                                                   data.mutableBytes.assumingMemoryBound(to: UInt8.self),
                                                   stride, &error), error)
+            }
         }
 
         // `data` owns the bytes for the provider's (and so the image's)
@@ -2375,7 +2388,7 @@ final class EngineSession: @unchecked Sendable {
 
     /// A rendering intent for profile conversion (GlimsProfileIntent):
     /// the facade's own values 1–4, never the engine's native enum.
-    enum ProfileIntent: UInt32, Codable {
+    enum ProfileIntent: UInt32, Codable, Sendable {
         case perceptual = 1, relativeColorimetric, saturation, absoluteColorimetric
 
         /// The choices the Convert form offers, in display order.

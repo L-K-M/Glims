@@ -209,8 +209,8 @@ GlimsStatus glims_image_render     (GlimsEngine *e, GlimsImageID id, double scal
 GlimsStatus glims_projection_prepare_read (GlimsOpenImage *open, double scale, GlimsRect area,
                                            GeglBuffer **buffer_out);
 
-/* display-render.c: conservative adapter caps for slot 132
- * (image_render_to_profile), documented in glims_engine.h and
+/* display-render.c: conservative adapter caps for slots132/164
+ * (image_render_to_profile/image_render_proofed), documented in glims_engine.h and
  * docs/display-destination-render.md. The ICC cap keeps the length well
  * inside LCMS's 32-bit size domain; the temp cap bounds the per-call
  * scratch allocation (rows are processed in chunks of at most this
@@ -220,6 +220,11 @@ GlimsStatus glims_projection_prepare_read (GlimsOpenImage *open, double scale, G
 GlimsStatus glims_image_render_to_profile (GlimsEngine *e, GlimsImageID id, double scale, GlimsRect area,
                                            const uint8_t *destination_icc, size_t destination_icc_length,
                                            uint8_t *pixels, size_t stride, char **error);
+GlimsStatus glims_image_render_proofed (GlimsEngine *e, GlimsImageID id, double scale, GlimsRect area,
+                                       const uint8_t *destination_icc, size_t destination_icc_length,
+                                       const uint8_t *proof_icc, size_t proof_icc_length,
+                                       const GlimsProofSettings *settings,
+                                       uint8_t *pixels, size_t stride, char **error);
 GlimsStatus glims_image_save       (GlimsEngine *e, GlimsImageID id, const char *path, char **error);
 GlimsStatus glims_image_save_copy  (GlimsEngine *e, GlimsImageID id, const char *path, char **error);
 GlimsStatus glims_image_export     (GlimsEngine *e, GlimsImageID id, const char *path, char **error);

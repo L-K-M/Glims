@@ -59,6 +59,7 @@ final class EngineCanvasView: NSView {
     /// the owning window's actual backing color space, refreshed on window,
     /// backing and screen-profile changes. Read-only seam for tests.
     private(set) var destination = CanvasDisplayDestination.srgbFallback
+    private(set) var softProof: CanvasSoftProof?
     /// Destination observer tokens for the owning window and its associated
     /// screen; swapped on window changes and removed on detach/close. The
     /// blocks hold `self` weakly, so no observer retain cycle.
@@ -200,6 +201,17 @@ final class EngineCanvasView: NSView {
         setNeedsRender()
     }
 
+    func setSoftProof(_ proof: CanvasSoftProof?) {
+        guard softProof != proof, !renderingStopped, !document.isClosing else { return }
+        softProof = proof
+        generation += 1
+        tiles.removeAll()
+        staleTiles.removeAll()
+        failedTiles.removeAll()
+        needsDisplay = true
+        setNeedsRender()
+    }
+
     private func updateFrameSize() {
         setFrameSize(CanvasGeometry.viewSize(imageSize: CGSize(width: Double(document.info.width),
                                                                height: Double(document.info.height)),
@@ -230,10 +242,11 @@ final class EngineCanvasView: NSView {
         // a destination change bumps the generation, so this result is
         // discarded on arrival instead of repopulating the cleared cache.
         let destination = self.destination
+        let proof = self.softProof
         renderQueue.async {
             let result = Result {
                 try CanvasDisplayDestination.render(session, image: image, scale: scale, area: area,
-                                                    destination: destination)
+                                                    destination: destination, proof: proof)
             }
             DispatchQueue.main.async {
                 self.renderInFlight = false
@@ -273,7 +286,7 @@ final class EngineCanvasView: NSView {
         while let key = nextTileToRender() {
             store(try CanvasDisplayDestination.render(document.session, image: document.image,
                                                        scale: deviceScale, area: deviceRect(for: key),
-                                                       destination: destination), for: key)
+                                                       destination: destination, proof: softProof), for: key)
             count += 1
         }
         needsDisplay = true
