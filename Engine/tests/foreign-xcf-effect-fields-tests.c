@@ -12,7 +12,9 @@
 #include "core/gimpitem.h"
 #include "core/gimplayer.h"
 #include "core/gimplayer-new.h"
+#include "core/gimplist.h"
 #include "core/gimppickable.h"
+#include "file/file-open.h"
 #include "file/file-save.h"
 #include "plug-in/gimppluginmanager.h"
 #include "plug-in/gimppluginmanager-file.h"
@@ -80,7 +82,7 @@ typedef struct {
 
 typedef struct {
   guint32 version;
-  gsize layer, effect, properties_end;
+  gsize layer, effect, operation_version, properties_start, properties_end;
   gsize fields[3];
   guint32 values[3];
 } EffectRecord;
@@ -213,8 +215,10 @@ locate_record (const guint8 *bytes, gsize size, EffectRecord *record)
   if (occurrences (bytes, size, SENTINEL, sizeof SENTINEL) != 1) return FALSE;
   cursor.offset = effect;
   if (!string_is (&cursor, SENTINEL) || !string_is (&cursor, ICON) ||
-      !string_is (&cursor, OPERATION) ||
-      !string_is (&cursor, gegl_operation_get_op_version (OPERATION))) return FALSE;
+      !string_is (&cursor, OPERATION)) return FALSE;
+  record->operation_version = cursor.offset;
+  if (!string_is (&cursor, gegl_operation_get_op_version (OPERATION))) return FALSE;
+  record->properties_start = cursor.offset;
   static const guint32 prefix[] = { 8, 33, 7, 37, 36, 35, 46, 44 };
   for (guint i = 0; i < G_N_ELEMENTS (prefix); i++) {
     guint32 property, length, value;
@@ -386,6 +390,91 @@ clean_open (Fixture *fixture)
       undo.undo_count == 0 && undo.redo_count == 0;
 }
 
+static gboolean
+legacy_native_control (GlimsEngine *engine, const gchar *path)
+{
+  GFile *file = g_file_new_for_path (path);
+  GimpPDBStatusType status;
+  gboolean vector = FALSE;
+  const gchar *mime = NULL;
+  GError *error = NULL;
+  engine->busy++;
+  GimpImage *image = file_open_image (engine->gimp, gimp_get_user_context (engine->gimp), NULL, file,
+      0, 0, FALSE, FALSE, NULL, GIMP_RUN_NONINTERACTIVE, &vector, &status, &mime, &error);
+  engine->busy--;
+  GList *layers = image ? gimp_image_get_layer_list (image) : NULL;
+  GimpContainer *filters = layers && !layers->next
+      ? gimp_drawable_get_filters (GIMP_DRAWABLE (layers->data)) : NULL;
+  GList *effects = GIMP_IS_LIST (filters) ? GIMP_LIST (filters)->queue->head : NULL;
+  GimpDrawableFilter *effect = effects && !effects->next && GIMP_IS_DRAWABLE_FILTER (effects->data)
+      ? GIMP_DRAWABLE_FILTER (effects->data) : NULL;
+  gboolean valid = image && status == GIMP_PDB_SUCCESS && !error && !vector &&
+      g_strcmp0 (mime, "image/x-xcf") == 0 && effect &&
+      g_strcmp0 (gimp_object_get_name (GIMP_OBJECT (effect)), SENTINEL) == 0 &&
+      g_strcmp0 (gegl_node_get_operation (gimp_drawable_filter_get_operation (effect)), OPERATION) == 0;
+  if (error) fprintf (stderr, "OBS native legacy XCF open: %s\n", error->message);
+  g_list_free (layers);
+  g_clear_error (&error);
+  g_clear_object (&image);
+  g_object_unref (file);
+  return valid;
+}
+
+static void
+legacy_control (GlimsEngine *engine, guint version, const gchar *modern, gsize size,
+                const EffectRecord *record, const gfloat expected[COMPONENTS])
+{
+  Fixture loaded = {0};
+  GlimsImageID opened = 0;
+  char *error = NULL;
+  GError *file_error = NULL;
+  gchar *name = g_strdup_printf ("foreign-explicit-effect-v%u.xcf", version);
+  gchar *path = g_build_filename (work_dir, name, NULL);
+  gchar *legacy = NULL, *reread = NULL;
+  gsize reread_size = 0;
+  gfloat actual[COMPONENTS];
+  printf ("OBS legacy_version=%u\n", version);
+  NEED (record->version == 22 && record->operation_version < record->properties_start &&
+        record->properties_start < record->properties_end && record->properties_end + 8 < size,
+        "legacy fixture derives from the bounded v22 effect record");
+  legacy = g_memdup2 (modern, size);
+  legacy[12] = '0' + (version - 20);
+  // The first three strings and all properties are identical. v20/v21
+  // have no fourth string. Move only the TLVs and mask-offset word, and
+  // leave a gap before the untouched absolute mask location.
+  gsize tail = record->properties_end + 8;
+  gsize removed = record->properties_start - record->operation_version;
+  memmove (legacy + record->operation_version, legacy + record->properties_start,
+           tail - record->properties_start);
+  memset (legacy + tail - removed, 0, removed);
+  NEED (g_file_set_contents (path, legacy, (gssize) size, &file_error),
+        "legacy oracle is written separately without a Glims carrier");
+  NEED (legacy_native_control (engine, path), "direct GIMP open accepts the legacy record and effect");
+  NEED (api->image_open (engine, path, &opened, &error) == GLIMS_STATUS_OK,
+        "public image_open accepts the validated legacy effect without a Glims carrier");
+  NEED (opened_fixture (engine, opened, &loaded), "legacy open retains its layer, precision and dimensions");
+  GimpDrawableFilter *effect = one_effect (&loaded);
+  CHECK (effect && explicit_fields (effect) && gimp_drawable_filter_get_mask (effect),
+         "legacy open preserves all three explicit native fields and the effect mask");
+  CHECK (clean_open (&loaded), "legacy open starts clean without a carrier or Undo history");
+  CHECK (read_pixels (&loaded, FALSE, actual) && !memcmp (actual, source_pixels, sizeof actual),
+         "legacy open preserves exact FLOAT_LINEAR source bytes");
+  CHECK (read_pixels (&loaded, TRUE, actual) && pixel_delta (actual, expected) < 2e-4,
+         "legacy rendered pixels match the independently configured native oracle");
+  CHECK (read_file (path, &reread, &reread_size) && reread_size == size && !memcmp (reread, legacy, size),
+         "public open does not modify the legacy source file");
+cleanup:
+  if (file_error) fprintf (stderr, "OBS legacy fixture write: %s\n", file_error->message);
+  if (error) fprintf (stderr, "OBS legacy public open: %s\n", error);
+  if (opened) api->image_close (engine, opened);
+  clear_error (&error);
+  g_clear_error (&file_error);
+  g_free (reread);
+  g_free (legacy);
+  g_free (path);
+  g_free (name);
+}
+
 static void
 plain_control (GlimsEngine *engine)
 {
@@ -541,6 +630,8 @@ regression (GlimsEngine *engine, gpointer unused)
          "public open leaves the foreign byte oracle unchanged");
   CHECK (explicit_fields (filter) && read_pixels (&source, TRUE, actual) && pixel_delta (actual, expected) < 2e-4,
          "opening the foreign document leaves the original native source and oracle unchanged");
+  legacy_control (engine, 20, patched, size, &encoded, expected);
+  legacy_control (engine, 21, patched, size, &encoded, expected);
 cleanup:
   if (file_error) fprintf (stderr, "OBS oracle write: %s\n", file_error->message);
   if (error) fprintf (stderr, "OBS public open: %s\n", error);
