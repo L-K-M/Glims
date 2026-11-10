@@ -10,6 +10,11 @@ enum RecorderFileSemanticBridge {
         /// unsuccessful inspection row, for a faithful unchanged Save As.
         let file: RecorderFileValue
         let log: RecorderLog<SemanticImageCommand>
+
+        fileprivate init(file: RecorderFileValue, log: RecorderLog<SemanticImageCommand>) {
+            self.file = file
+            self.log = log
+        }
     }
 
     static func prepare(_ file: RecorderFileValue) throws -> PreparedRecording {
