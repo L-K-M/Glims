@@ -44,6 +44,9 @@ public enum GlimsApplication {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "metadata-rating-edit" {
                 return EngineSmokeTestHost.run()
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-rasterize-batch" {
+                return EngineSmokeTest.runHostedLayerRasterizeBatch()
+            }
             return EngineSmokeTest.run()
         case .interactive, .printVersion:
             let controller = AppController()

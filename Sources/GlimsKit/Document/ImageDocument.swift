@@ -2009,6 +2009,64 @@ final class ImageDocument {
         }, completion: completion)
     }
 
+    /// Cached admission for the captured source vector. The menu/sheet uses
+    /// `.confirmation`; an explicit confirmed command may become a no-op.
+    /// This never queries the engine or substitutes the current selection.
+    func rasterizeLayerSourcesRefusal(_ ids: [Int32],
+                                     request: LayerRasterizePolicy.Request = .confirmation) -> String? {
+        rasterizeLayerSourcesError(ids, request: request)?.localizedDescription
+    }
+
+    private func rasterizeLayerSourcesError(_ ids: [Int32],
+                                           request: LayerRasterizePolicy.Request) -> Error? {
+        if isClosing { return DocumentError.closed }
+        if !acceptsEdits || targetCommandIsPending { return DocumentError.busy }
+        if let reason = FloatingControlsLogic.resolveFirstGate(floatingState) {
+            return EngineSession.EngineError(status: Int32(GLIMS_STATUS_BUSY.rawValue), message: reason)
+        }
+        let reason: String?
+        if isMaskTargetActive {
+            reason = "Finish mask editing before rasterizing layers."
+        } else if isChannelTargetActive {
+            reason = "Return to Layers before rasterizing; the current channel cannot take that edit."
+        } else {
+            reason = LayerRasterizePolicy.refusal(ids: ids, layerIDs: Set(layers.map(\.id)),
+                sources: layerSources, locks: layerLocks, request: request)
+        }
+        return reason.map {
+            EngineSession.EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: $0)
+        }
+    }
+
+    /// Rasterize the explicit ordered IDs captured by a confirmation. Field
+    /// commits may change selection; the accepted vector still names these
+    /// objects in this document. Native code preflights them behind every
+    /// earlier input, then performs one batch call/Undo. Counted target work
+    /// holds close until both native execution and completion have drained;
+    /// its existing cleanup refreshes authoritative state even on failure.
+    func rasterizeLayerSources(_ layers: [Int32],
+                               completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        let captured = layers
+        onUserCommand?()
+        if let error = rasterizeLayerSourcesError(captured, request: .explicitCommand) {
+            onError?(error.localizedDescription)
+            NSSound.beep()
+            return completion(.failure(error))
+        }
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        // Field/text commits may start close, preview or exclusive work, or
+        // enqueue a target replacement. Recheck before accepting any work.
+        if let error = rasterizeLayerSourcesError(captured, request: .explicitCommand) {
+            onError?(error.localizedDescription)
+            NSSound.beep()
+            return completion(.failure(error))
+        }
+        enqueueTargetCommand({ session, image in
+            try session.rasterizeLayers(image, layers: captured)
+        }, completion: completion)
+    }
+
     /// The menu commands act on the layer the engine selects when they
     /// run — layer 0, the adapter's "selected layer at execution" — so a
     /// creation or pick queued ahead of them is what they hit, not the
