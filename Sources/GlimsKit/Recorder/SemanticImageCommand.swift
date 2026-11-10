@@ -33,7 +33,7 @@ enum SemanticImageCommand {
     case selectCommand(EngineSession.SelectCommand, radius: Double)
     case transformImage(EngineSession.Transform)
     case scale(width: Int, height: Int)
-    case resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: NSColor)
+    case resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: RecorderColor)
     case crop(CGRect)
     case layerProperties(LayerProperties)
 
