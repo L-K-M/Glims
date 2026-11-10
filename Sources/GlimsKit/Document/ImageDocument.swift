@@ -37,7 +37,10 @@ final class ImageDocument {
     private(set) var recorderBindingDescriptions: [Int: RecorderBindingDescription] = [:]
     private var recorderSymbols: [RecorderRuntimeTarget: UUID] = [:]
     private(set) var recorderLoadedFile: RecorderFileValue?
+    private(set) var recorderFileMetadata: RecorderFileMetadata
     private var recorderRevision = UUID()
+    private var recorderSavedRevision: UUID?
+    private static let recorderFileQueue = DispatchQueue(label: "ch.lkmc.Glims.recorder.file", qos: .userInitiated)
     private var recorderReplayGeneration = UUID()
     private var recorderReplayWaitingGeneration: UUID?
 
@@ -78,6 +81,11 @@ final class ImageDocument {
         case quickMask(Int32)
     }
 
+    enum RecorderSaveOutcome: Equatable {
+        case savedCurrentRevision
+        case savedEarlierRevision
+    }
+
     enum RecorderInstallError: LocalizedError, Equatable {
         case wrongDocument, staleRecording, unsettled, changedImage, incompleteChoices, duplicateTarget
         case unavailableTarget(String)
@@ -85,8 +93,8 @@ final class ImageDocument {
 
         var errorDescription: String? {
             switch self {
-            case .wrongDocument: return "This recording was confirmed for a different image."
-            case .staleRecording: return "The current recording changed. Confirm the replacement again."
+            case .wrongDocument: return "This Recorder action was confirmed for a different image."
+            case .staleRecording: return "The current recording changed. Choose the Recorder action again."
             case .unsettled: return "Stop recording or replay and wait for accepted commands to finish."
             case .changedImage: return "The image changed while checking the recording targets. Confirm the targets again."
             case .incompleteChoices: return "Choose one target for each required recording symbol."
@@ -387,7 +395,10 @@ final class ImageDocument {
         self.image = image
         self.name = name
         self.fileState = DocumentFileState(openedFrom: source)
-        self.info = try session.info(image)
+        let initialInfo = try session.info(image)
+        self.info = initialInfo
+        self.recorderFileMetadata = RecorderFileMetadata(origin: .init(imageLabel: name,
+            initialWidth: initialInfo.width, initialHeight: initialInfo.height))
         self.colorInfo = try session.colorInfo(image)
         try reload()
         refreshSelection()
@@ -4582,14 +4593,71 @@ final class ImageDocument {
         recorderDescriptions = RecorderDescriptionCatalog()
         recorderBindingDescriptions.removeAll()
         recorderLoadedFile = nil
+        recorderFileMetadata = RecorderFileMetadata(origin: .init(imageLabel: name,
+            initialWidth: info.width, initialHeight: info.height))
         recorderRevision = UUID()
+        recorderSavedRevision = nil
     }
 
-    /// The checkpoint fences replacement of the current settled recording.
-    /// The caller still supplies the user's explicit target choices.
+    var hasUnsavedRecordingChanges: Bool {
+        recorderFileMetadata.hasUnsavedChanges(in: recorder, revision: recorderRevision, savedRevision: recorderSavedRevision)
+    }
+
+    func renameRecording(_ name: String) throws {
+        guard !isClosing else { throw DocumentError.closed }
+        if try recorderFileMetadata.rename(name) {
+            recorderRevision = UUID()
+            notifyRecorderChanged()
+        }
+    }
+
+    /// Identifies the owning document and current settled recording revision.
     func recorderInstallCheckpoint() throws -> RecorderInstallCheckpoint {
-        try requireRecorderInstallReadiness(holding: 0)
+        try requireRecorderReadiness(holding: 0)
         return RecorderInstallCheckpoint(owner: recoveryID, revision: recorderRevision)
+    }
+
+    /// Save the admitted revision to the chosen URL. The file name and the
+    /// recording's intrinsic name are independent. An accepted write can
+    /// finish after an edit or close request, with its result reported once
+    /// while the work count still holds the document.
+    func saveRecording(to url: URL, checkpoint: RecorderInstallCheckpoint,
+                       completion: @escaping @MainActor (Result<RecorderSaveOutcome, Error>) -> Void) {
+        do { try requireRecorderReadiness(checkpoint, holding: 0) }
+        catch { return completion(.failure(error)) }
+
+        let metadata = recorderFileMetadata
+        let log = recorder
+        let descriptions = recorderDescriptions
+        let bindings = recorderBindingDescriptions
+        let loaded = recorderLoadedFile
+        pendingWork += 1
+        Self.recorderFileQueue.async {
+            let written = Result {
+                let file: RecorderFileValue
+                if let loaded { file = metadata.namedCopy(of: loaded) }
+                else {
+                    file = try RecorderFileCodec.snapshot(log, recordingID: metadata.recordingID, name: metadata.name,
+                                                          origin: metadata.origin, descriptions: descriptions, bindings: bindings)
+                }
+                try RecorderFileStore.save(file, to: url)
+            }
+            DispatchQueue.main.async {
+                defer { self.jobDidFinish(input: false) }
+                switch written {
+                case .failure(let error): completion(.failure(error))
+                case .success:
+                    if self.recorderRevision == checkpoint.revision {
+                        self.recorderSavedRevision = checkpoint.revision
+                        self.notifyRecorderChanged()
+                    }
+                    // An observer may have edited the recording reentrantly.
+                    let outcome: RecorderSaveOutcome = self.recorderRevision == checkpoint.revision
+                        ? .savedCurrentRevision : .savedEarlierRevision
+                    completion(.success(outcome))
+                }
+            }
+        }
     }
 
     /// Verify bindings against this image on its input queue. The MainActor
@@ -4599,7 +4667,7 @@ final class ImageDocument {
                           checkpoint: RecorderInstallCheckpoint,
                           choices: [UUID: RecorderInstallChoice],
                           completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
-        do { try requireRecorderInstallReadiness(checkpoint, holding: 0) }
+        do { try requireRecorderReadiness(checkpoint, holding: 0) }
         catch { return completion(.failure(error)) }
         let version = stateVersion
         pendingWork += 1
@@ -4610,7 +4678,7 @@ final class ImageDocument {
                 // if either callback asks to close the document reentrantly.
                 defer { self.jobDidFinish(input: false) }
                 let committed = Result<Void, Error> {
-                    try self.requireRecorderInstallReadiness(checkpoint, holding: 1)
+                    try self.requireRecorderReadiness(checkpoint, holding: 1)
                     guard self.stateVersion == version else { throw RecorderInstallError.changedImage }
                     let installation = try checked.get()
                     self.recorder = installation.log
@@ -4619,7 +4687,9 @@ final class ImageDocument {
                     self.recorderBindingDescriptions = installation.bindings
                     self.recorderSymbols = installation.symbols
                     self.recorderLoadedFile = installation.file
+                    self.recorderFileMetadata = RecorderFileMetadata(file: installation.file)
                     self.recorderRevision = UUID()
+                    self.recorderSavedRevision = self.recorderRevision
                     self.recorderReplayGeneration = UUID()
                     self.recorderReplayWaitingGeneration = nil
                 }
@@ -4629,8 +4699,8 @@ final class ImageDocument {
         }
     }
 
-    private func requireRecorderInstallReadiness(_ checkpoint: RecorderInstallCheckpoint? = nil,
-                                                 holding workCount: Int) throws {
+    private func requireRecorderReadiness(_ checkpoint: RecorderInstallCheckpoint? = nil,
+                                          holding workCount: Int) throws {
         guard !isClosing else { throw DocumentError.closed }
         if let checkpoint {
             guard checkpoint.owner == recoveryID else { throw RecorderInstallError.wrongDocument }
@@ -4961,6 +5031,7 @@ final class ImageDocument {
 
     private func reserveRecording(context: RecorderContext?) throws -> RecorderCapture {
         let reservation = try recorder.reserve()
+        recorderRevision = UUID()
         if let context { recorderTargetContexts[reservation.ordinal] = context }
         var targets: [RecorderRuntimeTarget] = []
         switch context {
@@ -5174,6 +5245,7 @@ final class ImageDocument {
             if let context = confirmed.context { recorderTargetContexts[reservation.ordinal] = context }
             recorderDescriptions.acceptFirst(confirmed.descriptions)
             recorderBindingDescriptions[reservation.ordinal] = confirmed.binding
+            recorderRevision = UUID()
             notifyRecorderChanged()
         } catch RecorderLog<SemanticImageCommand>.Refusal.staleReservation {
             // Clear/start deliberately invalidate older callbacks.
