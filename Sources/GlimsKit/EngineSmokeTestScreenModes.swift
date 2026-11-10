@@ -369,6 +369,155 @@ extension EngineSmokeTest {
         expect(try session.copyPixels(b.imageDocument.image, merged: true).pixels == otherPixels
             && session.undoInfo(b.imageDocument.image) == otherHistory,
                "captured palette changes preserve B's native pixels and history")
+        // File > Close must also reach an owned borderless document while
+        // its real field editor is first responder. Each mode gets a fresh
+        // native edit and actual Cancel/Don't Save sheet controls.
+        guard let fileMenu = NSApp.mainMenu?.item(withTitle: "File")?.submenu,
+              let installedClose = fileMenu.items.first(where: {
+                  $0.action == #selector(NSWindow.performClose(_:))
+              }) else { throw NSError(domain: "ScreenModeFixture", code: 4) }
+        for mode in [DocumentScreenMode.fullScreenWithMenu, .fullScreenBare] {
+            let owner = try make("Dirty Close \(mode.title)")
+            let doc = owner.imageDocument
+            let window = owner.window!
+            let beforePixels = try session.copyPixels(doc.image, merged: true).pixels
+            let beforeUndo = try session.undoInfo(doc.image)
+            let modeOptionsToRestore = NSApp.presentationOptions
+            let closeField = NSTextField(frame: NSRect(x: 30, y: 40, width: 180, height: 24))
+            closeField.stringValue = "Close field \(mode.rawValue)"
+            window.contentView?.addSubview(closeField)
+            defer {
+                if let sheet = window.attachedSheet {
+                    window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                    try? wait("dirty Close cleanup dismisses its sheet", { window.attachedSheet == nil })
+                }
+                closeField.removeFromSuperview()
+            }
+            doc.fill(at: .zero, mode: .selection, color: .red, threshold: 0, sampleMerged: false)
+            try wait("known native edit drains before dirty Close", { doc.pendingWork == 0 })
+            let editedPixels = try session.copyPixels(doc.image, merged: true).pixels
+            let editedUndo = try session.undoInfo(doc.image)
+            let editedHistory = try session.history(doc.image)
+            expect(doc.hasUnsavedChanges && editedPixels != beforePixels
+                && Array(editedPixels.prefix(4)) == [255, 0, 0, 255]
+                && editedUndo.undoCount == beforeUndo.undoCount + 1,
+                   "\(mode.title) dirty Close starts with a known native red edit and one Undo")
+            owner.setScreenMode(mode)
+            try settled(owner, mode)
+            let ownedFrame = window.frame
+            let ownedStyle = window.styleMask
+            let ownedOptions = NSApp.presentationOptions
+
+            func focusCloseField() throws {
+                window.makeKeyAndOrderFront(nil)
+                _ = window.makeFirstResponder(closeField)
+                try wait("\(mode.title) Close field has the actual editor", {
+                    guard let editor = closeField.currentEditor() else { return false }
+                    return NSApp.keyWindow === window && window.firstResponder === editor
+                })
+            }
+            func dispatchFieldClose(_ phase: String) throws {
+                try focusCloseField()
+                fileMenu.update()
+                let target = NSApp.target(forAction: #selector(NSWindow.performClose(_:)),
+                                          to: nil, from: installedClose)
+                let targetWindow = (target as? NSWindow) ?? (target as? NSView)?.window
+                expect(installedClose.target == nil && installedClose.isEnabled
+                    && targetWindow === window && window.firstResponder === closeField.currentEditor(),
+                       "\(mode.title) \(phase) File menu validates and resolves Close from its actual field editor")
+                expect(NSApp.sendAction(#selector(NSWindow.performClose(_:)), to: nil, from: installedClose),
+                       "\(mode.title) \(phase) installed Close dispatches through the responder chain")
+            }
+            func closePrompt(_ phase: String) throws -> (NSWindow, NSButton, NSButton) {
+                try wait("\(mode.title) \(phase) native save prompt opens", {
+                    guard let sheet = window.attachedSheet else { return false }
+                    return sheet.isVisible && sheet.sheetParent === window && NSApp.keyWindow === sheet
+                })
+                guard let sheet = window.attachedSheet, let content = sheet.contentView else {
+                    throw NSError(domain: "ScreenModeFixture", code: 5)
+                }
+                let buttons = descendants(content, NSButton.self)
+                guard let cancel = buttons.first(where: { $0.title == "Cancel" }),
+                      let discard = buttons.first(where: { $0.title == "Don't Save" }) else {
+                    throw NSError(domain: "ScreenModeFixture", code: 6)
+                }
+                expect(buttons.contains { $0.title == "Save" }
+                    && sheet.sheetParent === window && a.window?.attachedSheet == nil
+                    && b.window?.attachedSheet == nil,
+                       "\(mode.title) \(phase) actual Save/Cancel/Don't Save prompt belongs only to its dirty owner")
+                return (sheet, cancel, discard)
+            }
+            try focusCloseField()
+            expect(owner.screenModeSnapshot != nil && !window.styleMask.contains(.titled)
+                && window.firstResponder === closeField.currentEditor(),
+                   "\(mode.title) retains an owned snapshot with a real field editor before Close")
+            try dispatchFieldClose("Cancel")
+            let (_, cancel, _) = try closePrompt("Cancel")
+            var cancelResult: Bool?
+            var cancelCompletions = 0
+            // Observe the existing close completion after the menu opened the
+            // sheet. Its visible save prompt refuses a duplicate sheet; this
+            // acknowledgment proves Cancel's native sheet completion ran.
+            owner.requestClose { cancelCompletions += 1; cancelResult = $0 }
+            cancel.performClick(nil)
+            try wait("\(mode.title) Cancel close completion arrives", {
+                cancelResult != nil && window.attachedSheet == nil
+            })
+            expect(cancelResult == false && cancelCompletions == 1,
+                   "\(mode.title) actual Cancel reports the registered close refusal exactly once")
+            expect(window.isVisible && !owner.closeStarted && !doc.isClosing && doc.hasUnsavedChanges
+                && owner.screenMode == mode && owner.screenModeState.phase == .stable
+                && owner.screenModeSnapshot != nil && window.frame == ownedFrame
+                && window.styleMask == ownedStyle && NSApp.presentationOptions == ownedOptions,
+                   "\(mode.title) Cancel keeps the edited owner, frame and owned presentation intact")
+            expect(try session.copyPixels(doc.image, merged: true).pixels == editedPixels
+                && session.undoInfo(doc.image) == editedUndo && session.history(doc.image) == editedHistory,
+                   "\(mode.title) Cancel preserves every edited native pixel and complete Undo history")
+            try dispatchFieldClose("Don't Save")
+            let (_, _, discard) = try closePrompt("Don't Save")
+            var discardResult: Bool?
+            var discardCompletions = 0
+            owner.requestClose { discardCompletions += 1; discardResult = $0 }
+            discard.performClick(nil)
+            try wait("\(mode.title) Don't Save closes and drains its native owner", {
+                discardResult != nil && window.attachedSheet == nil
+                    && (try? session.info(doc.image)) == nil
+            })
+            expect(discardResult == true && discardCompletions == 1 && owner.closeStarted
+                && owner.screenModeState.isClosed && owner.screenModeSnapshot == nil
+                && doc.isClosing && !window.isVisible && NSApp.presentationOptions == modeOptionsToRestore,
+                   "\(mode.title) Don't Save closes once, drains the image and releases owned presentation")
+            expect(try session.copyPixels(b.imageDocument.image, merged: true).pixels == otherPixels
+                && session.undoInfo(b.imageDocument.image) == otherHistory && !b.closeStarted,
+                   "\(mode.title) dirty Close leaves the unrelated B image and Undo history untouched")
+        }
+
+        // A titled document exercises the normal window.performClose fallback
+        // while a native field editor is the first responder.
+        let fallback = try make("Windowed Close Fallback")
+        let fallbackWindow = fallback.window!
+        let fallbackField = NSTextField(frame: NSRect(x: 30, y: 40, width: 180, height: 24))
+        fallbackWindow.contentView?.addSubview(fallbackField)
+        fallbackWindow.makeKeyAndOrderFront(nil)
+        _ = fallbackWindow.makeFirstResponder(fallbackField)
+        try wait("windowed Close field becomes first responder", {
+            guard let editor = fallbackField.currentEditor() else { return false }
+            return NSApp.keyWindow === fallbackWindow && fallbackWindow.firstResponder === editor
+        })
+        fileMenu.update()
+        expect(fallback.screenModeSnapshot == nil && fallbackWindow.styleMask.contains(.titled)
+            && !fallback.imageDocument.hasUnsavedChanges && installedClose.isEnabled,
+               "windowed fallback validates the installed Close menu with no owned snapshot")
+        expect(NSApp.sendAction(#selector(NSWindow.performClose(_:)), to: nil, from: installedClose),
+               "windowed field-editor Close dispatches through the normal responder route")
+        try wait("windowed fallback Close actually drains its native owner", {
+            fallback.closeStarted && !fallbackWindow.isVisible
+                && (try? session.info(fallback.imageDocument.image)) == nil
+        })
+        expect(fallback.screenModeState.isClosed && fallback.screenModeSnapshot == nil
+            && fallbackWindow.attachedSheet == nil && NSApp.presentationOptions == originalOptions,
+               "windowed normal Close closes the native image and preserves application presentation")
+
         panel.orderOut(nil)
         a.setScreenMode(.fullScreenWithMenu)
         try settled(a, .fullScreenWithMenu)
