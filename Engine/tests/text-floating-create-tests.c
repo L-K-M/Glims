@@ -449,6 +449,7 @@ exercise (GlimsEngine *e, gpointer data)
     if (error) { api->free_string (error); error = NULL; }
     refuse (e, &rejected, &expected, "x", &settings, (GlimsPoint){0,0}, GLIMS_STATUS_NOT_FOUND, "same item ID is now ordinary, never anchor fallback");
     NEED (make_scene (e, &caller->scene, 1), "create image retained for external caller transport proof");
+    caller->expected.struct_size = sizeof caller->expected;
     NEED (api->image_floating_selection (e, caller->scene.image, &caller->expected) == GLIMS_STATUS_OK, "capture external caller expectation");
     before = state (e, &caller->scene, TRUE);
     refuse (e, &rejected, &caller->expected, "x", &settings, (GlimsPoint){0,0}, GLIMS_STATUS_NOT_FOUND, "another image's captured float never retargets A");
