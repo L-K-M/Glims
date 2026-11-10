@@ -1,11 +1,12 @@
 import AppKit
 
-/// Operations admitted by the facade's single captured-source contract.
+/// Operations admitted by the facade's captured-source contracts.
 enum SourceFilterOperation: String, Sendable {
     case bumpMap = "gegl:bump-map"
     case variableBlur = "gegl:variable-blur"
     case selectiveGaussianBlur = "gegl:gaussian-blur-selective"
     case negativeDarkroom = "gegl:negative-darkroom"
+    case displace = "gegl:displace"
 
     var title: String {
         switch self {
@@ -13,6 +14,7 @@ enum SourceFilterOperation: String, Sendable {
         case .variableBlur: return "Variable Blur"
         case .selectiveGaussianBlur: return "Selective Gaussian Blur"
         case .negativeDarkroom: return "Negative Darkroom"
+        case .displace: return "Displace"
         }
     }
 
@@ -22,10 +24,14 @@ enum SourceFilterOperation: String, Sendable {
         case .variableBlur: return "Variable blur"
         case .selectiveGaussianBlur: return "Selective Gaussian blur"
         case .negativeDarkroom: return "Negative darkroom"
+        case .displace: return "Displace"
         }
     }
 
     var sourceExplanation: String {
+        if self == .displace {
+            return "Preview uses snapshots of both maps. Apply changes the target pixels; Undo restores them. Set an axis amount to zero to disable it."
+        }
         if self == .negativeDarkroom {
             return "Preview uses a snapshot of this source. Apply makes filtered pixels opaque; Undo restores them."
         }
@@ -38,6 +44,7 @@ enum SourceFilterOperation: String, Sendable {
         case .variableBlur: return "Blur mask"
         case .selectiveGaussianBlur: return "Contrast reference"
         case .negativeDarkroom: return "Dodge/burn map"
+        case .displace: return "Horizontal / radial map"
         }
     }
 }
@@ -75,9 +82,19 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
     let operation: SourceFilterOperation
     private let rows: () -> [FilterSourceChoice]
     private let refusal: () -> String?
-    private let preview: (Int32, @escaping (Result<Void, Error>) -> Void) -> Void
+    private enum PreviewHandler {
+        case single((Int32, @escaping (Result<Void, Error>) -> Void) -> Void)
+        case displace((Int32, Int32, @escaping (Result<Void, Error>) -> Void) -> Void)
+    }
+    private let previewHandler: PreviewHandler
+    private var usesDisplaceSources: Bool {
+        if case .displace = previewHandler { return true }
+        return false
+    }
+    private static let verticalSourceLabel = "Vertical / angular map"
 
     private let sourcePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let verticalSourcePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let previewButton = NSButton(title: "Preview", target: nil, action: nil)
     private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
     private let statusLabel = NSTextField(labelWithString: "")
@@ -86,12 +103,15 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
     private var currentRows: [FilterSourceChoice] = []
     /// Row IDs parallel to the popup's items (including a disabled missing row).
     private var installedIDs: [Int32] = []
+    private var verticalInstalledIDs: [Int32] = []
     /// The user's explicit selection; preserved across refreshes and never
     /// retargeted when its row disappears.
     private var selectionID: Int32?
+    private var verticalSelectionID: Int32?
     /// The ID captured when Preview was accepted; a refresh while running
     /// must not overwrite it.
     private var capturedPreviewID: Int32?
+    private var capturedVerticalPreviewID: Int32?
     private var previewRequest: UUID?
     /// Last known display name per ID, used for the disabled missing row.
     private var knownNames: [Int32: String] = [:]
@@ -101,23 +121,39 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
     private var lastError: String?
     var onClosed: (() -> Void)?
 
-    init(targetName: String, preferredSource: Int32, operation: SourceFilterOperation = .bumpMap,
-         rows: @escaping () -> [FilterSourceChoice],
-         refusal: @escaping () -> String?,
-         hostWindow: NSWindow?,
-         preview: @escaping (Int32, @escaping (Result<Void, Error>) -> Void) -> Void) {
+    /// Retains the original single-source initializer and callback contract.
+    convenience init(targetName: String, preferredSource: Int32, operation: SourceFilterOperation = .bumpMap,
+                     rows: @escaping () -> [FilterSourceChoice],
+                     refusal: @escaping () -> String?, hostWindow: NSWindow?,
+                     preview: @escaping (Int32, @escaping (Result<Void, Error>) -> Void) -> Void) {
+        self.init(targetName: targetName, preferredSource: preferredSource, operation: operation,
+                  rows: rows, refusal: refusal, hostWindow: hostWindow, handler: .single(preview))
+    }
+
+    /// Displace requires two independently chosen IDs. Neither role inherits a
+    /// current/preferred source, including when the catalog arrives later.
+    convenience init(displaceTargetName: String, rows: @escaping () -> [FilterSourceChoice],
+                     refusal: @escaping () -> String?, hostWindow: NSWindow?,
+                     previewDisplace: @escaping (Int32, Int32, @escaping (Result<Void, Error>) -> Void) -> Void) {
+        self.init(targetName: displaceTargetName, preferredSource: 0, operation: .displace,
+                  rows: rows, refusal: refusal, hostWindow: hostWindow, handler: .displace(previewDisplace))
+    }
+
+    private init(targetName: String, preferredSource: Int32, operation: SourceFilterOperation,
+                 rows: @escaping () -> [FilterSourceChoice], refusal: @escaping () -> String?,
+                 hostWindow: NSWindow?, handler: PreviewHandler) {
         self.targetName = targetName
         self.preferredSource = preferredSource
         self.operation = operation
         self.rows = rows
         self.refusal = refusal
         self.hostWindow = hostWindow
-        self.preview = preview
+        self.previewHandler = handler
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 190),
                         styleMask: [.titled, .closable, .utilityWindow],
                         backing: .buffered, defer: false)
         super.init()
-        panel.title = "\(operation.title) Source"
+        panel.title = usesDisplaceSources ? "Displace Sources" : "\(operation.title) Source"
         panel.isReleasedWhenClosed = false
         panel.delegate = self
         buildContent()
@@ -142,6 +178,11 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
         sourcePopup.setAccessibilityLabel("\(operation.sourceLabel) source")
         sourcePopup.target = self
         sourcePopup.action = #selector(sourceChanged(_:))
+        if usesDisplaceSources {
+            verticalSourcePopup.setAccessibilityLabel("\(Self.verticalSourceLabel) source")
+            verticalSourcePopup.target = self
+            verticalSourcePopup.action = #selector(sourceChanged(_:))
+        }
 
         statusLabel.setAccessibilityLabel("\(operation.accessibilityName) source status")
         statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
@@ -157,9 +198,11 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
         cancelButton.target = self
         cancelButton.action = #selector(cancelPressed(_:))
 
-        let grid = NSGridView(views: [
-            [NSTextField(labelWithString: "\(operation.sourceLabel):"), sourcePopup],
-        ])
+        var sourceRows: [[NSView]] = [[NSTextField(labelWithString: "\(operation.sourceLabel):"), sourcePopup]]
+        if usesDisplaceSources {
+            sourceRows.append([NSTextField(labelWithString: "\(Self.verticalSourceLabel):"), verticalSourcePopup])
+        }
+        let grid = NSGridView(views: sourceRows)
         grid.rowAlignment = .firstBaseline
         let buttons = NSStackView(views: [previewButton, cancelButton])
         buttons.orientation = .horizontal
@@ -182,7 +225,8 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
             explanation.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28),
             statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28),
         ])
-        panel.setContentSize(NSSize(width: 420, height: 260))
+        if usesDisplaceSources { verticalSourcePopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true }
+        panel.setContentSize(NSSize(width: usesDisplaceSources ? 480 : 420, height: usesDisplaceSources ? 300 : 260))
     }
 
     // MARK: Lifecycle
@@ -210,7 +254,7 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
         currentRows = fresh
         let isInitialPopulation = !hasPopulated
         hasPopulated = true
-        if isInitialPopulation {
+        if isInitialPopulation && !usesDisplaceSources {
             if fresh.contains(where: { $0.id == preferredSource }) {
                 selectionID = preferredSource
             } else {
@@ -249,8 +293,16 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
 
     private func installItems() {
         let keep = isRunning ? (capturedPreviewID ?? selectionID) : selectionID
-        sourcePopup.removeAllItems()
-        installedIDs = []
+        installedIDs = installItems(in: sourcePopup, keeping: keep)
+        if usesDisplaceSources {
+            let vertical = isRunning ? (capturedVerticalPreviewID ?? verticalSelectionID) : verticalSelectionID
+            verticalInstalledIDs = installItems(in: verticalSourcePopup, keeping: vertical)
+        }
+    }
+
+    private func installItems(in popup: NSPopUpButton, keeping keep: Int32?) -> [Int32] {
+        popup.removeAllItems()
+        var ids: [Int32] = []
         var items = currentRows
         var selectedIndex = -1
         if let keep {
@@ -266,16 +318,17 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
         for item in items {
             // Distinct sources may share a display name. Add menu items
             // directly so NSPopUpButton cannot coalesce equal titles.
-            sourcePopup.menu?.addItem(NSMenuItem(title: item.name, action: nil, keyEquivalent: ""))
-            installedIDs.append(item.id)
+            popup.menu?.addItem(NSMenuItem(title: item.name, action: nil, keyEquivalent: ""))
+            ids.append(item.id)
         }
         if selectedIndex >= 0 {
-            sourcePopup.selectItem(at: selectedIndex)
+            popup.selectItem(at: selectedIndex)
             let missing = !currentRows.contains(where: { $0.id == keep })
-            sourcePopup.item(at: selectedIndex)?.isEnabled = !missing
+            popup.item(at: selectedIndex)?.isEnabled = !missing
         } else {
-            sourcePopup.select(nil)
+            popup.select(nil)
         }
+        return ids
     }
 
     private var selectionIsLive: Bool {
@@ -283,11 +336,21 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
         return currentRows.contains { $0.id == selectionID }
     }
 
+    private var verticalSelectionIsLive: Bool {
+        guard let verticalSelectionID else { return false }
+        return currentRows.contains { $0.id == verticalSelectionID }
+    }
+
     @objc private func sourceChanged(_ sender: NSPopUpButton) {
         guard !isInvalidated, !isRunning else { return }
-        let index = sourcePopup.indexOfSelectedItem
-        guard installedIDs.indices.contains(index) else { return }
-        selectionID = installedIDs[index]
+        let index = sender.indexOfSelectedItem
+        if usesDisplaceSources && sender === verticalSourcePopup {
+            guard verticalInstalledIDs.indices.contains(index) else { return }
+            verticalSelectionID = verticalInstalledIDs[index]
+        } else {
+            guard sender === sourcePopup, installedIDs.indices.contains(index) else { return }
+            selectionID = installedIDs[index]
+        }
         lastError = nil
         updateControls()
     }
@@ -303,19 +366,28 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
             updateControls()
             return
         }
+        let send: (@escaping (Result<Void, Error>) -> Void) -> Void
+        switch previewHandler {
+        case .single(let action): send = { reply in action(id, reply) }
+        case .displace(let action):
+            guard verticalSelectionIsLive, let vertical = verticalSelectionID else { updateControls(); return }
+            capturedVerticalPreviewID = vertical
+            send = { reply in action(id, vertical, reply) }
+        }
         capturedPreviewID = id
         let request = UUID()
         previewRequest = request
         isRunning = true
         lastError = nil
         updateControls()
-        preview(id) { [weak self] result in
+        send { [weak self] result in
             guard let self, !self.isInvalidated, self.previewRequest == request else { return }
             self.previewRequest = nil
             // Invalidated during the accepted work: the views are already
             // gone, so the late completion is dropped here.
             self.isRunning = false
             self.capturedPreviewID = nil
+            self.capturedVerticalPreviewID = nil
             switch result {
             case .success:
                 self.invalidate()
@@ -352,7 +424,9 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
         let live = selectionIsLive
         let gate = refusal()
         sourcePopup.isEnabled = !isInvalidated && !isRunning
-        previewButton.isEnabled = !isInvalidated && !isRunning && live && gate == nil
+        verticalSourcePopup.isEnabled = !isInvalidated && !isRunning
+        previewButton.isEnabled = !isInvalidated && !isRunning && live
+            && (!usesDisplaceSources || verticalSelectionIsLive) && gate == nil
         cancelButton.isEnabled = !isInvalidated && !isRunning
         panel.standardWindowButton(.closeButton)?.isEnabled = !isInvalidated && !isRunning
         guard !isInvalidated else { return }
@@ -366,6 +440,10 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
             statusLabel.textColor = .secondaryLabelColor
             let name = knownNames[selectionID] ?? "The selected source"
             statusLabel.stringValue = "\(name) is no longer available. Choose another \(operation.sourceLabel.lowercased()) source, then press Preview."
+        } else if usesDisplaceSources, let verticalSelectionID, !verticalSelectionIsLive {
+            statusLabel.textColor = .secondaryLabelColor
+            let name = knownNames[verticalSelectionID] ?? "The selected source"
+            statusLabel.stringValue = "\(name) is no longer available. Choose another vertical / angular map source, then press Preview."
         } else if let gate {
             statusLabel.textColor = .secondaryLabelColor
             statusLabel.stringValue = gate
@@ -374,7 +452,8 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
             statusLabel.stringValue = "No \(operation.sourceLabel.lowercased()) sources are available."
         } else {
             statusLabel.textColor = .secondaryLabelColor
-            statusLabel.stringValue = ""
+            statusLabel.stringValue = usesDisplaceSources && (!live || !verticalSelectionIsLive)
+                ? "Choose both map sources, then press Preview." : ""
         }
     }
 }

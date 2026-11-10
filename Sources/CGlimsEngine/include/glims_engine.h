@@ -3312,6 +3312,31 @@ typedef struct GlimsEngineAPI {
                                           const GlimsTextSettings *settings,
                                           GlimsPoint position,
                                           GlimsItemID *out, char **error);
+  /* Slot169: begin a merge-only gegl:displace preview with two captured
+   * same-image drawable sources. Explicit positive target, x_source and
+   * y_source ids are mandatory. X supplies horizontal/radial displacement
+   * and Y vertical/angular displacement; the operation's amount properties
+   * can disable either axis. No optional map or arbitrary pad name is accepted.
+   * Sources may be the same drawable or the target. Both source identities
+   * are validated and their native-format pixels/committed effects detached
+   * before a target preview is attached. Native buffer coordinates are kept;
+   * no item-offset translation is added. Distinct captured buffers share the
+   * existing 512 MiB GLIMS_MAX_PIXEL_BUFFER_BYTES snapshot budget; the same
+   * source in both roles shares one snapshot and is charged once.
+   * Target/rasterization, indexed-image, floating-selection, work/lock and
+   * Undo readiness follow slot147. Abort changes no stored pixels/history;
+   * Apply merges as one native Undo, without a persistent auxiliary effect.
+   * A refused commit leaves the preview cancelable. Both captured inputs live
+   * until the session ends, independently of later source edits or deletion.
+   * *out is zero on every failure, including public dispatch on a stopped
+   * engine; ordinary admission failures leave pixels and history unchanged. */
+  GlimsStatus (*filter_begin_displace_with_sources) (GlimsEngine *engine,
+                                                    GlimsImageID image,
+                                                    GlimsItemID target,
+                                                    GlimsItemID x_source,
+                                                    GlimsItemID y_source,
+                                                    GlimsFilterID *out,
+                                                    char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

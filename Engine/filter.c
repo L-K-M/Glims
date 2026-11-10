@@ -106,6 +106,7 @@ glims_filters_free (gpointer data)
   g_clear_object (&session->existing);
   g_clear_object (&session->operation);
   g_clear_object (&session->aux_source);
+  g_clear_object (&session->aux_source2);
   g_clear_object (&session->drawable);
   g_clear_object (&session->image);
   g_free (session);
@@ -219,6 +220,7 @@ filter_begin_internal (GlimsEngine    *engine,
                     GlimsItemID     drawable_id,
                     const char     *operation,
                     GeglNode       *aux_source,
+                    GeglNode       *aux_source2,
                     GlimsFilterID  *out,
                     char          **error)
 {
@@ -228,6 +230,7 @@ filter_begin_internal (GlimsEngine    *engine,
   gboolean        non_destructive;
   gint            id;
   GlimsStatus     status;
+  gboolean        owns_busy = aux_source2 != NULL;
 
   if (out) *out = 0;
   if (! open)
@@ -261,33 +264,43 @@ filter_begin_internal (GlimsEngine    *engine,
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
 
+  /* Dual-input attachment may emit native image notifications. Refuse
+   * reentrant edits until the session is installed and owns both maps. */
+  if (owns_busy) engine->busy++;
   session = g_new0 (GlimsFilter, 1);
   session->image           = g_object_ref (open->image);
   session->drawable        = g_object_ref (drawable);
   session->non_destructive = non_destructive;
   session->operation = gegl_node_new_child (NULL, "operation", operation, NULL);
   if (!session->operation) {
-    glims_filters_free (session);
-    return glims_fail (error, NULL, "The filter operation could not be created.");
+    status = glims_fail (error, NULL, "The filter operation could not be created.");
+    goto failed;
   }
   status = glims_filter_config_prepare (session->operation, error);
-  if (status != GLIMS_STATUS_OK) { glims_filters_free (session); return status; }
+  if (status != GLIMS_STATUS_OK) goto failed;
   status = glims_color_balance_config_prepare (session->operation, error);
-  if (status != GLIMS_STATUS_OK) { glims_filters_free (session); return status; }
+  if (status != GLIMS_STATUS_OK) goto failed;
   status = glims_hue_saturation_config_prepare (session->operation, error);
-  if (status != GLIMS_STATUS_OK) { glims_filters_free (session); return status; }
+  if (status != GLIMS_STATUS_OK) goto failed;
   status = glims_levels_config_prepare (session->operation, error);
-  if (status != GLIMS_STATUS_OK) { glims_filters_free (session); return status; }
+  if (status != GLIMS_STATUS_OK) goto failed;
   status = glims_curves_config_prepare (session->operation, error);
-  if (status != GLIMS_STATUS_OK) { glims_filters_free (session); return status; }
+  if (status != GLIMS_STATUS_OK) goto failed;
   if (aux_source) {
     if (!gegl_node_connect_to (aux_source, "output", session->operation, "aux")) {
-      glims_filters_free (session);
-      return glims_fail (error, NULL, "The captured filter source could not be connected.");
+      status = glims_fail (error, NULL, "The captured filter source could not be connected.");
+      goto failed;
     }
     session->aux_source = g_object_ref (aux_source);
-    session->non_destructive = FALSE;
   }
+  if (aux_source2) {
+    if (!gegl_node_connect_to (aux_source2, "output", session->operation, "aux2")) {
+      status = glims_fail (error, NULL, "The captured vertical filter source could not be connected.");
+      goto failed;
+    }
+    session->aux_source2 = g_object_ref (aux_source2);
+  }
+  if (aux_source || aux_source2) session->non_destructive = FALSE;
   /* The undo step and the filter's name in the layer's filter list use the
    * operation's title ("Gaussian Blur"), as GIMP's filter tools do
    * (gimp_tool_get_undo_desc in app/tools). */
@@ -299,10 +312,10 @@ filter_begin_internal (GlimsEngine    *engine,
   }
 
   if (!session->filter) {
-    glims_filters_free (session);
-    return glims_fail (error, NULL, "The filter preview could not be created.");
+    status = glims_fail (error, NULL, "The filter preview could not be created.");
+    goto failed;
   }
-  if (aux_source) g_object_set (session->filter, "to-be-merged", TRUE, NULL);
+  if (aux_source || aux_source2) g_object_set (session->filter, "to-be-merged", TRUE, NULL);
 
   /* A live preview sits on the drawable's stack but is not a committed
    * effect: mark it temporary, as the engine's tools do with their
@@ -311,7 +324,7 @@ filter_begin_internal (GlimsEngine    *engine,
   gimp_drawable_filter_set_temporary (session->filter, TRUE);
   gimp_drawable_filter_apply (session->filter, NULL);
   gimp_drawable_filter_set_preview (session->filter, TRUE);
-  if (aux_source) {
+  if (aux_source || aux_source2) {
     /* Native merged previews sit below existing committed effects. */
     GimpContainer *filters = gimp_drawable_get_filters (drawable);
     gint count = gimp_container_get_n_children (filters);
@@ -324,15 +337,20 @@ filter_begin_internal (GlimsEngine    *engine,
   id = glims_next_session_id (engine);
   g_hash_table_insert (engine->filters, GINT_TO_POINTER (id), session);
   *out = id;
-
+  if (owns_busy) engine->busy--;
   return GLIMS_STATUS_OK;
+
+failed:
+  glims_filters_free (session);
+  if (owns_busy) engine->busy--;
+  return status;
 }
 
 GlimsStatus
 glims_filter_begin (GlimsEngine *engine, GlimsImageID image, GlimsItemID drawable,
                     const char *operation, GlimsFilterID *out, char **error)
 {
-  return filter_begin_internal (engine, image, drawable, operation, NULL, out, error);
+  return filter_begin_internal (engine, image, drawable, operation, NULL, NULL, out, error);
 }
 
 GlimsStatus
@@ -369,8 +387,52 @@ glims_filter_begin_with_source (GlimsEngine *engine, GlimsImageID image,
   if (status != GLIMS_STATUS_OK) return status;
   status = glims_filter_input_snapshot (engine, open, source, &snapshot, error);
   if (status != GLIMS_STATUS_OK) return status;
-  status = filter_begin_internal (engine, image, target, operation, snapshot, out, error);
+  status = filter_begin_internal (engine, image, target, operation, snapshot, NULL, out, error);
   g_object_unref (snapshot);
+  return status;
+}
+
+GlimsStatus
+glims_filter_begin_displace_with_sources (GlimsEngine *engine, GlimsImageID image,
+                                           GlimsItemID target, GlimsItemID x_source,
+                                           GlimsItemID y_source, GlimsFilterID *out,
+                                           char **error)
+{
+  GlimsOpenImage *open;
+  GimpDrawable *drawable;
+  GeglNode *x_snapshot = NULL, *y_snapshot = NULL;
+  GlimsStatus status;
+  if (out) *out = 0;
+  if (!out || target <= 0 || x_source <= 0 || y_source <= 0)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  open = glims_lookup_image (engine, image);
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = source_merge_history_ready (open->image, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (gimp_image_get_floating_selection (open->image)) return GLIMS_STATUS_BUSY;
+  if (gimp_image_get_base_type (open->image) == GIMP_INDEXED) return GLIMS_STATUS_UNSUPPORTED;
+  drawable = glims_lookup_drawable (open, target);
+  if (!drawable) return GLIMS_STATUS_NOT_FOUND;
+  if (!GIMP_IS_LAYER (drawable) || GIMP_IS_GROUP_LAYER (drawable) ||
+      glims_layer_editable_source_kind (GIMP_LAYER (drawable))) {
+    if (error) *error = g_strdup ("Choose a pixel layer, or rasterize the target's editable content first.");
+    return GLIMS_STATUS_UNSUPPORTED;
+  }
+  status = glims_check_item_locks (GIMP_ITEM (drawable), GLIMS_LOCK_PIXELS, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (!glims_filter_operation_allowed ("gegl:displace")) {
+    if (error) *error = g_strdup ("Displace is not available in this image engine.");
+    return GLIMS_STATUS_UNSUPPORTED;
+  }
+  status = glims_filter_input_snapshot_pair (engine, open, x_source, y_source,
+                                             &x_snapshot, &y_snapshot, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = filter_begin_internal (engine, image, target, "gegl:displace",
+                                   x_snapshot, y_snapshot, out, error);
+  g_object_unref (x_snapshot);
+  g_object_unref (y_snapshot);
   return status;
 }
 
@@ -811,7 +873,7 @@ glims_filter_commit (GlimsEngine    *engine,
   GlimsStatus status = glims_filter_check_edit (engine, id, error);
 
   if (status != GLIMS_STATUS_OK) return status;
-  if (session->aux_source || uses_owned_config (session->operation)) {
+  if (session->aux_source || session->aux_source2 || uses_owned_config (session->operation)) {
     status = source_merge_history_ready (session->image, error);
     if (status != GLIMS_STATUS_OK) return status;
   }
