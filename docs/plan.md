@@ -3681,3 +3681,24 @@ is explicitly not assessed: no Tcl evaluation, conditional patch inference,
 source archive or release integration is added. See
 [`installed-port-provenance.md`](installed-port-provenance.md) for usage and
 evidence limits. Independent review/integration remain pending.
+
+### Captured batch Rasterize (2026-11-10 candidate)
+
+API v1 appends slot165 for an explicit ordered retained-source vector. The
+owned plural sheet captures document, IDs and names; Cancel queues nothing,
+and Apply rechecks cached and native admission before converting those same
+sources as one Undo. All targets are validated before normal mutation;
+unexpected Core failures can leave a changed prefix and report that limit.
+Counted completion drains before close, and late sheet Apply cannot add work.
+
+Each supported engine passes 96 focused native checks using retained text
+sources. This is not link/vector fixture coverage. General checks pass
+1,917 on 3.2.8/3.2.0/master and 1,703 on 3.0.8. Initial sole stop-timing
+failures at 5,037/10,146 ms remain recorded beside passing private repeats,
+without a causal claim. The pinned actual UI passes all 51 checks with real
+Cancel/Apply, A capture while B is key/main, readiness/refusal and close drain.
+Its focused smoke host now completes real AppKit launch and dispatches events;
+no production activation defect is inferred from the earlier unlaunched host.
+See `batch-layer-rasterize.md` for exact scope, hashes and remaining validation.
+Other-engine UI, current units/integration, CI/review and merge remain pending;
+batch Restore and the broader gesture-policy item stay open.
