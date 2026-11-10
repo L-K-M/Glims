@@ -126,7 +126,7 @@ state (GlimsEngine *e, Scene *s, gboolean exact)
     rows = g_new0 (GlimsHistoryRow, history.count);
     if (api->image_history (e, s->image, rows, history.count, &history) != GLIMS_STATUS_OK) goto done;
     g_string_append_printf (out, "undo:%d:%d:%s:%s;history:%" G_GUINT64_FORMAT ":%d:%d;", undo.undo_count,
-      undo.redo_count, undo.next_undo, undo.next_redo, history.revision, history.count, history.current_position);
+      undo.redo_count, undo.next_undo, undo.next_redo, (guint64) history.revision, history.count, history.current_position);
     for (gint i = 0; i < history.count; i++) g_string_append_printf (out, "%d:%s;", rows[i].position, rows[i].name);
   }
   floating = gimp_image_get_floating_selection (image);
