@@ -3570,3 +3570,16 @@ All four engines pass 149 focused native checks and 24 actual UI checks;
 existing conformance also passes. See `variable-blur.md` for the independent
 pixel oracle, refusal guards and remaining auxiliary roles. The facade keeps
 APIv1/163 and upstream sources remain unchanged. CI/review/integration follow.
+
+### Installed MacPorts recipe inventory (2026-11-10 candidate)
+
+The standalone `scripts/installed-port-provenance.py` inventories requested
+installed recipes and recorded PortGroups through immutable SQLite reads,
+checking exact original hashes/sizes and database/WAL stability. It refuses
+implicit output overwrites and never writes inside the source prefix.
+Fifteen temporary-registry fixtures pass; a read-only aom/zlib/libidn2 sample
+verified metadata with the registry DB/WAL/SHM unchanged. Source completeness
+is explicitly not assessed: no Tcl evaluation, conditional patch inference,
+source archive or release integration is added. See
+[`installed-port-provenance.md`](installed-port-provenance.md) for usage and
+evidence limits. Independent review/integration remain pending.
