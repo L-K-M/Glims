@@ -67,6 +67,9 @@ enum EngineSmokeTest {
     }
 
     static func run() -> Int32 {
+        if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "channel-menus", !NSApp.isRunning {
+            return runHostedChannelMenus()
+        }
         guard let path = EngineLibrary.configuredPath() else {
             print("FAIL no engine library; set \(EngineLibrary.environmentVariable)")
             return 2
@@ -494,6 +497,11 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "adjustment-catalog-failure" {
                 try exerciseAdjustmentCatalogFailure(session, documents: documents)
                 print(failures == 0 ? "PASSED (adjustment catalog failure)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "channel-menus" {
+                try exerciseChannelMenus(session, documents: documents)
+                print(failures == 0 ? "PASSED (channel menus)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {

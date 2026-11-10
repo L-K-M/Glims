@@ -1179,6 +1179,61 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         endPendingEdits()
         ChannelForms.edit(id, in: imageDocument, on: window)
     }
+
+    // MARK: Channel menu
+
+    // Known channel picks are mirrored before they settle and do not set
+    // targetCommandIsPending. Counted work must drain before resolving a
+    // main-menu target; explicit palette row commands retain their own IDs.
+    private var channelMenuBaseAllowed: Bool {
+        ChannelMenuPolicy.baseEditingAllowed(
+            acceptsEdits: imageDocument.acceptsEdits,
+            isBusy: EngineActivity.shared.isBusy || PlugInCommands.isRunning
+                || imageDocument.pendingWork != 0,
+            previewBusy: previewBusy,
+            sheetAttached: window?.attachedSheet != nil,
+            isClosing: closeStarted || imageDocument.isClosing,
+            targetCommandIsPending: imageDocument.targetCommandIsPending)
+    }
+
+    private var selectedSavedChannelMenuTarget: EngineSession.Channel? {
+        ChannelMenuPolicy.savedTarget(in: imageDocument.channels, selectedIDs: imageDocument.selectedChannelIDs)
+    }
+
+    @objc func channelAttributesMenu(_ sender: Any?) {
+        guard channelMenuBaseAllowed, !imageDocument.floatingState.isActive,
+              let channel = selectedSavedChannelMenuTarget else { return }
+        editChannelAttributes(channel.id)
+    }
+
+    @objc func duplicateChannelMenu(_ sender: Any?) {
+        guard channelMenuBaseAllowed, !imageDocument.floatingState.isActive,
+              let channel = selectedSavedChannelMenuTarget else { return }
+        imageDocument.duplicateChannel(channel.id)
+    }
+
+    @objc func deleteChannelMenu(_ sender: Any?) {
+        guard channelMenuBaseAllowed, !imageDocument.floatingState.isActive,
+              let channel = selectedSavedChannelMenuTarget else { return }
+        imageDocument.deleteChannel(channel.id)
+    }
+
+    @objc func returnToLayersMenu(_ sender: Any?) {
+        guard canReturnToLayersFromMenu else { return }
+        imageDocument.returnToLayers()
+    }
+
+    private var canReturnToLayersFromMenu: Bool {
+        channelMenuBaseAllowed && imageDocument.isChannelTargetActive
+            && imageDocument.activeLayer != nil && !imageDocument.floatingState.isActive
+    }
+
+    @objc func channelToSelectionMenu(_ sender: NSMenuItem) {
+        guard channelMenuBaseAllowed, let channel = selectedSavedChannelMenuTarget,
+              let tag = UInt32(exactly: sender.tag),
+              let operation = EngineSession.SelectOperation(rawValue: tag) else { return }
+        imageDocument.channelToSelection(channel.id, operation: operation)
+    }
     @objc func toggleMaskShowing(_ sender: Any?) { imageDocument.toggleMaskShowing() }
 
     /// Layer ▸ Mask ▸ Mask to Selection ▸ …; the item's tag carries the
@@ -1884,6 +1939,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return !editingBlocked && !previewBusy
         case #selector(saveSelectionAsChannel(_:)):
             return !editingBlocked && !previewBusy
+        case #selector(channelAttributesMenu(_:)), #selector(duplicateChannelMenu(_:)),
+             #selector(deleteChannelMenu(_:)):
+            return channelMenuBaseAllowed && selectedSavedChannelMenuTarget != nil
+                && !imageDocument.floatingState.isActive
+        case #selector(channelToSelectionMenu(_:)):
+            guard let tag = UInt32(exactly: menuItem.tag),
+                  EngineSession.SelectOperation(rawValue: tag) != nil else { return false }
+            return channelMenuBaseAllowed && selectedSavedChannelMenuTarget != nil
+        case #selector(returnToLayersMenu(_:)):
+            return canReturnToLayersFromMenu
         case #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)):
             return !imageDocument.isClosing
         case #selector(rotateViewClockwise(_:)), #selector(rotateViewCounterclockwise(_:)), #selector(setViewAngle(_:)):
