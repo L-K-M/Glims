@@ -1,13 +1,15 @@
 # Snapshot filter inputs
 
-Bump Map now has a same-image height-map chooser. The source is captured when
-Preview starts; Apply to Pixels merges into the captured target and Undo
-restores its pixels. Other auxiliary-input operations and custom-config editors
-remain separate work.
+Bump Map, Variable Blur and Selective Gaussian Blur have same-image height-map,
+blur-mask and contrast-reference choosers. The source is captured when Preview
+starts; Apply to Pixels merges into the captured target and Undo restores its
+pixels.
+Other auxiliary-input operations and custom-config editors remain separate work.
 
 API version 1 appends slot 147, `filter_begin_with_source`. It accepts explicit
-positive target/source IDs, currently for `gegl:bump-map`. Targets are ordinary
-or previously rasterized pixel-behaving layers. Editable sources and groups
+positive target/source IDs for `gegl:bump-map`, `gegl:variable-blur`, and
+`gegl:gaussian-blur-selective`. Targets are ordinary or previously rasterized
+pixel-behaving layers. Editable sources and groups
 are readable height maps, but are not destructive targets. Attached masks and
 channels can also supply source pixels. Indexed images refuse because their
 shared mutable Babl palette would not be frozen by a tile snapshot.
@@ -52,3 +54,30 @@ The 512 MiB refusal fixture prevents tile materialization rather than allocating
 a dense image. The self-contained bundle passes 1,917 native and 2,370 app checks
 with development outputs unreadable; 871 unit tests pass. No upstream source
 is modified.
+
+## Selective Gaussian contrast reference (candidate)
+
+`gegl:gaussian-blur-selective` has one optional aux input, used as the contrast
+reference for channelwise maximum-delta comparisons. The existing no-source
+operation uses the target as that reference. The captured-source route instead
+uses a detached snapshot through the same native-format, 512 MiB, merge-only
+contract above. It adds no live source dependency or persistent auxiliary effect.
+Multi-role and other compositor operations remain unsupported by slot 147.
+
+The private native baseline executed 33 checks with only snapshot admission
+failing. The actual-menu baseline executed three checks with only chooser
+admission failing. The native allowlist and Swift source-role descriptor were
+added after those observed failures. All four supported engines now pass 128
+focused native checks and 28 actual-menu/form checks. General conformance
+passes 1,917 checks on 3.2/master and 1,703 on 3.0.8.
+
+The native oracles independently construct authentic GEGL graphs and cover
+partial alpha, offsets, Cancel, Apply, one Undo, exact Undo/Redo, source
+mutation/removal and representative refusal cases. The UI checks exercise
+explicit contrast-reference choice, both installed numeric controls, captured
+document ownership, stale chooser isolation, parameter reevaluation and the
+same pixel/Undo lifecycle. CI on Xcode 26 reproduced a Swift 6.2 type-checker
+limit in the fixture's combined array expression; explicitly typed byte
+intermediates preserve the fixture while its CI rerun remains pending.
+Other auxiliary roles, including multiple-role Displace and Oilify inputs,
+remain outside this source contract.
