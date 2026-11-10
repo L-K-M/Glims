@@ -2846,6 +2846,36 @@ static GlimsStatus api_filter_begin_with_source (GlimsEngine *e, GlimsImageID im
 }
 
 typedef struct {
+  GlimsImageID image;
+  GlimsItemID target, x_source, y_source;
+  GlimsFilterID *out;
+  char **error;
+} GlimsDisplaceSourcesArgs;
+static GlimsStatus displace_sources_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsDisplaceSourcesArgs *a = data;
+  return glims_filter_begin_displace_with_sources (e, a->image, a->target,
+                                                   a->x_source, a->y_source,
+                                                   a->out, a->error);
+}
+static GlimsStatus api_filter_begin_displace_with_sources (GlimsEngine *e,
+                                                           GlimsImageID image,
+                                                           GlimsItemID target,
+                                                           GlimsItemID x_source,
+                                                           GlimsItemID y_source,
+                                                           GlimsFilterID *out,
+                                                           char **error)
+{
+  if (out) *out = 0;
+  if (error) *error = NULL;
+  if (!out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsDisplaceSourcesArgs args = { .image = image, .target = target,
+                                   .x_source = x_source, .y_source = y_source,
+                                   .out = out, .error = error };
+  return glims_engine_call (e, displace_sources_on_engine, &args);
+}
+
+typedef struct {
   GlimsFilterID filter;
   GlimsBrightnessContrastSettings *out;
   const GlimsBrightnessContrastSettings *settings;
@@ -3326,6 +3356,7 @@ static const GlimsEngineAPI api_v1 = {
   .image_restore_layer_sources = api_image_restore_layer_sources,
   .image_pick_layer = api_image_pick_layer,
   .text_layer_new_captured = api_text_layer_new_captured,
+  .filter_begin_displace_with_sources = api_filter_begin_displace_with_sources,
 };
 
 __attribute__ ((visibility ("default")))
