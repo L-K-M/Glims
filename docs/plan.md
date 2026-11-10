@@ -3702,3 +3702,11 @@ The actual old window failed five new profile-title checks while retaining
 plus 1,015 units. See [working-profile-title.md](working-profile-title.md)
 for exact foreground-host and external AX limits. Hosted CI/review and final
 integration remain pending.
+
+### Tool and color menu parity (2026-11-10 candidate)
+
+View > Tools exposes all 26 existing tools plus shared Swap/Default Colors,
+with stable command IDs and no factory canvas-letter equivalents. All four
+engines pass 106 actual menu/field/native-invariance checks; 1,021 isolated
+unit tests pass. See [tool-color-menus.md](tool-color-menus.md) for the scoped
+key-equivalent oracle correction and remaining CI/integration limits.
