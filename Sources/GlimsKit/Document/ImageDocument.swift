@@ -256,7 +256,12 @@ final class ImageDocument {
     /// Recorder admission and completion use their own notification so observing
     /// the log never replaces the window's image-state handler.
     var onRecorderChange: (() -> Void)?
-    private var recorderObservers: [UUID: () -> Void] = [:]
+    enum RecorderObserverScope: Equatable { case commands, presentation }
+    private struct RecorderObserver {
+        let scope: RecorderObserverScope
+        let callback: () -> Void
+    }
+    private var recorderObservers: [UUID: RecorderObserver] = [:]
     /// Called with the changed area in image pixels.
     var onProjectionChange: ((CGRect) -> Void)?
     /// Called with engine errors that the interface should show.
@@ -4240,9 +4245,9 @@ final class ImageDocument {
 
     /// Recorder-specific UI subscriptions leave the existing single callback
     /// intact. A snapshot permits listeners to detach or retarget reentrantly.
-    func addRecorderObserver(_ observer: @escaping () -> Void) -> UUID {
+    func addRecorderObserver(scope: RecorderObserverScope = .commands, _ observer: @escaping () -> Void) -> UUID {
         let token = UUID()
-        recorderObservers[token] = observer
+        recorderObservers[token] = RecorderObserver(scope: scope, callback: observer)
         return token
     }
 
@@ -4251,8 +4256,13 @@ final class ImageDocument {
     }
 
     private func notifyRecorderChanged() {
-        let observers = Array(recorderObservers.values)
+        let observers = recorderObservers.values.map(\.callback)
         onRecorderChange?()
+        observers.forEach { $0() }
+    }
+
+    private func notifyRecorderPresentationChanged() {
+        let observers = recorderObservers.values.filter { $0.scope == .presentation }.map(\.callback)
         observers.forEach { $0() }
     }
 
@@ -4580,6 +4590,10 @@ final class ImageDocument {
             recorderReplayWaitingGeneration = nil
             DispatchQueue.main.async { self.continueRecorderReplay(generation: generation) }
         }
+        // State callbacks above may have accepted thumbnail reads. Refresh
+        // only after their actual final drain, without changing command
+        // notifications or turning pointer samples into presentation events.
+        if pendingWork == 0 && !strokeIsActive { notifyRecorderPresentationChanged() }
     }
 
     private nonisolated func report(_ error: Error) {

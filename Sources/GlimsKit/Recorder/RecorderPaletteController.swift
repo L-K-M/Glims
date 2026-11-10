@@ -132,7 +132,7 @@ final class RecorderPaletteController: NSViewController, PaletteContent, NSTable
         actionError = nil
         if let target {
             let generation = observationGeneration
-            observerToken = target.addRecorderObserver { [weak self, weak target] in
+            observerToken = target.addRecorderObserver(scope: .presentation) { [weak self, weak target] in
                 guard let self, let target, self.observationGeneration == generation,
                       self.document === target else { return }
                 let current = self.currentDocument()
