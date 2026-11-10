@@ -482,6 +482,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         (PaletteCenter.shared.registeredPalette(for: ChannelsPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: PathsPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: HistoryPaletteController.definition.kind))?.retarget()
+        (PaletteCenter.shared.registeredPalette(for: RecorderPaletteController.definition.kind))?.retarget()
         // Path shapes arrive with the state; the canvas draws them, and
         // the cached guide list arrives with it too (reloadGuides fires
         // this same callback), so the canvas redraws the guide overlay.
