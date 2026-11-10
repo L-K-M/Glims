@@ -3547,3 +3547,16 @@ absence remains distinct from False. Per-Apply descriptor reads, independent
 SET/REMOVE gates and document-version checks precede the counted native edit.
 All984 units and19 actual form checks per engine pass. See metadata-rights.md;
 remaining metadata forms, review, CI and the final bundle are still open.
+
+### Painting source consent (2026-11-10)
+
+Layer-target painting and the shared pixel-command route now require explicit
+rasterization of editable text/link/vector content. A captured owning-window
+Rasterize/Cancel prompt consumes the original gesture and asks the user to draw
+or apply again. Masks/channels keep their independent pixel targets. Fresh
+queued source reads fence an earlier Undo, and captured-state checks reject
+queued edits, retargeting and late window closure. The existing explicit source
+restore remains available. See `painting-source-consent.md` for the measured
+native text Undo/Redo issue and scope. Initial consent and two timing defects
+were reproduced before their respective fixes; final integration checks are
+in progress. The facade remains APIv1/163 and upstream sources are unchanged.

@@ -11,6 +11,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     let canvas: EngineCanvasView
     let rotationView: CanvasRotationView
     private var viewAngleAlert: NSAlert?
+    private var paintSourceAlert: NSAlert?
     private let preferences: EditorPreferences
     let statusBar = StatusBarView(frame: .zero)
     /// The scroll view hosting the canvas and its native ruler slots;
@@ -168,6 +169,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // lets a remembered refusal go.
         imageDocument.onWillChangeLayers = { [weak self] in self?.endPendingEdits() }
         imageDocument.onUserCommand = { [weak self] in self?.statusIsError = false }
+        imageDocument.onPaintNeedsRasterize = { [weak self] layer, version in
+            self?.presentPaintSourceConfirmation(layer: layer, stateVersion: version)
+        }
         imageDocument.onSelectionChange = { [weak self] in
             guard let self else { return }
             self.canvas.selectionOutline = self.imageDocument.selectionOutline
@@ -1613,6 +1617,42 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         presentLayerSourceConfirmation(.restore)
     }
 
+    /// A refused paint gesture has already ended. Consent only rasterizes
+    /// its captured target; drawing again starts a new, fully captured stroke.
+    private func presentPaintSourceConfirmation(layer: Int32, stateVersion: Int) {
+        let document = imageDocument
+        func isCurrent() -> Bool {
+            document.acceptsEdits && !document.targetCommandIsPending
+                && document.pendingWork == 0 && !document.strokeIsActive
+                && document.stateVersion == stateVersion
+                && document.selectedLayerIDs == [layer] && document.activeDrawable == layer
+                && !document.isMaskTargetActive && !document.isChannelTargetActive
+        }
+        guard let window, window.attachedSheet == nil, !closeStarted, !previewBusy, isCurrent(),
+              let info = document.layers.first(where: { $0.id == layer }),
+              LayerSourceMenuPolicy.isEnabled(.rasterize, source: document.layerSources[layer],
+                  locks: document.layerLocks[layer], targetIsLayer: true, stateBlocked: false) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Rasterize \u{201C}\(info.name)\u{201D} before painting?"
+        alert.informativeText = "Painting changes the layer's pixels. Rasterize, then draw or apply the command again. "
+            + "The editable source is retained; Layer > Restore Layer Source can restore it and discard pixel edits."
+        alert.addButton(withTitle: "Rasterize")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.forEach { $0.setAccessibilityLabel($0.title) }
+        paintSourceAlert = alert
+        alert.beginSheetModal(for: window) { [weak self, weak alert] response in
+            guard let self, let alert, self.paintSourceAlert === alert else { return }
+            self.paintSourceAlert = nil
+            guard response == .alertFirstButtonReturn, !self.closeStarted,
+                  self.imageDocument === document else { return }
+            guard isCurrent() else {
+                self.showStatusError("The image changed. Start the paint command again.")
+                return
+            }
+            document.rasterizeLayerSource(layer, paintStateVersion: stateVersion)
+        }
+    }
+
     /// The confirmation sheet shared by both layer-source commands. The
     /// document and the explicit layer id are captured by value before the
     /// alert is shown, so Apply can never fall back to layer 0, the
@@ -2568,6 +2608,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             window?.endSheet(alert.window, returnCode: .abort)
         }
         viewAngleAlert = nil
+        if let alert = paintSourceAlert, window?.attachedSheet === alert.window {
+            window?.endSheet(alert.window, returnCode: .abort)
+        }
+        paintSourceAlert = nil
         // A closing window cancels any in-progress guide drag: the ghost is
         // cleared and no guide action is committed; late events afterwards
         // are ignored by the gesture's captured window/document identity.

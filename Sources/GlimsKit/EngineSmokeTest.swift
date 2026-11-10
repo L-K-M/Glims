@@ -186,6 +186,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (guides controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "paint-source-consent" {
+                try exercisePaintSourceConsent(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (paint source consent)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-source-controls" {
                 try exerciseLayerSourceControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (layer source controls)" : "FAILED: \(failures) failure(s)")
@@ -538,6 +543,7 @@ enum EngineSmokeTest {
             try exerciseGuideCache(session, documents: documents)
             try exerciseLayerSourceCache(session, documents: documents)
             try exerciseLayerSourceControls(session, work: work, documents: documents)
+            try exercisePaintSourceConsent(session, work: work, documents: documents)
 
             try exerciseIndexedWrapper(session)
             try exerciseResourceGradient(session, documents: documents)
