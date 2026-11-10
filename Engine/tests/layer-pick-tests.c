@@ -36,6 +36,20 @@ static int checks, failures;
 #define NEED(c, ...) do { gboolean need_ = (c); CHECK (need_, __VA_ARGS__); \
   if (!need_) goto cleanup; } while (0)
 
+/* The compile-only driver must explicitly select a reviewed engine/source
+ * profile. A version alone never infers a threshold for future Core builds. */
+#if !defined (GLIMS_PICK_EXPECTED_MAJOR) || !defined (GLIMS_PICK_EXPECTED_MINOR) || \
+    !defined (GLIMS_PICK_EXPECTED_MICRO) || !defined (GLIMS_PICK_EXPECTED_LOW_THRESHOLD)
+#error "Build this harness with a reviewed engine/source profile via test-layer-pick.py"
+#endif
+_Static_assert (GIMP_MAJOR_VERSION == GLIMS_PICK_EXPECTED_MAJOR &&
+                GIMP_MINOR_VERSION == GLIMS_PICK_EXPECTED_MINOR &&
+                GIMP_MICRO_VERSION == GLIMS_PICK_EXPECTED_MICRO,
+                "producer headers differ from the explicit reviewed engine profile");
+_Static_assert (GLIMS_PICK_EXPECTED_LOW_THRESHOLD == 0 ||
+                GLIMS_PICK_EXPECTED_LOW_THRESHOLD == 1,
+                "invalid explicit native pick threshold profile");
+
 _Static_assert (offsetof (GlimsEngineAPI, image_pick_layer) ==
                 offsetof (GlimsEngineAPI, image_restore_layer_sources) +
                 sizeof (((GlimsEngineAPI *) 0)->image_restore_layer_sources),
@@ -257,6 +271,10 @@ exercise (GlimsEngine *engine, gpointer data)
   alpha_pixel (top, 2, 1, 0.25f);
   alpha_pixel (top, 3, 1, nextafterf (0.25f, 1.0f));
   alpha_pixel (top, 4, 1, nextafterf (0.25f, 0.0f));
+  /* Float values strictly on opposite sides of master's reviewed0.001.
+   * Do not assert exact equality between a stored float and double0.001. */
+  alpha_pixel (top, 1, 2, 0.0005f);
+  alpha_pixel (top, 2, 2, 0.002f);
   NEED (api->layer_mask_add (engine, id, item_id (top), GLIMS_MASK_WHITE, FALSE, &mask_id, &error) == GLIMS_STATUS_OK,
         "attach top's real applied mask");
   for (gint i = 0; i < 25; i++) mask_pixels[i] = 1;
@@ -264,15 +282,26 @@ exercise (GlimsEngine *engine, gpointer data)
   gegl_buffer_set (gimp_drawable_get_buffer (GIMP_DRAWABLE (gimp_layer_get_mask (top))), GEGL_RECTANGLE (0, 0, 5, 5),
                    0, babl_format ("Y float"), mask_pixels, GEGL_AUTO_ROWSTRIDE);
   CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 2, 1) == 0.25, "literal alpha is exactly quarter, not64/255");
-  CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 3, 1) > 0.25, "next float above quarter exceeds strict threshold");
-  CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 4, 1) < 0.25, "next float below quarter misses strict threshold");
+  CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 3, 1) > 0.25, "next float above quarter is stored above quarter");
+  CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 4, 1) < 0.25, "next float below quarter is stored below quarter");
+  CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 1, 2) < 0.001,
+         "independent lower float is strictly below reviewed master threshold");
+  CHECK (gimp_pickable_get_opacity_at (GIMP_PICKABLE (top), 2, 2) > 0.001,
+         "independent upper float is strictly above reviewed master threshold");
   selected = g_list_prepend (NULL, bottom); gimp_image_set_selected_layers (image, selected); g_list_free (selected);
   gimp_image_flush (image); gimp_image_clean_all (image);
   {
     struct { gint x, y; GlimsItemID expected; const char *label; } cases[] = {
       {5, 6, item_id (top), "top opaque pixel"}, {6, 5, item_id (child), "transparent top hole selects child, not group"},
-      {7, 5, item_id (child), "exact quarter does not pass strict threshold"}, {8, 5, item_id (top), "next float above quarter passes"},
-      {9, 5, item_id (child), "next float below quarter falls through"}, {5, 4, item_id (child), "applied zero mask falls through"},
+      {7, 5, GLIMS_PICK_EXPECTED_LOW_THRESHOLD ? item_id (top) : item_id (child),
+       "exact quarter follows the explicitly reviewed native threshold"},
+      {8, 5, item_id (top), "next float above quarter passes both reviewed thresholds"},
+      {9, 5, GLIMS_PICK_EXPECTED_LOW_THRESHOLD ? item_id (top) : item_id (child),
+       "next float below quarter follows the explicitly reviewed native threshold"},
+      {6, 6, item_id (child), "float below0.001 falls through on all reviewed engines"},
+      {7, 6, GLIMS_PICK_EXPECTED_LOW_THRESHOLD ? item_id (top) : item_id (child),
+       "float above0.001 but below quarter distinguishes reviewed native profiles"},
+      {5, 4, item_id (child), "applied zero mask falls through"},
       {15, 15, 0, "no hit outside content with background hidden"}, {0, 0, 0, "empty group's bounds are not content"}
     };
     for (guint i = 0; i < G_N_ELEMENTS (cases); i++)
@@ -394,6 +423,9 @@ main (int argc, char **argv)
   char *error = NULL;
   GlimsStatus status;
   if (argc != 2) return 2;
+  printf ("NOTE explicit reviewed native pick profile %d.%d.%d threshold %s\n",
+          GLIMS_PICK_EXPECTED_MAJOR, GLIMS_PICK_EXPECTED_MINOR, GLIMS_PICK_EXPECTED_MICRO,
+          GLIMS_PICK_EXPECTED_LOW_THRESHOLD ? "0.001" : "0.25");
   api = glims_engine_get_api (GLIMS_ENGINE_API_VERSION);
   CHECK (api && api->struct_size >= offsetof (GlimsEngineAPI, image_restore_layer_sources) +
          sizeof api->image_restore_layer_sources, "producer exposes the required immutable166 prefix");

@@ -3238,8 +3238,12 @@ typedef struct GlimsEngineAPI {
                                              char **error);
   /* Slot167: read-only layer pick at `point` in image coordinates. Uses the
    * engine's own gimp_image_pick_layer hit test (topmost layer with sampled
-   * opacity > 0.25, honoring visibility, raw pixel alpha, applied layer mask
-   * and layer offsets; groups follow the engine's native pick behavior).
+   * opacity strictly above that engine's native threshold). Reviewed stable
+   * GIMP3.0.8/3.2.0/3.2.8 use 0.25; reviewed master3.3.1 at
+   * 5374deeec14a0366df4b17b6e5c6f9aff63db2ca uses 0.001. No threshold is
+   * inferred for unreviewed builds. Core honors visibility, raw pixel alpha,
+   * applied layer masks and offsets; groups follow the engine's native
+   * pick behavior.
    * Coordinates are truncated toward zero and the truncated value must fit in
    * a signed 32-bit sample coordinate. Non-finite/out-of-range coordinates,
    * missing `out`, or any sample-minus-layer-offset subtraction that cannot
