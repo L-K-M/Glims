@@ -1475,12 +1475,20 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         imageDocument.selectFromPath(path)
     }
 
+    /// The window starts closing before its render queue can hand the
+    /// image to the document's close drain. Gate direct actions as well
+    /// as menu validation throughout that interval.
+    private var pathActionsAvailable: Bool {
+        !closeStarted && !previewBusy && window?.attachedSheet == nil && imageDocument.acceptsEdits
+    }
+
     @objc func newPath(_ sender: Any?) {
+        guard pathActionsAvailable else { return }
         imageDocument.addPath(VectorPath())
     }
 
     @objc func deletePath(_ sender: Any?) {
-        guard let path = imageDocument.activePath else { return }
+        guard pathActionsAvailable, let path = imageDocument.activePath else { return }
         imageDocument.deletePath(path)
     }
 
@@ -1790,9 +1798,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
              #selector(paste(_:)), #selector(pasteInPlace(_:)), #selector(deleteBackward(_:)):
             return canPerformClipboardCommand(menuItem.action)
         case #selector(newPath(_:)):
-            return !editingBlocked && !previewBusy
+            return pathActionsAvailable
         case #selector(deletePath(_:)):
-            return imageDocument.activePath != nil && !editingBlocked && !previewBusy
+            return imageDocument.activePath != nil && pathActionsAvailable
         case #selector(selectFromPath(_:)), #selector(strokePath(_:)), #selector(fillPath(_:)):
             return imageDocument.activePath != nil && !editingBlocked
         case #selector(fill(_:)):
