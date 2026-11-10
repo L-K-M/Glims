@@ -80,14 +80,16 @@ end (GByteArray *bytes)
 }
 
 static Spec *
-spec_new (guint layers, guint effects, guint name_bytes)
+spec_new_for_version (guint layers, guint effects, guint name_bytes, guint version)
 {
   Spec *spec = g_new0 (Spec, 1);
   spec->bytes = g_byte_array_new ();
   spec->slots = g_array_new (FALSE, FALSE, sizeof (gsize));
   GArray *layer_slots = g_array_new (FALSE, FALSE, sizeof (gsize));
   GByteArray *bytes = spec->bytes;
-  g_byte_array_append (bytes, (guint8 *) "gimp xcf v022\0", 14);
+  gchar header[14];
+  g_snprintf (header, sizeof header, "gimp xcf v%03u", version);
+  g_byte_array_append (bytes, (guint8 *) header, sizeof header);
   put32 (bytes, 4); put32 (bytes, 2); put32 (bytes, 0); put32 (bytes, 600);
   end (bytes);
   spec->layer_table = bytes->len;
@@ -118,7 +120,8 @@ spec_new (guint layers, guint effects, guint name_bytes)
       if (!i && !j) spec->effect_start = bytes->len;
       name = name_bytes ? g_strnfill (name_bytes - 1, 'n') : g_strdup_printf ("Effect%u-%u", i, j);
       string (bytes, name); g_free (name);
-      string (bytes, "gimp-gegl"); string (bytes, "gegl:exposure"); string (bytes, "0:0");
+      string (bytes, "gimp-gegl"); string (bytes, "gegl:exposure");
+      if (version >= 22) string (bytes, "0:0");
       if (!i && !j) spec->mode = bytes->len;
       property (bytes, 35, 3);
       if (!i && !j) spec->blend = bytes->len;
@@ -144,6 +147,12 @@ spec_new (guint layers, guint effects, guint name_bytes)
   }
   g_array_unref (layer_slots);
   return spec;
+}
+
+static Spec *
+spec_new (guint layers, guint effects, guint name_bytes)
+{
+  return spec_new_for_version (layers, effects, name_bytes, 22);
 }
 
 static void
@@ -456,6 +465,21 @@ test_valid_specs (void)
   CHECK (!glims_xcf_effect_fields_layer (fields, 2) && !glims_xcf_effect_fields_effect (fields, 0, 2),
          "out-of-range metadata access is empty");
   glims_xcf_effect_fields_free (fields); g_clear_error (&error); spec_free (spec);
+  for (guint version = 20; version <= 21; version++) {
+    spec = spec_new_for_version (2, 2, 0, version);
+    fields = decode_bytes (spec->bytes->data, spec->bytes->len, &error);
+    const GlimsXcfImageFields *legacy = glims_xcf_effect_fields_image (fields);
+    effect = glims_xcf_effect_fields_effect (fields, 1, 1);
+    gchar *message = g_strdup_printf ("version%u restores literal legacy fields and mask without an operation version", version);
+    CHECK (legacy && legacy->version == version && !error && glims_xcf_effect_fields_layer_count (fields) == 2 &&
+           glims_xcf_effect_fields_effect_count (fields, 1) == 2 && effect &&
+           !g_strcmp0 (effect->operation, "gegl:exposure") && effect->operation_version == NULL &&
+           !g_strcmp0 (effect->name, "Effect1-1") && effect->blend_space == 2 &&
+           effect->composite_space == 2 && effect->composite_mode == 3 &&
+           effect->mask_present && effect->mask_width == 4 && effect->mask_height == 2, message);
+    g_free (message);
+    glims_xcf_effect_fields_free (fields); g_clear_error (&error); spec_free (spec);
+  }
   spec = spec_new (1, 1, 0);
   spec->bytes->data[12] = '3';
   set32 (spec->bytes, 22, 0x12345678); set32 (spec->bytes, 26, 0x87654321);
@@ -564,8 +588,10 @@ test_rejections (void)
   GByteArray *many = insert_bytes (spec, 30, properties->data, properties->len);
   g_byte_array_unref (properties); g_byte_array_unref (spec->bytes); spec->bytes = many;
   reject (spec, GLIMS_XCF_EFFECT_FIELDS_BUDGET, "global property count bounds zero-size unknown property loops");
-  spec = spec_new (1, 1, 0); spec->bytes->data[12] = '1';
-  reject (spec, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "other XCF versions have an explicit unsupported error");
+  spec = spec_new (1, 1, 0); memcpy (spec->bytes->data + 10, "019", 3);
+  reject (spec, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "pre-effect XCF versions have an explicit unsupported error");
+  spec = spec_new (1, 1, 0); spec->bytes->data[12] = '7';
+  reject (spec, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "unknown future XCF versions have an explicit unsupported error");
   spec = spec_new (1, 1, 0); spec->bytes->data[11] = 'x';
   reject (spec, GLIMS_XCF_EFFECT_FIELDS_MALFORMED, "invalid version digits are malformed rather than unsupported");
   spec = spec_new (1, 1, 0); memset (spec->bytes->data, 'x', 9);
