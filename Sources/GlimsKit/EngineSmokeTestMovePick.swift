@@ -619,7 +619,14 @@ extension EngineSmokeTest {
             // Paint Options may accept resource reads when the tool changes.
             // Wait for those real reads before testing pointer admission.
             try drain(first.owner.imageDocument); try drain(command.owner.imageDocument)
-            if variant == 2 { try key(command.owner, code: 55, characters: "") }
+            if variant == 2 {
+                // Key-down can reach the canvas only after it owns focus.
+                // Becoming first responder must discard keys from an old owner.
+                try require(command.owner.window?.makeFirstResponder(command.owner.canvas) == true &&
+                            command.owner.window?.firstResponder === command.owner.canvas,
+                            "held Command fixture must deliver key-down to the focused canvas")
+                try key(command.owner, code: 55, characters: "")
+            }
             let flags: NSEvent.ModifierFlags = variant == 2 ? [] : [.command]
             try mouse(command.owner, .leftMouseDown, CGPoint(x: 60, y: 40), flags: flags)
             expect(command.owner.imageDocument.pendingWork == 0, "temporary/selected/held Command uses Current without even queuing a pick")
@@ -634,6 +641,9 @@ extension EngineSmokeTest {
         ToolState.shared.select(.move)
         let space = try scene("Space beats Command", floating: true); _ = try front(space.owner)
         let beforeSpace = try snapshot(space.owner.imageDocument.image)
+        try require(space.owner.window?.makeFirstResponder(space.owner.canvas) == true &&
+                    space.owner.window?.firstResponder === space.owner.canvas,
+                    "held Space fixture must deliver key-down to the focused canvas")
         try key(space.owner, code: 49, characters: " ")
         try mouse(space.owner, .leftMouseDown, hole, flags: [.command]); try mouse(space.owner, .leftMouseUp, end(hole, delta), flags: [.command])
         try key(space.owner, down: false, code: 49, characters: " "); try drain(space.owner.imageDocument)
