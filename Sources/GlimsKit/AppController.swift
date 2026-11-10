@@ -656,7 +656,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     private func performRecorderAction(_ action: RecorderPaletteAction, in document: ImageDocument) throws {
-        if action.needsFileSheet {
+        if action.needsFileSheet ||
+            ((action == .record || action == .clear) && document.hasUnsavedRecordingChanges) {
             guard let owner = documents.first(where: { $0.imageDocument === document }) else {
                 throw RecorderFileCoordinator.Refusal.windowUnavailable
             }
@@ -943,6 +944,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 EngineActivity.shared.closeImage(image, session: session) { _ in }
                 return completion(.failure(ImageDocument.DocumentError.closed))
             }
+            guard controller.canDiscardRecordingForRevert else {
+                EngineActivity.shared.closeImage(image, session: session) { _ in }
+                return completion(.failure(RecorderFileCoordinator.Refusal.changed))
+            }
             let frame = controller.window?.frame
             let zoom = controller.canvas.zoomPercent
             let center = controller.canvasCenter
@@ -959,7 +964,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 if let frame { replacement.window?.setFrame(frame, display: false) }
                 replacement.zoom(to: zoom)
                 replacement.center(on: center)
-                controller.closeDiscardingChanges()
+                guard controller.closeAfterRevert() else {
+                    replacement.closeDiscardingChanges()
+                    return completion(.failure(RecorderFileCoordinator.Refusal.changed))
+                }
                 completion(.success(replacement))
             } catch {
                 EngineActivity.shared.closeImage(image, session: session) { _ in }

@@ -17,15 +17,31 @@ final class RecorderFileCoordinator {
         }
     }
 
+    enum Loss: Equatable {
+        case replace, close, revert
+
+        var allowsActiveRecording: Bool { self != .replace }
+        var detail: String {
+            switch self {
+            case .replace: return "The current recording stays in this image until a new recording replaces it."
+            case .close: return "Closing the image removes its recording."
+            case .revert: return "Reverting the image removes its recording."
+            }
+        }
+    }
+
     private struct Operation {
-        let id = UUID()
+        var id = UUID()
         let window: NSWindow
         let checkpoint: ImageDocument.RecorderInstallCheckpoint
+        var allowsActiveRecording = false
     }
 
     private weak var owner: DocumentWindowController?
     private var active: UUID?
     private var bindingSheet: RecorderBindingSheetController?
+    private weak var waitingDocument: ImageDocument?
+    private var waitObserver: UUID?
 
     init(owner: DocumentWindowController) { self.owner = owner }
 
@@ -43,7 +59,7 @@ final class RecorderFileCoordinator {
         case .nameRecording: name(operation)
         case .saveRecording: save(operation) { [weak self] _ in self?.finish(operation) }
         case .loadRecording:
-            confirmReplacement(operation) { [weak self] allowed in
+            confirmReplacement(operation, detail: Loss.replace.detail) { [weak self] allowed in
                 guard let self else { return }
                 if allowed { self.chooseFile(operation) } else { self.finish(operation) }
             }
@@ -51,6 +67,69 @@ final class RecorderFileCoordinator {
             finish(operation)
             throw Refusal.windowUnavailable
         }
+    }
+
+    /// Wait for already accepted commands without stopping or replacing the
+    /// live recording. Only a later, verified decision authorizes loss.
+    func confirmLoss(_ loss: Loss,
+                     completion: @escaping @MainActor (ImageDocument.RecorderInstallCheckpoint?) -> Void) {
+        guard canPresent, let owner, let window = owner.window else { return completion(nil) }
+        let id = UUID()
+        active = id
+        continueLoss(loss, id: id, window: window, completion: completion)
+    }
+
+    private func continueLoss(_ loss: Loss, id: UUID, window: NSWindow,
+                              completion: @escaping @MainActor (ImageDocument.RecorderInstallCheckpoint?) -> Void) {
+        guard active == id else { return }
+        guard let owner, owner.window === window, !owner.closeStarted, !owner.imageDocument.isClosing else {
+            clearWait()
+            active = nil
+            return completion(nil)
+        }
+        let document = owner.imageDocument
+        if document.pendingWork > 0 || document.strokeIsActive {
+            guard waitObserver == nil else { return }
+            waitingDocument = document
+            owner.statusBar.message = "Waiting for accepted recording commands…"
+            waitObserver = document.addRecorderObserver(scope: .presentation) { [weak self, weak document] in
+                guard let self, let document, document.pendingWork == 0, !document.strokeIsActive else { return }
+                self.clearWait()
+                DispatchQueue.main.async { self.continueLoss(loss, id: id, window: window, completion: completion) }
+            }
+            return
+        }
+        clearWait()
+        guard window.attachedSheet == nil else {
+            active = nil
+            return completion(nil)
+        }
+        guard document.hasUnsavedRecordingChanges else {
+            active = nil
+            return completion(document.recorderContentCheckpoint())
+        }
+        do {
+            let checkpoint = try document.recorderSaveCheckpoint(allowActiveRecording: loss.allowsActiveRecording)
+            let operation = Operation(id: id, window: window, checkpoint: checkpoint,
+                                      allowsActiveRecording: loss.allowsActiveRecording)
+            confirmReplacement(operation, detail: loss.detail) { [weak self] allowed in
+                guard let self else { return completion(nil) }
+                let current = self.current(operation)
+                let approved = allowed && current?.recorderContentCheckpoint() == checkpoint
+                self.finish(operation, error: allowed && !approved ? Refusal.changed : nil)
+                completion(approved ? checkpoint : nil)
+            }
+        } catch {
+            active = nil
+            document.onError?(error.localizedDescription)
+            completion(nil)
+        }
+    }
+
+    private func clearWait() {
+        if let waitObserver { waitingDocument?.removeRecorderObserver(waitObserver) }
+        waitObserver = nil
+        waitingDocument = nil
     }
 
     private func current(_ operation: Operation) -> ImageDocument? {
@@ -61,7 +140,9 @@ final class RecorderFileCoordinator {
 
     private func verify(_ operation: Operation) throws -> ImageDocument {
         guard let document = current(operation),
-              try document.recorderInstallCheckpoint() == operation.checkpoint else { throw Refusal.changed }
+              try document.recorderSaveCheckpoint(allowActiveRecording: operation.allowsActiveRecording) == operation.checkpoint else {
+            throw Refusal.changed
+        }
         return document
     }
 
@@ -70,6 +151,7 @@ final class RecorderFileCoordinator {
         if let error { current(operation)?.onError?(error.localizedDescription) }
         active = nil
         bindingSheet = nil
+        clearWait()
     }
 
     private func name(_ operation: Operation) {
@@ -110,7 +192,8 @@ final class RecorderFileCoordinator {
             guard response == .OK, let url = panel.url else { return completion(false) }
             do {
                 let captured = try self.verify(operation)
-                captured.saveRecording(to: url, checkpoint: operation.checkpoint) { [weak self] result in
+                captured.saveRecording(to: url, checkpoint: operation.checkpoint,
+                                       allowActiveRecording: operation.allowsActiveRecording) { [weak self] result in
                     // The backend's work count drains after this callback.
                     DispatchQueue.main.async {
                         guard let self, self.current(operation) === captured else { return completion(false) }
@@ -134,12 +217,13 @@ final class RecorderFileCoordinator {
         }
     }
 
-    private func confirmReplacement(_ operation: Operation, completion: @escaping @MainActor (Bool) -> Void) {
+    private func confirmReplacement(_ operation: Operation, detail: String,
+                                    completion: @escaping @MainActor (Bool) -> Void) {
         guard let document = current(operation) else { return completion(false) }
         guard document.hasUnsavedRecordingChanges else { return completion(true) }
         let alert = NSAlert()
         alert.messageText = "Save changes to the current recording?"
-        alert.informativeText = "The current recording stays in this image until a new recording is loaded."
+        alert.informativeText = detail
         alert.addButton(withTitle: "Save…")
         alert.addButton(withTitle: "Discard Changes")
         alert.addButton(withTitle: "Cancel")
