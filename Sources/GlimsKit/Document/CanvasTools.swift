@@ -170,7 +170,9 @@ final class CanvasToolController {
     var onHintChange: ((ToolHintPolicy.Refresh) -> Void)?
 
     var hint: String {
-        let tool = dragTool ?? pointerTool(for: hintFlags)
+        // An idle hint has modifier state, not a tablet device event. The
+        // accepted drag already captures any matching hardware eraser tool.
+        let tool = dragTool ?? keyboard.pointerTool(current: ToolState.shared.current, flags: hintFlags)
         var flags = hintFlags
         if keyboard.optionIsDown(flags: hintFlags) { flags.insert(.option) }
         let phase: ToolHintPolicy.Phase
