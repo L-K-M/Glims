@@ -3598,8 +3598,9 @@ read-only contract and remaining physical/HDR/proof-control scope.
 
 Glims stages Rigi revision `a5801f2` for the saved palette-group width growth
 fix. Rigi's 134 unit tests, gallery smoke, release build and independent review
-passed at that revision. Rigi PR #19 is pushed and awaiting merge; it must merge
-before Glims merges this consumer adoption. Glims passes 988 unit tests and 2,771 engine-backed app checks with this pin.
+passed at that revision. Rigi PR #19 is merged after CI and completed review;
+this pin is its exact tested head, now an ancestor of Rigi main. Glims passes
+988 unit tests and 2,771 engine-backed app checks with this pin.
 Consumer CI, review and adoption merge remain pending.
 
 ### Installed MacPorts recipe inventory (2026-11-10 candidate)
