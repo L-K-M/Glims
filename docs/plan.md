@@ -3692,3 +3692,13 @@ no production activation defect is inferred from the earlier unlaunched host.
 See `batch-layer-rasterize.md` for exact scope, hashes and remaining validation.
 Other-engine UI, current units/integration, CI/review and merge remain pending;
 batch Restore and the broader gesture-policy item stay open.
+
+### Channel main-menu parity (2026-11-10 candidate)
+
+Eight existing channel actions now have main-menu routes with shared cached
+single-saved-channel and pending-work gates; context clicked-row behavior is
+unchanged. Old Main reproduced two missing-submenu failures. Corrected actual
+all-four UI56 and 1,016 private leased units pass. A preserved initial fixture
+failure led to exact native multi-setter history comparison and a latched wait,
+not changed production semantics. See `channel-menu-parity.md` for scope and
+remaining independent review, CI and combined-release gates.
