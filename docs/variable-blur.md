@@ -8,20 +8,20 @@ GEGL properties. Apply to Pixels merges the result as one native Undo step.
 Cancel preserves the target and its history. No live auxiliary graph is stored
 as an XCF effect.
 
-The facade's existing slot147 admits only Bump Map and Variable Blur. Positive
+The facade's existing slot 147 admits only Bump Map and Variable Blur. Positive
 explicit target/source IDs, image ownership, pixel-layer admission, locks,
 Undo availability, floating-selection and indexed-image guards are retained.
 Read-only source content is allowed. The detached snapshot has the existing
-512MiB bound; later source edits or deletion cannot change the preview.
+512 MiB bound; later source edits or deletion cannot change the preview.
 
-The initial native regression reproduced13 refusals before admission. The
-corrected native implementation passes149 focused checks per engine, including
+The initial native regression reproduced 13 refusals before admission. The
+corrected native implementation passes 149 focused checks per engine, including
 three independent raw-GEGL pixel oracles, partial alpha, source lifetime,
 Cancel, Apply, exact Undo/Redo, refusal cases and existing Bump Map behavior.
-General conformance passes1917 checks on3.2/master and1703 on3.0.8.
+General conformance passes 1,917 checks on 3.2/master and 1,703 on 3.0.8.
 
 The actual-menu regression reproduced the missing chooser before UI wiring.
-All24 UI checks pass on each of four engines: captured document routing while
+All 24 UI checks pass on each of four engines: captured document routing while
 another image is frontmost, explicit mask choice, parameter edits, native
 pixel comparison, one Undo, Cancel/close and source-chooser replacement.
 Choosing another source operation invalidates the old request; its retained

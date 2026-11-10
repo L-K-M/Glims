@@ -3361,7 +3361,7 @@ and exact coverage.
 The source chooser captures a same-image drawable into owned native-format
 tiles before creating the target preview. Bump Map applies to pixels with
 one native Undo step; existing target effects remain above it. API v1
-appends slot147. Other auxiliary/config operations remain unavailable.
+appends slot 147. Other auxiliary/config operations remain unavailable.
 See `filter-inputs.md` for policy and coverage. The expanded private/public
 harness passes228 checks on all four engines; the actual chooser/editor
 passes20 per engine. The self-contained bundle passes1,917 native and2,370
@@ -3499,7 +3499,7 @@ Curves candidate (2026-11-09): facade v1 appends157..160 for owned five-channel
 snapshots, one-channel point/sample patches and global TRC updates. The dedicated
 graph/numeric form and native immutable replacement are under acceptance; see
 `curves.md`. Levels and Curves share exact native TRC binding installation.
-Main #135 has merged captured batch Fit; its accepted bundle passes1917 native
+Main #135 has merged captured batch Fit; its accepted bundle passes 1,917 native
 and2542 app checks. This checkpoint does not close the remaining completion ledger.
 
 
@@ -3583,7 +3583,7 @@ remain pending. Other auxiliary-input operations remain unsupported.
 Variable Blur now shares the immutable same-image source snapshot and
 merge-only preview lifecycle with Bump Map, with blur-mask-specific labels.
 Native and actual-menu regressions failed before their respective fixes.
-All four engines pass149 focused native checks and24 actual UI checks;
+All four engines pass 149 focused native checks and 24 actual UI checks;
 existing conformance also passes. See `variable-blur.md` for the independent
 pixel oracle, refusal guards and remaining auxiliary roles. The facade keeps
 APIv1/163 and upstream sources remain unchanged. CI/review/integration follow.
