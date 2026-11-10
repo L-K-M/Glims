@@ -361,6 +361,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (brightness contrast)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "selective-gaussian-source" {
+                try exerciseSelectiveGaussianSource(session, documents: documents)
+                print(failures == 0 ? "PASSED (selective gaussian source)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "variable-blur-source" {
                 try exerciseVariableBlurSource(session, documents: documents)
                 print(failures == 0 ? "PASSED (variable blur source)" : "FAILED: \(failures) failure(s)")
@@ -539,6 +544,7 @@ enum EngineSmokeTest {
             try exerciseBatchFit(session, documents: documents)
             try exerciseFilterSources(session, documents: documents)
             try exerciseVariableBlurSource(session, documents: documents)
+            try exerciseSelectiveGaussianSource(session, documents: documents)
             try exerciseBrightnessContrast(session, work: work, documents: documents)
             try exerciseColorBalance(session, work: work, documents: documents)
             try exerciseInputHistogram(session, work: work, documents: documents)

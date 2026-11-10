@@ -3586,6 +3586,19 @@ original across 16 bounded RGBA fixtures. See
 ownership reasoning, controls and parity limits. Modern validation of the
 patched source and independent review remain pending.
 
+### Selective Gaussian contrast reference (2026-11-10 candidate)
+
+Selective Gaussian Blur now has a captured contrast-reference chooser and the
+installed numeric property form, using the existing snapshot guards, 512 MiB
+bound and merge-only lifecycle. The native baseline reproduced one admission
+failure among 33 checks; the actual-menu baseline reproduced one chooser failure
+among three checks. All four engines now pass 128 focused native and 28 actual
+UI checks, plus general conformance (1,917 checks on 3.2/master; 1,703 on 3.0.8).
+Xcode 26 CI then exposed a Swift 6.2 type-checker limit in the fixture generator;
+the expression is split into typed byte intermediates without changing its
+pixels or oracles. CI rerun and final integration remain pending. Other auxiliary
+roles remain separate work. See `filter-inputs.md` for the exact contract.
+
 ### Path lifecycle menu commands (2026-11-10 candidate)
 
 Edit now exposes New Path and Delete Path beside Stroke Path and Fill Path.
