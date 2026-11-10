@@ -121,6 +121,9 @@ final class CanvasToolController {
     /// The Transform tool's pending transform, waiting for Return.
     private(set) var transformSession: LayerTransformSession?
     private var transformDrag: LayerTransformSession.Drag?
+    /// The pointer's last image location during a Transform drag, so a
+    /// modifier-only event recomputes the preview from the same point.
+    private var transformDragCurrent: CGPoint?
     /// The Move tool's snapping drag, captured at the press when this
     /// window's Snap To state enables any target; nil when snapping is off
     /// (the legacy raw move) or no layer could be captured.
@@ -331,6 +334,7 @@ final class CanvasToolController {
             }
         case .transform:
             guard let drag = transformDrag else { return }
+            transformDragCurrent = point
             transformSession?.update(drag, to: point, constrained: event.modifierFlags.contains(.shift))
             canvas.needsDisplay = true
         case .eyedropper:
@@ -358,6 +362,7 @@ final class CanvasToolController {
             lassoPoints = []
             handOrigin = nil
             gradientCapture = nil
+            transformDragCurrent = nil
             moveSnap = nil
             moveSnapWasRequested = false
             floatingMove = nil
@@ -381,6 +386,9 @@ final class CanvasToolController {
         case .path:
             pathTool.mouseUp()
         case .transform:
+            if let drag = transformDrag {
+                transformSession?.update(drag, to: end, constrained: event.modifierFlags.contains(.shift))
+            }
             transformDrag = nil
             if transformSession?.isIdentity == false {
                 onStatus?("Return applies the transform; Escape cancels it.")
@@ -806,6 +814,16 @@ final class CanvasToolController {
         canvas.needsDisplay = true
     }
 
+    /// Modifier-only changes recompute a stationary Transform preview from
+    /// the captured drag and its last pointer location, without a native
+    /// call.
+    func transformModifiersChanged(_ flags: NSEvent.ModifierFlags) {
+        guard dragTool == .transform, let drag = transformDrag else { return }
+        transformSession?.update(drag, to: transformDragCurrent ?? drag.start,
+                                 constrained: flags.contains(.shift))
+        canvas.needsDisplay = true
+    }
+
     /// The rubber band or lasso path of a selection being drawn, in view
     /// coordinates (the canvas is flipped).
     func drawOverlay(scale: Double) {
@@ -1000,6 +1018,7 @@ final class CanvasToolController {
             return
         }
         transformDrag = session.beginDrag(handle, at: point)
+        transformDragCurrent = point
         canvas.needsDisplay = true
     }
 

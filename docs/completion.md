@@ -110,6 +110,8 @@ bundle with the native and Swift build outputs inaccessible.
 - [x] Live Shift-constrained and Option-centered rectangle/ellipse selection,
       stationary modifier preview, captured selection modes and Escape cancellation
       (#127).
+- [x] Stationary and release-event Shift constraints for Transform corner
+      and rotation previews, with no-motion handle clicks preserving geometry.
 - [ ] Remaining snapping interactions and other modifier behavior.
 - [x] Stroke Selection and explicit Paste Into/Anchor/New Layer/Discard.
 - [x] Float Selected Pixels (move/copy), existing floating-selection drag

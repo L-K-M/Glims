@@ -3509,3 +3509,17 @@ slots. All four engines pass121 focused checks plus the existing general
 conformance suites;75 data-only parser checks pass. See `xcf-effects.md` for
 format, ownership, external-editor limits and the remaining unsupported forms.
 Final integration review, CI and the self-contained release remain pending.
+
+
+### Transform modifier previews (2026-11-10 candidate)
+
+Transform now recomputes its captured corner/rotation preview when Shift
+changes without pointer movement, and consumes final release coordinates and
+modifiers before ending the drag. A press/release within handle hit tolerance
+keeps the captured geometry; returning to the press after moving restores it.
+Preview and Escape preserve native pixels/history; existing Return admission
+and the single-Undo apply path remain unchanged. The actual-event regression
+first reproduced four missing routes; review then found the near-handle click
+regression, reproduced with event and model checks before correction. All978
+units pass, and36 actual-event checks pass on each of all four engines.
+Independent final review and CI are pending.
