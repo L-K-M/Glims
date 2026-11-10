@@ -373,7 +373,12 @@ extension EngineSmokeTest {
         a.setScreenMode(.fullScreenWithMenu)
         try settled(a, .fullScreenWithMenu)
         a.setScreenMode(.fullScreenBare)
-        a.window?.close()
+        guard let closeItem = NSApp.mainMenu?.item(withTitle: "File")?.submenu?.items.first(where: {
+            $0.action == #selector(NSWindow.performClose(_:))
+        }) else { return expect(false, "installed File menu exposes its normal Close action") }
+        expect(closeItem.target == nil
+            && NSApp.sendAction(#selector(NSWindow.performClose(_:)), to: nil, from: closeItem),
+               "installed File > Close dispatches through the nil-target responder chain in bare mode")
         try wait("closing native full-screen window completes", {
             a.closeStarted && a.screenModeState.isClosed && a.window?.isVisible != true
         })
