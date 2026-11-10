@@ -4,6 +4,30 @@ import AppKit
 /// Select Alpha and color selection can read the active drawable. Replay needs
 /// explicit context bindings before these values can reproduce another edit.
 enum SemanticImageCommand {
+    /// Immutable property values only. The explicit layer binding stays with
+    /// the owning document, outside the semantic log.
+    struct LayerProperties: Equatable {
+        let name: String?
+        let isVisible: Bool?
+        let opacity: Double?
+        let mode: String?
+
+        init(_ change: EngineSession.LayerChange) {
+            name = change.name
+            isVisible = change.isVisible
+            opacity = change.opacity
+            mode = change.mode
+        }
+
+        var change: EngineSession.LayerChange {
+            .init(name: name, isVisible: isVisible, opacity: opacity, mode: mode)
+        }
+    }
+
+    private struct MissingLayerBinding: LocalizedError {
+        var errorDescription: String? { "This recorded layer change has no explicit layer binding." }
+    }
+
     case selectionShape(EngineSession.SelectShape, options: EngineSession.SelectOptions)
     case selectColor(CGPoint, options: EngineSession.SelectOptions)
     case selectCommand(EngineSession.SelectCommand, radius: Double)
@@ -11,12 +35,13 @@ enum SemanticImageCommand {
     case scale(width: Int, height: Int)
     case resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: NSColor)
     case crop(CGRect)
+    case layerProperties(LayerProperties)
 
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
         case .transformImage, .scale, .resizeCanvas, .crop: return true
-        case .selectionShape, .selectColor, .selectCommand: return false
+        case .selectionShape, .selectColor, .selectCommand, .layerProperties: return false
         }
     }
 
@@ -52,6 +77,7 @@ enum SemanticImageCommand {
         case .scale: return "Scale Image"
         case .resizeCanvas: return "Resize Canvas"
         case .crop: return "Crop Image"
+        case .layerProperties: return "Layer Properties"
         }
     }
 
@@ -73,6 +99,19 @@ enum SemanticImageCommand {
             try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill)
         case .crop(let rect):
             try session.crop(image: image, to: rect)
+        case .layerProperties:
+            throw MissingLayerBinding()
         }
+    }
+
+    /// The caller freshly confirms this runtime layer against the owning image.
+    /// It is never stored in the command and never falls back to selection.
+    func apply(session: EngineSession, image: Int32, layer: Int32) throws {
+        guard case .layerProperties(let properties) = self else {
+            try apply(session: session, image: image)
+            return
+        }
+        guard layer > 0 else { throw MissingLayerBinding() }
+        try session.changeLayer(layer, image: image, properties.change)
     }
 }
