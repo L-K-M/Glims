@@ -3802,3 +3802,13 @@ and all 26 focused checks on every engine. See
 [close-all-documents.md](close-all-documents.md) for exact host/review limits
 and remaining real responder/Quit/file-completion acceptance. Hosted gates
 and final integration remain pending.
+
+### Captured batch Restore sources (2026-11-10 candidate)
+
+The Layer menu and Layers palette confirm a captured ordered source vector,
+then regenerate it through appended slot166 as one native Undo with counted
+exclusive close draining. All-four focused native163/163/114/163, general
+1,917/1,917/1,703/1,917, actual UI48each and1,020 private leased units pass.
+The independently measured native linked-file Redo display/source ordering
+is explicit. No atomic rollback or self-contained release claim is inferred.
+See`batch-layer-restore.md` for exact source/proof scope, AX and fault gaps.

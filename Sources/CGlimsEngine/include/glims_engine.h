@@ -3213,6 +3213,28 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_rasterize_layers) (GlimsEngine *engine, GlimsImageID image,
                                         const GlimsItemID *layers, int32_t count,
                                         char **error);
+  /* Slot166: restore the captured ordered vector of 1..256 distinct positive
+   * attached same-image layer ids from retained text/link/vector sources.
+   * Ordinary pixels, groups, masks/channels and missing sources refuse. Every
+   * member, including already-editable no-ops, must pass effective PIXELS and
+   * POSITION locks, write readiness, no floating selection, enabled/unfrozen
+   * Undo and zero open Undo groups. Known missing/empty retained link file or
+   * buffer is refused using in-memory facts; admission never stats/loads files.
+   * The whole vector is validated and strongly held before mutation. Changed
+   * members share one native Restore Layer Sources Undo; all-no-op requests
+   * change no history/dirty state. Identities, topology and ordered selection
+   * stay with the layers, but regeneration may resize/reposition pixels and
+   * masks or rename layers. Links reload current external content; Undo/Redo
+   * is not an immutable linked-file snapshot. Void native setters do not
+   * report rendering success: postchecks confirm retained source kind and
+   * editable behavior, not pixel correctness. Detected Core/load/monitor
+   * failure may leave changes inside the one Undo group; errors explicitly
+   * warn some layers may have changed/use Undo and refresh authoritative state,
+   * with no rollback promise. Ordinary admission refusals change nothing.
+   * The vector is borrowed for this synchronous engine-thread call only. */
+  GlimsStatus (*image_restore_layer_sources) (GlimsEngine *engine, GlimsImageID image,
+                                             const GlimsItemID *layers, int32_t count,
+                                             char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
