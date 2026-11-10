@@ -3577,3 +3577,13 @@ checks pass on all four engines, including retained Bump Map behavior.
 The actual UI route initially reproduced a disabled menu and missing chooser.
 Final source-chooser interaction checks, review, CI and release integration
 remain pending. Other auxiliary-input operations remain unsupported.
+
+### Captured Variable Blur mask (2026-11-10 candidate)
+
+Variable Blur now shares the immutable same-image source snapshot and
+merge-only preview lifecycle with Bump Map, with blur-mask-specific labels.
+Native and actual-menu regressions failed before their respective fixes.
+All four engines pass149 focused native checks and24 actual UI checks;
+existing conformance also passes. See `variable-blur.md` for the independent
+pixel oracle, refusal guards and remaining auxiliary roles. The facade keeps
+APIv1/163 and upstream sources remain unchanged. CI/review/integration follow.
