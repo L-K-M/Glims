@@ -292,7 +292,7 @@ class CoreSourceCollectionTests(unittest.TestCase):
         for name, target in targets.items():
             (repo / name).symlink_to(target)
         self.components["gegl"] = (repo, self.commit(repo))
-        self.assertEqual((repo / "c").resolve(strict=True), repo / "source.c")
+        self.assertEqual((repo / "c").resolve(strict=True), (repo / "source.c").resolve(strict=True))
 
         result, output = self.collect_cli()
         self.assertEqual(result.returncode, 0, result.stderr)
