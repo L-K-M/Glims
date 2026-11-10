@@ -925,6 +925,26 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         PaletteCenter.shared.resetLayout()
     }
 
+    @objc func selectToolFromMenu(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem,
+              item.identifier == MenuShortcutBridge.builtinIdentifier,
+              item.action == #selector(selectToolFromMenu(_:)),
+              let tool = ToolMenuCatalog.tool(forTag: item.tag) else { return }
+        ToolState.shared.select(tool)
+    }
+
+    @objc func swapColorsFromMenu(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem, item.identifier == MenuShortcutBridge.builtinIdentifier,
+              item.action == #selector(swapColorsFromMenu(_:)), item.tag == ToolMenuCatalog.swapColorsTag else { return }
+        ToolState.shared.swapColors()
+    }
+
+    @objc func resetColorsFromMenu(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem, item.identifier == MenuShortcutBridge.builtinIdentifier,
+              item.action == #selector(resetColorsFromMenu(_:)), item.tag == ToolMenuCatalog.defaultColorsTag else { return }
+        ToolState.shared.resetColors()
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
         case #selector(pasteAsNewImage(_:)):
@@ -945,6 +965,21 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         case #selector(togglePaletteVisibility(_:)):
             menuItem.title = PaletteCenter.shared.isHidingPalettes ? "Show Palettes" : "Hide Palettes"
             return session != nil
+        case #selector(selectToolFromMenu(_:)):
+            // Like the Tools palette, these change the global context, even
+            // while loading or busy. No image service or engine read is needed.
+            guard menuItem.identifier == MenuShortcutBridge.builtinIdentifier,
+                  let tool = ToolMenuCatalog.tool(forTag: menuItem.tag) else {
+                menuItem.state = .off; return false
+            }
+            menuItem.state = tool == ToolState.shared.current ? .on : .off
+            return true
+        case #selector(swapColorsFromMenu(_:)):
+            menuItem.state = .off
+            return menuItem.identifier == MenuShortcutBridge.builtinIdentifier && menuItem.tag == ToolMenuCatalog.swapColorsTag
+        case #selector(resetColorsFromMenu(_:)):
+            menuItem.state = .off
+            return menuItem.identifier == MenuShortcutBridge.builtinIdentifier && menuItem.tag == ToolMenuCatalog.defaultColorsTag
         default:
             return true
         }
