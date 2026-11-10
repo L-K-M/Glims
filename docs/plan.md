@@ -3882,3 +3882,69 @@ and engine diagnostics are preserved. Physical hardware, combined integration,
 latest-head CI, publication review and merge remain open. See
 `tablet-eraser-proximity.md` for the event ownership contract, exact run IDs and
 aggregate receipt path.
+
+### Spring-loaded tool letters (2026-11-10 candidate)
+
+Tap selects; Shift+letter cycles; hold or use an interaction temporarily
+selects until its captured interaction finishes. New explicit selections and
+text focus retain priority. A measured focus-loss regression (two failures)
+is corrected; all four engines pass 83 interface checks, plus 18 state tests
+and 1,033 isolated full-suite tests. See [spring-tool-letters.md](spring-tool-letters.md)
+for exact revisions, review scope and remaining physical-input/release gates.
+
+### Live canvas tool hints (2026-11-10 candidate)
+
+Stationary modifier/tool changes update useful hints while preserving error,
+progress and activity priority. Same-window field focus clears lost modifier
+releases; its measured six-failure regression is fixed. All four engines pass
+51 interface checks and the full isolated suite passes 1,022 tests. See
+[live-tool-hints.md](live-tool-hints.md) for scope, AX and integration limits.
+
+### Tool and color menu parity (2026-11-10 candidate)
+
+View > Tools exposes all 26 existing tools plus shared Swap/Default Colors,
+with stable command IDs and no factory canvas-letter equivalents. All four
+engines pass 106 actual menu/field/native-invariance checks; 1,021 isolated
+unit tests pass. See [tool-color-menus.md](tool-color-menus.md) for the scoped
+key-equivalent oracle correction and remaining CI/integration limits.
+
+### Per-document screen modes (2026-11-10 candidate)
+
+Canvas F, View > Screen Mode and the Tools palette select Windowed,
+Full Screen with Menu and Full Screen Bare. Owned modes resize the document
+in place, preserve palette visibility, and restore frame/style/presentation;
+native full-screen callbacks cannot acquire owned presentation without a
+snapshot. Rigi `13ec06a` provides explicit document focus eligibility.
+Normal File > Close routes through the existing save/cancel flow even when
+an owned borderless window has no title-bar close button.
+
+The expanded focused fixture passes 77 checks on every engine, 308 total,
+and the full XCTest run passes 1,025 tests. Every recorded process exited
+zero and released the desktop; immediate screen/AX observations report
+Finder and no dialog, without proving a complete desktop inventory.
+Earlier native-Space menu-policy and bare-window Close failures remain
+recorded. See [screen-modes.md](screen-modes.md) for behavior, source/evidence
+scope and limits. Physical interaction, multi-display/accessibility audit,
+final combined release, hosted CI/review and integration remain pending.
+
+### Recorder layer property commands (2026-11-10 candidate)
+
+Accepted name, visibility, opacity and mode changes now capture immutable
+semantic values with a freshly checked explicit same-document layer
+binding. Both write routes retain counted reconciliation/callback order.
+The actual old opacity control produces the expected zero-capture RED;
+new36 checks and the unchanged Recorder capture/replay/palette checks pass
+on all four engines (712 total), plus1,050 unit tests. See
+[recorder-layer-properties.md](recorder-layer-properties.md). Persistence,
+other command families, hosted CI/review and final integration remain open.
+
+### Captured floating Text creation (2026-11-10 candidate)
+
+A new editor owns its complete original floating expectation. Native168
+prepares before anchoring and inserts in one normal Text Undo; stale or
+unsafe requests refuse, with truthful reconciliation after late failure.
+The old frontend fails18 of51 checks; the unchanged fixture now passes51 on
+every engine, plus1,050 units. Native170 checks per engine and all7,454
+general checks pass. See [text-floating-creation.md](text-floating-creation.md)
+for scope and the existing Escape Apply/close policy. Hosted CI/current
+feedback, combined integration and final release remain separate gates.

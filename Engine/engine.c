@@ -1166,6 +1166,9 @@ MARSHAL (fonts, return glims_fonts (e, a->out);)
 MARSHAL (text_layer_new, return glims_text_layer_new (e, a->image, a->string, a->in,
                                                       (GlimsPoint) { a->number, a->number2 },
                                                       a->out, a->error);)
+MARSHAL (text_layer_new_captured, return glims_text_layer_new_captured (e, a->image, a->in, a->string, a->in2,
+                                                                        (GlimsPoint) { a->number, a->number2 },
+                                                                        a->out, a->error);)
 MARSHAL (text_layer_get, return glims_text_layer_get (e, a->image, a->item, a->out, a->in_out);)
 MARSHAL (text_layer_set, return glims_text_layer_set (e, a->image, a->item, a->string, a->in,
                                                       a->error);)
@@ -1808,6 +1811,30 @@ api_text_layer_new (GlimsEngine *e, GlimsImageID image, const char *text,
   GlimsArgs a = { .image = image, .string = text, .in = settings, .number = position.x,
                   .number2 = position.y, .out = layer, .error = error };
   return glims_engine_call (e, text_layer_new_on_engine, &a);
+}
+
+static GlimsStatus
+api_text_layer_new_captured (GlimsEngine *e, GlimsImageID image,
+                             const GlimsFloatingState *expected,
+                             const char *text,
+                             const GlimsTextSettings *settings,
+                             GlimsPoint position,
+                             GlimsItemID *out, char **error)
+{
+  GlimsArgs a = { .image = image, .string = text, .in = expected, .in2 = settings,
+                  .number = position.x, .number2 = position.y, .out = out, .error = error };
+  if (error)
+    *error = NULL;
+  if (out)
+    *out = 0;
+  if (! out)
+    {
+      glims_fail (error, NULL, "The text layer result is required.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  if (! e)
+    return GLIMS_STATUS_NOT_RUNNING;
+  return glims_engine_call (e, text_layer_new_captured_on_engine, &a);
 }
 
 static GlimsStatus
@@ -3298,6 +3325,7 @@ static const GlimsEngineAPI api_v1 = {
   .image_rasterize_layers = api_image_rasterize_layers,
   .image_restore_layer_sources = api_image_restore_layer_sources,
   .image_pick_layer = api_image_pick_layer,
+  .text_layer_new_captured = api_text_layer_new_captured,
 };
 
 __attribute__ ((visibility ("default")))

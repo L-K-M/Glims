@@ -486,6 +486,12 @@ GlimsStatus glims_fonts          (GlimsEngine *e, char **names);
 GlimsStatus glims_text_layer_new (GlimsEngine *e, GlimsImageID image, const char *text,
                                   const GlimsTextSettings *settings, GlimsPoint position,
                                   GlimsItemID *layer, char **error);
+GlimsStatus glims_text_layer_new_captured (GlimsEngine *e, GlimsImageID image,
+                                           const GlimsFloatingState *expected,
+                                           const char *text,
+                                           const GlimsTextSettings *settings,
+                                           GlimsPoint position,
+                                           GlimsItemID *out, char **error);
 GlimsStatus glims_text_layer_get (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                   char **text, GlimsTextSettings *settings);
 GlimsStatus glims_text_layer_set (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,

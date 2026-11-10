@@ -95,6 +95,11 @@ struct CanvasKeyboardState {
     private(set) var commandHeld = false
     private(set) var optionHeld = false
 
+    mutating func modifiersChanged(_ flags: NSEvent.ModifierFlags) {
+        commandHeld = flags.contains(.command)
+        optionHeld = flags.contains(.option)
+    }
+
     mutating func keyDown(_ keyCode: Int) {
         if keyCode == CanvasKeyboardPolicy.spaceKeyCode { spaceHeld = true }
         if CanvasKeyboardPolicy.commandKeyCodes.contains(keyCode) { commandHeld = true }
