@@ -926,7 +926,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     func openNativeFilter(_ operation: EngineSession.FilterOperation) {
         guard !previewBusy, !imageDocument.isClosing, !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
               !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
-        if operation.name == "gegl:bump-map" && operation.support == .needsAuxInput {
+        if NativeFilterMenuLayout.usesSourceChooser(operation) {
             return openFilterSourceChooser(operation)
         }
         if NativeFilterMenuLayout.usesCurvesEditor(operation) {
@@ -1008,16 +1008,21 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     // MARK: Layer menu
 
     private func openFilterSourceChooser(_ operation: EngineSession.FilterOperation) {
-        guard let target = imageDocument.activeLayer else { return }
-        guard imageDocument.bumpMapRefusal(target: target) == nil else {
-            statusBar.message = imageDocument.bumpMapRefusal(target: target) ?? "Choose a pixel layer first."
+        guard let target = imageDocument.activeLayer,
+              let sourceOperation = SourceFilterOperation(rawValue: operation.name),
+              NativeFilterMenuLayout.usesSourceChooser(operation) else { return }
+        guard imageDocument.sourceFilterRefusal(target: target) == nil else {
+            statusBar.message = imageDocument.sourceFilterRefusal(target: target) ?? "Choose a pixel layer first."
             return
         }
-        if let filterSourceChooser, !filterSourceChooser.isInvalidated { filterSourceChooser.show(); return }
+        if let filterSourceChooser, !filterSourceChooser.isInvalidated {
+            if filterSourceChooser.operation == sourceOperation { filterSourceChooser.show(); return }
+            filterSourceChooser.invalidate()
+        }
         filterSourceRequest += 1
         let request = filterSourceRequest
         let targetName = imageDocument.layers.first { $0.id == target }?.name ?? "Layer"
-        let chooser = FilterSourceChooserController(targetName: targetName, preferredSource: target, rows: { [weak self] in
+        let chooser = FilterSourceChooserController(targetName: targetName, preferredSource: target, operation: sourceOperation, rows: { [weak self] in
             guard let self else { return [] }
             var rows: [FilterSourceChoice] = []
             for layer in self.imageDocument.layers {
@@ -1029,10 +1034,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             rows += self.imageDocument.channels.map { .init(id: $0.id, name: "\($0.name) — Channel") }
             return rows
         }, refusal: { [weak self] in
-            self?.imageDocument.bumpMapRefusal(target: target) ?? (self == nil ? "The document is closed." : nil)
+            self?.imageDocument.sourceFilterRefusal(target: target) ?? (self == nil ? "The document is closed." : nil)
         }, hostWindow: window, preview: { [weak self] source, completion in
             guard let self, self.filterSourceRequest == request, !self.closeStarted, !self.previewBusy,
-                  self.imageDocument.bumpMapRefusal(target: target) == nil else {
+                  self.imageDocument.sourceFilterRefusal(target: target) == nil else {
                 completion(.failure(ImageDocument.DocumentError.busy)); return
             }
             self.endPendingEdits()
@@ -1044,7 +1049,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 switch result {
                 case .failure(let error): completion(.failure(error))
                 case .success(let properties):
-                    guard !self.previewBusy, self.imageDocument.bumpMapRefusal(target: target) == nil else {
+                    guard !self.previewBusy, self.imageDocument.sourceFilterRefusal(target: target) == nil else {
                         completion(.failure(ImageDocument.DocumentError.busy)); return
                     }
                     self.startPreview(title: operation.title, begin: { [imageDocument = self.imageDocument] reply in
@@ -2051,14 +2056,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             guard !editingBlocked, !previewBusy else { return false }
             return singleLayerItemAllowed(menuItem, action: "Gaussian Blur")
         case #selector(runNativeFilter(_:)):
-            // Auxiliary-input and config operations stay listed but can't
-            // open a form yet; their titles carry the reason.
+            // Operations without an admitted source contract or dedicated
+            // config editor stay disabled with their reason in the title.
             guard let command = menuItem.representedObject as? NativeFilterCommand,
                   (NativeFilterMenuLayout.supportsParameterEditor(command.operation)
                     || NativeFilterMenuLayout.usesSourceChooser(command.operation)) else { return false }
             guard !editingBlocked, !previewBusy, imageDocument.activeLayer != nil else { return false }
             if NativeFilterMenuLayout.usesSourceChooser(command.operation), let target = imageDocument.activeLayer {
-                return imageDocument.bumpMapRefusal(target: target) == nil
+                return imageDocument.sourceFilterRefusal(target: target) == nil
             }
             return singleLayerItemAllowed(menuItem, action: command.operation.title)
         case #selector(repeatExport(_:)):

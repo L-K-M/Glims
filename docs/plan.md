@@ -3561,6 +3561,16 @@ native text Undo/Redo issue and scope. Initial consent and two timing defects
 were reproduced before their respective fixes; final integration checks are
 in progress. The facade remains APIv1/163 and upstream sources are unchanged.
 
+### Captured Variable Blur mask (2026-11-10 candidate)
+
+Variable Blur now shares the immutable same-image source snapshot and
+merge-only preview lifecycle with Bump Map, with blur-mask-specific labels.
+Native and actual-menu regressions failed before their respective fixes.
+All four engines pass 149 focused native checks and 24 actual UI checks;
+existing conformance also passes. See `variable-blur.md` for the independent
+pixel oracle, refusal guards and remaining auxiliary roles. The facade keeps
+APIv1/163 and upstream sources remain unchanged. CI/review/integration follow.
+
 
 ### Recorder capture, replay and palette (2026-11-10 candidate)
 
