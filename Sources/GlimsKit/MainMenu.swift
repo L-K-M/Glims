@@ -224,6 +224,11 @@ enum MainMenu {
                 item("Reset Rotation", #selector(DocumentWindowController.resetViewRotation(_:))),
             ]),
             .separator(),
+            submenu("Screen Mode", DocumentScreenMode.allCases.map { mode in
+                let entry = item(mode.title, #selector(DocumentWindowController.chooseScreenMode(_:)))
+                entry.tag = mode.rawValue
+                return entry
+            }),
             item("Show Rulers", #selector(DocumentWindowController.toggleShowRulers(_:))),
             item("Show Guides", #selector(DocumentWindowController.toggleShowGuides(_:))),
             item("Show Grid", #selector(DocumentWindowController.toggleShowGrid(_:))),

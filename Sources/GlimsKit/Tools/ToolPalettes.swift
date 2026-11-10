@@ -17,7 +17,7 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
         contentSize: NSSize(
             width: 61,
             height: Metrics.margin + ClassicToolGridLayout().size(forSlotCount: ToolID.paletteSlots.count).height
-                + Metrics.gridToColors + ClassicColorPairLayout.size.height + Metrics.margin),
+                + Metrics.gridToColors + ClassicColorPairLayout.size.height + 8 + 18 + Metrics.margin),
         sizing: .fixed,
         frameAutosaveName: "Glims.palette.tools")
 
@@ -27,6 +27,9 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
         })
     })
     private let colors = ClassicColorPair()
+    private let screenModes = NSSegmentedControl(labels: DocumentScreenMode.allCases.map(\.title),
+        trackingMode: .selectOne, target: nil, action: nil)
+    private weak var targetDocument: ImageDocument?
     /// Which color the shared color panel is editing for this palette.
     private var editedColor: ReferenceWritableKeyPath<ToolState, NSColor>?
     private var observer: UUID?
@@ -43,7 +46,20 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
         colors.onEditForeground = { [weak self] in self?.editColor(\.foreground) }
         colors.onEditBackground = { [weak self] in self?.editColor(\.background) }
 
-        for view in [grid, colors] as [NSView] {
+        screenModes.controlSize = .small
+        screenModes.setAccessibilityLabel("Screen mode")
+        screenModes.target = self
+        screenModes.action = #selector(screenModeChosen(_:))
+        let symbols = ["macwindow", "menubar.rectangle", "rectangle.inset.filled"]
+        for mode in DocumentScreenMode.allCases {
+            screenModes.setWidth(16, forSegment: mode.rawValue)
+            screenModes.setToolTip(mode.title, forSegment: mode.rawValue)
+            screenModes.setImage(NSImage(systemSymbolName: symbols[mode.rawValue],
+                accessibilityDescription: mode.title), forSegment: mode.rawValue)
+        }
+        NotificationCenter.default.addObserver(self, selector: #selector(screenModeChanged(_:)),
+            name: DocumentWindowController.screenModeDidChange, object: nil)
+        for view in [grid, colors, screenModes] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
@@ -52,14 +68,43 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
             grid.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             colors.topAnchor.constraint(equalTo: grid.bottomAnchor, constant: Metrics.gridToColors),
             colors.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+            screenModes.topAnchor.constraint(equalTo: colors.bottomAnchor, constant: 8),
+            screenModes.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+            screenModes.heightAnchor.constraint(equalToConstant: 18),
         ])
         view = root
         grid.selectTool(id: ToolState.shared.current.rawValue)
         stateChanged()
+        refreshScreenMode()
         observer = ToolState.shared.observe { [weak self] in self?.stateChanged() }
     }
 
-    func retarget(to target: ImageDocument?) {}
+    func retarget(to target: ImageDocument?) {
+        targetDocument = target
+        refreshScreenMode()
+    }
+
+    private var targetWindowController: DocumentWindowController? {
+        guard let targetDocument else { return nil }
+        return NSApp.windows.compactMap { $0.windowController as? DocumentWindowController }
+            .first { $0.imageDocument === targetDocument }
+    }
+
+    private func refreshScreenMode() {
+        guard isViewLoaded else { return }
+        let owner = targetWindowController
+        screenModes.isEnabled = owner?.canChangeScreenMode == true
+        screenModes.selectedSegment = owner?.screenMode.rawValue ?? 0
+    }
+
+    @objc private func screenModeChanged(_ notification: Notification) { refreshScreenMode() }
+
+    @objc private func screenModeChosen(_ sender: NSSegmentedControl) {
+        guard let mode = DocumentScreenMode(rawValue: sender.selectedSegment),
+              let owner = targetWindowController else { return }
+        owner.setScreenMode(mode)
+        refreshScreenMode()
+    }
 
     private func stateChanged() {
         if grid.selectedToolID != ToolState.shared.current.rawValue {

@@ -10,6 +10,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     let imageDocument: ImageDocument
     let canvas: EngineCanvasView
     let rotationView: CanvasRotationView
+    var screenModeState = DocumentScreenModeState()
     private var viewAngleAlert: NSAlert?
     private var paintSourceAlert: NSAlert?
     private var batchRasterizeAlert: NSAlert?
@@ -517,6 +518,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc override func cancelOperation(_ sender: Any?) {
         if let previewPanel { previewPanel.cancel() }
         else if previewStartIsPending { cancelPendingPreview() }
+        else if screenMode != .windowed { setScreenMode(.windowed) }
         // NSWindowController's superclass does not implement this optional
         // key-binding action. An idle Escape reaching us has nothing to cancel.
     }
@@ -2127,6 +2129,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             menuItem.state = gridViewState.menuState
             return !imageDocument.isClosing
 
+        case #selector(chooseScreenMode(_:)):
+            guard let mode = DocumentScreenMode(rawValue: menuItem.tag) else { return false }
+            menuItem.state = mode == screenMode ? .on : .off
+            return canChangeScreenMode
+        case #selector(cycleScreenMode(_:)):
+            return canChangeScreenMode
         case #selector(toggleShowRulers(_:)):
             // Same contract as Show Guides, spelled out in RulerMenuLogic:
             // the checkmark reads the window's cached flag and an engine-
@@ -2736,6 +2744,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func windowWillClose(_ notification: Notification) {
+        screenModeState.close()
+        publishScreenMode()
         closeStarted = true
         imageDocument.beginClosing()
         softProofController?.invalidate()
