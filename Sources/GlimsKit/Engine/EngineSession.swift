@@ -691,6 +691,15 @@ final class EngineSession: @unchecked Sendable {
         return rows.prefix(Int(min(count, filled))).map(Self.layer)
     }
 
+    /// The engine's opacity hit test, never a bounds approximation. A
+    /// successful miss is nil; failed/busy queries remain errors.
+    func pickLayer(image: Int32, at point: CGPoint) throws -> Int32? {
+        var hit: Int32 = 0
+        try check(api.image_pick_layer(engine, image,
+                                       GlimsPoint(x: Double(point.x), y: Double(point.y)), &hit), nil)
+        return hit == 0 ? nil : hit
+    }
+
     func undoInfo(_ image: Int32) throws -> UndoInfo {
         var info = GlimsUndoInfo()
         try check(api.image_undo_info(engine, image, &info), nil)

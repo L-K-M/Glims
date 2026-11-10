@@ -91,6 +91,38 @@ final class CanvasToolController {
     private unowned let canvas: EngineCanvasView
     private var document: ImageDocument { canvas.document }
 
+    /// A request survives pointer release while its counted read/selection
+    /// acknowledgment is pending. It never retains an NSEvent or another
+    /// window's mutable current target.
+    @MainActor
+    private final class PickedMove {
+        enum Phase: Equatable { case query, selection, move, anchor }
+        weak var window: NSWindow?
+        let document: ImageDocument
+        let expected: EngineSession.FloatingState
+        let floatingBounds: CGRect?
+        let start: CGPoint
+        var revision: ImageDocument.MoveTargetRevision
+        var latest: CGPoint
+        var released = false
+        var cancelled = false
+        var phase = Phase.query
+        var row: EngineSession.Layer?
+        var ownership: ImageDocument.MoveSelectionOwnership?
+        var proposed: CGRect?
+        var plan = CanvasSnapPlanner.Result.none
+
+        init(window: NSWindow, document: ImageDocument, start: CGPoint) {
+            self.window = window; self.document = document; self.start = start; self.latest = start
+            expected = document.floatingState
+            floatingBounds = document.layers.first(where: { $0.id == document.floatingState.floating })?.bounds
+            revision = document.moveTargetRevision
+        }
+    }
+    private var pickedMove: PickedMove?
+    private var pickedMoveWasRequested = false
+    private var pickedMoveFocusObservers: [NSObjectProtocol] = []
+
     /// The tool for the current drag; Space and Command switch tools
     /// temporarily meanwhile.
     private var dragTool: ToolID?
@@ -160,12 +192,24 @@ final class CanvasToolController {
     /// commit on Return. A background file operation must wait for these
     /// edits rather than blocking their eventual commit.
     var hasPendingInteraction: Bool {
-        dragTool != nil || pendingCrop != nil || textEditor != nil
+        dragTool != nil || pickedMove != nil || pendingCrop != nil || textEditor != nil
             || transformSession.map { !$0.isIdentity } == true
     }
 
     init(canvas: EngineCanvasView) {
         self.canvas = canvas
+        let center = NotificationCenter.default
+        pickedMoveFocusObservers = [
+            center.addObserver(forName: NSWindow.didResignKeyNotification, object: nil, queue: .main) { [weak self] note in
+                MainActor.assumeIsolated {
+                    guard let self, (note.object as? NSWindow) === self.canvas.window else { return }
+                    self.cancelPickedMove()
+                }
+            },
+            center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.cancelPickedMove() }
+            }
+        ]
         // The Transform tool's box shows as soon as the tool is picked, and
         // an unapplied transform goes away when another tool is.
         ToolState.shared.observe { [weak self] in
@@ -187,6 +231,8 @@ final class CanvasToolController {
         }
     }
 
+    deinit { pickedMoveFocusObservers.forEach { NotificationCenter.default.removeObserver($0) } }
+
     /// Space is the temporary hand, Command moves the layer, then a matching
     /// hardware eraser may override the user's selected tool for this press.
     private func pointerTool(for event: NSEvent) -> ToolID {
@@ -197,6 +243,8 @@ final class CanvasToolController {
     // MARK: Pointer
 
     func mouseDown(with event: NSEvent) {
+        cancelPickedMove()
+        pickedMoveWasRequested = false
         let point = canvas.imagePoint(for: event)
         let tool = pointerTool(for: event)
         let optionDown = keyboard.optionIsDown(flags: event.modifierFlags)
@@ -277,6 +325,12 @@ final class CanvasToolController {
                 dragTool = nil
                 return
             }
+            if ToolState.shared.current == .move,
+               ToolState.shared.moveTargetMode == .pickLayerOrGuide,
+               !keyboard.commandHeld, !event.modifierFlags.contains(.command) {
+                beginPickedMove(at: point)
+                return
+            }
             if document.floatingState.isActive {
                 // An existing floating selection owns the Move gesture:
                 // capture its expected state, window, document and bounds
@@ -308,6 +362,13 @@ final class CanvasToolController {
     func mouseDragged(with event: NSEvent) {
         // A guide drag owns the gesture: view-only ghost, no native call.
         if canvas.guideDrag.mouseDragged(with: event) { return }
+        if pickedMoveWasRequested {
+            if let request = pickedMove, !request.released {
+                request.latest = canvas.imagePoint(for: event)
+                updatePickedMove(request)
+            }
+            return
+        }
         guard let tool = dragTool else { return }
         let point = canvas.imagePoint(for: event)
 
@@ -373,6 +434,15 @@ final class CanvasToolController {
         // An intentional release of a guide drag commits exactly one
         // addGuide/moveGuide/removeGuide action.
         if canvas.guideDrag.mouseUp(with: event) { return }
+        if pickedMoveWasRequested {
+            if let request = pickedMove {
+                request.latest = canvas.imagePoint(for: event)
+                request.released = true
+                updatePickedMove(request)
+                finishPickedMove(request)
+            }
+            return
+        }
         guard let tool = dragTool else { return }
 
         if tool.paintTool != nil {
@@ -535,6 +605,7 @@ final class CanvasToolController {
     /// indicators clear and the release commits nothing. Safe with no
     /// gesture; called on Escape, tool change and window close.
     func cancelMoveSnap() {
+        cancelPickedMove()
         guard let gesture = moveSnap, !gesture.cancelled else { return }
         gesture.cancelled = true
         gesture.plan = .none
@@ -618,9 +689,137 @@ final class CanvasToolController {
     /// Safe with no gesture; called on Escape, tool change and window
     /// close.
     func cancelFloatingMove() {
+        cancelPickedMove()
         guard let gesture = floatingMove, !gesture.cancelled else { return }
         gesture.cancelled = true
         gesture.plan = .none
+        canvas.needsDisplay = true
+    }
+
+    // MARK: Native opacity-picked Move
+
+    private func pickedMoveOwnerIsLive(_ request: PickedMove) -> Bool {
+        guard !request.cancelled, pickedMove === request,
+              let window = request.window, canvas.window === window,
+              canvas.document === request.document, !request.document.isClosing,
+              request.document.acceptsEdits,
+              request.document.floatingState == request.expected,
+              ToolState.shared.current == .move,
+              ToolState.shared.moveTargetMode == .pickLayerOrGuide else { return false }
+        if let bounds = request.floatingBounds {
+            guard request.document.layers.first(where: { $0.id == request.expected.floating })?.bounds == bounds else { return false }
+        }
+        return true
+    }
+
+    private func beginPickedMove(at point: CGPoint) {
+        pickedMoveWasRequested = true
+        moveSnap = nil; moveSnapWasRequested = false
+        floatingMove = nil; floatingMoveWasRequested = false
+        guard let window = canvas.window else { return }
+        let request = PickedMove(window: window, document: document, start: point)
+        pickedMove = request
+        document.readMoveHit(at: point, expected: request.expected) { [weak self, request] result in
+            guard let self, !request.cancelled, self.pickedMove === request else { return }
+            guard self.pickedMoveOwnerIsLive(request),
+                  request.document.moveTargetRevision == request.revision,
+                  request.document.pendingWork == 0 else { return self.cancelPickedMove() }
+            switch result {
+            case .failure(let error):
+                self.onStatus?(error.localizedDescription)
+                self.cancelPickedMove()
+            case .success(nil): self.cancelPickedMove()
+            case .success(let row?):
+                request.row = row
+                if request.expected.isActive {
+                    request.phase = row.id == request.expected.floating ? .move : .anchor
+                    self.updatePickedMove(request)
+                    self.finishPickedMove(request)
+                } else {
+                    request.phase = .selection
+                    request.document.selectMoveHit(row, expected: request.expected, revision: request.revision) { [weak self, request] selection in
+                        switch selection {
+                        case .failure(let error):
+                            guard let self, self.pickedMove === request else { return }
+                            self.onStatus?(error.localizedDescription)
+                            self.cancelPickedMove()
+                        case .success(let owned):
+                            request.ownership = owned
+                            guard let self else {
+                                request.document.restoreMoveSelection(owned)
+                                return
+                            }
+                            guard self.pickedMoveOwnerIsLive(request), request.document.ownsMoveSelection(owned) else {
+                                if self.pickedMove === request { self.cancelPickedMove() }
+                                else { request.document.restoreMoveSelection(owned) }
+                                return
+                            }
+                            request.revision = request.document.moveTargetRevision
+                            request.phase = .move
+                            self.updatePickedMove(request)
+                            self.finishPickedMove(request)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func updatePickedMove(_ request: PickedMove) {
+        guard request.phase == .move, let row = request.row else { return }
+        guard pickedMoveOwnerIsLive(request), request.document.moveTargetRevision == request.revision,
+              request.document.layers.contains(where: { $0.id == row.id && $0.bounds == row.bounds }),
+              request.ownership.map(request.document.ownsMoveSelection) ?? request.expected.isActive else {
+            return cancelPickedMove()
+        }
+        let raw = row.bounds.offsetBy(dx: request.latest.x - request.start.x, dy: request.latest.y - request.start.y)
+        guard Self.isUsableRect(raw), abs(raw.minX) <= 524_288, abs(raw.minY) <= 524_288,
+              abs(raw.maxX) <= 524_288, abs(raw.maxY) <= 524_288 else {
+            onStatus?("That move is outside the supported image coordinates.")
+            return cancelPickedMove()
+        }
+        let plan: CanvasSnapPlanner.Result
+        if canvas.snapTo.isEmpty { plan = .none }
+        else {
+            plan = CanvasSnapPlanner.plan(input: SnapTargetCache.plannerInput(
+                movingRect: raw,
+                imageSize: CGSize(width: Double(request.document.info.width), height: Double(request.document.info.height)),
+                guides: request.document.guides, grid: request.document.grid,
+                layers: request.document.layers, moving: row.id),
+                config: .init(targets: canvas.snapTo.targets), canvasScale: canvas.scale)
+        }
+        let preview = SnapTargetCache.pixelMove(bounds: row.bounds,
+            proposed: raw.offsetBy(dx: plan.dx, dy: plan.dy), plan: plan)
+        request.proposed = preview.rect; request.plan = preview.plan
+        canvas.needsDisplay = true
+    }
+
+    private func finishPickedMove(_ request: PickedMove) {
+        guard request.released, request.phase == .move || request.phase == .anchor else { return }
+        guard pickedMoveOwnerIsLive(request), request.document.moveTargetRevision == request.revision else {
+            return cancelPickedMove()
+        }
+        let ownership = request.ownership
+        request.ownership = nil
+        pickedMove = nil // Consume before a document callback can re-enter.
+        canvas.needsDisplay = true
+        if request.phase == .anchor {
+            request.document.anchorPickedFloating(request.expected)
+        } else if let row = request.row, let proposed = request.proposed {
+            let offset = CGSize(width: proposed.minX - row.bounds.minX, height: proposed.minY - row.bounds.minY)
+            request.document.movePickedLayer(row, expected: request.expected, ownership: ownership, by: offset)
+        }
+    }
+
+    func cancelPickedMove() {
+        guard let request = pickedMove else { return }
+        request.cancelled = true
+        pickedMove = nil
+        request.proposed = nil; request.plan = .none
+        if let owned = request.ownership {
+            request.ownership = nil
+            request.document.restoreMoveSelection(owned)
+        }
         canvas.needsDisplay = true
     }
 
@@ -698,7 +897,7 @@ final class CanvasToolController {
             cancelTransform(message: "Transform cancelled.")
             return true
         }
-        if (moveSnap != nil || floatingMove != nil), keyCode == Self.escapeKey {
+        if (moveSnap != nil || floatingMove != nil || pickedMove != nil), keyCode == Self.escapeKey {
             // Escape cancels the snapping or floating move: preview and
             // indicators clear and the release commits nothing.
             cancelMoveSnap()
@@ -857,7 +1056,11 @@ final class CanvasToolController {
             // active, the selected layer's bounds while a snapping drag
             // is active.
             let bounds: CGRect
-            if let gesture = floatingMove {
+            if pickedMoveWasRequested {
+                guard let request = pickedMove, !request.cancelled,
+                      request.phase == .move, let proposed = request.proposed else { return }
+                bounds = proposed
+            } else if let gesture = floatingMove {
                 guard !gesture.cancelled else { return }
                 bounds = gesture.proposed
             } else if let gesture = moveSnap {
@@ -889,7 +1092,9 @@ final class CanvasToolController {
         // The active move gesture's plan — a floating drag's or an
         // ordinary snapping drag's, whichever is in progress.
         let activePlan: CanvasSnapPlanner.Result?
-        if let gesture = floatingMove, !gesture.cancelled {
+        if let request = pickedMove, !request.cancelled, request.phase == .move {
+            activePlan = request.plan
+        } else if let gesture = floatingMove, !gesture.cancelled {
             activePlan = gesture.plan
         } else if let gesture = moveSnap, !gesture.cancelled {
             activePlan = gesture.plan

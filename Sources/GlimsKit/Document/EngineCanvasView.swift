@@ -372,6 +372,7 @@ final class EngineCanvasView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         swapDestinationObservers()
+        if window == nil { tools.cancelPickedMove() }
         backingDidChange()
         updateAntsTimer()
     }
@@ -753,6 +754,12 @@ final class EngineCanvasView: NSView {
             xTilt: isTablet ? Double(event.tilt.x) : 0,
             yTilt: isTablet ? Double(event.tilt.y) : 0,
             timeMilliseconds: UInt32(truncatingIfNeeded: Int(event.timestamp * 1000)))
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        if accepted { tools.cancelPickedMove() }
+        return accepted
     }
 
     override func mouseDown(with event: NSEvent) {
