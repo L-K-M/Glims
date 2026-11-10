@@ -79,9 +79,14 @@ extension EngineSmokeTest {
             check(completed, "tool hints complete all dedicated acceptance scenarios")
         }
         func fixture(_ name: String, red: UInt8) throws -> (ImageDocument, DocumentWindowController) {
-            let bytes = Data((0..<(32 * 24)).flatMap { index -> [UInt8] in
-                [red, UInt8((index * 7) % 256), UInt8((index * 19) % 256), 255]
-            })
+            var rgba: [UInt8] = []
+            for index in 0..<(32 * 24) {
+                rgba.append(red)
+                rgba.append(UInt8((index * 7) % 256))
+                rgba.append(UInt8((index * 19) % 256))
+                rgba.append(255)
+            }
+            let bytes = Data(rgba)
             let image = try session.newImage(pixels: ClipboardImage(width: 32, height: 24, pixels: bytes, origin: .zero))
             ownedImages.append(image)
             try session.select(.rectangle(CGRect(x: 3, y: 4, width: 11, height: 8)), image: image)
