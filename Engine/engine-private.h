@@ -56,6 +56,12 @@ struct GlimsEngine
    * reused, never reset. 0 is never issued. At UINT64_MAX the allocation
    * fails closed (no identity is handed out, none is reused). */
   guint64             next_item_set_token;
+
+  /* Transport lifetime, guarded by `lock`. A registered external caller
+   * remains counted until it consumes its result and leaves the transport,
+   * even after its engine-thread function has completed. */
+  gboolean            stopping;
+  guint               registered_callers;
 };
 
 typedef struct GlimsItemSets GlimsItemSets;
@@ -612,6 +618,9 @@ uint32_t    glims_layer_editable_source_kind (GimpLayer *layer);
  * step; an already rasterized instance is a no-op. Readiness and locks
  * are the caller's. */
 GlimsStatus glims_layer_rasterize   (GimpImage *image, GimpLayer *layer, char **error);
+/* Nonmutating batch admission, including known missing/empty retained link
+ * file/content. Does not access external files or prove rendering succeeds. */
+GlimsStatus glims_layer_restore_source_admit (GimpLayer *layer, char **error);
 /* Restores a rasterized text/link/vector layer from its retained source as
  * one native undo step, discarding pixel edits; an already editable
  * instance is a no-op, pixel/group/missing-source layers are UNSUPPORTED

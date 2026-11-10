@@ -2067,6 +2067,77 @@ final class ImageDocument {
         }, completion: completion)
     }
 
+    /// Cached whole-vector admission. Confirmation requires at least one
+    /// rasterized source; an already confirmed vector may become a no-op.
+    func restoreLayerSourcesRefusal(_ ids: [Int32],
+                                   request: LayerRestorePolicy.Request = .confirmation) -> String? {
+        restoreLayerSourcesError(ids, request: request)?.localizedDescription
+    }
+
+    private func restoreLayerSourcesError(_ ids: [Int32],
+                                         request: LayerRestorePolicy.Request) -> Error? {
+        if isClosing { return DocumentError.closed }
+        if !acceptsEdits || targetCommandIsPending { return DocumentError.busy }
+        if let reason = FloatingControlsLogic.resolveFirstGate(floatingState) {
+            return EngineSession.EngineError(status: Int32(GLIMS_STATUS_BUSY.rawValue), message: reason)
+        }
+        let reason: String?
+        if isMaskTargetActive {
+            reason = "Finish mask editing before restoring layer sources."
+        } else if isChannelTargetActive {
+            reason = "Return to Layers before restoring sources; the current channel cannot take that edit."
+        } else {
+            reason = LayerRestorePolicy.refusal(ids: ids, layerIDs: Set(layers.map(\.id)),
+                sources: layerSources, locks: layerLocks, request: request)
+        }
+        return reason.map {
+            EngineSession.EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: $0)
+        }
+    }
+
+    /// Restore captured IDs in this document as one native vector command.
+    /// File reads use engine-wide exclusive admission after accepted input
+    /// drains. A detected native failure can leave a changed prefix, so reload
+    /// authoritative state on either outcome while the document remains alive.
+    func restoreLayerSources(_ ids: [Int32],
+                             completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        let captured = ids
+        onUserCommand?()
+        func refuse(_ error: Error) {
+            onError?(error.localizedDescription)
+            NSSound.beep()
+            completion(.failure(error))
+        }
+        if let error = restoreLayerSourcesError(captured, request: .explicitCommand) { return refuse(error) }
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        if let error = restoreLayerSourcesError(captured, request: .explicitCommand) { return refuse(error) }
+        var rejection: Error = DocumentError.busy
+        enqueueExclusive(label: "Restoring layer sources", admission: {
+            if let error = self.restoreLayerSourcesError(captured, request: .explicitCommand) {
+                rejection = error
+                return false
+            }
+            return true
+        }, rejected: {
+            refuse(self.isClosing ? DocumentError.closed : rejection)
+        }) { [session, image] in
+            let result = Result<Void, Error> { try session.restoreLayerSources(image, layers: captured) }
+            DispatchQueue.main.async {
+                var delivered = result
+                if !self.isClosing {
+                    do { try self.reload() }
+                    catch {
+                        if case .success = delivered { delivered = .failure(error) }
+                        else { self.onError?(error.localizedDescription) }
+                    }
+                }
+                if case .failure(let error) = delivered { self.onError?(error.localizedDescription) }
+                completion(delivered)
+            }
+        }
+    }
+
     /// The menu commands act on the layer the engine selects when they
     /// run — layer 0, the adapter's "selected layer at execution" — so a
     /// creation or pick queued ahead of them is what they hit, not the
@@ -2319,10 +2390,43 @@ final class ImageDocument {
         setLayerLocks(item, lock, to: !(layerLocks[item]?.local.contains(lock) ?? false))
     }
 
-    func changeLayer(_ layer: Int32, _ change: EngineSession.LayerChange) {
-        guard !refuseWhileEditingUnavailable() else { return }
+    private final class LayerChangeResult: @unchecked Sendable {
+        // Written on inputQueue, read only by its dispatched afterFinish.
+        var value: Result<Void, Error>?
+    }
+
+    func changeLayer(_ layer: Int32, _ change: EngineSession.LayerChange,
+                     completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
+        guard !refuseWhileEditingUnavailable() else {
+            completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
+        }
         endPendingUserEdits()
-        run { session, image in try session.changeLayer(layer, image: image, change) }
+        // Finishing a field can close the document or start exclusive work.
+        guard !refuseWhileEditingUnavailable() else {
+            completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
+        }
+        guard let completion else {
+            run { session, image in try session.changeLayer(layer, image: image, change) }
+            return
+        }
+        let result = LayerChangeResult()
+        // Keep reconciliation alive even if another document starts exclusive
+        // work between this input and its callback. Close drains both stages.
+        pendingWork += 1
+        enqueue(on: inputQueue, input: true, afterFinish: {
+            EngineActivity.shared.whenIdle {
+                if !self.isClosing {
+                    do { try self.reload() }
+                    catch { self.onError?("The layer state could not be refreshed: \(error)") }
+                }
+                self.jobDidFinish(input: false)
+                completion(result.value ?? .failure(DocumentError.busy))
+            }
+        }) { [session, image] in
+            let answer = Result { try session.changeLayer(layer, image: image, change) }
+            result.value = answer
+            if case .failure(let error) = answer { self.report(error) }
+        }
     }
 
     /// Moves the active drawable. While its mask is the edit target the
@@ -4649,6 +4753,7 @@ final class ImageDocument {
     /// Count the whole exclusive operation, including its input drain,
     /// so a close cannot destroy the image while a file call is waiting.
     private func enqueueExclusive(effect: CommandEffect = .changesImage, label: String,
+                                  admission: (() -> Bool)? = nil,
                                   rejected: @escaping @MainActor () -> Void,
                                   _ work: @escaping () -> Void) {
         guard !isClosing, !recorder.isReplaying || effect == .readsPixels else { return rejected() }
@@ -4656,6 +4761,9 @@ final class ImageDocument {
         // The observer can start replay or close; reject with the original
         // completion rather than silently dropping an admitted write.
         guard !isClosing, !recorder.isReplaying || effect == .readsPixels else { return rejected() }
+        // Source vectors also revalidate after this observer: a field action
+        // may have changed cached targets or started another operation.
+        guard admission?() != false else { return rejected() }
         pendingWork += 1
         let accepted = EngineActivity.shared.perform(label: label, work: work) {
             self.jobDidFinish(input: false)

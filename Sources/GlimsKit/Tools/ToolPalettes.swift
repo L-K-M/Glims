@@ -511,6 +511,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         modes.selectedSegment = Int(options.operation.rawValue)
         modes.controlSize = .small
         modes.toolTip = "Shift adds, Option subtracts, Shift-Option intersects when you start dragging"
+        modes.setAccessibilityLabel("Selection mode")
         stack.addArrangedSubview(row("Mode", modes) { control in
             ToolState.shared.selectOptions.operation =
                 EngineSession.SelectOperation(rawValue: UInt32((control as! NSSegmentedControl).selectedSegment)) ?? .replace
@@ -621,6 +622,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         let menu = NSPopUpButton(frame: .zero, pullsDown: false)
         menu.controlSize = .small
         menu.font = .systemFont(ofSize: 11)
+        menu.setAccessibilityLabel(label)
         menu.addItems(withTitles: items)
         menu.selectItem(at: selected)
         if let readBrush {
@@ -637,6 +639,9 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         title.font = .systemFont(ofSize: 11)
         title.alignment = .right
         title.widthAnchor.constraint(equalToConstant: Self.labelWidth).isActive = true
+        if let control = control as? NSControl {
+            control.setAccessibilityTitleUIElement(title)
+        }
         if let onChange, let control = control as? NSControl {
             actionBindings.append(ActionBinding(control: control, onChange: onChange))
         }

@@ -29,7 +29,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private var pendingFileOperations = 0
     private var terminationRequested = false
     private let fileWrites = FileWriteCoordinator()
-    private var terminationClosingDocument: DocumentWindowController?
+    private var closingDocument: DocumentWindowController?
+    /// Newest first, captured once. Documents adopted after Close All starts
+    /// remain open; Quit deliberately switches back to the live document list.
+    private var closeAllRemaining: [DocumentWindowController]?
     /// Periodic recovery copies into the private store; starts with the
     /// engine and stays off when the store cannot be created.
     private var recovery: RecoveryScheduler?
@@ -230,31 +233,64 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !terminationRequested else { return .terminateLater }
-        guard !documents.isEmpty || pendingFileOperations > 0 else { return .terminateNow }
+        guard !documents.isEmpty || pendingFileOperations > 0 || closingDocument != nil else { return .terminateNow }
         terminationRequested = true
+        closeAllRemaining = nil
         newImagePanel?.close()
         recoveryPanel?.close()
         // AppKit expects terminateLater before reply(toApplicationShouldTerminate:).
-        DispatchQueue.main.async { self.closeNextDocumentForTermination() }
+        DispatchQueue.main.async { self.advanceDocumentClosing() }
         return .terminateLater
     }
 
-    private func closeNextDocumentForTermination() {
-        guard terminationRequested, terminationClosingDocument == nil, pendingFileOperations == 0 else { return }
-        guard let controller = documents.last else {
-            terminationRequested = false
-            NSApp.reply(toApplicationShouldTerminate: true)
+    private var canCloseAllDocuments: Bool {
+        !documents.isEmpty && !terminationRequested && closeAllRemaining == nil
+            && closingDocument == nil && !PlugInCommands.isRunning
+    }
+
+    /// Close only the current finite set. This does not gate New/Open or
+    /// recovery adoption and never replies to AppKit's termination protocol.
+    @objc func closeAllDocuments(_ sender: Any?) {
+        guard canCloseAllDocuments else { return }
+        closeAllRemaining = Array(documents.reversed())
+        advanceDocumentClosing()
+    }
+
+    /// One in-flight request serves both commands. A Quit that arrives during
+    /// Close All joins that request, then closes the live list if it succeeds.
+    private func advanceDocumentClosing() {
+        guard closingDocument == nil, pendingFileOperations == 0 else { return }
+        let controller: DocumentWindowController
+        if terminationRequested {
+            guard let next = documents.last else {
+                terminationRequested = false
+                NSApp.reply(toApplicationShouldTerminate: true)
+                return
+            }
+            controller = next
+        } else if var remaining = closeAllRemaining {
+            remaining.removeAll { candidate in !documents.contains { $0 === candidate } }
+            guard !remaining.isEmpty else {
+                closeAllRemaining = nil
+                return
+            }
+            controller = remaining.removeFirst()
+            closeAllRemaining = remaining
+        } else {
             return
         }
-        terminationClosingDocument = controller
-        controller.requestClose { [weak self] closed in
-            guard let self else { return }
-            self.terminationClosingDocument = nil
+        closingDocument = controller
+        controller.requestClose { [weak self, weak controller] closed in
+            guard let self, let controller, self.closingDocument === controller else { return }
+            self.closingDocument = nil
             if closed {
-                self.closeNextDocumentForTermination()
+                self.advanceDocumentClosing()
             } else {
-                self.terminationRequested = false
-                NSApp.reply(toApplicationShouldTerminate: false)
+                self.closeAllRemaining = nil
+                if self.terminationRequested {
+                    self.terminationRequested = false
+                    NSApp.reply(toApplicationShouldTerminate: false)
+                }
             }
         }
     }
@@ -463,7 +499,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             let result = Result { try session.newImage(width: width, height: height) }
             DispatchQueue.main.async {
                 self.pendingFileOperations -= 1
-                defer { self.closeNextDocumentForTermination() }
+                defer { self.advanceDocumentClosing() }
                 do {
                     self.open(try ImageDocument(session: session, image: result.get(), name: "Untitled"))
                 } catch {
@@ -485,7 +521,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             let result = Result { try session.newImage(pixels: payload.decoded()) }
             DispatchQueue.main.async {
                 self.pendingFileOperations -= 1
-                defer { self.closeNextDocumentForTermination() }
+                defer { self.advanceDocumentClosing() }
                 do {
                     let image = try result.get()
                     do { self.open(try ImageDocument(session: session, image: image, name: "Clipboard")) }
@@ -562,7 +598,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 DispatchQueue.main.async {
                     self.openingURLs.remove(url)
                     self.pendingFileOperations -= 1
-                    defer { self.closeNextDocumentForTermination() }
+                    defer { self.advanceDocumentClosing() }
                     do {
                         self.open(try ImageDocument(session: session, image: result.get(), name: url.lastPathComponent, openedFrom: url))
                         NSDocumentController.shared.noteNewRecentDocumentURL(url)
@@ -701,7 +737,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             guard let record = store.recoverableDocument(matching: candidate) else {
                 inFlightRecoveries.remove(key)
                 pendingFileOperations -= 1
-                closeNextDocumentForTermination()
+                advanceDocumentClosing()
                 // Refresh first: an emptied list's message must not
                 // overwrite the refusal error.
                 recoveryPanel?.setRecords(store.discoverRecoverableDocuments())
@@ -752,7 +788,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         inFlightRecoveries.remove(key)
         defer {
             recoveryPanel?.setBusy(!inFlightRecoveries.isEmpty)
-            closeNextDocumentForTermination()
+            advanceDocumentClosing()
         }
         switch result {
         case .success(let image):
@@ -825,7 +861,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 return
             }
             self.pendingFileOperations -= 1
-            defer { self.closeNextDocumentForTermination() }
+            defer { self.advanceDocumentClosing() }
             switch result {
             case .success(let image):
                 if self.terminationRequested {
@@ -861,7 +897,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             let result = Result { try session.openImage(path: source.path) }
             DispatchQueue.main.async {
                 self.pendingFileOperations -= 1
-                defer { self.closeNextDocumentForTermination() }
+                defer { self.advanceDocumentClosing() }
                 self.adoptRevertedImage(result, from: source, into: controller, completion: completion)
             }
         })
@@ -927,6 +963,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case #selector(closeAllDocuments(_:)):
+            return canCloseAllDocuments
         case #selector(pasteAsNewImage(_:)):
             return session != nil && !PlugInCommands.isRunning && !terminationRequested
                 && NSPasteboard.general.availableType(from: [.png, .tiff]) != nil

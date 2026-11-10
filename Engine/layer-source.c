@@ -127,6 +127,41 @@ source_is_retained (GimpLayer *layer,
     }
 }
 
+/* Nonmutating whole-vector admission for batch Restore. A retained object
+ * is not proof that fonts, paths, file loaders or monitoring will succeed.
+ * Check only facts already available in memory; never stat or load a file. */
+GlimsStatus
+glims_layer_restore_source_admit (GimpLayer *layer, char **error)
+{
+  uint32_t kind = source_kind_of (layer);
+
+  if ((kind != GLIMS_LAYER_TEXT && kind != GLIMS_LAYER_LINK &&
+       kind != GLIMS_LAYER_VECTOR) || !source_is_retained (layer, kind))
+    {
+      if (error)
+        *error = g_strdup ("Every layer must have a retained text, link or vector source to restore.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+
+#if GIMP_CHECK_VERSION (3, 2, 0)
+  if (kind == GLIMS_LAYER_LINK)
+    {
+      GimpLink *link = gimp_link_layer_get_link (GIMP_LINK_LAYER (layer));
+      GFile *file = gimp_link_get_file (link, NULL, NULL);
+      GeglBuffer *buffer = gimp_link_get_buffer (link);
+
+      if (!file || !buffer || gegl_buffer_get_width (buffer) <= 0 ||
+          gegl_buffer_get_height (buffer) <= 0)
+        {
+          if (error)
+            *error = g_strdup ("The retained link has no file or content to restore from.");
+          return GLIMS_STATUS_UNSUPPORTED;
+        }
+    }
+#endif
+  return GLIMS_STATUS_OK;
+}
+
 /* The attached layer `id` of `image` — also a group — or with 0 the
  * first selected layer, or NULL. A stale or foreign id and a detached
  * item resolve to NULL. */

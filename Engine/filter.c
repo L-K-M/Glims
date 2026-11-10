@@ -347,7 +347,8 @@ glims_filter_begin_with_source (GlimsEngine *engine, GlimsImageID image,
   if (out) *out = 0;
   if (!out || !operation || target <= 0 || source <= 0) return GLIMS_STATUS_INVALID_ARGUMENT;
   if (strcmp (operation, "gegl:bump-map") && strcmp (operation, "gegl:variable-blur") &&
-      strcmp (operation, "gegl:gaussian-blur-selective"))
+      strcmp (operation, "gegl:gaussian-blur-selective") &&
+      strcmp (operation, "gegl:negative-darkroom"))
     return GLIMS_STATUS_UNSUPPORTED;
   open = glims_lookup_image (engine, image);
   if (!open) return GLIMS_STATUS_NOT_FOUND;
