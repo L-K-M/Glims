@@ -379,13 +379,12 @@ extension EngineSmokeTest {
         expect(!a.imageDocument.hasUnsavedChanges && a.imageDocument.pendingWork == 0,
                "File Close starts from a clean document with no queued edit")
         let closeTarget = NSApp.target(forAction: #selector(NSWindow.performClose(_:)), to: nil, from: closeItem)
-        expect(NSApp.keyWindow === a.window && closeTarget as AnyObject? === a.window,
-               "File Close resolves the actual bare document window")
-        print("SCREEN CLOSE DIAG style=\(a.window!.styleMask.rawValue) closeButton=\(String(describing: a.window!.standardWindowButton(.closeButton))) target=\(String(describing: closeTarget))")
+        let targetWindow = (closeTarget as? NSWindow) ?? (closeTarget as? NSView)?.window
+        expect(NSApp.keyWindow === a.window && targetWindow === a.window,
+               "File Close resolves a responder in the actual bare document window")
         expect(closeItem.target == nil
             && NSApp.sendAction(#selector(NSWindow.performClose(_:)), to: nil, from: closeItem),
                "installed File > Close dispatches through the nil-target responder chain in bare mode")
-        print("SCREEN CLOSE AFTER started=\(a.closeStarted) dirty=\(a.imageDocument.hasUnsavedChanges) closing=\(a.imageDocument.isClosing) sheet=\(String(describing: a.window?.attachedSheet)) visible=\(a.window?.isVisible == true)")
         try wait("closing native full-screen window completes", {
             a.closeStarted && a.screenModeState.isClosed && a.window?.isVisible != true
         })

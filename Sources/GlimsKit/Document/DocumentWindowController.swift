@@ -271,7 +271,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         scrollView.verticalRulerView = verticalRuler
         scrollView.rulersVisible = rulerViewState.showsRulers
 
-        let content = NSView()
+        let content = DocumentContentView()
         for view in [scrollView, statusBar] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
@@ -2838,5 +2838,20 @@ private final class ProportionLinker: NSObject, NSTextFieldDelegate {
         } else if field === height, height.integerValue > 0 {
             width.integerValue = max(1, Int((Double(height.integerValue) * ratio).rounded()))
         }
+    }
+}
+
+/// Owned borderless modes have no title-bar close button. Route the normal
+/// nil-target Close action through the same document admission/save flow.
+@MainActor
+private final class DocumentContentView: NSView {
+    @objc func performClose(_ sender: Any?) {
+        guard let window else { return }
+        guard let owner = window.windowController as? DocumentWindowController,
+              owner.screenModeSnapshot != nil else {
+            window.performClose(sender)
+            return
+        }
+        if owner.windowShouldClose(window) { window.close() }
     }
 }
