@@ -209,7 +209,9 @@ enum RecorderFileCodec {
             let value = try Object(node, required: ["tag", "rect"])
             let rectangle = try rect(value.get("rect"))
             let x = min(rectangle.x, rectangle.x + rectangle.width).rounded(), y = min(rectangle.y, rectangle.y + rectangle.height).rounded()
-            let width = rectangle.width.rounded(), height = rectangle.height.rounded()
+            // CGRect.width/height use positive extents even when the retained
+            // size has a negative component. Keep the wire payload unchanged.
+            let width = abs(rectangle.width).rounded(), height = abs(rectangle.height).rounded()
             for coordinate in [x, y, width, height, x + width, y + height] { try nativeInteger(coordinate) }
             guard width >= 1, height >= 1 else { throw RecorderFileError.invalid("The rounded crop rectangle is empty.") }
             return .crop(rectangle)
