@@ -3236,6 +3236,82 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_restore_layer_sources) (GlimsEngine *engine, GlimsImageID image,
                                              const GlimsItemID *layers, int32_t count,
                                              char **error);
+  /* Slot167: read-only layer pick at `point` in image coordinates. Uses the
+   * engine's own gimp_image_pick_layer hit test (topmost layer with sampled
+   * opacity strictly above that engine's native threshold). Reviewed stable
+   * GIMP3.0.8/3.2.0/3.2.8 use 0.25; reviewed master3.3.1 at
+   * 5374deeec14a0366df4b17b6e5c6f9aff63db2ca uses 0.001. No threshold is
+   * inferred for unreviewed builds. Core honors visibility, raw pixel alpha,
+   * applied layer masks and offsets; groups follow the engine's native
+   * pick behavior.
+   * Coordinates are truncated toward zero and the truncated value must fit in
+   * a signed 32-bit sample coordinate. Non-finite/out-of-range coordinates,
+   * missing `out`, or any sample-minus-layer-offset subtraction that cannot
+   * fit that range are INVALID_ARGUMENT. The arithmetic check covers Core's
+   * actual layer traversal, including groups and children; it does not clamp
+   * to image bounds or approximate a hit. Ordinary finite out-of-canvas points
+   * remain valid when those conversions are safe. *out
+   * is set to 0 before every failure path (including public dispatch) and on
+   * a miss, otherwise to the positive item id of the hit layer. Unknown/stale
+   * image is NOT_FOUND. Refuses with BUSY while another engine operation holds
+   * the engine busy. This is a read-only image/tree/selection/history/dirty
+   * query, but not a promise that the Core pick never performs I/O or buffer
+   * reads. */
+  GlimsStatus (*image_pick_layer) (GlimsEngine *engine, GlimsImageID image,
+                                   GlimsPoint point, GlimsItemID *out);
+  /* Slot168: create a text layer while atomically consuming the exact
+   * captured floating selection state. The public wrapper sets *out to 0
+   * and clears *error before dispatch (absent out is INVALID_ARGUMENT);
+   * failures leave *out 0, including late partial failures, so callers
+   * must reload actual state. The expected state is mandatory and copied
+   * by its known prefix only: a well-formed active state names a positive
+   * floating selection, its attachment and a known owned target kind
+   * (layer, layer mask or saved/Quick Mask channel); an inactive state
+   * must be all zero. A NULL, short or inconsistent state is
+   * INVALID_ARGUMENT. The call compares the full expected
+   * active/floating/target/kind fields against the fresh native state
+   * before mutation and again immediately before mutation after detached
+   * layout preparation, refusing mismatches with NOT_FOUND and no
+   * retargeting or fallback. A stale/foreign/intervening float is
+   * refused even when the expected state is inactive.
+   *
+   * Admission requires an explicit image, no engine-busy/stroke/filter
+   * preview activity, enabled/unfrozen Undo with no open Undo group, and
+   * a valid active target of the image with the matching drawable class
+   * and effective PIXELS locks satisfied (inherited). Text, settings and
+   * font are validated as text_layer_new does; position.x/y must be
+   * finite and floor(position + 0.5) must fit in a signed 32-bit coordinate
+   * (the existing rounding policy, not GUI truncation). Rendered text
+   * offset-plus-size and the conservative union of text, current physical
+   * drawable/bounding rectangles and the image/zero extent must also have
+   * representable signed coordinates and spans. Unrepresentable geometry
+   * is INVALID_ARGUMENT before Undo/anchor; safe off-canvas positions are
+   * valid. This domain check can refuse contrived extreme spans across
+   * unrelated layers; it does not predict or retarget ACTIVE_PARENT.
+   * Detached text preparation and
+   * layout happen before the outer undo group or anchor; a layout
+   * failure leaves no image mutation. The mutation raises a balanced busy
+   * fence, rechecks native state and runs in exactly one outer native
+   * Text "Add Text Layer" undo group: it anchors the captured active
+   * floating selection (if any), sets the prepared offset, adds the
+   * prepared layer with ACTIVE_PARENT at index -1 and selects it, then
+   * closes the group and flushes. Anchor is a native void merge with no
+   * rollback guarantee.
+   *
+   * After a successful anchor, an unexpected insertion/group-end failure
+   * reports FAILED with an explicit image-may-have-changed/inspect-Undo
+   * message, leaves *out 0 and does not claim unchanged state, atomic
+   * rollback or guaranteed pixel success. It attempts to close its opened
+   * group and flushes actual state on that path; the call never ends a group
+   * it did not start. Inactive expected state is valid only when the image truly
+   * has no floating selection and creates normally with legacy
+   * ACTIVE_PARENT placement. */
+  GlimsStatus (*text_layer_new_captured) (GlimsEngine *engine, GlimsImageID image,
+                                          const GlimsFloatingState *expected,
+                                          const char *text,
+                                          const GlimsTextSettings *settings,
+                                          GlimsPoint position,
+                                          GlimsItemID *out, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

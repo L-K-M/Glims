@@ -175,6 +175,9 @@ final class ToolState {
     var gradientStore: GradientToolStore
 
     private(set) var current: ToolID = .paintbrush
+    /// Explicit selection identity, including choosing the same tool again.
+    /// Brush/settings notifications deliberately leave this token unchanged.
+    private(set) var selectionRevision: UInt64 = 0
     /// The tool each group shows, so a shortcut returns to the last one used.
     private var lastInGroup: [Int: ToolID] = [:]
 
@@ -256,6 +259,7 @@ final class ToolState {
     private var observers: [UUID: () -> Void] = [:]
 
     func select(_ tool: ToolID) {
+        selectionRevision &+= 1
         current = tool
         if let index = ToolID.paletteSlots.firstIndex(where: { $0.contains(tool) }) {
             lastInGroup[index] = tool

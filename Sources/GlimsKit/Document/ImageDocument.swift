@@ -2645,6 +2645,18 @@ final class ImageDocument {
         }
     }
 
+    /// Commits a new editor's original floating expectation. The native
+    /// compound action may anchor that exact float; it never retargets to
+    /// one introduced while typing. Reconcile actual state even on failure.
+    func addText(_ text: String, settings: EngineSession.TextSettings, at position: CGPoint,
+                 expectedFloating: EngineSession.FloatingState) {
+        guard !text.isEmpty, !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
+        enqueueTargetCommand { session, image in
+            _ = try session.addTextLayer(image: image, text: text, settings: settings, at: position,
+                                        expectedFloating: expectedFloating)
+        }
+    }
+
     /// Changes a text layer's text, its look, or both, as one undo step.
     /// Empty text removes the layer, like the text editor's commit —
     /// a target-changing edit, so it queues as a target command.
