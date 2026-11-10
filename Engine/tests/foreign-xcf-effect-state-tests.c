@@ -128,10 +128,12 @@ cleanup:
 int
 main (int argc, char **argv)
 {
-  int baseline = foreign_fixture_main (argc, argv);
-  if (baseline) return baseline;
-  gchar *user = g_build_filename (work_dir, "user-admission", NULL);
-  gchar *cache = g_build_filename (work_dir, "cache-admission", NULL);
+  if (argc != 2) return 2;
+  work_dir = argv[1];
+  api = glims_engine_get_api (GLIMS_ENGINE_API_VERSION);
+  if (!api || api->struct_size < sizeof *api) return 2;
+  gchar *user = g_build_filename (work_dir, "user", NULL);
+  gchar *cache = g_build_filename (work_dir, "cache", NULL);
   GlimsEngine *engine = NULL;
   char *error = NULL;
   GlimsEngineConfig config = { .struct_size = sizeof config, .user_directory = user, .cache_directory = cache };
@@ -139,8 +141,13 @@ main (int argc, char **argv)
     fprintf (stderr, "%s\n", error ? error : "admission engine startup failed");
     clear_error (&error); g_free (user); g_free (cache); return 2;
   }
-  CHECK (glims_engine_call (engine, admission, NULL) == GLIMS_STATUS_OK,
-    "binder admission tests run on the real engine worker");
+  CHECK (glims_engine_call (engine, regression, NULL) == GLIMS_STATUS_OK,
+    "foreign XCF regression runs on the real engine worker");
+  /* The engine deliberately starts once per process. Run both independent
+   * phases on that one worker, after the oracle closes all adopted images. */
+  if (!failures)
+    CHECK (glims_engine_call (engine, admission, NULL) == GLIMS_STATUS_OK,
+      "binder admission tests run on the real engine worker");
   api->stop (engine); g_free (user); g_free (cache);
   printf ("%s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);
   return failures != 0;
