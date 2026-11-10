@@ -154,6 +154,7 @@ final class EngineCanvasView: NSView {
         self.document = document
         lastBackingFactor = Self.fallbackBackingFactor
         super.init(frame: .zero)
+        TabletEraserProximity.shared.start()
         updateFrameSize()
     }
 
@@ -755,6 +756,7 @@ final class EngineCanvasView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard !TabletEraserProximity.isProximityEvent(event) else { return }
         guard !document.isClosing else {
             document.onError?(ImageDocument.DocumentError.busy.localizedDescription)
             return
@@ -764,10 +766,12 @@ final class EngineCanvasView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard !TabletEraserProximity.isProximityEvent(event) else { return }
         tools.mouseDragged(with: event)
     }
 
     override func mouseUp(with event: NSEvent) {
+        guard !TabletEraserProximity.isProximityEvent(event) else { return }
         tools.mouseUp(with: event)
     }
 
