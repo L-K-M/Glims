@@ -177,7 +177,7 @@ struct NativeFilterMenuLayout: Equatable {
     }
 
     static func usesSourceChooser(_ operation: EngineSession.FilterOperation) -> Bool {
-        operation.name == "gegl:bump-map" && operation.support == .needsAuxInput
+        SourceFilterOperation(rawValue: operation.name) != nil && operation.support == .needsAuxInput
     }
 }
 
