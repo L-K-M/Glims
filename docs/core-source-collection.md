@@ -25,8 +25,9 @@ Each root input takes a repository directory and a revision. Revisions are
 resolved once to full commit IDs. The Glims revision must describe the actual
 build being documented; a later Main revision is not a substitute. For example,
 the earlier verified API 164 bundle records Glims source `2453eab266b26b48b1261e93225c505846e931df`.
-This example is documentation; collection of the real engine inputs remains a
-separate review/validation step.
+This illustrative command uses that earlier bundle's revision. The recorded
+offline collection below used Glims recipes from `b425e320`; binding that
+source set to a released binary remains a separate review/validation step.
 
 ```sh
 python3 -I -B scripts/collect-core-sources.py \
@@ -120,15 +121,24 @@ commit/recursive-gitlink payloads, missing objects/mappings, symlink preservatio
 and refusal, recipe/hash scope, dirty input isolation, attribute neutralization,
 output overlap/overwrite/race protection (including external object-store
 symlinks and alternate stores), bounds, configured-filter refusal and
-deterministic archives. They do not execute or build the app/engine, access the
-real dependency registry, or establish completeness of the real source set.
+deterministic archives. CLI cases additionally cover composed-link escapes,
+case/Unicode aliases, filename collisions, and contained multihop/dangling links.
+They do not execute or build the app/engine, access the real dependency registry,
+or establish completeness of the real source set.
 
-On 2026-11-10, all 73 packaging-script tests passed, including 19 collector
-fixtures. A real offline collection of the pinned GIMP 3.2.8, GEGL 0.4.72,
-babl 0.1.128 and exact GIMP data gitlink, with Glims recipes from `b425e320`,
-produced a 281,620,480-byte archive. An independent pass verified all 8,760
-file/symlink payloads against their manifest SHA256 and committed Git blob IDs.
-The archive SHA256 is
+On 2026-11-10, the initial candidate passed 73 packaging-script tests, including
+19 collector fixtures. Later CLI regressions exposed four failures in the
+pre-fix collector: composed-link escape, case-alias escape, Unicode-alias escape
+and case-colliding committed names. After the graph fix at `d144af4`, all
+26 collector fixtures and all 80 packaging-script tests passed.
+
+A real offline collection with the corrected collector used the pinned
+GIMP 3.2.8, GEGL 0.4.72, babl 0.1.128 and exact GIMP data gitlink, with Glims
+recipes still pinned to `b425e320`. An independent pass read the archive without
+extracting it and verified all 8,760 file/symlink payloads against manifest
+SHA256 and committed Git blob IDs, plus modes and directory sets. Payload rows
+and component records matched the original collection exactly. The entire
+281,620,480-byte archive retained the original SHA256:
 `bd39ed0efa1f7132568b7806e64175811edca86f6911aea4f5b966c48c22f0a6`.
 The manifest still records `corresponding_source_complete: false`; these checks
 do not cover the omitted dependencies or bind this archive to a released binary.
