@@ -996,6 +996,20 @@ final class ImageDocument {
         run(semantic: command, command.apply)
     }
 
+    func selectFloatingShape(_ shape: EngineSession.SelectShape, options: EngineSession.SelectOptions,
+                             expected: EngineSession.FloatingState) {
+        guard expected.isActive, acceptsEdits, !strokeIsActive, pendingInput == 0,
+              !targetCommandIsPending, floatingState == expected else {
+            onError?(DocumentError.targetChanged.localizedDescription)
+            return
+        }
+        let command = SemanticImageCommand.selectionShape(shape, options: options)
+        run(semantic: command) { session, image in
+            try Self.requireFloatingGestureState(expected, operation: options.operation, session: session, image: image)
+            try command.apply(session: session, image: image)
+        }
+    }
+
     func selectColor(at point: CGPoint, options: EngineSession.SelectOptions) {
         guard !refuseWhileEditingUnavailable() else { return }
         let command = SemanticImageCommand.selectColor(point, options: options)
@@ -2513,6 +2527,7 @@ final class ImageDocument {
     /// delivered only after its own queue acknowledgment, so continuation
     /// admission does not reject the read's own pending count.
     func readMoveHit(at point: CGPoint, expected: EngineSession.FloatingState,
+                     requireUnlockedFloatingHit: Bool = false,
                      completion: @escaping @MainActor (Result<EngineSession.Layer?, Error>) -> Void) {
         guard acceptsEdits, !strokeIsActive, pendingWork == 0, !targetCommandIsPending,
               pendingTargetPick == nil, pendingLayerSelection == nil, pendingChannelSelection == nil,
@@ -2534,6 +2549,10 @@ final class ImageDocument {
                         throw DocumentError.targetChanged
                     }
                     return row
+                }
+                if requireUnlockedFloatingHit, let row, row.id == expected.floating {
+                    guard try session.selectedLayers(image) == [row.id] else { throw DocumentError.targetChanged }
+                    try Self.requireUnlockedFloatingPixels(row.id, session: session, image: image)
                 }
                 guard try session.floatingSelection(image) == expected else { throw DocumentError.targetChanged }
                 return row
@@ -2608,7 +2627,8 @@ final class ImageDocument {
     /// A captured hit, never today's active layer. The worker revalidates
     /// both the original floating triplet and the explicit layer geometry.
     func movePickedLayer(_ row: EngineSession.Layer, expected: EngineSession.FloatingState,
-                         ownership: MoveSelectionOwnership?, by offset: CGSize) {
+                         ownership: MoveSelectionOwnership?, by offset: CGSize,
+                         requireUnlockedPixels: Bool = false) {
         guard offset != .zero else { return }
         guard PickedMoveGeometry.canTranslate(row, in: layers, by: offset),
               acceptsEdits, !strokeIsActive, pendingInput == 0, !targetCommandIsPending,
@@ -2635,13 +2655,35 @@ final class ImageDocument {
             if !expected.isActive, !(try session.selectedItems(.channel, image: image)).isEmpty {
                 throw DocumentError.targetChanged
             }
+            if requireUnlockedPixels {
+                try Self.requireUnlockedFloatingPixels(row.id, session: session, image: image)
+            }
             try session.moveLayer(row.id, image: image, by: offset)
+        }
+    }
+
+    private nonisolated static func requireUnlockedFloatingPixels(_ layer: Int32, session: EngineSession,
+                                                                 image: Int32) throws {
+        guard try !session.layerState(layer, image: image).effective.contains(.pixels) else {
+            throw FloatingError.refused("Unlock the floating selection’s pixels before moving it.")
+        }
+    }
+
+    private nonisolated static func requireFloatingGestureState(_ expected: EngineSession.FloatingState,
+                                                               operation: EngineSession.SelectOperation?,
+                                                               session: EngineSession, image: Int32) throws {
+        guard try session.floatingSelection(image) == expected else { throw DocumentError.targetChanged }
+        if operation == .subtract || operation == .intersect {
+            guard try session.selectionBounds(image: image) != nil else {
+                throw FloatingError.refused("Make a selection before subtracting from it or intersecting it.")
+            }
         }
     }
 
     /// The serialized app command validates the captured full state before
     /// the existing id-checked native Anchor. It never recaptures a new float.
-    func anchorPickedFloating(_ expected: EngineSession.FloatingState) {
+    func anchorPickedFloating(_ expected: EngineSession.FloatingState,
+                              selectingWith operation: EngineSession.SelectOperation? = nil) {
         guard acceptsEdits, !strokeIsActive, pendingInput == 0, !targetCommandIsPending,
               expected.isActive, floatingState == expected else {
             onError?(DocumentError.targetChanged.localizedDescription)
@@ -2654,7 +2696,7 @@ final class ImageDocument {
             return
         }
         enqueueTargetCommand({ session, image in
-            guard try session.floatingSelection(image) == expected else { throw DocumentError.targetChanged }
+            try Self.requireFloatingGestureState(expected, operation: operation, session: session, image: image)
             _ = try session.floatingCommand(.anchor, image: image, expected: expected.floating)
         })
     }
