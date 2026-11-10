@@ -193,6 +193,40 @@ extension EngineSmokeTest {
         expect(!a.recorder.isRecording && (try? snapshot(imageA)) == initial,
                "the actual Edit Stop route stops recording without editing the image")
 
+        guard let registeredRecorder = PaletteCenter.shared.registeredPalette(for: RecorderPaletteController.definition.kind),
+              let anchor = button(.record), anchor.window?.isVisible == true,
+              let recordItem = menuItem(editRecorder, .record), let recordAction = recordItem.action,
+              let stopItem = menuItem(editRecorder, .stop), let stopAction = stopItem.action else {
+            throw NSError(domain: "RecorderPaletteFixture", code: 4, userInfo: [NSLocalizedDescriptionKey:
+                "The registered Recorder palette, owned visible anchor and real Edit actions must exist."])
+        }
+        let rowsBeforeTransition = RecorderPalettePresentation(document: a).rows
+        let statusBeforeTransition = a.replayStatus
+        let menuTagsBeforeTransition = editRecorder?.items.map(\.tag)
+        let startedAsPanel = registeredRecorder.presentation == .panel
+        // Present raises an already open panel. Close it first: Rigi retains
+        // its panel content, but now genuinely invokes the factory for an
+        // attached form, which must have a distinct view controller.
+        registeredRecorder.close()
+        try require(wait { !registeredRecorder.isPresented }, "Recorder panel did not close before attached presentation")
+        registeredRecorder.present(from: anchor)
+        let presentedAsPopover = wait { registeredRecorder.presentation == .popover }
+        registeredRecorder.showPanel()
+        let returnedToPanel = wait { registeredRecorder.presentation == .panel }
+        try require(wait { a.pendingWork == 0 && b.pendingWork == 0 && !EngineActivity.shared.isBusy },
+                    "Recorder presentation changes did not drain accepted document reads")
+        _ = NSApp.sendAction(recordAction, to: owner, from: recordItem)
+        let globalRecordReachedA = a.recorder.isRecording && !b.recorder.isRecording
+        _ = NSApp.sendAction(stopAction, to: owner, from: stopItem)
+        let recorderStatePreserved = !a.recorder.isRecording && a.recorder.pendingCount == 0
+            && RecorderPalettePresentation(document: a).rows == rowsBeforeTransition
+            && a.replayStatus == statusBeforeTransition && b.recorder.records.isEmpty
+        let nativeStatePreserved = try snapshot(imageA) == initial && snapshot(imageB) == untouchedB
+        expect(startedAsPanel && presentedAsPopover && returnedToPanel && globalRecordReachedA
+                && owner.frontDocument === a && recorderStatePreserved && nativeStatePreserved
+                && editRecorder?.items.map(\.tag) == menuTagsBeforeTransition,
+               "the registered Recorder supports separate attached/panel forms and retains global Edit routing without changing either image or its recording")
+
         var legacyNotifications = 0, observerNotifications = 0, oneShotNotifications = 0
         var stateNotifications = 0, errors: [String] = []
         let previousState = a.onStateChange
