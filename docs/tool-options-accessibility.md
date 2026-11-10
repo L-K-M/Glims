@@ -14,3 +14,8 @@ and their public accessibility properties without presenting a window; they do
 not claim VoiceOver announcement quality or keyboard interaction acceptance.
 Actual Full Keyboard Access/VoiceOver and the final combined app audit remain
 separate gates. No native engine or Rigi code changed.
+
+The complete private leased unit run passes 1,014 tests with zero failures
+(`tool-options-ax-units.bG1G5j`); its owned test process exits0, final external
+AX snapshot reports no dialog, and the desktop releases. Evidence is local
+under `/tmp/glims-completion`; this does not replace the actual VoiceOver pass.
