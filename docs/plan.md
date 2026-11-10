@@ -3692,3 +3692,14 @@ no production activation defect is inferred from the earlier unlaunched host.
 See `batch-layer-rasterize.md` for exact scope, hashes and remaining validation.
 Other-engine UI, current units/integration, CI/review and merge remain pending;
 batch Restore and the broader gesture-policy item stay open.
+
+### Captured Close All (2026-11-10 candidate)
+
+File > Close All uses the existing sequential close/save/drain flow for a
+captured document set and stops on Cancel or failed Save without quitting.
+A later Quit joins the in-flight close request. The old menu/validation
+baseline failed three assertions; the corrected source passes 1,014 units
+and all 26 focused checks on every engine. See
+[close-all-documents.md](close-all-documents.md) for exact host/review limits
+and remaining real responder/Quit/file-completion acceptance. Hosted gates
+and final integration remain pending.
