@@ -3560,3 +3560,13 @@ restore remains available. See `painting-source-consent.md` for the measured
 native text Undo/Redo issue and scope. Initial consent and two timing defects
 were reproduced before their respective fixes; final integration checks are
 in progress. The facade remains APIv1/163 and upstream sources are unchanged.
+
+### Path lifecycle menu commands (2026-11-10 candidate)
+
+Edit now exposes New Path and Delete Path beside Stroke Path and Fill Path.
+Each responder action uses its owning document's existing path service,
+including default names and native Undo. Validation reads cached edit and
+path-selection state; Delete requires exactly one path, while New accepts
+an empty or multiple selection. Floating selections preserve path editing.
+The actual-menu regression reproduced the missing commands before the fix;
+all-four-engine checks and final integration are tracked in the PR.
