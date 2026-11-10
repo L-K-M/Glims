@@ -280,6 +280,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (brush-palette-sync)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "path-menus" {
+                try exercisePathMenus(session, documents: documents)
+                print(failures == 0 ? "PASSED (path-menus)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layer-multiselection-controls" {
                 try exerciseLayerMultiselectionControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (layer-multiselection-controls)" : "FAILED: \(failures) failure(s)")
@@ -507,6 +512,7 @@ enum EngineSmokeTest {
             try exerciseTargetHistory(session, documents: documents)
             try exercisePreferences(session, documents: documents)
             try exercisePaths(session, documents: documents)
+            try exercisePathMenus(session, documents: documents)
             try exercisePathAnchors(session, documents: documents)
             try exercisePathFillAndVector(session, work: work, documents: documents)
             try exerciseVectorStyleForm(session, work: work, documents: documents)
@@ -7452,8 +7458,8 @@ enum EngineSmokeTest {
               "the image is destroyed and the effect session goes with it")
         documents.items.removeAll { $0 === pendingDocument }
 
-        // A catalog reply can arrive after the window starts closing,
-        // before render teardown marks the image itself closing. Both a
+        // A catalog reply can arrive after document admission stops,
+        // while render teardown still keeps the native image alive. Both a
         // new filter and an existing effect must refuse that late start.
         if let gaussian = NativeFilterCatalog.shared.operation(named: "gegl:gaussian-blur") {
             for existing in [false, true] {
@@ -7471,9 +7477,27 @@ enum EngineSmokeTest {
                 documents.items.append(closingDocument)
                 let closingController = DocumentWindowController(document: closingDocument)
                 closingController.showWindow(nil)
+                let renderHeld = DispatchSemaphore(value: 0), renderRelease = DispatchSemaphore(value: 0)
+                var renderReleased = false
+                defer {
+                    if !renderReleased { renderRelease.signal() }
+                    closingController.previewPanel?.cancel()
+                    if !closingController.closeStarted { closingController.window?.close() }
+                    let deadline = Date().addingTimeInterval(10)
+                    while (try? session.info(closingImage)) != nil && Date() < deadline { spin(0.02) }
+                    documents.items.removeAll { $0 === closingDocument }
+                }
+                closingController.canvas.enqueueRenderBarrier {
+                    renderHeld.signal()
+                    _ = renderRelease.wait(timeout: .now() + 30)
+                }
+                guard renderHeld.wait(timeout: .now() + 5) == .success else {
+                    return check(false, "the late-filter fixture holds its render drain (existing \(existing))")
+                }
                 closingController.window?.close()
-                check(closingController.closeStarted && !closingDocument.isClosing,
-                      "window closing precedes asynchronous render teardown (existing \(existing))")
+                check(closingController.closeStarted && closingDocument.isClosing && !closingDocument.acceptsEdits
+                        && (try? session.info(closingImage)) != nil,
+                      "window closing stops document admission while the held render drain retains its native image (existing \(existing))")
                 if existing, let effect = closingDocument.layerEffects[drawable]?.first {
                     closingController.editEffectParameters(effect.id, on: drawable, operationName: gaussian.name)
                 } else {
@@ -7481,13 +7505,13 @@ enum EngineSmokeTest {
                 }
                 check(!closingDocument.filterPreviewIsOpen && closingDocument.pendingWork == 0,
                       "a late filter start is refused after window closing (existing \(existing))")
+                renderReleased = true
+                renderRelease.signal()
                 let deadline = Date().addingTimeInterval(10)
                 while (try? session.info(closingImage)) != nil && Date() < deadline { spin(0.02) }
                 check(closingController.previewPanel == nil && !closingDocument.filterPreviewIsOpen
                         && (try? session.info(closingImage)) == nil,
                       "closing leaves no late filter panel or live image (existing \(existing))")
-                closingController.previewPanel?.cancel()
-                documents.items.removeAll { $0 === closingDocument }
             }
         }
 
