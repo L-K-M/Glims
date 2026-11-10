@@ -37,6 +37,14 @@ extension EngineSmokeTest {
                                       windowNumber: window.windowNumber, context: nil, eventNumber: 0,
                                       clickCount: 1, pressure: 1)!
         }
+        func flagsChanged(_ flags: NSEvent.ModifierFlags, at p: CGPoint) -> NSEvent? {
+            let canvas = controller.canvas
+            let location = canvas.convert(CGPoint(x: p.x * canvas.scale, y: p.y * canvas.scale), to: nil)
+            return NSEvent.keyEvent(with: .flagsChanged, location: location, modifierFlags: flags,
+                                    timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                    characters: "", charactersIgnoringModifiers: "",
+                                    isARepeat: false, keyCode: 56)
+        }
         @discardableResult func drag(_ tool: ToolID, start: CGPoint, end: CGPoint,
                   down: NSEvent.ModifierFlags = [], during: NSEvent.ModifierFlags = [],
                   up: NSEvent.ModifierFlags? = nil) -> CGRect? {
@@ -109,5 +117,114 @@ extension EngineSmokeTest {
                   && controller.canvas.tools.selectionDragRect == nil,
                   "Escape with held modifiers cancels without changing selection or history")
         } else { check(false, "selection cancel event constructs") }
+
+        // MARK: Transform modifier routing
+
+        // The Transform tool's preview is local until Return; Shift must
+        // recompute it from the captured drag and the pointer's current
+        // location without a pointer move, and release must restore the
+        // free geometry. The release on mouseUp must use the final
+        // coordinates and modifiers.
+        state.select(.transform)
+        let transformLayer = document.activeLayer
+        let transformBounds = document.layers.first(where: { $0.id == transformLayer })?.bounds
+        guard let transformLayer, let transformBounds,
+              transformBounds == CGRect(x: 0, y: 0, width: 160, height: 120) else {
+            return check(false, "the transform fixture's active layer covers the image")
+        }
+        let undoBeforeTransform = document.undoInfo.undoCount
+        func transformUndoIntact() -> Bool {
+            document.undoInfo.undoCount == undoBeforeTransform
+                && document.layers.first(where: { $0.id == transformLayer })?.bounds == transformBounds
+        }
+
+        // Picking a handle within its hit tolerance must not create a
+        // transform before the pointer has moved.
+        let nearCorner = CGPoint(x: 158, y: 119)
+        controller.canvas.mouseDown(with: mouse(.leftMouseDown, nearCorner, []))
+        if let stationaryShift = flagsChanged([.shift], at: nearCorner) {
+            controller.canvas.flagsChanged(with: stationaryShift)
+        }
+        check(controller.canvas.tools.transformSession?.isIdentity == true,
+              "stationary Shift on a near-handle press preserves the captured geometry")
+        controller.canvas.mouseUp(with: mouse(.leftMouseUp, nearCorner, []))
+        check(controller.canvas.tools.transformSession?.isIdentity == true && transformUndoIntact(),
+              "clicking near a transform handle without moving creates no preview change or Undo")
+        if let cancelClick = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                              timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                              characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                                              isARepeat: false, keyCode: 53) {
+            controller.canvas.keyDown(with: cancelClick)
+        }
+
+        // A corner drag previews free, Shift constrains it in place, and
+        // releasing Shift restores the free box without moving the pointer.
+        let corner = CGPoint(x: transformBounds.maxX, y: transformBounds.maxY)
+        let freeTarget = CGPoint(x: 200, y: 130)
+        controller.canvas.mouseDown(with: mouse(.leftMouseDown, corner, []))
+        controller.canvas.mouseDragged(with: mouse(.leftMouseDragged, freeTarget, []))
+        check(controller.canvas.tools.transformSession?.box == CGRect(x: 0, y: 0, width: 200, height: 130),
+              "a free corner drag previews the unconstrained box")
+        if let shiftDown = flagsChanged([.shift], at: freeTarget) {
+            controller.canvas.flagsChanged(with: shiftDown)
+        } else { check(false, "the Shift press event constructs") }
+        check(controller.canvas.tools.transformSession?.box == CGRect(x: 0, y: 0, width: 200, height: 150),
+              "pressing Shift without moving the pointer constrains the corner preview")
+        if let shiftUp = flagsChanged([], at: freeTarget) {
+            controller.canvas.flagsChanged(with: shiftUp)
+        } else { check(false, "the Shift release event constructs") }
+        check(controller.canvas.tools.transformSession?.box == CGRect(x: 0, y: 0, width: 200, height: 130),
+              "releasing Shift without moving the pointer restores the free corner preview")
+        // A Shift drag, then a release on the mouseUp's final coordinates.
+        controller.canvas.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 190, y: 125), .shift))
+        check(controller.canvas.tools.transformSession?.box == CGRect(x: 0, y: 0, width: 190, height: 142.5),
+              "a Shift corner drag previews the constrained box")
+        controller.canvas.mouseUp(with: mouse(.leftMouseUp, freeTarget, []))
+        check(controller.canvas.tools.transformSession?.box == CGRect(x: 0, y: 0, width: 200, height: 130),
+              "mouseUp processes its final coordinates and modifiers before ending the drag")
+        check(controller.canvas.tools.transformSession != nil && transformUndoIntact(),
+              "the corner preview leaves the layer and Undo history untouched")
+        if let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                         timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                         characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                                         isARepeat: false, keyCode: 53) {
+            controller.canvas.keyDown(with: escape)
+        } else { check(false, "the transform cancel event constructs") }
+        check(controller.canvas.tools.transformSession == nil && transformUndoIntact(),
+              "Escape cancels the pending corner transform with no mutation")
+
+        // A rotation drag: Shift snaps to 15 degrees and release restores
+        // the free angle, again without moving the pointer.
+        let rotateStart = CGPoint(x: 200, y: 100)
+        let rotateFree = CGPoint(x: 200, y: 150)
+        let freeAngle = atan2(Double(90), Double(120)) - atan2(Double(40), Double(120))
+        controller.canvas.mouseDown(with: mouse(.leftMouseDown, rotateStart, []))
+        controller.canvas.mouseDragged(with: mouse(.leftMouseDragged, rotateFree, []))
+        check(abs((controller.canvas.tools.transformSession?.angle ?? -1) - freeAngle) < 1e-9,
+              "a free rotation drag previews the free angle")
+        if let rotateShiftDown = flagsChanged([.shift], at: rotateFree) {
+            controller.canvas.flagsChanged(with: rotateShiftDown)
+        } else { check(false, "the rotation Shift press event constructs") }
+        check(abs((controller.canvas.tools.transformSession?.angle ?? -1) - .pi / 12) < 1e-9,
+              "pressing Shift without moving the pointer snaps the rotation to 15 degrees")
+        if let rotateShiftUp = flagsChanged([], at: rotateFree) {
+            controller.canvas.flagsChanged(with: rotateShiftUp)
+        } else { check(false, "the rotation Shift release event constructs") }
+        check(abs((controller.canvas.tools.transformSession?.angle ?? -1) - freeAngle) < 1e-9,
+              "releasing Shift without moving the pointer restores the free rotation")
+        controller.canvas.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 200, y: 140), .shift))
+        controller.canvas.mouseUp(with: mouse(.leftMouseUp, rotateFree, []))
+        check(abs((controller.canvas.tools.transformSession?.angle ?? -1) - freeAngle) < 1e-9,
+              "mouseUp restores the free rotation after a Shift drag ends")
+        check(controller.canvas.tools.transformSession != nil && transformUndoIntact(),
+              "the rotation preview leaves the layer and Undo history untouched")
+        if let rotateEscape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                               timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                               characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                                               isARepeat: false, keyCode: 53) {
+            controller.canvas.keyDown(with: rotateEscape)
+        } else { check(false, "the rotation cancel event constructs") }
+        check(controller.canvas.tools.transformSession == nil && transformUndoIntact(),
+              "Escape cancels the pending rotation with no mutation")
     }
 }

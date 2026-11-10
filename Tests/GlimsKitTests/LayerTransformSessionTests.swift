@@ -30,6 +30,24 @@ final class LayerTransformSessionTests: XCTestCase {
         XCTAssertEqual(session.handle(at: CGPoint(x: 400, y: 300), tolerance: 5), .rotate)
     }
 
+    func testStationaryPressAndReturningToItRestoreCapturedGeometry() {
+        let handles: [(LayerTransformSession.Handle, CGPoint)] = [
+            (.corner(2), CGPoint(x: 298, y: 149)),
+            (.edge(1), CGPoint(x: 298, y: 100)),
+            (.rotate, CGPoint(x: 400, y: 100))
+        ]
+        for (handle, press) in handles {
+            var session = LayerTransformSession(layer: 1, bounds: bounds)
+            let drag = session.beginDrag(handle, at: press)
+            session.update(drag, to: press, constrained: true)
+            XCTAssertTrue(session.isIdentity)
+            session.update(drag, to: CGPoint(x: 450, y: 175), constrained: false)
+            XCTAssertFalse(session.isIdentity)
+            session.update(drag, to: press, constrained: false)
+            XCTAssertTrue(session.isIdentity)
+        }
+    }
+
     func testACornerScalesFromTheOppositeCornerAndShiftKeepsTheShape() {
         var session = LayerTransformSession(layer: 1, bounds: bounds)
         let drag = session.beginDrag(.corner(2), at: CGPoint(x: 300, y: 150))
