@@ -3715,6 +3715,15 @@ A separate ordinary LaunchServices foreign-file event passed; the actual
 File Open chooser and final integrated release remain unverified. Required
 latest-head CI/review/integration and broader preservation work stay open.
 
+### Legacy XCF effects
+
+Glims opens plain XCF 20 and 21 while preserving explicit effect blend and
+composite settings. Those versions do not encode an operation version;
+version 22 and later keep the strict existing operation-version check.
+Two formerly refused files now match direct native rendered pixels and
+preserve their effect masks, original bytes and empty opening history.
+See [the native and parser checks](xcf-effect-fields.md#legacy-effect-records).
+
 ### Accepted RPC caller drain (2026-11-10 candidate)
 
 Native stop now closes external admission, cancels running plug-ins without
