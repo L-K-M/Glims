@@ -39,11 +39,18 @@ enum ToolHintPolicy {
         case .selectByColor:
             return phase == .dragging ? "Release, then click to select matching colors." : selection("matching colors", flags: flags)
         case .move: return "Drag a layer or guide. Arrows nudge 1 px; Shift-arrows nudge 10 px."
-        case .transform: return "Drag transform handles. Shift constrains."
+        case .transform:
+            return phase == .dragging && flags.contains(.shift)
+                ? "Constrained transform. Release Shift for a free transform."
+                : "Drag transform handles. Shift constrains."
         case .crop: return "Drag the area to keep."
         case .eyedropper: return "Click or drag to sample the foreground color."
         case .text: return "Click to add or edit text."
-        case .path: return "Click to add an anchor; drag for handles. Shift-click selects or starts a subpath."
+        case .path:
+            if phase == .dragging { return "Drag an anchor or handle. Shift mirrors a dragged handle." }
+            if flags.contains(.shift) { return "Shift-click toggles an anchor or starts a new subpath." }
+            if flags.contains(.option) { return "Option-drag an anchor to pull out its handles." }
+            return "Click to add an anchor; drag for handles. Shift-click selects or starts a subpath."
         case .paintbrush, .pencil, .airbrush, .eraser, .smudge, .blur, .sharpen, .dodge, .burn:
             return phase == .dragging ? "Drag to apply \(tool.name.lowercased()); release to finish."
                 : "Drag to apply \(tool.name.lowercased()). Option samples color; [ ] changes size."

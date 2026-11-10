@@ -76,6 +76,12 @@ final class ToolHintPolicyTests: XCTestCase {
     }
 
     func testOnlySupportedToolsAdvertiseConstraintsAndPendingCommits() {
+        XCTAssertEqual(ToolHintPolicy.hint(tool: .path, phase: .idle, flags: .option),
+            "Option-drag an anchor to pull out its handles.")
+        XCTAssertEqual(ToolHintPolicy.hint(tool: .path, phase: .idle, flags: [.shift, .option]),
+            "Shift-click toggles an anchor or starts a new subpath.")
+        XCTAssertEqual(ToolHintPolicy.hint(tool: .transform, phase: .dragging, flags: .shift),
+            "Constrained transform. Release Shift for a free transform.")
         XCTAssertEqual(ToolHintPolicy.hint(tool: .gradient, phase: .dragging, flags: [.shift, .option]),
             "Drag the gradient endpoints; release to apply.")
         XCTAssertEqual(ToolHintPolicy.hint(tool: .crop, phase: .cropReady(width: 20, height: 13), flags: []),
