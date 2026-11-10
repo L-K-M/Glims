@@ -18,7 +18,6 @@ final class RecorderBindingSheetController: NSObject, NSWindowDelegate, NSTableV
     private let channels: [Candidate]
     private let quickMask: [Candidate]
     private var choices: [UUID: Choice] = [:]
-    private var visibleCandidates: [Candidate] = []
 
     private let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 560, height: 460),
                                   styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -43,13 +42,14 @@ final class RecorderBindingSheetController: NSObject, NSWindowDelegate, NSTableV
         let layerRows = document.layers
         var paths: [Int32: String] = [:]
         var siblingCounts: [Int32: Int] = [:]
-        layers = layerRows.map { row in
+        layers = layerRows.enumerated().map { ordinal, row in
             let index = siblingCounts[row.parent, default: 0] + 1
             siblingCounts[row.parent] = index
             let component = "\(index). \(Self.label(row.name))"
-            let full = paths[row.parent].map { Self.label($0 + " / " + component, max: 110) } ?? component
+            let full = paths[row.parent].map { Self.label($0, max: 64) + " / " + component } ?? component
             paths[row.id] = full
-            return Candidate(choice: .layer(row.id), title: full, hasMask: (document.maskStates[row.id]?.mask ?? 0) > 0)
+            return Candidate(choice: .layer(row.id), title: "\(ordinal + 1). \(full)",
+                             hasMask: (document.maskStates[row.id]?.mask ?? 0) > 0)
         }
         channels = document.channels.filter { !$0.isQuickMask }.enumerated().map { index, row in
             Candidate(choice: .channel(row.id), title: "\(index + 1). \(Self.label(row.name))")
@@ -186,9 +186,8 @@ final class RecorderBindingSheetController: NSObject, NSWindowDelegate, NSTableV
     @objc private func choose(_ sender: NSPopUpButton) {
         guard symbols.indices.contains(table.selectedRow) else { return }
         let row = table.selectedRow
-        let index = sender.indexOfSelectedItem - 1
         let symbol = symbols[row]
-        choices[symbol.id] = visibleCandidates.indices.contains(index) ? visibleCandidates[index].choice : nil
+        choices[symbol.id] = sender.selectedItem?.representedObject as? Choice
         table.reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integer: 0))
         refreshChoice()
     }
@@ -208,14 +207,20 @@ final class RecorderBindingSheetController: NSObject, NSWindowDelegate, NSTableV
         default: candidates = maskOwners.contains(symbol.id) ? layers.filter(\.hasMask) : layers
         }
         let assignedElsewhere = Set(choices.filter { $0.key != symbol.id }.values)
-        visibleCandidates = candidates.filter { !assignedElsewhere.contains($0.choice) }
+        let available = candidates.filter { !assignedElsewhere.contains($0.choice) }
         popup.removeAllItems()
-        popup.addItem(withTitle: visibleCandidates.isEmpty ? "No unused live target" : "Choose a live target…")
-        popup.addItems(withTitles: visibleCandidates.map(\.title))
-        if let selected = choices[symbol.id], let index = visibleCandidates.firstIndex(where: { $0.choice == selected }) {
-            popup.selectItem(at: index + 1)
-        } else { popup.selectItem(at: 0) }
-        popup.isEnabled = !visibleCandidates.isEmpty
+        popup.addItem(withTitle: available.isEmpty ? "No unused live target" : "Choose a live target…")
+        // AppKit can combine items added by title. The represented choice,
+        // rather than an index derived from the displayed label, owns identity.
+        for candidate in available {
+            let item = NSMenuItem(title: candidate.title, action: nil, keyEquivalent: "")
+            item.representedObject = candidate.choice
+            popup.menu?.addItem(item)
+        }
+        let selected = choices[symbol.id]
+        let index = popup.itemArray.firstIndex { ($0.representedObject as? Choice) == selected } ?? 0
+        popup.selectItem(at: index)
+        popup.isEnabled = !available.isEmpty
         progress.stringValue = "\(choices.count) of \(symbols.count) targets bound"
         accept.isEnabled = isComplete
     }

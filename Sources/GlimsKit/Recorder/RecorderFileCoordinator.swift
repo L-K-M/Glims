@@ -103,7 +103,8 @@ final class RecorderFileCoordinator {
         // stays exact, including spelling or punctuation not used in paths.
         let base = String(document.recorderFileMetadata.name.prefix(180))
             .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
-        panel.nameFieldStringValue = base.isEmpty || base == "." || base == ".." ? "Recording" : base
+        let suggested = base.isEmpty || base == "." || base == ".." ? "Recording" : base
+        panel.nameFieldStringValue = suggested + ".glimsrecording"
         panel.beginSheetModal(for: operation.window) { [weak self] response in
             guard let self else { return completion(false) }
             guard response == .OK, let url = panel.url else { return completion(false) }
