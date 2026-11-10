@@ -76,6 +76,9 @@ enum EngineSmokeTest {
         if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tool-color-menus", !NSApp.isRunning {
             return runHostedToolColorMenus()
         }
+        if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "screen-modes", !NSApp.isRunning {
+            return runHostedScreenModes()
+        }
         guard let path = EngineLibrary.configuredPath() else {
             print("FAIL no engine library; set \(EngineLibrary.environmentVariable)")
             return 2
@@ -568,6 +571,11 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "channel-menus" {
                 try exerciseChannelMenus(session, documents: documents)
                 print(failures == 0 ? "PASSED (channel menus)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "screen-modes" {
+                try exerciseScreenModes(session, documents: documents)
+                print(failures == 0 ? "PASSED (screen modes)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {

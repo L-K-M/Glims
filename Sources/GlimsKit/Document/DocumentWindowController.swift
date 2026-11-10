@@ -10,6 +10,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     let imageDocument: ImageDocument
     let canvas: EngineCanvasView
     let rotationView: CanvasRotationView
+    var screenModeState = DocumentScreenModeState()
+    var screenModeSnapshot: DocumentScreenModeSnapshot?
     private var viewAngleAlert: NSAlert?
     private var paintSourceAlert: NSAlert?
     private var batchRasterizeAlert: NSAlert?
@@ -271,7 +273,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         scrollView.verticalRulerView = verticalRuler
         scrollView.rulersVisible = rulerViewState.showsRulers
 
-        let content = NSView()
+        let content = DocumentContentView()
         for view in [scrollView, statusBar] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
@@ -534,6 +536,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc override func cancelOperation(_ sender: Any?) {
         if let previewPanel { previewPanel.cancel() }
         else if previewStartIsPending { cancelPendingPreview() }
+        else if screenMode != .windowed { setScreenMode(.windowed) }
         // NSWindowController's superclass does not implement this optional
         // key-binding action. An idle Escape reaching us has nothing to cancel.
     }
@@ -2267,6 +2270,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             menuItem.state = gridViewState.menuState
             return !imageDocument.isClosing
 
+        case #selector(chooseScreenMode(_:)):
+            guard let mode = DocumentScreenMode(rawValue: menuItem.tag) else { return false }
+            menuItem.state = mode == screenMode ? .on : .off
+            return canChangeScreenMode
+        case #selector(cycleScreenMode(_:)):
+            return canChangeScreenMode
         case #selector(toggleShowRulers(_:)):
             // Same contract as Show Guides, spelled out in RulerMenuLogic:
             // the checkmark reads the window's cached flag and an engine-
@@ -2876,6 +2885,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func windowWillClose(_ notification: Notification) {
+        closeScreenMode()
         closeStarted = true
         imageDocument.beginClosing()
         softProofController?.invalidate()
@@ -2972,5 +2982,20 @@ private final class ProportionLinker: NSObject, NSTextFieldDelegate {
         } else if field === height, height.integerValue > 0 {
             width.integerValue = max(1, Int((Double(height.integerValue) * ratio).rounded()))
         }
+    }
+}
+
+/// Owned borderless modes have no title-bar close button. Route the normal
+/// nil-target Close action through the same document admission/save flow.
+@MainActor
+private final class DocumentContentView: NSView {
+    @objc func performClose(_ sender: Any?) {
+        guard let window else { return }
+        guard let owner = window.windowController as? DocumentWindowController,
+              owner.screenModeSnapshot != nil else {
+            window.performClose(sender)
+            return
+        }
+        if owner.windowShouldClose(window) { window.close() }
     }
 }

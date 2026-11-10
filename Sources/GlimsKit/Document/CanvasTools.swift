@@ -830,6 +830,11 @@ final class CanvasToolController {
         }
 
         switch key.lowercased() {
+        case "f":
+            if !event.isARepeat {
+                (canvas.window?.windowController as? DocumentWindowController)?.cycleScreenMode(nil)
+            }
+            return true
         case "q":
             if !event.isARepeat {
                 document.setQuickMask(!(document.quickMaskState?.enabled ?? false))
