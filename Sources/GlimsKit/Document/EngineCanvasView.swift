@@ -67,6 +67,11 @@ final class EngineCanvasView: NSView {
 
     /// The current tool's handling of pointer and key events.
     private(set) lazy var tools = CanvasToolController(canvas: self)
+    private var hintLifecycleObservers: [NSObjectProtocol] = []
+
+    deinit {
+        for token in hintLifecycleObservers { NotificationCenter.default.removeObserver(token) }
+    }
 
     /// This window's guide-drag gesture (ruler-created and Move-tool),
     /// view-only until the release commits exactly one guide action.
@@ -270,6 +275,9 @@ final class EngineCanvasView: NSView {
     /// Drains any in-flight read before the engine image is destroyed.
     func stopRendering(completion: @escaping @MainActor () -> Void) {
         renderingStopped = true
+        tools.stopHintEvents()
+        hintLifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        hintLifecycleObservers = []
         removeDestinationObservers()
         antsTimer?.invalidate()
         antsTimer = nil
@@ -370,6 +378,21 @@ final class EngineCanvasView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        hintLifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        hintLifecycleObservers = []
+        tools.resetHintModifiers()
+        if let window, !renderingStopped {
+            let center = NotificationCenter.default
+            let scopes: [(Notification.Name, AnyObject?)] = [
+                (NSWindow.didResignKeyNotification, window),
+                (NSApplication.didResignActiveNotification, nil)
+            ]
+            for (name, object) in scopes {
+                hintLifecycleObservers.append(center.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.tools.resetHintModifiers() }
+                })
+            }
+        }
         swapDestinationObservers()
         backingDidChange()
         updateAntsTimer()
@@ -790,6 +813,7 @@ final class EngineCanvasView: NSView {
     override func flagsChanged(with event: NSEvent) {
         tools.selectionModifiersChanged(event.modifierFlags)
         tools.transformModifiersChanged(event.modifierFlags)
+        tools.hintModifiersChanged(event.modifierFlags)
         super.flagsChanged(with: event)
     }
 
