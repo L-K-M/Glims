@@ -540,7 +540,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                               started: (@MainActor (Result<Void, Error>) -> Void)? = nil,
                               buildPanel: @escaping @MainActor (ImageDocument.FilterPreviewStart) -> FilterPreviewPanel?) {
         // A catalog reply may arrive after windowWillClose cancels
-        // previews, while rendering still drains before isClosing flips.
+        // previews, while rendering drains after document admission stops.
         guard !closeStarted, !imageDocument.isClosing else {
             started?(.failure(ImageDocument.DocumentError.closed)); return
         }
@@ -1510,6 +1510,23 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         imageDocument.selectFromPath(path)
     }
 
+    /// The window starts closing before its render queue can hand the
+    /// image to the document's close drain. Gate direct actions as well
+    /// as menu validation throughout that interval.
+    private var pathActionsAvailable: Bool {
+        !closeStarted && !previewBusy && window?.attachedSheet == nil && imageDocument.acceptsEdits
+    }
+
+    @objc func newPath(_ sender: Any?) {
+        guard pathActionsAvailable else { return }
+        imageDocument.addPath(VectorPath())
+    }
+
+    @objc func deletePath(_ sender: Any?) {
+        guard pathActionsAvailable, let path = imageDocument.activePath else { return }
+        imageDocument.deletePath(path)
+    }
+
     /// Edit ▸ Stroke Path: draws the active path on the active layer in the
     /// foreground color at the Path tool's stroke width.
     @objc func strokePath(_ sender: Any?) {
@@ -1820,6 +1837,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(cut(_:)), #selector(copy(_:)), #selector(copyMerged(_:)),
              #selector(paste(_:)), #selector(pasteInPlace(_:)), #selector(deleteBackward(_:)):
             return canPerformClipboardCommand(menuItem.action)
+        case #selector(newPath(_:)):
+            return pathActionsAvailable
+        case #selector(deletePath(_:)):
+            return imageDocument.activePath != nil && pathActionsAvailable
         case #selector(selectFromPath(_:)), #selector(strokePath(_:)), #selector(fillPath(_:)):
             return imageDocument.activePath != nil && !editingBlocked
         case #selector(fill(_:)):
@@ -2644,6 +2665,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     func windowWillClose(_ notification: Notification) {
         closeStarted = true
+        imageDocument.beginClosing()
         softProofController?.invalidate()
         softProofController = nil
         if let alert = viewAngleAlert, window?.attachedSheet === alert.window {

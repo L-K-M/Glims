@@ -257,6 +257,9 @@ final class ImageDocument {
     private var pendingInput = 0
     /// Once the image starts closing, nothing new is queued.
     private(set) var isClosing = false
+    /// Closing admission may precede the canvas render drain. Native
+    /// teardown is scheduled separately, after the controller releases it.
+    private var nativeCloseIsScheduled = false
     private(set) var isTransferringClipboard = false
     private(set) var isSavingForClose = false
     private var onQueueDrained: (() -> Void)?
@@ -3643,14 +3646,22 @@ final class ImageDocument {
         }
     }
 
-    /// Stops taking work and destroys the engine image once everything
-    /// queued has run, so a close never tears the image from under a job.
-    /// The teardown cannot rely on `self` — the controller may already be
-    /// gone — so the session and image id travel in the closure.
-    func closeImageWhenDrained(completion: @escaping @MainActor () -> Void = {}) {
+    /// Stops accepting edits immediately, without destroying the image.
+    /// A document window calls this before its renderer begins draining;
+    /// accepted input and teardown remain counted until native close.
+    func beginClosing() {
         guard !isClosing else { return }
         if strokeIsActive { endStroke() }
         isClosing = true
+    }
+
+    /// Destroys the engine image once accepted work and teardown drain.
+    /// A window calls this only after its renderer has stopped. Bare
+    /// document callers begin closing here without a separate render phase.
+    func closeImageWhenDrained(completion: @escaping @MainActor () -> Void = {}) {
+        guard !nativeCloseIsScheduled else { return }
+        beginClosing()
+        nativeCloseIsScheduled = true
         let close = { [session, image] in
             EngineActivity.shared.closeImage(image, session: session) { result in
                 if case .failure(let error) = result { self.onError?(String(describing: error)) }

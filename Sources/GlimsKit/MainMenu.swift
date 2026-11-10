@@ -56,6 +56,8 @@ enum MainMenu {
             .separator(),
             item("Fill…", #selector(DocumentWindowController.fill(_:))),
             item("Stroke Selection…", #selector(DocumentWindowController.strokeSelection(_:))),
+            item("New Path", #selector(DocumentWindowController.newPath(_:))),
+            item("Delete Path", #selector(DocumentWindowController.deletePath(_:))),
             item("Stroke Path", #selector(DocumentWindowController.strokePath(_:))),
             item("Fill Path", #selector(DocumentWindowController.fillPath(_:))),
             item("To Vector Layer", #selector(DocumentWindowController.toVectorLayer(_:))),
