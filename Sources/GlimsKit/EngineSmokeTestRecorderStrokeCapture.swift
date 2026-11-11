@@ -192,6 +192,54 @@ extension EngineSmokeTest {
         }
         expect(hasSelectionPrefix() && capturedPencil && doc.recorder.pendingCount == 0 && !doc.recorder.isRecording,
                "the accepted Pencil settles once after Stop in its ordered Recorder row, while the later Pencil stays out")
+
+        if capturedPencil {
+            guard case .success(.completeStroke(let command)) = records[1].resolution else {
+                throw NSError(domain: "RecorderStrokeCapture", code: 3, userInfo: [NSLocalizedDescriptionKey: "The stroke row lacks its owned payload"])
+            }
+            expect(try command.facts.brush == resource && command.facts.fingerprint.utf8.count == 64
+                   && command.trace.first == .init(first)
+                   && command.trace.batches == [firstBatch, finalBatch].map { try $0.map(RecorderStrokeTrace.Point.init) },
+                   "the payload preserves the actual brush, first sample and both ordered batches")
+            for _ in 0..<2 {
+                doc.undo()
+                try drain()
+                try session.undo(reference.image)
+            }
+            try doc.startReplay()
+            try require(wait { doc.replayStatus == .finished(total: 2) && doc.pendingWork == 0 },
+                        "the loaded Pencil commands did not replay")
+            try session.select(.all, image: reference.image)
+            try referenceStroke(first, batches: [firstBatch, finalBatch])
+            expect(try pixels(actual.image) == painted && pixels(actual.image) == pixels(reference.image)
+                   && sameHistory(actual.image, reference.image) && doc.recorder.records.count == 2,
+                   "whole-stroke replay matches an independent native edit, history and the settled log")
+        }
+
+        doc.beginStroke(at: later, brush: brush)
+        var refusedMidStroke = false
+        do { try doc.startRecording() } catch { refusedMidStroke = true }
+        doc.endStroke()
+        try drain()
+        expect(refusedMidStroke && !doc.recorder.isRecording,
+               "starting Recorder mid-stroke cannot capture a suffix")
+
+        try doc.startRecording()
+        var unsupported = brush
+        unsupported.tool = .paintbrush
+        unsupported.red = 0.12
+        let beforeUnsupported = try pixels(actual.image)
+        doc.beginStroke(at: first, brush: unsupported)
+        doc.continueStroke(firstBatch)
+        doc.endStroke()
+        try doc.stopRecording()
+        try drain()
+        let unsupportedRow = doc.recorder.records.first
+        var recordedRefusal = false
+        if case .failure? = unsupportedRow?.resolution { recordedRefusal = true }
+        expect(try pixels(actual.image) != beforeUnsupported && recordedRefusal &&
+               doc.recorder.records.count == 1 && doc.recorder.replayRefusal != nil,
+               "an unsupported stroke paints normally and produces a visible nonreplayable row")
         complete = true
     }
 }

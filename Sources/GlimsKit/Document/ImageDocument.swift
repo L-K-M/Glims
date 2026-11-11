@@ -126,6 +126,35 @@ final class ImageDocument {
         let descriptions: [UUID: RecorderDescriptionObservation]
     }
 
+    /// Lives only on inputQueue. AppKit and the semantic log never own
+    /// the native stroke ID or a mutable partial gesture.
+    private struct StrokeRecordingDraft {
+        let capture: RecorderCapture
+        let confirmed: ConfirmedRecorderCapture
+        let settings: RecorderStrokeCommand.Settings?
+        var trace: RecorderStrokeAccumulator?
+        var facts: EngineSession.StrokeCaptureFacts?
+        var failure: Error?
+
+        mutating func refuse(_ error: Error) {
+            guard failure == nil else { return }
+            failure = error
+            trace = nil
+        }
+
+        mutating func finish(interleaved: Bool) -> Result<SemanticImageCommand, Error> {
+            if let failure { return .failure(failure) }
+            if interleaved {
+                return .failure(RecorderReplayError(message: "Another edit was accepted before the stroke ended."))
+            }
+            guard let settings, let facts, let result = trace?.finish() else {
+                return .failure(RecorderReplayError(message: "This stroke's brush, paint settings or target cannot be recorded."))
+            }
+            return result.map { SemanticImageCommand.completeStroke(.init(settings: settings, trace: $0, facts: facts)) }
+                .mapError { error -> Error in RecorderReplayError(message: error.localizedDescription) }
+        }
+    }
+
     private struct RecorderReplayError: LocalizedError, CustomStringConvertible {
         let message: String
         var errorDescription: String? { message }
@@ -388,7 +417,9 @@ final class ImageDocument {
 
     /// Touched only on `inputQueue`.
     private nonisolated(unsafe) var currentStroke: Int32?
+    private nonisolated(unsafe) var strokeRecordingDraft: StrokeRecordingDraft?
     private(set) var strokeIsActive = false
+    private var strokeRecordingInterleaved = false
 
     /// Which plug-in commands can run on the selected layers, by name;
     /// nil until asked for after a change.
@@ -999,6 +1030,7 @@ final class ImageDocument {
     // MARK: Painting
 
     func beginStroke(at point: EngineSession.StrokePoint, brush: EngineSession.Brush = EngineSession.Brush()) {
+        guard !strokeIsActive else { return }
         guard !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
         guard !refuseSingleLayerCommand("Paint") else { return }
         guard !refuseMultiChannelCommand("Paint") else { return }
@@ -1015,34 +1047,90 @@ final class ImageDocument {
             return
         }
         guard let target = paintTarget, !refuseStructuredPaint(on: target) else { return }
+        let capture: RecorderCapture?
+        do {
+            if recorder.isRecording {
+                let context: RecorderContext
+                if case .layer(let layer) = target, layer == drawable {
+                    context = .layer(layer)
+                } else {
+                    context = .unavailable("Only an ordinary pixel layer can be recorded as a stroke target.")
+                }
+                capture = try reserveRecording(context: context)
+            } else { capture = nil }
+        } catch {
+            onError?("Recorder could not accept this stroke: \(error.localizedDescription)")
+            return
+        }
         strokeIsActive = true
-        enqueue(on: inputQueue, input: true) { [session, image] in
+        strokeRecordingInterleaved = false
+        enqueue(on: inputQueue, input: true, strokePart: true) { [session, image] in
+            if let capture {
+                let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+                let first = try? RecorderStrokeTrace.Point(point)
+                self.strokeRecordingDraft = .init(capture: capture, confirmed: confirmed,
+                    settings: .init(brush), trace: first.map(RecorderStrokeAccumulator.init(first:)))
+            }
             do {
                 try self.requirePaintTarget()
                 try self.requireRasterizedPaintTarget(target)
-                self.currentStroke = try session.beginStroke(image: image, drawable: drawable, brush: brush, first: point)
+                if let draft = self.strokeRecordingDraft, case .layer = draft.confirmed.binding,
+                   draft.settings != nil, draft.trace != nil {
+                    let result = try session.beginStrokeCapturing(image: image, drawable: drawable, brush: brush, first: point)
+                    self.currentStroke = result.stroke
+                    self.strokeRecordingDraft?.facts = result.facts
+                } else {
+                    self.currentStroke = try session.beginStroke(image: image, drawable: drawable, brush: brush, first: point)
+                }
             } catch {
                 self.currentStroke = nil
+                self.strokeRecordingDraft?.refuse(error)
                 self.report(error)
             }
         }
+        // A notification can close the owning document reentrantly. The
+        // accepted begin must already be counted before that can queue End.
+        if capture != nil { notifyRecorderChanged() }
     }
 
     func continueStroke(_ points: [EngineSession.StrokePoint]) {
         guard strokeIsActive else { return }
-        enqueue(on: inputQueue, input: true) { [session] in
+        enqueue(on: inputQueue, input: true, strokePart: true) { [session] in
             guard let stroke = self.currentStroke else { return }
-            do { try session.continueStroke(stroke, points: points) } catch { self.report(error) }
+            do { try session.continueStroke(stroke, points: points) }
+            catch {
+                self.strokeRecordingDraft?.refuse(error)
+                self.report(error)
+                return
+            }
+            if self.strokeRecordingDraft?.facts != nil, self.strokeRecordingDraft?.trace != nil {
+                do { self.strokeRecordingDraft?.trace?.appendAccepted(try points.map(RecorderStrokeTrace.Point.init)) }
+                catch { self.strokeRecordingDraft?.refuse(RecorderReplayError(message: error.localizedDescription)) }
+            }
         }
     }
 
     func endStroke() {
         guard strokeIsActive else { return }
+        let interleaved = strokeRecordingInterleaved
+        strokeRecordingInterleaved = false
         strokeIsActive = false
-        enqueue(on: inputQueue, input: true) { [session] in
-            guard let stroke = self.currentStroke else { return }
+        enqueue(on: inputQueue, input: true, strokePart: true) { [session] in
+            let stroke = self.currentStroke
             self.currentStroke = nil
-            do { try session.endStroke(stroke) } catch { self.report(error) }
+            var draft = self.strokeRecordingDraft
+            self.strokeRecordingDraft = nil
+            if let stroke {
+                do { try session.endStroke(stroke) }
+                catch {
+                    draft?.refuse(error)
+                    self.report(error)
+                }
+            }
+            if var draft {
+                let result = draft.finish(interleaved: interleaved)
+                self.settleRecording(draft.capture, result: result, confirmed: draft.confirmed)
+            }
         }
     }
 
@@ -4628,6 +4716,7 @@ final class ImageDocument {
 
     func startRecording() throws {
         guard !isClosing else { throw DocumentError.closed }
+        guard !strokeIsActive else { throw RecorderReplayError(message: "Finish the current stroke before starting Recorder.") }
         try recorder.startRecording()
         resetRecorderSidecars()
         notifyRecorderChanged()
@@ -5016,6 +5105,14 @@ final class ImageDocument {
                 }
                 if let context { try Self.requireRecorderContext(context, session: session, image: image) }
                 if case .layer(let layer)? = context {
+                    if case .completeStroke = step.command {
+                        try self.requireRasterizedPaintTarget(.layer(layer))
+                        guard try !session.quickMask(image).enabled,
+                              session.selectedItems(.channel, image: image).isEmpty,
+                              !session.layerMask(layer, image: image).editing else {
+                            throw RecorderReplayError(message: "Finish editing the channel or layer mask before replaying this stroke.")
+                        }
+                    }
                     try step.command.apply(session: session, image: image, layer: layer)
                 } else {
                     try step.command.apply(session: session, image: image)
@@ -5050,7 +5147,7 @@ final class ImageDocument {
         switch command {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
-        case .layerProperties: return true
+        case .layerProperties, .completeStroke: return true
         default: return false
         }
     }
@@ -5356,10 +5453,11 @@ final class ImageDocument {
     /// and count as unsaved changes while they wait or run. `teardown`
     /// jobs (filter aborts) are cleanup: they queue and count even while
     /// closing, so the drain never destroys an image out from under them.
-    private func enqueue(on queue: DispatchQueue, input: Bool = false, teardown: Bool = false,
+    private func enqueue(on queue: DispatchQueue, input: Bool = false, teardown: Bool = false, strokePart: Bool = false,
                          afterFinish: (@MainActor () -> Void)? = nil,
                          _ work: @escaping () -> Void) {
         guard teardown || !isClosing else { return }
+        if strokeIsActive && input && !strokePart { strokeRecordingInterleaved = true }
         pendingWork += 1
         if input { pendingInput += 1 }
         EngineActivity.shared.whenIdle {
@@ -5391,6 +5489,7 @@ final class ImageDocument {
         let accepted = EngineActivity.shared.perform(label: label, work: work) {
             self.jobDidFinish(input: false)
         }
+        if accepted && strokeIsActive && effect != .readsPixels { strokeRecordingInterleaved = true }
         if !accepted {
             jobDidFinish(input: false)
             rejected()
