@@ -383,12 +383,14 @@ unsupported_case (GlimsEngine *engine, GlimsResourceID brush, const char *finger
     NEED (refused_before_paint (engine, &scene, &before, brush, &settings, fingerprint, GLIMS_STATUS_FAILED),
           "disabled Red refuses guarded replay before pixels or history change");
   } else {
-    settings.tool = GLIMS_PAINT_PAINTBRUSH;
+    settings.tool = GLIMS_PAINT_BLUR;
+    settings.rate = 80;
+    settings.pressure_size = true;
   }
   NEED (api->stroke_begin_with_capture_facts (engine, scene.image, scene.layer, brush,
           &settings, trace, NULL, &stroke, &box.facts, &error) == GLIMS_STATUS_OK && stroke > 0 && !error,
         fingerprint ? "unguarded Pencil still paints with disabled Red"
-                    : "ordinary live Paintbrush is admitted without an expected fingerprint");
+                    : "ordinary live Blur rate80 is admitted without an expected fingerprint");
   CHECK (facts_empty (&box.facts) && tail_intact (&box, sizeof box),
          "unsupported live configuration yields nil facts and preserves the future tail");
   NEED (finish_trace (engine, &stroke), "unsupported live stroke still uses V1 continuation and end");

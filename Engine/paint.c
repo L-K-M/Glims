@@ -323,7 +323,8 @@ capture_stroke_facts (GlimsEngine               *engine,
   GimpContext *context = GIMP_CONTEXT (options);
   GimpLayerMode paint_mode = gimp_context_get_paint_mode (context);
   GimpSymmetry *symmetry = gimp_image_get_active_symmetry (image);
-  if ((brush->tool != GLIMS_PAINT_PENCIL && brush->tool != GLIMS_PAINT_ERASER) ||
+  if ((brush->tool != GLIMS_PAINT_PAINTBRUSH &&
+       brush->tool != GLIMS_PAINT_PENCIL && brush->tool != GLIMS_PAINT_ERASER) ||
       !recordable_first_point (first) ||
       G_OBJECT_TYPE (drawable) != GIMP_TYPE_LAYER ||
       !gimp_drawable_is_rgb (drawable) || !gimp_drawable_has_alpha (drawable) ||
@@ -390,6 +391,15 @@ capture_stroke_facts (GlimsEngine               *engine,
       static const gchar dynamics_domain[] = "glims-stroke-pressure-size-v1";
       g_checksum_update (hash, (const guchar *) dynamics_domain, sizeof dynamics_domain);
       g_checksum_update (hash, (const guchar *) dynamics, strlen (dynamics) + 1);
+    }
+  /* Keep existing Pencil/Eraser digests unchanged. The added tool must
+   * remain distinct even when its effective options match Pencil. */
+  if (brush->tool == GLIMS_PAINT_PAINTBRUSH)
+    {
+      static const gchar paintbrush_domain[] = "glims-stroke-paintbrush-v1";
+      const guint8 tool = GLIMS_PAINT_PAINTBRUSH;
+      g_checksum_update (hash, (const guchar *) paintbrush_domain, sizeof paintbrush_domain);
+      g_checksum_update (hash, &tool, sizeof tool);
     }
   facts->fingerprint = g_strdup (g_checksum_get_string (hash));
 
