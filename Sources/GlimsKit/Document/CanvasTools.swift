@@ -863,7 +863,7 @@ final class CanvasToolController {
             return cancelPickedMove()
         }
         let plan: CanvasSnapPlanner.Result
-        if canvas.snapTo.isEmpty { plan = .none }
+        if canvas.snapTo.isEmpty || request.latest == request.start { plan = .none }
         else {
             plan = CanvasSnapPlanner.plan(input: SnapTargetCache.plannerInput(
                 movingRect: raw,
