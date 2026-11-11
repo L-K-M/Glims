@@ -103,6 +103,7 @@ extension RecorderFileCommand {
         case .crop(let value): self = .crop(rect(value))
         case .layerProperties(let value): self = .layerProperties(.init(name: value.name, visible: value.isVisible, opacity: value.opacity,
             mode: try value.mode.map { try RecorderFileLayerMode($0) }))
+        case .completeStroke: throw RecorderFileError.invalid("This recording contains a stroke that cannot yet be saved.")
         }
     }
 }
