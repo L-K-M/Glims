@@ -4223,6 +4223,40 @@ See [editor verification](editor-verification.md) for evidence boundaries,
 source-review failures that were not counted as approval, and the public
 release, spoken-accessibility and physical-display qualification gates.
 
+### Five-second startup and editor quality targets (2026-11-11 candidate)
+
+The expanded user brief is tracked in [quality-targets.md](quality-targets.md);
+notarization is explicitly excluded. The previous verification totals do not
+establish Photoshop 4 parity or complete usability.
+
+Startup now packages a relocatable command registry after signing inner
+executables. A fresh matching engine/language can seed it exclusively; native
+path, mtime and protocol checks still discover changed and custom plug-ins.
+A separate native font helper links bundled HarfBuzz and uses CoreText to
+locate downloaded font assets. Its config keeps ordinary/user font roots but
+omits the broad macOS Assets scans. The original native config remains the
+failure fallback. No system-font caches or font outlines are shipped. The
+helper alone runs with a non-root working directory to avoid a reproduced
+Fontconfig 2.18.3 absolute-glob bug; the application does not change global cwd.
+The optional helper has a three-second deadline. A stalled child is killed
+and reaped before native discovery resumes; its wait dispatches only a private
+GLib context. A CLI regression covers the deadline, reaping, working directory
+and success/failure paths without starting the editor. The packaging probe
+also confines its working directory and startup diagnostics to its temporary
+home, and catalog checks require a newly written report on every run.
+
+Integrated packaged launches reached the document in 2.70 seconds with fresh
+Glims data, 1.72 seconds cached, and 4.09 seconds relocated with fresh data.
+These are local measurements, not disk-cache-flushed or cross-Mac guarantees.
+The startup regression script compares font/command catalogs through corrupt
+caches, user font installation/removal, relocation, incompatible registry and
+missing-helper fallback. All pass. Corrupt command caches and incompatible
+registries use slower native discovery (about eleven seconds). The 128
+packaging checks and all four adapter suites pass. The integrated standalone
+bundle passes 1,917 native and 3,310 application checks with development
+trees denied. Other Macs, old preference collections and arbitrary custom
+plug-in changes remain outside this qualification.
+
 ### Typed transform controls (2026-11-11 candidate)
 
 Transform options now edit X/Y, Width/Height and clockwise Angle through the
