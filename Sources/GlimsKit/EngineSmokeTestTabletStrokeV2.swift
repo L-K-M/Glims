@@ -181,12 +181,13 @@ extension EngineSmokeTest {
             try require(wait { NSApp.isActive && NSApp.keyWindow === owner.window && NSApp.mainWindow === owner.window },
                         "The actual owned document did not become main and key")
         }
-        func point(_ index: Int, device: UInt?) throws -> NSEvent {
+        func point(_ index: Int, device: UInt?, imagePoint: CGPoint? = nil) throws -> NSEvent {
             let type: NSEvent.EventType = [.leftMouseDown, .leftMouseDragged, .leftMouseUp][index]
+            let position = imagePoint ?? positions[index]
             guard let window = ownerA.window,
                   let template = NSEvent.mouseEvent(with: type,
-                    location: canvas.convert(CGPoint(x: positions[index].x * canvas.scale,
-                                                     y: positions[index].y * canvas.scale), to: nil),
+                    location: canvas.convert(CGPoint(x: position.x * canvas.scale,
+                                                     y: position.y * canvas.scale), to: nil),
                     modifierFlags: [], timestamp: eventTimes[index], windowNumber: window.windowNumber,
                     context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else {
                 throw NSError(domain: "TabletV2Fixture", code: 2)
@@ -204,7 +205,7 @@ extension EngineSmokeTest {
             guard let event = NSEvent(cgEvent: cg) else { throw NSError(domain: "TabletV2Fixture", code: 4) }
             let mapped = canvas.imagePoint(for: event)
             let admitted = event.type == type && event.subtype == .tabletPoint && UInt(exactly: event.deviceID) == device
-                && abs(mapped.x - positions[index].x) < 0.001 && abs(mapped.y - positions[index].y) < 0.001
+                && abs(mapped.x - position.x) < 0.001 && abs(mapped.y - position.y) < 0.001
                 && Double(event.pressure) == pressures[index]
                 && Double(event.tilt.x) == tiltX && Double(event.tilt.y) == tiltY
                 && abs(Double(event.rotation) - [90, 180, 270][index]) < 0.001
@@ -218,7 +219,7 @@ extension EngineSmokeTest {
                 default: mouse = false
                 }
                 let subtype = mouse ? event.subtype : nil
-                print("OBS tablet admission index=\(index) expectedType=\(type.rawValue) actualType=\(event.type.rawValue) subtype=\(subtype.map { String($0.rawValue) } ?? "not read") location=\(event.locationInWindow) mapped=\(mapped) timestamp=\(event.timestamp)")
+                print("OBS tablet admission index=\(index) expectedType=\(type.rawValue) actualType=\(event.type.rawValue) subtype=\(subtype.map { String($0.rawValue) } ?? "not read") location=\(event.locationInWindow) expectedImagePoint=\(position) mapped=\(mapped) timestamp=\(event.timestamp)")
                 if event.type == .tabletPoint || subtype == .tabletPoint {
                     print("OBS tablet NSEvent device=\(event.deviceID) pressure=\(event.pressure) tilt=\(event.tilt) rotation=\(event.rotation) tangent=\(event.tangentialPressure)")
                 } else {
@@ -315,9 +316,8 @@ extension EngineSmokeTest {
         expect(monitor.strokeCapture(for: matched[0]) == nil && heldCapture.capabilities.hasOptionalAxes,
                "deactivation clears future captures without changing an owned press snapshot")
         try front(ownerA); try proximity(42, capabilities: optionalBits, probe: matched[0])
-        guard let badCG = matched[0].cgEvent?.copy() else { throw NSError(domain: "TabletV2Fixture", code: 7) }
-        badCG.location = CGPoint(x: 10_000_000, y: 10_000_000)
-        guard let badDown = NSEvent(cgEvent: badCG) else { throw NSError(domain: "TabletV2Fixture", code: 8) }
+        let badDown = try point(0, device: 42, imagePoint: CGPoint(x: 600_000, y: 16))
+        print("OBS invalid-down mapped image point=\(canvas.imagePoint(for: badDown))")
         try require(abs(canvas.imagePoint(for: badDown).x) > 524_288, "Invalid-down setup must be outside the V2 coordinate range")
         let beforeBadDown = try rows().count
         canvas.mouseDown(with: badDown); try drain(a)
@@ -334,10 +334,10 @@ extension EngineSmokeTest {
         state.select(.text)
         canvas.mouseDragged(with: matched[1]); try drain(a)
         let afterDrag = try pixels(source.image)
-        guard let window = ownerA.window, let invalidRelease = NSEvent.mouseEvent(with: .leftMouseUp,
-            location: canvas.convert(CGPoint(x: 600_000 * canvas.scale, y: 16 * canvas.scale), to: nil),
-            modifierFlags: [], timestamp: 11, windowNumber: window.windowNumber, context: nil,
-            eventNumber: 0, clickCount: 1, pressure: 1) else { throw NSError(domain: "TabletV2Fixture", code: 9) }
+        let invalidRelease = try point(2, device: 42, imagePoint: CGPoint(x: 600_000, y: 16))
+        print("OBS invalid-release mapped image point=\(canvas.imagePoint(for: invalidRelease))")
+        try require(abs(canvas.imagePoint(for: invalidRelease).x) > 524_288,
+                    "Invalid-release setup must be outside the V2 coordinate range")
         canvas.mouseUp(with: invalidRelease); try drain(a)
         let lifecycleRows = try rows().filter { $0.sequence > lifecycleFence && $0.image == source.image }
         expect(lifecycleRows.map(\.kind) == ["start", "init", "motion", "interpolate", "finish"]
