@@ -3652,7 +3652,7 @@ completion item remains unchecked.
 
 ### View-local ICC soft proofing (2026-11-10 candidate)
 
-APIv1 appends slot164 with owned proof/display intents and BPC, preserving
+APIv1 appends slot 164 with owned proof/display intents and BPC, preserving
 slot132. Window-owned setup/toggle controls capture immutable ICC bytes and
 render settings, fence stale tiles and never replace failed proof rendering
 with unproofed pixels. Counted off-main profile loading/preflight drains before
@@ -4151,3 +4151,16 @@ and fixed; all 13 focused AppKit tests and 1,222 integrated unit tests pass.
 Independent source review found no important issue. See
 [`effect-selection-accessibility.md`](effect-selection-accessibility.md) for
 scope and the separate spoken VoiceOver/full-keyboard audit gates.
+
+
+### Soft-proof gamut warnings (2026-11-11 candidate)
+
+The existing window-owned Soft Proof Setup adds a captured Gamut warnings
+option. Owned flag 2 extends slot 164 without changing the 173-slot API layout;
+Engine maps it to the native proof transform and leaves LCMS global alarm
+settings untouched. Independent gamut pixels, alpha and state preservation
+pass484 checks per engine on all four supported engines. The pinned actual
+form and Swift bridge pass25 mandatory checks, and all 1,229 units pass.
+Independent source review found no important issue. Latest-head CI and final
+integration are pending. See [soft-proof rendering](soft-proof-render.md)
+for the full contract and hardware/HDR limitations.

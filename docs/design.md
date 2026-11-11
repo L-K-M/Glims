@@ -98,7 +98,7 @@ The 3.2 features below come from the release notes (https://www.gimp.org/release
 - Tools use unmodified single letters (the tooltip shows "Brush (B)"). Shift+letter cycles within the group, and holding the letter switches tools temporarily ("spring-loaded"). Letters go to text whenever a text field or the text tool has focus.
 - Space = temporary Hand. Option with a paint tool = temporary Color Picker. Cmd = temporary Move. Arrows nudge 1 px; Shift-arrow nudges 10 px.
 - Selection modifiers are two-phase. Before the drag: Shift adds, Option subtracts, Shift-Option intersects. During the drag: Shift constrains and Option draws from the center.
-- Other keys: D default colors, X swap colors, Q quick mask, F cycles screen modes, Tab / Shift-Tab hide palettes, [ ] brush size, Shift-[ ] hardness, digits 1–0 set opacity, Return commits, Escape cancels.
+- Other keys: D default colors, X swap colors, Q quick mask, F cycles screen modes, Tab / Shift-Tab hide palettes, [ ] brush size, Shift-[ ] hardness, digits 1–0 set opacity. Return and Escape are tool-specific: Return applies a pending Crop or Transform and Escape cancels it; with the Text tool a plain Return inserts a newline, while Command-Return, Escape or a click outside finishes and applies the text; with the Path tool Return or Escape ends the current subpath.
 - Respect macOS reservations: Cmd-H, Cmd-M, Cmd-Space, Cmd-` and Cmd-Q keep their system meanings, so Curves and similar items get other shortcuts.
 - Trackpad: pinch zooms, two fingers pan, rotate rotates the view. Option-scroll zooms.
 

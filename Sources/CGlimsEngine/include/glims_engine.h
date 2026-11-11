@@ -1063,7 +1063,8 @@ typedef enum GlimsProfileIntent {
  * native color-transform flags and rendering-intent values never cross
  * the facade. A separate render slot means proofing is enabled. */
 typedef enum GlimsProofFlags {
-  GLIMS_PROOF_BLACK_POINT_COMPENSATION = 1u
+  GLIMS_PROOF_BLACK_POINT_COMPENSATION = 1u,
+  GLIMS_PROOF_GAMUT_CHECK = 2u
 } GlimsProofFlags;
 
 typedef struct GlimsProofSettings {
@@ -3222,7 +3223,7 @@ typedef struct GlimsEngineAPI {
    * be any valid ICC profile accepted by the native proofing constructor.
    * Both ICC blobs are nonempty, at most 16 MiB, copied synchronously, and
    * never retained. Settings must have the complete known prefix; both
-   * intents are GlimsProfileIntent and only the owned BPC flag is valid.
+   * intents are GlimsProfileIntent. Owned BPC and gamut-check flags are valid.
    * NULL/short settings, invalid intents/flags, ICC lengths and render
    * bounds are refused before writing caller output. Malformed ICC or an
    * unsupported native transform fails explicitly, without an unproofed
@@ -3232,8 +3233,9 @@ typedef struct GlimsEngineAPI {
    * This is a synchronous engine-thread read: no image/profile/selection,
    * history/dirty or saved simulation settings change, and write-readiness
    * is not required. Profiles/transforms are per-call, never cached. Use
-   * unchanged slot132 when proofing is disabled. No gamut, paper-white or
-   * black-simulation option is implied by this slot. */
+   * unchanged slot132 when proofing is disabled. Gamut warnings use the native
+   * transform alarm colors; independent paper-white and black-simulation
+   * controls are not provided by this slot. */
   GlimsStatus (*image_render_proofed) (GlimsEngine *engine, GlimsImageID image,
                                       double scale, GlimsRect area,
                                       const uint8_t *destination_icc, size_t destination_icc_length,

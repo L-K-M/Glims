@@ -64,9 +64,40 @@ extension EngineSmokeTest {
         }
         guard let gray = CGColorSpace(name: CGColorSpace.genericGrayGamma2_2),
               let grayICC = gray.copyICCData() as Data?,
-              let p3 = CGColorSpace(name: CGColorSpace.displayP3), let p3Space = NSColorSpace(cgColorSpace: p3) else {
+              let p3 = CGColorSpace(name: CGColorSpace.displayP3), let p3Space = NSColorSpace(cgColorSpace: p3),
+              let p3ICC = p3.copyICCData() as Data?,
+              let rgbICC = CGColorSpace(name: CGColorSpace.sRGB)?.copyICCData() as Data? else {
             return check(false, "the proof fixture has generated gray-gamma2.2 and P3 ICC profiles")
         }
+        // A wide source and smaller proof gamut independently discriminate
+        // the Swift flag bridge: dropping the new flag makes both renders equal.
+        let sourceProfileURL = work.appendingPathComponent("gamut-source-p3.icc")
+        try p3ICC.write(to: sourceProfileURL)
+        let samples: [UInt8] = [255, 0, 0, 255, 0, 255, 0, 200, 0, 0, 255, 128, 255, 255, 0, 64,
+                               255, 0, 255, 32, 0, 255, 255, 16, 255, 128, 0, 255, 10, 200, 90, 255]
+        let gamutImage = try session.newImage(pixels: ClipboardImage(width: 4, height: 2,
+            pixels: Data(samples), origin: .zero))
+        do {
+            defer { try? session.closeImage(gamutImage) }
+            try session.assignProfile(gamutImage, path: sourceProfileURL.path)
+            let info = try session.info(gamutImage), color = try session.colorInfo(gamutImage)
+            let undo = try session.undoInfo(gamutImage), source = try session.copyPixels(gamutImage, merged: false).pixels
+            let plainProof = try CanvasSoftProof(profileICC: rgbICC, profileName: "sRGB")
+            let warningProof = try CanvasSoftProof(profileICC: rgbICC, profileName: "sRGB", gamutWarnings: true)
+            let area = CGRect(x: 0, y: 0, width: 4, height: 2)
+            let plain = try session.render(gamutImage, scale: 1, area: area, destinationICC: rgbICC, proof: plainProof)
+            let warning = try session.render(gamutImage, scale: 1, area: area, destinationICC: rgbICC, proof: warningProof)
+            let plainBytes = bytes(plain), warningBytes = bytes(warning)
+            check(plainBytes?.count == samples.count && warningBytes?.count == samples.count && plainBytes != warningBytes,
+                  "the Swift gamut flag changes real wide-source proof pixels")
+            check(warningBytes.map { output in (0..<8).allSatisfy { abs(Int(output[$0 * 4 + 3]) - Int(samples[$0 * 4 + 3])) <= 1 } } == true,
+                  "gamut-warning pixels retain every sample's own alpha")
+            check((try? session.info(gamutImage)) == info && (try? session.colorInfo(gamutImage)) == color
+                    && (try? session.undoInfo(gamutImage)) == undo
+                    && (try? session.copyPixels(gamutImage, merged: false).pixels) == source,
+                  "the Swift gamut bridge preserves native pixels, working profile and Undo")
+        }
+        try FileManager.default.removeItem(at: sourceProfileURL)
         let profileURL = work.appendingPathComponent("generated-proof-gray-gamma22.icc")
         let invalidURL = work.appendingPathComponent("invalid-proof.icc")
         let oversizedURL = work.appendingPathComponent("oversized-proof.icc")
@@ -125,18 +156,19 @@ extension EngineSmokeTest {
         check(first.window?.sheetParent === a.window && first.imageDocument === document && first.initialProof == nil
                 && first.proofIntentPopup.titleOfSelectedItem == EngineSession.ProfileIntent.relativeColorimetric.title
                 && first.displayIntentPopup.titleOfSelectedItem == EngineSession.ProfileIntent.relativeColorimetric.title
-                && first.blackPointCompensationCheck.state == .off,
-              "the owned form starts with relative intents and black point compensation off")
+                && first.blackPointCompensationCheck.state == .off && first.gamutWarningsCheck.state == .off,
+              "the owned form starts with relative intents, black point compensation and gamut warnings off")
         first.pathField.stringValue = profileURL.path
         choose(first.proofIntentPopup, .perceptual)
         first.blackPointCompensationCheck.state = .on
+        first.gamutWarningsCheck.state = .on
         b.window?.makeKeyAndOrderFront(nil)
         apply(first, document: document)
         guard let proof = a.canvas.softProof, first.isInvalidated else {
             return check(false, "a generated gray proof passes actual asynchronous native preflight: \(first.lastError ?? "no result")")
         }
         check(proof.profileICC == grayICC && proof.proofIntent == .perceptual
-                && proof.displayIntent == .relativeColorimetric && proof.blackPointCompensation
+                && proof.displayIntent == .relativeColorimetric && proof.blackPointCompensation && proof.gamutWarnings
                 && b.canvas.softProof == nil && a.softProofController == nil,
               "Apply changes only its captured window while another window is front")
         check(nativeStateIsIntact(), "proof setup leaves native pixels, working profile, dirty state and history unchanged")
@@ -163,6 +195,7 @@ extension EngineSmokeTest {
         first.pathField.stringValue = invalidURL.path
         choose(first.proofIntentPopup, .saturation)
         first.blackPointCompensationCheck.state = .off
+        first.gamutWarningsCheck.state = .off
         check(a.canvas.softProof == proof, "changing closed form controls cannot mutate the captured applied proof value")
         if let action = toggle.action { NSApp.sendAction(action, to: a, from: toggle) }
         _ = a.validateMenuItem(toggle)
@@ -180,6 +213,7 @@ extension EngineSmokeTest {
         choose(reuse.proofIntentPopup, .absoluteColorimetric)
         choose(reuse.displayIntentPopup, .perceptual)
         reuse.blackPointCompensationCheck.state = .off
+        reuse.gamutWarningsCheck.state = .on
         wait { a.canvas.renderedTileCount > 0 && !a.canvas.hasPendingRender }
         let enteredOld = ProofSmokeFlag(), enteredNew = ProofSmokeFlag()
         a.canvas.enqueueRenderBarrier { DispatchQueue.main.async { enteredOld.mark() }; oldRenderGate.wait() }
@@ -193,7 +227,7 @@ extension EngineSmokeTest {
             return check(false, "pathless options validate against the retained profile: \(reuse.lastError ?? "no result")")
         }
         check(updated.profileICC == grayICC && updated.proofIntent == .absoluteColorimetric
-                && updated.displayIntent == .perceptual && !updated.blackPointCompensation
+                && updated.displayIntent == .perceptual && !updated.blackPointCompensation && updated.gamutWarnings
                 && a.canvas.renderedTileCount == 0,
               "new options retain exact ICC bytes and invalidate the existing canvas cache")
         oldRenderGate.signal()
