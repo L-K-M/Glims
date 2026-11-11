@@ -2501,6 +2501,7 @@ final class ImageDocument {
     /// document is still alive; failures are also reported through
     /// `onError`.
     func restoreLayerSource(_ layer: Int32,
+                            expectedStateVersion: Int? = nil,
                             completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
         guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else {
@@ -2517,6 +2518,15 @@ final class ImageDocument {
                 LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Restore Layer Source")!)))
         }
         endPendingUserEdits()
+        // Text consent describes a settled captured state. Ending an edit
+        // must not silently change the pixels the user agreed to discard.
+        if let version = expectedStateVersion,
+           stateVersion != version || pendingWork != 0 || isClosing
+            || !acceptsEdits || targetCommandIsPending || strokeIsActive
+            || isMaskTargetActive || isChannelTargetActive {
+            onError?(DocumentError.targetChanged.localizedDescription)
+            return completion(.failure(DocumentError.targetChanged))
+        }
         enqueueExclusive(label: "Restoring the layer's source", rejected: {
             self.onError?(DocumentError.busy.localizedDescription)
             completion(.failure(DocumentError.busy))
