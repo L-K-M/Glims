@@ -53,7 +53,7 @@ public enum GlimsApplication {
                ["metadata-rating-edit", "layer-rasterize-batch", "layer-restore-batch",
                 "tablet-eraser-proximity", "recorder-layer-properties", "text-floating-create",
                 "displace-source", "oilify-source", "recorder-canvas-stroke-ui", "recorder-file-ui", "recorder-file-picker-ui",
-                "recorder-open-picker-ui", "recorder-consent-ui",
+                "recorder-open-picker-ui", "recorder-consent-ui", "recorder-revert-ui", "recorder-quit-ui",
                 "move-pick", "move-pick-range", "move-pick-spring",
                 "move-pick-busy-restore"].contains(smokeCase) {
                 return EngineSmokeTestHost.run()
