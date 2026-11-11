@@ -113,9 +113,31 @@ dynamics_supported (GimpDynamics *dynamics)
           if (!supported || (is_size && ++size_outputs > 1)) return FALSE;
         }
       else if ((spec->flags & GIMP_CONFIG_PARAM_SERIALIZE) &&
-               !(spec->flags & GIMP_CONFIG_PARAM_IGNORE) &&
-               (strcmp (spec->name, "name") || spec->value_type != G_TYPE_STRING))
-        return FALSE;
+               !(spec->flags & GIMP_CONFIG_PARAM_IGNORE))
+        {
+          /* GimpViewable serializes cosmetic icon fields too. Bound the
+           * ordinary names and admit only the stock, absent pixbuf, so
+           * serialization cannot allocate an arbitrary embedded image. */
+          if ((!strcmp (spec->name, "name") || !strcmp (spec->name, "icon-name")) &&
+              spec->value_type == G_TYPE_STRING && (spec->flags & G_PARAM_READABLE))
+            {
+              g_autofree gchar *value = NULL;
+              g_object_get (dynamics, spec->name, &value, NULL);
+              if (value && strnlen (value, DYNAMICS_MAX_NAME_BYTES + 1) > DYNAMICS_MAX_NAME_BYTES)
+                return FALSE;
+            }
+          else if (!strcmp (spec->name, "icon-pixbuf") &&
+                   g_type_is_a (spec->value_type, G_TYPE_OBJECT) &&
+                   (spec->flags & G_PARAM_READABLE))
+            {
+              GObject *pixbuf = NULL;
+              g_object_get (dynamics, spec->name, &pixbuf, NULL);
+              gboolean absent = pixbuf == NULL;
+              g_clear_object (&pixbuf);
+              if (!absent) return FALSE;
+            }
+          else return FALSE;
+        }
     }
   return size_outputs == 1;
 }
