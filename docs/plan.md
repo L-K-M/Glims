@@ -4251,6 +4251,15 @@ Undo/Redo output and editable XCF reopening. The Swift suite passes 1,250
 tests. This closes the tonal-picker gap in the broader editor brief; it does
 not establish complete Photoshop 4 parity or final application acceptance.
 
+### Readable precision labels (2026-11-11 candidate)
+
+Document titles, the status information selector and Image Information use
+the same readable component and transfer-curve labels, such as
+"16-bit float · Linear", instead of internal format names. Unknown typed
+state remains "Unknown"; profiles and underlying color behavior are unchanged.
+All 1,266 unit tests and the existing native conversion/form/Undo/reopen
+workflow pass. Independent SWE-2-Flash review found no important issue.
+
 ### Recorded affine layer transforms (2026-11-11 candidate)
 
 The Recorder captures committed layer transforms with an explicit layer
@@ -4284,3 +4293,30 @@ focused menu/adjustment-layer workflows, and 3,322/3,322/3,296/3,322 full
 checks on 3.2.8/3.2.0/3.0.8/master. Independent source review found no
 important issue. The owned operation must be present to re-edit this XCF
 effect; upstream applications do not provide the `glims:` operation.
+
+### Recorded new Levels adjustments (2026-11-11 candidate)
+
+Apply now records a newly created Levels effect on its original explicit
+layer, with the final native settings for all five channels, the transfer
+curve and both clamp flags. Saved format version 5 retains versions 1
+through 4. Preview updates, Cancel and pre-admission refusals add no row;
+an admitted Apply still settles after Stop. Native failures retain the
+preview for retry. Applying Levels to a mask/channel or editing an existing
+effect remains usable but produces an explicit unsupported recording row.
+
+The focused native workflow passes 33 checks on each of GIMP 3.2.8, 3.2.0,
+3.0.8 and master. It verifies queued final settings, selection changes after
+preview begins, Stop with a pending Apply, actual save/load and explicit
+rebound targets, exact native-reference pixels and Undo/Redo, grayscale
+replay, indexed refusal, fresh pixel locks and mask/channel/Quick Mask roles,
+failed Apply retry, unsupported existing-effect/mask/channel capture, and
+close cleanup. The full Swift suite passes 1,291 tests, including 13 focused
+Levels format/binding tests; the valid v5 fixture failed against the prior
+codec before implementation. Independent source review found no important
+issues. The timed-out helper review supplied no approval and was superseded
+by that completed independent review. No engine or facade code changed.
+
+The existing Recorder epoch tests cover stale completions after a new
+recording; this native case does not repeat them. Other adjustment families,
+existing-effect identity replay and text recording remain open. These
+checks establish this Levels slice, not complete action/batch coverage.
