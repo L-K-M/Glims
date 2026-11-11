@@ -637,6 +637,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (oilify source)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "lens-blur-source" {
+                try exerciseLensBlurSource(session, documents: documents)
+                print(failures == 0 ? "PASSED (Lens Blur source UI)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "variable-blur-source" {
                 try exerciseVariableBlurSource(session, documents: documents)
                 print(failures == 0 ? "PASSED (variable blur source)" : "FAILED: \(failures) failure(s)")
@@ -3605,6 +3610,141 @@ enum EngineSmokeTest {
         survivors.forEach { $0.closeDiscardingChanges() }
         wait { app.documents.isEmpty }
         check(app.documents.isEmpty, "all documents close cleanly after the revert checks")
+    }
+
+    private static func exerciseLensBlurSource(_ session: EngineSession, documents: DocumentList) throws {
+        var owners: [DocumentWindowController] = [], images: [Int32] = [], forms: [NSWindow] = []; var checks = 0
+        func expect(_ value: Bool, _ text: String) { checks += 1; check(value, "Lens UI: \(text)") }
+        func wait(_ ready: () -> Bool) -> Bool {
+            let end = Date().addingTimeInterval(15)
+            while !ready() && Date() < end { EngineSmokeTestHost.pumpEvents(for: 0.01) }
+            return ready()
+        }
+        func views<T: NSView>(_ root: NSView?, _ type: T.Type) -> [T] {
+            guard let root else { return [] }
+            return ((root as? T).map { [$0] } ?? []) + root.subviews.flatMap { views($0, type) }
+        }
+        func button(_ window: NSWindow?, _ title: String) -> NSButton? {
+            views(window?.contentView, NSButton.self).first { $0.title == title || $0.accessibilityLabel() == title }
+        }
+        func items(_ menu: NSMenu) -> [NSMenuItem] { menu.items + menu.items.flatMap { $0.submenu.map(items) ?? [] } }
+        func pixels(_ image: Int32) throws -> Data { try session.copyPixels(image, merged: true).pixels }
+        func gone(_ image: Int32) -> Bool { do { _ = try session.info(image); return false } catch let e as EngineSession.EngineError { return e.isNotFound } catch { return false } }
+        func near(_ a: Data, _ b: Data) -> Bool { a.count == b.count && zip(a, b).allSatisfy { pair in abs(Int(pair.0) - Int(pair.1)) <= 1 } }
+        defer {
+            for owner in owners { owner.previewPanel?.cancel(); owner.closeDiscardingChanges() }
+            for image in images where !owners.contains(where: { $0.imageDocument.image == image }) { try? session.closeImage(image) }
+            expect(wait { images.allSatisfy(gone) && owners.allSatisfy { $0.imageDocument.pendingWork == 0 } }, "both owned images and counted work drain")
+            expect(forms.allSatisfy { !$0.isVisible } && owners.allSatisfy { $0.window?.isVisible != true && $0.window?.attachedSheet == nil }, "all owned choosers, previews and windows close without sheets")
+            documents.items.removeAll { doc in owners.contains { $0.imageDocument === doc } }
+            print("     lens-blur-source checks: \(checks)")
+        }
+        var bytes: [UInt8] = []
+        for y in 0..<32 { for x in 0..<32 {
+            let red: Int = (18 + x * 7 + (y & 3) * 13) % 256
+            let green: Int = (41 + y * 5 + (x & 7) * 9) % 256
+            let blue: Int = (73 + x * 3 + y * 11) % 256
+            let alpha: Int = 60 + (x * 11 + y * 17) % 176
+            bytes.append(UInt8(red))
+            bytes.append(UInt8(green))
+            bytes.append(UInt8(blue))
+            bytes.append(UInt8(alpha))
+        } }
+        let imageA = try session.newImage(pixels: .init(width: 32, height: 32, pixels: Data(bytes), origin: .zero)); images.append(imageA)
+        guard let target = try session.layers(imageA).first?.id else { return expect(false, "the texture owns a native target") }
+        try session.changeLayer(target, image: imageA, .init(name: "Lens target"))
+        var ramp: Int32 = 0
+        for (name, kind) in [("Black blur map", 0), ("White blur map", 1), ("Ramp blur map", 2)] {
+            var map: [UInt8] = []
+            for _ in 0..<32 { for x in 0..<32 { let v = UInt8(kind == 0 ? 0 : kind == 1 ? 255 : x * 255 / 31); map.append(contentsOf: [v, v, v, 255]) } }
+            let source = try session.pastePixels(imageA, pixels: .init(width: 32, height: 32, pixels: Data(map), origin: .zero), at: .zero)
+            try session.changeLayer(source, image: imageA, .init(name: name, isVisible: false)); if kind == 2 { ramp = source }
+        }
+        try session.selectItems([target], kind: .layer, image: imageA)
+        let imageB = try session.newImage(width: 32, height: 32); images.append(imageB)
+        for (image, name) in [(imageA, "Lens A"), (imageB, "Lens B")] {
+            let doc = try ImageDocument(session: session, image: image, name: name); documents.items.append(doc)
+            let owner = DocumentWindowController(document: doc); owners.append(owner); owner.showWindow(nil)
+        }
+        let a = owners[0], b = owners[1], doc = a.imageDocument
+        guard wait({ owners.allSatisfy { $0.imageDocument.pendingWork == 0 } }) else { return expect(false, "initial document reads settle") }
+        let original = try pixels(imageA), history = try session.undoInfo(imageA), beforeB = try pixels(imageB), historyB = try session.undoInfo(imageB)
+        let operations = try session.filterOperations(); NativeFilterCatalog.shared.install(operations)
+        guard let operation = operations.first(where: { $0.name == "gegl:lens-blur" }), let menu = NSApp.mainMenu else { return expect(false, "installed native Lens catalog and main menu exist") }
+        NativeFilterMenus.install(operations, in: menu)
+        let candidate = items(menu).first { ($0.representedObject as? NativeFilterCommand)?.operation.name == operation.name }
+        // AppKit enables responder-chain menu actions for the actual key
+        // document. Establish A's real focus before asking the menu to update.
+        NSApp.activate(ignoringOtherApps: true)
+        a.window?.makeMain(); a.window?.makeKeyAndOrderFront(nil)
+        guard wait({ NSApp.isActive && NSApp.mainWindow === a.window && NSApp.keyWindow === a.window }) else {
+            return expect(false, "A owns actual main/key focus before menu validation")
+        }
+        candidate?.menu?.update()
+        print("OBS Lens menu present=\(candidate != nil) title=\(candidate?.title ?? "nil") enabled=\(candidate?.isEnabled ?? false) action=\(String(describing: candidate?.action)) validates=\(candidate.map(a.validateMenuItem) ?? false) expectedTarget=\(target) activeLayer=\(String(describing: doc.activeLayer)) activeDrawable=\(String(describing: doc.activeDrawable)) selected=\(doc.selectedLayerIDs) refusal=\(doc.sourceFilterRefusal(target: target) ?? "nil")")
+        let enabled = candidate.map { a.validateMenuItem($0) && $0.isEnabled && $0.action != nil && $0.title == "\(operation.title)…" } ?? false
+        expect(enabled, "the installed Lens Blur menu admits its source chooser")
+        guard enabled, let item = candidate, let action = item.action else { return }
+        func settle() -> Bool { wait { doc.pendingWork == 0 && !EngineActivity.shared.isBusy } }
+        func front(_ owner: DocumentWindowController) -> Bool {
+            NSApp.activate(ignoringOtherApps: true); owner.window?.makeMain(); owner.window?.makeKeyAndOrderFront(nil)
+            return wait { NSApp.isActive && NSApp.mainWindow === owner.window && NSApp.keyWindow === owner.window }
+        }
+        func chooser() -> NSWindow? { NSApp.windows.first { $0.isVisible && $0.parent === a.window && $0.title == "\(operation.title) Source" } }
+        func openChooser() -> NSWindow? {
+            _ = NSApp.sendAction(action, to: a, from: item)
+            guard wait({ chooser() != nil }), let window = chooser() else { return nil }
+            forms.append(window); return window
+        }
+        func select(_ popup: NSPopUpButton, _ name: String) -> Bool {
+            guard let choice = popup.item(withTitle: name), let action = popup.action else { return false }
+            popup.select(choice); return NSApp.sendAction(action, to: popup.target, from: popup)
+        }
+        guard let first = openChooser(), let popup = views(first.contentView, NSPopUpButton.self).first else { return expect(false, "Lens source chooser opens") }
+        expect(views(first.contentView, NSPopUpButton.self).count == 1 && popup.accessibilityLabel() == "Blur mask source" && popup.selectedItem?.title == "None" && ["Black blur map", "White blur map", "Ramp blur map"].allSatisfy(popup.itemTitles.contains) && button(first, "Preview Lens Blur")?.isEnabled == true, "one accessible blur mask picker starts at explicit None rather than the preferred target")
+        button(first, "Cancel filter source")?.performClick(nil); _ = settle()
+        expect(try !first.isVisible && !doc.filterPreviewIsOpen && pixels(imageA) == original && session.undoInfo(imageA) == history, "source Cancel preserves A pixels and history")
+        let properties = try session.filterOperationProperties(operation.name)
+        guard let radius = properties.first(where: { $0.name == "radius" }) else { return expect(false, "native Radius descriptor exists") }
+        func preview(_ name: String) -> NativeFilterPanel? {
+            guard let window = openChooser(), let popup = views(window.contentView, NSPopUpButton.self).first,
+                  select(popup, name), front(b), let send = button(window, "Preview Lens Blur") else { return nil }
+            send.performClick(nil)
+            guard wait({ a.previewPanel != nil && doc.pendingWork == 0 && !window.isVisible }), let panel = a.previewPanel as? NativeFilterPanel,
+                  let field = views(panel.window?.contentView, NSTextField.self).first(where: { $0.isEditable && ($0.accessibilityLabel() ?? "").hasPrefix(radius.label) }), let change = field.action else { return nil }
+            if let window = panel.window { forms.append(window) }
+            field.stringValue = "2"; guard NSApp.sendAction(change, to: field.target, from: field), settle() else { return nil }; return panel
+        }
+        guard let none = preview("None"), let filter = none.filter else { return expect(false, "None Preview admits the real Radius form while B is front") }
+        expect(none.imageDocument === doc && b.previewPanel == nil && doc.filterPreviewIsOpen && chooser() == nil, "Preview remains captured by A after B becomes actual main/key")
+        expect(try session.filterProperty(filter, "radius") == .number(2) && button(none.window, "Apply to Pixels") != nil, "the real Radius control sends two and offers pixel Apply")
+        let nonePixels = try pixels(imageA)
+        expect(try nonePixels != original && session.undoInfo(imageA) == history, "None preview really blurs the asymmetric partial-alpha texture without Undo")
+        button(none.window, "Apply to Pixels")?.performClick(nil); _ = wait { a.previewPanel == nil && doc.pendingWork == 0 }
+        let applied = try pixels(imageA)
+        expect(try applied == nonePixels && session.undoInfo(imageA).undoCount == history.undoCount + 1 && session.effects(on: target, image: imageA).isEmpty, "pixel Apply commits the None result with one Undo and no retained effect")
+        doc.undo(); _ = settle(); expect(try pixels(imageA) == original, "one Undo restores exact original pixels")
+        doc.redo(); _ = settle(); expect(try pixels(imageA) == applied, "one Redo restores exact applied pixels")
+        doc.undo(); _ = settle()
+        for name in ["Black blur map", "Ramp blur map"] {
+            let before = try session.undoInfo(imageA)
+            guard let panel = preview(name) else { return expect(false, "the explicit \(name) opens a captured preview") }
+            let frame = try pixels(imageA)
+            expect(try (name == "Black blur map" ? near(frame, original) && frame != nonePixels : frame != original && frame != nonePixels) && session.undoInfo(imageA) == before, "\(name) has a distinct measured mask effect without adding Undo")
+            button(panel.window, "Cancel")?.performClick(nil); _ = wait { a.previewPanel == nil && doc.pendingWork == 0 }
+            expect(try pixels(imageA) == original && session.undoInfo(imageA) == before, "\(name) Cancel preserves exact stored pixels and history")
+        }
+        expect(try pixels(imageB) == beforeB && session.undoInfo(imageB) == historyB && session.selectedLayers(imageA) == [target], "all A previews and Undo/Redo preserve B and the captured A target")
+        guard let stale = openChooser(), let stalePopup = views(stale.contentView, NSPopUpButton.self).first, select(stalePopup, "Ramp blur map"), let stalePreview = button(stale, "Preview Lens Blur") else { return expect(false, "stale-source chooser captures the explicit ramp") }
+        _ = try session.layerCommand(.delete, image: imageA, layer: ramp)
+        _ = wait { !doc.layers.contains { $0.id == ramp } }
+        expect(stalePopup.selectedItem?.title == "Ramp blur map" && stalePopup.selectedItem?.isEnabled == false && !stalePreview.isEnabled, "automatic refresh preserves a removed map as disabled instead of substituting None")
+        let afterDelete = try session.undoInfo(imageA)
+        if let send = stalePreview.action { _ = NSApp.sendAction(send, to: stalePreview.target, from: stalePreview) }; _ = settle()
+        expect(try !doc.filterPreviewIsOpen && a.previewPanel == nil && session.undoInfo(imageA) == afterDelete, "stale Preview refuses without native history mutation")
+        a.closeDiscardingChanges(); _ = wait { doc.isClosing && !stale.isVisible && gone(imageA) && doc.pendingWork == 0 }
+        if let send = stalePreview.action { _ = NSApp.sendAction(send, to: stalePreview.target, from: stalePreview) }
+        expect(doc.isClosing && !stale.isVisible && a.previewPanel == nil && gone(imageA), "close invalidates the captured chooser and late Preview cannot recreate native work")
     }
 
     private static func exerciseClipboard(_ session: EngineSession, documents: DocumentList) throws {

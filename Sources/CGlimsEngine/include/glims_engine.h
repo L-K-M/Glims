@@ -3092,9 +3092,17 @@ typedef struct GlimsEngineAPI {
    * snapshot of a same-image drawable's pixels and committed effects. Supports
    * gegl:bump-map (height map), gegl:variable-blur (blur mask),
    * gegl:gaussian-blur-selective (contrast reference), and
-   * gegl:negative-darkroom (dodge/burn map) through their single aux
-   * pad; all other operations are UNSUPPORTED. target/source are
-   * explicit positive IDs; target must be a pixel-behaving layer, including a previously
+   * gegl:negative-darkroom (dodge/burn map), and gegl:lens-blur (radius map)
+   * through their single aux pad; all other operations are UNSUPPORTED.
+   * Lens Blur alone accepts source0 as explicit None (uniform blur). Its map
+   * must convert to finite unit-range luminance in both linear and perceptual
+   * views in the source's working space, allowing eight upper float ULPs for
+   * conversion roundoff; pixels are never clamped. Both mapped and
+   * None sessions validate native geometry, radius arithmetic and a bounded
+   * aggregate scratch allocation before attachment and every changed setting.
+   * Unsafe settings are refused before mutation. Imported Lens effects are
+   * not admitted for parameter editing. All other operations require a
+   * positive source ID. target must be a pixel-behaving layer, including a previously
    * rasterized source. Groups and editable sources are not merge targets.
    * Indexed images are UNSUPPORTED. Existing work/floating selections, disabled
    * or frozen Undo and an open native Undo group are BUSY. Merge rechecks Undo

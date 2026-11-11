@@ -4086,3 +4086,20 @@ form reproduced four acknowledgement failures. All four engines now pass
 1,216 unit tests passing. Native and Swift source reviews found no
 important issue. See [`gimp-filter-colors.md`](gimp-filter-colors.md) for
 source revisions, Offset's native gate differences and release limits.
+
+### Lens Blur optional mask (2026-11-11)
+
+Lens Blur now starts with explicit None for uniform blur or captures a chosen
+same-image Blur mask. Its modeless property form applies to the original
+target as one pixel Undo, even while another document is main/key. Native
+admission bounds real luminance conversions, tile/storage coordinates,
+radius arithmetic and aggregate worker scratch before copying or mutation.
+Both property setter paths and commit retain the bounded contract; imported
+Lens effects remain outside parameter editing.
+
+Combined source `5c0ef00` passes 1,220 unit tests, 648 focused Lens native
+checks, 76 actual-window checks and 7,454 general native checks across the
+four engines. Independent native and Swift production reviews found no
+important issue. See [`lens-blur-source.md`](lens-blur-source.md) for the
+observed baselines, captured-map lifetime and exact evidence limits. Final
+standalone packaging and whole-editor completion remain separate gates.

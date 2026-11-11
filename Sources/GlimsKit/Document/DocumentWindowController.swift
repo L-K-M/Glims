@@ -1112,7 +1112,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         filterSourceRequest += 1
         let request = filterSourceRequest
         let targetName = imageDocument.layers.first { $0.id == target }?.name ?? "Layer"
-        let chooser = FilterSourceChooserController(targetName: targetName, preferredSource: target, operation: sourceOperation, rows: { [weak self] in
+        let rows: () -> [FilterSourceChoice] = { [weak self] in
             guard let self else { return [] }
             var rows: [FilterSourceChoice] = []
             for layer in self.imageDocument.layers {
@@ -1123,9 +1123,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             }
             rows += self.imageDocument.channels.map { .init(id: $0.id, name: "\($0.name) — Channel") }
             return rows
-        }, refusal: { [weak self] in
+        }
+        let refusal: () -> String? = { [weak self] in
             self?.imageDocument.sourceFilterRefusal(target: target) ?? (self == nil ? "The document is closed." : nil)
-        }, hostWindow: window, preview: { [weak self] source, completion in
+        }
+        let preview: (Int32?, @escaping (Result<Void, Error>) -> Void) -> Void = { [weak self] source, completion in
             guard let self, self.filterSourceRequest == request, !self.closeStarted, !self.previewBusy,
                   self.imageDocument.sourceFilterRefusal(target: target) == nil else {
                 completion(.failure(ImageDocument.DocumentError.busy)); return
@@ -1151,7 +1153,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                     }
                 }
             }
-        })
+        }
+        let chooser: FilterSourceChooserController
+        if sourceOperation == .lensBlur {
+            chooser = FilterSourceChooserController(lensBlurTargetName: targetName, rows: rows,
+                refusal: refusal, hostWindow: window, previewLensBlur: preview)
+        } else {
+            chooser = FilterSourceChooserController(targetName: targetName, preferredSource: target,
+                operation: sourceOperation, rows: rows, refusal: refusal, hostWindow: window,
+                preview: { source, reply in preview(source, reply) })
+        }
         chooser.onClosed = { [weak self] in
             guard let self, self.filterSourceRequest == request else { return }
             self.filterSourceRequest += 1; self.filterSourceChooser = nil

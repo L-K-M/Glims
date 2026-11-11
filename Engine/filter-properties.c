@@ -20,6 +20,7 @@
 #include "engine-private.h"
 #include "levels-config.h"
 #include "curves-config.h"
+#include "filter-input.h"
 
 #include <math.h>
 #include <string.h>
@@ -803,6 +804,12 @@ filter_set_value (GlimsFilter          *session,
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
 
+  GlimsStatus status = glims_filter_lens_validate (session, pspec->name, &typed);
+  if (status != GLIMS_STATUS_OK) {
+    g_value_unset (&typed);
+    g_clear_object (&color);
+    return status;
+  }
   gegl_node_set_property (session->operation, pspec->name, &typed);
   g_value_unset (&typed);
   g_clear_object (&color);

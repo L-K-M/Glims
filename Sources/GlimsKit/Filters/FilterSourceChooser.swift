@@ -8,6 +8,7 @@ enum SourceFilterOperation: String, Sendable {
     case negativeDarkroom = "gegl:negative-darkroom"
     case displace = "gegl:displace"
     case oilify = "gegl:oilify"
+    case lensBlur = "gegl:lens-blur"
 
     var title: String {
         switch self {
@@ -17,6 +18,7 @@ enum SourceFilterOperation: String, Sendable {
         case .negativeDarkroom: return "Negative Darkroom"
         case .displace: return "Displace"
         case .oilify: return "Oilify"
+        case .lensBlur: return "Lens Blur"
         }
     }
 
@@ -28,6 +30,7 @@ enum SourceFilterOperation: String, Sendable {
         case .negativeDarkroom: return "Negative darkroom"
         case .displace: return "Displace"
         case .oilify: return "Oilify"
+        case .lensBlur: return "Lens blur"
         }
     }
 
@@ -41,6 +44,9 @@ enum SourceFilterOperation: String, Sendable {
         if self == .oilify {
             return "Preview uses snapshots of the optional maps. Apply changes the target pixels."
         }
+        if self == .lensBlur {
+            return "None applies uniform blur. A mask varies the radius. Apply changes the target pixels; Undo restores them."
+        }
         return "Preview uses a snapshot of this source. Apply changes the target pixels; Undo restores them."
     }
 
@@ -52,6 +58,7 @@ enum SourceFilterOperation: String, Sendable {
         case .negativeDarkroom: return "Dodge/burn map"
         case .displace: return "Horizontal / radial map"
         case .oilify: return "Radius map"
+        case .lensBlur: return "Blur mask"
         }
     }
 
@@ -99,12 +106,13 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
     private let refusal: () -> String?
     private enum PreviewHandler {
         case single((Int32, @escaping (Result<Void, Error>) -> Void) -> Void)
+        case singleOptional((Int32?, @escaping (Result<Void, Error>) -> Void) -> Void)
         case displace((Int32, Int32, @escaping (Result<Void, Error>) -> Void) -> Void)
         case oilify((Int32?, Int32?, @escaping (Result<Void, Error>) -> Void) -> Void)
     }
     private let previewHandler: PreviewHandler
     private var hasSecondSource: Bool { operation.secondSourceLabel != nil }
-    private var mapsAreOptional: Bool { operation == .oilify }
+    private var mapsAreOptional: Bool { operation == .oilify || operation == .lensBlur }
 
     private let sourcePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let secondSourcePopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -140,6 +148,13 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
                      preview: @escaping (Int32, @escaping (Result<Void, Error>) -> Void) -> Void) {
         self.init(targetName: targetName, preferredSource: preferredSource, operation: operation,
                   rows: rows, refusal: refusal, hostWindow: hostWindow, handler: .single(preview))
+    }
+
+    convenience init(lensBlurTargetName: String, rows: @escaping () -> [FilterSourceChoice],
+                     refusal: @escaping () -> String?, hostWindow: NSWindow?,
+                     previewLensBlur: @escaping (Int32?, @escaping (Result<Void, Error>) -> Void) -> Void) {
+        self.init(targetName: lensBlurTargetName, preferredSource: 0, operation: .lensBlur,
+                  rows: rows, refusal: refusal, hostWindow: hostWindow, handler: .singleOptional(previewLensBlur))
     }
 
     /// Displace requires two independently chosen IDs. Neither role inherits a
@@ -251,7 +266,7 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
     // MARK: Lifecycle
 
     /// Presents the panel as a nonmodal child of the host window (never a
-    /// sheet). Only single-source filters initially choose the preferred
+    /// sheet). Only mandatory single-source filters initially choose the preferred
     /// source or the first offered row.
     func show() {
         guard !isInvalidated else { return }
@@ -273,7 +288,7 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
         currentRows = fresh
         let isInitialPopulation = !hasPopulated
         hasPopulated = true
-        if isInitialPopulation && !hasSecondSource {
+        if isInitialPopulation && !hasSecondSource && !mapsAreOptional {
             if fresh.contains(where: { $0.id == preferredSource }) {
                 selectionID = preferredSource
             } else {
@@ -386,6 +401,8 @@ final class FilterSourceChooserController: NSObject, NSWindowDelegate {
         case .single(let action):
             guard let id = selectionID else { return }
             send = { reply in action(id, reply) }
+        case .singleOptional(let action):
+            send = { [id = selectionID] reply in action(id, reply) }
         case .displace(let action):
             guard let id = selectionID, let second = secondSelectionID else { return }
             send = { reply in action(id, second, reply) }
