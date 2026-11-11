@@ -584,6 +584,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         metadataSheet?.documentStateDidChange()
         adjustmentSheet?.documentStateDidChange()
 
+        // The transform options' numeric rows track the selected layer's
+        // preview through this same state hook, so a target, bounds or
+        // selection change refreshes unfocused fields and readiness.
+        canvas.tools.transformDocumentStateDidChange()
     }
 
     // MARK: Menu commands

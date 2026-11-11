@@ -188,6 +188,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (recorder layer properties)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "numeric-transform" {
+                try exerciseNumericTransform(session, documents: documents)
+                print(failures == 0 ? "PASSED (numeric transform)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-install" {
                 try exerciseRecorderInstall(session, documents: documents)
                 print(failures == 0 ? "PASSED (recorder install)" : "FAILED: \(failures) failure(s)")
@@ -4117,7 +4122,7 @@ enum EngineSmokeTest {
         check(ToolsPaletteController().view.subviews.contains { ($0 as? ClassicToolGrid)?.slots.count == ToolID.paletteSlots.count },
               "the Tools palette shows \(ToolID.paletteSlots.count) tool cells")
         state.select(.pencil)
-        check(ToolOptionsPaletteController().view.subviews.count >= 4, "Tool Options shows the pencil's settings")
+        check(((ToolOptionsPaletteController().view as? NSScrollView)?.documentView?.subviews.count ?? 0) >= 4, "Tool Options shows the pencil's settings")
 
         state.foreground = .black
         document.beginStroke(at: .init(x: 20, y: 50, pressure: 1), brush: state.brush(for: .pencil))
@@ -6759,11 +6764,12 @@ enum EngineSmokeTest {
         state.select(.path)
         state.foreground = .red
         let options = ToolOptionsPaletteController()
-        let opacity = options.view.subviews.compactMap { $0 as? ClassicValueSlider }.last
+        let optionBody = (options.view as? NSScrollView)?.documentView ?? options.view
+        let opacity = optionBody.subviews.compactMap { $0 as? ClassicValueSlider }.last
         let field = opacity.flatMap { descendant(of: $0, as: NSTextField.self, matching: { $0.isEditable }) }
         field?.stringValue = "50"
         if let field, let action = field.action { NSApp.sendAction(action, to: field.target, from: field) }
-        let antialias = options.view.subviews.compactMap { $0 as? NSButton }.first { $0.title == "Antialias fill" }
+        let antialias = optionBody.subviews.compactMap { $0 as? NSButton }.first { $0.title == "Antialias fill" }
         if antialias?.state == .on { antialias?.performClick(nil) }
         check(state.pathFillOpacity == 0.5 && !state.pathFillAntialias,
               "the Path options commit fill opacity and antialias choices")
