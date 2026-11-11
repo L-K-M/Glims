@@ -4061,3 +4061,15 @@ Latest-Main integration `bf37550` passes16 fresh native-backed checks across
 four engines and all1,216 unit tests, with independent source review. See
 [catalog completeness](filter-catalog-completeness.md). Hosted CI and the
 standalone application remain final integration gates.
+
+### Revert load fixture ordering (2026-11-11)
+
+The broad bundle's three Revert-close failures were reproduced as an
+expired test delay, before Recorder consent and the real load. The test
+now holds the real input queue after consent, requests Close while held,
+and explicitly releases it with a permanent timeout fence. Production is
+unchanged. The original assertions plus two ordering checks pass23 on
+each engine; the ordinary full bundled debug workflow passes3,233 with
+build trees denied. Source review found no important issue. See
+[`revert-load-fixture.md`](revert-load-fixture.md) for the exact sources,
+execution scope and final-release limits.
