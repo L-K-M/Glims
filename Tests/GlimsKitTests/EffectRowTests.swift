@@ -223,4 +223,62 @@ final class EffectRowTests: XCTestCase {
         XCTAssertEqual(commit.items.first?.drawable, 7)
         XCTAssertEqual(commit.items.first?.effect.id, 21)
     }
+
+    // MARK: Badge accessibility
+
+    /// The row's semantic badge, found by its user label ("Filter"
+    /// unselected, "Selected filter" selected) while walking the
+    /// view tree, never by private type or arranged-subview position.
+    /// Unignored AX children would omit precisely the missing element
+    /// that this regression needs to inspect.
+    private func badge(in row: EffectRowView) -> NSView? {
+        let badgeLabels: Set<String> = ["Filter", "Selected filter"]
+        func search(_ element: Any) -> NSView? {
+            guard let view = element as? NSView else { return nil }
+            if let label = view.accessibilityLabel(), badgeLabels.contains(label) {
+                return view
+            }
+            let children: [Any] = view.subviews
+            for child in children {
+                if let found = search(child) { return found }
+            }
+            return nil
+        }
+        return search(row)
+    }
+
+    func testBadgeIsAnAccessibilityElementWithImageRole() {
+        let row = makeRow()
+        guard let badge = badge(in: row) else {
+            XCTFail("no view carries the badge label \"Filter\" or \"Selected filter\"")
+            return
+        }
+        XCTAssertTrue(badge.isAccessibilityElement(),
+                      "the fx badge must be an accessibility element itself")
+        XCTAssertEqual(badge.accessibilityRole(), .image,
+                       "the badge is a drawn mark, so its role is image")
+    }
+
+    func testBadgeLabelTracksUpdateSelected() {
+        let row = makeRow()
+        guard let badge = badge(in: row) else {
+            XCTFail("no view carries the badge label \"Filter\" or \"Selected filter\"")
+            return
+        }
+        XCTAssertEqual(badge.accessibilityLabel(), "Filter")
+
+        row.updateSelected(true)
+        XCTAssertEqual(badge.accessibilityLabel(), "Selected filter")
+        XCTAssertTrue(self.badge(in: row) === badge,
+                      "the selected label still belongs to the same badge element")
+
+        row.updateSelected(false)
+        XCTAssertEqual(badge.accessibilityLabel(), "Filter")
+
+        // A row built selected starts with the selected label.
+        let selected = EffectRowView(
+            item: EffectItem(document: NSObject(), drawable: 4, effect: effect(11)),
+            isSelected: true, commit: Commit().call)
+        XCTAssertEqual(self.badge(in: selected)?.accessibilityLabel(), "Selected filter")
+    }
 }
