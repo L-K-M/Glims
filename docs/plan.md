@@ -4277,3 +4277,20 @@ This foundation does not expose skew/distort/perspective canvas modes yet.
 Captured-target atomic commits, the new handles, warped pixel previews,
 structured-layer qualification and large-image interaction timing remain
 separate work. It does not establish Photoshop 4 parity.
+
+### Recorded affine layer transforms (2026-11-11 candidate)
+
+The Recorder captures committed layer transforms with an explicit layer
+symbol, the six image-coordinate coefficients and a named interpolation
+choice. Saved format version 4 preserves versions 1 through 3. Loading an
+action binds its target explicitly; replay uses fresh native membership,
+mode, lock and output-geometry checks before touching pixels. Preview,
+identity, cancelled and refused transforms do not become successful actions.
+
+All 1,262 unit tests pass. The focused native workflow passes on all four
+engines, including actual asynchronous save/load, rebound targets, exact
+pixel/bounds output and Undo/Redo, stale locks, mask/channel/Quick Mask
+refusals, deleted targets and accepted-command failure settlement. Independent
+production review and follow-up fixture review have no remaining important
+findings. These checks do not exercise the binding sheet itself or establish
+complete action/batch coverage; filter and text recording remain open.

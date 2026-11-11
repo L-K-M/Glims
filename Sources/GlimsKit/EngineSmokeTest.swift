@@ -183,6 +183,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (tablet eraser proximity)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-affine" {
+                try exerciseRecorderAffine(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (recorder affine)" : "FAILED (recorder affine): \(failures)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-layer-properties" {
                 try exerciseRecorderLayerProperties(session, documents: documents)
                 print(failures == 0 ? "PASSED (recorder layer properties)" : "FAILED: \(failures) failure(s)")

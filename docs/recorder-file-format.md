@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 3
+# Recorder file format, versions 1 to 4
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,19 +7,22 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is integer `1`, `2` or `3`. `recordingID` is a file UUID. `origin` contains
+`version` is integer `1`, `2`, `3` or `4`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
-The writer selects version 3 exactly when at least one successful record is a
-`channelToSelection`, version 2 when at least one successful record is a
-`completeStroke` and no channel selection exists, and version 1 otherwise. A
-version 2 file must contain a successful `completeStroke`; a version 3 file must
-contain a successful `channelToSelection` (and may also contain strokes, which
-are readable from version 2 on). A version 1 file contains neither. Version 1 is
-therefore the pre-stroke schema, version 2 the stroke-extended schema and
-version 3 the channel-selection-extended schema.
-Version integers outside 1...3 refuse the file.
+The writer selects version 4 exactly when at least one successful record is a
+`transformLayer`, version 3 when at least one successful record is a
+`channelToSelection` and no layer transform exists, version 2 when at least
+one successful record is a `completeStroke` and neither exists, and version 1
+otherwise. A version 2 file must contain a successful `completeStroke`; a
+version 3 file must contain a successful `channelToSelection` (and may also
+contain strokes, which are readable from version 2 on); a version 4 file must
+contain a successful `transformLayer` (and may also contain strokes and
+channel selections). Version 1 is therefore the pre-stroke schema, version 2
+the stroke-extended schema, version 3 the channel-selection-extended schema
+and version 4 the layer-transform-extended schema.
+Version integers outside 1...4 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -50,6 +53,7 @@ Commands have an owned `tag` and the following exact fields:
 | `selectCommand` | `command`, `radius` |
 | `channelToSelection` | `operation` (version 3 only) |
 | `transformImage` | `transform` |
+| `transformLayer` | `matrix`, `interpolation` (version 4 only) |
 | `scale` | integer `width`, `height` |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |
@@ -73,9 +77,10 @@ components inside 0...1. Canvas colors are the values actually passed by the
 worker to native resize. No NSColor or late conversion enters the file.
 
 Bindings are `kind:"none"`, `kind:"layer"` with `symbol`, `kind:"channel"`
-with `symbol`, or `kind:"context"` with `context`. Layer properties require a
-layer symbol; `channelToSelection` requires a channel symbol whose description
-kind is `channel` — the explicit source channel, never the active paint target.
+with `symbol`, or `kind:"context"` with `context`. Layer properties and layer
+transforms require a layer symbol (any layer-kind description);
+`channelToSelection` requires a channel symbol whose description kind is
+`channel` — the explicit source channel, never the active paint target.
 Select Alpha and color selection with `sampleMerged:false` require context;
 other commands require none. Context has ordered `layers`/`channels` UUID
 arrays, `target`, `masks` and
@@ -104,6 +109,31 @@ never substituted, and its symbol description must have kind `channel`. The
 command is refused in a version 1 or 2 file, and a version 3 file without a
 successful `channelToSelection` is refused, exactly as version 2 always
 required a complete stroke.
+
+## Layer transforms (version 4)
+
+`transformLayer` is the version 4 command. It records one committed
+Transform-tool affine: `matrix` has exactly the six coefficients `a`, `b`,
+`c`, `d`, `tx`, `ty` as finite numbers, and `interpolation` is a Glims-owned
+tag (`none/linear/cubic/noHalo/loHalo`), not a native enum ordinal. The
+matrix acts in absolute image pixels, y down, on the explicitly bound layer;
+it is never normalized to or adapted for a differently sized rebound layer.
+The record's `layer` binding names the explicit transformed layer symbol,
+never the implicit paint target or selection.
+
+Every coefficient must be finite, the affine determinant `a*d - b*c` must be
+finite with absolute value at least 1e-9 (matching the native degeneracy
+bound; finite coefficients can still overflow it), and the identity matrix is
+refused because live admission never admits it. The command is refused in a
+version 1, 2 or 3 file, and a version 4 file without a successful
+`transformLayer` is refused, exactly as earlier extensions always required
+their own successful command. Fresh membership, mode/lock gates and output
+geometry against the bound layer's current native bounds remain replay
+duties; the codec cannot prove a binding-time target. Live acceptance and
+replay both require finite transformed corners within ±1,048,576 pixels and
+outward-rounded output dimensions from 1 to 524,288 pixels. This check runs
+before native mutation; symbol-description bounds cannot substitute for the
+freshly bound layer's geometry.
 
 ## Complete strokes (version 2)
 
