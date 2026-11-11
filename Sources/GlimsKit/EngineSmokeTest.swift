@@ -117,6 +117,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "filter-catalog-complete" {
+                try exerciseFilterCatalogComplete(session)
+                print(failures == 0 ? "PASSED (cold filter catalog completeness)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tablet-eraser-proximity" {
                 try exerciseTabletEraserProximity(session, documents: documents)
                 print(failures == 0 ? "PASSED (tablet eraser proximity)" : "FAILED: \(failures) failure(s)")

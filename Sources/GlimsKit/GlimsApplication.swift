@@ -26,11 +26,11 @@ public enum GlimsApplication {
             return 0
         }
 
-        // This regression drives only a bare document and independent engine
-        // references. It does not need an AppKit application or desktop.
+        // These regressions exercise engine services without windows or an
+        // AppKit application. They do not need the desktop.
         if mode == .engineSmokeTest,
            let smokeCase = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"],
-           ["recorder-stroke-capture", "recorder-stroke-file"].contains(smokeCase) {
+           ["recorder-stroke-capture", "recorder-stroke-file", "filter-catalog-complete"].contains(smokeCase) {
             return EngineSmokeTest.run()
         }
 
