@@ -4121,6 +4121,17 @@ Adjust placements and the descriptor-supported typed metadata forms are
 already present. The completion ledger now names those finite capabilities;
 it does not infer blanket batching or every possible metadata schema editor.
 
+### Explicit palette keyboard entry (2026-11-11 candidate)
+
+Window menu palette commands use Rigi's explicit focus API; automatic layout
+continues to preserve document focus. The old Recorder key-window failure is
+reproduced, then fixed in the normal application host: 12 checks pass on every
+engine, including real Tab dispatch, document pixels/Undo preservation and
+owned teardown. The consumer's 1,220 unit tests and Rigi's 143 native tests,
+Gallery smoke and release build pass. See
+[`palette-keyboard-focus.md`](palette-keyboard-focus.md) for exact scope and
+the separate full accessibility audit.
+
 ### Bzip2 and XZ foreign XCF recovery (2026-11-11 candidate)
 
 Compressed XCF uses one bounded decoded snapshot for native loading and
