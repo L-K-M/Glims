@@ -26,6 +26,13 @@ public enum GlimsApplication {
             return 0
         }
 
+        // This regression drives only a bare document and independent engine
+        // references. It does not need an AppKit application or desktop.
+        if mode == .engineSmokeTest,
+           ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-stroke-capture" {
+            return EngineSmokeTest.run()
+        }
+
         let app = NSApplication.shared
         // Rigi draws its chrome light, so the whole app keeps the light
         // Aqua appearance even when the Mac uses Dark Mode; system-colored
