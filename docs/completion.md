@@ -95,8 +95,9 @@ bundle with the native and Swift build outputs inaccessible.
 - [x] Glims XCF point-effect supplements preserve actual Curves HDR bypass
       and explicit blend/composite fields, with bounded correspondence checks
       and failed-write rollback (integration candidate; `xcf-effects.md`).
-- [ ] Preserve nondefault native-only effect blend/composite settings when
-      opening XCF; upstream currently normalizes them to AUTO.
+- [x] Preserve the supported explicit foreign effect blend/composite settings
+      when opening plain, gzip, bzip2 and XZ XCF, before native normalization
+      can discard them. Unsupported schemas remain explicit refusals.
 - [x] Recover validated foreign effect fields in plain XCF v20–26 across
       layers, groups, layer masks and channels, before image adoption
       (`xcf-effect-fields.md`). Native complex 3.2.8/v26 checks pass
@@ -105,6 +106,9 @@ bundle with the native and Swift build outputs inaccessible.
 - [x] Preserve supported foreign effect fields in a single gzip member
       (candidate). GIMP and the metadata reader share the decoded stream;
       the pinned pathname-swap regression passes 117/117.
+- [x] Bounded bzip2/XZ recovery through the same native/metadata snapshot
+      (candidate; `compressed-xcf-fields.md`), with pinned field/pixel checks
+      and all-four-engine codec/conformance checks.
 - [x] Path fill, vector layers and vector style controls.
 - [x] Multi-anchor path editing with group move/delete and Undo.
 - [x] Searchable brush, pattern and gradient resource choosers, with
