@@ -32,7 +32,7 @@ extension EngineSmokeTest {
         check(try session.selectionBounds(image: image) == expected,
               "channel capture contract: the real native action applied its explicit channel")
         let labels = document.recorder.records.compactMap { row -> String? in
-            if case .success(let command) = row.resolution { return command.displayName }
+            if case .success(let command) = row.resolution { return command.title }
             return nil
         }
         check(labels == ["Channel to Selection"],
