@@ -977,6 +977,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     func openNativeFilter(_ operation: EngineSession.FilterOperation) {
         guard !previewBusy, !imageDocument.isClosing, !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
               !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
+        if operation.name == SourceFilterOperation.oilify.rawValue {
+            guard imageDocument.session.supportsOilifySources, NativeFilterMenuLayout.usesSourceChooser(operation) else {
+                statusBar.message = "Oilify is not available in this image engine."
+                return
+            }
+            return openFilterSourceChooser(operation)
+        }
         if NativeFilterMenuLayout.usesSourceChooser(operation) {
             return openFilterSourceChooser(operation)
         }
@@ -1062,7 +1069,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         guard let target = imageDocument.activeLayer,
               let sourceOperation = SourceFilterOperation(rawValue: operation.name),
               NativeFilterMenuLayout.usesSourceChooser(operation) else { return }
-        if sourceOperation == .displace { return openDisplaceSourceChooser(operation, target: target) }
+        if sourceOperation == .displace || sourceOperation == .oilify {
+            return openPairedSourceChooser(operation, sourceOperation: sourceOperation, target: target)
+        }
         guard imageDocument.sourceFilterRefusal(target: target) == nil else {
             statusBar.message = imageDocument.sourceFilterRefusal(target: target) ?? "Choose a pixel layer first."
             return
@@ -1121,21 +1130,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         filterSourceChooser = chooser; chooser.show()
     }
 
-    /// Owns its original document, target and explicit two-map choices. A
+    /// Owns its original document, target and explicit map choices. A
     /// parameter-catalog reply never follows the front window or selection.
-    private func openDisplaceSourceChooser(_ operation: EngineSession.FilterOperation, target: Int32) {
+    private func openPairedSourceChooser(_ operation: EngineSession.FilterOperation,
+                                         sourceOperation: SourceFilterOperation, target: Int32) {
         guard imageDocument.sourceFilterRefusal(target: target) == nil else {
             statusBar.message = imageDocument.sourceFilterRefusal(target: target) ?? "Choose a pixel layer first."
             return
         }
         if let filterSourceChooser, !filterSourceChooser.isInvalidated {
-            if filterSourceChooser.operation == .displace { filterSourceChooser.show(); return }
+            if filterSourceChooser.operation == sourceOperation { filterSourceChooser.show(); return }
             filterSourceChooser.invalidate()
         }
         filterSourceRequest += 1
         let request = filterSourceRequest
         let targetName = imageDocument.layers.first { $0.id == target }?.name ?? "Layer"
-        let chooser = FilterSourceChooserController(displaceTargetName: targetName, rows: { [weak self] in
+        let rows: () -> [FilterSourceChoice] = { [weak self] in
             guard let self else { return [] }
             var rows: [FilterSourceChoice] = []
             for layer in self.imageDocument.layers {
@@ -1146,9 +1156,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             }
             rows += self.imageDocument.channels.map { .init(id: $0.id, name: "\($0.name) — Channel") }
             return rows
-        }, refusal: { [weak self] in
+        }
+        let refusal: () -> String? = { [weak self] in
             self?.imageDocument.sourceFilterRefusal(target: target) ?? (self == nil ? "The document is closed." : nil)
-        }, hostWindow: window, previewDisplace: { [weak self] xSource, ySource, completion in
+        }
+        let preview: (Int32?, Int32?, @escaping (Result<Void, Error>) -> Void) -> Void = { [weak self] first, second, completion in
             guard let self, self.filterSourceRequest == request, !self.closeStarted, !self.previewBusy,
                   self.imageDocument.sourceFilterRefusal(target: target) == nil else {
                 completion(.failure(ImageDocument.DocumentError.busy)); return
@@ -1166,15 +1178,32 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                         completion(.failure(ImageDocument.DocumentError.busy)); return
                     }
                     self.startPreview(title: operation.title, begin: { [imageDocument = self.imageDocument] reply in
-                        imageDocument.beginDisplacePreview(properties: properties, target: target,
-                                                           xSource: xSource, ySource: ySource, completion: reply)
+                        if sourceOperation == .oilify {
+                            imageDocument.beginOilifyPreview(properties: properties, target: target,
+                                                             radiusSource: first, exponentSource: second, completion: reply)
+                        } else if let first, let second {
+                            imageDocument.beginDisplacePreview(properties: properties, target: target,
+                                                               xSource: first, ySource: second, completion: reply)
+                        } else {
+                            reply(.failure(ImageDocument.DocumentError.busy))
+                        }
                     }, started: completion) { [imageDocument = self.imageDocument] start in
                         NativeFilterPanel(document: imageDocument, operation: operation, properties: properties,
                                           filter: start.filter, initialValues: start.values, mergesPixels: true)
                     }
                 }
             }
-        })
+        }
+        let chooser: FilterSourceChooserController
+        if sourceOperation == .oilify {
+            chooser = FilterSourceChooserController(oilifyTargetName: targetName, rows: rows,
+                                                   refusal: refusal, hostWindow: window, previewOilify: preview)
+        } else {
+            chooser = FilterSourceChooserController(displaceTargetName: targetName, rows: rows,
+                                                   refusal: refusal, hostWindow: window, previewDisplace: { x, y, reply in
+                preview(x, y, reply)
+            })
+        }
         chooser.onClosed = { [weak self] in
             guard let self, self.filterSourceRequest == request else { return }
             self.filterSourceRequest += 1; self.filterSourceChooser = nil
@@ -2399,6 +2428,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             guard let command = menuItem.representedObject as? NativeFilterCommand,
                   (NativeFilterMenuLayout.supportsParameterEditor(command.operation)
                     || NativeFilterMenuLayout.usesSourceChooser(command.operation)) else { return false }
+            if command.operation.name == SourceFilterOperation.oilify.rawValue,
+               !imageDocument.session.supportsOilifySources { return false }
             guard !editingBlocked, !previewBusy, imageDocument.activeLayer != nil else { return false }
             if NativeFilterMenuLayout.usesSourceChooser(command.operation), let target = imageDocument.activeLayer {
                 return imageDocument.sourceFilterRefusal(target: target) == nil
