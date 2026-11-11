@@ -132,6 +132,25 @@ final class RecorderFileSemanticBridgeTests: XCTestCase {
         }
     }
 
+    func testLayerTransformLiteralBecomesExactFrontendMatrixAndOwnedInterpolation() throws {
+        let binding = #"{"kind":"layer","symbol":"22222222-2222-2222-2222-222222222222"}"#
+        let cases: [(String, EngineSession.Interpolation)] = [
+            ("none", .none), ("linear", .linear), ("cubic", .cubic), ("noHalo", .noHalo), ("loHalo", .loHalo),
+        ]
+        for (name, expected) in cases {
+            let command = "{\"tag\":\"transformLayer\",\"matrix\":{\"a\":0.5,\"b\":0.25,\"c\":-0.75,\"d\":1.25,\"tx\":-4.5,\"ty\":8},\"interpolation\":\"\(name)\"}"
+            let text = wire(success(command, binding: binding), symbols: symbols)
+                .replacingOccurrences(of: "\"version\":1", with: "\"version\":4")
+            let prepared = try RecorderFileSemanticBridge.prepare(try RecorderFileCodec.decode(Data(text.utf8)))
+            guard let row = prepared.log.records.first,
+                  case .success(.transformLayer(let matrix, let interpolation)) = row.resolution else {
+                return XCTFail("Missing layer transform")
+            }
+            XCTAssertEqual(matrix, CGAffineTransform(a: 0.5, b: 0.25, c: -0.75, d: 1.25, tx: -4.5, ty: 8))
+            XCTAssertEqual(interpolation, expected, name)
+        }
+    }
+
     func testAbsentLayerPropertiesRemainAbsentWhileExplicitZeroValuesRemainExplicit() throws {
         let binding = #"{"kind":"layer","symbol":"22222222-2222-2222-2222-222222222222"}"#
         let prepared = try prepare(success(#"{"tag":"layerProperties","properties":{}}"#, binding: binding), symbols: symbols)

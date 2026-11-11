@@ -106,6 +106,17 @@ enum RecorderFileSemanticBridge {
             let change = EngineSession.LayerChange(name: value.name, isVisible: value.visible,
                                                    opacity: value.opacity, mode: value.mode?.name)
             return .layerProperties(SemanticImageCommand.LayerProperties(change))
+        case .transformLayer(let matrix, let interpolation):
+            let value: EngineSession.Interpolation
+            switch interpolation {
+            case .none: value = .none
+            case .linear: value = .linear
+            case .cubic: value = .cubic
+            case .noHalo: value = .noHalo
+            case .loHalo: value = .loHalo
+            }
+            return .transformLayer(matrix: CGAffineTransform(a: matrix.a, b: matrix.b, c: matrix.c,
+                d: matrix.d, tx: matrix.tx, ty: matrix.ty), interpolation: value)
         case .completeStroke(let value): return .completeStroke(value)
         }
     }

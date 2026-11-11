@@ -49,7 +49,8 @@ velocity or direction. Only ordinary pixel layers can be bound for stroke
 recording; painting a mask/channel or using another paint tool produces an
 explicit unsupported row. Saved strokes use recording format version 2;
 recordings without successful strokes retain version 1; Channel ▸ To Selection
-raises the file to version 3. See
+raises the file to version 3, and a committed Transform-tool layer affine
+raises it to version 4. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
 Record starts a fresh log, replacing the prior recording. Stop stops accepting
