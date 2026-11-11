@@ -299,6 +299,8 @@ cleanup:
   return GLIMS_STATUS_OK;
 }
 
+#include "lens-blur-owned-guards.h"
+
 int
 main (int argc, char **argv)
 {
@@ -323,6 +325,12 @@ main (int argc, char **argv)
     CHECK (glims_engine_call (engine, lens_eventual_support, GINT_TO_POINTER (mode)) == GLIMS_STATUS_OK,
            "selected input pixel/history suite executes on engine thread");
   }
+  CHECK (glims_engine_call (engine, lens_copy_bounds, NULL) == GLIMS_STATUS_OK,
+         "snapshot metadata boundary checks execute without copying boundary buffers");
+  CHECK (glims_engine_call (engine, lens_owned_guards, NULL) == GLIMS_STATUS_OK,
+         "owned Lens setter and invalid-map guards execute on engine thread");
+  CHECK (glims_engine_call (engine, lens_lifetime, NULL) == GLIMS_STATUS_OK,
+         "owned Lens detached-source lifetime executes on engine thread");
 
   api->stop (engine); g_free (user); g_free (cache);
   printf ("%s: %d lens checks, %d failures (admitted=%s)\n",

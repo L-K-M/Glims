@@ -39,4 +39,6 @@ GlimsStatus glims_filter_input_lens_prepare (GlimsEngine *, GlimsOpenImage *,
 /* Prospective Lens Blur validation before mutation/attachment/commit. Returns
  * OK for sessions not marked owned Lens Blur. */
 GlimsStatus glims_filter_lens_validate (GlimsFilter *, const char *, const GValue *);
+/* Metadata-only gate used before source materialization and snapshot copying. */
+gboolean glims_filter_input_lens_map_bounds (GeglBuffer *);
 #endif

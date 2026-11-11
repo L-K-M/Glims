@@ -115,6 +115,7 @@ def build(args: argparse.Namespace) -> Path:
     inputs: set[Path] = set(objects)
     expanded = {name: response_tokens(path, inputs, set()) for name, path in responses.items()}
     inputs.update({HARNESS, FIXTURE, READER, FILTER_C, FILTER_PROPERTIES_C, Path(__file__).resolve(),
+                   ROOT / "Engine/tests/lens-blur-owned-guards.h",
                    ROOT / "Engine/engine-private.h", ROOT / "Engine/filter-input.h",
                    ROOT / "Sources/CGlimsEngine/include/glims_engine.h"})
     inputs = {p.resolve() for p in inputs}

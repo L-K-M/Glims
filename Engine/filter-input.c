@@ -360,8 +360,8 @@ lens_rect_pixels (const GeglRectangle *rect, uint64_t *pixels)
   return TRUE;
 }
 
-static gboolean
-lens_map_bounds (GeglBuffer *buffer)
+gboolean
+glims_filter_input_lens_map_bounds (GeglBuffer *buffer)
 {
   const GeglRectangle *extent = gegl_buffer_get_extent (buffer);
   const GeglRectangle *abyss = gegl_buffer_get_abyss (buffer);
@@ -530,7 +530,7 @@ glims_filter_input_lens_prepare (GlimsEngine *engine, GlimsOpenImage *open,
     g_object_ref (map);
     status = source_buffer (map, &live, error);
     if (status != GLIMS_STATUS_OK) goto done;
-    if (!lens_map_bounds (live)) {
+    if (!glims_filter_input_lens_map_bounds (live)) {
       status = oilify_unsupported (error, "The blur map exceeds its pixel snapshot or conversion limit."); goto done;
     }
     status = copy_source_buffer (live, &node, error);
@@ -539,7 +539,7 @@ glims_filter_input_lens_prepare (GlimsEngine *engine, GlimsOpenImage *open,
     if (!snapshot || gegl_buffer_get_format (snapshot) != gegl_buffer_get_format (live) ||
         !gegl_rectangle_equal (gegl_buffer_get_extent (snapshot), gegl_buffer_get_extent (live)) ||
         !gegl_rectangle_equal (gegl_buffer_get_abyss (snapshot), gegl_buffer_get_abyss (live)) ||
-        !lens_map_bounds (snapshot)) {
+        !glims_filter_input_lens_map_bounds (snapshot)) {
       status = oilify_unsupported (error, "The blur map snapshot did not preserve its native format and bounds."); goto done;
     }
     if (!lens_map_values (snapshot)) {
