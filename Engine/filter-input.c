@@ -7,6 +7,7 @@
 #include "gegl/gimp-gegl-utils.h"
 #include "gegl-operations-util.h"
 #include <math.h>
+#include <float.h>
 
 static GlimsStatus
 source_buffer (GimpDrawable *source, GeglBuffer **out, char **error)
@@ -342,4 +343,315 @@ done:
   g_object_unref (target);
   engine->busy--;
   return status;
+}
+
+/* Lens Blur's unchanged native operation uses signed ring indices and
+ * radius-scaled per-worker storage. Validate before it can evaluate. */
+enum { LENS_SCAN_PIXELS = 1024, LENS_WORKERS = 64, LENS_MAX_RADIUS = 46340 };
+
+static gboolean
+lens_rect_pixels (const GeglRectangle *rect, uint64_t *pixels)
+{
+  if (!rect || rect->width < 0 || rect->height < 0 ||
+      (gint64) rect->x + rect->width > G_MAXINT ||
+      (gint64) rect->y + rect->height > G_MAXINT)
+    return FALSE;
+  *pixels = (uint64_t) rect->width * (uint64_t) rect->height;
+  return TRUE;
+}
+
+/* Reproduce only the integer domain of GEGL's SUPERSET alignment in int64.
+ * Never call native alignment to decide whether native alignment is safe. */
+static gboolean
+lens_tile_axis (gint origin, gint length, gint shift, gint tile, uint64_t *aligned_length)
+{
+  if (length <= 0 || tile <= 0) return FALSE;
+  gint64 first = (gint64) origin - shift, last = first + length;
+  if (!oilify_native_integer (first) || !oilify_native_integer (last)) return FALSE;
+  if (first < 0) first -= (gint64) tile - 1;
+  if (last > 0) last += (gint64) tile - 1;
+  if (!oilify_native_integer (first) || !oilify_native_integer (last)) return FALSE;
+  first = first / tile * tile;
+  last = last / tile * tile;
+  if (!oilify_native_integer ((gint64) shift + first) ||
+      !oilify_native_integer ((gint64) shift + last) ||
+      last <= first || last - first > G_MAXINT) return FALSE;
+  /* Buffer reads and COW tile-copy loops then add the storage shift to
+   * those restored coordinates, and advance one tile at the loop edge. */
+  if (!oilify_native_integer (2 * (gint64) shift + first - tile) ||
+      !oilify_native_integer (2 * (gint64) shift + last + tile)) return FALSE;
+  *aligned_length = (uint64_t) (last - first);
+  return TRUE;
+}
+
+gboolean
+glims_filter_input_lens_map_bounds (GeglBuffer *buffer)
+{
+  const GeglRectangle *extent = gegl_buffer_get_extent (buffer);
+  const GeglRectangle *abyss = gegl_buffer_get_abyss (buffer);
+  uint64_t pixels, abyss_pixels;
+  if (!lens_rect_pixels (extent, &pixels) || pixels == 0 ||
+      !lens_rect_pixels (abyss, &abyss_pixels)) return FALSE;
+  gint bpp = babl_format_get_bytes_per_pixel (gegl_buffer_get_format (buffer));
+  if (bpp <= 0 || pixels > GLIMS_MAX_PIXEL_BUFFER_BYTES / (uint64_t) bpp) return FALSE;
+  gint tw, th, sx, sy;
+  g_object_get (buffer, "tile-width", &tw, "tile-height", &th,
+                "shift-x", &sx, "shift-y", &sy, NULL);
+  /* Native duplication constructs a fresh base buffer with these values.
+   * set_extent can exceed constructor ranges, so validate those ranges too. */
+  const gchar *names[] = {"x", "y", "width", "height", "abyss-x", "abyss-y",
+                         "abyss-width", "abyss-height", "shift-x", "shift-y", "tile-width", "tile-height"};
+  const gint values[] = {extent->x, extent->y, extent->width, extent->height, abyss->x, abyss->y,
+                        abyss->width, abyss->height, sx, sy, tw, th};
+  GObjectClass *klass = g_type_class_ref (GEGL_TYPE_BUFFER);
+  gboolean constructible = TRUE;
+  for (guint i = 0; i < G_N_ELEMENTS (names); i++) {
+    GParamSpec *spec = g_object_class_find_property (klass, names[i]);
+    if (!spec || !G_IS_PARAM_SPEC_INT (spec) ||
+        values[i] < G_PARAM_SPEC_INT (spec)->minimum || values[i] > G_PARAM_SPEC_INT (spec)->maximum) {
+      constructible = FALSE; break;
+    }
+  }
+  g_type_class_unref (klass);
+  if (!constructible || tw <= 0 || th <= 0 ||
+      (uint64_t) tw * (uint64_t) th > (uint64_t) G_MAXINT / (uint64_t) bpp) return FALSE;
+  uint64_t padded_width, padded_height;
+  if (!lens_tile_axis (extent->x, extent->width, sx, tw, &padded_width) ||
+      !lens_tile_axis (extent->y, extent->height, sy, th, &padded_height) ||
+      padded_width * padded_height > GLIMS_MAX_PIXEL_BUFFER_BYTES / (uint64_t) bpp) return FALSE;
+  uint64_t unused;
+  if (abyss_pixels &&
+      (!lens_tile_axis (abyss->x, abyss->width, sx, tw, &unused) ||
+       !lens_tile_axis (abyss->y, abyss->height, sy, th, &unused))) return FALSE;
+  /* Bound both converted scans, including a subbuffer's distinct abyss.
+   * Sparse native storage alone is not a bound on conversion work. */
+  if (!gegl_rectangle_equal (extent, abyss)) pixels += abyss_pixels;
+  return pixels <= GLIMS_MAX_PIXEL_BUFFER_BYTES / (2 * sizeof (gfloat));
+}
+
+static gboolean
+lens_map_rect (GeglBuffer *buffer, const GeglRectangle *rect, const Babl *format)
+{
+  gfloat values[LENS_SCAN_PIXELS];
+  for (gint y = 0; y < rect->height; y++) {
+    for (gint x = 0; x < rect->width; ) {
+      gint count = MIN (LENS_SCAN_PIXELS, rect->width - x);
+      GeglRectangle row = {rect->x + x, rect->y + y, count, 1};
+      gegl_buffer_get (buffer, &row, 1.0, format, values, GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
+      /* Stock white converts to 1+1 ULP in Y' on the pinned Babl. Keep
+       * the authentic samples; the geometry guard covers eight ULPs. */
+      for (gint i = 0; i < count; i++)
+        if (!isfinite (values[i]) || values[i] < 0.0f ||
+            values[i] > 1.0f + 8.0f * FLT_EPSILON) return FALSE;
+      x += count;
+    }
+  }
+  return TRUE;
+}
+
+static gboolean
+lens_map_values (GeglBuffer *buffer)
+{
+  const GeglRectangle *extent = gegl_buffer_get_extent (buffer);
+  const GeglRectangle *abyss = gegl_buffer_get_abyss (buffer);
+  const Babl *space = babl_format_get_space (gegl_buffer_get_format (buffer));
+  const gchar *names[] = {"Y float", "Y' float"};
+  for (guint i = 0; i < G_N_ELEMENTS (names); i++) {
+    const Babl *format = babl_format_with_space (names[i], space);
+    if (!format || !lens_map_rect (buffer, extent, format) ||
+        (!gegl_rectangle_equal (extent, abyss) && !lens_map_rect (buffer, abyss, format)))
+      return FALSE;
+  }
+  return TRUE;
+}
+
+static gboolean
+lens_target_geometry (GimpDrawable *target, GeglRectangle *extent, GeglRectangle *abyss,
+                      GeglRectangle *area)
+{
+  GeglBuffer *raw = gimp_drawable_get_buffer (target);
+  uint64_t pixels, abyss_pixels;
+  if (!raw || !glims_filter_input_lens_map_bounds (raw)) return FALSE;
+  *extent = *gegl_buffer_get_extent (raw);
+  *abyss = *gegl_buffer_get_abyss (raw);
+  memset (area, 0, sizeof *area);
+  return lens_rect_pixels (extent, &pixels) && pixels > 0 &&
+         pixels <= GLIMS_MAX_PIXEL_BUFFER_BYTES / (4 * sizeof (gfloat)) &&
+         lens_rect_pixels (abyss, &abyss_pixels) &&
+         abyss_pixels <= GLIMS_MAX_PIXEL_BUFFER_BYTES / (4 * sizeof (gfloat)) &&
+         oilify_target_placement (target, extent) &&
+         gimp_item_mask_intersect (GIMP_ITEM (target), &area->x, &area->y, &area->width, &area->height) &&
+         area->width > 0 && area->height > 0;
+}
+
+static gboolean
+lens_validate_bounds (GimpDrawable *target, gboolean has_map, gdouble radius, gboolean clip)
+{
+  GeglRectangle extent, abyss, area;
+  OilifyBox box = {G_MAXINT64, G_MAXINT64, G_MININT64, G_MININT64};
+  if (!isfinite (radius) || radius < 0.0 || radius > (gdouble) LENS_MAX_RADIUS ||
+      !lens_target_geometry (target, &extent, &abyss, &area)) return FALSE;
+  /* Both bbox (double) and process (float) rounding occur upstream. */
+  gint64 r = (gint64) MAX (floor (radius + 0.5), floorf ((gfloat) radius + 0.5f));
+  /* At radius<=46340, eight upper ULPs add less than .045 pixel. With
+   * float rounding, any resulting horizontal support fits within R+2.
+   * Native vertical traversal still uses nominal R and r*r stays bounded. */
+  gint64 halo = r + 2;
+  if (r > LENS_MAX_RADIUS || r * r > G_MAXINT) return FALSE;
+  GeglRectangle item = {0, 0, gimp_item_get_width (GIMP_ITEM (target)),
+                             gimp_item_get_height (GIMP_ITEM (target))};
+  if (item.width <= 0 || item.height <= 0) return FALSE;
+  oilify_include_rect (&box, &extent, 0, 0);
+  oilify_include_rect (&box, &abyss, 0, 0);
+  oilify_include_rect (&box, &item, 0, 0);
+  /* Native selection crops can translate input into selection-local space.
+   * Cover both the raw and translated envelope before attachment settles. */
+  oilify_include_rect (&box, &extent, -(gint64) area.x, -(gint64) area.y);
+  oilify_include_rect (&box, &abyss, -(gint64) area.x, -(gint64) area.y);
+  oilify_include_rect (&box, &item, -(gint64) area.x, -(gint64) area.y);
+  if (!oilify_native_integer (box.left - 4 * halo) ||
+      !oilify_native_integer (box.top - 4 * halo) ||
+      !oilify_native_integer (box.right + 4 * halo) ||
+      !oilify_native_integer (box.bottom + 4 * halo)) return FALSE;
+
+  gint64 width = box.right - box.left, height = box.bottom - box.top;
+  if (width <= 0 || height <= 0) return FALSE;
+  uint64_t ow = (uint64_t) width + (clip ? 0 : 2 * halo);
+  uint64_t oh = (uint64_t) height + (clip ? 0 : 2 * halo);
+  uint64_t pw = ow + 2 * halo, ph = oh + 2 * halo;
+  /* GEGL's parallel splitter multiplies a dimension by 2*i (i<64).
+   * This bound also makes the following uint64 products safe. */
+  if (pw > G_MAXINT / (2 * LENS_WORKERS) || ph > G_MAXINT / (2 * LENS_WORKERS)) return FALSE;
+  if (ow * oh > GLIMS_MAX_PIXEL_BUFFER_BYTES / (4 * sizeof (gfloat))) return FALSE;
+  uint64_t rows = MIN ((uint64_t) (2 * r + 1), ph);
+  uint64_t ring_pixels = pw * rows;
+  if (ring_pixels > G_MAXINT / 4 || ow > G_MAXINT / 4) return FALSE;
+  /* Native arrays: RGBA+weight[+mask] rings and RGBA+weight output row.
+   * Bound simultaneous invocations even if the global worker count changes. */
+  uint64_t scratch = sizeof (gfloat) * ((has_map ? 6 : 5) * ring_pixels + 5 * ow);
+  return scratch <= GLIMS_MAX_PIXEL_BUFFER_BYTES / LENS_WORKERS;
+}
+
+static gboolean
+lens_property_types (GeglNode *node)
+{
+  const gchar *numbers[] = {"radius", "highlight-factor", "highlight-threshold-low", "highlight-threshold-high"};
+  const gchar *flags[] = {"clip", "linear-mask"};
+  for (guint i = 0; i < G_N_ELEMENTS (numbers); i++) {
+    GParamSpec *spec = gegl_node_find_property (node, numbers[i]);
+    if (!spec || !G_IS_PARAM_SPEC_DOUBLE (spec)) return FALSE;
+  }
+  for (guint i = 0; i < G_N_ELEMENTS (flags); i++) {
+    GParamSpec *spec = gegl_node_find_property (node, flags[i]);
+    if (!spec || !G_IS_PARAM_SPEC_BOOLEAN (spec)) return FALSE;
+  }
+  return TRUE;
+}
+
+GlimsStatus
+glims_filter_input_lens_prepare (GlimsEngine *engine, GlimsOpenImage *open,
+                                 GimpDrawable *target, GlimsItemID source,
+                                 GeglNode **out, char **error)
+{
+  GimpDrawable *map = NULL;
+  GeglBuffer *raw = NULL, *live = NULL, *snapshot = NULL;
+  GeglNode *node = NULL, *defaults = NULL;
+  GeglRectangle extent = {0}, abyss = {0}, area = {0}, now_extent, now_abyss, now_area;
+  const Babl *raw_format = NULL;
+  GlimsStatus status = GLIMS_STATUS_OK;
+  if (out) *out = NULL;
+  if (!out || !engine || !open || !target || source < 0) return GLIMS_STATUS_INVALID_ARGUMENT;
+  g_object_ref (target);
+  engine->busy++;
+  if (!lens_target_geometry (target, &extent, &abyss, &area)) {
+    status = oilify_unsupported (error, "The Lens Blur target geometry is not supported."); goto done;
+  }
+  raw = g_object_ref (gimp_drawable_get_buffer (target));
+  raw_format = gegl_buffer_get_format (raw);
+  defaults = gegl_node_new_child (NULL, "operation", "gegl:lens-blur", NULL);
+  if (!defaults || !lens_property_types (defaults)) {
+    status = oilify_unsupported (error, "This engine's Lens Blur properties are not supported."); goto done;
+  }
+  gdouble radius; gboolean clip;
+  gegl_node_get (defaults, "radius", &radius, "clip", &clip, NULL);
+  if (!lens_validate_bounds (target, source > 0, radius, clip)) {
+    status = oilify_unsupported (error, "Lens Blur exceeds its geometry or memory limit; reduce the radius or image size."); goto done;
+  }
+  if (source > 0) {
+    map = glims_lookup_drawable (open, source);
+    if (!map) { status = GLIMS_STATUS_NOT_FOUND; goto done; }
+    g_object_ref (map);
+    GeglBuffer *source_raw = gimp_drawable_get_buffer (map);
+    if (!source_raw || !glims_filter_input_lens_map_bounds (source_raw)) {
+      status = oilify_unsupported (error, "The blur map's native tile geometry is not supported."); goto done;
+    }
+    status = source_buffer (map, &live, error);
+    if (status != GLIMS_STATUS_OK) goto done;
+    if (!glims_filter_input_lens_map_bounds (live)) {
+      status = oilify_unsupported (error, "The blur map exceeds its pixel snapshot or conversion limit."); goto done;
+    }
+    status = copy_source_buffer (live, &node, error);
+    if (status != GLIMS_STATUS_OK) goto done;
+    gegl_node_get (node, "buffer", &snapshot, NULL);
+    if (!snapshot || gegl_buffer_get_format (snapshot) != gegl_buffer_get_format (live) ||
+        !gegl_rectangle_equal (gegl_buffer_get_extent (snapshot), gegl_buffer_get_extent (live)) ||
+        !gegl_rectangle_equal (gegl_buffer_get_abyss (snapshot), gegl_buffer_get_abyss (live)) ||
+        !glims_filter_input_lens_map_bounds (snapshot)) {
+      status = oilify_unsupported (error, "The blur map snapshot did not preserve its native format and bounds."); goto done;
+    }
+    if (!lens_map_values (snapshot)) {
+      status = oilify_unsupported (error, "The blur map must contain finite luminance in [0, 1]."); goto done;
+    }
+  }
+  if (glims_lookup_drawable (open, gimp_item_get_id (GIMP_ITEM (target))) != target ||
+      (map && glims_lookup_drawable (open, source) != map) ||
+      gimp_drawable_get_buffer (target) != raw || gegl_buffer_get_format (raw) != raw_format ||
+      !lens_target_geometry (target, &now_extent, &now_abyss, &now_area) ||
+      !gegl_rectangle_equal (&extent, &now_extent) || !gegl_rectangle_equal (&abyss, &now_abyss) ||
+      !gegl_rectangle_equal (&area, &now_area)) {
+    status = GLIMS_STATUS_BUSY;
+    if (error) *error = g_strdup ("The target changed while preparing Lens Blur."); goto done;
+  }
+  *out = node; node = NULL;
+done:
+  g_clear_object (&snapshot); g_clear_object (&node); g_clear_object (&defaults);
+  g_clear_object (&live); g_clear_object (&raw);
+  if (map) g_object_unref (map);
+  engine->busy--;
+  g_object_unref (target);
+  return status;
+}
+
+GlimsStatus
+glims_filter_lens_validate (GlimsFilter *session, const char *property, const GValue *prospective)
+{
+  if (!session || !session->owned_lens_blur) return GLIMS_STATUS_OK;
+  if (!session->operation || !session->drawable || !lens_property_types (session->operation))
+    return GLIMS_STATUS_UNSUPPORTED;
+  gdouble radius, factor, low, high;
+  gboolean clip;
+  gegl_node_get (session->operation, "radius", &radius, "clip", &clip,
+                 "highlight-factor", &factor, "highlight-threshold-low", &low,
+                 "highlight-threshold-high", &high, NULL);
+  if (property && prospective) {
+    gdouble *number = !strcmp (property, "radius") ? &radius :
+                     !strcmp (property, "highlight-factor") ? &factor :
+                     !strcmp (property, "highlight-threshold-low") ? &low :
+                     !strcmp (property, "highlight-threshold-high") ? &high : NULL;
+    if (number) {
+      if (!G_VALUE_HOLDS_DOUBLE (prospective)) return GLIMS_STATUS_INVALID_ARGUMENT;
+      *number = g_value_get_double (prospective);
+    } else if (!strcmp (property, "clip")) {
+      if (!G_VALUE_HOLDS_BOOLEAN (prospective)) return GLIMS_STATUS_INVALID_ARGUMENT;
+      clip = g_value_get_boolean (prospective);
+    }
+  }
+  if (!isfinite (factor) || !isfinite ((gfloat) (factor * 10.0 * G_LN2)) ||
+      !isfinite (low) || !isfinite ((gfloat) low) ||
+      !isfinite (high) || !isfinite ((gfloat) high)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  gfloat denominator = (gfloat) high - (gfloat) low;
+  if (factor != 0.0 && (!isfinite (denominator) || denominator == 0.0f))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  return lens_validate_bounds (session->drawable, session->aux_source != NULL, radius, clip)
+           ? GLIMS_STATUS_OK : GLIMS_STATUS_UNSUPPORTED;
 }

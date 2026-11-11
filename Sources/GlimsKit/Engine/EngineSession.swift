@@ -914,8 +914,9 @@ final class EngineSession: @unchecked Sendable {
 
     /// Captured same-image source pixels are detached before the preview starts.
     /// Apply merges into target pixels; the auxiliary graph is not an XCF effect.
-    func beginFilter(image: Int32, drawable: Int32, operation: String, source: Int32) throws -> Int32 {
-        guard drawable > 0, source > 0, let sourceOperation = SourceFilterOperation(rawValue: operation),
+    func beginFilter(image: Int32, drawable: Int32, operation: String, source: Int32?) throws -> Int32 {
+        guard let sourceOperation = SourceFilterOperation(rawValue: operation), drawable > 0,
+              (source.map { $0 > 0 } ?? (sourceOperation == .lensBlur)),
               sourceOperation != .displace, sourceOperation != .oilify else {
             throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
                               message: "Choose a pixel layer and a valid source for this filter.")
@@ -923,7 +924,7 @@ final class EngineSession: @unchecked Sendable {
         var filter: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
         let status = operation.withCString { name in
-            api.filter_begin_with_source(engine, image, drawable, name, source, &filter, &error)
+            api.filter_begin_with_source(engine, image, drawable, name, source ?? 0, &filter, &error)
         }
         try check(status, error)
         guard filter > 0 else {

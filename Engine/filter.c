@@ -231,8 +231,10 @@ filter_begin_internal (GlimsEngine    *engine,
   gboolean        non_destructive;
   gint            id;
   GlimsStatus     status;
-  gboolean        owns_busy = aux_source2 != NULL || owned_oilify;
-  gboolean        merges_pixels = aux_source || aux_source2 || owned_oilify;
+  gboolean        owned_lens = operation && !strcmp (operation, "gegl:lens-blur");
+  gboolean        owned_preparation = owned_oilify || owned_lens;
+  gboolean        owns_busy = aux_source2 != NULL || owned_preparation;
+  gboolean        merges_pixels = aux_source || aux_source2 || owned_preparation;
 
   if (out) *out = 0;
   if (! open)
@@ -274,6 +276,7 @@ filter_begin_internal (GlimsEngine    *engine,
   session->drawable        = g_object_ref (drawable);
   session->non_destructive = non_destructive;
   session->owned_oilify    = owned_oilify;
+  session->owned_lens_blur = owned_lens;
   session->operation = gegl_node_new_child (NULL, "operation", operation, NULL);
   if (!session->operation) {
     status = glims_fail (error, NULL, "The filter operation could not be created.");
@@ -304,6 +307,11 @@ filter_begin_internal (GlimsEngine    *engine,
     }
     session->aux_source2 = g_object_ref (aux_source2);
   }
+  status = glims_filter_lens_validate (session, NULL, NULL);
+  if (status != GLIMS_STATUS_OK) {
+    if (error) *error = g_strdup ("Lens Blur exceeds its geometry or memory limit; reduce the radius or image size.");
+    goto failed;
+  }
   if (merges_pixels) session->non_destructive = FALSE;
   /* The undo step and the filter's name in the layer's filter list use the
    * operation's title ("Gaussian Blur"), as GIMP's filter tools do
@@ -326,30 +334,30 @@ filter_begin_internal (GlimsEngine    *engine,
    * editing filters — XCF skips temporary filters, and drawable_effects
    * counts only committed ones. Commit flips the flag back. */
   gimp_drawable_filter_set_temporary (session->filter, TRUE);
-  if (owned_oilify) {
+  if (owned_preparation) {
     /* Preview toggles the applicator bypass, separately from whether the
      * native stack connects the filter's node. Keep both disabled here. */
     gimp_drawable_filter_set_preview (session->filter, FALSE);
     gimp_filter_set_active (GIMP_FILTER (session->filter), FALSE);
   }
   gimp_drawable_filter_apply (session->filter, NULL);
-  if (!owned_oilify) gimp_drawable_filter_set_preview (session->filter, TRUE);
+  if (!owned_preparation) gimp_drawable_filter_set_preview (session->filter, TRUE);
   if (merges_pixels) {
     /* Native merged previews sit below existing committed effects. */
     GimpContainer *filters = gimp_drawable_get_filters (drawable);
     gint count = gimp_container_get_n_children (filters);
     if (gimp_container_have (filters, GIMP_OBJECT (session->filter)))
       gimp_container_reorder (filters, GIMP_OBJECT (session->filter), count - 1);
-    if (owned_oilify) {
+    if (owned_preparation) {
       if (count <= 0 || gimp_container_get_child_by_index (filters, count - 1) != GIMP_OBJECT (session->filter)) {
-        status = glims_fail (error, NULL, "The Oilify preview could not attach to the raw pixels.");
+        status = glims_fail (error, NULL, "The filter preview could not attach to the raw pixels.");
         goto failed;
       }
       /* Freezing after attachment resyncs Core's first-filter input crop.
        * Do it at the raw-input end before any Oilify preview is active. */
       gimp_drawable_filter_layer_mask_freeze (session->filter);
       if (!gimp_drawable_filter_get_mask (session->filter)) {
-        status = glims_fail (error, NULL, "The Oilify selection could not be frozen.");
+        status = glims_fail (error, NULL, "The filter selection could not be frozen.");
         goto failed;
       }
       gimp_drawable_filter_set_preview (session->filter, TRUE);
@@ -375,6 +383,8 @@ GlimsStatus
 glims_filter_begin (GlimsEngine *engine, GlimsImageID image, GlimsItemID drawable,
                     const char *operation, GlimsFilterID *out, char **error)
 {
+  if (operation && !strcmp (operation, "gegl:lens-blur"))
+    return glims_filter_begin_with_source (engine, image, drawable, operation, 0, out, error);
   return filter_begin_internal (engine, image, drawable, operation, NULL, NULL, FALSE, out, error);
 }
 
@@ -387,11 +397,13 @@ glims_filter_begin_with_source (GlimsEngine *engine, GlimsImageID image,
   GimpDrawable *drawable;
   GeglNode *snapshot = NULL;
   GlimsStatus status;
+  gboolean lens = operation && !strcmp (operation, "gegl:lens-blur");
   if (out) *out = 0;
-  if (!out || !operation || target <= 0 || source <= 0) return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (!out || !operation || target <= 0 || source < 0 || (!lens && source == 0))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
   if (strcmp (operation, "gegl:bump-map") && strcmp (operation, "gegl:variable-blur") &&
       strcmp (operation, "gegl:gaussian-blur-selective") &&
-      strcmp (operation, "gegl:negative-darkroom"))
+      strcmp (operation, "gegl:negative-darkroom") && !lens)
     return GLIMS_STATUS_UNSUPPORTED;
   open = glims_lookup_image (engine, image);
   if (!open) return GLIMS_STATUS_NOT_FOUND;
@@ -410,10 +422,13 @@ glims_filter_begin_with_source (GlimsEngine *engine, GlimsImageID image,
   }
   status = glims_check_item_locks (GIMP_ITEM (drawable), GLIMS_LOCK_PIXELS, error);
   if (status != GLIMS_STATUS_OK) return status;
-  status = glims_filter_input_snapshot (engine, open, source, &snapshot, error);
+  if (lens)
+    status = glims_filter_input_lens_prepare (engine, open, drawable, source, &snapshot, error);
+  else
+    status = glims_filter_input_snapshot (engine, open, source, &snapshot, error);
   if (status != GLIMS_STATUS_OK) return status;
   status = filter_begin_internal (engine, image, target, operation, snapshot, NULL, FALSE, out, error);
-  g_object_unref (snapshot);
+  g_clear_object (&snapshot);
   return status;
 }
 
@@ -564,6 +579,13 @@ glims_filter_edit_begin (GlimsEngine   *engine,
         *error = strdup ("That effect has no editable parameters.");
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
+  /* Imported Lens graphs have not passed the owned mask/geometry contract.
+   * Opening an editable shadow would evaluate them before validation. */
+  if (!strcmp (operation, "gegl:lens-blur")) {
+    g_free (operation);
+    if (error) *error = g_strdup ("Imported Lens Blur effects cannot be edited here. Apply a new Lens Blur to pixels instead.");
+    return GLIMS_STATUS_UNSUPPORTED;
+  }
   if (!strcmp (operation, "gimp:brightness-contrast") || !strcmp (operation, "gimp:color-balance") ||
       !strcmp (operation, "gimp:hue-saturation") || !strcmp (operation, "gimp:levels") ||
       !strcmp (operation, "gimp:curves")) {
@@ -719,6 +741,12 @@ glims_filter_set_double (GlimsEngine   *engine,
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
   g_param_value_validate (pspec, &typed);
+  status = glims_filter_lens_validate (session, property, &typed);
+  g_value_unset (&number);
+  if (status != GLIMS_STATUS_OK) {
+    g_value_unset (&typed);
+    return status;
+  }
   gegl_node_set_property (session->operation, property, &typed);
   g_value_unset (&typed);
 
@@ -941,7 +969,12 @@ glims_filter_commit (GlimsEngine    *engine,
   GlimsStatus status = glims_filter_check_edit (engine, id, error);
 
   if (status != GLIMS_STATUS_OK) return status;
-  if (session->aux_source || session->aux_source2 || session->owned_oilify || uses_owned_config (session->operation)) {
+  status = glims_filter_lens_validate (session, NULL, NULL);
+  if (status != GLIMS_STATUS_OK) {
+    if (error) *error = g_strdup ("Lens Blur exceeds its geometry or memory limit; reduce the radius or image size.");
+    return status;
+  }
+  if (session->aux_source || session->aux_source2 || session->owned_oilify || session->owned_lens_blur || uses_owned_config (session->operation)) {
     status = source_merge_history_ready (session->image, error);
     if (status != GLIMS_STATUS_OK) return status;
   }

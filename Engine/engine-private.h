@@ -167,6 +167,7 @@ typedef struct
   GeglNode           *aux_source; /* owned detached snapshot node, new sessions only */
   GeglNode           *aux_source2; /* owned second map */
   gboolean            owned_oilify; /* slot170 plain and mapped merges */
+  gboolean            owned_lens_blur; /* slot147 None and captured-mask merges */
 } GlimsFilter;
 
 typedef GlimsStatus (*GlimsEngineFunc) (GlimsEngine *engine, gpointer data);
