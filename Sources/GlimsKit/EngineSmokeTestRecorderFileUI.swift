@@ -2,7 +2,8 @@ import AppKit
 
 @MainActor
 extension EngineSmokeTest {
-    static func exerciseRecorderFileUI(_ session: EngineSession, work: URL, documents: DocumentList) throws {
+    static func exerciseRecorderFileUI(_ session: EngineSession, work: URL, documents: DocumentList,
+                                       driveFilePickers: Bool) throws {
         var checks = 0
         func expect(_ condition: Bool, _ message: String) {
             checks += 1
@@ -11,8 +12,8 @@ extension EngineSmokeTest {
         func require(_ condition: Bool, _ message: String) throws {
             if !condition { throw NSError(domain: "RecorderFileUI", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
         }
-        func wait(_ condition: () -> Bool) -> Bool {
-            let deadline = Date().addingTimeInterval(12)
+        func wait(seconds: TimeInterval = 12, _ condition: () -> Bool) -> Bool {
+            let deadline = Date().addingTimeInterval(seconds)
             while !condition() && Date() < deadline { EngineSmokeTestHost.pumpEvents() }
             return condition()
         }
@@ -23,6 +24,7 @@ extension EngineSmokeTest {
         var owned: [DocumentWindowController] = []
         var unowned: [Int32] = []
         let fileURL = work.appendingPathComponent("Recorder UI file.glimsrecording")
+        let inputURL = work.appendingPathComponent("Explicit targets.glimsrecording")
         defer {
             for controller in owned {
                 if let window = controller.window, let sheet = window.attachedSheet {
@@ -39,6 +41,7 @@ extension EngineSmokeTest {
             for image in unowned { try? session.closeImage(image) }
             documents.items.removeAll { document in owned.contains { $0.imageDocument === document } }
             try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: inputURL)
             print("     recorder-file-ui checks: \(checks)")
         }
 
@@ -101,35 +104,39 @@ extension EngineSmokeTest {
         try a.presentRecorderFileAction(.saveRecording)
         try require(wait { windowA.attachedSheet is NSSavePanel }, "Save did not attach a native file panel")
         guard let cancelledSave = windowA.attachedSheet as? NSSavePanel else { throw NSError(domain: "RecorderFileUI", code: 6) }
-        cancelledSave.directoryURL = work
-        cancelledSave.nameFieldStringValue = fileURL.lastPathComponent
         cancelledSave.cancel(nil)
         try require(wait { a.canPresentRecorderFileSheet }, "cancelled file panel did not finish")
         expect(adoc.hasUnsavedRecordingChanges && !FileManager.default.fileExists(atPath: fileURL.path),
                "cancelling the native Save panel leaves the recording dirty")
 
-        try a.presentRecorderFileAction(.saveRecording)
-        try require(wait { windowA.attachedSheet is NSSavePanel }, "second native Save panel did not attach")
-        guard let save = windowA.attachedSheet as? NSSavePanel else { throw NSError(domain: "RecorderFileUI", code: 11) }
-        save.directoryURL = work
-        save.nameFieldStringValue = fileURL.lastPathComponent
-        save.ok(nil)
-        try require(wait { a.canPresentRecorderFileSheet && adoc.pendingWork == 0 }, "accepted native Save did not finish")
-        let written = try RecorderFileCodec.decode(Data(contentsOf: fileURL))
-        expect(written.name == "Named in its original window" && written.recordingID == originalA.recordingID
-                && !adoc.hasUnsavedRecordingChanges,
-               "accepting the native Save panel writes A's revision under a separate filename")
-        try adoc.renameRecording("Named after saving")
-
-        try a.presentRecorderFileAction(.loadRecording)
-        try require(wait { windowA.attachedSheet != nil }, "dirty Load did not ask for consent")
-        guard let replacementView = windowA.attachedSheet?.contentView,
-              let discard = views(replacementView, NSButton.self).first(where: { $0.title == "Discard Changes" }) else {
-            throw NSError(domain: "RecorderFileUI", code: 7, userInfo: [NSLocalizedDescriptionKey: "Replacement consent controls are absent"])
+        if driveFilePickers {
+            try a.presentRecorderFileAction(.saveRecording)
+            try require(wait { windowA.attachedSheet?.isVisible == true && windowA.attachedSheet is NSSavePanel },
+                        "second native Save panel did not attach")
+            FileHandle.standardError.write(Data("Recorder picker: save only to \(fileURL.path)\n".utf8))
+            try require(wait(seconds: 90) { a.canPresentRecorderFileSheet && adoc.pendingWork == 0 },
+                        "accepted native Save did not finish")
+            let written = try RecorderFileCodec.decode(Data(contentsOf: fileURL))
+            expect(written.name == "Named in its original window" && written.recordingID == originalA.recordingID
+                    && !adoc.hasUnsavedRecordingChanges,
+                   "accepting the native Save panel writes A's revision under a separate filename")
+            try adoc.renameRecording("Named after saving")
         }
-        discard.performClick(nil)
-        try require(wait { windowA.attachedSheet is NSOpenPanel }, "Load did not attach a native Open panel after consent")
-        expect(adoc.hasUnsavedRecordingChanges && adoc.recorderFileMetadata.name == "Named after saving",
+
+        func openAfterDiscard() throws {
+            try a.presentRecorderFileAction(.loadRecording)
+            try require(wait { windowA.attachedSheet != nil }, "dirty Load did not ask for consent")
+            guard let replacementView = windowA.attachedSheet?.contentView,
+                  let discard = views(replacementView, NSButton.self).first(where: { $0.title == "Discard Changes" }) else {
+                throw NSError(domain: "RecorderFileUI", code: 7, userInfo: [NSLocalizedDescriptionKey: "Replacement consent controls are absent"])
+            }
+            discard.performClick(nil)
+            try require(wait { windowA.attachedSheet?.isVisible == true && windowA.attachedSheet is NSOpenPanel },
+                        "Load did not attach a native Open panel after consent")
+        }
+        let dirtyBeforeOpen = adoc.recorderFileMetadata
+        try openAfterDiscard()
+        expect(adoc.hasUnsavedRecordingChanges && adoc.recorderFileMetadata == dirtyBeforeOpen,
                "Discard grants permission without clearing the old recording while Open is pending")
         (windowA.attachedSheet as? NSOpenPanel)?.cancel(nil)
         try require(wait { a.canPresentRecorderFileSheet }, "cancelled Open panel did not finish")
@@ -148,10 +155,27 @@ extension EngineSmokeTest {
                 .init(ordinal: 1, outcome: .success(.layerProperties(.init(name: "Changed two", visible: nil, opacity: nil, mode: nil)), .layer(secondSymbol)))
             ])
         let prepared = try RecorderFileSemanticBridge.prepare(file)
-        let sheet = try RecorderBindingSheetController(file: prepared.file, document: adoc)
         let checkpoint = try adoc.recorderInstallCheckpoint()
         var selection: [UUID: ImageDocument.RecorderInstallChoice]?
-        sheet.begin(on: windowA) { selection = $0 }
+        // The normal regression drives the binding UI without a machine's
+        // file-panel service. The opt-in run exercises real Save and Open;
+        // the external driver must verify the private destination before OK.
+        var directSheet: RecorderBindingSheetController?
+        if driveFilePickers {
+            try RecorderFileCodec.encode(file).write(to: inputURL, options: .atomic)
+            try openAfterDiscard()
+            FileHandle.standardError.write(Data("Recorder picker: open only \(inputURL.path)\n".utf8))
+            try require(wait(seconds: 90) {
+                guard let sheet = windowA.attachedSheet, !(sheet is NSSavePanel),
+                      let content = sheet.contentView else { return false }
+                return views(content, NSTableView.self).first != nil
+            }, "accepting the native Open panel did not reach the binding sheet")
+            expect(adoc.hasUnsavedRecordingChanges && adoc.recorderFileMetadata == dirtyBeforeOpen,
+                   "opening the real file still leaves the old revision in place until bindings are accepted")
+        } else {
+            directSheet = try RecorderBindingSheetController(file: prepared.file, document: adoc)
+            directSheet?.begin(on: windowA) { selection = $0 }
+        }
         guard let bindView = windowA.attachedSheet?.contentView,
               let table = views(bindView, NSTableView.self).first,
               let popup = views(bindView, NSPopUpButton.self).first,
@@ -178,17 +202,33 @@ extension EngineSmokeTest {
         expect(load.isEnabled, "complete distinct choices enable Load")
         load.performClick(nil)
         try require(wait { windowA.attachedSheet == nil }, "binding sheet did not finish")
-        expect(selection == [firstSymbol: .layer(later), secondSymbol: .layer(base)],
-               "visible selections return the exact independent native IDs")
-        if let selection {
-            var result: Result<Void, Error>?
-            adoc.installRecording(prepared, checkpoint: checkpoint, choices: selection) { result = $0 }
-            try require(wait { result != nil && adoc.pendingWork == 0 }, "bound recording did not drain")
-            if case .failure(let error)? = result { throw error }
+        withExtendedLifetime(directSheet) {}
+        if driveFilePickers {
+            try require(wait { a.canPresentRecorderFileSheet && adoc.pendingWork == 0 },
+                        "native Open and bound installation did not drain")
+        } else {
+            expect(selection == [firstSymbol: .layer(later), secondSymbol: .layer(base)],
+                   "visible selections return the exact independent native IDs")
+            if let selection {
+                var result: Result<Void, Error>?
+                adoc.installRecording(prepared, checkpoint: checkpoint, choices: selection) { result = $0 }
+                try require(wait { result != nil && adoc.pendingWork == 0 }, "bound recording did not drain")
+                if case .failure(let error)? = result { throw error }
+            }
         }
         expect(adoc.recorderLoadedFile == file && bdoc.recorderFileMetadata == originalB && !adoc.hasUnsavedRecordingChanges,
                "explicit Load installs only A's recording and starts it clean")
         expect(try session.undoInfo(imageA) == baselineA && session.copyPixels(imageA, merged: true).pixels == nativePixelsA,
                "naming, file dialogs, binding and installation do not edit A's pixels or history")
+        if driveFilePickers {
+            try adoc.startReplay()
+            try require(wait { adoc.replayStatus == .finished(total: 2) && adoc.pendingWork == 0 },
+                        "replay of the recording opened through the picker did not complete")
+            let layers = try session.layers(imageA)
+            expect(layers.first(where: { $0.id == later })?.name == "Changed one" &&
+                   layers.first(where: { $0.id == base })?.name == "Changed two" &&
+                   bdoc.recorderFileMetadata == originalB,
+                   "replay uses the two exact bound native layer IDs in A")
+        }
     }
 }
