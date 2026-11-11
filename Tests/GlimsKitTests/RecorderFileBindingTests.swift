@@ -78,6 +78,20 @@ final class RecorderFileBindingTests: XCTestCase {
         XCTAssertThrowsError(try decode(fixture(target: quickTarget, selectedChannel: quick, quickEnabled: false, editingMask: false)))
     }
 
+    private func transformFixture(_ kind: String) -> String {
+        let symbol = #"{"id":"55555555-5555-5555-5555-555555555555","description":{"name":"T","kind":"\#(kind)","ancestors":[],"siblingIndex":0,"bounds":{"x":0,"y":0,"width":1,"height":1}}}"#
+        return #"{"format":"ch.lkmc.Glims.recording","version":4,"recordingID":"11111111-1111-1111-1111-111111111111","name":"Bound","origin":{"imageLabel":"A","initialWidth":41,"initialHeight":29},"symbols":["# + symbol + #"],"records":[{"ordinal":0,"outcome":"success","command":{"tag":"transformLayer","matrix":{"a":0.5,"b":0.25,"c":-0.75,"d":1.25,"tx":-4.5,"ty":8},"interpolation":"linear"},"binding":{"kind":"layer","symbol":"55555555-5555-5555-5555-555555555555"}}]}"#
+    }
+
+    func testLayerTransformBindsEveryLayerKindButNeverAChannelRole() {
+        for kind in ["pixel", "group", "text", "link", "vector"] {
+            XCTAssertNoThrow(try decode(transformFixture(kind)), kind)
+        }
+        for kind in ["channel", "quickMask"] {
+            XCTAssertThrowsError(try decode(transformFixture(kind)), kind)
+        }
+    }
+
     func testSelectAlphaUsesTheSameOwnedContextAndNoNumericEnums() throws {
         let text = replace(fixture(), #""tag":"selectColor","point":{"x":0,"y":0},"options":{"operation":"replace","antialias":true,"feather":0,"cornerRadius":0,"threshold":0,"contiguous":true,"sampleMerged":false}"#,
                            #""tag":"selectCommand","command":"fromAlpha","radius":0"#)
