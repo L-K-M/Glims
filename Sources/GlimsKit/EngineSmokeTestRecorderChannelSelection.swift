@@ -76,7 +76,7 @@ extension EngineSmokeTest {
             let copy = try session.duplicateImage(image)
             defer { try? session.closeImage(copy) }
             let channel = try session.channelFromSelection(copy, name: "Selection oracle")
-            guard let rendered = try session.drawableThumbnail(channel, image: copy, maxSize: 4096),
+            guard let rendered = try session.drawableThumbnail(channel, image: copy, maxSize: 64),
                   let bytes = rendered.dataProvider?.data as Data? else {
                 throw NSError(domain: "RecorderChannelSelectionFixture", code: 2)
             }
@@ -125,6 +125,44 @@ extension EngineSmokeTest {
             for handle in loose { try? session.closeImage(handle) }
             try? FileManager.default.removeItem(at: directory)
             print("     recorder-channel-selection checks: \(checks)")
+        }
+
+        if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-channel-quick-mask" {
+            let item = try document("Quick Mask source recording")
+            item.doc.setQuickMask(true)
+            try drain(item.doc)
+            guard let quickMask = item.doc.channels.first(where: { $0.isQuickMask }) else {
+                throw NSError(domain: "RecorderChannelSelectionFixture", code: 5)
+            }
+            var options = EngineSession.SelectOptions()
+            options.sampleMerged = false
+            var liveErrors: [String] = []
+            item.doc.onError = { liveErrors.append($0) }
+            try record(item.doc) {
+                item.doc.selectColor(at: CGPoint(x: 20, y: 15), options: options)
+                item.doc.channelToSelection(quickMask.id, operation: .replace)
+            }
+            expect(item.doc.recorder.records.count == 2, "both Quick Mask actions retain their acceptance order")
+            expect(liveErrors.isEmpty, "portable-recording refusal does not reject either live Quick Mask action")
+            let unsupported: Bool
+            if let row = item.doc.recorder.records.last, case .failure(let reason) = row.resolution {
+                unsupported = reason.contains("Quick Mask")
+            } else { unsupported = false }
+            expect(unsupported, "Quick Mask To Selection is explicitly unavailable for portable recording")
+            var result: Result<ImageDocument.RecorderSaveOutcome, Error>?
+            let url = directory.appendingPathComponent("quick-mask.glimsrecording")
+            item.doc.saveRecording(to: url, checkpoint: try item.doc.recorderInstallCheckpoint()) { result = $0 }
+            try drain(item.doc)
+            let saved: Bool
+            if case .success? = result { saved = true } else { saved = false }
+            expect(saved, "the mixed recording remains saveable without conflicting channel-symbol roles")
+            if saved {
+                let file = try RecorderFileCodec.decode(Data(contentsOf: url))
+                let failed: Bool
+                if case .failure = file.records.last?.outcome { failed = true } else { failed = false }
+                expect(failed, "the saved recording retains the explicit unsupported row")
+            }
+            return
         }
 
         // Independent native oracles on bare images: the exact expected

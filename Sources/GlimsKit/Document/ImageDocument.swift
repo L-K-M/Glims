@@ -3076,12 +3076,15 @@ final class ImageDocument {
     }
 
     func channelToSelection(_ id: Int32, operation: EngineSession.SelectOperation) {
-        guard !refuseWhileEditingUnavailable(), channels.contains(where: { $0.id == id }) else { return }
+        guard !refuseWhileEditingUnavailable(), let source = channels.first(where: { $0.id == id }) else { return }
         endPendingUserEdits()
         let semantic = SemanticImageCommand.channelToSelection(operation)
+        let recordingFailure = source.isQuickMask
+            ? "Quick Mask To Selection cannot be saved as a portable channel command. Turn off Quick Mask and use a saved channel."
+            : nil
         // The explicit source channel `id` — not the active paint target — is
         // bound for recording and replay.
-        run(semantic: semantic, recorderChannel: id) { session, image in
+        run(semantic: semantic, recorderChannel: id, recordingFailure: recordingFailure) { session, image in
             try session.channelToSelection(id, image: image, operation: operation)
         }
     }
@@ -5531,7 +5534,7 @@ final class ImageDocument {
             // Bind the explicitly invoked source channel, validated against
             // the cached channel list; the active paint target is not consulted.
             guard let channel = explicitChannel, channel > 0,
-                  channels.contains(where: { $0.id == channel }) else {
+                  channels.contains(where: { $0.id == channel && !$0.isQuickMask }) else {
                 return .unavailable("The recorded source channel is not a current channel of this image; record it again.")
             }
             return .channel(channel)
@@ -5573,7 +5576,7 @@ final class ImageDocument {
         if case .channel(let channel) = context {
             // Fresh native validation of the explicit source channel before
             // any mutation; the active paint target is never substituted.
-            guard channel > 0, try session.channels(image).contains(where: { $0.id == channel }) else {
+            guard channel > 0, try session.channels(image).contains(where: { $0.id == channel && !$0.isQuickMask }) else {
                 throw RecorderReplayError(message: "The recorded source channel no longer belongs to this native image.")
             }
             return
@@ -5793,6 +5796,7 @@ final class ImageDocument {
     @discardableResult
     func run(effect: CommandEffect = .changesImage, semantic: SemanticImageCommand? = nil, recorderLayer: Int32? = nil,
              recorderChannel: Int32? = nil,
+             recordingFailure: String? = nil,
              _ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
         guard !isClosing else { return false }
         if effect != .readsPixels && refuseWhileEditingUnavailable(forPreviewWork: effect == .changesPreview) {
@@ -5808,7 +5812,15 @@ final class ImageDocument {
             let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
             let result = Result { try work(session, image) }
             if case .failure(let error) = result { self.report(error) }
-            if let semantic { self.settleRecording(capture, result: result.map { semantic }, confirmed: confirmed) }
+            if let semantic {
+                let recordingResult = result.flatMap { _ -> Result<SemanticImageCommand, Error> in
+                    if let recordingFailure {
+                        return .failure(RecorderReplayError(message: recordingFailure))
+                    }
+                    return .success(semantic)
+                }
+                self.settleRecording(capture, result: recordingResult, confirmed: confirmed)
+            }
         }
         // Notify only after queue admission/counting: a listener may close the
         // document or start a fresh epoch, and accepted work must still drain.

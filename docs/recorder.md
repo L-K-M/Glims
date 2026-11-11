@@ -1,5 +1,9 @@
 # Recorder
 
+Channel > To Selection records ordinary saved channels. Using the transient
+Quick Mask channel keeps the live edit and adds an explicit failed recording
+row; the log remains saveable, and replay refuses its incomplete sequence.
+
 The Recorder palette shows the open image's recorded semantic commands in
 acceptance order, with explicit Recorded, Failed or Cancelled text. Window >
 Recorder opens it. Edit > Recorder and the palette expose the same commands.

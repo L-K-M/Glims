@@ -276,7 +276,7 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (recorder capture)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
-            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-channel-selection" {
+            if ["recorder-channel-selection", "recorder-channel-quick-mask"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? "") {
                 try exerciseRecorderChannelSelection(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (recorder channel selection)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
