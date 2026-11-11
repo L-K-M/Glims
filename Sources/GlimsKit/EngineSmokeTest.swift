@@ -150,6 +150,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Recorder file UI)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-revert-ui" {
+                try exerciseRecorderRevertUI(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Recorder Revert UI)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-consent-ui" {
                 try exerciseRecorderConsentUI(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (Recorder consent UI)" : "FAILED: \(failures) failure(s)")
