@@ -183,6 +183,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (tablet eraser proximity)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-affine" {
+                try exerciseRecorderAffine(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (recorder affine)" : "FAILED (recorder affine): \(failures)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-layer-properties" {
                 try exerciseRecorderLayerProperties(session, documents: documents)
                 print(failures == 0 ? "PASSED (recorder layer properties)" : "FAILED: \(failures) failure(s)")
@@ -490,6 +495,11 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tool-color-menus" {
                 try exerciseToolColorMenus(session, documents: documents)
                 print(failures == 0 ? "PASSED (tool color menus)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "color-conversions" {
+                try exerciseColorConversions(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (color conversions)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "working-profile-title" {
@@ -1640,7 +1650,7 @@ enum EngineSmokeTest {
                 && !document.colorInfo.hasEmbeddedProfile
                 && !document.colorInfo.profileLabel.isEmpty,
               "a fresh document caches RGB u8 non-linear state and the builtin profile")
-        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision) · \(document.colorInfo.profileLabel))",
+        check(controller.window?.title == "• Color @ 100% (RGB, 8-bit integer · Non-linear · \(document.colorInfo.profileLabel))",
               "the title reports the cached mode and precision")
 
         // The Mode items check the cached mode — RGB here — and
@@ -1667,7 +1677,7 @@ enum EngineSmokeTest {
               "the reload reports the image grayscale")
         check(document.undoInfo.undoCount == undoBefore + 1, "the conversion is one undo step")
         check(document.hasUnsavedChanges, "the converted image is dirty")
-        check(controller.window?.title == "• Color @ 100% (Grayscale, \(document.info.precision) · \(document.colorInfo.profileLabel))",
+        check(controller.window?.title == "• Color @ 100% (Grayscale, 8-bit integer · Non-linear · \(document.colorInfo.profileLabel))",
               "the title follows the conversion")
         _ = controller.validateMenuItem(modeRGB)
         _ = controller.validateMenuItem(modeGray)
@@ -1787,7 +1797,7 @@ enum EngineSmokeTest {
         check(document.colorInfo.component == .half && document.colorInfo.trc == .linear,
               "the form's choice converts to 16-bit float linear")
         check(document.undoInfo.undoCount == undoBefore + 1, "the precision conversion is one undo step")
-        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision) · \(document.colorInfo.profileLabel))",
+        check(controller.window?.title == "• Color @ 100% (RGB, 16-bit float · Linear · \(document.colorInfo.profileLabel))",
               "the title shows the new precision")
 
         // Undo and redo carry the color state; the title follows both.
@@ -1796,7 +1806,7 @@ enum EngineSmokeTest {
         spin()
         check(document.colorInfo.component == .u8 && document.colorInfo.trc == .nonlinear,
               "undo restores the earlier precision")
-        check(controller.window?.title == "• Color @ 100% (RGB, \(document.info.precision) · \(document.colorInfo.profileLabel))",
+        check(controller.window?.title == "• Color @ 100% (RGB, 8-bit integer · Non-linear · \(document.colorInfo.profileLabel))",
               "the title follows undo")
         document.redo()
         wait { document.pendingWork == 0 }
@@ -1834,7 +1844,7 @@ enum EngineSmokeTest {
         let reopenedController = DocumentWindowController(document: reopenedDocument)
         reopenedController.showWindow(nil)
         defer { reopenedController.window?.close() }
-        check(reopenedController.window?.title == "Color @ 100% (RGB, \(reopenedDocument.info.precision) · \(reopenedDocument.colorInfo.profileLabel))",
+        check(reopenedController.window?.title == "Color @ 100% (RGB, 16-bit float · Linear · \(reopenedDocument.colorInfo.profileLabel))",
               "a reopened document titles from its own state")
 
         // Asking for the mode the image already has is a no-op: no
