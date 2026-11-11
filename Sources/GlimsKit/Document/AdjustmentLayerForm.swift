@@ -14,10 +14,17 @@ enum AdjustmentLayerLogic {
     }
 
     /// The small useful set of generic single-input color adjustments,
-    /// by the engine's operation names, in display order. Only these are
-    /// offered; the catalog decides which of them are actually supported.
+    /// by the engine's operation names, in display order. The `gimp:`
+    /// entries are the dedicated config operations whose native editors
+    /// the effect-parameter routing already drives on a committed effect.
+    /// Only these are offered; the catalog decides which of them are
+    /// actually supported.
     static let knownOperations: [(name: String, title: String)] = [
         ("gegl:brightness-contrast", "Brightness/Contrast"),
+        ("gimp:levels", "Levels"),
+        ("gimp:curves", "Curves"),
+        ("gimp:color-balance", "Color Balance"),
+        ("gimp:hue-saturation", "Hue-Saturation"),
         ("gegl:exposure", "Exposure"),
         ("gegl:hue-chroma", "Hue/Chroma"),
         ("gegl:saturation", "Saturation"),
@@ -26,14 +33,16 @@ enum AdjustmentLayerLogic {
         ("gegl:invert-gamma", "Value Invert"),
     ]
 
-    /// The catalog's operations of the known set that the generic form
-    /// can drive (`support == .supported`), in the known set's display
-    /// order regardless of catalog order. Unsupported, config-driven,
-    /// two-input and unknown operations never appear — there is no
-    /// fallback to an unlisted operation.
+    /// The catalog's operations of the known set that a parameter editor
+    /// can drive — the generic form's `.supported` operations plus the
+    /// dedicated config operations the effect-parameter routing owns —
+    /// in the known set's display order regardless of catalog order.
+    /// Unsupported, uneditable config-driven, two-input and unknown
+    /// operations never appear — there is no fallback to an unlisted
+    /// operation.
     static func availableOperations(in catalog: [EngineSession.FilterOperation]) -> [EngineSession.FilterOperation] {
         knownOperations.compactMap { known in
-            catalog.first { $0.name == known.name && $0.support == .supported }
+            catalog.first { $0.name == known.name && NativeFilterMenuLayout.supportsParameterEditor($0) }
         }
     }
 
