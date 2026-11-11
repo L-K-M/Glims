@@ -4164,3 +4164,17 @@ form and Swift bridge pass25 mandatory checks, and all 1,229 units pass.
 Independent source review found no important issue. Latest-head CI and final
 integration are pending. See [soft-proof rendering](soft-proof-render.md)
 for the full contract and hardware/HDR limitations.
+
+
+### Native float color sampling (2026-11-11 candidate)
+
+The Color Picker and Option-paint sampling now use a straight nonlinear sRGB
+double read from the native projection, before display-byte quantization.
+Owned output type and slot 174 extend API version 1. Opaque tool colors keep
+native fractions and explicitly report clipping of extended samples to the
+editing range. Image pixels, profile, selection and Undo stay unchanged.
+The independent native fixture passes 480 checks across four engines, and
+the actual picker/wide-gamut workflows pass 48. General conformance and codec
+checks pass on all four engines; source review found no important issue.
+Latest-head unit/CI and final packaging remain pending. See
+[the sampling contract](float-color-sampling.md).

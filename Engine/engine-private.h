@@ -207,6 +207,8 @@ GlimsStatus glims_image_close      (GlimsEngine *e, GlimsImageID id);
 GlimsStatus glims_image_info       (GlimsEngine *e, GlimsImageID id, GlimsImageInfo *info);
 GlimsStatus glims_image_render     (GlimsEngine *e, GlimsImageID id, double scale, GlimsRect area,
                                     uint8_t *pixels, size_t stride);
+GlimsStatus glims_image_sample_color (GlimsEngine *e, GlimsImageID id, int32_t x, int32_t y,
+                                      GlimsSampledColor *out, char **error);
 /* Shared lazy projection preparation for one synchronous area read,
  * used by both renderers (image.c, display-render.c): validates `scale`
  * and `area` (finite 0 < scale <= MAX_RENDER_SCALE, width/height >= 1),

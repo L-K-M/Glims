@@ -1194,15 +1194,23 @@ final class CanvasToolController {
     }
 
     private func pickColor(at point: CGPoint) {
-        guard point.x >= 0, point.y >= 0, point.x < Double(document.info.width), point.y < Double(document.info.height),
-              let pixel = try? document.session.render(document.image, scale: 1,
-                                                       area: CGRect(x: floor(point.x), y: floor(point.y), width: 1, height: 1)),
-              let data = pixel.dataProvider?.data as Data?, data.count >= 4 else { return }
-        let alpha = Double(data[3]) / 255
-        let unpremultiply = { (value: UInt8) in alpha > 0 ? min(1, Double(value) / 255 / alpha) : 0 }
-        ToolState.shared.foreground = NSColor(srgbRed: unpremultiply(data[0]), green: unpremultiply(data[1]),
-                                              blue: unpremultiply(data[2]), alpha: 1)
-        ToolState.shared.notifyChange()
+        guard point.x >= 0, point.y >= 0, point.x < Double(document.info.width),
+              point.y < Double(document.info.height) else { return }
+        do {
+            let sample = try document.session.sampleColor(document.image,
+                x: Int(floor(point.x)), y: Int(floor(point.y)))
+            // Editing colors use bounded sRGB and opaque alpha. Keep the
+            // native fraction; clipping is separate from display quantization.
+            let components = sample.alpha > 0 ? [sample.red, sample.green, sample.blue] : [0, 0, 0]
+            let bounded = components.map { min(1, max(0, $0)) }
+            ToolState.shared.foreground = NSColor(srgbRed: bounded[0], green: bounded[1], blue: bounded[2], alpha: 1)
+            ToolState.shared.notifyChange()
+            if components != bounded {
+                onStatus?("The sampled color is outside sRGB; the tool color is clipped to 0–1.")
+            }
+        } catch {
+            onStatus?("Could not sample the image color: \(error)")
+        }
     }
 
     // MARK: Keys

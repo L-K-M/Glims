@@ -71,5 +71,35 @@ extension EngineSmokeTest {
         check((try? session.info(image)) == before && (try? session.undoInfo(image)) == history
                 && (try? session.copyPixels(image, merged: true).pixels) == pixels,
               "float picker: sampling leaves image state, pixels and Undo unchanged")
+
+        guard let p3 = CGColorSpace(name: CGColorSpace.displayP3)?.copyICCData() as Data? else {
+            return check(false, "float picker: the wide-gamut fixture profile is available")
+        }
+        let profile = FileManager.default.temporaryDirectory.appendingPathComponent("picker-p3-\(UUID().uuidString).icc")
+        try p3.write(to: profile)
+        defer { try? FileManager.default.removeItem(at: profile) }
+        // Assign after filling so the stored red becomes an actual P3 red;
+        // filling after assignment would convert sRGB red into the working space.
+        try session.fill(image: image, at: .zero, mode: .selection,
+                         color: NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
+        try session.assignProfile(image, path: profile.path)
+        let wide = try session.sampleColor(image, x: 2, y: 3)
+        check(wide.red > 1 && (wide.green < 0 || wide.blue < 0),
+              "float picker: the native wide-gamut sample really exceeds bounded sRGB")
+        let wideInfo = try session.info(image), wideHistory = try session.undoInfo(image)
+        let wideColor = try session.colorInfo(image)
+        let priorStatus = owner.canvas.tools.onStatus
+        var messages: [String] = []
+        owner.canvas.tools.onStatus = { message in messages.append(message); priorStatus?(message) }
+        pick(CGPoint(x: 2.5, y: 3.5), tool: .eyedropper)
+        owner.canvas.tools.onStatus = priorStatus
+        let selected = state.foreground.usingColorSpace(.sRGB)
+        check(selected?.redComponent == 1 && selected?.greenComponent == 0 && selected?.blueComponent == 0,
+              "float picker: an extended sample is bounded only when becoming an editing color")
+        check(messages.contains { $0.contains("clipped to 0–1") },
+              "float picker: editing-color clipping is explicitly reported")
+        check((try? session.info(image)) == wideInfo && (try? session.undoInfo(image)) == wideHistory
+            && (try? session.colorInfo(image)) == wideColor,
+              "float picker: clipping the tool color leaves the wide-gamut image and Undo unchanged")
     }
 }

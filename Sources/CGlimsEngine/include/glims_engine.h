@@ -304,6 +304,14 @@ typedef struct GlimsColor {
   double red, green, blue, alpha; /* sRGB, 0 ... 1 */
 } GlimsColor;
 
+/* A sampled composite color, before display quantization or proofing.
+ * Straight (unassociated), nonlinear sRGB components; RGB may be outside
+ * 0 ... 1 for wide-gamut/HDR source colors. Alpha is finite in 0 ... 1.
+ * This is distinct from the bounded GlimsColor used by editing commands. */
+typedef struct GlimsSampledColor {
+  double red, green, blue, alpha;
+} GlimsSampledColor;
+
 typedef enum GlimsFillMode {
   GLIMS_FILL_SIMILAR_COLORS = 1,  /* the area of similar color around the point */
   GLIMS_FILL_SELECTION      = 2   /* the selection, or the whole layer */
@@ -3459,6 +3467,18 @@ typedef struct GlimsEngineAPI {
                                      GlimsStrokeID stroke,
                                      const GlimsStrokePacketV2 *packet,
                                      char **error);
+  /* Slot174: read one composited image pixel as straight nonlinear sRGB
+   * doubles, without an 8-bit display conversion or premultiply roundtrip.
+   * Native projection precision still applies. x/y must lie inside the
+   * image canvas; INVALID_ARGUMENT otherwise or for NULL out. NOT_FOUND
+   * for an unknown image; FAILED for nonfinite native components. A read,
+   * allowed during edits like image_render: no pixels, selection, profile,
+   * dirty state or Undo changes. Public entry clears *out on every failure,
+   * including stopped-engine dispatch, and clears *error when supplied.
+   * No caller pointer is retained. */
+  GlimsStatus (*image_sample_color) (GlimsEngine *engine, GlimsImageID image,
+                                     int32_t x, int32_t y,
+                                     GlimsSampledColor *out, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
