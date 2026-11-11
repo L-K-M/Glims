@@ -1963,13 +1963,15 @@ final class ImageDocument {
     func readSoftProofProfile(at url: URL, proofIntent: EngineSession.ProfileIntent,
                               displayIntent: EngineSession.ProfileIntent,
                               blackPointCompensation: Bool, destination: CanvasDisplayDestination,
+                              gamutWarnings: Bool = false,
                               completion: @escaping @MainActor (Result<CanvasSoftProof, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         enqueue(on: inputQueue) { [session, image] in
             let result = Result {
                 let proof = try CanvasSoftProof(profileICC: ICCProfileFile.read(url),
                     profileName: url.lastPathComponent, proofIntent: proofIntent,
-                    displayIntent: displayIntent, blackPointCompensation: blackPointCompensation)
+                    displayIntent: displayIntent, blackPointCompensation: blackPointCompensation,
+                    gamutWarnings: gamutWarnings)
                 _ = try CanvasDisplayDestination.render(session, image: image, scale: 1,
                     area: CGRect(x: 0, y: 0, width: 1, height: 1), destination: destination, proof: proof)
                 return proof

@@ -20,6 +20,7 @@ final class CanvasSoftProofTests: XCTestCase {
         XCTAssertEqual(proof.proofIntent, .absoluteColorimetric)
         XCTAssertEqual(proof.displayIntent, .perceptual)
         XCTAssertTrue(proof.blackPointCompensation)
+        XCTAssertFalse(proof.gamutWarnings)
     }
 
     func testOptionChangesHaveIndependentWindowValueIdentity() throws {
@@ -27,6 +28,10 @@ final class CanvasSoftProofTests: XCTestCase {
         let first = try CanvasSoftProof(profileICC: bytes, profileName: "Proof")
         let second = try CanvasSoftProof(profileICC: bytes, profileName: "Proof", blackPointCompensation: true)
         XCTAssertNotEqual(first, second)
+        let warnings = try CanvasSoftProof(profileICC: bytes, profileName: "Proof", gamutWarnings: true)
+        XCTAssertNotEqual(first, warnings)
+        XCTAssertNotEqual(second, warnings)
+        XCTAssertEqual(warnings.profileICC, first.profileICC)
         XCTAssertEqual(first, try CanvasSoftProof(profileICC: bytes, profileName: "Proof"))
     }
 }
