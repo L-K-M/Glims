@@ -3,6 +3,7 @@
 #include "core/gimpdynamics.h"
 #include "core/gimpdynamicsoutput.h"
 #include "core/gimpobject.h"
+#include "core/gimpviewable.h"
 
 #include <math.h>
 #include <string.h>
@@ -19,9 +20,27 @@
 #define DYNAMICS_MAX_NAME_BYTES 255u
 
 static gboolean
+viewable_metadata_supported (GimpViewable *viewable)
+{
+  const gchar *name = gimp_object_get_name (viewable);
+  const gchar *icon = gimp_viewable_get_icon_name (viewable);
+  if ((name && strnlen (name, DYNAMICS_MAX_NAME_BYTES + 1) > DYNAMICS_MAX_NAME_BYTES) ||
+      (icon && strnlen (icon, DYNAMICS_MAX_NAME_BYTES + 1) > DYNAMICS_MAX_NAME_BYTES))
+    return FALSE;
+  /* This getter only references the existing object. Serializing a pixbuf
+   * would instead allocate PNG and base64 data before the final byte cap. */
+  GObject *pixbuf = NULL;
+  g_object_get (viewable, "icon-pixbuf", &pixbuf, NULL);
+  gboolean absent = pixbuf == NULL;
+  g_clear_object (&pixbuf);
+  return absent;
+}
+
+static gboolean
 curve_supported (GimpCurve *curve)
 {
-  if (!curve || G_OBJECT_TYPE (curve) != GIMP_TYPE_CURVE)
+  if (!curve || G_OBJECT_TYPE (curve) != GIMP_TYPE_CURVE ||
+      !viewable_metadata_supported (GIMP_VIEWABLE (curve)))
     return FALSE;
   gint count = gimp_curve_get_n_points (curve);
   if (count < 0 || count > DYNAMICS_MAX_POINTS ||
@@ -37,6 +56,22 @@ curve_supported (GimpCurve *curve)
   for (gint i = 0; i < 256; i++)
     if (!isfinite (curve->samples[i]))
       return FALSE;
+  guint properties_count = 0;
+  g_autofree GParamSpec **properties = g_object_class_list_properties (G_OBJECT_GET_CLASS (curve),
+                                                                     &properties_count);
+  if (properties_count > DYNAMICS_MAX_PROPERTIES) return FALSE;
+  for (guint i = 0; i < properties_count; i++)
+    {
+      GParamSpec *spec = properties[i];
+      if (!(spec->flags & GIMP_CONFIG_PARAM_SERIALIZE) || (spec->flags & GIMP_CONFIG_PARAM_IGNORE))
+        continue;
+      if (!(spec->flags & G_PARAM_READABLE)) return FALSE;
+      const gchar *name = spec->name;
+      if (strcmp (name, "curve-type") && strcmp (name, "n-points") && strcmp (name, "points") &&
+          strcmp (name, "point-types") && strcmp (name, "n-samples") && strcmp (name, "samples") &&
+          strcmp (name, "name") && strcmp (name, "icon-name") && strcmp (name, "icon-pixbuf"))
+        return FALSE;
+    }
   return TRUE;
 }
 
@@ -86,7 +121,8 @@ output_supported (GimpDynamicsOutput *output, gboolean size_output)
 static gboolean
 dynamics_supported (GimpDynamics *dynamics)
 {
-  if (!dynamics || G_OBJECT_TYPE (dynamics) != GIMP_TYPE_DYNAMICS)
+  if (!dynamics || G_OBJECT_TYPE (dynamics) != GIMP_TYPE_DYNAMICS ||
+      !viewable_metadata_supported (GIMP_VIEWABLE (dynamics)))
     return FALSE;
   const gchar *name = gimp_object_get_name (GIMP_OBJECT (dynamics));
   if (name && strnlen (name, DYNAMICS_MAX_NAME_BYTES + 1) > DYNAMICS_MAX_NAME_BYTES)
@@ -115,27 +151,14 @@ dynamics_supported (GimpDynamics *dynamics)
       else if ((spec->flags & GIMP_CONFIG_PARAM_SERIALIZE) &&
                !(spec->flags & GIMP_CONFIG_PARAM_IGNORE))
         {
-          /* GimpViewable serializes cosmetic icon fields too. Bound the
-           * ordinary names and admit only the stock, absent pixbuf, so
-           * serialization cannot allocate an arbitrary embedded image. */
+          /* Values were bounded through borrowed/native getters above. */
           if ((!strcmp (spec->name, "name") || !strcmp (spec->name, "icon-name")) &&
               spec->value_type == G_TYPE_STRING && (spec->flags & G_PARAM_READABLE))
-            {
-              g_autofree gchar *value = NULL;
-              g_object_get (dynamics, spec->name, &value, NULL);
-              if (value && strnlen (value, DYNAMICS_MAX_NAME_BYTES + 1) > DYNAMICS_MAX_NAME_BYTES)
-                return FALSE;
-            }
+            continue;
           else if (!strcmp (spec->name, "icon-pixbuf") &&
                    g_type_is_a (spec->value_type, G_TYPE_OBJECT) &&
                    (spec->flags & G_PARAM_READABLE))
-            {
-              GObject *pixbuf = NULL;
-              g_object_get (dynamics, spec->name, &pixbuf, NULL);
-              gboolean absent = pixbuf == NULL;
-              g_clear_object (&pixbuf);
-              if (!absent) return FALSE;
-            }
+            continue;
           else return FALSE;
         }
     }
