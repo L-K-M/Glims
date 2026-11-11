@@ -1384,6 +1384,32 @@ stroke_begin_with_capture_facts_on_engine (GlimsEngine *e, gpointer data)
                                                 &a->stroke, &a->facts, a->error);
 }
 
+typedef struct
+{
+  GlimsImageID image;
+  GlimsItemID drawable;
+  GlimsResourceID brush_resource;
+  const GlimsBrushSettings *brush;
+  const GlimsStrokePacketV2 *packet;
+  GlimsStrokeID stroke;
+  char **error;
+} GlimsStrokeV2Args;
+
+static GlimsStatus
+stroke_begin_v2_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsStrokeV2Args *a = data;
+  return glims_stroke_begin_v2 (e, a->image, a->drawable, a->brush_resource,
+                                a->brush, a->packet, &a->stroke, a->error);
+}
+
+static GlimsStatus
+stroke_continue_v2_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsStrokeV2Args *a = data;
+  return glims_stroke_continue_v2 (e, a->stroke, a->packet, a->error);
+}
+
 /* selection_stroke carries a full 64-bit resource handle besides the
  * brush settings, so it gets its own args struct; the id never travels
  * in one of GlimsArgs' 32-bit fields. */
@@ -1617,6 +1643,30 @@ api_stroke_end (GlimsEngine *e, GlimsStrokeID stroke)
 {
   GlimsArgs a = { .item = stroke };
   return glims_engine_call (e, stroke_end_on_engine, &a);
+}
+
+static GlimsStatus
+api_stroke_begin_v2 (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
+                     GlimsResourceID brush_resource, const GlimsBrushSettings *brush,
+                     const GlimsStrokePacketV2 *packet, GlimsStrokeID *out, char **error)
+{
+  if (out) *out = 0;
+  if (error) *error = NULL;
+  if (!out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsStrokeV2Args a = {.image = image, .drawable = drawable, .brush_resource = brush_resource,
+                        .brush = brush, .packet = packet, .error = error};
+  GlimsStatus status = glims_engine_call (e, stroke_begin_v2_on_engine, &a);
+  if (status == GLIMS_STATUS_OK) *out = a.stroke;
+  return status;
+}
+
+static GlimsStatus
+api_stroke_continue_v2 (GlimsEngine *e, GlimsStrokeID stroke,
+                        const GlimsStrokePacketV2 *packet, char **error)
+{
+  if (error) *error = NULL;
+  GlimsStrokeV2Args a = {.stroke = stroke, .packet = packet, .error = error};
+  return glims_engine_call (e, stroke_continue_v2_on_engine, &a);
 }
 
 static GlimsStatus
@@ -3473,6 +3523,8 @@ static const GlimsEngineAPI api_v1 = {
   .filter_begin_displace_with_sources = api_filter_begin_displace_with_sources,
   .filter_begin_oilify_with_sources = api_filter_begin_oilify_with_sources,
   .stroke_begin_with_capture_facts = api_stroke_begin_with_capture_facts,
+  .stroke_begin_v2 = api_stroke_begin_v2,
+  .stroke_continue_v2 = api_stroke_continue_v2,
 };
 
 __attribute__ ((visibility ("default")))
