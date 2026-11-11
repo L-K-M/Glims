@@ -144,9 +144,8 @@ final class ColorControlsTests: XCTestCase {
                                 profileLabel: profile, hasEmbeddedProfile: embedded)
     }
 
-    private func rows(_ colorInfo: EngineSession.ColorInfo,
-                      precision: String = "u8-non-linear") -> [String: String] {
-        Dictionary(uniqueKeysWithValues: ColorForms.informationRows(colorInfo: colorInfo, precision: precision)
+    private func rows(_ colorInfo: EngineSession.ColorInfo) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: ColorForms.informationRows(colorInfo: colorInfo)
             .map { ($0.label, $0.value) })
     }
 
@@ -167,13 +166,13 @@ final class ColorControlsTests: XCTestCase {
 
     /// No profile at all reports "None" — and invents no source for it.
     func testTheInformationRowsReportNoProfile() {
-        let values = ColorForms.informationRows(colorInfo: info(profile: ""), precision: "u8-non-linear")
+        let values = ColorForms.informationRows(colorInfo: info(profile: ""))
         XCTAssertEqual(Dictionary(uniqueKeysWithValues: values.map { ($0.label, $0.value) })["Color profile"], "None")
         XCTAssertFalse(values.contains { $0.label == "Profile source" })
     }
 
     /// An unreadable precision reports "Unknown", never an empty cell.
     func testTheInformationRowsReportUnknownPrecision() {
-        XCTAssertEqual(rows(info(), precision: "")["Precision"], "Unknown")
+        XCTAssertEqual(rows(info(component: .unknown))["Precision"], "Unknown")
     }
 }
