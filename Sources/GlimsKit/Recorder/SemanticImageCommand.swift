@@ -48,12 +48,16 @@ enum SemanticImageCommand {
     /// The explicit layer lives in the document's runtime binding, never in
     /// this command, and is never silently adapted to a rebound layer.
     case transformLayer(matrix: CGAffineTransform, interpolation: EngineSession.Interpolation)
+    /// A newly applied Levels adjustment with its whole accepted native
+    /// settings. The explicit layer lives in the document's runtime binding,
+    /// never in this command; there is no active-layer fallback.
+    case applyLevels(EngineSession.LevelsSettings)
     case completeStroke(RecorderStrokeCommand)
 
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .transformLayer, .scale, .resizeCanvas, .crop, .completeStroke: return true
+        case .transformImage, .transformLayer, .applyLevels, .scale, .resizeCanvas, .crop, .completeStroke: return true
         case .selectionShape, .selectColor, .selectCommand, .channelToSelection, .layerProperties: return false
         }
     }
@@ -93,6 +97,7 @@ enum SemanticImageCommand {
         case .crop: return "Crop Image"
         case .layerProperties: return "Layer Properties"
         case .transformLayer: return "Transform Layer"
+        case .applyLevels: return "Levels"
         case .completeStroke(let stroke): return stroke.title
         }
     }
@@ -115,7 +120,7 @@ enum SemanticImageCommand {
             try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill)
         case .crop(let rect):
             try session.crop(image: image, to: rect)
-        case .layerProperties, .transformLayer, .completeStroke:
+        case .layerProperties, .transformLayer, .applyLevels, .completeStroke:
             throw MissingLayerBinding()
         case .channelToSelection:
             throw MissingChannelBinding()
@@ -132,6 +137,19 @@ enum SemanticImageCommand {
         case .transformLayer(let matrix, let interpolation):
             guard layer > 0 else { throw MissingLayerBinding() }
             try session.transformLayer(layer, image: image, matrix: matrix, interpolation: interpolation)
+        case .applyLevels(let settings):
+            guard layer > 0 else { throw MissingLayerBinding() }
+            // A fresh session on the bound layer: one commit, one Undo. A
+            // failed set or commit aborts the new preview so replay never
+            // leaks a live filter session.
+            let filter = try session.beginFilter(image: image, drawable: layer, operation: "gimp:levels")
+            do {
+                try session.setLevelsSettings(filter, to: settings)
+                try session.commitFilter(filter)
+            } catch {
+                try? session.abortFilter(filter)
+                throw error
+            }
         case .completeStroke(let stroke):
             guard layer > 0 else { throw MissingLayerBinding() }
             try stroke.apply(session: session, image: image, layer: layer)
