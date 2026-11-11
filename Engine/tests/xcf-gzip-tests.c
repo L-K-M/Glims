@@ -142,6 +142,22 @@ split_xcf_prefix (void)
   g_assert_cmpuint (g_memory_output_stream_get_data_size (G_MEMORY_OUTPUT_STREAM (output)), ==, 0);
 }
 
+static void
+incomplete_xcf_prefix (void)
+{
+  /* The first complete gzip member decodes only to "gimp ". */
+  g_autoptr(GInputStream) input = g_memory_input_stream_new_from_data (split_xcf, 25, NULL);
+  g_autoptr(GOutputStream) output = g_memory_output_stream_new_resizable ();
+  g_autoptr(GError) error = NULL;
+  gboolean is_xcf = FALSE;
+  if (glims_xcf_gzip_decode_xcf (input, output, 25, 128, &is_xcf, &error) ||
+      !g_error_matches (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA) ||
+      g_memory_output_stream_get_data_size (G_MEMORY_OUTPUT_STREAM (output)) != 0) {
+    g_test_message ("An undecided partial header must not reach native format detection.");
+    g_test_fail ();
+  }
+}
+
 int
 main (int argc, char **argv)
 {
@@ -157,5 +173,6 @@ main (int argc, char **argv)
   g_test_add_func ("/xcf-gzip/unrelated-member", unrelated_gzip);
   g_test_add_func ("/xcf-gzip/empty-then-unrelated", empty_then_unrelated);
   g_test_add_func ("/xcf-gzip/split-xcf-prefix", split_xcf_prefix);
+  g_test_add_func ("/xcf-gzip/incomplete-xcf-prefix", incomplete_xcf_prefix);
   return g_test_run ();
 }
