@@ -21,6 +21,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var savedSoftProof: CanvasSoftProof?
     private let preferences: EditorPreferences
     let statusBar = StatusBarView(frame: .zero)
+    let statusInformation = StatusInformationPopUpButton()
     /// The scroll view hosting the canvas and its native ruler slots;
     /// readable for the smoke test's native-slot checks.
     let scrollView = CanvasScrollView()
@@ -248,6 +249,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         statusBar.isZoomEditable = true
         statusBar.onZoomTo = { [weak self] percent in self?.zoom(to: ZoomLadder.clamped(percent)) }
         statusBar.setZoom(percent: canvas.zoomPercent)
+        statusBar.setAccessoryViews([statusInformation])
+        canvas.onRenderMetricsChange = { [weak self] _ in self?.refreshStatusInformation() }
         stateDidChange()
         window.center()
     }
@@ -519,6 +522,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         return scoped.allSatisfy { !PaletteEditScope.isFieldEditing($0) }
     }
 
+    private func refreshStatusInformation() {
+        let info = imageDocument.info
+        let color = imageDocument.colorInfo
+        statusInformation.update(StatusInformationSnapshot(width: info.width, height: info.height,
+            profileLabel: color.profileLabel,
+            precisionLabel: "\(color.component.title) · \(color.trc.title)",
+            renderMetrics: canvas.renderMetrics))
+    }
+
     private func stateDidChange() {
         window?.title = Self.title(name: imageDocument.name, zoomPercent: canvas.zoomPercent,
                                    isDirty: imageDocument.hasUnsavedChanges,
@@ -526,6 +538,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                    precision: imageDocument.info.precision,
                                    profileLabel: imageDocument.colorInfo.profileLabel,
                                    viewRotation: rotationView.rotationDegrees)
+        refreshStatusInformation()
         refreshIdleStatus(.stateChange)
         (PaletteCenter.shared.registeredPalette(for: LayersPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: ChannelsPaletteController.definition.kind))?.retarget()
