@@ -4178,3 +4178,14 @@ the actual picker/wide-gamut workflows pass 48. General conformance and codec
 checks pass on all four engines; source review found no important issue.
 Latest-head unit/CI and final packaging remain pending. See
 [the sampling contract](float-color-sampling.md).
+
+
+### Numeric foreground and background colors (2026-11-11 candidate)
+
+The Tools swatches open an owned editor with simultaneous RGB Percent and
+Float entries and a native color well. Full fractions are retained, invalid
+drafts preserve the current color, and session/control identities fence late
+callbacks across foreground/background switches and close/reopen. All 1,242
+unit tests pass, including controller and unsupported-well recovery checks.
+Two independent source reviews found no important issue. Latest-head CI and
+final integration are pending; see [numeric tool colors](tool-color-numeric.md).
