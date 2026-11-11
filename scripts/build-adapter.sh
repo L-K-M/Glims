@@ -65,6 +65,20 @@ echo "==> Reading GIMP's build flags"
 meson introspect --targets "$BUILD" > "$OUT/targets.json"
 python3 -I "$ROOT/scripts/adapter-flags.py" "$OUT/targets.json" "$BUILD" "$INSTALL" "$OUT"
 
+# Compression recovery runs in the adapter, before the image is adopted.
+# Keep its existing prefix dependencies in the frozen response file so
+# isolated native fixtures and bundle collection use the same link inputs.
+python3 -I - "$OUT/link.rsp" "$PREFIX/lib/libbz2.dylib" "$PREFIX/lib/liblzma.dylib" <<'PYCOMPRESSION'
+from pathlib import Path
+import shlex
+import sys
+libraries = [Path(value) for value in sys.argv[2:]]
+if not all(path.is_file() for path in libraries):
+    raise SystemExit("The dependency prefix needs its bzip2 and liblzma libraries")
+with Path(sys.argv[1]).open("a") as output:
+    output.write("\n" + shlex.join(map(str, libraries)) + "\n")
+PYCOMPRESSION
+
 TYPELIB_PATH="$INSTALL/lib/girepository-1.0:$PREFIX/lib/girepository-1.0"
 
 echo "==> Compiling the adapter"
@@ -96,6 +110,12 @@ for program in engine-tests engine-perf; do
     "$ROOT/Engine/tests/$program.c" -o "$OUT/glims-$program" || die "building $program failed"
 done
 
+# Exercise the actual compiled streaming decoders without starting GIMP.
+xcrun clang @"$OUT/compile.rsp" -I"$ROOT/Engine" -std=c11 -O2 -Wall -Wextra \
+  -c "$ROOT/Engine/tests/xcf-compressed-tests.c" -o "$OUT/xcf-compressed-tests.o"
+xcrun clang++ -o "$OUT/glims-xcf-compressed-tests" "$OUT/xcf-compressed-tests.o" \
+  "$OUT/obj/xcf-compressed.o" "$OUT/obj/xcf-gzip.o" @"$OUT/link.rsp"
+
 exported="$(nm -gU "$OUT/libglimsengine.dylib" | awk '{print $3}')"
 [[ "$exported" == "_glims_engine_get_api" ]] || die "the adapter exports more than glims_engine_get_api: $exported"
 echo "-- $OUT/libglimsengine.dylib ($(du -h "$OUT/libglimsengine.dylib" | cut -f1)), exports only glims_engine_get_api"
@@ -116,6 +136,12 @@ if [[ "$MODE" == test ]]; then
     die "plug-ins reported load errors during the tests; see $OUT/test.log"
   criticals="$(grep -c "CRITICAL" "$OUT/test.log" || true)"
   (( criticals == 0 )) || echo "!! $criticals GLib CRITICAL message(s) during the tests; see $OUT/test.log"
+  status=0
+  run_with_timeout 60 "$OUT/codec-test.log" \
+    env HOME="$WORK/home" XDG_CACHE_HOME="$WORK/cache" \
+        "$OUT/glims-xcf-compressed-tests" || status=$?
+  cat "$OUT/codec-test.log"
+  (( status == 0 )) || die "the compressed XCF codec tests failed (status $status)"
 fi
 
 if [[ "$MODE" == perf ]]; then
