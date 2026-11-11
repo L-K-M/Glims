@@ -4189,3 +4189,16 @@ callbacks across foreground/background switches and close/reopen. All 1,242
 unit tests pass, including controller and unsupported-well recovery checks.
 Two independent source reviews found no important issue. Latest-head CI and
 final integration are pending; see [numeric tool colors](tool-color-numeric.md).
+
+
+### Final editor integration (2026-11-11 candidate)
+
+The final integration combines the independently reviewed native float
+sampling, numeric tool-color editor and status information slices. Glims
+pins merged Rigi `3f277226df3b5b66c5198d4cb4acd64fc14fe544`, whose 154
+unit tests, gallery smoke, release build and native CI pass. Popovers read
+and observe the workspace Reduce Motion policy on the main queue.
+The combined Glims build and all 1,248 unit tests pass. Four-engine ordinary
+workflows, latest-head CI, final standalone assembly and interactive checks
+remain pending at this checkpoint. The completion ledger separates the
+implemented editor from public distribution and physical-display gates.
