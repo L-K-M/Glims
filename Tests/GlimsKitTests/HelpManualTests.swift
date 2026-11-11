@@ -14,19 +14,20 @@ final class HelpManualTests: XCTestCase {
         XCTAssertNotNil(manual.section(titled: HelpManual.keyboardReferenceTitle))
     }
 
-    /// The manual must describe the current features and not advertise the
-    /// ones that are missing (the assigned help slice's topic list).
+    /// The shipped Help describes the implemented editor controls.
     func testManualCoversTheCurrentFeatures() {
         // The manual wraps lines, so phrases may span a line break.
         let text = (HelpManual.load()?.text ?? "").replacingOccurrences(of: "\n", with: " ")
         for phrase in ["Save As…", "Export…", "clipboard", "Paint Bucket",
                        "New Layer Group", "Lock Transparency",
-                       "not part of this release", "History palette", "New Snapshot",
+                       "Add Layer Mask…", "Edit Mask", "Apply Mask",
+                       "Recovery Copies", "Copy Every", "History palette", "New Snapshot",
                        "live preview", "Apply", "Cancel",
                        "Workspaces", "Preferences…",
                        "physical pixels", "Actual Pixels"] {
             XCTAssertTrue(text.contains(phrase), "the manual never mentions \(phrase)")
         }
+        XCTAssertFalse(text.contains("Layer masks are not part of this release"))
     }
 
     func testSectionsParse() throws {
