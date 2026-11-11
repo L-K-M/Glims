@@ -1,6 +1,8 @@
 /* Test-only bounded NDJSON sink at the real paint boundary. No facade slots
  * or production diagnostics. Only a private paint.c has renamed call sites. */
 #include "tablet-v2-ui-telemetry.h"
+
+#pragma clang diagnostic ignored "-Wdeclaration-after-statement"
 #include "core/gimpimage.h"
 #include "core/gimpitem.h"
 #include <errno.h>
