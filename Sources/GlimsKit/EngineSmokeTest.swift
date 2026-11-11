@@ -5665,9 +5665,15 @@ enum EngineSmokeTest {
                                           context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
             controller.canvas.mouseDown(with: press)
             controller.canvas.tools.textEditor?.insertText("Snap", replacementRange: NSRange(location: NSNotFound, length: 0))
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            window.makeMain()
+            wait { NSApp.mainWindow === window && NSApp.keyWindow === window }
+            print("OBS snapshot before request source=\(document.image) main=\((NSApp.mainWindow?.windowController as? DocumentWindowController)?.imageDocument.image ?? 0) key=\((NSApp.keyWindow?.windowController as? DocumentWindowController)?.imageDocument.image ?? 0) appOwned=\(app.documents.map { $0.imageDocument.image })")
             document.newSnapshot()
             wait { app.frontDocument != nil }
             let snapshotDoc = app.frontDocument
+            print("OBS snapshot after unchanged wait source=\(document.image) main=\((NSApp.mainWindow?.windowController as? DocumentWindowController)?.imageDocument.image ?? 0) key=\((NSApp.keyWindow?.windowController as? DocumentWindowController)?.imageDocument.image ?? 0) appOwned=\(app.documents.map { $0.imageDocument.image }) candidate=\(snapshotDoc?.image ?? 0)")
             // The real app routes engine events to its documents; the
             // smoke test's list stands in for that.
             if let snapshotDoc { documents.items.append(snapshotDoc) }
