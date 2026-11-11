@@ -74,7 +74,9 @@ Dated reports below retain their original scope and pending notes.
       `text-source-restore-consent.md`). Arrange, Trim, transforms and layer
       properties retain their explicit single-layer command policy.
 - [x] Adjustment layer creation as an empty pass-through group with a filter,
-      explicit placement and editable filter settings.
+      explicit placement and editable filter settings. The picker also offers
+      the dedicated Levels, Curves, Color Balance and Hue-Saturation config
+      operations, whose committed-effect editors the routing already drives.
 - [x] Bump Map height-map chooser with immutable same-image snapshots,
       pixel Apply/Undo/Redo and native source validation (#126).
 - [x] Native Brightness/Contrast paired controls and committed-effect editing,
