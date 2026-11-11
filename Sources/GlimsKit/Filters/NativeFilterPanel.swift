@@ -19,6 +19,11 @@ final class NativeFilterPanel: FilterPreviewPanel {
     /// request's answer decides the row. Values are unusable for this —
     /// a NaN request never equals itself yet must still take its answer.
     private var generations: [String: Int] = [:]
+    private var pendingGenerations: [String: Int] = [:]
+    private var requestSequence = 0
+    /// The text last displayed/submitted by each text control, so peer
+    /// acknowledgements can preserve a newer uncommitted field draft.
+    private var draftFields: [String: () -> (NSTextField, String)?] = [:]
     /// The latest value the engine accepted, for reverts.
     private var accepted: [String: EngineSession.FilterValue] = [:]
     private let statusField = NSTextField(wrappingLabelWithString: "")
@@ -67,16 +72,41 @@ final class NativeFilterPanel: FilterPreviewPanel {
         guard let filter else { return }
         let generation = (generations[name] ?? 0) + 1
         generations[name] = generation
-        imageDocument.setFilterProperty(filter, name, value) { [weak self] result in
-            guard let self, self.generations[name] == generation else { return }
-            switch result {
-            case .success:
-                self.accepted[name] = value
-                self.showError("")
-            case .failure(let error):
-                if let accepted = self.accepted[name] { self.bindings[name]?(accepted) }
-                self.showError(error.localizedDescription)
+        pendingGenerations[name] = generation
+        let sentGenerations = generations
+        requestSequence += 1
+        let request = requestSequence
+        let submittedText = draftFields[name]?().map { field, _ in
+            field.currentEditor()?.string ?? field.stringValue
+        }
+        imageDocument.setFilterProperty(filter, name, value, reading: bindings.keys.sorted()) { [weak self] answer in
+            guard let self, self.filter == filter else { return }
+            if self.pendingGenerations[name] == generation { self.pendingGenerations[name] = nil }
+            for (peer, actual) in answer.values {
+                self.accepted[peer] = actual
+                // A later queued edit owns its control until its own answer.
+                if let pending = self.pendingGenerations[peer], pending > (sentGenerations[peer] ?? 0) { continue }
+                if peer == name && !answer.didWrite {
+                    self.restore(peer, actual, submittedText: submittedText)
+                } else if let field = self.draftFields[peer]?() {
+                    FilterFieldDrafts.preserve([field]) { self.bindings[peer]?(actual) }
+                } else {
+                    self.bindings[peer]?(actual)
+                }
             }
+            if !answer.didWrite, answer.values[name] == nil, self.generations[name] == generation,
+               let accepted = self.accepted[name] {
+                self.restore(name, accepted, submittedText: submittedText)
+            }
+            if request == self.requestSequence { self.showError(answer.error?.localizedDescription ?? "") }
+        }
+    }
+
+    private func restore(_ name: String, _ value: EngineSession.FilterValue, submittedText: String?) {
+        if let field = draftFields[name]?()?.0, let submittedText {
+            FilterFieldDrafts.preserve([(field, submittedText)]) { bindings[name]?(value) }
+        } else {
+            bindings[name]?(value)
         }
     }
 
@@ -191,6 +221,11 @@ final class NativeFilterPanel: FilterPreviewPanel {
         case .number, .integer:
             let row = FilterNumberRow(property: property)
             let integer = property.kind == .integer
+            draftFields[property.name] = { [weak row] in
+                guard let row else { return nil }
+                let displayed = row.formatter.string(from: NSNumber(value: row.value)) ?? "\(row.value)"
+                return (row.field, displayed)
+            }
             bindings[property.name] = { [weak row] value in
                 switch value {
                 case .number(let number): row?.show(number)
@@ -225,6 +260,7 @@ final class NativeFilterPanel: FilterPreviewPanel {
             return row
         case .string:
             let row = FilterStringRow(property: property)
+            draftFields[property.name] = { [weak row] in row?.displayedField }
             bindings[property.name] = { [weak row] value in
                 if case .string(let text) = value { row?.show(text) }
             }
@@ -339,6 +375,7 @@ private final class FilterEnumRow: NSView {
 
 /// A UTF-8 string property; applies on Return or focus loss, not per key.
 private final class FilterStringRow: NSView {
+    var displayedField: (NSTextField, String) { (field, value) }
     private let field = NSTextField()
     private(set) var value = ""
     var onChange: ((String) -> Void)?

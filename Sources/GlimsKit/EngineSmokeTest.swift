@@ -6934,9 +6934,15 @@ enum EngineSmokeTest {
             return zip([a.redComponent, a.greenComponent, a.blueComponent, a.alphaComponent],
                        [b.redComponent, b.greenComponent, b.blueComponent, b.alphaComponent]).allSatisfy { abs($0.0 - $0.1) < 0.000001 }
         }
-        let pixels = Data((0..<(32 * 24)).flatMap { i -> [UInt8] in
-            [UInt8((i * 13 + 7) % 251), UInt8((i * 29 + 51) % 253), UInt8((i * 7 + 113) % 255), 255]
-        })
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(32 * 24 * 4)
+        for i in 0..<(32 * 24) {
+            let red = UInt8((i * 13 + 7) % 251)
+            let green = UInt8((i * 29 + 51) % 253)
+            let blue = UInt8((i * 7 + 113) % 255)
+            bytes.append(contentsOf: [red, green, blue, 255])
+        }
+        let pixels = Data(bytes)
         let image = try session.newImage(pixels: .init(width: 32, height: 24, pixels: pixels, origin: .zero))
         var owner: DocumentWindowController?
         let release = DispatchSemaphore(value: 0)
@@ -7041,6 +7047,19 @@ enum EngineSmokeTest {
         try drain()
         expect(try !holdExpired && numbers().first == 0.75 && controlsMatchNative(),
                "explicit hold release preserves the newest native hue/color acknowledgement")
+        try require(panel.window?.makeFirstResponder(hueRow.field) == true,
+                    "the real hue field could not acquire its editor")
+        guard let editor = hueRow.field.currentEditor() as? NSTextView else { throw NoWindow() }
+        editor.string = "0.33"
+        editor.setSelectedRange(NSRange(location: 2, length: 1))
+        try sendColor(alpha: 0.2); try drain()
+        expect(try numbers().first == 0 && hueRow.value == 0 && editor.string == "0.33"
+            && editor.selectedRange() == NSRange(location: 2, length: 1),
+            "a peer acknowledgement refreshes accepted hue while preserving newer editor text and selection")
+        try require(panel.window?.makeFirstResponder(nil) == true, "the real hue draft could not finish editing")
+        try drain()
+        expect(try abs((numbers().first ?? -1) - 0.33) < 0.000001 && controlsMatchNative(),
+               "the preserved real field draft commits and refreshes the linked color")
         expect(try session.copyPixels(image, merged: true).pixels != beforeMerged && session.undoInfo(image) == beforeUndo,
                "the real coupled preview changes projected pixels without creating Undo")
         guard let cancel = all(root, NSButton.self).first(where: { $0.title == "Cancel" }) else { throw NoWindow() }

@@ -4690,11 +4690,41 @@ final class ImageDocument {
     /// write adds no undo step and does not dirty the image.
     func setFilterProperty(_ filter: Int32, _ property: String, _ value: EngineSession.FilterValue,
                            completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
-        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
-        if refuseWhileEditingUnavailable(forPreviewWork: true) { return completion(.failure(DocumentError.busy)) }
+        setFilterProperty(filter, property, value, reading: []) { acknowledgement in
+            if let error = acknowledgement.error { completion(.failure(error)) }
+            else { completion(.success(())) }
+        }
+    }
+
+    struct FilterPropertyAcknowledgement {
+        let didWrite: Bool
+        let values: [String: EngineSession.FilterValue]
+        let error: Error?
+    }
+
+    /// Read coupled native values in the same counted input job as the write.
+    /// A read failure after a successful write must not pretend it rolled back.
+    func setFilterProperty(_ filter: Int32, _ property: String, _ value: EngineSession.FilterValue,
+                           reading names: [String],
+                           completion: @escaping @MainActor (FilterPropertyAcknowledgement) -> Void) {
+        guard !isClosing else {
+            return completion(.init(didWrite: false, values: [:], error: DocumentError.closed))
+        }
+        if refuseWhileEditingUnavailable(forPreviewWork: true) {
+            return completion(.init(didWrite: false, values: [:], error: DocumentError.busy))
+        }
         enqueue(on: inputQueue) { [session] in
-            let result = Result { try session.setFilterProperty(filter, property, to: value) }
-            DispatchQueue.main.async { completion(result) }
+            var didWrite = false
+            var error: Error?
+            var values: [String: EngineSession.FilterValue] = [:]
+            do { try session.setFilterProperty(filter, property, to: value); didWrite = true }
+            catch let failure { error = failure }
+            for name in names {
+                do { values[name] = try session.filterProperty(filter, name) }
+                catch let failure { if error == nil { error = failure } }
+            }
+            let answer = FilterPropertyAcknowledgement(didWrite: didWrite, values: values, error: error)
+            DispatchQueue.main.async { completion(answer) }
         }
     }
 
