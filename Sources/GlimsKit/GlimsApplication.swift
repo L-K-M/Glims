@@ -29,7 +29,8 @@ public enum GlimsApplication {
         // This regression drives only a bare document and independent engine
         // references. It does not need an AppKit application or desktop.
         if mode == .engineSmokeTest,
-           ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-stroke-capture" {
+           let smokeCase = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"],
+           ["recorder-stroke-capture", "recorder-stroke-file"].contains(smokeCase) {
             return EngineSmokeTest.run()
         }
 
