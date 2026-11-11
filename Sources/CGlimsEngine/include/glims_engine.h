@@ -215,6 +215,16 @@ typedef struct GlimsStrokePoint {
   uint32_t time_ms;
 } GlimsStrokePoint;
 
+/* Owned facts for a supported deterministic V1 stroke. Initialize to zero
+ * except struct_size. Free each non-NULL string with free_string. */
+typedef struct GlimsStrokeCaptureFacts {
+  uint32_t struct_size;
+  bool     brush_internal;
+  char    *brush_name;
+  char    *brush_collection; /* NULL and empty are distinct resource identities */
+  char    *fingerprint;      /* 64 lowercase hexadecimal characters when present */
+} GlimsStrokeCaptureFacts;
+
 /* Selections. */
 typedef enum GlimsSelectOperation {
   GLIMS_SELECT_REPLACE   = 0,
@@ -3337,6 +3347,44 @@ typedef struct GlimsEngineAPI {
                                                     GlimsItemID y_source,
                                                     GlimsFilterID *out,
                                                     char **error);
+
+  /* Slot170: start an owned, merge-only Oilify preview on a pixel layer.
+   * Positive radius/exponent ids refer to attached same-image drawables.
+   * Zero leaves that pad absent; two zero ids give plain Oilify. Distinct
+   * sources share the 512 MiB snapshot budget, with identical ids charged
+   * once. Detached native-format inputs retain their buffer coordinates.
+   * Native halo and sample arithmetic and converted target RGBA/luminance
+   * and map luminance must validate before attachment. The current selection
+   * is frozen before preview; no implicit rasterization or persisted effect.
+   * Abort preserves stored pixels/history; Apply merges with one native Undo.
+   * On failure *out is zero. Generic legacy filter routes keep their contract. */
+  GlimsStatus (*filter_begin_oilify_with_sources) (GlimsEngine *engine,
+                                                  GlimsImageID image,
+                                                  GlimsItemID target,
+                                                  GlimsItemID radius_source,
+                                                  GlimsItemID exponent_source,
+                                                  GlimsFilterID *out,
+                                                  char **error);
+
+  /* Slot171: atomically begin a live V1 stroke and capture owned facts about
+   * the brush and effective paint configuration actually used at first paint.
+   * brush_resource zero chooses the actual inherited brush. With no expected
+   * fingerprint, unsupported capture does not prevent live painting; on
+   * success *out is a stroke and facts->fingerprint can be NULL. When an
+   * expected fingerprint is supplied, a positive explicit brush resource
+   * and an exact supported fingerprint match are required before first paint.
+   * All failures clear *out and the supported facts fields; struct_size and
+   * any future tail remain unchanged. Finish with the ordinary V1 end call. */
+  GlimsStatus (*stroke_begin_with_capture_facts) (GlimsEngine *engine,
+                                                  GlimsImageID image,
+                                                  GlimsItemID drawable,
+                                                  GlimsResourceID brush_resource,
+                                                  const GlimsBrushSettings *brush,
+                                                  const GlimsStrokePoint *first,
+                                                  const char *expected_fingerprint,
+                                                  GlimsStrokeID *out,
+                                                  GlimsStrokeCaptureFacts *facts,
+                                                  char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
