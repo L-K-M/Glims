@@ -229,7 +229,9 @@ and as the base for resolving relative linked files. The source stamp
 is checked again before publication. Glims supplements and images
 without effects skip the foreign metadata reader. The original native
 loader still handles other gzip formats, with foreign XCF effect
-recovery disabled on that fallback.
+recovery disabled on that fallback. The format probe can read across an
+empty member or a split prefix to identify the inner format. It refuses
+an incomplete prefix at EOF and refuses an XCF that spans members.
 
 The pinned 3.2.8 fixture switches a private alias from A to B immediately
 before native load, then back to A before metadata recovery. The two XCFs
@@ -238,7 +240,11 @@ failed two of 117 checks: native pixels came from B while restored effect
 fields came from A. The shared-spool adapter passes all 117 checks. It
 keeps A's raw and rendered pixels, fields and mask; the original alias,
 load procedure and clean opening history; and both source files' bytes.
-The nine private gzip checks pass, as do general conformance checks on
+The twelve private gzip checks pass. Each supported engine also passes
+the eight-case native fallback test: a compressed PNG with a leading
+empty member opens with the exact expected pixels, while the equivalent
+multi-member XCF refuses without publishing an image. General
+conformance passes on
 3.2.8 (1,917), 3.2.0 (1,917), 3.0.8 (1,703) and master (1,917).
 
 The fixture verifies the lexical parent passed to the native loader. It
