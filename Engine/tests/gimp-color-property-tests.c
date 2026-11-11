@@ -2,6 +2,7 @@
  * GEGL nodes and GLib default GValues, never the adapter's property helpers.
  * All native objects are accessed only on the engine worker. */
 #include "engine-private.h"
+#include <cairo.h>
 #include "libgimpcolor/gimpcolor.h"
 #include "core/gimp.h"
 #include "core/gimpdrawable.h"
