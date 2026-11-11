@@ -116,4 +116,94 @@ final class LayerTransformSessionTests: XCTestCase {
         XCTAssertEqual(session.box, bounds.offsetBy(dx: 30, dy: -10))
         XCTAssertEqual(session.angle, .pi / 2, accuracy: 1e-9)
     }
+
+    func testNumericGeometryMovesResizesAndTurnsAtomically() {
+        var session = LayerTransformSession(layer: 1, bounds: bounds)
+
+        XCTAssertTrue(session.setGeometry(origin: CGPoint(x: 20, y: 30),
+                                          width: 100, height: 50, degrees: 90))
+
+        XCTAssertEqual(session.box, CGRect(x: 20, y: 30, width: 100, height: 50))
+        XCTAssertEqual(session.angle, .pi / 2, accuracy: 1e-9)
+        XCTAssertFalse(session.isIdentity)
+        // The matrix carries the original's top-left onto the box's
+        // top-left, turned 90° clockwise around the box's center.
+        let mapped = CGPoint(x: bounds.minX, y: bounds.minY).applying(session.matrix)
+        assertEqual(mapped, session.corners[0])
+        XCTAssertNotEqual(session.matrix.a * session.matrix.d - session.matrix.b * session.matrix.c, 0)
+    }
+
+    func testNumericResizingKeepsTheOriginAnchored() {
+        var session = LayerTransformSession(layer: 1, bounds: bounds)
+        XCTAssertTrue(session.setGeometry(origin: bounds.origin, width: bounds.width,
+                                          height: bounds.height, degrees: 90))
+        let pivot = session.center
+
+        XCTAssertTrue(session.setGeometry(origin: bounds.origin, width: 300,
+                                          height: bounds.height, degrees: 90))
+
+        // The X/Y fields are a literal editor for the unturned box: a
+        // width change never moves the origin, so a turned box's pivot
+        // (its center) follows.
+        XCTAssertEqual(session.box.origin, bounds.origin)
+        XCTAssertNotEqual(session.center, pivot)
+        XCTAssertEqual(session.angle, .pi / 2, accuracy: 1e-9)
+    }
+
+    func testFullAndNegativeTurnsNormalizeBeforeConvertingToRadians() {
+        var session = LayerTransformSession(layer: 1, bounds: bounds)
+
+        XCTAssertTrue(session.setGeometry(origin: bounds.origin, width: bounds.width,
+                                          height: bounds.height, degrees: 360))
+        XCTAssertEqual(session.angle, 0, accuracy: 1e-12)
+        XCTAssertTrue(session.isIdentity)
+
+        XCTAssertTrue(session.setGeometry(origin: bounds.origin, width: bounds.width,
+                                          height: bounds.height, degrees: -270))
+        XCTAssertEqual(session.angle, .pi / 2, accuracy: 1e-9)
+
+        XCTAssertTrue(session.setGeometry(origin: bounds.origin, width: bounds.width,
+                                          height: bounds.height, degrees: 540))
+        XCTAssertEqual(session.angle, .pi, accuracy: 1e-9)
+    }
+
+    func testUnsafeNumericGeometryIsRejectedWithoutChangingTheSession() {
+        let invalid: [(origin: CGPoint, width: Double, height: Double, degrees: Double)] = [
+            (bounds.origin, 0, bounds.height, 0),                        // width below minimumSide
+            (bounds.origin, -5, bounds.height, 0),                       // negative width
+            (bounds.origin, bounds.width, 0.5, 0),                       // height below minimumSide
+            (bounds.origin, 524289, bounds.height, 0),                   // width out of range
+            (bounds.origin, bounds.width, 524289, 0),                    // height out of range
+            (CGPoint(x: 524289, y: 0), bounds.width, bounds.height, 0),  // x out of range
+            (CGPoint(x: -524289, y: 0), bounds.width, bounds.height, 0), // x out of range
+            (CGPoint(x: 0, y: 524289), bounds.width, bounds.height, 0),  // y out of range
+            (CGPoint(x: 524288, y: 0), 10, bounds.height, 0),            // x + width overflows bound
+            (bounds.origin, .nan, bounds.height, 0),                     // NaN width
+            (bounds.origin, bounds.width, Double.infinity, 0),                 // infinite height
+            (CGPoint(x: Double.infinity, y: 0), bounds.width, bounds.height, 0),
+            (bounds.origin, bounds.width, bounds.height, .nan),          // NaN angle
+        ]
+        for entry in invalid {
+            var session = LayerTransformSession(layer: 1, bounds: bounds)
+            XCTAssertTrue(session.setGeometry(origin: CGPoint(x: 20, y: 30),
+                                              width: 100, height: 50, degrees: 45))
+            let before = session
+            XCTAssertFalse(session.setGeometry(origin: entry.origin, width: entry.width,
+                                               height: entry.height, degrees: entry.degrees),
+                           "accepted \(entry)")
+            XCTAssertEqual(session, before)
+        }
+    }
+    func testNumericGeometryRefusesNativeDegeneracyAndOversizedRotatedBounds() {
+        let large = CGRect(x: -262144, y: -262144, width: 524288, height: 524288)
+        var session = LayerTransformSession(layer: 1, bounds: large)
+        XCTAssertFalse(session.setGeometry(origin: .zero, width: 1, height: 1, degrees: 0),
+                       "the native transform rejects determinants below 1e-9")
+        XCTAssertEqual(session.box, large)
+        XCTAssertFalse(session.setGeometry(origin: large.origin, width: large.width,
+                                           height: large.height, degrees: 45),
+                       "a rotation must not exceed the native output dimension limit")
+        XCTAssertEqual(session.box, large)
+    }
+
 }

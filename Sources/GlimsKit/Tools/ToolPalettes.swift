@@ -127,9 +127,10 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
 }
 
 /// The Tool Options palette: the current tool's settings. Its rows are
-/// rebuilt when the tool changes; every change goes to `ToolState`.
+/// rebuilt when the tool changes. Shared tool settings live in ToolState;
+/// numeric transforms edit the target document's pending canvas session.
 @MainActor
-final class ToolOptionsPaletteController: NSViewController, PaletteContent {
+final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTextFieldDelegate {
     typealias Target = ImageDocument
 
     static let definition = PaletteDefinition(
@@ -139,7 +140,10 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         sizing: .resizable(minimumContentSize: NSSize(width: 220, height: 120)),
         frameAutosaveName: "Glims.palette.toolOptions")
 
-    private let stack = NSStackView()
+    private final class OptionsStackView: NSStackView {
+        override var isFlipped: Bool { true }
+    }
+    private let stack = OptionsStackView()
     private var shownTool: ToolID?
     private var shownFontCount = 0
     private var shownBrushResource: EngineSession.ResourceIdentity?
@@ -151,6 +155,29 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
     /// Existing controls follow external changes without replacing the active
     /// field editor. Resource presentation rebuilds wait for editing to end.
     private var brushRefreshers: [(EngineSession.Brush) -> Void] = []
+    /// Like the brush refreshers, for the Transform tool's numeric rows:
+    /// updates unfocused fields and readiness without touching a live
+    /// draft or its selection.
+    private var transformRefreshers: [() -> Void] = []
+    /// The Transform tool's editable fields, so edit-start can capture
+    /// the target and Apply can resolve a live draft.
+    private final class TransformFieldEntry {
+        let field: NSTextField
+        let kind: TransformNumericInput.Field
+        let read: (LayerTransformSession) -> Double
+        var draft = TransformNumericDraft(text: "")
+        init(field: NSTextField, kind: TransformNumericInput.Field,
+             read: @escaping (LayerTransformSession) -> Double) {
+            self.field = field
+            self.kind = kind
+            self.read = read
+        }
+    }
+    private var transformFieldEntries: [TransformFieldEntry] = []
+    /// The inline message for a rejected transform draft.
+    private var transformErrorLabel: NSTextField?
+    /// The canvas controller the transform rows currently observe.
+    private weak var transformObservedTools: CanvasToolController?
     /// The front document, retained (weakly) as the resource choosers'
     /// session and loading source.
     private weak var document: ImageDocument?
@@ -179,11 +206,26 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         stack.alignment = .leading
         stack.spacing = 6
         stack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
-        view = stack
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.documentView = stack
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            stack.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            stack.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+        ])
+        view = scroll
         rebuild()
         observer = ToolState.shared.observe { [weak self] in self?.stateChanged() }
         NotificationCenter.default.addObserver(self, selector: #selector(fieldEditingEnded(_:)),
                                                name: NSControl.textDidEndEditingNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(transformFieldEditingBegan(_:)),
+                                               name: NSControl.textDidBeginEditingNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(transformFieldChanged(_:)),
+                                               name: NSControl.textDidChangeNotification, object: nil)
     }
 
     private func stateChanged() {
@@ -205,6 +247,8 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         } else if state.current.paintTool != nil {
             let brush = state.brush(for: state.current)
             brushRefreshers.forEach { $0(brush) }
+        } else if state.current == .transform {
+            transformRefreshers.forEach { $0() }
         }
     }
 
@@ -234,7 +278,54 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
             document = target
             if BrushChooser.shared.isOpen { BrushChooser.shared.close() }
             if GradientChooser.shared.isOpen { GradientChooser.shared.close() }
+            rebindTransformObserver()
         }
+    }
+
+    private var targetWindowController: DocumentWindowController? {
+        guard let document else { return nil }
+        return NSApp.windows.compactMap { $0.windowController as? DocumentWindowController }
+            .first { $0.imageDocument === document }
+    }
+
+    /// The canvas controller owning the front document's transform
+    /// session, when this palette retargeted that document.
+    private var transformTools: CanvasToolController? {
+        targetWindowController?.canvas.tools
+    }
+
+    /// Moves the observer while preserving drafts and their original targets.
+    private func rebindTransformObserver() {
+        transformObservedTools?.onTransformSessionChange = nil
+        let tools = transformTools
+        tools?.onTransformSessionChange = { [weak self] in self?.transformPreviewChanged() }
+        transformObservedTools = tools
+        transformPreviewChanged()
+    }
+
+    private func transformPreviewChanged() {
+        transformRefreshers.forEach { $0() }
+    }
+
+    private var transformTarget: TransformNumericTarget? {
+        guard let document, let tools = transformTools, let preview = tools.transformPreview else { return nil }
+        let route = document.moveTargetRevision
+        return TransformNumericTarget(document: ObjectIdentifier(document), layer: preview.layer,
+                                      original: preview.original, generation: tools.transformGeneration,
+                                      routeRevision: [route.pick, route.layers, route.items, route.command])
+    }
+
+    @objc private func transformFieldEditingBegan(_ notification: Notification) {
+        guard let field = notification.object as? NSTextField,
+              let entry = transformFieldEntries.first(where: { $0.field === field }) else { return }
+        entry.draft.begin(target: transformTarget)
+    }
+
+    @objc private func transformFieldChanged(_ notification: Notification) {
+        guard let field = notification.object as? NSTextField,
+              let entry = transformFieldEntries.first(where: { $0.field === field }) else { return }
+        entry.draft.update(field.currentEditor()?.string ?? field.stringValue)
+        transformPreviewChanged()
     }
 
     func paletteDidDismiss(_ presentation: PalettePresentation) {
@@ -243,6 +334,13 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
     }
 
     private func rebuild() {
+        defer {
+            if let scroll = view as? NSScrollView {
+                stack.layoutSubtreeIfNeeded()
+                scroll.contentView.scroll(to: .zero)
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+        }
         let state = ToolState.shared
         let tool = state.current
         shownTool = tool
@@ -253,6 +351,9 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         shownGradient = tool == .gradient ? Self.gradientPresentation(of: state) : nil
         shownMoveTargetMode = tool == .move ? state.moveTargetMode : nil
         brushRefreshers.removeAll()
+        transformRefreshers.removeAll()
+        transformFieldEntries.removeAll()
+        transformErrorLabel = nil
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         actionBindings.removeAll()
 
@@ -269,13 +370,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
         } else if tool == .text {
             addTextRows(state.textSettings)
         } else if tool == .transform {
-            let methods = EngineSession.Interpolation.allCases
-            stack.addArrangedSubview(popUp("Resample", methods.map(\.name),
-                                           selected: methods.firstIndex(of: state.transformInterpolation) ?? 2) { index in
-                ToolState.shared.transformInterpolation = methods[index]
-            })
-            stack.addArrangedSubview(hint("Drag a corner or edge to scale (Shift keeps the proportions), "
-                + "inside to move, outside to rotate (Shift: 15° steps). Return applies; Escape cancels."))
+            addTransformRows(state)
         } else if tool == .path {
             stack.addArrangedSubview(slider("Stroke", 1...200, state.pathLineWidth, unit: "px", fractionDigits: 1) { value in
                 ToolState.shared.pathLineWidth = value
@@ -325,6 +420,239 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent {
     }
 
     // MARK: Rows
+
+    /// The Transform tool's options: numeric X/Y/Width/Height (image
+    /// pixels) and Angle (clockwise degrees) fields for the pending
+    /// session, an inline error for rejected drafts, explicit Apply and
+    /// Cancel, then Resample. Field commits edit only the per-document
+    /// preview; nothing reaches the engine until Apply, which uses the
+    /// canvas's native transform path and its single undo step.
+    private func addTransformRows(_ state: ToolState) {
+        for (label, kind, read): (String, TransformNumericInput.Field,
+                                  (LayerTransformSession) -> Double) in [
+            ("X", .x, { $0.box.minX }),
+            ("Y", .y, { $0.box.minY }),
+            ("Width", .width, { $0.box.width }),
+            ("Height", .height, { $0.box.height }),
+            ("Angle", .angle, { $0.angle * 180 / .pi }),
+        ] {
+            stack.addArrangedSubview(transformRow(label, kind: kind, read: read))
+        }
+
+        let errorLabel = NSTextField(wrappingLabelWithString: "")
+        errorLabel.font = .systemFont(ofSize: 11)
+        errorLabel.textColor = .systemRed
+        errorLabel.preferredMaxLayoutWidth = 220
+        errorLabel.isHidden = true
+        transformErrorLabel = errorLabel
+        stack.addArrangedSubview(errorLabel)
+        stack.addArrangedSubview(transformButtonsRow())
+
+        let methods = EngineSession.Interpolation.allCases
+        stack.addArrangedSubview(popUp("Resample", methods.map(\.name),
+                                       selected: methods.firstIndex(of: state.transformInterpolation) ?? 2) { index in
+            ToolState.shared.transformInterpolation = methods[index]
+        })
+        stack.addArrangedSubview(hint("Type the position, size and angle, or drag a corner or edge to "
+            + "scale (Shift keeps the proportions), inside to move, outside to rotate (Shift: 15° "
+            + "steps). Apply commits the transform. Return in a field accepts its value; "
+            + "Escape discards that field draft."))
+        transformRefreshers.forEach { $0() }
+    }
+
+    /// One numeric transform field. Committing parses the draft strictly;
+    /// a rejected value keeps the draft and shows the reason inline —
+    /// nothing is clamped or reverted.
+    private func transformRow(_ label: String, kind: TransformNumericInput.Field,
+                              read: @escaping (LayerTransformSession) -> Double) -> NSView {
+        let field = NSTextField(frame: .zero)
+        field.isEditable = true
+        field.delegate = self
+        field.controlSize = .small
+        field.font = .systemFont(ofSize: 11)
+        (field.cell as? NSTextFieldCell)?.sendsActionOnEndEditing = true
+        field.setAccessibilityLabel("Transform \(label)")
+        field.widthAnchor.constraint(equalToConstant: 95).isActive = true
+        field.toolTip = kind == .angle ? "Clockwise rotation in degrees" : "Image pixels"
+        let entry = TransformFieldEntry(field: field, kind: kind, read: read)
+        transformFieldEntries.append(entry)
+        transformRefreshers.append { [weak self, weak entry] in
+            guard let self, let entry else { return }
+            let field = entry.field
+            let tools = self.transformTools
+            let preview = tools?.transformPreview
+            let editor = field.currentEditor()
+            if let editor { entry.draft.update(editor.string) }
+            let current = preview.map { Self.transformText(read($0)) } ?? ""
+            entry.draft.refresh(current, target: self.transformTarget, editing: editor != nil)
+            // Keep a rejected or stale draft editable so it can be corrected
+            // or explicitly cancelled even after its old target disappears.
+            field.isEnabled = tools?.transformNumericEditsAllowed == true || entry.draft.hasDraft
+            if let editor {
+                if editor.string != entry.draft.text {
+                    let selection = editor.selectedRange
+                    editor.string = entry.draft.text
+                    let count = (entry.draft.text as NSString).length
+                    let location = min(selection.location, count)
+                    editor.selectedRange = NSRange(location: location, length: min(selection.length, count - location))
+                }
+            } else {
+                field.stringValue = entry.draft.text
+            }
+        }
+        let result = row(label, field) { [weak self, weak entry] _ in
+            guard let entry else { return }
+            _ = self?.commitTransformField(entry)
+        }
+        let unit = NSTextField(labelWithString: kind == .angle ? "°" : "px")
+        unit.font = .systemFont(ofSize: 11)
+        unit.textColor = .secondaryLabelColor
+        (result as? NSStackView)?.addArrangedSubview(unit)
+        return result
+    }
+
+    private static func transformText(_ value: Double) -> String {
+        let text = String(format: "%.1f", value)
+        return text.hasSuffix(".0") ? String(text.dropLast(2)) : text
+    }
+
+    /// The commit behind a transform field's action (Return or end of
+    /// editing). Validates the draft, then applies all five values
+    /// atomically to the pending session through the canvas.
+    @discardableResult
+    private func commitTransformField(_ entry: TransformFieldEntry) -> Bool {
+        let field = entry.field
+        entry.draft.update(field.currentEditor()?.string ?? field.stringValue)
+        func refuse(_ message: String) -> Bool {
+            entry.draft.reject(message)
+            showTransformError(message)
+            transformPreviewChanged()
+            return false
+        }
+        guard let tools = transformTools, let preview = tools.transformPreview else {
+            return refuse("Select a layer to transform, or Cancel to discard this draft.")
+        }
+        guard entry.draft.canCommit(to: transformTarget) else {
+            return refuse("The transform target changed. Cancel this draft, then edit the new target.")
+        }
+        // Display precision must not round an untouched model value when
+        // Return, Tab or Apply ends a field edit.
+        guard entry.draft.hasDraft else { return true }
+        guard let value = TransformNumericInput.parse(entry.draft.text) else {
+            return refuse("Enter a number, for example 12.5.")
+        }
+        if let problem = TransformNumericInput.problem(value, for: entry.kind) { return refuse(problem) }
+        var origin = preview.box.origin
+        var width = preview.box.width, height = preview.box.height
+        var degrees = preview.angle * 180 / .pi
+        switch entry.kind {
+        case .x: origin.x = value
+        case .y: origin.y = value
+        case .width: width = value
+        case .height: height = value
+        case .angle: degrees = value
+        }
+        guard tools.setTransformGeometry(origin: origin, width: width, height: height,
+                                         degrees: degrees, expectedLayer: preview.layer,
+                                         expectedOriginal: preview.original),
+              let accepted = tools.transformPreview else {
+            return refuse("The layer is unavailable or the transform exceeds its supported bounds.")
+        }
+        entry.draft.accept(text: Self.transformText(entry.read(accepted)), target: transformTarget)
+        field.stringValue = entry.draft.text
+        field.currentEditor()?.string = entry.draft.text
+        showTransformError(transformFieldEntries.compactMap { $0.draft.error }.first)
+        transformPreviewChanged()
+        return true
+    }
+
+    private func showTransformError(_ message: String?) {
+        transformErrorLabel?.stringValue = message ?? ""
+        transformErrorLabel?.isHidden = message == nil
+    }
+
+    /// The Apply and Cancel buttons. Apply first resolves a focused
+    /// field's valid draft so its value joins the committed transform; a
+    /// draft that fails validation blocks Apply instead of being dropped.
+    private func transformButtonsRow() -> NSView {
+        let apply = NSButton(title: "Apply", target: nil, action: nil)
+        let cancel = NSButton(title: "Cancel", target: nil, action: nil)
+        for button in [apply, cancel] {
+            button.bezelStyle = .rounded
+            button.controlSize = .small
+            button.font = .systemFont(ofSize: 11)
+        }
+        apply.setAccessibilityLabel("Apply transform")
+        cancel.setAccessibilityLabel("Cancel transform")
+        actionBindings.append(ActionBinding(control: apply) { [weak self] _ in
+            self?.applyTransformFromOptions()
+        })
+        actionBindings.append(ActionBinding(control: cancel) { [weak self] _ in
+            self?.cancelTransformFromOptions()
+        })
+        transformRefreshers.append { [weak self, weak apply, weak cancel] in
+            let tools = self?.transformTools
+            let busy = tools?.transformDragInProgress ?? false
+            let hasDraft = self?.transformFieldEntries.contains { $0.draft.hasDraft } == true
+            apply?.isEnabled = tools?.transformNumericEditsAllowed == true
+                && (tools?.transformIsApplicable == true || hasDraft) && !busy
+            cancel?.isEnabled = (tools?.transformSession != nil || hasDraft) && !busy
+        }
+        let controls = NSStackView(views: [apply, cancel])
+        controls.spacing = 6
+        return row("", controls, onChange: nil)
+    }
+
+    private func applyTransformFromOptions() {
+        guard let tools = transformTools, tools.transformNumericEditsAllowed else { return }
+        for entry in transformFieldEntries where entry.field.currentEditor() != nil || entry.draft.hasDraft {
+            guard commitTransformField(entry) else { return }
+        }
+        // End the accepted field edit before Apply starts a new transform
+        // lifetime. A button click can otherwise leave the same editor alive
+        // with its previous generation captured for the next typed value.
+        guard view.window?.makeFirstResponder(nil) != false else { return }
+        tools.applyPendingTransform()
+        transformPreviewChanged()
+    }
+
+    private func cancelTransformFromOptions() {
+        let current = transformTarget
+        let hasForeignDraft = transformFieldEntries.contains {
+            $0.draft.hasDraft && !$0.draft.canCommit(to: current)
+        }
+        // Cancelling A's stale draft after retargeting must not discard B's
+        // unrelated pending transform.
+        if !hasForeignDraft { transformTools?.cancelPendingTransform() }
+        let preview = transformTools?.transformPreview
+        for entry in transformFieldEntries {
+            entry.draft.cancel(text: preview.map { Self.transformText(entry.read($0)) } ?? "")
+            entry.draft.begin(target: transformTarget)
+            entry.field.stringValue = entry.draft.text
+            entry.field.currentEditor()?.string = entry.draft.text
+        }
+        showTransformError(nil)
+        transformPreviewChanged()
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard let entry = transformFieldEntries.first(where: { $0.field === control }) else { return false }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            let text = transformTools?.transformPreview.map { Self.transformText(entry.read($0)) } ?? ""
+            entry.draft.cancel(text: text)
+            entry.draft.begin(target: transformTarget)
+            entry.field.stringValue = text
+            textView.string = text
+            showTransformError(transformFieldEntries.compactMap { $0.draft.error }.first)
+            transformPreviewChanged()
+            return true
+        }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            _ = commitTransformField(entry)
+            return true
+        }
+        return false
+    }
 
     /// The next text's look. The text takes the foreground color; Return
     /// starts a new line and Escape applies, in the canvas editor.
