@@ -410,7 +410,7 @@ regression (GlimsEngine *engine, gpointer unused)
   BAD (d, ds, p, ps, &invalid, 1, full, STRIDE, GLIMS_STATUS_INVALID_ARGUMENT, "invalid proof intent refuses");
   invalid = settings; invalid.display_intent = UINT32_MAX;
   BAD (d, ds, p, ps, &invalid, 1, full, STRIDE, GLIMS_STATUS_INVALID_ARGUMENT, "invalid display intent refuses");
-  invalid = settings; invalid.flags = 2;
+  invalid = settings; invalid.flags = 4;
   BAD (d, ds, p, ps, &invalid, 1, full, STRIDE, GLIMS_STATUS_INVALID_ARGUMENT, "unknown owned proof flag refuses");
   invalid.flags = 0x2000;
   BAD (d, ds, p, ps, &invalid, 1, full, STRIDE, GLIMS_STATUS_INVALID_ARGUMENT, "raw native BPC flag is not an owned flag");

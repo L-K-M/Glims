@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Compile-only native gamut-warning contract harness (test-only slice).
+"""Build and run the native gamut-warning contract harness.
 
 build --producer PREFIX --out DIRECTORY [--ref GIMP_REF] [--adapter-root DIR]
 run   --binary BINARY --work DIRECTORY [--timeout SECONDS]
 
-Only the pinned engine set GIMP_3_2_8 (the first ENGINE_SETS entry in
-scripts/engine.env) is accepted: the inherited proof-render helper slice is
-verified against that ref only, so any other --ref is rejected instead of
-guessed. --producer defaults to ADAPTER_ROOT/REF/libglimsengine producer
-prefix (ADAPTER_ROOT defaults to $GLIMS_ADAPTER_ROOT or <repo>/_engine/adapter).
+The four engine sets use the same native proof-transform interfaces.
+The inherited proof helpers have existing conformance coverage on all four;
+This driver selects matching producer compile flags for the requested ref.
+--producer defaults to the ADAPTER_ROOT/REF producer prefix (ADAPTER_ROOT defaults to $GLIMS_ADAPTER_ROOT or <repo>/_engine/adapter).
 
 build compiles the current display renderer plus the harness
 Engine/tests/proof-gamut-tests.c (which includes proof-render-tests.c with a
@@ -24,9 +23,9 @@ run is a separate explicit step: it only executes an already-built binary,
 in a work directory that must be new or empty, with a fresh private
 HOME/XDG/GIMP3_DIRECTORY/TMPDIR environment and G_DEBUG=fatal-criticals.
 
-Expected on the current renderer: the candidate owned bit 2 is refused, so
-the run is RED by contract until production maps it; this driver reports the
-harness exit status unchanged.
+The baseline renderer refuses owned bit 2 and fails the pixel contract.
+The current renderer must match the independent native gamut transform; this
+driver reports the harness exit status unchanged.
 """
 from __future__ import annotations
 import argparse
@@ -74,11 +73,8 @@ def pinned_ref():
 
 def resolve_ref(value):
     ref = value or pinned_ref()
-    if ref != PINNED_REF:
-        raise RuntimeError(
-            f'ref {ref} is rejected: the inherited proof-render helper slice is '
-            f'verified only on the pinned {PINNED_REF}; verify actual inherited-'
-            'helper compatibility before adding support for another ref')
+    if ref not in ('GIMP_3_2_8', 'GIMP_3_2_0', 'GIMP_3_0_8', 'master'):
+        raise RuntimeError(f'Unsupported engine ref: {ref}')
     return ref
 
 
@@ -130,7 +126,7 @@ def build(args):
     finally:
         need(all(Path(p).is_file() and sha(Path(p)) == digest for p, digest in before.items()),
              'Producer changed while compiling the isolated test; preserve outputs for inspection')
-    print(f'-- built {binary}; NOT RUN; expected RED on the current renderer until bit 2 is mapped',
+    print(f'-- built {binary}; NOT RUN; producer unchanged',
           flush=True)
 
 
@@ -140,7 +136,8 @@ def run(args):
     need(args.timeout > 0, 'Timeout must be positive')
     work.mkdir(parents=True, exist_ok=True)
     need(not any(work.iterdir()), f'Work directory must be new or empty; no existing contents are deleted: {work}')
-    env = os.environ.copy()
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith(('GLIMS_', 'DYLD_'))}
     for key, leaf in [('HOME', 'home'), ('XDG_CONFIG_HOME', 'config'), ('XDG_DATA_HOME', 'data'),
                       ('XDG_CACHE_HOME', 'cache'), ('XDG_STATE_HOME', 'state'),
                       ('GIMP3_DIRECTORY', 'user'), ('TMPDIR', 'tmp')]:
@@ -148,6 +145,7 @@ def run(args):
         directory.mkdir()
         env[key] = str(directory)
     env['G_DEBUG'] = 'fatal-criticals'
+    env['CFFIXED_USER_HOME'] = str(work / 'home')
     command = [str(binary), str(work)]
     print('==> explicit native run with fresh private HOME/XDG/GIMP/TMP; no GUI', flush=True)
     print('    ' + shlex.join(command), flush=True)
@@ -188,7 +186,7 @@ def main():
     p = commands.add_parser('build', help='Compile/link only, against an existing immutable producer')
     p.add_argument('--producer', type=Path, help='existing producer prefix (default: ADAPTER_ROOT/REF)')
     p.add_argument('--adapter-root', type=Path, help='adapter output root (default: $GLIMS_ADAPTER_ROOT or <repo>/_engine/adapter)')
-    p.add_argument('--ref', help=f'engine set name; only the pinned {PINNED_REF} is accepted')
+    p.add_argument('--ref', help='supported engine set name (defaults to the pinned engine)')
     p.add_argument('--out', type=Path, required=True, help='new or empty output directory outside the producer')
     p = commands.add_parser('run', help='Explicitly execute an already-built native harness')
     p.add_argument('--binary', type=Path, required=True)

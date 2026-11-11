@@ -6,17 +6,16 @@
  * native reference) are reused by inclusion with the included main renamed;
  * it never runs here, so scripts/test-proof-gamut.py compiles this harness
  * with -Wno-unused-function. The included suite's own regression — including
- * its flags==2 refusal case — is dead code in this binary and is not
+ * its unknown-flag refusal case — is dead code in this binary and is not
  * executed.
  *
- * Contract under test: a candidate owned bit 2, named below and NOT read
- * from the current API173 facade header (which owns only bit 1), must be
+ * Contract under test: owned bit 2, named independently below rather than
+ * read from the facade header, must be
  * accepted by the public proof renderer and must match an independently
  * constructed direct native proofing transform carrying the native
- * GAMUT_CHECK flag. The current renderer refuses bit 2 with
- * INVALID_ARGUMENT and writes nothing, so this suite is expected to run RED
- * until the production mapping lands; expectations are deliberately not
- * weakened to pass the old behavior.
+ * GAMUT_CHECK flag. The baseline renderer refused bit 2 with
+ * INVALID_ARGUMENT and wrote nothing; the regression requires actual native
+ * gamut pixels rather than accepting that old refusal.
  *
  * proof-gamut-tests WORK_DIR
  */
@@ -24,10 +23,8 @@
 #include "proof-render-tests.c"
 #undef main
 
-/* Candidate owned flag bit 2. The current header defines only
- * GLIMS_PROOF_BLACK_POINT_COMPENSATION = 1u; this named candidate constant
- * is owned by this test, not by the facade, and no future production enum is
- * referenced. */
+/* Independently fixed owned flag bit 2. Reusing the facade enum here could
+ * let a mistaken production value silently change this regression oracle. */
 #define GLIMS_PROOF_GAMUT_CANDIDATE2 2u
 
 /* Deliberately saturated samples with differing, mostly partial alpha: the
