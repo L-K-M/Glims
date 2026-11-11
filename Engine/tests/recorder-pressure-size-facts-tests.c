@@ -67,7 +67,11 @@ alter_pressure_curve (GlimsEngine *engine, gpointer data)
   if (!probe->curve) return GLIMS_STATUS_FAILED;
   /* Change an actual enabled native curve, preserving a finite configuration. */
   gimp_curve_set_curve_type (probe->curve, GIMP_CURVE_FREE);
+#if GIMP_MAJOR_VERSION > 3 || (GIMP_MAJOR_VERSION == 3 && GIMP_MINOR_VERSION >= 2)
   gimp_curve_set_sample (probe->curve, 0.38, 0.1);
+#else
+  gimp_curve_set_curve (probe->curve, 0.38, 0.1);
+#endif
   gchar *changed = gimp_config_serialize_to_string (GIMP_CONFIG (probe->dynamics), NULL);
   gboolean different = changed && g_strcmp0 (changed, probe->serialized);
   g_free (changed);
