@@ -86,6 +86,19 @@ plain_bytes (void)
   refuses ((const guint8 *) expected, sizeof expected - 1, 128, 128, G_IO_ERROR_INVALID_DATA);
 }
 
+static void
+unrelated_gzip (void)
+{
+  g_autoptr(GInputStream) input = g_memory_input_stream_new_from_data (member, sizeof member, NULL);
+  g_autoptr(GOutputStream) output = g_memory_output_stream_new_resizable ();
+  g_autoptr(GError) error = NULL;
+  gboolean is_xcf = TRUE;
+  g_assert_true (glims_xcf_gzip_decode_xcf (input, output, sizeof member, 128, &is_xcf, &error));
+  g_assert_no_error (error);
+  g_assert_false (is_xcf);
+  g_assert_cmpuint (g_memory_output_stream_get_data_size (G_MEMORY_OUTPUT_STREAM (output)), ==, 0);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -98,5 +111,6 @@ main (int argc, char **argv)
   g_test_add_func ("/xcf-gzip/trailing-byte", trailing_byte);
   g_test_add_func ("/xcf-gzip/concatenated-members", concatenated_members);
   g_test_add_func ("/xcf-gzip/plain-bytes", plain_bytes);
+  g_test_add_func ("/xcf-gzip/unrelated-member", unrelated_gzip);
   return g_test_run ();
 }

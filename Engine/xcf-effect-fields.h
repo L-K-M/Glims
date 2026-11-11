@@ -83,6 +83,10 @@ typedef struct GlimsXcfEffectFields GlimsXcfEffectFields;
 GlimsXcfEffectFields *glims_xcf_effect_fields_read (GFile *file,
                                                   GCancellable *cancellable,
                                                   GError **error);
+/* Read the same metadata from an already verified, borrowed seekable
+ * stream. The reader rewinds the stream and does not close it. */
+GlimsXcfEffectFields *glims_xcf_effect_fields_read_stream (GInputStream *stream, guint64 size,
+                                                         GCancellable *cancellable, GError **error);
 void glims_xcf_effect_fields_free (GlimsXcfEffectFields *fields);
 const GlimsXcfImageFields *glims_xcf_effect_fields_image (const GlimsXcfEffectFields *fields);
 guint glims_xcf_effect_fields_layer_count (const GlimsXcfEffectFields *fields);

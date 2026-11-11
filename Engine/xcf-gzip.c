@@ -1,11 +1,16 @@
 #include "xcf-gzip.h"
+#include <string.h>
 #include <zlib.h>
 
-gboolean
-glims_xcf_gzip_decode (GInputStream *input, GOutputStream *output,
-                       guint64 input_limit, guint64 output_limit,
-                       GError **error)
+static gboolean
+decode_member (GInputStream *input, GOutputStream *output,
+               guint64 input_limit, guint64 output_limit,
+               gboolean *is_xcf, GError **error)
 {
+  static const guint8 xcf_magic[] = "gimp xcf ";
+  const gsize magic_size = sizeof xcf_magic - 1;
+  gsize matched = 0;
+  if (is_xcf) *is_xcf = FALSE;
   z_stream stream = {0};
   if (inflateInit2 (&stream, MAX_WBITS + 16) != Z_OK) {
     g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Could not initialize gzip decoding");
@@ -34,6 +39,8 @@ glims_xcf_gzip_decode (GInputStream *input, GOutputStream *output,
 
     guint64 remaining = output_limit - output_bytes;
     gsize capacity = remaining >= sizeof outgoing ? sizeof outgoing : (gsize) remaining + 1;
+    gboolean probing = is_xcf && !*is_xcf;
+    if (probing) capacity = MIN (capacity, magic_size - matched);
     stream.next_out = outgoing;
     stream.avail_out = (uInt) capacity;
     uInt available = stream.avail_in;
@@ -48,8 +55,18 @@ glims_xcf_gzip_decode (GInputStream *input, GOutputStream *output,
       g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE, "Decoded gzip limit exceeded");
       break;
     }
-    if (produced && !g_output_stream_write_all (output, outgoing, produced, NULL, NULL, error)) break;
     output_bytes += produced;
+    if (probing) {
+      if (memcmp (outgoing, xcf_magic + matched, produced)) {
+        /* The regular native route owns unrelated compressed formats. */
+        complete = TRUE;
+        break;
+      }
+      matched += produced;
+      *is_xcf = matched == magic_size;
+      if (*is_xcf && !g_output_stream_write_all (output, xcf_magic, magic_size, NULL, NULL, error)) break;
+    } else if (produced && !g_output_stream_write_all (output, outgoing, produced, NULL, NULL, error))
+      break;
     if (result != Z_STREAM_END) continue;
 
     /* inflate validates the gzip trailer. Reject other bytes even when the
@@ -68,4 +85,19 @@ glims_xcf_gzip_decode (GInputStream *input, GOutputStream *output,
 
   inflateEnd (&stream);
   return complete;
+}
+
+gboolean
+glims_xcf_gzip_decode (GInputStream *input, GOutputStream *output,
+                       guint64 input_limit, guint64 output_limit, GError **error)
+{
+  return decode_member (input, output, input_limit, output_limit, NULL, error);
+}
+
+gboolean
+glims_xcf_gzip_decode_xcf (GInputStream *input, GOutputStream *output,
+                           guint64 input_limit, guint64 output_limit,
+                           gboolean *is_xcf, GError **error)
+{
+  return decode_member (input, output, input_limit, output_limit, is_xcf, error);
 }

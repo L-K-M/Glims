@@ -118,11 +118,11 @@ uninterpretable triplet through a varargs mismatch. This does not recover
 unknown values, admit mixed invalid words, or replace registered explicit
 values with AUTO.
 
-The loader compares pre-load and post-decode file size, required ETag and
-available device/inode attributes. This detects ordinary observable source
-changes; it is not an FD-bound snapshot, content-hash attestation or protection
-against an adversarial ABA replacement with the same metadata. Missing
-required identity evidence refuses recovery. The reader's bounds apply
+For plain XCF, the loader compares pre-load and post-decode file size,
+required ETag and available device/inode attributes. This detects ordinary
+observable changes. It does not bind both plain-XCF reads to one descriptor.
+Gzip uses the shared spool described below. Missing required identity
+evidence refuses recovery. The reader's bounds apply
 to plain XCF v20–26 and to the inner XCF of a single gzip member.
 Bzip2, xz, nested compressed wrappers and effects nested on effect masks
 remain outside recovery. The native loader may discard unsupported effects
@@ -213,17 +213,20 @@ exercise general conformance; the legacy native oracle is pinned to 3.2.8.
 
 ## Gzip-wrapped effect records
 
-GIMP opens the original compressed file and reports the inner XCF MIME.
-Effect recovery checks the original gzip signature after the native
-load. Glims supplements and images without effects keep their existing
-paths. Recovery checks the regular source descriptor against the
-original size, device and inode, then retains the same-file stamp check
-before native effect settings can change.
+The loader opens one local regular source descriptor and compares its
+size, device and inode with the original file stamp. It checks the gzip
+signature and decoded XCF prefix before dispatching the native load.
+For XCF, it decodes one complete member into a private seekable spool,
+checks the trailer, rejects trailing data and limits input and decoded
+output separately to 4 GiB. The loader unlinks the spool before writing
+any image bytes and closes it when the open finishes.
 
-Recovery decodes one complete gzip member into a private temporary
-file. It checks the trailer, rejects trailing data and limits input
-and decoded output separately to 4 GiB. The bounded XCF reader parses
-the staged copy. The recovery pass deletes the temporary file and
-directory before binding effects. GIMP's first decompression still
-uses its own loader. Native image identity, Save and Revert refer to
-the original file.
+GIMP's XCF stream loader and the bounded effect reader read the same
+decoded spool. Replacing the original pathname between their reads
+cannot mix one image's pixels with another image's effect settings.
+GIMP receives the original `GFile` for image identity, Save and Revert,
+and as the base for resolving relative linked files. The source stamp
+is checked again before publication. Glims supplements and images
+without effects skip the foreign metadata reader. The original native
+loader still handles other gzip formats, with foreign XCF effect
+recovery disabled on that fallback.
