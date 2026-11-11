@@ -23,6 +23,7 @@ enum AdjustmentLayerLogic {
         ("gegl:brightness-contrast", "Brightness/Contrast"),
         ("gimp:levels", "Levels"),
         ("gimp:curves", "Curves"),
+        ("glims:posterize", "Posterize"),
         ("gimp:color-balance", "Color Balance"),
         ("gimp:hue-saturation", "Hue-Saturation"),
         ("gegl:exposure", "Exposure"),

@@ -4267,3 +4267,20 @@ refusals, deleted targets and accepted-command failure settlement. Independent
 production review and follow-up fixture review have no remaining important
 findings. These checks do not exercise the binding sheet itself or establish
 complete action/batch coverage; filter and text recording remain open.
+
+
+### Color-only Posterize (2026-11-12 candidate)
+
+Image > Adjust and New Adjustment Layer offer Posterize with 2–256 levels.
+The adapter-owned operation follows the upstream color quantization while
+copying alpha unchanged. The older operation remains available under the
+explicit name "Posterize Including Transparency". Both use the existing
+modeless preview, Apply/Cancel, Undo and editable-effect workflow.
+
+All four engine sets pass native conformance and 41 focused checks covering
+partial alpha, unchanged source pixels, cancellation, Undo/Redo, adjustment
+groups and editable XCF reopening. The app passes 1,279 units, all four
+focused menu/adjustment-layer workflows, and 3,322/3,322/3,296/3,322 full
+checks on 3.2.8/3.2.0/3.0.8/master. Independent source review found no
+important issue. The owned operation must be present to re-edit this XCF
+effect; upstream applications do not provide the `glims:` operation.

@@ -97,6 +97,15 @@ final class AdjustmentLayerControlsTests: XCTestCase {
                            + "config ops outside the known set never do")
     }
 
+    func testColorPosterizeUsesTheAlphaPreservingOperation() {
+        let safe = operation("glims:posterize", title: "Posterize")
+        let changesAlpha = operation("gimp:posterize", title: "Posterize")
+        XCTAssertEqual(AdjustmentLayerLogic.availableOperations(in: [safe, changesAlpha]).map(\.name),
+                       ["glims:posterize"])
+        XCTAssertEqual(NativeFilterMenuLayout.itemTitle(safe), "Posterize…")
+        XCTAssertEqual(NativeFilterMenuLayout.itemTitle(changesAlpha), "Posterize Including Transparency…")
+    }
+
     func testCanonicalInvertOperationsFromTheNativeCatalogAreOffered() {
         let catalog = [operation("gegl:invert-gamma"), operation("gegl:invert-linear")]
         XCTAssertEqual(AdjustmentLayerLogic.availableOperations(in: catalog).map(\.name),

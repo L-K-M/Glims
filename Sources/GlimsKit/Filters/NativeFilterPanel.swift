@@ -44,7 +44,7 @@ final class NativeFilterPanel: FilterPreviewPanel {
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 200),
                             styleMask: [.titled, .closable, .utilityWindow],
                             backing: .buffered, defer: false)
-        panel.title = operation.title
+        panel.title = NativeFilterMenuLayout.displayTitle(operation)
         panel.isFloatingPanel = true
         super.init(document: imageDocument, panel: panel, filter: filter)
         buildContent(in: panel, properties: properties)

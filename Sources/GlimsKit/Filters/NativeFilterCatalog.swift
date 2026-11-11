@@ -172,8 +172,13 @@ struct NativeFilterMenuLayout: Equatable {
 
     /// The item's menu title: `Title…` when it opens a form, `Title
     /// (reason)` when it cannot run yet.
+    static func displayTitle(_ operation: EngineSession.FilterOperation) -> String {
+        if operation.name == "gimp:posterize" { return "Posterize Including Transparency" }
+        return operation.title.isEmpty ? operation.name : operation.title
+    }
+
     static func itemTitle(_ operation: EngineSession.FilterOperation) -> String {
-        let title = operation.title.isEmpty ? operation.name : operation.title
+        let title = displayTitle(operation)
         if usesBrightnessContrastEditor(operation) || usesColorBalanceEditor(operation) || usesHueSaturationEditor(operation) || usesLevelsEditor(operation) || usesCurvesEditor(operation) { return "\(title)…" }
         if usesSourceChooser(operation) { return "\(title)…" }
         if let reason = unavailableReason(operation.support) {
@@ -215,6 +220,7 @@ enum NativeFilterMenus {
         ("gimp:levels", "Levels"),
         ("gimp:curves", "Curves"),
         ("gimp:threshold", "Threshold"),
+        ("glims:posterize", "Posterize"),
         ("gegl:invert-gamma", "Invert Perceptual"),
         ("gegl:invert-linear", "Invert Linear"),
     ]

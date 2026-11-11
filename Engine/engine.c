@@ -13,6 +13,7 @@
  * network, and no change to the process locale.
  */
 #include "engine-private.h"
+#include "operation-posterize.h"
 #include "resource-mutation.h"
 #include "resource-rename.h"
 #include "layer-delete.h"
@@ -785,6 +786,12 @@ engine_initialize (GlimsEngine  *engine,
     }
 
   gimp_gegl_init (gimp);
+
+  /* The adapter's own operations register the way GIMP's do inside
+   * gimp_gegl_init(): the held class reference puts the type in GEGL's
+   * operation lookup before gimp_restore() and the plug-in catalogs
+   * enumerate operations. */
+  glims_operation_posterize_register ();
 
   current_language = language_init (NULL, NULL);
 
