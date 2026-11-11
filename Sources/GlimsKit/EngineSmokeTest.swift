@@ -782,6 +782,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (screen modes)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "palette-keyboard-focus" {
+                try exercisePaletteKeyboardFocus(session, documents: documents)
+                print(failures == 0 ? "PASSED (palette keyboard focus)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
                 check(false, "unknown engine smoke case: \(selected)")
 
