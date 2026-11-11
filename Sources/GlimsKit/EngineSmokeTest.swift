@@ -117,6 +117,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tablet-stroke-v2" {
+                try exerciseTabletStrokeV2(session, documents: documents)
+                print(failures == 0 ? "PASSED (tablet V2 input)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tablet-eraser-proximity" {
                 try exerciseTabletEraserProximity(session, documents: documents)
                 print(failures == 0 ? "PASSED (tablet eraser proximity)" : "FAILED: \(failures) failure(s)")
