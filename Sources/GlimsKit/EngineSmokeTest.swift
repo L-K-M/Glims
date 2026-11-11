@@ -266,6 +266,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (recorder replay)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-channel-capture-contract" {
+                try exerciseRecorderChannelCaptureContract(session, documents: documents)
+                print(failures == 0 ? "PASSED (channel capture contract)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-capture" {
                 try exerciseRecorderCapture(session, documents: documents)
                 print(failures == 0 ? "PASSED (recorder capture)" : "FAILED: \(failures) failure(s)")
