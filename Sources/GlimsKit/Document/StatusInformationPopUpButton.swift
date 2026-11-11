@@ -39,7 +39,7 @@ final class StatusInformationPopUpButton: NSPopUpButton {
     }
 
     @objc private func informationChosen() {
-        guard let choice = StatusInformationChoice(rawValue: selectedTag) else { return }
+        guard let choice = StatusInformationChoice(rawValue: selectedTag()) else { return }
         selectInformation(choice)
     }
 
