@@ -88,11 +88,14 @@ bundle with the native and Swift build outputs inaccessible.
       and failed-write rollback (integration candidate; `xcf-effects.md`).
 - [ ] Preserve nondefault native-only effect blend/composite settings when
       opening XCF; upstream currently normalizes them to AUTO.
-- [x] Recover validated foreign effect fields in plain XCF v22–26 across
+- [x] Recover validated foreign effect fields in plain XCF v20–26 across
       layers, groups, layer masks and channels, before image adoption
-      (candidate; `xcf-effect-fields.md`). Native complex 3.2.8/v26 checks
-      pass 43/43 after eight baseline failures; compressed containers,
-      v20/v21 and nested effect-mask effects remain outside this slice.
+      (`xcf-effect-fields.md`). Native complex 3.2.8/v26 checks pass
+      43/43 after eight baseline failures. The v20/v21 extension passes
+      the pinned 61-check native fixture.
+- [x] Preserve supported foreign effect fields in a single gzip member
+      (candidate). GIMP and the metadata reader share the decoded stream;
+      the pinned pathname-swap regression passes 117/117.
 - [x] Path fill, vector layers and vector style controls.
 - [x] Multi-anchor path editing with group move/delete and Undo.
 - [x] Searchable brush, pattern and gradient resource choosers, with

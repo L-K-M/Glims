@@ -108,7 +108,7 @@ struct NativeFilterMenuLayout: Equatable {
     }
 
     static func supportsParameterEditor(_ operation: EngineSession.FilterOperation?) -> Bool {
-        guard let operation else { return false }
+        guard let operation, operation.name != SourceFilterOperation.oilify.rawValue else { return false }
         return operation.support == .supported || usesBrightnessContrastEditor(operation) || usesColorBalanceEditor(operation) || usesHueSaturationEditor(operation) || usesLevelsEditor(operation) || usesCurvesEditor(operation)
     }
 
