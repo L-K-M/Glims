@@ -3337,6 +3337,24 @@ typedef struct GlimsEngineAPI {
                                                     GlimsItemID y_source,
                                                     GlimsFilterID *out,
                                                     char **error);
+
+  /* Slot170: start an owned, merge-only Oilify preview on a pixel layer.
+   * Positive radius/exponent ids refer to attached same-image drawables.
+   * Zero leaves that pad absent; two zero ids give plain Oilify. Distinct
+   * sources share the 512 MiB snapshot budget, with identical ids charged
+   * once. Detached native-format inputs retain their buffer coordinates.
+   * Native halo and sample arithmetic and converted target RGBA/luminance
+   * and map luminance must validate before attachment. The current selection
+   * is frozen before preview; no implicit rasterization or persisted effect.
+   * Abort preserves stored pixels/history; Apply merges with one native Undo.
+   * On failure *out is zero. Generic legacy filter routes keep their contract. */
+  GlimsStatus (*filter_begin_oilify_with_sources) (GlimsEngine *engine,
+                                                  GlimsImageID image,
+                                                  GlimsItemID target,
+                                                  GlimsItemID radius_source,
+                                                  GlimsItemID exponent_source,
+                                                  GlimsFilterID *out,
+                                                  char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

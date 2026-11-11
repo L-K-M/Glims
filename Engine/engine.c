@@ -2876,6 +2876,36 @@ static GlimsStatus api_filter_begin_displace_with_sources (GlimsEngine *e,
 }
 
 typedef struct {
+  GlimsImageID image;
+  GlimsItemID target, radius_source, exponent_source;
+  GlimsFilterID *out;
+  char **error;
+} GlimsOilifySourcesArgs;
+static GlimsStatus oilify_sources_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsOilifySourcesArgs *a = data;
+  return glims_filter_begin_oilify_with_sources (e, a->image, a->target,
+                                                 a->radius_source, a->exponent_source,
+                                                 a->out, a->error);
+}
+static GlimsStatus api_filter_begin_oilify_with_sources (GlimsEngine *e,
+                                                        GlimsImageID image,
+                                                        GlimsItemID target,
+                                                        GlimsItemID radius_source,
+                                                        GlimsItemID exponent_source,
+                                                        GlimsFilterID *out,
+                                                        char **error)
+{
+  if (out) *out = 0;
+  if (error) *error = NULL;
+  if (!out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsOilifySourcesArgs args = { .image = image, .target = target,
+                                 .radius_source = radius_source, .exponent_source = exponent_source,
+                                 .out = out, .error = error };
+  return glims_engine_call (e, oilify_sources_on_engine, &args);
+}
+
+typedef struct {
   GlimsFilterID filter;
   GlimsBrightnessContrastSettings *out;
   const GlimsBrightnessContrastSettings *settings;
@@ -3357,6 +3387,7 @@ static const GlimsEngineAPI api_v1 = {
   .image_pick_layer = api_image_pick_layer,
   .text_layer_new_captured = api_text_layer_new_captured,
   .filter_begin_displace_with_sources = api_filter_begin_displace_with_sources,
+  .filter_begin_oilify_with_sources = api_filter_begin_oilify_with_sources,
 };
 
 __attribute__ ((visibility ("default")))
