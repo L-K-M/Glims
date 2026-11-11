@@ -142,6 +142,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (active recorder save)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-stroke-capture" {
+                try exerciseRecorderStrokeCapture(session, documents: documents)
+                print(failures == 0 ? "PASSED (Recorder stroke capture)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if let smokeCase = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"],
                ["recorder-file-ui", "recorder-file-picker-ui"].contains(smokeCase) {
                 try exerciseRecorderFileUI(session, work: work, documents: documents,
