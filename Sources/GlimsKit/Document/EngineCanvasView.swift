@@ -49,6 +49,10 @@ final class EngineCanvasView: NSView {
     private(set) var zoomPercent = ZoomLadder.actualPixels
     private var tiles: [TileKey: CGImage] = [:]
     var renderedTileCount: Int { tiles.count }
+    private(set) var renderMetrics = CanvasRenderMetrics()
+    /// The owning controller installs a weak capture. Published only from
+    /// accepted tile/cache changes on the main actor.
+    var onRenderMetricsChange: ((CanvasRenderMetrics) -> Void)?
     private var staleTiles: Set<TileKey> = []
     private var failedTiles: Set<TileKey> = []
     private var renderingStopped = false
@@ -186,10 +190,7 @@ final class EngineCanvasView: NSView {
 
     func setZoom(percent: Int) {
         zoomPercent = percent
-        generation += 1
-        tiles.removeAll()
-        staleTiles.removeAll()
-        failedTiles.removeAll()
+        advanceRenderGeneration(clearingTiles: true)
         updateFrameSize()
         tools.canvasScaleDidChange()
         needsDisplay = true
@@ -198,10 +199,7 @@ final class EngineCanvasView: NSView {
 
     /// The image's size changed (crop, undo of a crop): every tile is stale.
     func imageSizeDidChange() {
-        generation += 1
-        tiles.removeAll()
-        staleTiles.removeAll()
-        failedTiles.removeAll()
+        advanceRenderGeneration(clearingTiles: true)
         updateFrameSize()
         needsDisplay = true
         setNeedsRender()
@@ -210,10 +208,7 @@ final class EngineCanvasView: NSView {
     func setSoftProof(_ proof: CanvasSoftProof?) {
         guard softProof != proof, !renderingStopped, !document.isClosing else { return }
         softProof = proof
-        generation += 1
-        tiles.removeAll()
-        staleTiles.removeAll()
-        failedTiles.removeAll()
+        advanceRenderGeneration(clearingTiles: true)
         needsDisplay = true
         setNeedsRender()
     }
@@ -250,16 +245,19 @@ final class EngineCanvasView: NSView {
         let destination = self.destination
         let proof = self.softProof
         renderQueue.async {
+            let started = DispatchTime.now().uptimeNanoseconds
             let result = Result {
                 try CanvasDisplayDestination.render(session, image: image, scale: scale, area: area,
                                                     destination: destination, proof: proof)
             }
+            let finished = DispatchTime.now().uptimeNanoseconds
             DispatchQueue.main.async {
                 self.renderInFlight = false
                 if generation == self.generation, !self.renderingStopped {
                     switch result {
                     case .success(let image):
-                        self.store(image, for: key)
+                        self.store(image, for: key, elapsedSeconds:
+                            CanvasRenderMetrics.elapsedSeconds(start: started, end: finished))
                         self.setNeedsDisplay(self.viewRect(for: key))
                     case .failure(let error):
                         // Retry when the image or zoom changes, not in
@@ -276,6 +274,7 @@ final class EngineCanvasView: NSView {
     /// Drains any in-flight read before the engine image is destroyed.
     func stopRendering(completion: @escaping @MainActor () -> Void) {
         renderingStopped = true
+        onRenderMetricsChange = nil
         tools.cancelFloatingShape()
         tools.stopHintEvents()
         hintLifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
@@ -294,9 +293,12 @@ final class EngineCanvasView: NSView {
         refreshDisplayDestination()
         var count = 0
         while let key = nextTileToRender() {
-            store(try CanvasDisplayDestination.render(document.session, image: document.image,
-                                                       scale: deviceScale, area: deviceRect(for: key),
-                                                       destination: destination, proof: softProof), for: key)
+            let started = DispatchTime.now().uptimeNanoseconds
+            let image = try CanvasDisplayDestination.render(document.session, image: document.image,
+                scale: deviceScale, area: deviceRect(for: key), destination: destination, proof: softProof)
+            let finished = DispatchTime.now().uptimeNanoseconds
+            store(image, for: key, elapsedSeconds:
+                CanvasRenderMetrics.elapsedSeconds(start: started, end: finished))
             count += 1
         }
         needsDisplay = true
@@ -325,16 +327,38 @@ final class EngineCanvasView: NSView {
         renderQueue.async { barrier() }
     }
 
-    private func store(_ image: CGImage, for key: TileKey) {
+    private func store(_ image: CGImage, for key: TileKey, elapsedSeconds: TimeInterval?) {
         tiles[key] = image
         staleTiles.remove(key)
-        guard tiles.count > Self.maximumCachedTiles else { return }
-        let visible = Set(visibleTileKeys())
-        for evicted in tiles.keys where !visible.contains(evicted) {
-            tiles[evicted] = nil
-            staleTiles.remove(evicted)
-            if tiles.count <= Self.maximumCachedTiles { break }
+        if tiles.count > Self.maximumCachedTiles {
+            let visible = Set(visibleTileKeys())
+            for evicted in tiles.keys where !visible.contains(evicted) {
+                tiles[evicted] = nil
+                staleTiles.remove(evicted)
+                if tiles.count <= Self.maximumCachedTiles { break }
+            }
         }
+        publishRenderMetrics(lastTileSeconds: elapsedSeconds)
+    }
+
+    private func advanceRenderGeneration(clearingTiles: Bool) {
+        generation += 1
+        if clearingTiles {
+            tiles.removeAll()
+            staleTiles.removeAll()
+            failedTiles.removeAll()
+        }
+        publishRenderMetrics(lastTileSeconds: nil)
+    }
+
+    private func publishRenderMetrics(lastTileSeconds: TimeInterval?) {
+        let bytes = tiles.values.reduce(UInt64(0)) { total, image in
+            total + CanvasRenderMetrics.pixelPayloadBytes(bytesPerRow: image.bytesPerRow, height: image.height)
+        }
+        let updated = CanvasRenderMetrics(cachedPixelBytes: bytes, lastTileSeconds: lastTileSeconds)
+        guard updated != renderMetrics else { return }
+        renderMetrics = updated
+        onRenderMetricsChange?(updated)
     }
 
     // MARK: Tile geometry
@@ -440,10 +464,7 @@ final class EngineCanvasView: NSView {
         let updated = CanvasDisplayDestination.snapshot(window: window)
         guard updated.invalidatesCache(comparedTo: destination) else { return }
         destination = updated
-        generation += 1
-        tiles.removeAll()
-        staleTiles.removeAll()
-        failedTiles.removeAll()
+        advanceRenderGeneration(clearingTiles: true)
         needsDisplay = true
     }
 
@@ -503,7 +524,7 @@ final class EngineCanvasView: NSView {
     /// change additionally clears the completed cache (refresh first).
     private func backingDidChange() {
         refreshDisplayDestination()
-        generation += 1
+        advanceRenderGeneration(clearingTiles: false)
         let clip = enclosingScrollView?.contentView
         let viewport = clip?.bounds ?? .zero
         let viewCenter = convert(CGPoint(x: viewport.midX, y: viewport.midY), from: clip)

@@ -21,6 +21,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var savedSoftProof: CanvasSoftProof?
     private let preferences: EditorPreferences
     let statusBar = StatusBarView(frame: .zero)
+    let statusInformation = StatusInformationPopUpButton()
     /// The scroll view hosting the canvas and its native ruler slots;
     /// readable for the smoke test's native-slot checks.
     let scrollView = CanvasScrollView()
@@ -248,6 +249,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         statusBar.isZoomEditable = true
         statusBar.onZoomTo = { [weak self] percent in self?.zoom(to: ZoomLadder.clamped(percent)) }
         statusBar.setZoom(percent: canvas.zoomPercent)
+        statusBar.setAccessoryViews([statusInformation])
+        canvas.onRenderMetricsChange = { [weak self] _ in self?.refreshStatusInformation() }
         stateDidChange()
         window.center()
     }
@@ -519,6 +522,29 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         return scoped.allSatisfy { !PaletteEditScope.isFieldEditing($0) }
     }
 
+    private func refreshStatusInformation() {
+        let info = imageDocument.info
+        let color = imageDocument.colorInfo
+        statusInformation.update(StatusInformationSnapshot(width: info.width, height: info.height,
+            profileLabel: color.profileLabel,
+            precisionLabel: "\(color.component.title) · \(color.trc.title)",
+            renderMetrics: canvas.renderMetrics))
+        refreshStatusInformationVisibility()
+    }
+
+    /// Progress and its Cancel control take priority over this optional
+    /// readout when the document is narrow. Keep the selected choice for
+    /// when the operation finishes or the window grows again.
+    private func refreshStatusInformationVisibility() {
+        let width = window?.contentLayoutRect.width ?? statusBar.bounds.width
+        let hidden = statusBar.isShowingProgress && width < 560
+        if statusInformation.isHidden != hidden { statusInformation.isHidden = hidden }
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        refreshStatusInformationVisibility()
+    }
+
     private func stateDidChange() {
         window?.title = Self.title(name: imageDocument.name, zoomPercent: canvas.zoomPercent,
                                    isDirty: imageDocument.hasUnsavedChanges,
@@ -526,6 +552,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                    precision: imageDocument.info.precision,
                                    profileLabel: imageDocument.colorInfo.profileLabel,
                                    viewRotation: rotationView.rotationDegrees)
+        refreshStatusInformation()
         refreshIdleStatus(.stateChange)
         (PaletteCenter.shared.registeredPalette(for: LayersPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: ChannelsPaletteController.definition.kind))?.retarget()
@@ -1690,6 +1717,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             guard let self else { return }
             self.statusProgressActive = false
             self.statusBar.hideProgress()
+            self.refreshStatusInformationVisibility()
             switch result {
             case .success(.completed): self.stateDidChange()
             case .success(.cancelled): self.statusBar.message = "\(title) was cancelled."
@@ -1703,12 +1731,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         statusProgressActive = progress != nil
         guard let progress else {
             statusBar.hideProgress()
+            refreshStatusInformationVisibility()
             refreshIdleStatus(.stateChange)
             return
         }
         statusBar.showProgress(fraction: progress.fraction) { [weak self] in
             _ = self?.imageDocument.session.cancelProcedure()
         }
+        refreshStatusInformationVisibility()
         if !progress.text.isEmpty {
             statusBar.message = progress.text
         }

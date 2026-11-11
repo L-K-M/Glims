@@ -707,6 +707,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (float color sampling)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "status-information" {
+                try exerciseStatusInformation(session, documents: documents)
+                print(failures == 0 ? "PASSED (status information)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "soft-proof" {
                 try exerciseSoftProof(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (soft proof)" : "FAILED: \(failures) failure(s)")
@@ -849,6 +854,7 @@ enum EngineSmokeTest {
             try exerciseDisplayDestination(session, work: work, documents: documents)
             try exerciseSoftProof(session, work: work, documents: documents)
             try exerciseFloatColorSampling(session, documents: documents)
+            try exerciseStatusInformation(session, documents: documents)
             try exerciseCanvasRotation(session, documents: documents)
             try exerciseTrackpadNavigation(session, documents: documents)
             try exerciseOptionScroll(session, documents: documents)
