@@ -30,7 +30,7 @@ struct GlimsXcfEffectFields {
 
 typedef struct { guint64 start, end; } Range;
 typedef struct {
-  GFileInputStream *stream;
+  GInputStream *stream;
   GCancellable *cancellable;
   GError **error;
   guint64 size, position, limit, spent, bytes_read;
@@ -581,6 +581,35 @@ done:
 }
 
 GlimsXcfEffectFields *
+glims_xcf_effect_fields_read_stream (GInputStream *stream, guint64 size,
+                                    GCancellable *cancellable, GError **error)
+{
+  Reader reader = { .stream = stream, .size = size, .limit = size,
+                    .cancellable = cancellable, .error = error };
+  if (!G_IS_SEEKABLE (stream) || !g_seekable_can_seek (G_SEEKABLE (stream)) || size > G_MAXINT64) {
+    fail (&reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "XCF metadata requires seekable bounded input");
+    return NULL;
+  }
+  if (!g_seekable_seek (G_SEEKABLE (stream), 0, G_SEEK_SET, cancellable, error)) return NULL;
+  GlimsXcfEffectFields *fields = NULL;
+  reader.anchors = g_array_new (FALSE, FALSE, sizeof (guint64));
+  reader.ranges = g_array_new (FALSE, FALSE, sizeof (Range));
+  reader.claimed = g_hash_table_new_full (g_int64_hash, g_int64_equal, g_free, NULL);
+  fields = allocate (&reader, sizeof *fields);
+  if (!fields) goto done;
+  fields->layers = g_ptr_array_new_with_free_func (layer_free);
+  fields->channels = g_ptr_array_new_with_free_func (channel_free);
+  if (!read_image (&reader, fields)) {
+    glims_xcf_effect_fields_free (fields); fields = NULL;
+  } else fields->bytes_read = reader.bytes_read;
+done:
+  if (reader.anchors) g_array_unref (reader.anchors);
+  if (reader.ranges) g_array_unref (reader.ranges);
+  if (reader.claimed) g_hash_table_unref (reader.claimed);
+  return fields;
+}
+
+GlimsXcfEffectFields *
 glims_xcf_effect_fields_read (GFile *file, GCancellable *cancellable, GError **error)
 {
   if (!G_IS_FILE (file)) {
@@ -594,31 +623,18 @@ glims_xcf_effect_fields_read (GFile *file, GCancellable *cancellable, GError **e
   }
   GFileInputStream *stream = g_file_read (file, cancellable, error);
   if (!stream) return NULL;
-  Reader reader = { .stream = stream, .cancellable = cancellable, .error = error };
   GlimsXcfEffectFields *fields = NULL;
   GFileInfo *info = g_file_input_stream_query_info (stream,
       G_FILE_ATTRIBUTE_STANDARD_SIZE "," G_FILE_ATTRIBUTE_STANDARD_TYPE, cancellable, error);
-  if (!info) goto done;
-  if (g_file_info_get_file_type (info) != G_FILE_TYPE_REGULAR ||
-      !G_IS_SEEKABLE (stream) || !g_seekable_can_seek (G_SEEKABLE (stream)) || g_file_info_get_size (info) < 0) {
-    fail (&reader, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED, "XCF metadata requires a seekable regular file"); goto done;
+  if (info) {
+    if (g_file_info_get_file_type (info) != G_FILE_TYPE_REGULAR || g_file_info_get_size (info) < 0)
+      g_set_error_literal (error, GLIMS_XCF_EFFECT_FIELDS_ERROR, GLIMS_XCF_EFFECT_FIELDS_UNSUPPORTED,
+                           "XCF metadata requires a seekable regular file");
+    else
+      fields = glims_xcf_effect_fields_read_stream (G_INPUT_STREAM (stream),
+          (guint64) g_file_info_get_size (info), cancellable, error);
+    g_object_unref (info);
   }
-  reader.size = reader.limit = (guint64) g_file_info_get_size (info);
-  reader.anchors = g_array_new (FALSE, FALSE, sizeof (guint64));
-  reader.ranges = g_array_new (FALSE, FALSE, sizeof (Range));
-  reader.claimed = g_hash_table_new_full (g_int64_hash, g_int64_equal, g_free, NULL);
-  fields = allocate (&reader, sizeof *fields);
-  if (!fields) goto done;
-  fields->layers = g_ptr_array_new_with_free_func (layer_free);
-  fields->channels = g_ptr_array_new_with_free_func (channel_free);
-  if (!read_image (&reader, fields)) {
-    glims_xcf_effect_fields_free (fields); fields = NULL;
-  } else fields->bytes_read = reader.bytes_read;
-done:
-  g_clear_object (&info);
-  if (reader.anchors) g_array_unref (reader.anchors);
-  if (reader.ranges) g_array_unref (reader.ranges);
-  if (reader.claimed) g_hash_table_unref (reader.claimed);
   GError *close_error = NULL;
   if (!g_input_stream_close (G_INPUT_STREAM (stream), NULL, &close_error)) {
     if (fields) { glims_xcf_effect_fields_free (fields); fields = NULL; g_propagate_error (error, close_error); }
