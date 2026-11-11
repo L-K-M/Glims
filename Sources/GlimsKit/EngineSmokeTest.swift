@@ -10736,6 +10736,12 @@ enum EngineSmokeTest {
             }
             return nil
         }
+        func visibleText(_ view: NSView?) -> String {
+            guard let view, !view.isHidden else { return "" }
+            var result = (view as? NSTextField)?.stringValue ?? ""
+            for child in view.subviews { result += " " + visibleText(child) }
+            return result
+        }
         var owners: [DocumentWindowController] = []
         var looseImages: [Int32] = []
         let priorTool = ToolState.shared.current
@@ -10867,8 +10873,9 @@ enum EngineSmokeTest {
         let cancelSheet = a.window?.attachedSheet
         let cancel = button(cancelSheet?.contentView, "Cancel")
         let restore = button(cancelSheet?.contentView, "Restore")
-        expect(cancelSheet != nil && cancel != nil && restore != nil && a.canvas.tools.textEditor == nil,
-               "a real Text click offers owned Restore/Cancel instead of a blank new-text editor")
+        expect(cancelSheet != nil && cancel != nil && restore != nil && a.canvas.tools.textEditor == nil
+                && visibleText(cancelSheet?.contentView).contains("Restore, then click the text again to edit."),
+               "a real Text click offers owned Restore/Cancel and fresh-click guidance instead of a blank editor")
         // On old code the preceding behavioral assertion is the only intended
         // failure. Cleanup still closes its unmodified empty editor and images.
         guard let cancel else { return }
@@ -10897,8 +10904,12 @@ enum EngineSmokeTest {
                "Restore changes the original target only and adds exactly one native Undo")
         expect(try snapshot(bSeed.image) == bBefore, "B's full native state is unchanged by A's sheet")
         print("OBS Text restore editorNil=\(a.canvas.tools.textEditor == nil) status=\(a.statusBar.message)")
-        expect(a.canvas.tools.textEditor == nil && a.statusBar.message == "Source restored. Click the text again to edit.",
-               "Restore does not revive an old editor and explicitly requests a fresh Text click")
+        // A trailing native state refresh deliberately replaces ordinary
+        // action feedback with the current tool hint. Consent above carries
+        // the explicit fresh-click instruction; the editor must stay absent.
+        expect(a.canvas.tools.textEditor == nil
+                && wait { a.statusBar.message.hasPrefix("Click to add or edit text.") },
+               "Restore leaves no old editor and returns to the normal settled Text hint")
         docA.undo(); try drain(docA)
         expect(try snapshot(aSeed.image).content == painted.content,
                "ordinary Undo restores measured painted pixels, layer identities and retained rasterized source")
