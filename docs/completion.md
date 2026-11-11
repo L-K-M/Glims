@@ -7,12 +7,14 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-Current source is merged through #197, with the final editor integration
-candidate adding native fractional color sampling, numeric foreground and
-background colors, selectable status information, and Rigi's Reduce Motion
-policy. The combined candidate passes 1,249 unit tests. Its four-engine and
-standalone verification is in progress; the installed local bundle still
-predates this candidate. Dated reports below retain their original scope.
+The editor implementation is merged through [#198](https://github.com/L-K-M/Glims/pull/198)
+(`e6a924b`). The tested production revision `9490d73` has identical source,
+tests, scripts, dependencies and resources at that merge. All 1,249 units,
+13,166 ordinary workflows across four engines, and the standalone bundle
+checks pass. The ordinary release app also painted, saved XCF, quit,
+reopened that file and exported PNG. See [the verification report](editor-verification.md)
+for exact scope, cold-start timing and the remaining qualification gates.
+Dated reports below retain their original scope and pending notes.
 
 - [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
       fail before packaging. Hosted CI explicitly builds only the interface.
@@ -44,7 +46,7 @@ predates this candidate. Dated reports below retain their original scope.
       with native and Swift build trees inaccessible. The rotation candidate
       passes831 unit tests, all four focused runtime cases and2,237 full app checks.
 
-## Remaining implementation and final verification
+## Implemented scope and qualification gates
 
 - [x] Layer to Image Size and Trim Layer to Content, with pixel-only policy.
 - [x] Explicit Rasterize Layer and Restore Layer Source controls.
@@ -174,14 +176,17 @@ predates this candidate. Dated reports below retain their original scope.
 - [x] Proof setup/toggle/gamut controls and documented menu/keyboard routes.
 - [x] Status information: dimensions, working profile, precision, retained
       tile payload and accepted-render timing (current integration candidate).
-- [ ] Final integrated menu/keyboard audit.
+- [x] Integrated command-registry and real AppKit focus/keyboard regressions (#198).
 - [x] Finite semantic Recorder capture/replay, named Save/Load and bindings;
       unsupported commands are explicit. See `recorder.md` and shipped Help.
-- [ ] Full accessibility/focus, appearance and English-copy audit.
+- [x] AppKit focus/accessibility-label regressions, shipped Help and final-control
+      English-copy review, and on-screen Classic Light/Neutral Gray/Dark checks.
+- [ ] Spoken VoiceOver and system Full Keyboard Access qualification on hardware.
 - [ ] Public distribution checks from `plan.md`: corresponding sources,
       remaining license texts, signing/notarization and update process.
-- [ ] Final combined build, engine matrix, self-contained bundles and real
-      end-to-end editing/file workflows on the final integrated revision.
+- [x] Combined build, four-engine ordinary workflows, standalone pinned bundle
+      with development trees denied, and real editing/Save/reopen/Export workflows.
+      Verification excludes public notarized distribution and physical display accuracy.
 
 ## Evidence and initial implementation reports
 

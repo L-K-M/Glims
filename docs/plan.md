@@ -4206,3 +4206,19 @@ important issue; the small menu delta has its own follow-up review. Four-engine 
 workflows, latest-head CI, final standalone assembly and interactive checks
 remain pending at this checkpoint. The completion ledger separates the
 implemented editor from public distribution and physical-display gates.
+
+
+### Integrated editor verification (2026-11-11)
+
+PR #198 merged the remaining fractional color, numeric editor, status and
+Reduce Motion adoption changes. All 1,249 units and 13,166 ordinary workflow
+checks across the four engines pass. The pinned release app passes 1,917
+native and 3,298 editor checks with development trees denied and no engine
+override. Ordinary pointer painting, fractional entries, XCF Save/Quit/reopen,
+PNG export and all three appearance schemes have separate on-screen evidence.
+A passive normal launch needs no input: the isolated cold run took 58.5 seconds and
+the cached restart 1.2 seconds after the launch handshake. The final Help follow-up
+corrects the obsolete mask and three-choice Preferences descriptions.
+See [editor verification](editor-verification.md) for evidence boundaries,
+source-review failures that were not counted as approval, and the public
+release, spoken-accessibility and physical-display qualification gates.
