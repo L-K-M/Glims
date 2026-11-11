@@ -142,6 +142,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (active recorder save)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-stroke-file" {
+                try exerciseRecorderStrokeFile(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Recorder stroke file)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-stroke-capture" {
                 try exerciseRecorderStrokeCapture(session, documents: documents)
                 print(failures == 0 ? "PASSED (Recorder stroke capture)" : "FAILED: \(failures) failure(s)")
