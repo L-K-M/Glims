@@ -57,8 +57,13 @@ extension EngineSmokeTest {
         var pixels: [UInt8] = []
         for y in 0..<29 {
             for x in 0..<41 {
-                pixels += [UInt8((x * 17 + y * 7) % 256), UInt8((x * 3 + y * 23) % 256),
-                           UInt8((x * x + y * 11 + 31) % 256), 255]
+                let red: Int = (x * 17 + y * 7) % 256
+                let green: Int = (x * 3 + y * 23) % 256
+                let blue: Int = (x * x + y * 11 + 31) % 256
+                pixels.append(UInt8(red))
+                pixels.append(UInt8(green))
+                pixels.append(UInt8(blue))
+                pixels.append(255)
             }
         }
         let source = ClipboardImage(width: 41, height: 29, pixels: Data(pixels), origin: .zero)
@@ -154,7 +159,7 @@ extension EngineSmokeTest {
             expect(description.kind == .channel && description.name == "Right source",
                    "the row binds the explicit source channel symbol, not the paint target")
         } else { expect(false, "the row binds the explicit source channel symbol, not the paint target") }
-        expect(try selectionMask(a.doc.image) == expectedCombined && try outline(a.doc.image) == expectedOutline,
+        expect(try selectionMask(a.doc.image) == expectedCombined && outline(a.doc.image) == expectedOutline,
                "the live captured action matches the independent native selection exactly")
         expect(aErrors.isEmpty, "live capture reports no errors")
 
@@ -168,14 +173,14 @@ extension EngineSmokeTest {
         try drain(a.doc)
         expect(a.doc.replayStatus == .finished(total: 2) && aErrors.isEmpty,
                "replay of both rows finishes on the same image")
-        expect(try selectionMask(a.doc.image) == expectedCombined && try outline(a.doc.image) == expectedOutline,
+        expect(try selectionMask(a.doc.image) == expectedCombined && outline(a.doc.image) == expectedOutline,
                "replay reproduces the independently expected selection exactly")
         expect(try session.undoInfo(a.doc.image).undoCount == undoBeforeReplay.undoCount + 2,
                "each replayed step adds one normal native Undo entry")
         a.doc.undo()
         try drain(a.doc)
         expect(try selectionMask(a.doc.image) == expectedRectOnly
-                && try session.undoInfo(a.doc.image).undoCount == undoBeforeReplay.undoCount + 1,
+                && session.undoInfo(a.doc.image).undoCount == undoBeforeReplay.undoCount + 1,
                "native Undo removes exactly the replayed channel-to-selection step")
 
         // Saved-file round-trip: version 3, one channel-binding row, and a
@@ -198,13 +203,20 @@ extension EngineSmokeTest {
         expect(file.symbols.first(where: { $0.id == sourceSymbol })?.description.kind == .channel,
                "the saved source symbol keeps its channel description")
         // Strict refusal of a wrong-source binding or a foreign symbol kind.
-        let symbolText = sourceSymbol.uuidString.lowercased()
-        let wrongBinding = String(decoding: fileBytes, as: UTF8.self)
-            .replacingOccurrences(of: #""kind":"channel","symbol":"# + symbolText + #"""#,
-                                  with: #""kind":"layer","symbol":"# + symbolText + #"""#)
+        var wrongBindingObject = try JSONSerialization.jsonObject(with: fileBytes) as! [String: Any]
+        var records = wrongBindingObject["records"] as! [[String: Any]]
+        records[1]["binding"] = ["kind": "layer", "symbol": sourceSymbol.uuidString.lowercased()]
+        wrongBindingObject["records"] = records
+        let wrongBinding = String(decoding: try JSONSerialization.data(withJSONObject: wrongBindingObject), as: UTF8.self)
         decodeRefuses(wrongBinding, "a layer binding is refused as a channel source")
-        let wrongKind = String(decoding: fileBytes, as: UTF8.self)
-            .replacingOccurrences(of: #""kind":"channel","ancestors""#, with: #""kind":"pixel","ancestors""#)
+        var wrongKindObject = try JSONSerialization.jsonObject(with: fileBytes) as! [String: Any]
+        var symbols = wrongKindObject["symbols"] as! [[String: Any]]
+        let sourceIndex = symbols.firstIndex { ($0["id"] as? String)?.lowercased() == sourceSymbol.uuidString.lowercased() }!
+        var description = symbols[sourceIndex]["description"] as! [String: Any]
+        description["kind"] = "pixel"
+        symbols[sourceIndex]["description"] = description
+        wrongKindObject["symbols"] = symbols
+        let wrongKind = String(decoding: try JSONSerialization.data(withJSONObject: wrongKindObject), as: UTF8.self)
         decodeRefuses(wrongKind, "a pixel description is refused as a channel source")
 
         let prepared = try RecorderFileSemanticBridge.prepare(file)
@@ -220,8 +232,8 @@ extension EngineSmokeTest {
         try installResult?.get()
         try d.doc.startReplay()
         try drain(d.doc)
-        expect(d.doc.replayStatus == .finished(total: 2)
-                && try selectionMask(d.doc.image) == expectedCombined,
+        expect(try d.doc.replayStatus == .finished(total: 2)
+                && selectionMask(d.doc.image) == expectedCombined,
                "the loaded file replays onto the explicitly chosen source channel in another image")
 
         // Wrong-source install refusal: a layer choice cannot bind a channel symbol.
@@ -237,7 +249,7 @@ extension EngineSmokeTest {
 
         // Indexed absent-source refusal, fresh native: the channel is deleted
         // behind the document's back, so the cached gate passes and the queued
-        // fresh validation fails at that row's one-based index before mutating.
+        // fresh validation fails at internal index 1 (displayed row 2) before mutating.
         for reloaded in [false, true] {
             let item = try document("Absent source \(reloaded)")
             var errors: [String] = []
@@ -252,7 +264,7 @@ extension EngineSmokeTest {
             try item.doc.startReplay()
             try drain(item.doc)
             expect(failedAtIndexOne(item.doc.replayStatus),
-                   "\(reloaded ? "cached" : "fresh-native") absent source fails at the channel row's index 1")
+                   "\(reloaded ? "cached" : "fresh-native") absent source fails at internal index 1 (displayed row 2)")
             expect(try selectionMask(item.doc.image) == expectedRectOnly && !errors.isEmpty,
                    "row 0 stays applied, the channel row mutates nothing and reports its reason")
         }
