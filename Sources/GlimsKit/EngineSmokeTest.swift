@@ -3,6 +3,47 @@ import CGlimsEngine
 import Darwin
 import RigiUI
 
+/// One fixture-owned input-queue hold. Expiration remains visible even if
+/// cleanup subsequently releases the semaphore, so timeout cannot pass a test.
+private final class RevertLoadInputHold: @unchecked Sendable {
+    struct Snapshot: CustomStringConvertible {
+        let ready, released, expired, exited: Bool
+        var isHeld: Bool { ready && !released && !expired && !exited }
+        var description: String { "ready=\(ready) released=\(released) expired=\(expired) exited=\(exited)" }
+    }
+
+    private let lock = NSLock()
+    private let signal = DispatchSemaphore(value: 0)
+    private var ready = false, released = false, expired = false, exited = false
+
+    var snapshot: Snapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        return Snapshot(ready: ready, released: released, expired: expired, exited: exited)
+    }
+
+    func waitForRelease() -> Snapshot {
+        lock.lock()
+        ready = true
+        lock.unlock()
+        let result = signal.wait(timeout: .now() + 20)
+        lock.lock()
+        if result == .timedOut { expired = true }
+        exited = true
+        let state = Snapshot(ready: ready, released: released, expired: expired, exited: exited)
+        lock.unlock()
+        return state
+    }
+
+    func release() {
+        lock.lock()
+        guard !released else { lock.unlock(); return }
+        released = true
+        lock.unlock()
+        signal.signal()
+    }
+}
+
 /// `--engine-smoke-test`: drives a document end to end through the same code
 /// the interface uses, with the engine named by `GLIMS_ENGINE_LIBRARY` and
 /// throwaway directories, then measures how a plug-in-heavy workload affects
@@ -117,6 +158,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "legacy-revert-load" {
+                try exerciseRevert(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (legacy Revert load)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "filter-catalog-complete" {
                 try exerciseFilterCatalogComplete(session)
                 print(failures == 0 ? "PASSED (cold filter catalog completeness)" : "FAILED: \(failures) failure(s)")
@@ -3281,6 +3327,14 @@ enum EngineSmokeTest {
         documents.items.removeAll { $0 === discarded }
     }
 
+    private nonisolated static func observeRevertLoad(_ message: String) {
+        let line = "OBS legacy-revert-load uptime_ns=\(DispatchTime.now().uptimeNanoseconds) \(message)\n"
+        flockfile(stdout)
+        _ = fputs(line, stdout)
+        fflush(stdout)
+        funlockfile(stdout)
+    }
+
     /// File ▸ Revert…: the confirm sheet, the file-admission reload and
     /// the window replacement on success — plus every refusal path:
     /// Cancel, an unreadable source, an untitled image and a direct
@@ -3461,17 +3515,77 @@ enum EngineSmokeTest {
         track(closingDoc)
         guard let closingController = app.documents.last else { throw NoWindow() }
         let countBefore = app.documents.count
-        closingDoc.inputQueue.async { usleep(400_000) }
+        let inputHold = RevertLoadInputHold()
+        let closingInputQueue = closingDoc.inputQueue
+        defer {
+            inputHold.release()
+            if inputHold.snapshot.ready { wait { inputHold.snapshot.exited } }
+        }
+        func observeClosing(_ phase: String, owner: DocumentWindowController?, app: AppController?) {
+            guard let owner, let app else {
+                observeRevertLoad("\(phase) ownerAvailable=\(owner != nil) appAvailable=\(app != nil)")
+                return
+            }
+            observeRevertLoad("\(phase) pendingWork=\(owner.imageDocument.pendingWork) revertPending=\(owner.revertIsPending) closeStarted=\(owner.closeStarted) waitingForActivityToClose=\(owner.waitingForActivityToClose) sheetAttached=\(owner.window?.attachedSheet != nil) appContains=\(app.documents.contains { $0 === owner }) appCount=\(app.documents.count)")
+        }
+        // These counters and cached-state observations stay on Main. The
+        // worker reads only its locked hold state and the monotonic clock.
+        var handlerStarts = 0, handlerFinishes = 0
+        if let originalHandler = closingController.revertHandler {
+            closingController.revertHandler = { [weak closingController, weak app] source, done in
+                handlerStarts += 1
+                observeClosing("handler-start count=\(handlerStarts)", owner: closingController, app: app)
+                // Consent has already settled and revertIsPending is set.
+                // The real app's input drain must queue behind this hold.
+                closingInputQueue.async {
+                    observeRevertLoad("input-hold-enter")
+                    let state = inputHold.waitForRelease()
+                    observeRevertLoad("input-hold-exit \(state)")
+                }
+                originalHandler(source) { [weak closingController, weak app] result in
+                    handlerFinishes += 1
+                    let outcome: String
+                    switch result {
+                    case .success: outcome = "success"
+                    case .failure(let error): outcome = "failure=\(error.localizedDescription)"
+                    }
+                    observeClosing("handler-finish count=\(handlerFinishes) outcome=\(outcome)", owner: closingController, app: app)
+                    done(result)
+                    observeClosing("handler-after-completion count=\(handlerFinishes)", owner: closingController, app: app)
+                }
+            }
+        } else {
+            observeClosing("handler-unavailable", owner: closingController, app: app)
+        }
+        observeClosing("before-revert", owner: closingController, app: app)
         closingController.revertDocument(nil)
+        observeClosing("before-confirm", owner: closingController, app: app)
         confirm(.alertFirstButtonReturn, on: closingController)
-        wait { closingController.revertIsPending }
+        observeClosing("after-confirm", owner: closingController, app: app)
+        wait { closingController.revertIsPending && inputHold.snapshot.isHeld }
+        observeClosing("after-pending-wait", owner: closingController, app: app)
+        let held = inputHold.snapshot
+        observeRevertLoad("input-hold-before-close \(held)")
+        check(held.isHeld && handlerStarts == 1 && handlerFinishes == 0 && closingController.revertIsPending,
+              "the confirmed Revert is held on its real input queue before the file load drains")
         check(closingController.revertIsPending, "a confirmed Revert marks its pending load")
         var closedDuringLoad: Bool?
         closingController.requestClose { closedDuringLoad = $0 }
+        observeClosing("after-close-request result=\(String(describing: closedDuringLoad))", owner: closingController, app: app)
+        let closeIntentWhileHeld = inputHold.snapshot.isHeld
+            && (closingController.waitingForActivityToClose || closingController.closeStarted)
+        inputHold.release()
+        observeRevertLoad("input-hold-explicit-release \(inputHold.snapshot)")
+        wait { inputHold.snapshot.exited }
+        let released = inputHold.snapshot
+        check(closeIntentWhileHeld && released.ready && released.released && released.exited && !released.expired,
+              "Close intent precedes explicit release and the Revert hold exits without timeout")
         wait { closedDuringLoad != nil }
+        observeClosing("after-close-wait result=\(String(describing: closedDuringLoad))", owner: closingController, app: app)
         check(closedDuringLoad == true, "a close during the Revert load completes")
         wait { (try? session.info(closingImage)) == nil
                 && !app.documents.contains(where: { $0 === closingController }) }
+        observeClosing("after-removal-wait", owner: closingController, app: app)
         check(app.documents.count == countBefore - 1,
               "the closing document leaves and no duplicate window is adopted for it")
         check(FileManager.default.fileExists(atPath: closingFile.path),
