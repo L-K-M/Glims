@@ -24,6 +24,7 @@
 #include "filter-input.h"
 
 #include <dlfcn.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -1360,6 +1361,29 @@ stroke_begin_with_brush_resource_on_engine (GlimsEngine *e, gpointer data)
                                                  a->brush_settings, a->first, a->out, a->error);
 }
 
+typedef struct
+{
+  GlimsImageID             image;
+  GlimsItemID              drawable;
+  GlimsResourceID          brush_resource;
+  const GlimsBrushSettings *brush;
+  const GlimsStrokePoint   *first;
+  const char              *expected_fingerprint;
+  GlimsStrokeID            stroke;
+  GlimsStrokeCaptureFacts  facts;
+  char                   **error;
+} GlimsStrokeCaptureArgs;
+
+static GlimsStatus
+stroke_begin_with_capture_facts_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsStrokeCaptureArgs *a = data;
+
+  return glims_stroke_begin_with_capture_facts (e, a->image, a->drawable, a->brush_resource,
+                                                a->brush, a->first, a->expected_fingerprint,
+                                                &a->stroke, &a->facts, a->error);
+}
+
 /* selection_stroke carries a full 64-bit resource handle besides the
  * brush settings, so it gets its own args struct; the id never travels
  * in one of GlimsArgs' 32-bit fields. */
@@ -1605,6 +1629,66 @@ api_stroke_begin_with_brush_resource (GlimsEngine *e, GlimsImageID image, GlimsI
                                 .brush_settings = settings, .first = first,
                                 .out = stroke, .error = error };
   return glims_engine_call (e, stroke_begin_with_brush_resource_on_engine, &a);
+}
+
+/* Clear only complete known fields within the caller's declared prefix. */
+static gboolean
+clear_stroke_capture_facts (GlimsStrokeCaptureFacts *facts)
+{
+  if (!facts)
+    return FALSE;
+
+  size_t size = facts->struct_size;
+  if (size >= offsetof (GlimsStrokeCaptureFacts, brush_internal) + sizeof facts->brush_internal)
+    facts->brush_internal = false;
+  if (size >= offsetof (GlimsStrokeCaptureFacts, brush_name) + sizeof facts->brush_name)
+    facts->brush_name = NULL;
+  if (size >= offsetof (GlimsStrokeCaptureFacts, brush_collection) + sizeof facts->brush_collection)
+    facts->brush_collection = NULL;
+  if (size < offsetof (GlimsStrokeCaptureFacts, fingerprint) + sizeof facts->fingerprint)
+    return FALSE;
+  facts->fingerprint = NULL;
+  return TRUE;
+}
+
+static GlimsStatus
+api_stroke_begin_with_capture_facts (GlimsEngine *e, GlimsImageID image,
+                                     GlimsItemID drawable, GlimsResourceID brush_resource,
+                                     const GlimsBrushSettings *brush,
+                                     const GlimsStrokePoint *first,
+                                     const char *expected_fingerprint,
+                                     GlimsStrokeID *out,
+                                     GlimsStrokeCaptureFacts *facts, char **error)
+{
+  if (out) *out = 0;
+  if (error) *error = NULL;
+  gboolean facts_ready = clear_stroke_capture_facts (facts);
+  if (!out || !brush || !first || !facts_ready)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  /* The caller's layout never reaches the worker. Transfer owned fields
+   * only after the synchronous call has acknowledged success. */
+  GlimsStrokeCaptureArgs a = { .image = image, .drawable = drawable,
+                               .brush_resource = brush_resource, .brush = brush, .first = first,
+                               .expected_fingerprint = expected_fingerprint,
+                               .facts = { .struct_size = sizeof (GlimsStrokeCaptureFacts) },
+                               .error = error };
+  GlimsStatus status = glims_engine_call (e, stroke_begin_with_capture_facts_on_engine, &a);
+  if (status == GLIMS_STATUS_OK)
+    {
+      *out = a.stroke;
+      facts->brush_internal = a.facts.brush_internal;
+      facts->brush_name = a.facts.brush_name;
+      facts->brush_collection = a.facts.brush_collection;
+      facts->fingerprint = a.facts.fingerprint;
+    }
+  else
+    {
+      api_free_string (a.facts.brush_name);
+      api_free_string (a.facts.brush_collection);
+      api_free_string (a.facts.fingerprint);
+    }
+  return status;
 }
 
 static GlimsStatus
@@ -3388,6 +3472,7 @@ static const GlimsEngineAPI api_v1 = {
   .text_layer_new_captured = api_text_layer_new_captured,
   .filter_begin_displace_with_sources = api_filter_begin_displace_with_sources,
   .filter_begin_oilify_with_sources = api_filter_begin_oilify_with_sources,
+  .stroke_begin_with_capture_facts = api_stroke_begin_with_capture_facts,
 };
 
 __attribute__ ((visibility ("default")))
