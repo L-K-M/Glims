@@ -10756,6 +10756,7 @@ enum EngineSmokeTest {
                 && restored.undo.undoCount == painted.undo.undoCount + 1,
                "Restore changes the original target only and adds exactly one native Undo")
         expect(try snapshot(bSeed.image) == bBefore, "B's full native state is unchanged by A's sheet")
+        print("OBS Text restore editorNil=\(a.canvas.tools.textEditor == nil) status=\(a.statusBar.message)")
         expect(a.canvas.tools.textEditor == nil && a.statusBar.message == "Source restored. Click the text again to edit.",
                "Restore does not revive an old editor and explicitly requests a fresh Text click")
         docA.undo(); try drain(docA)
