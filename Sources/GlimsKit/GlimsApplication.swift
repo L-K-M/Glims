@@ -54,8 +54,8 @@ public enum GlimsApplication {
                 "tablet-eraser-proximity", "recorder-layer-properties", "text-floating-create",
                 "displace-source", "oilify-source", "recorder-canvas-stroke-ui", "recorder-canvas-paintbrush-ui", "recorder-file-ui", "recorder-file-picker-ui",
                 "recorder-open-picker-ui", "recorder-consent-ui", "recorder-revert-ui", "recorder-quit-ui",
-                "move-pick", "move-pick-range", "move-pick-spring",
-                "move-pick-busy-restore"].contains(smokeCase) {
+                "selection-anchor", "lasso-anchor", "region-anchor", "move-pick", "move-pick-range", "move-pick-spring",
+                "move-pick-busy-restore", "move-pick-stationary-snap"].contains(smokeCase) {
                 return EngineSmokeTestHost.run()
             }
             return EngineSmokeTest.run()

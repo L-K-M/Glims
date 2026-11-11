@@ -34,14 +34,44 @@ across tool choices. Move defaults to Current Layer. Choose Pick Layer or
 Guide from Tool Options or View > Move Target to use the layer under the
 pointer. A guide takes priority. An opaque hit on the floating selection
 moves it. A press on another layer anchors the float on release.
-A miss leaves it alone. Escape cancels. If Pick temporarily selected another
+A miss leaves it alone. A stationary picked click only selects its hit;
+guide or grid snapping cannot reposition the layer without pointer motion.
+A real drag still snaps and records one native movement Undo. Escape cancels. If Pick temporarily selected another
 layer, cancellation restores the prior target when the engine is free, unless
 a newer choice already took ownership. Holding Command keeps Current Layer
 behavior; Space still pans.
 
-The Move candidate passes 1,712 focused checks across four engines and 1,115
+Move passes 1,712 focused checks across four engines and 1,115
 unit tests. The busy-cancellation fixture reproduced the missed restore
-before the fix and passes afterward. Other selection-tool anchor behaviors
-have separate implementation and verification.
+before the fix and passes afterward.
+
+Rectangle, ellipse and Lasso keep the floating selection's identity from
+press through release. An eligible stationary click outside its opaque
+pixels anchors. An opaque press can move the float without anchoring. A
+shape or polygon drag still uses the selection path. Lasso distinguishes
+a short or long stationary press from motion that returns to the start.
+
+Wand and Select by Color use an unmodified miss to anchor on noncancelled
+release, even if the pointer has since moved. An opaque press uses Move.
+Shift or Option instead captures the point and selection options at press
+and selects on release, with the fresh empty-mask guard for Subtract and
+Intersect. Without a float, both tools still select at press. Escape,
+closing or replacing the captured float cannot apply its pending edit.
+
+On each of the four supported engines, the focused app runs pass 62
+rectangle and ellipse, 39 Lasso, and 42 Wand and Select by Color checks.
+The separate Text creation route anchors only within its grouped native
+edit. None of these gestures changes the rule for merely choosing a tool.
 
 No upstream source is modified or GUI library linked by this policy note.
+
+
+The combined selection and stationary-pick source at `ed40a43` passes
+924 focused checks in20 actual app processes across all four engines, plus
+1,115 unit tests. A separate16-check fixture first reproduced the
+stationary-click mutation with snapping enabled; its unchanged assertions
+then pass, including an independent literal guide-drag pixel/Undo oracle.
+Current Main integration retains the original selection assertions.
+Independent combined source review found no important ownership, queue,
+cancellation or shared-preview defect. Final combined release checks remain
+separate.
