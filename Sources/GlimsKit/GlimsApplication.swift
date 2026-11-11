@@ -51,7 +51,7 @@ public enum GlimsApplication {
         case .engineSmokeTest:
             if let smokeCase = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"],
                ["metadata-rating-edit", "layer-rasterize-batch", "layer-restore-batch",
-                "tablet-eraser-proximity", "recorder-layer-properties", "text-floating-create",
+                "tablet-eraser-proximity", "tablet-stroke-v2", "recorder-layer-properties", "text-floating-create",
                 "displace-source", "oilify-source", "recorder-canvas-stroke-ui", "recorder-canvas-paintbrush-ui", "recorder-file-ui", "recorder-file-picker-ui",
                 "recorder-open-picker-ui", "recorder-consent-ui", "recorder-revert-ui", "recorder-quit-ui",
                 "selection-anchor", "lasso-anchor", "region-anchor", "move-pick", "move-pick-range", "move-pick-spring",

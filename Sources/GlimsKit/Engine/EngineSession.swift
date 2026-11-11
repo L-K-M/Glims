@@ -367,6 +367,20 @@ final class EngineSession: @unchecked Sendable {
         var timeMilliseconds: UInt32 = 0
     }
 
+    struct StrokeSampleV2: Equatable {
+        let point: StrokePoint
+        let rotationTurns: Double?
+        let tangentialPressure: Double?
+
+        var isValid: Bool {
+            [point.x, point.y, point.pressure, point.xTilt, point.yTilt].allSatisfy(\.isFinite)
+                && abs(point.x) <= 524_288 && abs(point.y) <= 524_288
+                && (0...1).contains(point.pressure) && (-1...1).contains(point.xTilt) && (-1...1).contains(point.yTilt)
+                && rotationTurns.map { $0.isFinite && $0 >= 0 && $0 < 1 } != false
+                && tangentialPressure.map { $0.isFinite && (-1...1).contains($0) } != false
+        }
+    }
+
     let version: String
     private let api: GlimsEngineAPI
     private let engine: OpaquePointer
@@ -838,6 +852,55 @@ final class EngineSession: @unchecked Sendable {
 
     func endStroke(_ stroke: Int32) throws {
         try check(api.stroke_end(engine, stroke), nil)
+    }
+
+    func beginTabletStroke(image: Int32, drawable: Int32, brush: Brush, first: StrokeSampleV2) throws -> Int32 {
+        guard let begin = api.stroke_begin_v2, api.stroke_continue_v2 != nil else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue), message: "This image engine cannot accept tablet rotation or tangential pressure.")
+        }
+        let resource = try brush.resource.map { try resolveResource($0, kind: .brush) } ?? 0
+        var settings = Self.nativeBrush(brush), stroke: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try withTabletPacket([first]) { packet in
+            try check(begin(engine, image, drawable, resource, &settings, packet, &stroke, &error), error)
+        }
+        guard stroke > 0 else { throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The tablet stroke did not start.") }
+        return stroke
+    }
+
+    func continueTabletStroke(_ stroke: Int32, points: [StrokeSampleV2]) throws {
+        guard let send = api.stroke_continue_v2 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue), message: "This image engine cannot accept tablet samples.")
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try withTabletPacket(points) { packet in try check(send(engine, stroke, packet, &error), error) }
+    }
+
+    private func withTabletPacket(_ points: [StrokeSampleV2], _ send: (UnsafePointer<GlimsStrokePacketV2>) throws -> Void) throws {
+        let stride = MemoryLayout<GlimsStrokeSampleV2>.stride
+        guard points.count <= 4096, points.count <= 1_048_576 / stride, points.allSatisfy(\.isValid) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: "A tablet sample is outside the supported range.")
+        }
+        let samples = points.map { sample -> GlimsStrokeSampleV2 in
+            var value = GlimsStrokeSampleV2()
+            value.struct_size = UInt32(MemoryLayout<GlimsStrokeSampleV2>.size)
+            value.x = sample.point.x; value.y = sample.point.y
+            value.pressure = sample.point.pressure; value.xtilt = sample.point.xTilt; value.ytilt = sample.point.yTilt
+            value.time_ms = sample.point.timeMilliseconds
+            if let rotation = sample.rotationTurns {
+                value.flags |= UInt32(GLIMS_STROKE_SAMPLE_HAS_ROTATION.rawValue); value.rotation_turns = rotation
+            }
+            if let tangent = sample.tangentialPressure {
+                value.flags |= UInt32(GLIMS_STROKE_SAMPLE_HAS_TANGENTIAL_PRESSURE.rawValue); value.tangential_pressure = tangent
+            }
+            return value
+        }
+        try samples.withUnsafeBufferPointer { buffer in
+            var packet = GlimsStrokePacketV2(struct_size: UInt32(MemoryLayout<GlimsStrokePacketV2>.size),
+                sample_stride: UInt32(stride), samples: points.isEmpty ? nil : buffer.baseAddress,
+                count: buffer.count, byte_count: buffer.count * stride)
+            try send(&packet)
+        }
     }
 
     // MARK: Filters

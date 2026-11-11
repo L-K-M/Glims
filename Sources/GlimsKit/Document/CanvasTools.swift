@@ -183,6 +183,7 @@ final class CanvasToolController {
     /// The tool for the current drag; Space and Command switch tools
     /// temporarily meanwhile.
     private var dragTool: ToolID?
+    private var tabletStrokeCapture: TabletStrokeInput.Capture?
     private var dragStart: CGPoint?
     private var dragCurrent: CGPoint?
     private var dragOperation = EngineSession.SelectOperation.replace
@@ -376,6 +377,10 @@ final class CanvasToolController {
     // MARK: Pointer
 
     func mouseDown(with event: NSEvent) {
+        // An accepted paint gesture owns its tool, target and input format
+        // until End. A second press cannot replace those captured choices.
+        guard !document.strokeIsActive else { return }
+        tabletStrokeCapture = nil
         cancelPickedMove()
         pickedMoveWasRequested = false
         cancelFloatingShape()
@@ -421,7 +426,20 @@ final class CanvasToolController {
                 dragTool = nil
                 return
             }
-            document.beginStroke(at: canvas.strokePoint(for: event), brush: ToolState.shared.brush(for: tool))
+            tabletStrokeCapture = TabletEraserProximity.shared.strokeCapture(for: event)
+            let brush = ToolState.shared.brush(for: tool)
+            if let capture = tabletStrokeCapture {
+                guard let sample = canvas.tabletStrokePoint(for: event, capture: capture) else {
+                    tabletStrokeCapture = nil; dragTool = nil
+                    onStatus?("That tablet sample is outside the supported range."); return
+                }
+                document.beginTabletStroke(at: sample, brush: brush)
+            } else {
+                guard let point = canvas.strokePoint(for: event) else {
+                    dragTool = nil; onStatus?("That pointer sample is invalid."); return
+                }
+                document.beginStroke(at: point, brush: brush)
+            }
             return
         }
 
@@ -539,7 +557,9 @@ final class CanvasToolController {
         let point = canvas.imagePoint(for: event)
 
         if tool.paintTool != nil {
-            document.continueStroke([canvas.strokePoint(for: event)])
+            if let capture = tabletStrokeCapture {
+                if let point = canvas.tabletStrokePoint(for: event, capture: capture) { document.continueTabletStroke([point]) }
+            } else if let point = canvas.strokePoint(for: event) { document.continueStroke([point]) }
             return
         }
         switch tool {
@@ -584,6 +604,7 @@ final class CanvasToolController {
         hintFlags = event.modifierFlags
         defer {
             dragTool = nil
+            tabletStrokeCapture = nil
             dragStart = nil
             dragCurrent = nil
             selectionDragFlags = []
@@ -629,8 +650,11 @@ final class CanvasToolController {
         guard let tool = dragTool else { return }
 
         if tool.paintTool != nil {
-            document.continueStroke([canvas.strokePoint(for: event)])
-            document.endStroke()
+            // Invalid release coordinates/axes still finish accepted work.
+            defer { document.endStroke() }
+            if let capture = tabletStrokeCapture {
+                if let point = canvas.tabletStrokePoint(for: event, capture: capture) { document.continueTabletStroke([point]) }
+            } else if let point = canvas.strokePoint(for: event) { document.continueStroke([point]) }
             return
         }
         var options = ToolState.shared.selectOptions
@@ -1389,6 +1413,7 @@ final class CanvasToolController {
             cancelMoveSnap(); cancelFloatingMove()
             cancelFloatingShape()
             if dragTool?.paintTool != nil, document.strokeIsActive { document.endStroke() }
+            tabletStrokeCapture = nil
             dragTool = nil; dragStart = nil; dragCurrent = nil
             lassoPoints = []; handOrigin = nil; gradientCapture = nil
             selectionDragFlags = []; pendingCrop = nil

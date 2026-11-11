@@ -417,6 +417,7 @@ final class ImageDocument {
 
     /// Touched only on `inputQueue`.
     private nonisolated(unsafe) var currentStroke: Int32?
+    private nonisolated(unsafe) var currentStrokeUsesV2 = false
     private nonisolated(unsafe) var strokeRecordingDraft: StrokeRecordingDraft?
     private(set) var strokeIsActive = false
     private var strokeRecordingInterleaved = false
@@ -1044,7 +1045,25 @@ final class ImageDocument {
 
     // MARK: Painting
 
+    private enum StrokeInput {
+        case v1(EngineSession.StrokePoint)
+        case tablet(EngineSession.StrokeSampleV2)
+        var point: EngineSession.StrokePoint {
+            switch self { case .v1(let point): return point; case .tablet(let sample): return sample.point }
+        }
+        var isV2: Bool { if case .tablet = self { return true }; return false }
+    }
+
     func beginStroke(at point: EngineSession.StrokePoint, brush: EngineSession.Brush = EngineSession.Brush()) {
+        beginStroke(input: .v1(point), brush: brush)
+    }
+
+    func beginTabletStroke(at point: EngineSession.StrokeSampleV2, brush: EngineSession.Brush) {
+        guard point.isValid else { onError?("That tablet sample is outside the supported range."); return }
+        beginStroke(input: .tablet(point), brush: brush)
+    }
+
+    private func beginStroke(input: StrokeInput, brush: EngineSession.Brush) {
         guard !strokeIsActive else { return }
         guard !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
         guard !refuseSingleLayerCommand("Paint") else { return }
@@ -1086,23 +1105,29 @@ final class ImageDocument {
         enqueue(on: inputQueue, input: true, strokePart: true) { [session, image] in
             if let capture {
                 let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
-                let first = try? RecorderStrokeTrace.Point(point)
+                let first = input.isV2 ? nil : try? RecorderStrokeTrace.Point(input.point)
                 self.strokeRecordingDraft = .init(capture: capture, confirmed: confirmed,
                     settings: .init(brush), trace: first.map(RecorderStrokeAccumulator.init(first:)))
             }
             do {
                 try self.requirePaintTarget()
                 try self.requireRasterizedPaintTarget(target)
-                if let draft = self.strokeRecordingDraft, case .layer = draft.confirmed.binding,
+                self.currentStrokeUsesV2 = input.isV2
+                if case .tablet(let sample) = input {
+                    self.currentStroke = try session.beginTabletStroke(image: image, drawable: drawable, brush: brush, first: sample)
+                    self.strokeRecordingDraft?.refuse(RecorderReplayError(message:
+                        "Recorder does not yet save tablet rotation or tangential pressure."))
+                } else if let draft = self.strokeRecordingDraft, case .layer = draft.confirmed.binding,
                    draft.settings != nil, draft.trace != nil {
-                    let result = try session.beginStrokeCapturing(image: image, drawable: drawable, brush: brush, first: point)
+                    let result = try session.beginStrokeCapturing(image: image, drawable: drawable, brush: brush, first: input.point)
                     self.currentStroke = result.stroke
                     self.strokeRecordingDraft?.facts = result.facts
                 } else {
-                    self.currentStroke = try session.beginStroke(image: image, drawable: drawable, brush: brush, first: point)
+                    self.currentStroke = try session.beginStroke(image: image, drawable: drawable, brush: brush, first: input.point)
                 }
             } catch {
                 self.currentStroke = nil
+                self.currentStrokeUsesV2 = false
                 self.strokeRecordingDraft?.refuse(error)
                 self.report(error)
             }
@@ -1116,7 +1141,10 @@ final class ImageDocument {
         guard strokeIsActive else { return }
         enqueue(on: inputQueue, input: true, strokePart: true) { [session] in
             guard let stroke = self.currentStroke else { return }
-            do { try session.continueStroke(stroke, points: points) }
+            do {
+                guard !self.currentStrokeUsesV2 else { throw RecorderReplayError(message: "The stroke's input format changed.") }
+                try session.continueStroke(stroke, points: points)
+            }
             catch {
                 self.strokeRecordingDraft?.refuse(error)
                 self.report(error)
@@ -1129,6 +1157,20 @@ final class ImageDocument {
         }
     }
 
+    func continueTabletStroke(_ points: [EngineSession.StrokeSampleV2]) {
+        guard strokeIsActive else { return }
+        enqueue(on: inputQueue, input: true, strokePart: true) { [session] in
+            guard let stroke = self.currentStroke else { return }
+            do {
+                guard self.currentStrokeUsesV2 else { throw RecorderReplayError(message: "The stroke's input format changed.") }
+                try session.continueTabletStroke(stroke, points: points)
+            } catch {
+                self.strokeRecordingDraft?.refuse(error)
+                self.report(error)
+            }
+        }
+    }
+
     func endStroke() {
         guard strokeIsActive else { return }
         let interleaved = strokeRecordingInterleaved
@@ -1137,6 +1179,7 @@ final class ImageDocument {
         enqueue(on: inputQueue, input: true, strokePart: true) { [session] in
             let stroke = self.currentStroke
             self.currentStroke = nil
+            self.currentStrokeUsesV2 = false
             var draft = self.strokeRecordingDraft
             self.strokeRecordingDraft = nil
             if let stroke {
