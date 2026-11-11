@@ -20,7 +20,8 @@ Layout inside Contents/, modelled on GIMP's own macOS bundle
 
 Every Mach-O file gets @rpath install names and an rpath back to
 Contents/lib, the typelibs are recompiled with @rpath library names, and
-everything is signed ad hoc. The adapter finds this layout at run time and
+everything is signed ad hoc unless CODE_SIGN_IDENTITY (as in build-app.sh)
+selects a real identity. The adapter finds this layout at run time and
 points the engine and its plug-ins at it (Engine/engine.c, use_bundle).
 
 Contents/Resources/Engine-Notices.txt lists every bundled component with
@@ -674,14 +675,17 @@ class Bundler:
             raise SystemExit("build paths left in the bundle:\n  " + "\n  ".join(leaks[:20]))
 
     def sign(self):
-        """Ad hoc, inner code first: loose Mach-O files, then nested app
-        bundles (Python.app) as bundles."""
+        """Inner code first: loose Mach-O files, then nested app bundles
+        (Python.app) as bundles. CODE_SIGN_IDENTITY selects the identity,
+        as for the app itself in build-app.sh; unset or empty keeps the
+        ad hoc '-'."""
+        identity = os.environ.get("CODE_SIGN_IDENTITY") or "-"
         for path in self.machos():
-            run("codesign", "--force", "--sign", "-", path)
+            run("codesign", "--force", "--sign", identity, path)
         for root, directories, _ in os.walk(self.lib):
             for name in directories:
                 if name.endswith(".app"):
-                    run("codesign", "--force", "--sign", "-", os.path.join(root, name))
+                    run("codesign", "--force", "--sign", identity, os.path.join(root, name))
 
 
 def main():

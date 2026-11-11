@@ -93,6 +93,15 @@ extension RecorderFileCommand {
             case .fromAlpha: command = .fromAlpha
             }
             self = .selectCommand(command, radius: radius)
+        case .channelToSelection(let operation):
+            let value: Operation
+            switch operation {
+            case .replace: value = .replace
+            case .add: value = .add
+            case .subtract: value = .subtract
+            case .intersect: value = .intersect
+            }
+            self = .channelToSelection(value)
         case .transformImage(let value):
             let transform: Transform
             switch value {

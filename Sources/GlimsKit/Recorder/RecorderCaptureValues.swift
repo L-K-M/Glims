@@ -88,6 +88,9 @@ enum RecorderBindingDescription: Equatable {
 
     case none
     case layer(UUID)
+    /// An explicit source channel, for example Channel ▸ To Selection. The
+    /// symbol is a channel-kind description, never the active paint target.
+    case channel(UUID)
     case context(Context)
     case unavailable(String)
 }

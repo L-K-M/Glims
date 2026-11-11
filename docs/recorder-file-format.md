@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 and 2
+# Recorder file format, versions 1 to 3
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,15 +7,19 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is integer `1` or `2`. `recordingID` is a file UUID. `origin` contains
+`version` is integer `1`, `2` or `3`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
-The writer selects version 2 exactly when at least one successful record is a
-`completeStroke`, and version 1 otherwise. A version 2 file must contain a
-successful `completeStroke`; a version 1 file cannot contain one. Version 1 is
-therefore the pre-stroke schema and version 2 is the stroke-extended schema.
-Version integers outside 1...2 refuse the file.
+The writer selects version 3 exactly when at least one successful record is a
+`channelToSelection`, version 2 when at least one successful record is a
+`completeStroke` and no channel selection exists, and version 1 otherwise. A
+version 2 file must contain a successful `completeStroke`; a version 3 file must
+contain a successful `channelToSelection` (and may also contain strokes, which
+are readable from version 2 on). A version 1 file contains neither. Version 1 is
+therefore the pre-stroke schema, version 2 the stroke-extended schema and
+version 3 the channel-selection-extended schema.
+Version integers outside 1...3 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -44,6 +48,7 @@ Commands have an owned `tag` and the following exact fields:
 | `selectionShape` | `shape`, `options` |
 | `selectColor` | `point`, `options` |
 | `selectCommand` | `command`, `radius` |
+| `channelToSelection` | `operation` (version 3 only) |
 | `transformImage` | `transform` |
 | `scale` | integer `width`, `height` |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
@@ -67,10 +72,13 @@ Colors contain exactly `space:"srgb"`, `red`, `green`, `blue`, `alpha`: finite
 components inside 0...1. Canvas colors are the values actually passed by the
 worker to native resize. No NSColor or late conversion enters the file.
 
-Bindings are `kind:"none"`, `kind:"layer"` with `symbol`, or `kind:"context"`
-with `context`. Layer properties require a layer symbol. Select Alpha and color
-selection with `sampleMerged:false` require context; other commands require
-none. Context has ordered `layers`/`channels` UUID arrays, `target`, `masks` and
+Bindings are `kind:"none"`, `kind:"layer"` with `symbol`, `kind:"channel"`
+with `symbol`, or `kind:"context"` with `context`. Layer properties require a
+layer symbol; `channelToSelection` requires a channel symbol whose description
+kind is `channel` — the explicit source channel, never the active paint target.
+Select Alpha and color selection with `sampleMerged:false` require context;
+other commands require none. Context has ordered `layers`/`channels` UUID
+arrays, `target`, `masks` and
 `quickMask`. Target kinds are layer/channel/quickMask with `symbol`, or mask with
 `owner`. Mask entries contain `owner`, `isPresent`, `enabled`, `editing`,
 `showing`; their owners match the layer set. Quick Mask has `enabled`,
@@ -84,6 +92,18 @@ need no manufactured descriptor. Explicit unavailable bindings are refused.
 Decoding produces descriptions for later explicit user binding; it never maps
 names, tree positions or the current layer to a native target. Fresh ownership,
 operation capability and current-image argument checks remain replay duties.
+
+## Channel selections (version 3)
+
+`channelToSelection` is the version 3 command. It records Channel ▸ To Selection:
+the command carries only the combination `operation`
+(`replace/add/subtract/intersect`), and the record's `channel` binding names
+the explicit source channel symbol. The source channel is the one the live
+action was invoked with; it may differ from the active paint target, which is
+never substituted, and its symbol description must have kind `channel`. The
+command is refused in a version 1 or 2 file, and a version 3 file without a
+successful `channelToSelection` is refused, exactly as version 2 always
+required a complete stroke.
 
 ## Complete strokes (version 2)
 

@@ -1,5 +1,9 @@
 # Recorder
 
+Channel > To Selection records ordinary saved channels. Using the transient
+Quick Mask channel keeps the live edit and adds an explicit failed recording
+row; the log remains saveable, and replay refuses its incomplete sequence.
+
 The Recorder palette shows the open image's recorded semantic commands in
 acceptance order, with explicit Recorded, Failed or Cancelled text. Window >
 Recorder opens it. Edit > Recorder and the palette expose the same commands.
@@ -9,6 +13,8 @@ Current capture covers these command families:
 - Rectangle, ellipse and polygon selections, with their selection options.
 - Color selection, with its point and options.
 - Selection commands, including Select Alpha and radius-based changes.
+- Channel ▸ To Selection, with its combination operation and the explicitly
+  invoked source channel (which may differ from the active paint target).
 - Image rotation and flipping.
 - Image scaling.
 - Canvas resizing, with offset and fill color.
@@ -42,7 +48,8 @@ timestamps, with the accepted batch boundaries intact. It does not infer
 velocity or direction. Only ordinary pixel layers can be bound for stroke
 recording; painting a mask/channel or using another paint tool produces an
 explicit unsupported row. Saved strokes use recording format version 2;
-recordings without successful strokes retain version 1. See
+recordings without successful strokes retain version 1; Channel ▸ To Selection
+raises the file to version 3. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
 Record starts a fresh log, replacing the prior recording. Stop stops accepting
@@ -54,7 +61,10 @@ replay of that log, so a partial success cannot masquerade as a complete macro.
 
 Replay uses the image's current state. Color selection that samples a drawable
 and Select Alpha retain their original layer/channel/mask and Quick Mask
-context. Changed or unavailable bindings refuse with a reason. The driver
+context. Channel to Selection replays against its recorded source channel,
+freshly validated in the native image before any mutation; it never falls back
+to the active paint target. Changed or unavailable bindings refuse with a
+reason. The driver
 checks cached admission and fresh native targets, respects the live commands'
 floating-selection policy, and refuses unsettled work, conflicting operations
 or a closing image.
