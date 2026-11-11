@@ -4250,3 +4250,12 @@ creation, unchanged underlying pixels, typed edits, cancellation, exact
 Undo/Redo output and editable XCF reopening. The Swift suite passes 1,250
 tests. This closes the tonal-picker gap in the broader editor brief; it does
 not establish complete Photoshop 4 parity or final application acceptance.
+
+### Readable precision labels (2026-11-11 candidate)
+
+Document titles, the status information selector and Image Information use
+the same readable component and transfer-curve labels, such as
+"16-bit float · Linear", instead of internal format names. Unknown typed
+state remains "Unknown"; profiles and underlying color behavior are unchanged.
+All 1,266 unit tests and the existing native conversion/form/Undo/reopen
+workflow pass. Independent SWE-2-Flash review found no important issue.
