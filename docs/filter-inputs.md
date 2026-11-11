@@ -1,10 +1,12 @@
 # Snapshot filter inputs
 
-Bump Map, Variable Blur, Selective Gaussian Blur and Negative Darkroom have
-same-image height-map, blur-mask, contrast-reference and dodge/burn map choosers. The source is captured when Preview
-starts; Apply to Pixels merges into the captured target and Undo restores its
-pixels.
-Other auxiliary-input operations and custom-config editors remain separate work.
+Bump Map, Variable Blur, Selective Gaussian Blur, Negative Darkroom, Displace,
+Oilify and Lens Blur have role-specific same-image source choosers. A source
+is captured when Preview starts; Apply to Pixels merges into the captured
+target and Undo restores its pixels. Lens Blur starts at explicit None for
+uniform blur; its bounded native contract and control evidence are in
+[`lens-blur-source.md`](lens-blur-source.md). Displace and Oilify have separate
+paired-map contracts. The dated slices below retain their original scope.
 
 API version 1 appends slot 147, `filter_begin_with_source`. It accepts explicit
 positive target/source IDs for `gegl:bump-map`, `gegl:variable-blur`, and
