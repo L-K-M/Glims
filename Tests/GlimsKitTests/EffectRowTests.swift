@@ -257,6 +257,9 @@ final class EffectRowTests: XCTestCase {
                       "the fx badge must be an accessibility element itself")
         XCTAssertEqual(badge.accessibilityRole(), .image,
                        "the badge is a drawn mark, so its role is image")
+        let exposed = (row.accessibilityChildren() ?? []).compactMap { $0 as? NSView }
+        XCTAssertTrue(exposed.contains { $0 === badge },
+                      "the badge must be reachable through the row's actual AX children")
     }
 
     func testBadgeLabelTracksUpdateSelected() {
@@ -279,6 +282,11 @@ final class EffectRowTests: XCTestCase {
         let selected = EffectRowView(
             item: EffectItem(document: NSObject(), drawable: 4, effect: effect(11)),
             isSelected: true, commit: Commit().call)
-        XCTAssertEqual(self.badge(in: selected)?.accessibilityLabel(), "Selected filter")
+        selected.layoutSubtreeIfNeeded()
+        guard let selectedBadge = self.badge(in: selected) else {
+            XCTFail("a selected row has no badge carrying its selection label")
+            return
+        }
+        XCTAssertEqual(selectedBadge.accessibilityLabel(), "Selected filter")
     }
 }
