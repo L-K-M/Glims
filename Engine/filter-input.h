@@ -18,4 +18,14 @@ GlimsStatus glims_filter_input_snapshot_pair (GlimsEngine *, GlimsOpenImage *,
 GlimsStatus glims_filter_begin_displace_with_sources (GlimsEngine *, GlimsImageID,
                                                      GlimsItemID, GlimsItemID,
                                                      GlimsItemID, GlimsFilterID *, char **);
+
+/* Engine thread, after target admission. Zero ids leave those roles absent.
+ * Validates the raw bottom-of-stack target and the detached map samples in
+ * its working space before transferring any source node to the caller. */
+GlimsStatus glims_filter_input_oilify_prepare (GlimsEngine *, GlimsOpenImage *,
+                                              GimpDrawable *, GlimsItemID, GlimsItemID,
+                                              GeglNode **, GeglNode **, char **);
+GlimsStatus glims_filter_begin_oilify_with_sources (GlimsEngine *, GlimsImageID,
+                                                   GlimsItemID, GlimsItemID,
+                                                   GlimsItemID, GlimsFilterID *, char **);
 #endif
