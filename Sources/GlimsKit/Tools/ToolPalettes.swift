@@ -32,7 +32,7 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
     private weak var targetDocument: ImageDocument?
     /// The owned modeless color editor; a Foreground/Background click
     /// captures that global `ToolState` target in it.
-    private lazy var colorEditor = ToolColorEditorController()
+    private var colorEditor: ToolColorEditorController { .shared }
     private var observer: UUID?
 
     override func loadView() {

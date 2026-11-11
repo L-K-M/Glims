@@ -10,7 +10,7 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 Current source is merged through #197, with the final editor integration
 candidate adding native fractional color sampling, numeric foreground and
 background colors, selectable status information, and Rigi's Reduce Motion
-policy. The combined candidate passes 1,248 unit tests. Its four-engine and
+policy. The combined candidate passes 1,249 unit tests. Its four-engine and
 standalone verification is in progress; the installed local bundle still
 predates this candidate. Dated reports below retain their original scope.
 

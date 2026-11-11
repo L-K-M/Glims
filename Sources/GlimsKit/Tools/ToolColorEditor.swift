@@ -193,6 +193,8 @@ final class ToolColorEditorModel {
 /// cross into a later opening or a different color target.
 @MainActor
 final class ToolColorEditorController: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
+    static let shared = ToolColorEditorController()
+
     private enum Column: Equatable { case percent, float }
 
     private struct Binding {

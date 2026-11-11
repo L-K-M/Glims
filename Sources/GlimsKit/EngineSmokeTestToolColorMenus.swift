@@ -153,7 +153,7 @@ extension EngineSmokeTest {
             ("Blur", .blur), ("Sharpen", .sharpen), ("Dodge", .dodge), ("Burn", .burn),
             ("Gradient", .gradient), ("Paint Bucket", .bucketFill), ("Hand", .hand), ("Zoom", .zoom),
         ]
-        expect(toolItems.count == 26 && Set(toolItems.map(\.tag)).count == 26 && tools.items.count == 19,
+        expect(toolItems.count == 26 && Set(toolItems.map(\.tag)).count == 26 && tools.items.count == 21,
                "actual menu mirrors exactly 26 choices in the 16 palette slots")
         expect(items.allSatisfy { $0.keyEquivalent.isEmpty && $0.keyEquivalentModifierMask.isEmpty },
                "every tool and color command has an unassigned factory shortcut")

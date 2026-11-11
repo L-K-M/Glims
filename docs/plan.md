@@ -4198,7 +4198,11 @@ sampling, numeric tool-color editor and status information slices. Glims
 pins merged Rigi `3f277226df3b5b66c5198d4cb4acd64fc14fe544`, whose 154
 unit tests, gallery smoke, release build and native CI pass. Popovers read
 and observe the workspace Reduce Motion policy on the main queue.
-The combined Glims build and all 1,248 unit tests pass. Four-engine ordinary
+The final color-menu check reproduced seven failures with the missing
+foreground/background commands. Both menu commands and swatches now share
+one editor; all 1,249 combined unit tests pass, including actual panel
+switching and foreign-sender refusal. The broad source review found no
+important issue; the small menu delta has its own follow-up review. Four-engine ordinary
 workflows, latest-head CI, final standalone assembly and interactive checks
 remain pending at this checkpoint. The completion ledger separates the
 implemented editor from public distribution and physical-display gates.

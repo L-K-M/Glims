@@ -38,7 +38,7 @@ final class ToolMenuCatalogTests: XCTestCase {
         let menu = MainMenu.make()
         let tools = try XCTUnwrap(menu.item(withTitle: "View")?.submenu?.item(withTitle: "Tools")?.submenu)
         let items = tools.items.flatMap { $0.submenu?.items ?? [$0] }.filter { !$0.isSeparatorItem }
-        XCTAssertEqual(items.count, 28)
+        XCTAssertEqual(items.count, 30)
         XCTAssertTrue(items.allSatisfy(owner.validateMenuItem))
         XCTAssertNil(owner.session)
         let invalid = NSMenuItem(title: "Invalid tool", action: Selector(("selectToolFromMenu:")), keyEquivalent: "")

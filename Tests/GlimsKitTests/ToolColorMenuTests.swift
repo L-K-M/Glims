@@ -13,7 +13,7 @@ final class ToolColorMenuTests: XCTestCase {
         let menu = MainMenu.make()
         let tools = try XCTUnwrap(toolsSubmenu(in: menu))
         let topItems = tools.items
-        XCTAssertEqual(topItems.count, 19)
+        XCTAssertEqual(topItems.count, 21)
 
         let directCrops = try XCTUnwrap(topItems.first { $0.title == "Crop" })
         XCTAssertEqual(directCrops.action, Selector(("selectToolFromMenu:")))
@@ -37,9 +37,30 @@ final class ToolColorMenuTests: XCTestCase {
             if let submenu = item.submenu { return submenu.items.map(\.tag) }
             return item.isSeparatorItem ? [] : [item.tag]
         }
-        XCTAssertEqual(allTags.count, 28)
-        XCTAssertEqual(Set(allTags).count, 28)
+        XCTAssertEqual(allTags.count, 30)
+        XCTAssertEqual(Set(allTags).count, 30)
         XCTAssertEqual(tools.items.filter(\.isSeparatorItem).count, 1)
+    }
+
+    func testColorMenuCommandsOpenOneEditorAndRejectForeignItems() throws {
+        _ = NSApplication.shared
+        let owner = AppController()
+        let tools = try XCTUnwrap(toolsSubmenu(in: MainMenu.make()))
+        let foreground = try XCTUnwrap(tools.item(withTitle: "Foreground Color…"))
+        let background = try XCTUnwrap(tools.item(withTitle: "Background Color…"))
+        XCTAssertTrue(owner.validateMenuItem(foreground))
+        XCTAssertTrue(owner.validateMenuItem(background))
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(foreground.action), to: owner, from: foreground))
+        let panel = try XCTUnwrap(NSApp.windows.first { $0.title == "Foreground Color" && $0.isVisible })
+        defer { panel.close() }
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(background.action), to: owner, from: background))
+        XCTAssertEqual(panel.title, "Background Color")
+        XCTAssertEqual(NSApp.windows.filter { $0.isVisible && ["Foreground Color", "Background Color"].contains($0.title) }.count, 1)
+        let foreign = NSMenuItem(title: foreground.title, action: foreground.action, keyEquivalent: "")
+        foreign.tag = foreground.tag
+        XCTAssertFalse(owner.validateMenuItem(foreign))
+        _ = NSApp.sendAction(try XCTUnwrap(foreign.action), to: owner, from: foreign)
+        XCTAssertEqual(panel.title, "Background Color")
     }
 
     func testToolMenuItemsHaveNoKeyEquivalentsByDefault() throws {
@@ -66,8 +87,8 @@ final class ToolColorMenuTests: XCTestCase {
         let collection = MenuShortcutBridge.collect(from: menu)
         let leaves = tools.items.flatMap { $0.submenu?.items ?? [$0] }.filter { !$0.isSeparatorItem }
         let records = collection.records.filter { record in leaves.contains { $0 === record.item } }
-        XCTAssertEqual(records.count, 28)
-        XCTAssertEqual(Set(records.map(\.id)).count, 28)
+        XCTAssertEqual(records.count, 30)
+        XCTAssertEqual(Set(records.map(\.id)).count, 30)
         XCTAssertTrue(records.allSatisfy { $0.base == nil && $0.snapshot.keyEquivalent.isEmpty
             && $0.snapshot.modifierMask.isEmpty })
         XCTAssertEqual(Set(records.filter { $0.item.action == Selector(("selectToolFromMenu:")) }.map { $0.item.tag }), Set(1...26))

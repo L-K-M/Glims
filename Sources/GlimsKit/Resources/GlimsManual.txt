@@ -175,7 +175,8 @@ Three keys work with any tool:
   Command (hold)  move the active layer with any tool
   Option (hold)   sample a color with any painting tool
 
-Click either color swatch to edit the foreground or background color.
+Click either color swatch, or choose View > Tools > Foreground Color…
+or Background Color…, to edit that tool color.
 The modeless editor shows RGB Percent (0–100) and Float (0–1) entries
 at the same time, plus a native color well. Entries retain fractions;
 press Return or leave a field to apply a valid value. An invalid draft
