@@ -388,6 +388,7 @@ final class EngineCanvasView: NSView {
 
     override func resignFirstResponder() -> Bool {
         guard super.resignFirstResponder() else { return false }
+        tools.cancelPickedMove()
         tools.cancelSpringTools()
         tools.resetHintModifiers()
         return true
@@ -411,7 +412,10 @@ final class EngineCanvasView: NSView {
             }
         }
         swapDestinationObservers()
-        if window == nil { tools.cancelSpringTools() }
+        if window == nil {
+            tools.cancelPickedMove()
+            tools.cancelSpringTools()
+        }
         backingDidChange()
         updateAntsTimer()
     }
@@ -452,9 +456,15 @@ final class EngineCanvasView: NSView {
         let center = NotificationCenter.default
         destinationObservers = [
             center.addObserver(forName: NSWindow.didResignKeyNotification, object: window,
-                               queue: .main) { [weak self] _ in self?.tools.cancelSpringTools() },
+                               queue: .main) { [weak self] _ in
+                self?.tools.cancelPickedMove()
+                self?.tools.cancelSpringTools()
+            },
             center.addObserver(forName: NSApplication.didResignActiveNotification, object: NSApp,
-                               queue: .main) { [weak self] _ in self?.tools.cancelSpringTools() },
+                               queue: .main) { [weak self] _ in
+                self?.tools.cancelPickedMove()
+                self?.tools.cancelSpringTools()
+            },
             center.addObserver(forName: NSWindow.didChangeBackingPropertiesNotification, object: window,
                                queue: .main) { [weak self] _ in self?.destinationDidChange() },
             center.addObserver(forName: NSWindow.didChangeScreenNotification, object: window,

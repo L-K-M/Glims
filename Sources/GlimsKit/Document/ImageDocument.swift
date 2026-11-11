@@ -780,7 +780,8 @@ final class ImageDocument {
     /// requested order exactly. A single selected channel also mirrors
     /// the paint target through `pendingTargetPick`; several selected
     /// channels resolve to no target. Path selection never touches it.
-    private func queueItemSelection(_ ids: [Int32], kind: EngineSession.ItemSetKind) {
+    private func queueItemSelection(_ ids: [Int32], kind: EngineSession.ItemSetKind,
+                                    prepare: (@Sendable (EngineSession, Int32) throws -> Void)? = nil) {
         itemSelectionVersion += 1
         let pick = PendingItemSelection(version: itemSelectionVersion, kind: kind, ids: ids)
         let existing: Set<Int32>
@@ -817,6 +818,7 @@ final class ImageDocument {
             var failure: Error?
             if kind == .channel { self.paintTargetIsValid = false }
             do {
+                try prepare?(session, image)
                 try session.selectItems(ordered, kind: kind, image: image)
                 guard try session.selectedItems(kind, image: image) == ordered else {
                     throw DocumentError.targetChanged
@@ -846,7 +848,15 @@ final class ImageDocument {
         if let layer = activeLayer { selectLayer(layer) }
     }
 
-    private func queueTargetPick(_ target: PaintTarget) {
+    @MainActor
+    private final class TargetPickReceipt {
+        var result: Result<Void, Error> = .success(())
+    }
+
+    private func queueTargetPick(_ target: PaintTarget,
+                                 validate: (@Sendable (EngineSession, Int32) throws -> Void)? = nil,
+                                 acknowledged: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
+        let receipt = TargetPickReceipt()
         targetPickVersion += 1
         let pick = TargetPick(version: targetPickVersion, target: target)
         pendingTargetPick = pick
@@ -879,10 +889,13 @@ final class ImageDocument {
         case .channel(let id): selectedChannelIDs = [id]
         case .layer, .mask: selectedChannelIDs = []
         }
-        enqueue(on: inputQueue) { [session, image] in
+        enqueue(on: inputQueue, afterFinish: {
+            acknowledged?(receipt.result)
+        }) { [session, image] in
             var failure: Error?
             self.paintTargetIsValid = false
             do {
+                try validate?(session, image)
                 // Best-effort: a layer gone since the read must not
                 // block the pick itself; reload reconciles the rest.
                 for other in staleEditing {
@@ -915,6 +928,8 @@ final class ImageDocument {
                 failure = error
             }
             DispatchQueue.main.async {
+                if let failure { receipt.result = .failure(failure) }
+                else { receipt.result = .success(()) }
                 if self.pendingTargetPick?.version == pick.version {
                     self.pendingTargetPick = nil
                     self.rejectedTargetPick = failure != nil
@@ -2538,6 +2553,192 @@ final class ImageDocument {
         guard !isMaskTargetActive else { return refuseMaskEdit() }
         guard !isChannelTargetActive else { return refuseChannelTransform() }
         run { session, image in try session.moveLayer(layer, image: image, by: offset) }
+    }
+
+    /// Existing target-route versions identify the owner of a transient Move
+    /// selection. Reloads and thumbnail reads do not steal that ownership.
+    struct MoveTargetRevision: Equatable {
+        let pick: Int
+        let layers: Int
+        let items: Int
+        let command: Int
+    }
+
+    var moveTargetRevision: MoveTargetRevision {
+        .init(pick: targetPickVersion, layers: layerSelectionVersion,
+              items: itemSelectionVersion, command: nextTargetCommandToken)
+    }
+
+    struct MoveSelectionOwnership {
+        fileprivate let revision: MoveTargetRevision
+        fileprivate let picked: Int32
+        fileprivate let previousLayers: [Int32]
+        fileprivate let previousChannels: [Int32]
+        fileprivate let previousMask: (layer: Int32, mask: Int32)?
+    }
+
+    @MainActor
+    private final class MovePickReceipt {
+        var result: Result<EngineSession.Layer?, Error> = .failure(DocumentError.targetChanged)
+    }
+
+    /// This read is counted, but not input/dirty work. Its native result is
+    /// delivered only after its own queue acknowledgment, so continuation
+    /// admission does not reject the read's own pending count.
+    func readMoveHit(at point: CGPoint, expected: EngineSession.FloatingState,
+                     completion: @escaping @MainActor (Result<EngineSession.Layer?, Error>) -> Void) {
+        guard acceptsEdits, !strokeIsActive, pendingWork == 0, !targetCommandIsPending,
+              pendingTargetPick == nil, pendingLayerSelection == nil, pendingChannelSelection == nil,
+              floatingState == expected else { return completion(.failure(DocumentError.busy)) }
+        let revision = moveTargetRevision
+        let receipt = MovePickReceipt()
+        enqueue(on: inputQueue, afterFinish: {
+            guard !self.isClosing else { return completion(.failure(DocumentError.closed)) }
+            guard self.moveTargetRevision == revision, self.floatingState == expected else {
+                return completion(.failure(DocumentError.targetChanged))
+            }
+            completion(receipt.result)
+        }) { [session, image] in
+            let result = Result<EngineSession.Layer?, Error> {
+                guard try session.floatingSelection(image) == expected else { throw DocumentError.targetChanged }
+                let hit = try session.pickLayer(image: image, at: point)
+                let row = try hit.map { id -> EngineSession.Layer in
+                    guard let row = try session.layers(image).first(where: { $0.id == id }) else {
+                        throw DocumentError.targetChanged
+                    }
+                    return row
+                }
+                guard try session.floatingSelection(image) == expected else { throw DocumentError.targetChanged }
+                return row
+            }
+            DispatchQueue.main.async { receipt.result = result }
+        }
+    }
+
+    /// Acknowledged authentic press selection; cancellation may restore its
+    /// saved target only while every later target route is still unchanged.
+    func selectMoveHit(_ row: EngineSession.Layer, expected: EngineSession.FloatingState,
+                       revision: MoveTargetRevision,
+                       completion: @escaping @MainActor (Result<MoveSelectionOwnership, Error>) -> Void) {
+        guard acceptsEdits, !strokeIsActive, pendingWork == 0, !targetCommandIsPending,
+              !expected.isActive, floatingState == expected, moveTargetRevision == revision,
+              layers.contains(where: { $0.id == row.id && $0.bounds == row.bounds }) else {
+            return completion(.failure(DocumentError.targetChanged))
+        }
+        // The owning canvas press already ended field editing before its
+        // query. Repeating that focus handoff here could cancel this request.
+        let previousMask: (layer: Int32, mask: Int32)? = {
+            guard selectedLayerIDs.count == 1,
+                  let id = selectedLayerIDs.first, let mask = maskStates[id], mask.editing, mask.mask != 0 else { return nil }
+            return (id, mask.mask)
+        }()
+        let owned = MoveSelectionOwnership(
+            revision: .init(pick: targetPickVersion + 1, layers: layerSelectionVersion,
+                            items: itemSelectionVersion, command: nextTargetCommandToken),
+            picked: row.id, previousLayers: selectedLayerIDs,
+            previousChannels: selectedChannelIDs, previousMask: previousMask)
+        queueTargetPick(.layer(row.id), validate: { session, image in
+            guard try session.floatingSelection(image) == expected,
+                  try session.layers(image).contains(where: { $0.id == row.id && $0.bounds == row.bounds }) else {
+                throw DocumentError.targetChanged
+            }
+        }, acknowledged: { result in completion(result.map { _ in owned }) })
+    }
+
+    func ownsMoveSelection(_ owned: MoveSelectionOwnership) -> Bool {
+        moveTargetRevision == owned.revision && selectedLayerIDs == [owned.picked]
+            && selectedChannelIDs.isEmpty && !targetCommandIsPending
+    }
+
+    func restoreMoveSelection(_ owned: MoveSelectionOwnership) {
+        guard !isClosing, !strokeIsActive, !floatingState.isActive,
+              ownsMoveSelection(owned), pendingTargetPick == nil else { return }
+        if EngineActivity.shared.isBusy {
+            EngineActivity.shared.whenIdle { [weak self] in
+                // Let the exclusive operation finish its MainActor cleanup.
+                // Recheck ownership before submitting a new native selection.
+                DispatchQueue.main.async { self?.restoreMoveSelection(owned) }
+            }
+            return
+        }
+        guard acceptsEdits else { return }
+        // Every route below increments an existing target version before
+        // notifying observers, so a second cancel cannot submit twice.
+        if !owned.previousChannels.isEmpty {
+            // Channels retain a remembered layer/mask target underneath.
+            // Restore it in the same input job before restoring channels.
+            selectedLayerIDs = owned.previousLayers
+            activeLayer = owned.previousLayers.first
+            if let mask = owned.previousMask { maskStates[mask.layer]?.editing = true }
+            queueItemSelection(owned.previousChannels, kind: .channel, prepare: { session, image in
+                try session.selectLayers(owned.previousLayers, image: image)
+                if let mask = owned.previousMask {
+                    guard try session.layerMask(mask.layer, image: image).mask == mask.mask else {
+                        throw DocumentError.targetChanged
+                    }
+                    try session.setLayerMask(mask.layer, image: image, flags: [.editing], values: [.editing])
+                }
+            })
+        } else if let mask = owned.previousMask {
+            guard maskStates[mask.layer]?.mask == mask.mask else { return }
+            queueTargetPick(.mask(layer: mask.layer, drawable: mask.mask))
+        } else {
+            queueLayerSelection(owned.previousLayers)
+        }
+    }
+
+    /// A captured hit, never today's active layer. The worker revalidates
+    /// both the original floating triplet and the explicit layer geometry.
+    func movePickedLayer(_ row: EngineSession.Layer, expected: EngineSession.FloatingState,
+                         ownership: MoveSelectionOwnership?, by offset: CGSize) {
+        guard offset != .zero else { return }
+        guard PickedMoveGeometry.canTranslate(row, in: layers, by: offset),
+              acceptsEdits, !strokeIsActive, pendingInput == 0, !targetCommandIsPending,
+              floatingState == expected, ownership.map(ownsMoveSelection) ?? expected.isActive else {
+            onError?(DocumentError.targetChanged.localizedDescription)
+            return
+        }
+        endPendingUserEdits()
+        guard acceptsEdits, !strokeIsActive, pendingInput == 0, !targetCommandIsPending,
+              floatingState == expected, ownership.map(ownsMoveSelection) ?? expected.isActive,
+              PickedMoveGeometry.canTranslate(row, in: layers, by: offset) else {
+            onError?(DocumentError.targetChanged.localizedDescription)
+            return
+        }
+        run { session, image in
+            guard try session.floatingSelection(image) == expected else {
+                throw DocumentError.targetChanged
+            }
+            let fresh = try session.layers(image)
+            guard PickedMoveGeometry.canTranslate(row, in: fresh, by: offset),
+                  try session.selectedLayers(image) == [row.id] else {
+                throw DocumentError.targetChanged
+            }
+            if !expected.isActive, !(try session.selectedItems(.channel, image: image)).isEmpty {
+                throw DocumentError.targetChanged
+            }
+            try session.moveLayer(row.id, image: image, by: offset)
+        }
+    }
+
+    /// The serialized app command validates the captured full state before
+    /// the existing id-checked native Anchor. It never recaptures a new float.
+    func anchorPickedFloating(_ expected: EngineSession.FloatingState) {
+        guard acceptsEdits, !strokeIsActive, pendingInput == 0, !targetCommandIsPending,
+              expected.isActive, floatingState == expected else {
+            onError?(DocumentError.targetChanged.localizedDescription)
+            return
+        }
+        endPendingUserEdits()
+        guard acceptsEdits, !strokeIsActive, pendingInput == 0, !targetCommandIsPending,
+              floatingState == expected else {
+            onError?(DocumentError.targetChanged.localizedDescription)
+            return
+        }
+        enqueueTargetCommand({ session, image in
+            guard try session.floatingSelection(image) == expected else { throw DocumentError.targetChanged }
+            _ = try session.floatingCommand(.anchor, image: image, expected: expected.floating)
+        })
     }
 
     /// Refuses an edit the mask target cannot take, saying why.
