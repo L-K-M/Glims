@@ -203,6 +203,38 @@ extension EngineSmokeTest {
                 && abs(Double(event.tilt.x) - 0.25) < 0.001 && abs(Double(event.tilt.y) - 0.5) < 0.001
                 && abs(Double(event.rotation) - [90, 180, 270][index]) < 0.001
                 && abs(Double(event.tangentialPressure) - [1, 0.5, 0][index]) < 0.001
+            if !admitted {
+                let mouse: Bool
+                switch event.type {
+                case .leftMouseDown, .leftMouseUp, .leftMouseDragged,
+                     .rightMouseDown, .rightMouseUp, .rightMouseDragged,
+                     .otherMouseDown, .otherMouseUp, .otherMouseDragged, .mouseMoved: mouse = true
+                default: mouse = false
+                }
+                let subtype = mouse ? event.subtype : nil
+                print("OBS tablet admission index=\(index) expectedType=\(type.rawValue) actualType=\(event.type.rawValue) subtype=\(subtype.map { String($0.rawValue) } ?? "not read") location=\(event.locationInWindow) mapped=\(mapped) timestamp=\(event.timestamp)")
+                if event.type == .tabletPoint || subtype == .tabletPoint {
+                    print("OBS tablet NSEvent device=\(event.deviceID) pressure=\(event.pressure) tilt=\(event.tilt) rotation=\(event.rotation) tangent=\(event.tangentialPressure)")
+                } else {
+                    print("OBS tablet NSEvent tablet getters not read: event is not a guarded tablet point")
+                }
+                func dumpCG(_ label: String, _ value: CGEvent) {
+                    let mouse: Bool
+                    switch value.type {
+                    case .leftMouseDown, .leftMouseUp, .leftMouseDragged,
+                         .rightMouseDown, .rightMouseUp, .rightMouseDragged,
+                         .otherMouseDown, .otherMouseUp, .otherMouseDragged, .mouseMoved: mouse = true
+                    default: mouse = false
+                    }
+                    let subtype = mouse ? value.getIntegerValueField(.mouseEventSubtype) : nil
+                    print("OBS tablet CG \(label) type=\(value.type.rawValue) location=\(value.location) timestamp=\(value.timestamp) subtype=\(subtype.map(String.init) ?? "not read")")
+                    if value.type == .tabletPointer || subtype == Int64(CGEventMouseSubtype.tabletPoint.rawValue) {
+                        print("OBS tablet CG \(label) device=\(value.getIntegerValueField(.tabletEventDeviceID)) mousePressure=\(value.getDoubleValueField(.mouseEventPressure)) tabletPressure=\(value.getDoubleValueField(.tabletEventPointPressure)) tiltX=\(value.getDoubleValueField(.tabletEventTiltX)) tiltY=\(value.getDoubleValueField(.tabletEventTiltY)) rotation=\(value.getDoubleValueField(.tabletEventRotation)) tangent=\(value.getDoubleValueField(.tabletEventTangentialPressure))")
+                    }
+                }
+                dumpCG("submitted", cg)
+                if let backing = event.cgEvent { dumpCG("NSEvent backing", backing) }
+            }
             try require(admitted, "CGEvent to NSEvent tablet values were not admitted; behavioral axis checks are NOT RUN")
             print("OBS tablet input index=\(index) device=\(event.deviceID) pressure=\(event.pressure) tilt=\(event.tilt) rotation=\(event.rotation) tangent=\(event.tangentialPressure) timestamp=\(event.timestamp)")
             return event
