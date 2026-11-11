@@ -81,6 +81,22 @@ final class AdjustmentLayerControlsTests: XCTestCase {
         ]).isEmpty, "no unsupported fallback to an unlisted operation")
     }
 
+    func testDedicatedConfigOperationsWithNativeEditorsAreOffered() {
+        let catalog = [
+            operation("gimp:curves", title: "Curves", support: .needsConfig),
+            operation("gimp:levels", title: "Levels", support: .needsConfig),
+            operation("gimp:hue-saturation", title: "Hue-Saturation", support: .needsConfig),
+            operation("gimp:color-balance", title: "Color Balance", support: .needsConfig),
+            operation("gimp:brightness-contrast", title: "Brightness-Contrast", support: .needsConfig),
+            operation("gimp:unknown-dedicated", support: .needsConfig),
+            operation("gegl:saturation", support: .needsConfig),
+        ]
+        XCTAssertEqual(AdjustmentLayerLogic.availableOperations(in: catalog).map(\.name),
+                       ["gimp:levels", "gimp:curves", "gimp:color-balance", "gimp:hue-saturation"],
+                       "dedicated config ops the effect editor drives appear in known-set order; "
+                           + "config ops outside the known set never do")
+    }
+
     func testCanonicalInvertOperationsFromTheNativeCatalogAreOffered() {
         let catalog = [operation("gegl:invert-gamma"), operation("gegl:invert-linear")]
         XCTAssertEqual(AdjustmentLayerLogic.availableOperations(in: catalog).map(\.name),

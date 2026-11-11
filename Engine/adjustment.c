@@ -17,6 +17,12 @@
 #include "core/gimpviewable.h"
 #include "operations/gimp-operation-config.h"
 
+#include "color-balance-config.h"
+#include "curves-config.h"
+#include "filter-config.h"
+#include "hue-saturation-config.h"
+#include "levels-config.h"
+
 GlimsStatus
 glims_adjustment_layer_new (GlimsEngine *engine, GlimsImageID image_id,
                             GlimsItemID parent_id, int32_t index,
@@ -69,8 +75,14 @@ glims_adjustment_layer_new (GlimsEngine *engine, GlimsImageID image_id,
                     : gimp_image_get_layers (open->image);
   if (index < 0 || index > gimp_container_get_n_children (children))
     return GLIMS_STATUS_INVALID_ARGUMENT;
+  /* The dedicated config operations are custom ops, but their configs
+   * are prepared below exactly as a filter session's, and the effect
+   * editor reads/writes them through the owned config path — they are
+   * safe on a pass-through group. Any other custom op is refused. */
   if (!glims_filter_operation_allowed (operation) ||
-      gimp_operation_config_is_custom (engine->gimp, operation))
+      (gimp_operation_config_is_custom (engine->gimp, operation) &&
+       strcmp (operation, "gimp:levels") && strcmp (operation, "gimp:curves") &&
+       strcmp (operation, "gimp:color-balance") && strcmp (operation, "gimp:hue-saturation")))
     {
       glims_fail (error, NULL, "That operation cannot be used as an adjustment layer.");
       return GLIMS_STATUS_UNSUPPORTED;
@@ -86,6 +98,19 @@ glims_adjustment_layer_new (GlimsEngine *engine, GlimsImageID image_id,
       status = GLIMS_STATUS_UNSUPPORTED;
       goto cleanup;
     }
+  /* Install a default owned config on the dedicated operations, as
+   * filter_begin_internal does, so the committed effect's node carries
+   * the same config the effect editor later copies and writes. */
+  status = glims_filter_config_prepare (node, error);
+  if (status != GLIMS_STATUS_OK) goto cleanup;
+  status = glims_color_balance_config_prepare (node, error);
+  if (status != GLIMS_STATUS_OK) goto cleanup;
+  status = glims_hue_saturation_config_prepare (node, error);
+  if (status != GLIMS_STATUS_OK) goto cleanup;
+  status = glims_levels_config_prepare (node, error);
+  if (status != GLIMS_STATUS_OK) goto cleanup;
+  status = glims_curves_config_prepare (node, error);
+  if (status != GLIMS_STATUS_OK) goto cleanup;
   group = gimp_group_layer_new (open->image);
   /* GimpItem starts floating. Keep our own reference across publication. */
   g_object_ref_sink (group);

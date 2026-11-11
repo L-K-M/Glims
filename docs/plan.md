@@ -4236,3 +4236,17 @@ workflow verifies real text input, preview/cancel, exact Undo/Redo pixels and
 stale selection refusal. Independent reviews cover the implementation and
 the subsequent focus and palette fixes. See [numeric-transform.md](numeric-transform.md).
 This does not close skew, distortion or perspective support.
+
+### Dedicated tonal adjustment layers (2026-11-11)
+
+New Adjustment Layer offers Levels, Curves, Color Balance and Hue-Saturation,
+using the same owned native configs and committed-effect editors as ordinary
+layer effects. The existing empty pass-through group remains the adjustment
+layer: creation is one Undo step; cancelling the subsequent parameter edit
+keeps that explicitly created layer.
+
+All four engine sets pass 203 focused native checks, including neutral
+creation, unchanged underlying pixels, typed edits, cancellation, exact
+Undo/Redo output and editable XCF reopening. The Swift suite passes 1,250
+tests. This closes the tonal-picker gap in the broader editor brief; it does
+not establish complete Photoshop 4 parity or final application acceptance.
