@@ -71,6 +71,38 @@ expect_refusal (GlimsXcfCompression compression, const guint8 *bytes, gsize leng
 }
 
 static void
+exercise_chunks (GlimsXcfCompression compression)
+{
+  const gsize length = 128 * 1024 + 17;
+  guint8 *plain = g_malloc (length);
+  guint32 state = 0x7184cb21u;
+  for (gsize i = 0; i < length; i++) {
+    state = state * 1664525u + 1013904223u;
+    plain[i] = (guint8) (state >> 24);
+  }
+  memcpy (plain, "gimp xcf v026\0", 14);
+  GBytes *encoded = encode (compression, plain, length);
+  CHECK (encoded != NULL && g_bytes_get_size (encoded) > 64 * 1024,
+         "independent data requires several compressed input buffers");
+  if (!encoded) { g_free (plain); return; }
+  gsize size;
+  const guint8 *bytes = g_bytes_get_data (encoded, &size);
+  Decoded full = decode (compression, bytes, size, size, length);
+  gsize actual_size;
+  const guint8 *actual = g_bytes_get_data (full.bytes, &actual_size);
+  CHECK (full.success && full.is_xcf && !full.has_error && actual_size == length
+          && !memcmp (actual, plain, length),
+         "multiple input/output buffers preserve the entire independent payload");
+  g_bytes_unref (full.bytes);
+  expect_refusal (compression, bytes, size, size - 1, length,
+                   "a late input-budget overrun refuses after multiple buffers");
+  expect_refusal (compression, bytes, size, size, length - 1,
+                   "a late decoded-budget overrun refuses after multiple buffers");
+  g_bytes_unref (encoded);
+  g_free (plain);
+}
+
+static void
 exercise (GlimsXcfCompression compression)
 {
   /* These are codec bytes, not a complete image fixture. The real native
@@ -160,6 +192,8 @@ int main (void)
 {
   exercise (GLIMS_XCF_COMPRESSION_BZIP2);
   exercise (GLIMS_XCF_COMPRESSION_XZ);
+  exercise_chunks (GLIMS_XCF_COMPRESSION_BZIP2);
+  exercise_chunks (GLIMS_XCF_COMPRESSION_XZ);
   printf ("%s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);
   return failures ? 1 : 0;
 }
