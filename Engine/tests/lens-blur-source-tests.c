@@ -183,6 +183,7 @@ lens_admission_baseline (GlimsEngine *engine, gpointer unused)
 {
   (void) unused;
   Fixture f = {0}; char *error = NULL; GlimsFilterID filter = 123;
+  gboolean mask_admitted = FALSE;
   guint8 before[BYTES];
   GlimsUndoInfo undo = {0};
 
@@ -201,7 +202,9 @@ lens_admission_baseline (GlimsEngine *engine, gpointer unused)
   clear_error (&error); filter = 123;
   GlimsStatus s1 = glims_filter_begin_with_source (f.engine, f.id, item_id (f.target), LENS_BLUR,
                                                    item_id (f.source), &filter, &error);
-  gboolean mask_admitted = s1 == GLIMS_STATUS_OK && filter > 0;
+  if (s1 != GLIMS_STATUS_OK)
+    fprintf (stderr, "Lens mask admission status=%u: %s\n", s1, error ? error : "no detail");
+  mask_admitted = s1 == GLIMS_STATUS_OK && filter > 0;
   /* Baseline RED on 173/current: missing support must be reported naturally. */
   CHECK (mask_admitted, "slot147 admits Lens Blur with a positive mask source");
 
@@ -248,7 +251,7 @@ begin_lens (Fixture *f, GlimsItemID source, GlimsFilterID *out, char **error)
 static GlimsStatus
 lens_eventual_support (GlimsEngine *engine, gpointer unused)
 {
-  (void) unused;
+  gint mode = GPOINTER_TO_INT (unused); /* None, zero mask, ramp mask. */
   if (!lens_admitted) {
     printf ("Lens Blur dependent pixel checks not executed: admission failed above.\n");
     fflush (stdout);
@@ -260,13 +263,17 @@ lens_eventual_support (GlimsEngine *engine, gpointer unused)
 
   NEED (fixture_open (engine, &f, FALSE), "eventual-support fixture opens");
   write_lens_target (&f, target);
-  write_y_mask (f.source, TRUE); NEED (read_pixels (f.source, FALSE, mask), "ramp mask captured for eventual support");
+  write_y_mask (f.source, mode == 2);
+  NEED (read_pixels (f.source, FALSE, mask), "native mask captured for the selected input case");
   NEED (read_pixels (f.target, FALSE, original) && api->image_undo_info (engine, f.id, &before) == GLIMS_STATUS_OK,
         "eventual-support baseline captured");
-  NEED (raw_lens_oracle (target, mask, TRUE, &lens_defaults, expected), "independent oracle for eventual support");
-  CHECK (bytes_differ (original, expected), "eventual-support oracle is nontrivial");
+  NEED (raw_lens_oracle (target, mode == 0 ? NULL : mask, mode == 2, &lens_defaults, expected),
+        "independent oracle for the selected input case");
+  CHECK (mode == 1 ? pixels_near (original, expected) : bytes_differ (original, expected),
+         "zero map is an identity control; None and ramp produce nontrivial blur");
 
-  NEED (begin_lens (&f, item_id (f.source), &filter, &error) && read_pixels (f.target, TRUE, preview),
+  GlimsItemID source = mode == 0 ? 0 : item_id (f.source);
+  NEED (begin_lens (&f, source, &filter, &error) && read_pixels (f.target, TRUE, preview),
         "eventual-support preview begins and renders");
   CHECK (pixels_near (preview, expected), "preview pixels match independent raw oracle within tolerance");
   CHECK (read_pixels (f.target, FALSE, actual) && !memcmp (original, actual, BYTES) && undo_equal (engine, f.id, &before),
@@ -275,7 +282,7 @@ lens_eventual_support (GlimsEngine *engine, gpointer unused)
   CHECK (read_pixels (f.target, FALSE, actual) && !memcmp (original, actual, BYTES) && undo_equal (engine, f.id, &before),
         "Cancel leaves stored pixels and history unchanged");
 
-  NEED (begin_lens (&f, item_id (f.source), &filter, &error), "fresh preview for Apply");
+  NEED (begin_lens (&f, source, &filter, &error), "fresh preview for Apply");
   NEED (api->filter_commit (engine, filter, &error) == GLIMS_STATUS_OK, "Apply commits"); filter = 0;
   NEED (read_pixels (f.target, FALSE, committed), "committed pixels readable");
   CHECK (pixels_near (committed, expected), "Apply/merged pixels match independent raw oracle within tolerance");
@@ -311,8 +318,11 @@ main (int argc, char **argv)
          "independent GEGL oracle suite executes on engine thread");
   CHECK (glims_engine_call (engine, lens_admission_baseline, NULL) == GLIMS_STATUS_OK,
          "slot147 admission baseline suite executes on engine thread");
-  CHECK (glims_engine_call (engine, lens_eventual_support, NULL) == GLIMS_STATUS_OK,
-         "eventual-support pixel/history suite executes on engine thread");
+  for (gint mode = 0; mode < 3; mode++) {
+    printf ("Lens Blur case: %s\n", mode == 0 ? "None" : mode == 1 ? "zero mask" : "ramp mask");
+    CHECK (glims_engine_call (engine, lens_eventual_support, GINT_TO_POINTER (mode)) == GLIMS_STATUS_OK,
+           "selected input pixel/history suite executes on engine thread");
+  }
 
   api->stop (engine); g_free (user); g_free (cache);
   printf ("%s: %d lens checks, %d failures (admitted=%s)\n",

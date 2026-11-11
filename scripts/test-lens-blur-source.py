@@ -26,6 +26,7 @@ HARNESS = ROOT / "Engine/tests/lens-blur-source-tests.c"
 FIXTURE = ROOT / "Engine/tests/filter-input-tests.c"
 READER = ROOT / "Engine/filter-input.c"
 FILTER_C = ROOT / "Engine/filter.c"
+FILTER_PROPERTIES_C = ROOT / "Engine/filter-properties.c"
 BINARY_NAME = "lens-blur-source-tests"
 
 
@@ -108,12 +109,12 @@ def build(args: argparse.Namespace) -> Path:
     obj_dir = producer / "obj"
     require(obj_dir.is_dir(), "producer missing obj/ directory")
     # Exclude filter-input/filter objects; compile test-local copies (no producer relink).
-    objects = sorted(p for p in obj_dir.glob("*.o") if p.stem not in {"filter-input", "filter"})
+    objects = sorted(p for p in obj_dir.glob("*.o") if p.stem not in {"filter-input", "filter", "filter-properties"})
     require({"engine"}.issubset({p.stem for p in objects}), "producer lacks required engine object(s)")
     responses = {name: producer / name for name in ("compile.rsp", "objects.rsp", "link.rsp")}
     inputs: set[Path] = set(objects)
     expanded = {name: response_tokens(path, inputs, set()) for name, path in responses.items()}
-    inputs.update({HARNESS, FIXTURE, READER, FILTER_C, Path(__file__).resolve(),
+    inputs.update({HARNESS, FIXTURE, READER, FILTER_C, FILTER_PROPERTIES_C, Path(__file__).resolve(),
                    ROOT / "Engine/engine-private.h", ROOT / "Engine/filter-input.h",
                    ROOT / "Sources/CGlimsEngine/include/glims_engine.h"})
     inputs = {p.resolve() for p in inputs}
@@ -136,6 +137,7 @@ def build(args: argparse.Namespace) -> Path:
     for src, flags in [
         (READER, ["-fvisibility=hidden", "-Wall", "-Wextra", "-Werror=implicit-function-declaration"]),
         (FILTER_C, ["-fvisibility=hidden", "-Wall", "-Wextra", "-Werror=implicit-function-declaration"]),
+        (FILTER_PROPERTIES_C, ["-fvisibility=hidden", "-Wall", "-Wextra", "-Werror=implicit-function-declaration"]),
         (HARNESS, ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror"]),
     ]:
         obj = output / (src.stem + ".o")

@@ -28,4 +28,15 @@ GlimsStatus glims_filter_input_oilify_prepare (GlimsEngine *, GlimsOpenImage *,
 GlimsStatus glims_filter_begin_oilify_with_sources (GlimsEngine *, GlimsImageID,
                                                    GlimsItemID, GlimsItemID,
                                                    GlimsItemID, GlimsFilterID *, char **);
+
+/* Engine thread. Prepares owned Lens Blur input: source 0 is explicit None
+ * (no aux node), positive source is a detached mask snapshot validated in its
+ * own space (finite unit-range Y and Y', eight upper float ULPs allowed
+ * for conversion roundoff, extent/abyss and samples preserved). */
+GlimsStatus glims_filter_input_lens_prepare (GlimsEngine *, GlimsOpenImage *,
+                                             GimpDrawable *, GlimsItemID,
+                                             GeglNode **, char **);
+/* Prospective Lens Blur validation before mutation/attachment/commit. Returns
+ * OK for sessions not marked owned Lens Blur. */
+GlimsStatus glims_filter_lens_validate (GlimsFilter *, const char *, const GValue *);
 #endif
