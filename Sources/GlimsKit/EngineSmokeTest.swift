@@ -368,6 +368,21 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (image adjust)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "region-anchor" {
+                try exerciseSelectionAnchor(session, documents: documents, regionOnly: true)
+                print(failures == 0 ? "PASSED (Region anchor)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "lasso-anchor" {
+                try exerciseSelectionAnchor(session, documents: documents, lassoOnly: true)
+                print(failures == 0 ? "PASSED (Lasso anchor)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "selection-anchor" {
+                try exerciseSelectionAnchor(session, documents: documents)
+                print(failures == 0 ? "PASSED (selection anchor)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "selection-drag" {
                 try exerciseSelectionDrag(session, documents: documents)
                 print(failures == 0 ? "PASSED (selection drag)" : "FAILED: \(failures) failure(s)")
@@ -386,6 +401,11 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "move-pick-spring" {
                 try exerciseMovePickSpring(session, documents: documents)
                 print(failures == 0 ? "PASSED (Move Pick and Spring)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "move-pick-stationary-snap" {
+                try exerciseMovePickStationarySnap(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Move Pick stationary snap)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "move-pick-range" {
@@ -5685,9 +5705,16 @@ enum EngineSmokeTest {
                                           context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
             controller.canvas.mouseDown(with: press)
             controller.canvas.tools.textEditor?.insertText("Snap", replacementRange: NSRange(location: NSNotFound, length: 0))
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            window.makeMain()
+            wait { NSApp.mainWindow === window && NSApp.keyWindow === window }
             document.newSnapshot()
-            wait { app.frontDocument != nil }
-            let snapshotDoc = app.frontDocument
+            // frontDocument may still be the source main window while
+            // the asynchronous snapshot is being adopted. Select only
+            // the new document actually owned by this app controller.
+            wait { app.documents.count == 1 && app.documents[0].imageDocument !== document }
+            let snapshotDoc = app.documents.first?.imageDocument
             // The real app routes engine events to its documents; the
             // smoke test's list stands in for that.
             if let snapshotDoc { documents.items.append(snapshotDoc) }
