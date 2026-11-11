@@ -5733,9 +5733,16 @@ enum EngineSmokeTest {
                                           context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
             controller.canvas.mouseDown(with: press)
             controller.canvas.tools.textEditor?.insertText("Snap", replacementRange: NSRange(location: NSNotFound, length: 0))
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            window.makeMain()
+            wait { NSApp.mainWindow === window && NSApp.keyWindow === window }
             document.newSnapshot()
-            wait { app.frontDocument != nil }
-            let snapshotDoc = app.frontDocument
+            // frontDocument may still be the source main window while
+            // the asynchronous snapshot is being adopted. Select only
+            // the new document actually owned by this app controller.
+            wait { app.documents.count == 1 && app.documents[0].imageDocument !== document }
+            let snapshotDoc = app.documents.first?.imageDocument
             // The real app routes engine events to its documents; the
             // smoke test's list stands in for that.
             if let snapshotDoc { documents.items.append(snapshotDoc) }

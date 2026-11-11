@@ -139,3 +139,29 @@ among 20 checks. The new producer predicts 184 checks, including separate
 stack activity and close-fence assertions for each begin. The harness tests
 the table size before reading the new pointer and never builds producer
 objects. These counts are source expectations pending the native matrix.
+
+
+## Verified native and editor checks (2026-11-11)
+
+Native170 production `30d9674` passes 184 focused checks on each supported
+engine, plus 7,454 general conformance checks across the four engines. The
+independent native UI-oracle exporter passes 20 checks on each engine.
+Swift/editor source `2188d1f` passes 44 actual AppKit checks per engine. The
+old chooser fixture at `19ea952` reports the expected missing-enabled-form
+failure among nine checks. These runs use separate immutable adapter
+outputs and private engine settings.
+
+A broader pinned-engine run exposed five failures in the existing History
+snapshot fixture. Diagnostic `bfcfb5d` observed that its unchanged
+`frontDocument` wait returned source image3 with an empty app-owned document
+list. Fixture-only `57c9eed` waits for the distinct app-owned snapshot;
+all original assertions pass. The corrected full pinned run passes 3,231
+checks with zero failures and process exit0. This is a fixture correction,
+not an Oilify rendering fix. Every recorded owned test process exited and
+released its desktop lease.
+
+Independent source review of `2188d1f` found no important production
+findings in source ownership, native format/halo validation, preview
+lifetime, captured Swift requests or the facade load boundary. The latest
+integration adds current Main's Move and gzip XCF changes; hosted checks
+and the final combined self-contained bundle remain separate gates.
