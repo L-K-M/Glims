@@ -7,6 +7,11 @@ import UniformTypeIdentifiers
 final class RecorderFileCoordinator {
     private static let recordingType = UTType(exportedAs: "ch.lkmc.glims.recording", conformingTo: .json)
 
+    struct PickerDefaults {
+        let directory: URL
+        let saveFilename: String
+    }
+
     enum Refusal: LocalizedError {
         case windowUnavailable, changed
         var errorDescription: String? {
@@ -38,12 +43,16 @@ final class RecorderFileCoordinator {
     }
 
     private weak var owner: DocumentWindowController?
+    private let pickerDefaults: PickerDefaults?
     private var active: UUID?
     private var bindingSheet: RecorderBindingSheetController?
     private weak var waitingDocument: ImageDocument?
     private var waitObserver: UUID?
 
-    init(owner: DocumentWindowController) { self.owner = owner }
+    init(owner: DocumentWindowController, pickerDefaults: PickerDefaults? = nil) {
+        self.owner = owner
+        self.pickerDefaults = pickerDefaults
+    }
 
     var canPresent: Bool {
         guard let owner, let window = owner.window else { return false }
@@ -186,7 +195,8 @@ final class RecorderFileCoordinator {
         let base = String(document.recorderFileMetadata.name.prefix(180))
             .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
         let suggested = base.isEmpty || base == "." || base == ".." ? "Recording" : base
-        panel.nameFieldStringValue = suggested + ".glimsrecording"
+        panel.nameFieldStringValue = pickerDefaults?.saveFilename ?? suggested + ".glimsrecording"
+        if let pickerDefaults { panel.directoryURL = pickerDefaults.directory }
         panel.beginSheetModal(for: operation.window) { [weak self] response in
             guard let self else { return completion(false) }
             guard response == .OK, let url = panel.url else { return completion(false) }
@@ -250,6 +260,7 @@ final class RecorderFileCoordinator {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
+        if let pickerDefaults { panel.directoryURL = pickerDefaults.directory }
         panel.beginSheetModal(for: operation.window) { [weak self] response in
             guard let self else { return }
             guard response == .OK, let url = panel.url else { return self.finish(operation) }
