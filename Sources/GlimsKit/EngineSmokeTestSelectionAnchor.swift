@@ -42,11 +42,12 @@ private final class SelectionAnchorQueueHold: @unchecked Sendable {
 @MainActor
 extension EngineSmokeTest {
     static func exerciseSelectionAnchor(_ session: EngineSession, documents: DocumentList,
-                                        lassoOnly: Bool = false) throws {
+                                        lassoOnly: Bool = false, regionOnly: Bool = false) throws {
         var count = 0
+        let label = regionOnly ? "Region anchor" : (lassoOnly ? "Lasso anchor" : "Selection anchor")
+        let smokeCase = regionOnly ? "region-anchor" : (lassoOnly ? "lasso-anchor" : "selection-anchor")
         func expect(_ value: Bool, _ message: String) {
             count += 1
-            let label = lassoOnly ? "Lasso anchor" : "Selection anchor"
             check(value, "\(label): \(message)")
         }
         func fixtureError(_ message: String) -> NSError {
@@ -90,7 +91,6 @@ extension EngineSmokeTest {
             documents.items.removeAll { doc in owners.contains { $0.imageDocument === doc } }
             ToolState.shared.selectOptions = priorOptions
             ToolState.shared.select(priorTool)
-            let smokeCase = lassoOnly ? "lasso-anchor" : "selection-anchor"
             print("     \(smokeCase) checks: \(count)")
         }
 
@@ -153,6 +153,12 @@ extension EngineSmokeTest {
         var baseBytes: [UInt8] = []
         for y in 0..<height {
             for x in 0..<width {
+                if regionOnly && (((48..<51).contains(x) && (40..<43).contains(y))
+                    || ((69..<72).contains(x) && (49..<52).contains(y))) {
+                    // Two separated, exact matches for the ordinary color-selection control.
+                    baseBytes.append(contentsOf: [246, 4, 173, 255])
+                    continue
+                }
                 baseBytes.append(UInt8((x * 7 + y * 11) % 256))
                 baseBytes.append(UInt8((x * 17 + y * 3) % 256))
                 baseBytes.append(UInt8((x + y * 23 + 19) % 256))
@@ -282,6 +288,185 @@ extension EngineSmokeTest {
         let opaque = CGPoint(x: 26, y: 26)
         let movedPoint = CGPoint(x: 33, y: 30)
         expect(NSApp.isRunning, "actual AppKit host is running")
+
+        if regionOnly {
+            let swatch = CGPoint(x: 49.5, y: 41.5)
+            let floatSample = CGPoint(x: 26.5, y: 26.5)
+            var colorOptions = options
+            colorOptions.threshold = 0
+            colorOptions.sampleMerged = true
+            var configuredSubtract = colorOptions
+            configuredSubtract.operation = .subtract
+
+            let other = try scene("Region focus control")
+            let otherBefore = try snapshot(other.native.image)
+            for tool in [ToolID.magicWand, .selectByColor] {
+                let contiguous = tool == .magicWand
+                let name = tool.name
+                ToolState.shared.select(tool)
+                ToolState.shared.selectOptions = configuredSubtract
+
+                let active = try scene("\(name) Anchor with configured Subtract", emptyMask: true)
+                let otherWindow = try front(other.owner)
+                let before = try snapshot(active.native.image)
+                let pending = try hold(active.owner)
+                let press = contiguous ? miss : hole
+                try pointer(active, .leftMouseDown, press)
+                expect(active.owner.imageDocument.pendingWork > 0,
+                       "\(name) unmodified press admits counted work on its captured document")
+                if !contiguous { try pointer(active, .leftMouseDragged, opaque, elapsed: short / 2) }
+                try pointer(active, .leftMouseUp, contiguous ? press : opaque, elapsed: short)
+                expect(try snapshot(active.native.image) == before && snapshot(other.native.image) == otherBefore,
+                       "\(name) buffered release changes neither document before the held reply")
+                pending.release.signal()
+                try drain(active.owner)
+                let anchor = try seed(emptyMask: true)
+                try session.floatingCommand(.anchor, image: anchor.image, expected: anchor.float)
+                let after = try snapshot(active.native.image)
+                expect(try matches(active.native, anchor) && after.content.selected == [active.native.target]
+                        && !after.content.floating.isActive && after.undo.undoCount == before.undo.undoCount + 1,
+                       contiguous
+                       ? "\(name) stationary miss anchors A with one Undo despite configured Subtract and an empty mask"
+                       : "\(name) noncancel drag from a float hole to an opaque point still anchors A with one Undo")
+                expect(try snapshot(other.native.image) == otherBefore
+                        && NSApp.keyWindow === otherWindow && NSApp.mainWindow === otherWindow,
+                       "\(name) leaves the front document B and its focus unchanged")
+                active.owner.imageDocument.undo()
+                try drain(active.owner)
+                expect(try snapshot(active.native.image).content == before.content,
+                       "\(name) Anchor Undo restores the exact float, attachment pixels and selection")
+                active.owner.imageDocument.redo()
+                try drain(active.owner)
+                expect(try snapshot(active.native.image).content == after.content,
+                       "\(name) Anchor Redo restores the same native result")
+                try retire(active)
+
+                let moving = try scene("\(name) opaque movement", emptyMask: true)
+                try front(moving.owner)
+                let beforeMove = try snapshot(moving.native.image)
+                try click(moving, opaque)
+                expect(try snapshot(moving.native.image) == beforeMove, "\(name) opaque still press makes a zero-displacement Move")
+                try pointer(moving, .leftMouseDown, opaque)
+                try pointer(moving, .leftMouseDragged, movedPoint, elapsed: short / 2)
+                try drain(moving.owner)
+                expect(try snapshot(moving.native.image) == beforeMove, "\(name) opacity-picked Move preview is view-only")
+                try pointer(moving, .leftMouseUp, movedPoint, elapsed: short)
+                try drain(moving.owner)
+                let translated = try seed(emptyMask: true)
+                try session.moveLayer(translated.float, image: translated.image, by: CGSize(width: 7, height: 4))
+                let afterMove = try snapshot(moving.native.image)
+                expect(try matches(moving.native, translated) && afterMove.content.floating == beforeMove.content.floating
+                        && afterMove.undo.undoCount == beforeMove.undo.undoCount + 1,
+                       "\(name) opaque handoff matches independent native Move and preserves the float")
+                try retire(moving)
+
+                ToolState.shared.selectOptions = colorOptions
+                let modified = try scene("\(name) modifier selection", emptyMask: contiguous)
+                try front(modified.owner)
+                let beforeSelect = try snapshot(modified.native.image)
+                let modifier: NSEvent.ModifierFlags = contiguous ? .shift : .option
+                try pointer(modified, .leftMouseDown, floatSample, flags: modifier)
+                try drain(modified.owner)
+                expect(try snapshot(modified.native.image) == beforeSelect,
+                       "\(name) physical modifier captures SELECT without editing on press")
+                var changedOptions = configuredSubtract
+                changedOptions.threshold = 0.75
+                changedOptions.sampleMerged = false
+                ToolState.shared.selectOptions = changedOptions
+                try pointer(modified, .leftMouseDragged, swatch, elapsed: short / 2)
+                try pointer(modified, .leftMouseUp, swatch, elapsed: short)
+                try drain(modified.owner)
+                let selected = try seed(emptyMask: contiguous)
+                var expectedOptions = colorOptions
+                expectedOptions.operation = contiguous ? .add : .subtract
+                expectedOptions.contiguous = contiguous
+                try session.selectColor(at: floatSample, image: selected.image, options: expectedOptions)
+                let afterSelect = try snapshot(modified.native.image)
+                expect(try matches(modified.native, selected) && afterSelect.content.floating == beforeSelect.content.floating
+                        && afterSelect.content.coverage != beforeSelect.content.coverage
+                        && afterSelect.undo.undoCount == beforeSelect.undo.undoCount + 1,
+                       "\(name) SELECT uses the press sample, options and physical combiner despite changed release input")
+                try retire(modified)
+
+                ToolState.shared.selectOptions = colorOptions
+                let ordinary = try scene("\(name) ordinary color selection", floating: false)
+                try front(ordinary.owner)
+                let ordinaryBefore = try snapshot(ordinary.native.image)
+                let ordinaryReference = try seed(floating: false)
+                expectedOptions.operation = .replace
+                try session.selectColor(at: swatch, image: ordinaryReference.image, options: expectedOptions)
+                let expectedBounds = contiguous ? CGRect(x: 48, y: 40, width: 3, height: 3)
+                                                : CGRect(x: 48, y: 40, width: 24, height: 12)
+                expect(try session.selectionBounds(image: ordinaryReference.image) == expectedBounds,
+                       "\(name) direct native mask distinguishes contiguous from disconnected literal swatches")
+                try pointer(ordinary, .leftMouseDown, swatch)
+                try drain(ordinary.owner)
+                let ordinaryPress = try snapshot(ordinary.native.image)
+                expect(try matches(ordinary.native, ordinaryReference)
+                        && ordinaryPress.undo.undoCount == ordinaryBefore.undo.undoCount + 1,
+                       "\(name) ordinary no-float selection still commits the native mask on press")
+                try pointer(ordinary, .leftMouseUp, opaque, elapsed: short)
+                try drain(ordinary.owner)
+                expect(try snapshot(ordinary.native.image) == ordinaryPress, "\(name) ordinary release adds no selection or Undo")
+                try retire(ordinary)
+            }
+            try retire(other)
+
+            ToolState.shared.select(.selectByColor)
+            ToolState.shared.selectOptions = colorOptions
+            let emptyMaskModifiers: [NSEvent.ModifierFlags] = [.option, [.shift, .option]]
+            for flags in emptyMaskModifiers {
+                let refused = try scene("Region fresh empty mask", observeEvents: false)
+                try front(refused.owner)
+                let original = try snapshot(refused.native.image)
+                try pointer(refused, .leftMouseDown, floatSample, flags: flags)
+                try drain(refused.owner)
+                expect(try snapshot(refused.native.image) == original, "modified SELECT leaves native state unchanged until release")
+                try session.select(.none, image: refused.native.image)
+                expect(try session.selectionBounds(image: refused.native.image) == nil
+                        && refused.owner.imageDocument.selectionBounds != nil,
+                       "the native mask becomes empty after press while cached coverage stays nonempty")
+                let cleared = try snapshot(refused.native.image)
+                try pointer(refused, .leftMouseUp, floatSample, elapsed: short)
+                try drain(refused.owner)
+                expect(try snapshot(refused.native.image) == cleared,
+                       "captured \(flags.contains(.shift) ? "Intersect" : "Subtract") refuses the fresh empty mask")
+                try retire(refused)
+            }
+
+            let cancelled = try scene("Region Escape while opacity read is held")
+            try front(cancelled.owner)
+            let beforeCancel = try snapshot(cancelled.native.image)
+            let cancelHold = try hold(cancelled.owner)
+            try pointer(cancelled, .leftMouseDown, swatch)
+            try escape(cancelled)
+            try pointer(cancelled, .leftMouseUp, swatch, elapsed: short)
+            cancelHold.release.signal()
+            try drain(cancelled.owner)
+            expect(try snapshot(cancelled.native.image) == beforeCancel,
+                   "Escape retires the pending Region capture before any native edit")
+            try retire(cancelled)
+
+            let stale = try scene("Region opacity read with replaced float", observeEvents: false)
+            try front(stale.owner)
+            let staleHold = try hold(stale.owner)
+            try pointer(stale, .leftMouseDown, swatch)
+            try pointer(stale, .leftMouseUp, swatch, elapsed: short)
+            try session.floatingCommand(.discard, image: stale.native.image, expected: stale.native.float)
+            try session.select(.rectangle(initialSelection), image: stale.native.image, options: options)
+            let replacement = try session.pasteInto(stale.native.image, target: stale.native.target, pixels: payload)
+            let replaced = try snapshot(stale.native.image)
+            expect(replacement != stale.native.float && replaced.content.floating.floating == replacement
+                    && stale.owner.imageDocument.floatingState.floating == stale.native.float,
+                   "a new native float has the same attachment while the captured document still sees the old id")
+            staleHold.release.signal()
+            try drain(stale.owner)
+            expect(try snapshot(stale.native.image) == replaced,
+                   "stale Region capture neither anchors nor edits the replacement float's selection")
+            try retire(stale)
+            return
+        }
+
         let anchoredReference = try anchorReference()
 
         if lassoOnly {
