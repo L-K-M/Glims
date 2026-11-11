@@ -4132,6 +4132,17 @@ Gallery smoke and release build pass. See
 [`palette-keyboard-focus.md`](palette-keyboard-focus.md) for exact scope and
 the separate full accessibility audit.
 
+### Bzip2 and XZ foreign XCF recovery (2026-11-11 candidate)
+
+Compressed XCF uses one bounded decoded snapshot for native loading and
+supported foreign effect fields, retaining the original file identity.
+Both previously refused formats now pass the pinned 47-check field/pixel
+oracle. All four engines pass 7,454 existing native and 136 codec checks;
+the unchanged gzip identity regression passes 117 checks and the ordinary
+editor workflow passes 3,233. Independent production source review found no
+important issue. See [`compressed-xcf-fields.md`](compressed-xcf-fields.md)
+for stream limits, exact coverage and the separate standalone-release gate.
+
 ### Accessible committed-filter selection (2026-11-11 candidate)
 
 The filter-selection badge now exposes its existing selected/unselected label
