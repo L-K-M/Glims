@@ -3511,6 +3511,21 @@ typedef struct GlimsEngineAPI {
                                                  GlimsItemID layer,
                                                  const GlimsLayerTransformRequest *request,
                                                  char **error);
+
+  /* Slot176: create an independently owned image copy with the captured
+   * layer transformed. The original's pixels, selection, dirty state and
+   * Undo remain unchanged. The same capture, editable-source, geometry,
+   * storage and lock admission as slot175 applies before copying.
+   * A returned positive image ID is owned by the caller and must be closed
+   * with image_close. Intended for read-only previews; eligible raster
+   * transforms materialize their full-resolution pixels on demand.
+   * Other layer structures use the ordinary native transform on the copy.
+   * No caller memory is retained. Public entry clears *result and *error
+   * on failure, including engine dispatch failure. */
+  GlimsStatus (*image_transform_preview) (GlimsEngine *engine, GlimsImageID image,
+                                         GlimsItemID layer,
+                                         const GlimsLayerTransformRequest *request,
+                                         GlimsImageID *result, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

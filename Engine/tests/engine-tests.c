@@ -2573,6 +2573,147 @@ test_captured_layer_transform (void)
 }
 
 static void
+test_transform_preview_copy (void)
+{
+  const int width = 256, height = 192;
+  const size_t length = (size_t) width * height * 4;
+  uint8_t *pattern = malloc (length), *expected = malloc (length), *actual = malloc (length);
+  const uint32_t samplers[] = { GLIMS_INTERPOLATION_DEFAULT, GLIMS_INTERPOLATION_NONE,
+    GLIMS_INTERPOLATION_LINEAR, GLIMS_INTERPOLATION_CUBIC, GLIMS_INTERPOLATION_NOHALO,
+    GLIMS_INTERPOLATION_LOHALO };
+  CHECK (pattern && expected && actual, "preview equivalence pixel buffers allocate");
+  if (! pattern || ! expected || ! actual) goto cleanup;
+  for (int y = 0; y < height; y++) for (int x = 0; x < width; x++)
+    {
+      size_t i = ((size_t) y * width + x) * 4;
+      pattern[i] = (uint8_t) x;
+      pattern[i + 1] = (uint8_t) (y * 5);
+      pattern[i + 2] = (uint8_t) (x * 11 + y * 7);
+      pattern[i + 3] = (uint8_t) ((x + y) % 256);
+    }
+  for (int kind = 0; kind < 5; kind++)
+    for (size_t interpolation = 0; interpolation < sizeof samplers / sizeof *samplers; interpolation++)
+      {
+        GlimsImageID image = 0, oracle = 0, preview = 0;
+        GlimsItemID layer = 0, oracle_layer = 0;
+        GlimsLayerTransformRequest request = {
+          .struct_size = sizeof request, .expected_bounds = { 0, 0, width, height },
+          .matrix = { .m = { { .92, -.08, -19 }, { .11, .88, 7 }, { .0003, -.0005, 1 } } },
+          .interpolation = samplers[interpolation]
+        };
+        int before, ow, oh, w, h;
+        uint8_t *original = NULL, *unchanged = NULL;
+        char *error = NULL;
+        bool ready = api->image_new (engine, width, height, &image, NULL) == GLIMS_STATUS_OK;
+        if (ready) layer = first_layer (image);
+        if (ready && kind == 0)
+          {
+            GlimsFillSettings color = { .struct_size = sizeof color, .mode = GLIMS_FILL_SELECTION,
+              .color = { .2, .7, .4, 1 }, .opacity = 1 };
+            ready = api->fill (engine, image, (GlimsPoint) { 0, 0 }, &color, NULL) == GLIMS_STATUS_OK;
+          }
+        else if (ready)
+          ready = api->image_paste_pixels (engine, image, request.expected_bounds,
+                    pattern, length, &layer, NULL) == GLIMS_STATUS_OK;
+        if (ready && kind == 2)
+          ready = api->image_convert_precision (engine, image, GLIMS_COLOR_COMPONENT_FLOAT,
+                    GLIMS_COLOR_TRC_LINEAR, NULL) == GLIMS_STATUS_OK;
+        if (ready && kind == 3)
+          ready = api->image_convert_mode (engine, image, GLIMS_COLOR_MODE_GRAYSCALE, NULL) == GLIMS_STATUS_OK &&
+                  api->image_convert_precision (engine, image, GLIMS_COLOR_COMPONENT_U16,
+                    GLIMS_COLOR_TRC_NONLINEAR, NULL) == GLIMS_STATUS_OK;
+        if (ready && kind == 4)
+          {
+            GlimsIndexedSettings indexed = { .struct_size = sizeof indexed,
+              .palette = GLIMS_INDEXED_PALETTE_GENERATED, .max_colors = 64,
+              .dither = GLIMS_INDEXED_DITHER_NONE, .preservation = GLIMS_INDEXED_PRESERVE_EDITABLE };
+            ready = api->image_convert_indexed (engine, image, &indexed, NULL, 0, NULL) == GLIMS_STATUS_OK;
+          }
+        if (ready) ready = api->image_duplicate (engine, image, &oracle, NULL) == GLIMS_STATUS_OK;
+        if (ready) oracle_layer = first_layer (oracle);
+        CHECK (ready && layer && oracle_layer, "preview fixture kind %d sampler %u prepares independently", kind, samplers[interpolation]);
+        if (! ready || ! layer || ! oracle_layer) goto image_cleanup;
+        original = render_all (image, &ow, &oh);
+        before = undo_depth (image);
+        CHECK (api->image_transform_preview (engine, image, layer, &request, &preview, &error) == GLIMS_STATUS_OK &&
+               preview > 0 && preview != image && error == NULL,
+               "preview kind %d sampler %u returns an independently owned image", kind, samplers[interpolation]);
+        CHECK (api->layer_transform_matrix_captured (engine, oracle, oracle_layer, &request, NULL) == GLIMS_STATUS_OK,
+               "preview oracle uses the ordinary captured commit path");
+        unchanged = render_all (image, &w, &h);
+        CHECK (original && unchanged && w == ow && h == oh &&
+               memcmp (original, unchanged, length) == 0 && undo_depth (image) == before,
+               "creating a lazy preview preserves every source composite pixel and Undo depth");
+        /* Close before even the first lazy tile is read. The graph must own
+         * the copied pixel buffer, never a dangling original drawable. */
+        CHECK (api->image_close (engine, image) == GLIMS_STATUS_OK, "source closes before private preview rendering");
+        image = 0;
+        if (preview)
+          {
+            const double scales[] = { 1, .37, 2 };
+            const GlimsRect areas[] = { { 67, 49, 73, 61 }, { 0, 0, 95, 71 }, { 119, 85, 71, 53 }, { 0, 0, width, height } };
+            for (size_t r = 0; r < sizeof areas / sizeof *areas; r++)
+              {
+                double scale = r < 3 ? scales[r] : 1;
+                GlimsRect area = areas[r];
+                memset (expected, 0x3c, length); memset (actual, 0xc3, length);
+                CHECK (api->image_render (engine, oracle, scale, area, expected, (size_t) area.width * 4) == GLIMS_STATUS_OK &&
+                       api->image_render (engine, preview, scale, area, actual, (size_t) area.width * 4) == GLIMS_STATUS_OK &&
+                       memcmp (expected, actual, (size_t) area.width * area.height * 4) == 0,
+                       "lazy preview kind %d sampler %u viewport %zu equals eager native pixels after source close",
+                       kind, samplers[interpolation], r);
+              }
+          }
+image_cleanup:
+        api->free_string (error);
+        free (original); free (unchanged);
+        if (preview) api->image_close (engine, preview);
+        if (oracle) api->image_close (engine, oracle);
+        if (image) api->image_close (engine, image);
+      }
+  {
+    GlimsImageID image = 0, result = 99;
+    GlimsItemID layer;
+    GlimsLayerTransformRequest request = { .struct_size = sizeof request,
+      .expected_bounds = { 0, 0, 8, 8 },
+      .matrix = { .m = { { 1, 0, 2 }, { 0, 1, 3 }, { 0, .01, 1 } } },
+      .interpolation = GLIMS_INTERPOLATION_NONE };
+    uint8_t unaligned[sizeof request + 17];
+    char *error = NULL;
+    CHECK (api->image_new (engine, 8, 8, &image, NULL) == GLIMS_STATUS_OK, "preview admission fixture opens");
+    if (! image) goto cleanup;
+    layer = first_layer (image);
+    request.struct_size = sizeof request + 16;
+    memset (unaligned, 0, sizeof unaligned); memcpy (unaligned + 1, &request, sizeof request);
+    CHECK (api->image_transform_preview (engine, image, layer,
+             (const GlimsLayerTransformRequest *) (unaligned + 1), &result, &error) == GLIMS_STATUS_OK && result > 0 && ! error,
+             "preview accepts an unaligned known prefix in a larger future request");
+    if (result > 0 && result != 99) api->image_close (engine, result);
+    api->free_string (error); error = NULL;
+    result = 99; request.struct_size = sizeof request - 1;
+    CHECK (api->image_transform_preview (engine, image, layer, &request, &result, NULL) == GLIMS_STATUS_INVALID_ARGUMENT && result == 0,
+           "short preview request refuses with cleared image output");
+    result = 99; request.struct_size = sizeof request; request.expected_bounds.x = 1;
+    CHECK (api->image_transform_preview (engine, image, layer, &request, &result, &error) == GLIMS_STATUS_FAILED && result == 0 && error,
+           "stale captured preview bounds refuse before copying with a cleared output");
+    api->free_string (error); error = NULL;
+    result = 99; request.expected_bounds.x = 0; request.matrix.m[2][1] = -.25;
+    CHECK (api->image_transform_preview (engine, image, layer, &request, &result, NULL) == GLIMS_STATUS_INVALID_ARGUMENT && result == 0,
+           "preview retains perspective-horizon admission before copying");
+    result = 99;
+    CHECK (api->image_transform_preview (engine, image, layer, NULL, &result, NULL) == GLIMS_STATUS_INVALID_ARGUMENT && result == 0 &&
+           api->image_transform_preview (engine, image, layer, &request, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+           "preview requires request and image-result storage");
+    api->image_close (engine, image);
+    result = 99;
+    CHECK (api->image_transform_preview (engine, image, layer, &request, &result, NULL) == GLIMS_STATUS_NOT_FOUND && result == 0,
+           "a closed original cannot create a preview or leak a stale output ID");
+  }
+cleanup:
+  free (pattern); free (expected); free (actual);
+}
+
+static void
 test_transform_masked_projection (const char *fixtures)
 {
   GlimsImageID image = 0;
@@ -14160,6 +14301,7 @@ main (int argc, char **argv)
   test_projective_source_offsets ();
   test_transform_masked_projection (argv[3]);
   test_captured_layer_transform ();
+  test_transform_preview_copy ();
   test_channels (argv[2]);
   test_drawable_filters (argv[2]);
   test_drawable_effects (argv[2]);

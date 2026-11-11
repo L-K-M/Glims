@@ -4593,17 +4593,9 @@ final class ImageDocument {
                       let index = source.firstIndex(where: { $0.id == request.layer }),
                       source[index].bounds == request.original else { throw DocumentError.targetChanged }
                 try Self.requireLayerTransformTarget(request.layer, session: session, image: image)
-                let duplicate = try session.duplicateImage(image)
+                let duplicate = try session.transformedPreviewImage(image, layer: request.layer, matrix: request.matrix,
+                    expectedBounds: request.original, interpolation: request.interpolation)
                 copy = duplicate
-                let layers = try session.layers(duplicate)
-                // Duplication preserves preorder but assigns fresh IDs. Check
-                // the complete tree shape before resolving the captured row.
-                guard source.count == layers.count,
-                      zip(source, layers).allSatisfy({ a, b in
-                          a.depth == b.depth && a.kind == b.kind && a.bounds == b.bounds
-                      }) else { throw DocumentError.targetChanged }
-                try session.transformLayer(layers[index].id, image: duplicate, matrix: request.matrix,
-                                           expectedBounds: request.original, interpolation: request.interpolation)
                 return try CanvasDisplayDestination.render(session, image: duplicate, scale: request.renderScale,
                     area: request.renderArea,
                     destination: request.destination, proof: request.proof)

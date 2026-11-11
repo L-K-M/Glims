@@ -4398,6 +4398,32 @@ values, and unknown-mask picks retain target admission until reconciliation.
 These focused UI and native checks pass on all four engines. Independent API
 and caller reviews found no remaining important issues after their fixes.
 
-Remaining in this slice: full ordinary workflow matrix, hosted CI and review,
-and merged bundle verification. Large-image preview latency needs further
-work. Photoshop 4 parity is still incomplete.
+The ordinary workflow matrix at `526556c` passes 3,315 / 3,315 / 3,289 /
+3,315 checks on 3.2.8 / 3.2.0 / 3.0.8 / master. Hosted CI/review and merged
+bundle verification remain open. Photoshop 4 parity is still incomplete.
+
+### Lazy transform preview pixels (2026-11-11 work in progress)
+
+Additive facade slot 176 creates an owned private transformed image, with
+the same captured target, geometry, storage, lock and editable-source admission
+as Apply. Ordinary root raster layers without masks or effects use the upstream
+transform matrix and sampler behind GIMP's tile-validation handler. The full
+native-resolution result exists logically; only demanded tiles are calculated.
+Groups, masked layers, nested layers and effect-bearing layers retain the
+ordinary native transform on the private copy. Apply is unchanged.
+
+The tile handler owns its graph and copied input buffer until the result image
+closes. The first native equivalence matrix covers all six sampler settings,
+opaque and partially transparent RGB, float-linear RGB, 16-bit grayscale and
+indexed images. Each source closes before the first preview read; off-origin,
+reduced, 2x and complete reads must equal an independently committed result.
+Unaligned/future prefixes and invalid/missing/stale requests exercise the API's
+admission and cleared output contract. These checks and the existing native
+conformance suites pass on all four engines. Independent source review found
+no important remaining issue.
+
+An initial 24 MP characterization measured 37.5 ms affine and 26.2 ms projective
+preview completion for the existing 800x600 viewport, versus 808 / 796 ms for
+the eager copy. Main-loop lateness was below 6 ms. These are single-run results
+on this Mac for eligible layers, not a guarantee for structured layers or
+arbitrary images. Full app, final packaging and hosted CI/review are pending.

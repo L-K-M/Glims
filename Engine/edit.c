@@ -12,6 +12,7 @@
 
 #include <math.h>
 #include <string.h>
+#include <cairo.h>
 
 #include "libgimpmath/gimpmath.h"
 
@@ -47,6 +48,8 @@
 #include "core/gimppickable-auto-shrink.h"
 #include "core/gimppattern.h"
 #include "core/gimpprojectable.h"
+#include "gegl/gimp-gegl-nodes.h"
+#include "gegl/gimptilehandlervalidate.h"
 
 #include "config/gimpcoreconfig.h"
 
@@ -1410,6 +1413,66 @@ preflight_transform_tree (GimpImage *image, GimpLayer *layer,
   return status;
 }
 
+typedef enum
+{
+  TRANSFORM_COMMIT,
+  TRANSFORM_VALIDATE,
+  TRANSFORM_PREVIEW
+} TransformPurpose;
+
+/* A private root raster layer can keep the upstream transform graph lazy.
+ * This is the same buffer-space matrix and sampler as
+ * gimp_drawable_transform_buffer_affine/gimp_gegl_apply_transform in
+ * GIMP_3_2_8. The tile handler owns the graph and its original buffer; only
+ * tiles demanded by the composite are materialized, at native precision.
+ * Masks, groups, ancestors and effects retain the ordinary native path until
+ * independently qualified. No original document ever receives this buffer. */
+static void
+preview_transform_raster (GimpLayer *layer, const GimpMatrix3 *matrix,
+                          GimpInterpolationType interpolation)
+{
+  GimpDrawable *drawable = GIMP_DRAWABLE (layer);
+  GeglBuffer *source = gimp_drawable_get_buffer (drawable);
+  const Babl *format = gegl_buffer_get_format (source);
+  GimpMatrix3 local;
+  gint x, y, left, top, right, bottom;
+  GeglNode *graph, *input, *transform, *output;
+  GeglBuffer *buffer;
+  GimpTileHandlerValidate *validate;
+
+  gimp_item_get_offset (GIMP_ITEM (layer), &x, &y);
+  gimp_transform_resize_boundary (matrix, GIMP_TRANSFORM_RESIZE_ADJUST,
+                                  x, y, x + gegl_buffer_get_width (source),
+                                  y + gegl_buffer_get_height (source),
+                                  &left, &top, &right, &bottom);
+  if (! gimp_matrix3_is_simple (matrix) && ! gimp_drawable_has_alpha (drawable))
+    format = gimp_drawable_get_format_with_alpha (drawable);
+
+  gimp_matrix3_identity (&local);
+  gimp_matrix3_translate (&local, x, y);
+  gimp_matrix3_mult (matrix, &local);
+  gimp_matrix3_translate (&local, -left, -top);
+  graph = gegl_node_new ();
+  input = gegl_node_new_child (graph, "operation", "gegl:buffer-source", "buffer", source, NULL);
+  transform = gegl_node_new_child (graph, "operation", "gegl:transform",
+                                   "near-z", GIMP_TRANSFORM_NEAR_Z, "sampler", interpolation, NULL);
+  gimp_gegl_node_set_matrix (transform, &local);
+  output = gegl_node_get_output_proxy (graph, "output");
+  gegl_node_link_many (input, transform, output, NULL);
+  buffer = gegl_buffer_new (GEGL_RECTANGLE (0, 0, right - left, bottom - top), format);
+  validate = GIMP_TILE_HANDLER_VALIDATE (gimp_tile_handler_validate_new (graph));
+  gimp_tile_handler_validate_assign (validate, buffer);
+  gimp_tile_handler_validate_invalidate (validate, gegl_buffer_get_extent (buffer));
+
+  gimp_item_start_transform (GIMP_ITEM (layer), FALSE);
+  gimp_drawable_set_buffer_full (drawable, FALSE, NULL, buffer,
+                                 GEGL_RECTANGLE (left, top, 0, 0), TRUE);
+  gimp_item_end_transform (GIMP_ITEM (layer), FALSE);
+  g_object_unref (validate);
+  g_object_unref (buffer);
+  g_object_unref (graph);
+}
+
 static GlimsStatus
 transform_layer_matrix (GlimsEngine       *engine,
                               GlimsImageID       id,
@@ -1417,6 +1480,7 @@ transform_layer_matrix (GlimsEngine       *engine,
                               const GlimsMatrix *matrix,
                               uint32_t           interpolation,
                               const GlimsRect   *expected_bounds,
+                              TransformPurpose   purpose,
                               char             **error)
 {
   GlimsStatus            status;
@@ -1490,6 +1554,15 @@ transform_layer_matrix (GlimsEngine       *engine,
   if (status != GLIMS_STATUS_OK) return status;
   status = preflight_transform_tree (image, layer, &transform, error);
   if (status != GLIMS_STATUS_OK) return status;
+  if (purpose == TRANSFORM_VALIDATE) return GLIMS_STATUS_OK;
+  if (purpose == TRANSFORM_PREVIEW && ! GIMP_IS_GROUP_LAYER (layer) &&
+      ! gimp_layer_get_parent (layer) && ! gimp_layer_get_mask (layer) &&
+      gimp_container_get_n_children (gimp_drawable_get_filters (GIMP_DRAWABLE (layer))) == 0)
+    {
+      preview_transform_raster (layer, &transform, type);
+      gimp_image_flush (image);
+      return GLIMS_STATUS_OK;
+    }
   /* Forward, grown to the result, as the unified transform tool commits
    * a layer (app/tools/gimptransformgridtool.c). gimp_item_transform opens
    * its own undo group. */
@@ -1504,7 +1577,7 @@ GlimsStatus
 glims_layer_transform_matrix (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
                               const GlimsMatrix *matrix, uint32_t interpolation, char **error)
 {
-  return transform_layer_matrix (engine, image, layer, matrix, interpolation, NULL, error);
+  return transform_layer_matrix (engine, image, layer, matrix, interpolation, NULL, TRANSFORM_COMMIT, error);
 }
 
 GlimsStatus
@@ -1515,7 +1588,57 @@ glims_layer_transform_matrix_captured (GlimsEngine *engine, GlimsImageID image, 
       request->expected_bounds.width < 1 || request->expected_bounds.height < 1)
     return GLIMS_STATUS_INVALID_ARGUMENT;
   return transform_layer_matrix (engine, image, layer, &request->matrix, request->interpolation,
-                                  &request->expected_bounds, error);
+                                  &request->expected_bounds, TRANSFORM_COMMIT, error);
+}
+
+GlimsStatus
+glims_image_transform_preview (GlimsEngine *engine, GlimsImageID id, GlimsItemID layer_id,
+                               const GlimsLayerTransformRequest *request,
+                               GlimsImageID *result, char **error)
+{
+  GlimsStatus status;
+  GlimsOpenImage *source = glims_lookup_image (engine, id);
+  GlimsImageID copy = 0;
+  GList *originals = NULL, *duplicates = NULL;
+  GlimsItemID target = 0;
+
+  if (result) *result = 0;
+  if (! result || ! request || request->struct_size < sizeof *request || layer_id <= 0 ||
+      request->expected_bounds.width < 1 || request->expected_bounds.height < 1)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (! source) return GLIMS_STATUS_NOT_FOUND;
+  status = glims_edit_ready (engine, source, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = transform_layer_matrix (engine, id, layer_id, &request->matrix, request->interpolation,
+                                   &request->expected_bounds, TRANSFORM_VALIDATE, error);
+  if (status != GLIMS_STATUS_OK) return status;
+
+  status = glims_image_duplicate (engine, id, &copy, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  originals = gimp_image_get_layer_list (source->image);
+  duplicates = gimp_image_get_layer_list (glims_lookup_image (engine, copy)->image);
+  GList *a = originals, *b = duplicates;
+  for (; a && b; a = a->next, b = b->next)
+    {
+      GimpItem *old = a->data, *new = b->data;
+      if (G_OBJECT_TYPE (old) != G_OBJECT_TYPE (new) ||
+          gimp_item_get_width (old) != gimp_item_get_width (new) ||
+          gimp_item_get_height (old) != gimp_item_get_height (new) ||
+          gimp_item_get_offset_x (old) != gimp_item_get_offset_x (new) ||
+          gimp_item_get_offset_y (old) != gimp_item_get_offset_y (new))
+        break;
+      if (gimp_item_get_id (old) == layer_id) target = gimp_item_get_id (new);
+    }
+  if (a || b || ! target)
+    status = glims_fail (error, NULL, "The preview copy does not match the source layer tree.");
+  else
+    status = transform_layer_matrix (engine, copy, target, &request->matrix, request->interpolation,
+                                     &request->expected_bounds, TRANSFORM_PREVIEW, error);
+  g_list_free (originals);
+  g_list_free (duplicates);
+  if (status == GLIMS_STATUS_OK) *result = copy;
+  else glims_release_image (engine, copy);
+  return status;
 }
 
 GlimsStatus
