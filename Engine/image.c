@@ -382,17 +382,17 @@ glims_image_open (GlimsEngine   *engine,
                                              G_FILE_QUERY_INFO_NONE, NULL, NULL);
 
   g_autoptr(GFileIOStream) spool = NULL;
-  gboolean gzip_source = FALSE;
-  if (!glims_foreign_gzip_spool (file, source_info, &spool, &gzip_source, &gerror))
+  gboolean compressed_source = FALSE;
+  if (!glims_foreign_compressed_spool (file, source_info, &spool, &compressed_source, &gerror))
     {
       g_clear_object (&source_info);
       g_object_unref (file);
       if (g_error_matches (gerror, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE))
         {
           g_clear_error (&gerror);
-          return glims_fail (error, NULL, "Gzip XCF exceeds the 4 GiB input or decoded limit.");
+          return glims_fail (error, NULL, "Compressed XCF exceeds the 4 GiB input or decoded limit.");
         }
-      return glims_fail (error, gerror, "The gzip XCF could not be staged.");
+      return glims_fail (error, gerror, "The compressed XCF could not be staged.");
     }
 
   /* Loading a non-XCF file runs a plug-in, which nests a main loop. */
@@ -430,7 +430,7 @@ glims_image_open (GlimsEngine   *engine,
   g_clear_error (&gerror);
 
   GlimsStatus restore_status = glims_foreign_effects_load (image, file, mime_type,
-                                                          source_info, spool, gzip_source, error);
+                                                          source_info, spool, compressed_source, error);
   if (spool)
     {
       GError *close_error = NULL;

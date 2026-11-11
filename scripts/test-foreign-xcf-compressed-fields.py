@@ -34,7 +34,8 @@ FIXTURE = REPO_ROOT / "Engine/tests/foreign-xcf-effect-fields-tests.c"
 DEFAULT_OUT = REPO_ROOT / ".build/foreign-xcf-compressed-fields-tests" / PINNED_REF
 BINARY_NAME = "foreign-xcf-compressed-fields-tests"
 # Fixture-only additions to the test link command; production links untouched.
-FIXTURE_LINK_FLAGS = ["-lbz2", "-llzma"]
+FIXTURE_LINK_FLAGS = [str((REPO_ROOT / "_deps/macports/lib" / name).resolve())
+                      for name in ("libbz2.dylib", "liblzma.dylib")]
 
 
 def fail(message: str) -> None:
