@@ -4246,6 +4246,33 @@ final class ImageDocument {
         }
     }
 
+    /// The preview gate is already reserved for this document and captured target.
+    /// Native Oilify validates and snapshots the supplied maps before attaching.
+    func beginOilifyPreview(properties: [EngineSession.FilterProperty], target: Int32,
+                            radiusSource: Int32?, exponentSource: Int32?,
+                            completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
+        guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !isSavingForClose, !isTransferringClipboard, !PlugInCommands.isRunning,
+              !EngineActivity.shared.isBusy, !targetCommandIsPending,
+              selectedLayerIDs == [target], activeDrawable == target else {
+            return completion(.failure(DocumentError.busy))
+        }
+        pendingWork += 1
+        inputQueue.async { [session, image] in
+            let result = Result<FilterPreviewStart, Error> {
+                try self.requirePaintTarget()
+                let filter = try session.beginOilify(image: image, drawable: target,
+                                                     radiusSource: radiusSource, exponentSource: exponentSource)
+                return try Self.previewStart(filter, operation: "gegl:oilify", properties: properties, session: session)
+            }
+            DispatchQueue.main.async {
+                defer { self.jobDidFinish(input: false) }
+                completion(result)
+            }
+        }
+    }
+
     /// Read initial settings on the worker; failed typed reads abort the new session.
     private nonisolated static func previewValues(_ filter: Int32, operation: String?,
                                                   properties: [EngineSession.FilterProperty],

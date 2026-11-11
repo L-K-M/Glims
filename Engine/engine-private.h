@@ -165,7 +165,8 @@ typedef struct
   GimpDrawableFilter *existing;
   gboolean            existing_active;
   GeglNode           *aux_source; /* owned detached snapshot node, new sessions only */
-  GeglNode           *aux_source2; /* owned second map, Displace sessions only */
+  GeglNode           *aux_source2; /* owned second map */
+  gboolean            owned_oilify; /* slot170 plain and mapped merges */
 } GlimsFilter;
 
 typedef GlimsStatus (*GlimsEngineFunc) (GlimsEngine *engine, gpointer data);
