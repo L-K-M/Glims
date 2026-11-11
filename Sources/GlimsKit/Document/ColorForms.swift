@@ -103,11 +103,17 @@ enum ColorForms {
     /// effective profile and whether it is embedded in the image or the
     /// engine's builtin fallback. Unknowns report as themselves rather
     /// than pretending a value.
-    static func informationRows(colorInfo: EngineSession.ColorInfo,
-                                precision: String) -> [(label: String, value: String)] {
+    /// User-facing precision comes from the owned color types, not the
+    /// engine's internal format nick (for example, `u8-non-linear`).
+    static func precisionLabel(_ colorInfo: EngineSession.ColorInfo) -> String {
+        guard colorInfo.component != .unknown, colorInfo.trc != .unknown else { return "Unknown" }
+        return "\(colorInfo.component.title) · \(colorInfo.trc.title)"
+    }
+
+    static func informationRows(colorInfo: EngineSession.ColorInfo) -> [(label: String, value: String)] {
         var rows = [
             (label: "Mode", value: colorInfo.mode.title),
-            (label: "Precision", value: precision.isEmpty ? "Unknown" : precision),
+            (label: "Precision", value: precisionLabel(colorInfo)),
             (label: "Color profile", value: colorInfo.profileLabel.isEmpty ? "None" : colorInfo.profileLabel),
         ]
         if !colorInfo.profileLabel.isEmpty {
@@ -122,7 +128,7 @@ enum ColorForms {
     /// cache the window title and Mode checkmarks show.
     static func presentInformation(for document: ImageDocument, on window: NSWindow) {
         guard window.attachedSheet == nil else { return }
-        let rows = informationRows(colorInfo: document.colorInfo, precision: document.info.precision)
+        let rows = informationRows(colorInfo: document.colorInfo)
         let grid = NSGridView(views: rows.map {
             [NSTextField(labelWithString: "\($0.label):"), NSTextField(labelWithString: $0.value)]
         })
