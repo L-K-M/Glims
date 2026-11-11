@@ -4046,3 +4046,18 @@ rows and all1,205 unit tests; independent source review finds no important
 issue. See [optional tablet axes](tablet-optional-axes.md) for the test-only
 window-local event correction, physical/coalescing limits and remaining
 all-four-engine, CI and final standalone-app gates.
+
+### Complete cold filter discovery (2026-11-11 candidate)
+
+A fresh engine can expand its catalog during enumeration. The reproduced
+131-to-183 growth previously left the first menu with a truncated response.
+The Swift reader now retries checked growth and refuses invalid or persistently
+changing counts. Complete lookup storage retains internal operations, while
+human menus omit untitled GIMP infrastructure and give unnamed external
+operations useful labels.
+
+The observed old first-response failure and three label assertions are fixed.
+Latest-Main integration `bf37550` passes16 fresh native-backed checks across
+four engines and all1,216 unit tests, with independent source review. See
+[catalog completeness](filter-catalog-completeness.md). Hosted CI and the
+standalone application remain final integration gates.

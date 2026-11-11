@@ -1066,14 +1066,54 @@ final class EngineSession: @unchecked Sendable {
 
     /// The catalog's filter operations, sorted by name.
     func filterOperations() throws -> [FilterOperation] {
+        try Self.readWholeFilterOperationRows { rows, capacity, count in
+            try check(api.filter_operations(engine, rows, capacity, &count), nil)
+        }.map { Self.filterOperation($0) }
+    }
+
+    /// The largest filter-operation catalog read accepted in one call.
+    private static let maxFilterOperationRows: Int32 = 10_000
+
+    /// How many fill attempts `readWholeFilterOperationRows` makes,
+    /// including the first, before reporting a catalog that keeps growing.
+    private static let filterOperationReadAttempts = 3
+
+    /// Reads the whole filter-operation catalog through `read`, which is
+    /// called with a row buffer and its capacity and reports the total
+    /// count. The probe (nil, 0) and every fill count are checked against
+    /// `0...maxFilterOperationRows` before anything is allocated, so a
+    /// negative or absurd count is refused instead of truncated or
+    /// allocated. Growth between the probe and the fill is retried a
+    /// bounded number of times; a shrinking or empty catalog is honored,
+    /// and `read`'s own errors propagate unchanged.
+    static func readWholeFilterOperationRows(
+        _ read: (UnsafeMutablePointer<GlimsOperationInfo>?, Int32, inout Int32) throws -> Void
+    ) throws -> [GlimsOperationInfo] {
         var count: Int32 = 0
-        try check(api.filter_operations(engine, nil, 0, &count), nil)
-        var rows = [GlimsOperationInfo](repeating: GlimsOperationInfo(), count: Int(count))
-        var filled: Int32 = 0
-        try rows.withUnsafeMutableBufferPointer { buffer in
-            try check(api.filter_operations(engine, buffer.baseAddress, count, &filled), nil)
+        try read(nil, 0, &count)
+        guard count >= 0, count <= Self.maxFilterOperationRows else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine reported an impossible number of filter operations.")
         }
-        return rows.prefix(Int(min(count, filled))).map(Self.filterOperation)
+        var capacity = count
+        for _ in 0..<Self.filterOperationReadAttempts {
+            var rows = [GlimsOperationInfo](repeating: GlimsOperationInfo(), count: Int(capacity))
+            var filled: Int32 = 0
+            try rows.withUnsafeMutableBufferPointer { buffer in
+                try read(buffer.baseAddress, capacity, &filled)
+            }
+            guard filled >= 0, filled <= Self.maxFilterOperationRows else {
+                throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                  message: "The engine reported an impossible number of filter operations.")
+            }
+            guard filled <= capacity else {
+                capacity = filled
+                continue
+            }
+            return Array(rows.prefix(Int(filled)))
+        }
+        throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                          message: "The filter operation catalog kept changing while it was being read.")
     }
 
     /// One operation's editable properties in declaration order.

@@ -125,6 +125,10 @@ struct NativeFilterMenuLayout: Equatable {
         // would be a second, generic version of it.
         var buckets: [String: [EngineSession.FilterOperation]] = [:]
         for operation in operations where operation.name != GaussianBlurPanel.operation {
+            // Untitled GIMP nodes are engine infrastructure (buffer sources,
+            // blend modes, profile transforms), not human filter commands.
+            // Keep them in the complete catalog for effect lookup.
+            guard !operation.name.hasPrefix("gimp:") || !operation.title.isEmpty else { continue }
             buckets[Self.submenuTitle(for: operation.categories) ?? "Other", default: []].append(operation)
         }
         let ordered = buckets.keys.sorted { $0 != "Other" && ($1 == "Other" || $0 < $1) }
@@ -168,12 +172,13 @@ struct NativeFilterMenuLayout: Equatable {
     /// The item's menu title: `Title…` when it opens a form, `Title
     /// (reason)` when it cannot run yet.
     static func itemTitle(_ operation: EngineSession.FilterOperation) -> String {
-        if usesBrightnessContrastEditor(operation) || usesColorBalanceEditor(operation) || usesHueSaturationEditor(operation) || usesLevelsEditor(operation) || usesCurvesEditor(operation) { return "\(operation.title)…" }
-        if usesSourceChooser(operation) { return "\(operation.title)…" }
+        let title = operation.title.isEmpty ? operation.name : operation.title
+        if usesBrightnessContrastEditor(operation) || usesColorBalanceEditor(operation) || usesHueSaturationEditor(operation) || usesLevelsEditor(operation) || usesCurvesEditor(operation) { return "\(title)…" }
+        if usesSourceChooser(operation) { return "\(title)…" }
         if let reason = unavailableReason(operation.support) {
-            return "\(operation.title) (\(reason))"
+            return "\(title) (\(reason))"
         }
-        return "\(operation.title)…"
+        return "\(title)…"
     }
 
     static func usesSourceChooser(_ operation: EngineSession.FilterOperation) -> Bool {
