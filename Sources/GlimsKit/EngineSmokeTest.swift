@@ -127,6 +127,49 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (recorder layer properties)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-install" {
+                try exerciseRecorderInstall(session, documents: documents)
+                print(failures == 0 ? "PASSED (recorder install)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-save" {
+                try exerciseRecorderSave(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (recorder save)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-active-save" {
+                try exerciseRecorderActiveSave(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (active recorder save)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-stroke-file" {
+                try exerciseRecorderStrokeFile(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Recorder stroke file)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-stroke-capture" {
+                try exerciseRecorderStrokeCapture(session, documents: documents)
+                print(failures == 0 ? "PASSED (Recorder stroke capture)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if let smokeCase = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"],
+               ["recorder-file-ui", "recorder-file-picker-ui", "recorder-open-picker-ui"].contains(smokeCase) {
+                try exerciseRecorderFileUI(session, work: work, documents: documents,
+                                           driveFilePickers: smokeCase != "recorder-file-ui",
+                                           openOnly: smokeCase == "recorder-open-picker-ui")
+                print(failures == 0 ? "PASSED (Recorder file UI)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-consent-ui" {
+                try exerciseRecorderConsentUI(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Recorder consent UI)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-quick-mask-color" {
+                try exerciseRecorderQuickMaskColor(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (recorder Quick Mask color)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents" {
                 try exerciseCloseAll(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (Close All)" : "FAILED: \(failures) failure(s)")
@@ -481,6 +524,11 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "displace-source" {
                 try exerciseDisplaceSource(session, documents: documents)
                 print(failures == 0 ? "PASSED (displace source)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "oilify-source" {
+                try exerciseOilifySource(session, documents: documents)
+                print(failures == 0 ? "PASSED (oilify source)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "variable-blur-source" {
@@ -6828,7 +6876,12 @@ enum EngineSmokeTest {
         let mainMenu = MainMenu.make()
         NSApp.mainMenu = mainMenu
         PlugInMenus.install(try session.procedures(), in: mainMenu)
-        NativeFilterMenus.install(operations, in: mainMenu)
+        // Keep a negative control even when every auxiliary operation
+        // offered by the running engine has an owned chooser.
+        let unhandled = EngineSession.FilterOperation(name: "fixture:unhandled-aux",
+            title: "Unhandled Auxiliary", categories: ["artistic"], blurb: "", support: .needsAuxInput)
+        NativeFilterMenus.install(operations + [unhandled], in: mainMenu)
+        defer { NativeFilterMenus.install(operations, in: mainMenu) }
         func submenu(_ path: [String]) -> NSMenu? {
             path.reduce(mainMenu as NSMenu?) { menu, title in menu?.item(withTitle: title)?.submenu }
         }
@@ -6847,9 +6900,9 @@ enum EngineSmokeTest {
               "Filter ▸ Blur keeps the dedicated command and gains the catalog's operations (\(blurItems))")
         check(nativeItem("gegl:gaussian-blur") == nil, "the catalog's own Gaussian Blur stays out")
         check(nativeItem("gegl:displace")?.title == "Displace…"
-                && nativeItem("gegl:oilify")?.title == "Oilify (needs a second layer as its source)"
+                && nativeItem(unhandled.name)?.title == "Unhandled Auxiliary (needs a second layer as its source)"
                 && nativeItem("gimp:curves")?.title == "Curves…",
-              "Displace offers its source chooser, Oilify remains gated and Curves exposes its dedicated form")
+              "Displace and Curves expose their forms while an unhandled auxiliary entry shows its reason")
         check(submenu(["Filter", "Render", "Pattern"])?.items.isEmpty == false,
               "the plug-in categories are intact after the native install")
 
@@ -6881,10 +6934,10 @@ enum EngineSmokeTest {
         if let item = nativeItem("gegl:median-blur") {
             check(controller.validateMenuItem(item), "a supported operation's menu item is enabled")
         } else { check(false, "Median Blur has a menu item") }
-        if let displaceItem = nativeItem("gegl:displace"), let oilifyItem = nativeItem("gegl:oilify") {
-            check(controller.validateMenuItem(displaceItem) && !controller.validateMenuItem(oilifyItem),
+        if let displaceItem = nativeItem("gegl:displace"), let unsupportedItem = nativeItem(unhandled.name) {
+            check(controller.validateMenuItem(displaceItem) && !controller.validateMenuItem(unsupportedItem),
                   "the admitted Displace chooser enables while an unhandled auxiliary operation stays disabled")
-        } else { check(false, "Displace and Oilify have menu items") }
+        } else { check(false, "Displace and the unhandled auxiliary control have menu items") }
 
         // The generic form on the same operation the dedicated panel
         // covers: number, bool and enum roundtrips through typed writes.

@@ -221,6 +221,7 @@ filter_begin_internal (GlimsEngine    *engine,
                     const char     *operation,
                     GeglNode       *aux_source,
                     GeglNode       *aux_source2,
+                    gboolean        owned_oilify,
                     GlimsFilterID  *out,
                     char          **error)
 {
@@ -230,7 +231,8 @@ filter_begin_internal (GlimsEngine    *engine,
   gboolean        non_destructive;
   gint            id;
   GlimsStatus     status;
-  gboolean        owns_busy = aux_source2 != NULL;
+  gboolean        owns_busy = aux_source2 != NULL || owned_oilify;
+  gboolean        merges_pixels = aux_source || aux_source2 || owned_oilify;
 
   if (out) *out = 0;
   if (! open)
@@ -264,13 +266,14 @@ filter_begin_internal (GlimsEngine    *engine,
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
 
-  /* Dual-input attachment may emit native image notifications. Refuse
-   * reentrant edits until the session is installed and owns both maps. */
+  /* Displace and owned Oilify attachment may emit native notifications.
+   * Refuse reentrant edits until the session is installed. */
   if (owns_busy) engine->busy++;
   session = g_new0 (GlimsFilter, 1);
   session->image           = g_object_ref (open->image);
   session->drawable        = g_object_ref (drawable);
   session->non_destructive = non_destructive;
+  session->owned_oilify    = owned_oilify;
   session->operation = gegl_node_new_child (NULL, "operation", operation, NULL);
   if (!session->operation) {
     status = glims_fail (error, NULL, "The filter operation could not be created.");
@@ -295,12 +298,13 @@ filter_begin_internal (GlimsEngine    *engine,
   }
   if (aux_source2) {
     if (!gegl_node_connect_to (aux_source2, "output", session->operation, "aux2")) {
-      status = glims_fail (error, NULL, "The captured vertical filter source could not be connected.");
+      status = glims_fail (error, NULL, owned_oilify ? "The Oilify exponent map could not be connected."
+                                                    : "The captured vertical filter source could not be connected.");
       goto failed;
     }
     session->aux_source2 = g_object_ref (aux_source2);
   }
-  if (aux_source || aux_source2) session->non_destructive = FALSE;
+  if (merges_pixels) session->non_destructive = FALSE;
   /* The undo step and the filter's name in the layer's filter list use the
    * operation's title ("Gaussian Blur"), as GIMP's filter tools do
    * (gimp_tool_get_undo_desc in app/tools). */
@@ -315,21 +319,42 @@ filter_begin_internal (GlimsEngine    *engine,
     status = glims_fail (error, NULL, "The filter preview could not be created.");
     goto failed;
   }
-  if (aux_source || aux_source2) g_object_set (session->filter, "to-be-merged", TRUE, NULL);
+  if (merges_pixels) g_object_set (session->filter, "to-be-merged", TRUE, NULL);
 
   /* A live preview sits on the drawable's stack but is not a committed
    * effect: mark it temporary, as the engine's tools do with their
    * editing filters — XCF skips temporary filters, and drawable_effects
    * counts only committed ones. Commit flips the flag back. */
   gimp_drawable_filter_set_temporary (session->filter, TRUE);
+  if (owned_oilify) {
+    /* Preview toggles the applicator bypass, separately from whether the
+     * native stack connects the filter's node. Keep both disabled here. */
+    gimp_drawable_filter_set_preview (session->filter, FALSE);
+    gimp_filter_set_active (GIMP_FILTER (session->filter), FALSE);
+  }
   gimp_drawable_filter_apply (session->filter, NULL);
-  gimp_drawable_filter_set_preview (session->filter, TRUE);
-  if (aux_source || aux_source2) {
+  if (!owned_oilify) gimp_drawable_filter_set_preview (session->filter, TRUE);
+  if (merges_pixels) {
     /* Native merged previews sit below existing committed effects. */
     GimpContainer *filters = gimp_drawable_get_filters (drawable);
     gint count = gimp_container_get_n_children (filters);
     if (gimp_container_have (filters, GIMP_OBJECT (session->filter)))
       gimp_container_reorder (filters, GIMP_OBJECT (session->filter), count - 1);
+    if (owned_oilify) {
+      if (count <= 0 || gimp_container_get_child_by_index (filters, count - 1) != GIMP_OBJECT (session->filter)) {
+        status = glims_fail (error, NULL, "The Oilify preview could not attach to the raw pixels.");
+        goto failed;
+      }
+      /* Freezing after attachment resyncs Core's first-filter input crop.
+       * Do it at the raw-input end before any Oilify preview is active. */
+      gimp_drawable_filter_layer_mask_freeze (session->filter);
+      if (!gimp_drawable_filter_get_mask (session->filter)) {
+        status = glims_fail (error, NULL, "The Oilify selection could not be frozen.");
+        goto failed;
+      }
+      gimp_drawable_filter_set_preview (session->filter, TRUE);
+      gimp_filter_set_active (GIMP_FILTER (session->filter), TRUE);
+    }
     gimp_drawable_update (drawable, 0, 0, -1, -1);
   }
   gimp_image_flush (open->image);
@@ -350,7 +375,7 @@ GlimsStatus
 glims_filter_begin (GlimsEngine *engine, GlimsImageID image, GlimsItemID drawable,
                     const char *operation, GlimsFilterID *out, char **error)
 {
-  return filter_begin_internal (engine, image, drawable, operation, NULL, NULL, out, error);
+  return filter_begin_internal (engine, image, drawable, operation, NULL, NULL, FALSE, out, error);
 }
 
 GlimsStatus
@@ -387,7 +412,7 @@ glims_filter_begin_with_source (GlimsEngine *engine, GlimsImageID image,
   if (status != GLIMS_STATUS_OK) return status;
   status = glims_filter_input_snapshot (engine, open, source, &snapshot, error);
   if (status != GLIMS_STATUS_OK) return status;
-  status = filter_begin_internal (engine, image, target, operation, snapshot, NULL, out, error);
+  status = filter_begin_internal (engine, image, target, operation, snapshot, NULL, FALSE, out, error);
   g_object_unref (snapshot);
   return status;
 }
@@ -430,9 +455,52 @@ glims_filter_begin_displace_with_sources (GlimsEngine *engine, GlimsImageID imag
                                              &x_snapshot, &y_snapshot, error);
   if (status != GLIMS_STATUS_OK) return status;
   status = filter_begin_internal (engine, image, target, "gegl:displace",
-                                   x_snapshot, y_snapshot, out, error);
+                                   x_snapshot, y_snapshot, FALSE, out, error);
   g_object_unref (x_snapshot);
   g_object_unref (y_snapshot);
+  return status;
+}
+
+GlimsStatus
+glims_filter_begin_oilify_with_sources (GlimsEngine *engine, GlimsImageID image,
+                                         GlimsItemID target, GlimsItemID radius_source,
+                                         GlimsItemID exponent_source, GlimsFilterID *out,
+                                         char **error)
+{
+  GlimsOpenImage *open;
+  GimpDrawable *drawable;
+  GeglNode *radius = NULL, *exponent = NULL;
+  GlimsStatus status;
+  if (out) *out = 0;
+  if (!out || target <= 0 || radius_source < 0 || exponent_source < 0)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  open = glims_lookup_image (engine, image);
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = source_merge_history_ready (open->image, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (gimp_image_get_floating_selection (open->image)) return GLIMS_STATUS_BUSY;
+  if (gimp_image_get_base_type (open->image) == GIMP_INDEXED) return GLIMS_STATUS_UNSUPPORTED;
+  drawable = glims_lookup_drawable (open, target);
+  if (!drawable) return GLIMS_STATUS_NOT_FOUND;
+  if (!GIMP_IS_LAYER (drawable) || GIMP_IS_GROUP_LAYER (drawable) ||
+      glims_layer_editable_source_kind (GIMP_LAYER (drawable))) {
+    if (error) *error = g_strdup ("Choose a pixel layer, or rasterize the target's editable content first.");
+    return GLIMS_STATUS_UNSUPPORTED;
+  }
+  status = glims_check_item_locks (GIMP_ITEM (drawable), GLIMS_LOCK_PIXELS, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (!glims_filter_operation_allowed ("gegl:oilify")) {
+    if (error) *error = g_strdup ("Oilify is not available in this image engine.");
+    return GLIMS_STATUS_UNSUPPORTED;
+  }
+  status = glims_filter_input_oilify_prepare (engine, open, drawable, radius_source, exponent_source,
+                                             &radius, &exponent, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = filter_begin_internal (engine, image, target, "gegl:oilify", radius, exponent, TRUE, out, error);
+  g_clear_object (&radius);
+  g_clear_object (&exponent);
   return status;
 }
 
@@ -873,7 +941,7 @@ glims_filter_commit (GlimsEngine    *engine,
   GlimsStatus status = glims_filter_check_edit (engine, id, error);
 
   if (status != GLIMS_STATUS_OK) return status;
-  if (session->aux_source || session->aux_source2 || uses_owned_config (session->operation)) {
+  if (session->aux_source || session->aux_source2 || session->owned_oilify || uses_owned_config (session->operation)) {
     status = source_merge_history_ready (session->image, error);
     if (status != GLIMS_STATUS_OK) return status;
   }

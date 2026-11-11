@@ -763,6 +763,11 @@ final class EngineSession: @unchecked Sendable {
 
     // MARK: Painting
 
+    struct StrokeCaptureFacts: Equatable {
+        let brush: ResourceIdentity
+        let fingerprint: String
+    }
+
     /// Starts a stroke on `drawable` — a layer or a layer mask's drawable
     /// id — and returns the stroke session `continueStroke`/`endStroke`
     /// take.
@@ -779,6 +784,49 @@ final class EngineSession: @unchecked Sendable {
             try check(api.stroke_begin(engine, image, drawable, &settings, &point, &stroke, &error), error)
         }
         return stroke
+    }
+
+    /// Captures the actual brush in the same engine call as first paint.
+    /// A supported live stroke can report no facts and still paint normally.
+    /// Guarded replay must match its recorded facts before any first paint.
+    func beginStrokeCapturing(image: Int32, drawable: Int32, brush: Brush, first: StrokePoint,
+                              expected: StrokeCaptureFacts? = nil) throws -> (stroke: Int32, facts: StrokeCaptureFacts?) {
+        guard let begin = api.stroke_begin_with_capture_facts else {
+            guard expected == nil else {
+                throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                                  message: "This engine cannot replay recorded strokes.")
+            }
+            return (try beginStroke(image: image, drawable: drawable, brush: brush, first: first), nil)
+        }
+        let identity = expected?.brush ?? brush.resource
+        let resource = try identity.map { try resolveResource($0, kind: .brush) } ?? 0
+        var settings = Self.nativeBrush(brush)
+        var point = Self.point(first)
+        var facts = GlimsStrokeCaptureFacts()
+        facts.struct_size = UInt32(MemoryLayout<GlimsStrokeCaptureFacts>.size)
+        var stroke: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        defer {
+            for pointer in [facts.brush_name, facts.brush_collection, facts.fingerprint].compactMap({ $0 }) {
+                api.free_string(pointer)
+            }
+        }
+        let status: GlimsStatus
+        if let expected {
+            status = expected.fingerprint.withCString {
+                begin(engine, image, drawable, resource, &settings, &point, $0, &stroke, &facts, &error)
+            }
+        } else {
+            status = begin(engine, image, drawable, resource, &settings, &point, nil, &stroke, &facts, &error)
+        }
+        try check(status, error)
+        guard stroke > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The stroke did not start.")
+        }
+        guard let name = facts.brush_name, let digest = facts.fingerprint else { return (stroke, nil) }
+        return (stroke, StrokeCaptureFacts(brush: .init(name: String(cString: name),
+            collection: facts.brush_collection.map { String(cString: $0) }, isInternal: facts.brush_internal),
+            fingerprint: String(cString: digest)))
     }
 
     func continueStroke(_ stroke: Int32, points: [StrokePoint]) throws {
@@ -805,7 +853,7 @@ final class EngineSession: @unchecked Sendable {
     /// Apply merges into target pixels; the auxiliary graph is not an XCF effect.
     func beginFilter(image: Int32, drawable: Int32, operation: String, source: Int32) throws -> Int32 {
         guard drawable > 0, source > 0, let sourceOperation = SourceFilterOperation(rawValue: operation),
-              sourceOperation != .displace else {
+              sourceOperation != .displace, sourceOperation != .oilify else {
             throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
                               message: "Choose a pixel layer and a valid source for this filter.")
         }
@@ -834,6 +882,29 @@ final class EngineSession: @unchecked Sendable {
         try check(status, error)
         guard filter > 0 else {
             throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Displace preview did not start.")
+        }
+        return filter
+    }
+
+    /// The native entry point is present; the operation catalog describes availability.
+    var supportsOilifySources: Bool { api.filter_begin_oilify_with_sources != nil }
+
+    /// A missing role leaves its input pad disconnected. Both roles can use the same layer.
+    func beginOilify(image: Int32, drawable: Int32, radiusSource: Int32?, exponentSource: Int32?) throws -> Int32 {
+        guard drawable > 0, (radiusSource.map { $0 > 0 } ?? true), (exponentSource.map { $0 > 0 } ?? true) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a pixel layer and valid Oilify maps.")
+        }
+        guard let begin = api.filter_begin_oilify_with_sources else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support owned Oilify previews.")
+        }
+        var filter: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        let status = begin(engine, image, drawable, radiusSource ?? 0, exponentSource ?? 0, &filter, &error)
+        try check(status, error)
+        guard filter > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Oilify preview did not start.")
         }
         return filter
     }
@@ -2949,11 +3020,25 @@ final class EngineSession: @unchecked Sendable {
         try check(api.image_scale(engine, image, Int32(width), Int32(height), &error), error)
     }
 
-    func resizeCanvas(_ image: Int32, width: Int, height: Int, offset: CGPoint, fill: NSColor) throws {
-        var color = try Self.color(fill)
+    /// Resolves the caller's color once, at execution, and returns the exact
+    /// owned value used by the native call for semantic recording.
+    @discardableResult
+    func resizeCanvas(_ image: Int32, width: Int, height: Int, offset: CGPoint, fill: NSColor) throws -> RecorderColor {
+        let captured = try Self.recorderColor(fill)
+        try resizeCanvas(image, width: width, height: height, offset: offset, fill: captured)
+        return captured
+    }
+
+    func resizeCanvas(_ image: Int32, width: Int, height: Int, offset: CGPoint, fill: RecorderColor) throws {
+        var color = GlimsColor(red: fill.red, green: fill.green, blue: fill.blue, alpha: fill.alpha)
         var error: UnsafeMutablePointer<CChar>?
         try check(api.image_resize_canvas(engine, image, Int32(width), Int32(height),
                                           Int32(offset.x), Int32(offset.y), &color, &error), error)
+    }
+
+    static func recorderColor(_ color: NSColor) throws -> RecorderColor {
+        let value = try Self.color(color)
+        return try RecorderColor(red: value.red, green: value.green, blue: value.blue, alpha: value.alpha)
     }
 
     private static func color(_ color: NSColor) throws -> GlimsColor {

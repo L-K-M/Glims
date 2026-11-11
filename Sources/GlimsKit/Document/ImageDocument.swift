@@ -33,15 +33,29 @@ final class ImageDocument {
     /// The document owns its frontend command log; engine handles remain outside it.
     private(set) var recorder = RecorderLog<SemanticImageCommand>()
     private var recorderTargetContexts: [Int: RecorderContext] = [:]
+    private(set) var recorderDescriptions = RecorderDescriptionCatalog()
+    private(set) var recorderBindingDescriptions: [Int: RecorderBindingDescription] = [:]
+    private var recorderSymbols: [RecorderRuntimeTarget: UUID] = [:]
+    private(set) var recorderLoadedFile: RecorderFileValue?
+    private(set) var recorderFileMetadata: RecorderFileMetadata
+    private var recorderRevision = UUID()
+    private var recorderSavedRevision: UUID?
+    private static let recorderFileQueue = DispatchQueue(label: "ch.lkmc.Glims.recorder.file", qos: .userInitiated)
     private var recorderReplayGeneration = UUID()
     private var recorderReplayWaitingGeneration: UUID?
 
-    private struct RecorderTargetContext: Equatable {
+    private struct RecorderTargetContext {
         let layers: [Int32]
         let channels: [Int32]
         let target: PaintTarget
         let masks: [Int32: EngineSession.MaskState]
         let quickMask: EngineSession.QuickMaskState
+
+        func matches(_ expected: Self) -> Bool {
+            layers == expected.layers && channels == expected.channels
+                && target == expected.target && masks == expected.masks
+                && RecorderQuickMaskColor.matches(quickMask, expected.quickMask)
+        }
     }
 
     private enum RecorderContext {
@@ -52,8 +66,93 @@ final class ImageDocument {
 
     private struct RecorderCapture {
         let reservation: RecorderLog<SemanticImageCommand>.Reservation
-        let command: SemanticImageCommand
         let context: RecorderContext?
+        let symbols: [RecorderRuntimeTarget: UUID]
+    }
+
+    /// Native identities are confined to this document's runtime packets.
+    private enum RecorderRuntimeTarget: Hashable {
+        case layer(Int32)
+        case channel(Int32)
+    }
+
+    struct RecorderInstallCheckpoint: Equatable {
+        fileprivate let owner: UUID
+        fileprivate let revision: UUID
+    }
+
+    enum RecorderInstallChoice: Hashable {
+        case layer(Int32)
+        case channel(Int32)
+        case quickMask(Int32)
+    }
+
+    enum RecorderSaveOutcome: Equatable {
+        case savedCurrentRevision
+        case savedEarlierRevision
+    }
+
+    enum RecorderInstallError: LocalizedError, Equatable {
+        case wrongDocument, staleRecording, unsettled, changedImage, incompleteChoices, duplicateTarget
+        case unavailableTarget(String)
+        case missingMask(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .wrongDocument: return "This Recorder action was confirmed for a different image."
+            case .staleRecording: return "The current recording changed. Choose the Recorder action again."
+            case .unsettled: return "Stop recording or replay and wait for accepted commands to finish."
+            case .changedImage: return "The image changed while checking the recording targets. Confirm the targets again."
+            case .incompleteChoices: return "Choose one target for each required recording symbol."
+            case .duplicateTarget: return "Choose a distinct target for each recording symbol."
+            case .unavailableTarget(let name): return "Choose a current target with the recorded role for “\(name)” in this image."
+            case .missingMask(let name): return "Choose a layer with a mask for “\(name)”."
+            }
+        }
+    }
+
+    private struct RecorderInstallation {
+        let log: RecorderLog<SemanticImageCommand>
+        let file: RecorderFileValue
+        let contexts: [Int: RecorderContext]
+        let descriptions: RecorderDescriptionCatalog
+        let bindings: [Int: RecorderBindingDescription]
+        let symbols: [RecorderRuntimeTarget: UUID]
+    }
+
+    private struct ConfirmedRecorderCapture {
+        let context: RecorderContext?
+        let binding: RecorderBindingDescription
+        let descriptions: [UUID: RecorderDescriptionObservation]
+    }
+
+    /// Lives only on inputQueue. AppKit and the semantic log never own
+    /// the native stroke ID or a mutable partial gesture.
+    private struct StrokeRecordingDraft {
+        let capture: RecorderCapture
+        let confirmed: ConfirmedRecorderCapture
+        let settings: RecorderStrokeCommand.Settings?
+        var trace: RecorderStrokeAccumulator?
+        var facts: EngineSession.StrokeCaptureFacts?
+        var failure: Error?
+
+        mutating func refuse(_ error: Error) {
+            guard failure == nil else { return }
+            failure = error
+            trace = nil
+        }
+
+        mutating func finish(interleaved: Bool) -> Result<SemanticImageCommand, Error> {
+            if let failure { return .failure(failure) }
+            if interleaved {
+                return .failure(RecorderReplayError(message: "Another edit was accepted before the stroke ended."))
+            }
+            guard let settings, let facts, let result = trace?.finish() else {
+                return .failure(RecorderReplayError(message: "This stroke's brush, paint settings or target cannot be recorded."))
+            }
+            return result.map { SemanticImageCommand.completeStroke(.init(settings: settings, trace: $0, facts: facts)) }
+                .mapError { error -> Error in RecorderReplayError(message: error.localizedDescription) }
+        }
     }
 
     private struct RecorderReplayError: LocalizedError, CustomStringConvertible {
@@ -318,7 +417,9 @@ final class ImageDocument {
 
     /// Touched only on `inputQueue`.
     private nonisolated(unsafe) var currentStroke: Int32?
+    private nonisolated(unsafe) var strokeRecordingDraft: StrokeRecordingDraft?
     private(set) var strokeIsActive = false
+    private var strokeRecordingInterleaved = false
 
     /// Which plug-in commands can run on the selected layers, by name;
     /// nil until asked for after a change.
@@ -331,7 +432,10 @@ final class ImageDocument {
         self.image = image
         self.name = name
         self.fileState = DocumentFileState(openedFrom: source)
-        self.info = try session.info(image)
+        let initialInfo = try session.info(image)
+        self.info = initialInfo
+        self.recorderFileMetadata = RecorderFileMetadata(origin: .init(imageLabel: name,
+            initialWidth: initialInfo.width, initialHeight: initialInfo.height))
         self.colorInfo = try session.colorInfo(image)
         try reload()
         refreshSelection()
@@ -941,6 +1045,7 @@ final class ImageDocument {
     // MARK: Painting
 
     func beginStroke(at point: EngineSession.StrokePoint, brush: EngineSession.Brush = EngineSession.Brush()) {
+        guard !strokeIsActive else { return }
         guard !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
         guard !refuseSingleLayerCommand("Paint") else { return }
         guard !refuseMultiChannelCommand("Paint") else { return }
@@ -957,34 +1062,94 @@ final class ImageDocument {
             return
         }
         guard let target = paintTarget, !refuseStructuredPaint(on: target) else { return }
+        // Admission callbacks above are synchronous and can themselves
+        // accept a stroke or close/change the captured target.
+        guard !strokeIsActive, !isClosing, !targetCommandIsPending,
+              activeDrawable == drawable, paintTarget == target else { return }
+        let capture: RecorderCapture?
+        do {
+            if recorder.isRecording {
+                let context: RecorderContext
+                if case .layer(let layer) = target, layer == drawable {
+                    context = .layer(layer)
+                } else {
+                    context = .unavailable("Only an ordinary pixel layer can be recorded as a stroke target.")
+                }
+                capture = try reserveRecording(context: context)
+            } else { capture = nil }
+        } catch {
+            onError?("Recorder could not accept this stroke: \(error.localizedDescription)")
+            return
+        }
         strokeIsActive = true
-        enqueue(on: inputQueue, input: true) { [session, image] in
+        strokeRecordingInterleaved = false
+        enqueue(on: inputQueue, input: true, strokePart: true) { [session, image] in
+            if let capture {
+                let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+                let first = try? RecorderStrokeTrace.Point(point)
+                self.strokeRecordingDraft = .init(capture: capture, confirmed: confirmed,
+                    settings: .init(brush), trace: first.map(RecorderStrokeAccumulator.init(first:)))
+            }
             do {
                 try self.requirePaintTarget()
                 try self.requireRasterizedPaintTarget(target)
-                self.currentStroke = try session.beginStroke(image: image, drawable: drawable, brush: brush, first: point)
+                if let draft = self.strokeRecordingDraft, case .layer = draft.confirmed.binding,
+                   draft.settings != nil, draft.trace != nil {
+                    let result = try session.beginStrokeCapturing(image: image, drawable: drawable, brush: brush, first: point)
+                    self.currentStroke = result.stroke
+                    self.strokeRecordingDraft?.facts = result.facts
+                } else {
+                    self.currentStroke = try session.beginStroke(image: image, drawable: drawable, brush: brush, first: point)
+                }
             } catch {
                 self.currentStroke = nil
+                self.strokeRecordingDraft?.refuse(error)
                 self.report(error)
             }
         }
+        // A notification can close the owning document reentrantly. The
+        // accepted begin must already be counted before that can queue End.
+        if capture != nil { notifyRecorderChanged() }
     }
 
     func continueStroke(_ points: [EngineSession.StrokePoint]) {
         guard strokeIsActive else { return }
-        enqueue(on: inputQueue, input: true) { [session] in
+        enqueue(on: inputQueue, input: true, strokePart: true) { [session] in
             guard let stroke = self.currentStroke else { return }
-            do { try session.continueStroke(stroke, points: points) } catch { self.report(error) }
+            do { try session.continueStroke(stroke, points: points) }
+            catch {
+                self.strokeRecordingDraft?.refuse(error)
+                self.report(error)
+                return
+            }
+            if self.strokeRecordingDraft?.facts != nil, self.strokeRecordingDraft?.trace != nil {
+                do { self.strokeRecordingDraft?.trace?.appendAccepted(try points.map(RecorderStrokeTrace.Point.init)) }
+                catch { self.strokeRecordingDraft?.refuse(RecorderReplayError(message: error.localizedDescription)) }
+            }
         }
     }
 
     func endStroke() {
         guard strokeIsActive else { return }
+        let interleaved = strokeRecordingInterleaved
+        strokeRecordingInterleaved = false
         strokeIsActive = false
-        enqueue(on: inputQueue, input: true) { [session] in
-            guard let stroke = self.currentStroke else { return }
+        enqueue(on: inputQueue, input: true, strokePart: true) { [session] in
+            let stroke = self.currentStroke
             self.currentStroke = nil
-            do { try session.endStroke(stroke) } catch { self.report(error) }
+            var draft = self.strokeRecordingDraft
+            self.strokeRecordingDraft = nil
+            if let stroke {
+                do { try session.endStroke(stroke) }
+                catch {
+                    draft?.refuse(error)
+                    self.report(error)
+                }
+            }
+            if var draft {
+                let result = draft.finish(interleaved: interleaved)
+                self.settleRecording(draft.capture, result: result, confirmed: draft.confirmed)
+            }
         }
     }
 
@@ -2455,11 +2620,11 @@ final class ImageDocument {
                 completion(result.value ?? .failure(DocumentError.busy))
             }
         }) { [session, image] in
-            let context = Self.confirmRecordingContext(capture?.context, session: session, image: image)
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
             let answer = Result { try session.changeLayer(layer, image: image, change) }
             result.value = answer
             if case .failure(let error) = answer { self.report(error) }
-            self.settleRecording(capture, result: answer, context: context)
+            self.settleRecording(capture, result: answer.map { semantic }, confirmed: confirmed)
         }
         // Queue/count first: Recorder observers may immediately request close.
         if capture != nil { notifyRecorderChanged() }
@@ -2894,8 +3059,10 @@ final class ImageDocument {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
         let capturedFill = (fill.copy() as? NSColor) ?? fill
-        let command = SemanticImageCommand.resizeCanvas(width: width, height: height, offset: offset, fill: capturedFill)
-        run(semantic: command, command.apply)
+        runDeferredImageCommand { session, image in
+            let value = try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: capturedFill)
+            return .resizeCanvas(width: width, height: height, offset: offset, fill: value)
+        }
     }
 
     func crop(to rect: CGRect) {
@@ -4246,6 +4413,33 @@ final class ImageDocument {
         }
     }
 
+    /// The preview gate is already reserved for this document and captured target.
+    /// Native Oilify validates and snapshots the supplied maps before attaching.
+    func beginOilifyPreview(properties: [EngineSession.FilterProperty], target: Int32,
+                            radiusSource: Int32?, exponentSource: Int32?,
+                            completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
+        guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !isSavingForClose, !isTransferringClipboard, !PlugInCommands.isRunning,
+              !EngineActivity.shared.isBusy, !targetCommandIsPending,
+              selectedLayerIDs == [target], activeDrawable == target else {
+            return completion(.failure(DocumentError.busy))
+        }
+        pendingWork += 1
+        inputQueue.async { [session, image] in
+            let result = Result<FilterPreviewStart, Error> {
+                try self.requirePaintTarget()
+                let filter = try session.beginOilify(image: image, drawable: target,
+                                                     radiusSource: radiusSource, exponentSource: exponentSource)
+                return try Self.previewStart(filter, operation: "gegl:oilify", properties: properties, session: session)
+            }
+            DispatchQueue.main.async {
+                defer { self.jobDidFinish(input: false) }
+                completion(result)
+            }
+        }
+    }
+
     /// Read initial settings on the worker; failed typed reads abort the new session.
     private nonisolated static func previewValues(_ filter: Int32, operation: String?,
                                                   properties: [EngineSession.FilterProperty],
@@ -4727,8 +4921,9 @@ final class ImageDocument {
 
     func startRecording() throws {
         guard !isClosing else { throw DocumentError.closed }
+        guard !strokeIsActive else { throw RecorderReplayError(message: "Finish the current stroke before starting Recorder.") }
         try recorder.startRecording()
-        recorderTargetContexts.removeAll()
+        resetRecorderSidecars()
         notifyRecorderChanged()
     }
 
@@ -4744,9 +4939,280 @@ final class ImageDocument {
             return false
         }
         recorder.clear()
-        recorderTargetContexts.removeAll()
+        resetRecorderSidecars()
         notifyRecorderChanged()
         return true
+    }
+
+    private func resetRecorderSidecars() {
+        recorderTargetContexts.removeAll()
+        recorderSymbols.removeAll()
+        recorderDescriptions = RecorderDescriptionCatalog()
+        recorderBindingDescriptions.removeAll()
+        recorderLoadedFile = nil
+        recorderFileMetadata = RecorderFileMetadata(origin: .init(imageLabel: name,
+            initialWidth: info.width, initialHeight: info.height))
+        recorderRevision = UUID()
+        recorderSavedRevision = nil
+    }
+
+    var hasUnsavedRecordingChanges: Bool {
+        recorderFileMetadata.hasUnsavedChanges(in: recorder, revision: recorderRevision, savedRevision: recorderSavedRevision)
+    }
+
+    func renameRecording(_ name: String) throws {
+        guard !isClosing else { throw DocumentError.closed }
+        if try recorderFileMetadata.rename(name) {
+            recorderRevision = UUID()
+            notifyRecorderChanged()
+        }
+    }
+
+    /// Identifies the current content even when accepted commands are still settling.
+    func recorderContentCheckpoint() -> RecorderInstallCheckpoint {
+        RecorderInstallCheckpoint(owner: recoveryID, revision: recorderRevision)
+    }
+
+    /// Identifies the owning document and current settled, stopped recording.
+    func recorderInstallCheckpoint() throws -> RecorderInstallCheckpoint {
+        try requireRecorderReadiness(holding: 0)
+        return recorderContentCheckpoint()
+    }
+
+    /// Close or revert consent can opt in to a settled, still-active recording.
+    func recorderSaveCheckpoint(allowActiveRecording: Bool = false) throws -> RecorderInstallCheckpoint {
+        try requireRecorderReadiness(holding: 0, allowActiveRecording: allowActiveRecording)
+        return recorderContentCheckpoint()
+    }
+
+    /// Read and validate the complete file away from MainActor. Preparing a
+    /// file never chooses targets or changes this document's current log.
+    func prepareRecordingFile(at url: URL, checkpoint: RecorderInstallCheckpoint,
+                              completion: @escaping @MainActor (Result<RecorderFileSemanticBridge.PreparedRecording, Error>) -> Void) {
+        do { try requireRecorderReadiness(checkpoint, holding: 0) }
+        catch { return completion(.failure(error)) }
+        pendingWork += 1
+        Self.recorderFileQueue.async {
+            let prepared = Result { try RecorderFileSemanticBridge.prepare(RecorderFileStore.load(from: url)) }
+            DispatchQueue.main.async {
+                defer { self.jobDidFinish(input: false) }
+                completion(Result {
+                    try self.requireRecorderReadiness(checkpoint, holding: 1)
+                    return try prepared.get()
+                })
+            }
+        }
+    }
+
+    /// Save the admitted revision to the chosen URL. The file name and the
+    /// recording's intrinsic name are independent. An accepted write can
+    /// finish after an edit or close request, with its result reported once
+    /// while the work count still holds the document.
+    func saveRecording(to url: URL, checkpoint: RecorderInstallCheckpoint,
+                       allowActiveRecording: Bool = false,
+                       completion: @escaping @MainActor (Result<RecorderSaveOutcome, Error>) -> Void) {
+        do { try requireRecorderReadiness(checkpoint, holding: 0, allowActiveRecording: allowActiveRecording) }
+        catch { return completion(.failure(error)) }
+
+        let metadata = recorderFileMetadata
+        let log = recorder
+        let descriptions = recorderDescriptions
+        let bindings = recorderBindingDescriptions
+        let loaded = recorderLoadedFile
+        pendingWork += 1
+        Self.recorderFileQueue.async {
+            let written = Result {
+                let file: RecorderFileValue
+                if let loaded { file = metadata.namedCopy(of: loaded) }
+                else {
+                    // Use a detached stopped log with its own epoch. The live
+                    // recording keeps accepting commands while the file writes.
+                    let stopped = log.isRecording ? try RecorderLog(settledRecords: log.records) : log
+                    file = try RecorderFileCodec.snapshot(stopped, recordingID: metadata.recordingID, name: metadata.name,
+                                                          origin: metadata.origin, descriptions: descriptions, bindings: bindings)
+                }
+                try RecorderFileStore.save(file, to: url)
+            }
+            DispatchQueue.main.async {
+                defer { self.jobDidFinish(input: false) }
+                switch written {
+                case .failure(let error): completion(.failure(error))
+                case .success:
+                    if self.recorderRevision == checkpoint.revision {
+                        self.recorderSavedRevision = checkpoint.revision
+                        self.notifyRecorderChanged()
+                    }
+                    // An observer may have edited the recording reentrantly.
+                    let outcome: RecorderSaveOutcome = self.recorderRevision == checkpoint.revision
+                        ? .savedCurrentRevision : .savedEarlierRevision
+                    completion(.success(outcome))
+                }
+            }
+        }
+    }
+
+    /// Verify bindings against this image on its input queue. The MainActor
+    /// completion runs once while the accepted read still holds its work count.
+    /// The ordinary drain runs after completion, including any requested close.
+    func installRecording(_ prepared: RecorderFileSemanticBridge.PreparedRecording,
+                          checkpoint: RecorderInstallCheckpoint,
+                          choices: [UUID: RecorderInstallChoice],
+                          completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        do { try requireRecorderReadiness(checkpoint, holding: 0) }
+        catch { return completion(.failure(error)) }
+        let version = stateVersion
+        pendingWork += 1
+        inputQueue.async { [session, image] in
+            let checked = Result { try Self.bindRecording(prepared, choices: choices, session: session, image: image) }
+            DispatchQueue.main.async {
+                // Keep the count through notifications and completion, even
+                // if either callback asks to close the document reentrantly.
+                defer { self.jobDidFinish(input: false) }
+                let committed = Result<Void, Error> {
+                    try self.requireRecorderReadiness(checkpoint, holding: 1)
+                    guard self.stateVersion == version else { throw RecorderInstallError.changedImage }
+                    let installation = try checked.get()
+                    self.recorder = installation.log
+                    self.recorderTargetContexts = installation.contexts
+                    self.recorderDescriptions = installation.descriptions
+                    self.recorderBindingDescriptions = installation.bindings
+                    self.recorderSymbols = installation.symbols
+                    self.recorderLoadedFile = installation.file
+                    self.recorderFileMetadata = RecorderFileMetadata(file: installation.file)
+                    self.recorderRevision = UUID()
+                    self.recorderSavedRevision = self.recorderRevision
+                    self.recorderReplayGeneration = UUID()
+                    self.recorderReplayWaitingGeneration = nil
+                }
+                if case .success = committed { self.notifyRecorderChanged() }
+                completion(committed)
+            }
+        }
+    }
+
+    private func requireRecorderReadiness(_ checkpoint: RecorderInstallCheckpoint? = nil,
+                                          holding workCount: Int, allowActiveRecording: Bool = false) throws {
+        guard !isClosing else { throw DocumentError.closed }
+        if let checkpoint {
+            guard checkpoint.owner == recoveryID else { throw RecorderInstallError.wrongDocument }
+            guard checkpoint.revision == recorderRevision else { throw RecorderInstallError.staleRecording }
+        }
+        guard (allowActiveRecording || !recorder.isRecording), !recorder.isReplaying, recorder.pendingCount == 0 else {
+            throw RecorderInstallError.unsettled
+        }
+        guard acceptsImageReads, !strokeIsActive, !endingPendingEdits,
+              pendingWork == workCount, !recorderTargetWorkPending else { throw DocumentError.busy }
+    }
+
+    private nonisolated static func bindRecording(_ prepared: RecorderFileSemanticBridge.PreparedRecording,
+                                                  choices: [UUID: RecorderInstallChoice],
+                                                  session: EngineSession, image: Int32) throws -> RecorderInstallation {
+        let file = prepared.file
+        var required: Set<UUID> = []
+        for row in file.records {
+            if case .success(_, let binding) = row.outcome {
+                required.formUnion(try RecorderFileCodec.referencedSymbols(binding))
+            }
+        }
+        guard Set(choices.keys) == required else { throw RecorderInstallError.incompleteChoices }
+        _ = try session.info(image)
+
+        let needsLayers = choices.values.contains { if case .layer = $0 { return true }; return false }
+        let needsChannels = choices.values.contains { if case .channel = $0 { return true }; return false }
+        let needsQuickMask = choices.values.contains { if case .quickMask = $0 { return true }; return false }
+        let layerIDs = needsLayers ? Set(try session.layers(image).map(\.id)) : []
+        let channelIDs = needsChannels ? Set(try session.channels(image).filter { !$0.isQuickMask }.map(\.id)) : []
+        let liveQuickMask = needsQuickMask ? try session.quickMask(image) : nil
+
+        var targets: [UUID: RecorderRuntimeTarget] = [:]
+        var symbols: [RecorderRuntimeTarget: UUID] = [:]
+        var observations: [UUID: RecorderDescriptionObservation] = [:]
+        var names: [UUID: String] = [:]
+        for symbol in file.symbols {
+            observations[symbol.id] = .available(symbol.description)
+            names[symbol.id] = symbol.description.name
+            guard let choice = choices[symbol.id] else { continue }
+            let unavailable = RecorderInstallError.unavailableTarget(symbol.description.name)
+            let target: RecorderRuntimeTarget
+            switch symbol.description.kind {
+            case .pixel, .group, .text, .link, .vector:
+                guard case .layer(let id) = choice, id > 0, layerIDs.contains(id) else { throw unavailable }
+                target = .layer(id)
+            case .channel:
+                guard case .channel(let id) = choice, id > 0, channelIDs.contains(id) else { throw unavailable }
+                target = .channel(id)
+            case .quickMask:
+                guard case .quickMask(let id) = choice, id > 0,
+                      liveQuickMask?.enabled == true, liveQuickMask?.channel == id else { throw unavailable }
+                target = .channel(id)
+            }
+            guard symbols[target] == nil else { throw RecorderInstallError.duplicateTarget }
+            targets[symbol.id] = target
+            symbols[target] = symbol.id
+        }
+
+        func layer(_ symbol: UUID) throws -> Int32 {
+            guard case .layer(let id)? = targets[symbol] else { throw RecorderInstallError.incompleteChoices }
+            return id
+        }
+        func channel(_ symbol: UUID) throws -> Int32 {
+            guard case .channel(let id)? = targets[symbol] else { throw RecorderInstallError.incompleteChoices }
+            return id
+        }
+
+        var bindings: [Int: RecorderBindingDescription] = [:]
+        var contexts: [Int: RecorderContext] = [:]
+        var liveMasks: [Int32: Int32] = [:]
+        for row in file.records {
+            guard case .success(_, let binding) = row.outcome else { continue }
+            bindings[row.ordinal] = binding
+            switch binding {
+            case .none: break
+            case .unavailable(let reason): throw RecorderFileError.invalid(reason)
+            case .layer(let symbol): contexts[row.ordinal] = .layer(try layer(symbol))
+            case .context(let saved):
+                var masks: [Int32: EngineSession.MaskState] = [:]
+                for mask in saved.masks {
+                    let owner = try layer(mask.owner)
+                    var id: Int32 = 0
+                    if mask.isPresent {
+                        if let known = liveMasks[owner] { id = known }
+                        else {
+                            id = try session.layerMask(owner, image: image).mask
+                            guard id > 0 else { throw RecorderInstallError.missingMask(names[mask.owner] ?? "recorded layer") }
+                            liveMasks[owner] = id
+                        }
+                    }
+                    masks[owner] = .init(mask: id, enabled: mask.enabled, editing: mask.editing, showing: mask.showing)
+                }
+                let target: PaintTarget
+                switch saved.target {
+                case .layer(let symbol): target = .layer(try layer(symbol))
+                case .channel(let symbol), .quickMask(let symbol): target = .channel(try channel(symbol))
+                case .mask(let symbol):
+                    let owner = try layer(symbol)
+                    guard let mask = masks[owner], mask.mask > 0 else {
+                        throw RecorderInstallError.missingMask(names[symbol] ?? "recorded layer")
+                    }
+                    target = .mask(layer: owner, drawable: mask.mask)
+                }
+                // Keep the recorded flags and order as replay expectations.
+                // Only the explicitly bound runtime handles come from A.
+                let color = saved.quickMask.color
+                let quickMask = EngineSession.QuickMaskState(enabled: saved.quickMask.enabled,
+                    channel: try saved.quickMask.symbol.map(channel) ?? 0, inverted: saved.quickMask.inverted,
+                    color: NSColor(srgbRed: CGFloat(color.red), green: CGFloat(color.green),
+                                   blue: CGFloat(color.blue), alpha: CGFloat(color.alpha)))
+                contexts[row.ordinal] = .target(.init(layers: try saved.layers.map(layer),
+                    channels: try saved.channels.map(channel), target: target, masks: masks, quickMask: quickMask))
+            }
+        }
+        var descriptions = RecorderDescriptionCatalog()
+        descriptions.acceptFirst(observations)
+        // A prepared candidate can be reused. Each install needs its own epoch.
+        let log = try RecorderLog(settledRecords: prepared.log.records)
+        return RecorderInstallation(log: log, file: file, contexts: contexts,
+                                    descriptions: descriptions, bindings: bindings, symbols: symbols)
     }
 
     /// Replay uses this document's current native image only. Each step keeps
@@ -4781,13 +5247,16 @@ final class ImageDocument {
         }
         if strokeIsActive { return "Finish the current stroke before replaying." }
         if endingPendingEdits { return "Finish pending field edits before replaying." }
-        if pendingWork != 0 || pendingTargetPick != nil || pendingLayerSelection != nil
-            || pendingChannelSelection != nil || pendingPathSelection != nil
-            || !pendingTargetCommands.isEmpty || quickMaskIntent != nil
-            || !componentIntents.isEmpty || !channelVisibilityIntents.isEmpty {
+        if pendingWork != 0 || recorderTargetWorkPending {
             return "Wait for accepted image and target changes to finish before replaying."
         }
         return nil
+    }
+
+    private var recorderTargetWorkPending: Bool {
+        pendingTargetPick != nil || pendingLayerSelection != nil || pendingChannelSelection != nil
+            || pendingPathSelection != nil || !pendingTargetCommands.isEmpty || quickMaskIntent != nil
+            || !componentIntents.isEmpty || !channelVisibilityIntents.isEmpty
     }
 
     private func continueRecorderReplay(generation: UUID) {
@@ -4841,6 +5310,17 @@ final class ImageDocument {
                 }
                 if let context { try Self.requireRecorderContext(context, session: session, image: image) }
                 if case .layer(let layer)? = context {
+                    if case .completeStroke = step.command {
+                        try self.requireRasterizedPaintTarget(.layer(layer))
+                        let selectedLayers = try session.selectedLayers(image)
+                        let editingMask = try selectedLayers.contains {
+                            try session.layerMask($0, image: image).editing
+                        }
+                        guard try !session.quickMask(image).enabled,
+                              try session.selectedItems(.channel, image: image).isEmpty, !editingMask else {
+                            throw RecorderReplayError(message: "Finish editing the channel or layer mask before replaying this stroke.")
+                        }
+                    }
                     try step.command.apply(session: session, image: image, layer: layer)
                 } else {
                     try step.command.apply(session: session, image: image)
@@ -4875,7 +5355,7 @@ final class ImageDocument {
         switch command {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
-        case .layerProperties: return true
+        case .layerProperties, .completeStroke: return true
         default: return false
         }
     }
@@ -4912,7 +5392,7 @@ final class ImageDocument {
     }
 
     private nonisolated static func recorderContextsMatch(_ first: RecorderContext, _ second: RecorderContext) -> Bool {
-        if case .target(let a) = first, case .target(let b) = second { return a == b }
+        if case .target(let actual) = first, case .target(let expected) = second { return actual.matches(expected) }
         return false
     }
 
@@ -4940,18 +5420,40 @@ final class ImageDocument {
                 target = .mask(layer: layer, drawable: mask.mask)
             } else { target = .layer(layer) }
         } else { target = nil }
-        guard layers == expected.layers, channels == expected.channels, masks == expected.masks,
-              quickMask == expected.quickMask, target == expected.target else {
+        guard let target, RecorderTargetContext(layers: layers, channels: channels, target: target,
+                                                 masks: masks, quickMask: quickMask).matches(expected) else {
             throw RecorderReplayError(message: "The native layer, channel, mask or Quick Mask target differs from the recording.")
         }
     }
 
     private func reserveRecording(_ command: SemanticImageCommand?, explicitLayer: Int32? = nil) throws -> RecorderCapture? {
         guard let command, recorder.isRecording else { return nil }
+        return try reserveRecording(context: captureRecorderContext(for: command, explicitLayer: explicitLayer))
+    }
+
+    private func reserveRecording(context: RecorderContext?) throws -> RecorderCapture {
         let reservation = try recorder.reserve()
-        let context = captureRecorderContext(for: command, explicitLayer: explicitLayer)
+        recorderRevision = UUID()
         if let context { recorderTargetContexts[reservation.ordinal] = context }
-        return RecorderCapture(reservation: reservation, command: command, context: context)
+        var targets: [RecorderRuntimeTarget] = []
+        switch context {
+        case .layer(let layer)?: targets = [.layer(layer)]
+        case .target(let target)?:
+            targets = target.layers.map { .layer($0) } + target.channels.map { .channel($0) }
+            switch target.target {
+            case .layer(let layer), .mask(let layer, _): targets.append(.layer(layer))
+            case .channel(let channel): targets.append(.channel(channel))
+            }
+            if target.quickMask.enabled { targets.append(.channel(target.quickMask.channel)) }
+        case .unavailable?, nil: break
+        }
+        var symbols: [RecorderRuntimeTarget: UUID] = [:]
+        for target in targets {
+            let symbol = recorderSymbols[target] ?? UUID()
+            recorderSymbols[target] = symbol
+            symbols[target] = symbol
+        }
+        return RecorderCapture(reservation: reservation, context: context, symbols: symbols)
     }
 
     private nonisolated static func confirmRecordingContext(_ context: RecorderContext?,
@@ -4965,16 +5467,149 @@ final class ImageDocument {
         }
     }
 
-    private nonisolated func settleRecording(_ capture: RecorderCapture?, result: Result<Void, Error>, context: RecorderContext?) {
+    private nonisolated static func confirmRecordingCapture(_ capture: RecorderCapture?, session: EngineSession,
+                                                            image: Int32) -> ConfirmedRecorderCapture {
+        guard let capture else { return ConfirmedRecorderCapture(context: nil, binding: .none, descriptions: [:]) }
+        let context = confirmRecordingContext(capture.context, session: session, image: image)
+        var observations: [UUID: RecorderDescriptionObservation] = [:]
+        do {
+            if case .unavailable(let reason)? = context { throw RecorderReplayError(message: reason) }
+            guard let context else { return ConfirmedRecorderCapture(context: nil, binding: .none, descriptions: [:]) }
+            let layers: [EngineSession.Layer]
+            if capture.symbols.keys.contains(where: { if case .layer = $0 { return true }; return false }) {
+                layers = try session.layers(image)
+            } else { layers = [] }
+            let needsChannels = capture.symbols.keys.contains { if case .channel = $0 { return true }; return false }
+            let channels: [EngineSession.Channel]
+            let info: EngineSession.ImageInfo?
+            if needsChannels {
+                channels = try session.channels(image)
+                info = try session.info(image)
+            } else { channels = []; info = nil }
+            for (target, symbol) in capture.symbols {
+                let description: RecorderTargetDescription
+                switch target {
+                case .layer(let id): description = try describeRecordedLayer(id, in: layers)
+                case .channel(let id):
+                    let quickMask: Bool
+                    if case .target(let expected) = context {
+                        quickMask = expected.quickMask.enabled && expected.quickMask.channel == id
+                    } else { quickMask = false }
+                    guard let info else { throw RecorderReplayError(message: "The recorded channel dimensions were unavailable.") }
+                    let row = channels.first { $0.id == id }
+                    guard quickMask || row != nil else { throw RecorderReplayError(message: "The recorded channel description was unavailable.") }
+                    description = RecorderTargetDescription(name: row?.name ?? "Quick Mask", kind: quickMask ? .quickMask : .channel,
+                        ancestors: [], siblingIndex: quickMask ? 0 : channels.firstIndex(where: { $0.id == id })!,
+                        bounds: .init(x: 0, y: 0, width: Double(info.width), height: Double(info.height)))
+                }
+                observations[symbol] = .available(description)
+            }
+            let binding = try describeRecordedBinding(context, symbols: capture.symbols)
+            return ConfirmedRecorderCapture(context: context, binding: binding, descriptions: observations)
+        } catch {
+            let reason = "The original target description could not be captured: \(error)"
+            for symbol in capture.symbols.values where observations[symbol] == nil {
+                observations[symbol] = .unavailable(reason)
+            }
+            return ConfirmedRecorderCapture(context: context, binding: .unavailable(reason), descriptions: observations)
+        }
+    }
+
+    private nonisolated static func recordedKind(_ kind: EngineSession.LayerKind) -> RecorderTargetDescription.Kind {
+        switch kind {
+        case .pixel: return .pixel
+        case .group: return .group
+        case .text: return .text
+        case .link: return .link
+        case .vector: return .vector
+        }
+    }
+
+    private nonisolated static func describeRecordedLayer(_ id: Int32, in layers: [EngineSession.Layer]) throws -> RecorderTargetDescription {
+        guard let row = layers.first(where: { $0.id == id }) else {
+            throw RecorderReplayError(message: "The original layer description was unavailable.")
+        }
+        func index(_ row: EngineSession.Layer) -> Int {
+            layers.filter { $0.parent == row.parent }.firstIndex { $0.id == row.id }!
+        }
+        var ancestors: [RecorderTargetDescription.Ancestor] = []
+        var parent = row.parent, seen: Set<Int32> = [row.id]
+        while parent != 0 {
+            guard seen.insert(parent).inserted, let ancestor = layers.first(where: { $0.id == parent }) else {
+                throw RecorderReplayError(message: "The original layer ancestry was unavailable.")
+            }
+            ancestors.append(.init(name: ancestor.name, kind: recordedKind(ancestor.kind), siblingIndex: index(ancestor)))
+            parent = ancestor.parent
+        }
+        return RecorderTargetDescription(name: row.name, kind: recordedKind(row.kind), ancestors: Array(ancestors.reversed()),
+            siblingIndex: index(row), bounds: .init(x: Double(row.bounds.origin.x), y: Double(row.bounds.origin.y),
+                                                   width: Double(row.bounds.width), height: Double(row.bounds.height)))
+    }
+
+    private nonisolated static func describeRecordedBinding(_ context: RecorderContext,
+                                                            symbols: [RecorderRuntimeTarget: UUID]) throws -> RecorderBindingDescription {
+        func symbol(_ target: RecorderRuntimeTarget) throws -> UUID {
+            guard let value = symbols[target] else { throw RecorderReplayError(message: "The captured target symbol was unavailable.") }
+            return value
+        }
+        switch context {
+        case .unavailable(let reason): return .unavailable(reason)
+        case .layer(let layer): return .layer(try symbol(.layer(layer)))
+        case .target(let expected):
+            let target: RecorderBindingDescription.Target
+            switch expected.target {
+            case .layer(let layer): target = .layer(try symbol(.layer(layer)))
+            case .mask(let layer, _): target = .mask(owner: try symbol(.layer(layer)))
+            case .channel(let channel):
+                let value = try symbol(.channel(channel))
+                target = expected.quickMask.enabled && expected.quickMask.channel == channel ? .quickMask(value) : .channel(value)
+            }
+            let masks = try expected.layers.map { layer -> RecorderBindingDescription.Mask in
+                guard let mask = expected.masks[layer] else { throw RecorderReplayError(message: "The captured mask role was unavailable.") }
+                return .init(owner: try symbol(.layer(layer)), isPresent: mask.mask != 0,
+                             enabled: mask.enabled, editing: mask.editing, showing: mask.showing)
+            }
+            let quickMaskSymbol: UUID?
+            if expected.quickMask.enabled { quickMaskSymbol = try symbol(.channel(expected.quickMask.channel)) }
+            else { quickMaskSymbol = nil }
+            let quickMask = RecorderBindingDescription.QuickMask(enabled: expected.quickMask.enabled,
+                symbol: quickMaskSymbol,
+                inverted: expected.quickMask.inverted, color: try RecorderQuickMaskColor.canonical(expected.quickMask))
+            return .context(.init(layers: try expected.layers.map { try symbol(.layer($0)) },
+                channels: try expected.channels.map { try symbol(.channel($0)) }, target: target, masks: masks, quickMask: quickMask))
+        }
+    }
+
+    private nonisolated func settleRecording(_ capture: RecorderCapture?, result: Result<SemanticImageCommand, Error>,
+                                             confirmed: ConfirmedRecorderCapture) {
         guard let capture else { return }
         let resolution: RecorderLog<SemanticImageCommand>.Resolution
         switch result {
-        case .success: resolution = .success(capture.command)
+        case .success(let command): resolution = .success(command)
         case .failure(let error): resolution = .failure(String(describing: error))
         }
         DispatchQueue.main.async {
-            self.resolveRecording(capture.reservation, with: resolution, context: context)
+            self.resolveRecording(capture.reservation, with: resolution, confirmed: confirmed)
         }
+    }
+
+    /// Canvas resize alone supplies its final immutable command after the
+    /// worker resolves and uses the caller's copied color exactly once.
+    private func runDeferredImageCommand(_ work: @escaping (EngineSession, Int32) throws -> SemanticImageCommand) {
+        guard !isClosing, !refuseWhileEditingUnavailable() else { return }
+        let capture: RecorderCapture?
+        do {
+            if recorder.isRecording { capture = try reserveRecording(context: nil) }
+            else { capture = nil }
+        }
+        catch { assertionFailure("A recording log refused an admitted canvas resize: \(error)"); return }
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+            let result = Result { try work(session, image) }
+            if case .failure(let error) = result { self.report(error) }
+            self.settleRecording(capture, result: result, confirmed: confirmed)
+        }
+        if capture != nil { notifyRecorderChanged() }
     }
 
     @discardableResult
@@ -4991,10 +5626,10 @@ final class ImageDocument {
             return false
         }
         enqueue(on: inputQueue, input: effect == .changesImage) { [session, image] in
-            let context = Self.confirmRecordingContext(capture?.context, session: session, image: image)
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
             let result = Result { try work(session, image) }
             if case .failure(let error) = result { self.report(error) }
-            self.settleRecording(capture, result: result, context: context)
+            if let semantic { self.settleRecording(capture, result: result.map { semantic }, confirmed: confirmed) }
         }
         // Notify only after queue admission/counting: a listener may close the
         // document or start a fresh epoch, and accepted work must still drain.
@@ -5004,12 +5639,15 @@ final class ImageDocument {
 
     private func resolveRecording(_ reservation: RecorderLog<SemanticImageCommand>.Reservation,
                                   with resolution: RecorderLog<SemanticImageCommand>.Resolution,
-                                  context: RecorderContext?) {
+                                  confirmed: ConfirmedRecorderCapture) {
         do {
             try recorder.resolve(reservation, with: resolution)
             // Resolve verifies the epoch first; stale callbacks must never
             // replace a newer recording's binding at the same ordinal.
-            if let context { recorderTargetContexts[reservation.ordinal] = context }
+            if let context = confirmed.context { recorderTargetContexts[reservation.ordinal] = context }
+            recorderDescriptions.acceptFirst(confirmed.descriptions)
+            recorderBindingDescriptions[reservation.ordinal] = confirmed.binding
+            recorderRevision = UUID()
             notifyRecorderChanged()
         } catch RecorderLog<SemanticImageCommand>.Refusal.staleReservation {
             // Clear/start deliberately invalidate older callbacks.
@@ -5023,10 +5661,11 @@ final class ImageDocument {
     /// and count as unsaved changes while they wait or run. `teardown`
     /// jobs (filter aborts) are cleanup: they queue and count even while
     /// closing, so the drain never destroys an image out from under them.
-    private func enqueue(on queue: DispatchQueue, input: Bool = false, teardown: Bool = false,
+    private func enqueue(on queue: DispatchQueue, input: Bool = false, teardown: Bool = false, strokePart: Bool = false,
                          afterFinish: (@MainActor () -> Void)? = nil,
                          _ work: @escaping () -> Void) {
         guard teardown || !isClosing else { return }
+        if strokeIsActive && input && !strokePart { strokeRecordingInterleaved = true }
         pendingWork += 1
         if input { pendingInput += 1 }
         EngineActivity.shared.whenIdle {
@@ -5058,6 +5697,7 @@ final class ImageDocument {
         let accepted = EngineActivity.shared.perform(label: label, work: work) {
             self.jobDidFinish(input: false)
         }
+        if accepted && strokeIsActive && effect != .readsPixels { strokeRecordingInterleaved = true }
         if !accepted {
             jobDidFinish(input: false)
             rejected()
