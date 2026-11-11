@@ -1047,6 +1047,10 @@ final class ImageDocument {
             return
         }
         guard let target = paintTarget, !refuseStructuredPaint(on: target) else { return }
+        // Admission callbacks above are synchronous and can themselves
+        // accept a stroke or close/change the captured target.
+        guard !strokeIsActive, !isClosing, !targetCommandIsPending,
+              activeDrawable == drawable, paintTarget == target else { return }
         let capture: RecorderCapture?
         do {
             if recorder.isRecording {
@@ -5107,9 +5111,12 @@ final class ImageDocument {
                 if case .layer(let layer)? = context {
                     if case .completeStroke = step.command {
                         try self.requireRasterizedPaintTarget(.layer(layer))
+                        let selectedLayers = try session.selectedLayers(image)
+                        let editingMask = try selectedLayers.contains {
+                            try session.layerMask($0, image: image).editing
+                        }
                         guard try !session.quickMask(image).enabled,
-                              session.selectedItems(.channel, image: image).isEmpty,
-                              !session.layerMask(layer, image: image).editing else {
+                              session.selectedItems(.channel, image: image).isEmpty, !editingMask else {
                             throw RecorderReplayError(message: "Finish editing the channel or layer mask before replaying this stroke.")
                         }
                     }

@@ -240,6 +240,59 @@ extension EngineSmokeTest {
         expect(try pixels(actual.image) != beforeUnsupported && recordedRefusal &&
                doc.recorder.records.count == 1 && doc.recorder.replayRefusal != nil,
                "an unsupported stroke paints normally and produces a visible nonreplayable row")
+
+        try doc.startRecording()
+        var reentered = false
+        doc.onUserCommand = {
+            guard !reentered else { return }
+            reentered = true
+            var refused = brush
+            refused.size = 0 // Native refusal exercises admission without two simultaneous paint cores.
+            doc.beginStroke(at: later, brush: refused)
+        }
+        doc.beginStroke(at: first, brush: brush)
+        doc.onUserCommand = nil
+        expect(reentered && doc.recorder.pendingCount == 1,
+               "a reentrant admission callback accepts only its inner stroke reservation")
+        doc.endStroke()
+        try doc.stopRecording()
+        try drain()
+        var oneRefusedRow = false
+        if doc.recorder.records.count == 1, case .failure = doc.recorder.records[0].resolution { oneRefusedRow = true }
+        expect(oneRefusedRow && doc.recorder.pendingCount == 0,
+               "the inner native refusal settles once without stranding an outer stroke")
+
+        try doc.startRecording()
+        var maskProbeBrush = brush
+        maskProbeBrush.blue = 0.9
+        doc.beginStroke(at: later, brush: maskProbeBrush)
+        doc.continueStroke(laterBatch)
+        doc.endStroke()
+        try doc.stopRecording()
+        try drain()
+        guard let other = try session.layers(actual.image).first(where: { $0.id != actual.layer && $0.kind == .pixel }) else {
+            throw NSError(domain: "RecorderStrokeCapture", code: 4)
+        }
+        try session.selectLayer(other.id, image: actual.image)
+        _ = try session.addLayerMask(other.id, image: actual.image, source: .white, edit: true)
+        try doc.reload()
+        let beforeMaskReplay = try pixels(actual.image)
+        let beforeMaskUndo = try session.undoInfo(actual.image)
+        try doc.startReplay()
+        try require(wait { !doc.recorder.isReplaying && doc.pendingWork == 0 }, "mask-target refusal did not settle")
+        var maskRefused = false
+        if case .failed(index: 0, reason: _) = doc.replayStatus { maskRefused = true }
+        expect(try maskRefused && pixels(actual.image) == beforeMaskReplay &&
+               session.undoInfo(actual.image) == beforeMaskUndo,
+               "editing another selected layer's mask refuses before painting the recorded layer")
+        try session.setLayerMask(other.id, image: actual.image, flags: .editing, values: [])
+        try doc.reload()
+        try doc.startReplay()
+        try require(wait { !doc.recorder.isReplaying && doc.pendingWork == 0 }, "ordinary explicit layer replay did not settle")
+        expect(try doc.replayStatus == .finished(total: 1) &&
+               session.selectedLayers(actual.image) == [other.id] &&
+               pixels(actual.image).merged != beforeMaskReplay.merged,
+               "a different ordinary selected layer does not replace the explicit stroke binding")
         complete = true
     }
 }
