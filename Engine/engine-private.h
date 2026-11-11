@@ -265,6 +265,12 @@ GlimsStatus glims_stroke_begin_with_capture_facts (GlimsEngine *e, GlimsImageID 
                                                    GlimsStrokeCaptureFacts *facts, char **error);
 GlimsStatus glims_stroke_continue  (GlimsEngine *e, GlimsStrokeID id,
                                     const GlimsStrokePoint *points, size_t count);
+GlimsStatus glims_stroke_begin_v2  (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
+                                    GlimsResourceID brush, const GlimsBrushSettings *settings,
+                                    const GlimsStrokePacketV2 *packet,
+                                    GlimsStrokeID *out, char **error);
+GlimsStatus glims_stroke_continue_v2 (GlimsEngine *e, GlimsStrokeID id,
+                                      const GlimsStrokePacketV2 *packet, char **error);
 GlimsStatus glims_stroke_end       (GlimsEngine *e, GlimsStrokeID id);
 void        glims_strokes_free     (gpointer stroke);
 

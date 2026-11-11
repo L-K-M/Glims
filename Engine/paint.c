@@ -56,6 +56,8 @@ static const gchar *const paint_infos[] =
   [GLIMS_PAINT_HEAL]       = "gimp-heal",
 };
 
+typedef enum { GLIMS_STROKE_INPUT_V1, GLIMS_STROKE_INPUT_V2 } GlimsStrokeInputVersion;
+
 typedef struct
 {
   GimpImage        *image;
@@ -63,6 +65,8 @@ typedef struct
   GList            *drawables;
   GimpPaintCore    *core;
   GimpPaintOptions *options;
+  GlimsStrokeInputVersion input_version;
+  guint32          last_time_ms; /* V2 only, after an entire accepted packet */
 } GlimsStroke;
 
 /* The paint info (core and options type) behind a Glims paint tool, or
@@ -111,6 +115,91 @@ to_coords (const GlimsStrokePoint *point)
   coords.xtilt    = CLAMP (point->xtilt, GIMP_COORDS_MIN_TILT, GIMP_COORDS_MAX_TILT);
   coords.ytilt    = CLAMP (point->ytilt, GIMP_COORDS_MIN_TILT, GIMP_COORDS_MAX_TILT);
 
+  return coords;
+}
+
+/* Runs on the engine worker. Caller memory may have an arbitrary alignment
+ * and stride; only the known prefixes are read into aligned owned storage.
+ * No Core call or stroke-state write occurs until this whole copy validates. */
+static GlimsStatus
+read_stroke_packet_v2 (const GlimsStrokePacketV2  *input,
+                       gboolean                    beginning,
+                       guint32                     previous_time,
+                       GlimsStrokeSampleV2       **samples_out,
+                       gsize                      *count_out,
+                       char                      **error)
+{
+  enum { MAX_SAMPLES = 4096, MAX_BYTES = 1024 * 1024 };
+  GlimsStrokePacketV2 packet;
+  guint32 prefix_size;
+  *samples_out = NULL;
+  *count_out = 0;
+  if (!input) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&prefix_size, input, sizeof prefix_size);
+  if (prefix_size < sizeof packet) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&packet, input, sizeof packet);
+  if (packet.sample_stride < sizeof (GlimsStrokeSampleV2) || packet.count > MAX_SAMPLES ||
+      packet.count > G_MAXSIZE / packet.sample_stride ||
+      packet.byte_count != packet.count * packet.sample_stride || packet.byte_count > MAX_BYTES ||
+      (beginning && packet.count != 1))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (!packet.count)
+    return packet.samples ? GLIMS_STATUS_INVALID_ARGUMENT : GLIMS_STATUS_OK;
+  if (!packet.samples || (uintptr_t) packet.samples > UINTPTR_MAX - packet.byte_count)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  GlimsStrokeSampleV2 *samples = g_try_new (GlimsStrokeSampleV2, packet.count);
+  if (!samples) return glims_fail (error, NULL, "The stroke samples could not be copied.");
+  const guint8 *bytes = packet.samples;
+  const guint32 known_flags = GLIMS_STROKE_SAMPLE_HAS_ROTATION |
+                              GLIMS_STROKE_SAMPLE_HAS_TANGENTIAL_PRESSURE;
+  gboolean have_previous = !beginning;
+  for (gsize i = 0; i < packet.count; i++)
+    {
+      GlimsStrokeSampleV2 *sample = &samples[i];
+      memcpy (&prefix_size, bytes + i * packet.sample_stride, sizeof prefix_size);
+      if (prefix_size < sizeof *sample || prefix_size > packet.sample_stride)
+        {
+          g_free (samples);
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        }
+      memcpy (sample, bytes + i * packet.sample_stride, sizeof *sample);
+      if ((sample->flags & ~known_flags) || sample->reserved ||
+          !isfinite (sample->x) || fabs (sample->x) > 524288 ||
+          !isfinite (sample->y) || fabs (sample->y) > 524288 ||
+          !isfinite (sample->pressure) || sample->pressure < 0 || sample->pressure > 1 ||
+          !isfinite (sample->xtilt) || fabs (sample->xtilt) > 1 ||
+          !isfinite (sample->ytilt) || fabs (sample->ytilt) > 1 ||
+          !isfinite (sample->rotation_turns) || sample->rotation_turns < 0 || sample->rotation_turns >= 1 ||
+          !isfinite (sample->tangential_pressure) || fabs (sample->tangential_pressure) > 1 ||
+          (!(sample->flags & GLIMS_STROKE_SAMPLE_HAS_ROTATION) && sample->rotation_turns != 0) ||
+          (!(sample->flags & GLIMS_STROKE_SAMPLE_HAS_TANGENTIAL_PRESSURE) && sample->tangential_pressure != 0) ||
+          (have_previous && (guint32) (sample->time_ms - previous_time) > 0x7fffffffu))
+        {
+          g_free (samples);
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        }
+      previous_time = sample->time_ms;
+      have_previous = TRUE;
+    }
+  *samples_out = samples;
+  *count_out = packet.count;
+  return GLIMS_STATUS_OK;
+}
+
+static GimpCoords
+to_coords_v2 (const GlimsStrokeSampleV2 *sample)
+{
+  GimpCoords coords = GIMP_COORDS_DEFAULT_VALUES;
+  coords.x = sample->x;
+  coords.y = sample->y;
+  coords.pressure = sample->pressure;
+  coords.xtilt = sample->xtilt;
+  coords.ytilt = sample->ytilt;
+  if (sample->flags & GLIMS_STROKE_SAMPLE_HAS_ROTATION)
+    coords.rotation = sample->rotation_turns;
+  if (sample->flags & GLIMS_STROKE_SAMPLE_HAS_TANGENTIAL_PRESSURE)
+    coords.wheel = (sample->tangential_pressure + 1) / 2;
   return coords;
 }
 
@@ -323,7 +412,8 @@ capture_stroke_facts (GlimsEngine               *engine,
   GimpContext *context = GIMP_CONTEXT (options);
   GimpLayerMode paint_mode = gimp_context_get_paint_mode (context);
   GimpSymmetry *symmetry = gimp_image_get_active_symmetry (image);
-  if ((brush->tool != GLIMS_PAINT_PENCIL && brush->tool != GLIMS_PAINT_ERASER) ||
+  if ((brush->tool != GLIMS_PAINT_PAINTBRUSH &&
+       brush->tool != GLIMS_PAINT_PENCIL && brush->tool != GLIMS_PAINT_ERASER) ||
       !recordable_first_point (first) ||
       G_OBJECT_TYPE (drawable) != GIMP_TYPE_LAYER ||
       !gimp_drawable_is_rgb (drawable) || !gimp_drawable_has_alpha (drawable) ||
@@ -391,6 +481,15 @@ capture_stroke_facts (GlimsEngine               *engine,
       g_checksum_update (hash, (const guchar *) dynamics_domain, sizeof dynamics_domain);
       g_checksum_update (hash, (const guchar *) dynamics, strlen (dynamics) + 1);
     }
+  /* Keep existing Pencil/Eraser digests unchanged. The added tool must
+   * remain distinct even when its effective options match Pencil. */
+  if (brush->tool == GLIMS_PAINT_PAINTBRUSH)
+    {
+      static const gchar paintbrush_domain[] = "glims-stroke-paintbrush-v1";
+      const guint8 tool = GLIMS_PAINT_PAINTBRUSH;
+      g_checksum_update (hash, (const guchar *) paintbrush_domain, sizeof paintbrush_domain);
+      g_checksum_update (hash, &tool, sizeof tool);
+    }
   facts->fingerprint = g_strdup (g_checksum_get_string (hash));
 
   /* Context already owns the values it inherited. Define them locally
@@ -410,6 +509,7 @@ stroke_begin_common (GlimsEngine              *engine,
                      const GlimsBrushSettings *brush,
                      GimpBrush                *brush_resource,
                      const GlimsStrokePoint   *first,
+                     const GimpCoords         *first_coords_v2,
                      GlimsStrokeID            *out,
                      const char               *expected_fingerprint,
                      GlimsStrokeCaptureFacts  *facts,
@@ -469,6 +569,8 @@ stroke_begin_common (GlimsEngine              *engine,
   stroke->drawable  = g_object_ref (drawable);
   stroke->options   = glims_make_paint_options (engine->gimp, info, brush, brush_resource);
   stroke->core      = g_object_new (info->paint_type, "undo-desc", info->blurb, NULL);
+  stroke->input_version = first_coords_v2 ? GLIMS_STROKE_INPUT_V2 : GLIMS_STROKE_INPUT_V1;
+  stroke->last_time_ms = first->time_ms;
   glims_set_tool_options (stroke->options, brush, source);
 
   GlimsStrokeCaptureFacts captured = { .struct_size = sizeof captured };
@@ -484,7 +586,7 @@ stroke_begin_common (GlimsEngine              *engine,
   if (GIMP_IS_AIRBRUSH (stroke->core))
     g_signal_connect (stroke->core, "stamp", G_CALLBACK (airbrush_stamp), stroke);
 
-  coords = to_coords (first);
+  coords = first_coords_v2 ? *first_coords_v2 : to_coords (first);
   stroke->drawables = g_list_prepend (NULL, drawable);
 
   if (! gimp_paint_core_start (stroke->core, stroke->drawables, stroke->options, &coords, &gerror))
@@ -526,7 +628,7 @@ glims_stroke_begin (GlimsEngine              *engine,
                     GlimsStrokeID            *out,
                     char                    **error)
 {
-  return stroke_begin_common (engine, image_id, layer_id, brush, NULL, first, out, NULL, NULL, error);
+  return stroke_begin_common (engine, image_id, layer_id, brush, NULL, first, NULL, out, NULL, NULL, error);
 }
 
 GlimsStatus
@@ -559,7 +661,7 @@ glims_stroke_begin_with_brush_resource (GlimsEngine              *engine,
       return status;
     }
 
-  return stroke_begin_common (engine, image_id, layer_id, brush, resource, first, out, NULL, NULL, error);
+  return stroke_begin_common (engine, image_id, layer_id, brush, resource, first, NULL, out, NULL, NULL, error);
 }
 
 GlimsStatus
@@ -590,8 +692,49 @@ glims_stroke_begin_with_capture_facts (GlimsEngine               *engine,
       if (status != GLIMS_STATUS_OK)
         return status;
     }
-  return stroke_begin_common (engine, image_id, layer_id, brush, resource, first, out,
+  return stroke_begin_common (engine, image_id, layer_id, brush, resource, first, NULL, out,
                               expected_fingerprint, facts, error);
+}
+
+GlimsStatus
+glims_stroke_begin_v2 (GlimsEngine                *engine,
+                       GlimsImageID                image,
+                       GlimsItemID                 drawable,
+                       GlimsResourceID             brush_id,
+                       const GlimsBrushSettings   *brush,
+                       const GlimsStrokePacketV2  *packet,
+                       GlimsStrokeID              *out,
+                       char                      **error)
+{
+  GlimsStrokeSampleV2 *samples = NULL;
+  gsize count;
+  if (out) *out = 0;
+  if (!out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsStatus status = read_stroke_packet_v2 (packet, TRUE, 0, &samples, &count, error);
+  if (status != GLIMS_STATUS_OK) return status;
+
+  GimpBrush *resource = NULL;
+  if (brush_id)
+    status = glims_lookup_brush (engine, brush_id, &resource);
+  else
+    resource = gimp_context_get_brush (gimp_get_user_context (engine->gimp));
+  if (status != GLIMS_STATUS_OK || !resource)
+    {
+      g_free (samples);
+      if (status != GLIMS_STATUS_OK) return status;
+      return glims_fail (error, NULL, "Choose an available brush before painting.");
+    }
+  /* Zero chooses the actual inherited brush at press; options then own it
+   * locally just like an explicit resource. V1's inheritance is unchanged. */
+  g_object_ref (resource);
+  const GlimsStrokeSampleV2 *p = samples;
+  GlimsStrokePoint first = {p->x, p->y, p->pressure, p->xtilt, p->ytilt, p->time_ms};
+  GimpCoords coords = to_coords_v2 (p);
+  status = stroke_begin_common (engine, image, drawable, brush, resource, &first, &coords,
+                                out, NULL, NULL, error);
+  g_object_unref (resource);
+  g_free (samples);
+  return status;
 }
 
 GlimsStatus
@@ -605,6 +748,8 @@ glims_stroke_continue (GlimsEngine            *engine,
 
   if (! stroke)
     return GLIMS_STATUS_NOT_FOUND;
+  if (stroke->input_version != GLIMS_STROKE_INPUT_V1)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
   if (count > 0 && ! points)
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
@@ -618,6 +763,31 @@ glims_stroke_continue (GlimsEngine            *engine,
 
   gimp_image_flush (stroke->image);
 
+  return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_stroke_continue_v2 (GlimsEngine               *engine,
+                          GlimsStrokeID              id,
+                          const GlimsStrokePacketV2 *packet,
+                          char                     **error)
+{
+  GlimsStroke *stroke = g_hash_table_lookup (engine->strokes, GINT_TO_POINTER (id));
+  GlimsStrokeSampleV2 *samples = NULL;
+  gsize count;
+  if (!stroke) return GLIMS_STATUS_NOT_FOUND;
+  if (stroke->input_version != GLIMS_STROKE_INPUT_V2) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsStatus status = read_stroke_packet_v2 (packet, FALSE, stroke->last_time_ms, &samples, &count, error);
+  if (status != GLIMS_STATUS_OK || !count) return status;
+  for (gsize i = 0; i < count; i++)
+    {
+      GimpCoords coords = to_coords_v2 (&samples[i]);
+      gimp_paint_core_interpolate (stroke->core, stroke->drawables, stroke->options,
+                                   &coords, samples[i].time_ms);
+    }
+  stroke->last_time_ms = samples[count - 1].time_ms;
+  g_free (samples);
+  gimp_image_flush (stroke->image);
   return GLIMS_STATUS_OK;
 }
 
