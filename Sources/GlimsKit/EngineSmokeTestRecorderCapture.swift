@@ -184,7 +184,8 @@ extension EngineSmokeTest {
             expect(width == 35 && height == 43, "scale dimensions are exact")
         } else { expect(false, "scale payload exists") }
         if case .resizeCanvas(let width, let height, let capturedOffset, let capturedFill) = commands[5] {
-            expect(width == 45 && height == 49 && capturedOffset == offset && capturedFill.isEqual(fill),
+            expect(width == 45 && height == 49 && capturedOffset == offset && capturedFill.red == 0.2 &&
+                   capturedFill.green == 0.35 && capturedFill.blue == 0.6 && capturedFill.alpha == 0.8,
                    "canvas dimensions, offset and copied color payload are exact")
         } else { expect(false, "resize payload exists") }
         if case .crop(let rect) = commands[6] {

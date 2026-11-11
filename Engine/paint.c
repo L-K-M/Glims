@@ -10,6 +10,8 @@
  * reproduced yet (docs/plan.md).
  */
 #include "engine-private.h"
+#include "brush-fingerprint.h"
+#include "stroke-dynamics-fingerprint.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -18,13 +20,17 @@
 #include "core/gimp.h"
 #include "core/gimpcontainer.h"
 #include "core/gimpcontext.h"
+#include "core/gimpdata.h"
 #include "core/gimpdatafactory.h"
 #include "core/gimpdrawable.h"
 #include "core/gimpdynamics.h"
 #include "core/gimpgrouplayer.h"
 #include "core/gimpimage.h"
+#include "core/gimpimage-symmetry.h"
 #include "core/gimpitem.h"
+#include "core/gimplayer.h"
 #include "core/gimppaintinfo.h"
+#include "core/gimpsymmetry.h"
 
 #include "paint/gimpairbrush.h"
 #include "paint/gimppaintcore.h"
@@ -285,6 +291,115 @@ glims_read_brush (const GlimsBrushSettings *brush,
   return settings->tool < G_N_ELEMENTS (paint_infos);
 }
 
+static void
+drop_stroke_facts (GlimsStrokeCaptureFacts *facts)
+{
+  g_clear_pointer (&facts->brush_name, g_free);
+  g_clear_pointer (&facts->brush_collection, g_free);
+  g_clear_pointer (&facts->fingerprint, g_free);
+}
+
+static gboolean
+recordable_first_point (const GlimsStrokePoint *point)
+{
+  return point && isfinite (point->x) && fabs (point->x) <= 524288 &&
+    isfinite (point->y) && fabs (point->y) <= 524288 &&
+    isfinite (point->pressure) && point->pressure >= 0 && point->pressure <= 1 &&
+    isfinite (point->xtilt) && fabs (point->xtilt) <= 1 &&
+    isfinite (point->ytilt) && fabs (point->ytilt) <= 1;
+}
+
+/* Gate the initial deterministic subset. Keep the actual native options
+ * rather than assuming that an inherited preset name identifies them. */
+static gboolean
+capture_stroke_facts (GlimsEngine               *engine,
+                      GimpImage                 *image,
+                      GimpDrawable              *drawable,
+                      const GlimsBrushSettings  *brush,
+                      const GlimsStrokePoint    *first,
+                      GimpPaintOptions          *options,
+                      GlimsStrokeCaptureFacts   *facts)
+{
+  GimpContext *context = GIMP_CONTEXT (options);
+  GimpLayerMode paint_mode = gimp_context_get_paint_mode (context);
+  GimpSymmetry *symmetry = gimp_image_get_active_symmetry (image);
+  if ((brush->tool != GLIMS_PAINT_PENCIL && brush->tool != GLIMS_PAINT_ERASER) ||
+      !recordable_first_point (first) ||
+      G_OBJECT_TYPE (drawable) != GIMP_TYPE_LAYER ||
+      !gimp_drawable_is_rgb (drawable) || !gimp_drawable_has_alpha (drawable) ||
+      gimp_drawable_get_active_mask (drawable) != GIMP_COMPONENT_MASK_ALL ||
+      gimp_image_get_floating_selection (image) ||
+      !symmetry || G_OBJECT_TYPE (symmetry) != GIMP_TYPE_SYMMETRY ||
+      (paint_mode != GIMP_LAYER_MODE_NORMAL && paint_mode != GIMP_LAYER_MODE_NORMAL_LEGACY) ||
+      options->expand_use || options->jitter_options->use_jitter ||
+      options->smoothing_options->use_smoothing ||
+      (options->application_mode != GIMP_PAINT_CONSTANT &&
+       options->application_mode != GIMP_PAINT_INCREMENTAL))
+    return FALSE;
+
+  g_autofree gchar *dynamics = NULL;
+  if (gimp_paint_options_are_dynamics_enabled (options))
+    {
+      dynamics = glims_stroke_dynamics_fingerprint (TRUE,
+                                                   gimp_context_get_dynamics (context));
+      if (!dynamics) return FALSE;
+    }
+
+  const gdouble values[] = { brush->red, brush->green, brush->blue,
+    gimp_context_get_opacity (context), options->brush_size, options->brush_angle,
+    options->brush_aspect_ratio, options->brush_spacing, options->brush_hardness,
+    options->brush_force };
+  for (gsize i = 0; i < G_N_ELEMENTS (values); i++)
+    if (!isfinite (values[i]) || (i < 3 && (values[i] < 0 || values[i] > 1)))
+      return FALSE;
+
+  GimpBrush *actual = gimp_context_get_brush (context);
+  if (!actual) return FALSE;
+  gint id = gimp_data_get_id (GIMP_DATA (actual));
+  GimpBrush *member = NULL;
+  if (id <= 0 || glims_lookup_brush (engine, (GlimsResourceID) id, &member) != GLIMS_STATUS_OK ||
+      member != actual)
+    return FALSE;
+  g_autofree gchar *content = glims_brush_fingerprint (actual);
+  if (!content ||
+      glims_resource_identifiers (engine, (GlimsResourceID) id, &facts->brush_name,
+                                  &facts->brush_collection, &facts->brush_internal,
+                                  NULL) != GLIMS_STATUS_OK)
+    return FALSE;
+
+  static const gchar domain[] = "glims-stroke-configuration-v1";
+  g_autoptr(GChecksum) hash = g_checksum_new (G_CHECKSUM_SHA256);
+  g_checksum_update (hash, (const guchar *) domain, sizeof domain);
+  g_checksum_update (hash, (const guchar *) content, strlen (content) + 1);
+  const guint8 flags[] = { brush->tool == GLIMS_PAINT_ERASER,
+    brush->tool == GLIMS_PAINT_ERASER && brush->anti_erase, options->hard != FALSE,
+    options->use_applicator != FALSE, options->brush_lock_to_view != FALSE,
+    paint_mode == GIMP_LAYER_MODE_NORMAL_LEGACY,
+    options->application_mode == GIMP_PAINT_INCREMENTAL };
+  g_checksum_update (hash, flags, sizeof flags);
+  for (gsize i = 0; i < G_N_ELEMENTS (values); i++)
+    {
+      gchar number[G_ASCII_DTOSTR_BUF_SIZE];
+      g_ascii_dtostr (number, sizeof number, values[i] == 0 ? 0 : values[i]);
+      g_checksum_update (hash, (const guchar *) number, strlen (number) + 1);
+    }
+  /* Keep existing disabled-dynamics recordings byte-compatible. Enabled
+   * recordings additionally bind to the actual bounded native config. */
+  if (dynamics)
+    {
+      static const gchar dynamics_domain[] = "glims-stroke-pressure-size-v1";
+      g_checksum_update (hash, (const guchar *) dynamics_domain, sizeof dynamics_domain);
+      g_checksum_update (hash, (const guchar *) dynamics, strlen (dynamics) + 1);
+    }
+  facts->fingerprint = g_strdup (g_checksum_get_string (hash));
+
+  /* Context already owns the values it inherited. Define them locally
+   * without running setters that could alter the configured brush links. */
+  gimp_context_define_property (context, GIMP_CONTEXT_PROP_BRUSH, TRUE);
+  gimp_context_define_property (context, GIMP_CONTEXT_PROP_PAINT_MODE, TRUE);
+  return TRUE;
+}
+
 /* The one paint-begin path behind stroke_begin and
  * stroke_begin_with_brush_resource: `brush_resource` is the stroke's own
  * selected brush, or NULL to inherit the user context's brush. */
@@ -296,6 +411,8 @@ stroke_begin_common (GlimsEngine              *engine,
                      GimpBrush                *brush_resource,
                      const GlimsStrokePoint   *first,
                      GlimsStrokeID            *out,
+                     const char               *expected_fingerprint,
+                     GlimsStrokeCaptureFacts  *facts,
                      char                    **error)
 {
   GlimsOpenImage     *open = glims_lookup_image (engine, image_id);
@@ -354,6 +471,16 @@ stroke_begin_common (GlimsEngine              *engine,
   stroke->core      = g_object_new (info->paint_type, "undo-desc", info->blurb, NULL);
   glims_set_tool_options (stroke->options, brush, source);
 
+  GlimsStrokeCaptureFacts captured = { .struct_size = sizeof captured };
+  if (facts && !capture_stroke_facts (engine, open->image, drawable, brush, first, stroke->options, &captured))
+    drop_stroke_facts (&captured);
+  if (expected_fingerprint && g_strcmp0 (expected_fingerprint, captured.fingerprint))
+    {
+      drop_stroke_facts (&captured);
+      glims_strokes_free (stroke);
+      return glims_fail (error, NULL, "The recorded brush or paint configuration changed.");
+    }
+
   if (GIMP_IS_AIRBRUSH (stroke->core))
     g_signal_connect (stroke->core, "stamp", G_CALLBACK (airbrush_stamp), stroke);
 
@@ -365,6 +492,7 @@ stroke_begin_common (GlimsEngine              *engine,
       g_list_free (stroke->drawables);
       stroke->drawables = NULL;
       glims_strokes_free (stroke);
+      drop_stroke_facts (&captured);
       return glims_fail (error, gerror, "The stroke could not start.");
     }
 
@@ -378,6 +506,13 @@ stroke_begin_common (GlimsEngine              *engine,
   id = glims_next_session_id (engine);
   g_hash_table_insert (engine->strokes, GINT_TO_POINTER (id), stroke);
   *out = id;
+  if (facts && captured.fingerprint)
+    {
+      facts->brush_internal = captured.brush_internal;
+      facts->brush_name = captured.brush_name;
+      facts->brush_collection = captured.brush_collection;
+      facts->fingerprint = captured.fingerprint;
+    }
 
   return GLIMS_STATUS_OK;
 }
@@ -391,7 +526,7 @@ glims_stroke_begin (GlimsEngine              *engine,
                     GlimsStrokeID            *out,
                     char                    **error)
 {
-  return stroke_begin_common (engine, image_id, layer_id, brush, NULL, first, out, error);
+  return stroke_begin_common (engine, image_id, layer_id, brush, NULL, first, out, NULL, NULL, error);
 }
 
 GlimsStatus
@@ -424,7 +559,39 @@ glims_stroke_begin_with_brush_resource (GlimsEngine              *engine,
       return status;
     }
 
-  return stroke_begin_common (engine, image_id, layer_id, brush, resource, first, out, error);
+  return stroke_begin_common (engine, image_id, layer_id, brush, resource, first, out, NULL, NULL, error);
+}
+
+GlimsStatus
+glims_stroke_begin_with_capture_facts (GlimsEngine               *engine,
+                                       GlimsImageID               image_id,
+                                       GlimsItemID                layer_id,
+                                       GlimsResourceID            brush_id,
+                                       const GlimsBrushSettings  *brush,
+                                       const GlimsStrokePoint    *first,
+                                       const char                *expected_fingerprint,
+                                       GlimsStrokeID             *out,
+                                       GlimsStrokeCaptureFacts   *facts,
+                                       char                     **error)
+{
+  GimpBrush *resource = NULL;
+  if (expected_fingerprint)
+    {
+      if (!brush_id || strnlen (expected_fingerprint, 65) != 64)
+        return GLIMS_STATUS_INVALID_ARGUMENT;
+      for (gsize i = 0; i < 64; i++)
+        if (!g_ascii_isdigit (expected_fingerprint[i]) &&
+            (expected_fingerprint[i] < 'a' || expected_fingerprint[i] > 'f'))
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  if (brush_id)
+    {
+      GlimsStatus status = glims_lookup_brush (engine, brush_id, &resource);
+      if (status != GLIMS_STATUS_OK)
+        return status;
+    }
+  return stroke_begin_common (engine, image_id, layer_id, brush, resource, first, out,
+                              expected_fingerprint, facts, error);
 }
 
 GlimsStatus

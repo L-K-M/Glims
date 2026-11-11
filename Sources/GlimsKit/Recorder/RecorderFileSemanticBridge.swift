@@ -1,0 +1,103 @@
+import CoreGraphics
+import Foundation
+
+/// Pure preparation only: complete owned file metadata and a fresh detached
+/// semantic log. Native target bindings, live installation and user consent
+/// belong to a later document transaction, never this bridge.
+enum RecorderFileSemanticBridge {
+    struct PreparedRecording {
+        /// Retain the entire file, including unused descriptions and every
+        /// unsuccessful inspection row, for a faithful unchanged Save As.
+        let file: RecorderFileValue
+        let log: RecorderLog<SemanticImageCommand>
+
+        fileprivate init(file: RecorderFileValue, log: RecorderLog<SemanticImageCommand>) {
+            self.file = file
+            self.log = log
+        }
+    }
+
+    static func prepare(_ file: RecorderFileValue) throws -> PreparedRecording {
+        // Caller-created values need the same whole-file semantic/resource
+        // validation as decoded bytes. Never convert a successful prefix.
+        _ = try RecorderFileCodec.encode(file)
+        let records = file.records.map { row -> RecorderLog<SemanticImageCommand>.Record in
+            let resolution: RecorderLog<SemanticImageCommand>.Resolution
+            switch row.outcome {
+            case .success(let value, _): resolution = .success(command(value))
+            case .failure(let reason): resolution = .failure(reason)
+            case .cancelled(let reason): resolution = .cancelled(reason)
+            }
+            return .init(ordinal: row.ordinal, resolution: resolution)
+        }
+        let log = try RecorderLog<SemanticImageCommand>(settledRecords: records)
+        return PreparedRecording(file: file, log: log)
+    }
+
+    private static func point(_ value: RecorderFileCommand.Point) -> CGPoint {
+        .init(x: CGFloat(value.x), y: CGFloat(value.y))
+    }
+    private static func rect(_ value: RecorderFileCommand.Rect) -> CGRect {
+        // Preserve signed raw size; CoreGraphics derives standardized extents.
+        .init(x: CGFloat(value.x), y: CGFloat(value.y), width: CGFloat(value.width), height: CGFloat(value.height))
+    }
+    private static func options(_ value: RecorderFileCommand.Options) -> EngineSession.SelectOptions {
+        let operation: EngineSession.SelectOperation
+        switch value.operation {
+        case .replace: operation = .replace
+        case .add: operation = .add
+        case .subtract: operation = .subtract
+        case .intersect: operation = .intersect
+        }
+        return .init(operation: operation, antialias: value.antialias, feather: value.feather,
+                     cornerRadius: value.cornerRadius, threshold: value.threshold,
+                     contiguous: value.contiguous, sampleMerged: value.sampleMerged)
+    }
+
+    private static func command(_ value: RecorderFileCommand) -> SemanticImageCommand {
+        switch value {
+        case .selectionShape(let shape, let settings):
+            let frontendShape: EngineSession.SelectShape
+            switch shape {
+            case .rectangle(let value): frontendShape = .rectangle(rect(value))
+            case .ellipse(let value): frontendShape = .ellipse(rect(value))
+            case .polygon(let values): frontendShape = .polygon(values.map(point))
+            }
+            return .selectionShape(frontendShape, options: options(settings))
+        case .selectColor(let value, let settings): return .selectColor(point(value), options: options(settings))
+        case .selectCommand(let value, let radius):
+            let selection: EngineSession.SelectCommand
+            switch value {
+            case .all: selection = .all
+            case .none: selection = .none
+            case .invert: selection = .invert
+            case .feather: selection = .feather
+            case .grow: selection = .grow
+            case .shrink: selection = .shrink
+            case .border: selection = .border
+            case .sharpen: selection = .sharpen
+            case .fromAlpha: selection = .fromAlpha
+            }
+            return .selectCommand(selection, radius: radius)
+        case .transformImage(let value):
+            let transform: EngineSession.Transform
+            switch value {
+            case .rotate90: transform = .rotate90
+            case .rotate180: transform = .rotate180
+            case .rotate270: transform = .rotate270
+            case .flipHorizontal: transform = .flipHorizontal
+            case .flipVertical: transform = .flipVertical
+            }
+            return .transformImage(transform)
+        case .scale(let width, let height): return .scale(width: width, height: height)
+        case .resizeCanvas(let width, let height, let offset, let fill):
+            return .resizeCanvas(width: width, height: height, offset: point(offset), fill: fill)
+        case .crop(let value): return .crop(rect(value))
+        case .layerProperties(let value):
+            let change = EngineSession.LayerChange(name: value.name, isVisible: value.visible,
+                                                   opacity: value.opacity, mode: value.mode?.name)
+            return .layerProperties(SemanticImageCommand.LayerProperties(change))
+        case .completeStroke(let value): return .completeStroke(value)
+        }
+    }
+}

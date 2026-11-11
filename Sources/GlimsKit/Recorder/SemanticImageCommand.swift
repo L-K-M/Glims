@@ -25,7 +25,7 @@ enum SemanticImageCommand {
     }
 
     private struct MissingLayerBinding: LocalizedError {
-        var errorDescription: String? { "This recorded layer change has no explicit layer binding." }
+        var errorDescription: String? { "This recorded edit has no explicit layer binding." }
     }
 
     case selectionShape(EngineSession.SelectShape, options: EngineSession.SelectOptions)
@@ -33,14 +33,15 @@ enum SemanticImageCommand {
     case selectCommand(EngineSession.SelectCommand, radius: Double)
     case transformImage(EngineSession.Transform)
     case scale(width: Int, height: Int)
-    case resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: NSColor)
+    case resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: RecorderColor)
     case crop(CGRect)
     case layerProperties(LayerProperties)
+    case completeStroke(RecorderStrokeCommand)
 
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .scale, .resizeCanvas, .crop: return true
+        case .transformImage, .scale, .resizeCanvas, .crop, .completeStroke: return true
         case .selectionShape, .selectColor, .selectCommand, .layerProperties: return false
         }
     }
@@ -78,6 +79,7 @@ enum SemanticImageCommand {
         case .resizeCanvas: return "Resize Canvas"
         case .crop: return "Crop Image"
         case .layerProperties: return "Layer Properties"
+        case .completeStroke(let stroke): return stroke.title
         }
     }
 
@@ -99,7 +101,7 @@ enum SemanticImageCommand {
             try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill)
         case .crop(let rect):
             try session.crop(image: image, to: rect)
-        case .layerProperties:
+        case .layerProperties, .completeStroke:
             throw MissingLayerBinding()
         }
     }
@@ -107,11 +109,15 @@ enum SemanticImageCommand {
     /// The caller freshly confirms this runtime layer against the owning image.
     /// It is never stored in the command and never falls back to selection.
     func apply(session: EngineSession, image: Int32, layer: Int32) throws {
-        guard case .layerProperties(let properties) = self else {
+        switch self {
+        case .layerProperties(let properties):
+            guard layer > 0 else { throw MissingLayerBinding() }
+            try session.changeLayer(layer, image: image, properties.change)
+        case .completeStroke(let stroke):
+            guard layer > 0 else { throw MissingLayerBinding() }
+            try stroke.apply(session: session, image: image, layer: layer)
+        default:
             try apply(session: session, image: image)
-            return
         }
-        guard layer > 0 else { throw MissingLayerBinding() }
-        try session.changeLayer(layer, image: image, properties.change)
     }
 }
