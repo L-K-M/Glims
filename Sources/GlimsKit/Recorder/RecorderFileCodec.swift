@@ -3,6 +3,7 @@ import Foundation
 enum RecorderFileCodec {
     static let format = "ch.lkmc.Glims.recording"
     static let version = 1
+    static let strokeVersion = 2
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -78,8 +79,8 @@ enum RecorderFileCodec {
 
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
-        guard try string(root.get("format")) == format,
-              try integer(root.get("version"), range: version...version) == version else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
+        guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
+        let fileVersion = try integer(root.get("version"), range: version...strokeVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -96,6 +97,7 @@ enum RecorderFileCodec {
             descriptions[symbol.id] = symbol.description
         }
         var points = 0
+        var hasStroke = false
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
             guard case .object(let members) = node, let outcome = members["outcome"] else { throw RecorderFileError.invalid("Missing record outcome.") }
             let outcomeName = try string(outcome)
@@ -104,7 +106,8 @@ enum RecorderFileCodec {
             switch outcomeName {
             case "success":
                 row = try Object(node, required: ["ordinal", "outcome", "command", "binding"])
-                let command = try command(row.get("command"), points: &points)
+                let command = try command(row.get("command"), version: fileVersion, points: &points)
+                if case .completeStroke = command { hasStroke = true }
                 let binding = try binding(row.get("binding"))
                 try validate(binding, for: command, descriptions: descriptions)
                 result = .success(command, binding)
@@ -118,6 +121,9 @@ enum RecorderFileCodec {
                 throw RecorderFileError.invalid("Record ordinals must be contiguous from zero.")
             }
             return .init(ordinal: index, outcome: result)
+        }
+        guard fileVersion == version || hasStroke else {
+            throw RecorderFileError.invalid("Version 2 requires a successful complete stroke.")
         }
         return RecorderFileValue(recordingID: try uuid(root.get("recordingID")), name: name, origin: source, symbols: symbols, records: records)
     }
@@ -153,7 +159,55 @@ enum RecorderFileCodec {
         do { return try RecorderColor(red: red, green: green, blue: blue, alpha: alpha) }
         catch { throw RecorderFileError.invalid("sRGB components must be finite and inside 0...1.") }
     }
-    private static func command(_ node: RecorderJSON, points: inout Int) throws -> RecorderFileCommand {
+    private static func strokePoint(_ node: RecorderJSON) throws -> RecorderStrokeTrace.Point {
+        let point = try Object(node, required: ["x", "y", "pressure", "xTilt", "yTilt", "timeMilliseconds"])
+        do {
+            return try .init(x: number(point.get("x")), y: number(point.get("y")),
+                pressure: number(point.get("pressure")), xTilt: number(point.get("xTilt")), yTilt: number(point.get("yTilt")),
+                timeMilliseconds: UInt32(integer(point.get("timeMilliseconds"), range: 0...Int(UInt32.max))))
+        } catch {
+            throw RecorderFileError.invalid("Invalid stroke sample.")
+        }
+    }
+
+    private static func stroke(_ node: RecorderJSON, points: inout Int) throws -> RecorderStrokeCommand {
+        let value = try Object(node, required: ["tag", "settings", "facts", "first", "batches"])
+        let settings = try Object(value.get("settings"),
+            required: ["tool", "size", "opacity", "red", "green", "blue", "pressureSize", "antiErase"], optional: ["hardness"])
+        guard let tool = RecorderStrokeCommand.Tool(rawValue: try string(settings.get("tool"))),
+              let brush = try RecorderStrokeCommand.Settings(tool: tool, size: number(settings.get("size")),
+                  opacity: number(settings.get("opacity")), red: number(settings.get("red")),
+                  green: number(settings.get("green")), blue: number(settings.get("blue")),
+                  hardness: settings.optional("hardness").map { try number($0) },
+                  pressureSize: bool(settings.get("pressureSize")), antiErase: bool(settings.get("antiErase"))) else {
+            throw RecorderFileError.invalid("Invalid recorded brush settings.")
+        }
+        let facts = try Object(value.get("facts"), required: ["brush", "fingerprint"])
+        let identity = try Object(facts.get("brush"), required: ["name", "isInternal"], optional: ["collection"])
+        let name = try string(identity.get("name"), native: true)
+        let collection = try identity.optional("collection").map { try string($0, native: true) }
+        let fingerprint = try string(facts.get("fingerprint"))
+        guard !name.isEmpty, fingerprint.utf8.count == 64,
+              fingerprint.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+            throw RecorderFileError.invalid("Invalid recorded brush identity or fingerprint.")
+        }
+        let maximum = min(RecorderStrokeAccumulator.maximumPoints, RecorderFileLimits.points - points)
+        guard maximum >= 1 else { throw RecorderFileError.invalid("Invalid stroke point count.") }
+        let first = try strokePoint(value.get("first"))
+        var count = 1
+        let batches = try array(value.get("batches"), maximum: maximum - 1).map { batch -> [RecorderStrokeTrace.Point] in
+            let samples = try array(batch, maximum: maximum - count)
+            guard !samples.isEmpty else { throw RecorderFileError.invalid("A recorded stroke batch cannot be empty.") }
+            count += samples.count
+            return try samples.map(strokePoint)
+        }
+        points += count
+        return .init(settings: brush, trace: .init(first: first, batches: batches),
+                     facts: .init(brush: .init(name: name, collection: collection,
+                                              isInternal: try bool(identity.get("isInternal"))), fingerprint: fingerprint))
+    }
+
+    private static func command(_ node: RecorderJSON, version: Int, points: inout Int) throws -> RecorderFileCommand {
         switch try tag(node) {
         case "selectionShape":
             let value = try Object(node, required: ["tag", "shape", "options"])
@@ -170,8 +224,8 @@ enum RecorderFileCodec {
                 shape = try tag(shapeNode) == "rectangle" ? .rectangle(rectangle) : .ellipse(rectangle)
             case "polygon":
                 let source = try Object(shapeNode, required: ["tag", "points"])
-                let vertices = try array(source.get("points"), maximum: RecorderFileLimits.polygonPoints).map { try point($0) }
-                guard vertices.count >= 3, vertices.count <= RecorderFileLimits.polygonPoints - points else { throw RecorderFileError.invalid("Invalid polygon point count.") }
+                let vertices = try array(source.get("points"), maximum: RecorderFileLimits.points).map { try point($0) }
+                guard vertices.count >= 3, vertices.count <= RecorderFileLimits.points - points else { throw RecorderFileError.invalid("Invalid polygon point count.") }
                 points += vertices.count; shape = .polygon(vertices)
             default: throw RecorderFileError.invalid("Unknown selection shape.")
             }
@@ -221,6 +275,9 @@ enum RecorderFileCodec {
             return .layerProperties(.init(name: try properties.optional("name").map { try string($0, native: true) },
                 visible: try properties.optional("visible").map { try bool($0) }, opacity: try properties.optional("opacity").map { try number($0) },
                 mode: try properties.optional("mode").map { try RecorderFileLayerMode(string($0)) }))
+        case "completeStroke":
+            guard version == strokeVersion else { throw RecorderFileError.invalid("A complete stroke needs recording version 2.") }
+            return .completeStroke(try stroke(node, points: &points))
         default: throw RecorderFileError.invalid("Unknown semantic command; use a compatible Glims version.")
         }
     }
@@ -319,6 +376,9 @@ enum RecorderFileCodec {
         switch (command, binding) {
         case (.layerProperties, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("Layer properties need a layer description.") }
+            return
+        case (.completeStroke, .layer(let id)):
+            guard descriptions[id]?.kind == .pixel else { throw RecorderFileError.invalid("A complete stroke needs a pixel layer description.") }
             return
         case (.selectColor(_, let options), .context) where !options.sampleMerged: break
         case (.selectCommand(.fromAlpha, _), .context): break

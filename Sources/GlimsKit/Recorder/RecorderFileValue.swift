@@ -1,6 +1,6 @@
 import Foundation
 
-/// Version-one file values. File UUIDs identify recordings/symbols only; no
+/// Owned file values. File UUIDs identify recordings and symbols only. No
 /// native identity, executable closure or runtime epoch can enter this model.
 struct RecorderFileValue: Equatable {
     struct Origin: Equatable {
@@ -60,10 +60,11 @@ enum RecorderFileCommand: Equatable {
     case resizeCanvas(width: Int, height: Int, offset: Point, fill: RecorderColor)
     case crop(Rect)
     case layerProperties(LayerProperties)
+    case completeStroke(RecorderStrokeCommand)
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties: return false
+        case .layerProperties, .completeStroke: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true
@@ -106,9 +107,23 @@ enum RecorderFileLimits {
     static let bytes = 16 * 1024 * 1024
     static let records = 10_000
     static let symbols = 10_000
-    static let polygonPoints = 100_000
+    // Successful polygons and strokes share the file's point budget.
+    static let points = 100_000
     static let stringBytes = 64 * 1024
     static let depth = 64
     static let values = 1_000_000
     static let numberBytes = 128
+
+    static func strokePointCount(_ trace: RecorderStrokeTrace, remaining: Int) throws -> Int {
+        let maximum = min(remaining, RecorderStrokeAccumulator.maximumPoints)
+        guard maximum >= 1 else { throw RecorderFileError.invalid("Invalid stroke point count.") }
+        var count = 1
+        for batch in trace.batches {
+            guard !batch.isEmpty, batch.count <= maximum - count else {
+                throw RecorderFileError.invalid("Invalid stroke point count or empty batch.")
+            }
+            count += batch.count
+        }
+        return count
+    }
 }

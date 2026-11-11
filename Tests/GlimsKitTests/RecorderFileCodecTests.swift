@@ -194,7 +194,7 @@ final class RecorderFileCodecTests: XCTestCase {
         let rows = (0...RecorderFileLimits.records).map { "{\"ordinal\":\($0),\"outcome\":\"failure\",\"reason\":\"\"}" }.joined(separator: ",")
         rejects(document(rows), reason: "oversized array")
         rejects(document("", symbols: Array(repeating: symbolJSON, count: RecorderFileLimits.symbols + 1).joined(separator: ",")), reason: "oversized array")
-        let points = Array(repeating: #"{"x":0,"y":0}"#, count: RecorderFileLimits.polygonPoints + 1).joined(separator: ",")
+        let points = Array(repeating: #"{"x":0,"y":0}"#, count: RecorderFileLimits.points + 1).joined(separator: ",")
         let polygon = "{\"tag\":\"selectionShape\",\"shape\":{\"tag\":\"polygon\",\"points\":[\(points)]},\"options\":\(options)}"
         rejects(document(success(polygon)), reason: "oversized array")
     }
@@ -285,7 +285,7 @@ final class RecorderFileCodecTests: XCTestCase {
         XCTAssertThrowsError(try RecorderFileCodec.encode(invalid))
         let settings = RecorderFileCommand.Options(operation: .replace, antialias: true, feather: 0, cornerRadius: 0,
                                                    threshold: 0, contiguous: true, sampleMerged: true)
-        let points = Array(repeating: RecorderFileCommand.Point(x: 0, y: 0), count: RecorderFileLimits.polygonPoints + 1)
+        let points = Array(repeating: RecorderFileCommand.Point(x: 0, y: 0), count: RecorderFileLimits.points + 1)
         let oversized = RecorderFileValue(recordingID: recordingID, name: "Named", origin: origin, symbols: [],
             records: [.init(ordinal: 0, outcome: .success(.selectionShape(.polygon(points), settings), .none))])
         XCTAssertThrowsError(try RecorderFileCodec.encode(oversized)) {
@@ -294,5 +294,189 @@ final class RecorderFileCodecTests: XCTestCase {
         XCTAssertEqual(RecorderFileLayerMode.names.count, 59)
         for mode in ["normal-legacy", "overlay-legacy", "color-erase", "erase", "merge", "split", "pass-through"] { XCTAssertNoThrow(try RecorderFileLayerMode(mode)) }
         for mode in ["behind", "behind-legacy", "replace", "overwrite", "anti-erase", "future-mode", "NORMAL"] { XCTAssertThrowsError(try RecorderFileLayerMode(mode)) }
+    }
+
+    private let strokeBatches = #"[[{"pressure":0.0,"timeMilliseconds":0,"x":0.0,"xTilt":0.0,"y":1.0,"yTilt":-0.5},{"pressure":1.0,"timeMilliseconds":7,"x":2.25,"xTilt":0.5,"y":4.0,"yTilt":0.0}],[{"pressure":0.25,"timeMilliseconds":7,"x":3.0,"xTilt":-0.5,"y":5.0,"yTilt":1.0}]]"#
+    private var strokeJSON: String {
+        #"{"batches":"# + strokeBatches + #","facts":{"brush":{"collection":"","isInternal":false,"name":"Stock brush"},"fingerprint":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},"first":{"pressure":0.75,"timeMilliseconds":4294967295,"x":-1.5,"xTilt":-1.0,"y":3.5,"yTilt":0.5},"settings":{"antiErase":true,"blue":0.6,"green":0.4,"hardness":0.25,"opacity":0.75,"pressureSize":false,"red":0.2,"size":8.5,"tool":"eraser"},"tag":"completeStroke"}"#
+    }
+    private var strokeSymbol: String {
+        #"{"description":{"ancestors":[],"bounds":{"height":29.0,"width":41.0,"x":0.0,"y":0.0},"kind":"pixel","name":"Original pixel layer","siblingIndex":0},"id":"22222222-2222-2222-2222-222222222222"}"#
+    }
+    private let strokeBinding = #"{"kind":"layer","symbol":"22222222-2222-2222-2222-222222222222"}"#
+    private func strokeDocument(_ command: String, binding: String? = nil, version: Int = 2) -> String {
+        let source = document(success(command, binding: binding ?? strokeBinding), symbols: strokeSymbol)
+        return source.replacingOccurrences(of: #""version":1"#, with: #""version":"# + String(version))
+    }
+
+    func testVersionTwoStrokeLiteralHasCanonicalBytesAndExactSemanticBatches() throws {
+        let decoded = try RecorderFileCodec.decode(bytes(strokeDocument(strokeJSON)))
+        guard case .success(.completeStroke(let stroke), .layer(let id)) = decoded.records.first?.outcome else {
+            return XCTFail("Missing explicit complete stroke")
+        }
+        XCTAssertEqual(id, symbol)
+        let expectedSettings = try XCTUnwrap(RecorderStrokeCommand.Settings(tool: .eraser, size: 8.5, opacity: 0.75,
+            red: 0.2, green: 0.4, blue: 0.6, hardness: 0.25, pressureSize: false, antiErase: true))
+        XCTAssertEqual(stroke.settings, expectedSettings)
+        XCTAssertEqual(stroke.facts.brush, .init(name: "Stock brush", collection: "", isInternal: false))
+        XCTAssertEqual(stroke.facts.fingerprint, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        XCTAssertEqual(stroke.trace.first, try .init(x: -1.5, y: 3.5, pressure: 0.75, xTilt: -1, yTilt: 0.5,
+                                                   timeMilliseconds: UInt32.max))
+        XCTAssertEqual(stroke.trace.batches, [
+            [try .init(x: 0, y: 1, pressure: 0, xTilt: 0, yTilt: -0.5, timeMilliseconds: 0),
+             try .init(x: 2.25, y: 4, pressure: 1, xTilt: 0.5, yTilt: 0, timeMilliseconds: 7)],
+            [try .init(x: 3, y: 5, pressure: 0.25, xTilt: -0.5, yTilt: 1, timeMilliseconds: 7)],
+        ])
+        let canonical = #"{"format":"ch.lkmc.Glims.recording","name":"Named","origin":{"imageLabel":"A","initialHeight":29,"initialWidth":41},"recordingID":"11111111-1111-1111-1111-111111111111","records":[{"binding":"# + strokeBinding
+            + #","command":"# + strokeJSON + #","ordinal":0,"outcome":"success"}],"symbols":["# + strokeSymbol + #"],"version":2}"#
+        XCTAssertEqual(try RecorderFileCodec.encode(decoded), bytes(canonical))
+        XCTAssertEqual(try RecorderFileCodec.decode(RecorderFileCodec.encode(decoded)), decoded)
+        let prepared = try RecorderFileSemanticBridge.prepare(decoded)
+        XCTAssertEqual(prepared.file, decoded)
+        guard case .success(.completeStroke(let semantic)) = prepared.log.records.first?.resolution else {
+            return XCTFail("Missing prepared stroke")
+        }
+        XCTAssertEqual(semantic, stroke)
+        XCTAssertFalse(prepared.log.isRecording)
+        XCTAssertFalse(prepared.log.isReplaying)
+    }
+
+    func testStrokeVersionAndPixelLayerBindingAreMandatory() {
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(strokeDocument(strokeJSON, version: 1))))
+        for version in [0, 3, Int.max] {
+            XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(strokeDocument(strokeJSON, version: version))))
+        }
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(replace(document(success(#"{"tag":"scale","width":1,"height":1}"#)),
+                                                                        #""version":1"#, #""version":2"#))))
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(strokeDocument(strokeJSON, binding: #"{"kind":"none"}"#))))
+        for kind in ["group", "text", "link", "vector", "channel", "quickMask"] {
+            let wrongLayer = replace(strokeDocument(strokeJSON), #""kind":"pixel""#, #""kind":""# + kind + #"""#)
+            XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(wrongLayer)), kind)
+        }
+        let missing = replace(strokeDocument(strokeJSON), #""symbol":"22222222-2222-2222-2222-222222222222""#,
+                              #""symbol":"33333333-3333-3333-3333-333333333333""#)
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(missing)))
+    }
+
+    func testStrokePayloadRejectsUnknownOrInvalidFields() {
+        let mutations = [
+            (#""tool":"eraser""#, #""tool":"paintbrush""#),
+            (#""tool":"eraser""#, #""tool":3"#),
+            (#""tool":"eraser""#, #""tool":"pencil""#), // antiErase is true.
+            (#""size":8.5"#, #""size":0"#), (#""size":8.5"#, #""size":10000.1"#),
+            (#""opacity":0.75"#, #""opacity":1.1"#), (#""red":0.2"#, #""red":-0.1"#),
+            (#""hardness":0.25"#, #""hardness":null"#), (#""hardness":0.25"#, #""hardness":1.1"#),
+            (#""pressureSize":false"#, #""pressureSize":0"#),
+            (#""name":"Stock brush""#, #""name":"""#), (#""name":"Stock brush""#, #""name":"Stock\u0000brush""#),
+            (#""collection":"""#, #""collection":null"#),
+            (#""isInternal":false"#, #""isInternal":false,"resourceID":123"#),
+            (#""fingerprint":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef""#, #""fingerprint":"ABCDEF""#),
+            (#""fingerprint":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef""#, #""fingerprint":"0123456789abcdeF0123456789abcdef0123456789abcdef0123456789abcdef""#),
+            (#""x":-1.5"#, #""x":524288.1"#), (#""y":3.5"#, #""y":-524288.1"#),
+            (#""pressure":0.75"#, #""pressure":-0.01"#), (#""xTilt":-1.0"#, #""xTilt":1.1"#),
+            (#""timeMilliseconds":4294967295"#, #""timeMilliseconds":4294967296"#),
+            (#""timeMilliseconds":4294967295"#, #""timeMilliseconds":-1"#),
+            (#""timeMilliseconds":4294967295"#, #""timeMilliseconds":1.0"#),
+            (#""x":-1.5"#, #""x":-1.5,"x":2"#),
+            (#""tag":"completeStroke""#, #""tag":"completeStroke","future":true"#),
+        ]
+        for (old, new) in mutations {
+            XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(strokeDocument(replace(strokeJSON, old, new)))), old)
+        }
+        let emptyBatch = replace(strokeJSON, strokeBatches, "[[]]")
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(strokeDocument(emptyBatch))))
+        let malformedBatches = replace(strokeJSON, strokeBatches, "[0]")
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(strokeDocument(malformedBatches))))
+    }
+
+    func testTapPreservesMissingOptionalFieldsAndSuccessfulStrokeSelectsVersionTwo() throws {
+        var tap = replace(strokeJSON, strokeBatches, "[]")
+        tap = replace(tap, #""collection":"","isInternal""#, #""isInternal""#)
+        tap = replace(tap, #""hardness":0.25,"opacity""#, #""opacity""#)
+        tap = replace(tap, #""antiErase":true"#, #""antiErase":false"#)
+        tap = replace(tap, #""tool":"eraser""#, #""tool":"pencil""#)
+        let value = try RecorderFileCodec.decode(bytes(strokeDocument(tap)))
+        guard case .success(.completeStroke(let stroke), _) = value.records[0].outcome else { return XCTFail("Missing tap") }
+        XCTAssertEqual(stroke.trace.batches, [])
+        XCTAssertNil(stroke.settings.hardness)
+        XCTAssertNil(stroke.facts.brush.collection)
+        XCTAssertNotEqual(stroke.facts.brush, .init(name: "Stock brush", collection: "", isInternal: false))
+        let encoded = try RecorderFileCodec.encode(value)
+        XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains(#""version":2"#))
+        XCTAssertEqual(try RecorderFileCodec.decode(encoded), value)
+    }
+
+    func testVersionTwoPreservesMixedCommandsAndInspectionOutcomes() throws {
+        let first = success(strokeJSON, binding: strokeBinding)
+        let second = success(#"{"tag":"transformImage","transform":"flipHorizontal"}"#, ordinal: 1)
+        let failed = #"{"ordinal":2,"outcome":"failure","reason":"Stroke refused"}"#
+        let cancelled = #"{"ordinal":3,"outcome":"cancelled","reason":"Cancelled after accepted work"}"#
+        let text = document([first, second, failed, cancelled].joined(separator: ","), symbols: strokeSymbol)
+            .replacingOccurrences(of: #""version":1"#, with: #""version":2"#)
+        let decoded = try RecorderFileCodec.decode(bytes(text))
+        let prepared = try RecorderFileSemanticBridge.prepare(decoded)
+        XCTAssertEqual(try RecorderFileCodec.decode(RecorderFileCodec.encode(decoded)), decoded)
+        XCTAssertEqual(prepared.log.records.count, 4)
+        guard case .success(.transformImage(.flipHorizontal)) = prepared.log.records[1].resolution else {
+            return XCTFail("The ordinary command changed inside version 2")
+        }
+        XCTAssertEqual(decoded.records[2].outcome, .failure("Stroke refused"))
+        XCTAssertEqual(decoded.records[3].outcome, .cancelled("Cancelled after accepted work"))
+        XCTAssertEqual(prepared.log.replayRefusal, .unsuccessfulRecording)
+    }
+
+    func testStrokeSnapshotNeedsCaptureTimeBindingAndMatchesLiteral() throws {
+        let expected = try RecorderFileCodec.decode(bytes(strokeDocument(strokeJSON)))
+        guard case .success(.completeStroke(let stroke), _) = expected.records[0].outcome else { return XCTFail("Missing stroke") }
+        var log = RecorderLog<SemanticImageCommand>()
+        try log.startRecording()
+        let accepted = try log.reserve()
+        try log.resolve(accepted, with: .success(.completeStroke(stroke)))
+        try log.stopRecording()
+        var catalog = RecorderDescriptionCatalog()
+        catalog.acceptFirst([symbol: .available(expected.symbols[0].description)])
+        func snapshot(_ bindings: [Int: RecorderBindingDescription]) throws -> RecorderFileValue {
+            try RecorderFileCodec.snapshot(log, recordingID: recordingID, name: "Named", origin: origin,
+                                           descriptions: catalog, bindings: bindings)
+        }
+        XCTAssertThrowsError(try snapshot([:]))
+        XCTAssertThrowsError(try snapshot([0: .none]))
+        XCTAssertThrowsError(try snapshot([0: .unavailable("Capture failed")]))
+        XCTAssertEqual(try snapshot([0: .layer(symbol)]), expected)
+        XCTAssertEqual(log.records.count, 1)
+        XCTAssertEqual(log.pendingCount, 0)
+    }
+
+    func testStrokeAndPolygonPointBudgetsAreSharedAndBatchesStayNonempty() throws {
+        let source = try RecorderFileCodec.decode(bytes(strokeDocument(strokeJSON)))
+        guard case .success(.completeStroke(let stroke), _) = source.records[0].outcome else { return XCTFail("Missing stroke") }
+        let point = stroke.trace.first
+        let maximum = RecorderStrokeTrace(first: point, batches: [Array(repeating: point, count: 65_535)])
+        XCTAssertEqual(try RecorderFileLimits.strokePointCount(maximum, remaining: 100_000), 65_536)
+        let excess = RecorderStrokeTrace(first: point, batches: [Array(repeating: point, count: 65_536)])
+        let settings = RecorderFileCommand.Options(operation: .replace, antialias: false, feather: 0,
+                                                   cornerRadius: 0, threshold: 0, contiguous: true, sampleMerged: true)
+        func file(_ trace: RecorderStrokeTrace, polygonCount: Int = 0) -> RecorderFileValue {
+            let command = RecorderStrokeCommand(settings: stroke.settings, trace: trace, facts: stroke.facts)
+            var rows: [RecorderFileValue.Record] = [.init(ordinal: 0, outcome: .success(.completeStroke(command), .layer(symbol)))]
+            if polygonCount > 0 {
+                rows.append(.init(ordinal: 1, outcome: .success(.selectionShape(.polygon(
+                    Array(repeating: .init(x: 0, y: 0), count: polygonCount)), settings), .none)))
+            }
+            return .init(recordingID: recordingID, name: "Named", origin: origin, symbols: source.symbols, records: rows)
+        }
+        XCTAssertThrowsError(try RecorderFileCodec.encode(file(excess)))
+        XCTAssertThrowsError(try RecorderFileCodec.encode(file(.init(first: point, batches: [[]]))))
+        let boundary = try RecorderFileCodec.encode(file(maximum, polygonCount: 34_464))
+        XCTAssertEqual(try RecorderFileCodec.decode(boundary).records.count, 2)
+        XCTAssertThrowsError(try RecorderFileCodec.encode(file(maximum, polygonCount: 34_465)))
+        let tooManySamples = "[" + Array(repeating: "0", count: 65_536).joined(separator: ",") + "]"
+        let batchOverflow = replace(strokeJSON, strokeBatches, "[" + tooManySamples + "]")
+        rejects(strokeDocument(batchOverflow), reason: "oversized array")
+        let polygon = #"{"tag":"selectionShape","shape":{"tag":"polygon","points":["#
+            + Array(repeating: #"{"x":0,"y":0}"#, count: 100_000).joined(separator: ",") + #"]},"options":"# + options + "}"
+        let rows = success(polygon) + "," + success(replace(strokeJSON, strokeBatches, "[]"), binding: strokeBinding, ordinal: 1)
+        let overflow = document(rows, symbols: strokeSymbol).replacingOccurrences(of: #""version":1"#, with: #""version":2"#)
+        rejects(overflow, reason: "Invalid stroke point count")
     }
 }

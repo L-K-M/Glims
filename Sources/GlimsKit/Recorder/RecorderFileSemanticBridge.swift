@@ -97,6 +97,7 @@ enum RecorderFileSemanticBridge {
             let change = EngineSession.LayerChange(name: value.name, isVisible: value.visible,
                                                    opacity: value.opacity, mode: value.mode?.name)
             return .layerProperties(SemanticImageCommand.LayerProperties(change))
+        case .completeStroke(let value): return .completeStroke(value)
         }
     }
 }

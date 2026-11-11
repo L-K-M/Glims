@@ -18,9 +18,14 @@ extension RecorderFileCodec {
             let outcome: RecorderFileValue.Outcome
             switch record.resolution {
             case .success(let command):
-                if case .selectionShape(.polygon(let points), _) = command {
-                    guard points.count <= RecorderFileLimits.polygonPoints - pointCount else { throw RecorderFileError.invalid("Invalid polygon point count.") }
+                switch command {
+                case .selectionShape(.polygon(let points), _):
+                    guard points.count <= RecorderFileLimits.points - pointCount else { throw RecorderFileError.invalid("Invalid polygon point count.") }
                     pointCount += points.count
+                case .completeStroke(let stroke):
+                    let count = try RecorderFileLimits.strokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
+                    pointCount += count
+                default: break
                 }
                 let value = try RecorderFileCommand(command)
                 let binding: RecorderBindingDescription
@@ -69,7 +74,7 @@ extension RecorderFileCommand {
             case .rectangle(let value): result = .rectangle(rect(value))
             case .ellipse(let value): result = .ellipse(rect(value))
             case .polygon(let values):
-                guard values.count >= 3, values.count <= RecorderFileLimits.polygonPoints else { throw RecorderFileError.invalid("Invalid polygon point count.") }
+                guard values.count >= 3, values.count <= RecorderFileLimits.points else { throw RecorderFileError.invalid("Invalid polygon point count.") }
                 result = .polygon(values.map(point))
             }
             self = .selectionShape(result, options(settings))
@@ -103,7 +108,7 @@ extension RecorderFileCommand {
         case .crop(let value): self = .crop(rect(value))
         case .layerProperties(let value): self = .layerProperties(.init(name: value.name, visible: value.isVisible, opacity: value.opacity,
             mode: try value.mode.map { try RecorderFileLayerMode($0) }))
-        case .completeStroke: throw RecorderFileError.invalid("This recording contains a stroke that cannot yet be saved.")
+        case .completeStroke(let value): self = .completeStroke(value)
         }
     }
 }

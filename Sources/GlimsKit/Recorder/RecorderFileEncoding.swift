@@ -6,12 +6,19 @@ extension RecorderFileCodec {
             throw RecorderFileError.invalid("The recording exceeds the record/symbol limit.")
         }
         var pointCount = 0
+        var fileVersion = version
         for record in value.records {
-            if case .success(.selectionShape(.polygon(let points), _), _) = record.outcome {
-                guard points.count >= 3, points.count <= RecorderFileLimits.polygonPoints - pointCount else {
+            switch record.outcome {
+            case .success(.selectionShape(.polygon(let points), _), _):
+                guard points.count >= 3, points.count <= RecorderFileLimits.points - pointCount else {
                     throw RecorderFileError.invalid("Invalid polygon point count.")
                 }
                 pointCount += points.count
+            case .success(.completeStroke(let stroke), _):
+                let count = try RecorderFileLimits.strokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
+                pointCount += count
+                fileVersion = strokeVersion
+            default: break
             }
         }
         let records = try value.records.map { record -> RecorderJSON in
@@ -29,7 +36,7 @@ extension RecorderFileCodec {
         let symbols = try value.symbols.map { symbol in
             RecorderJSON.object(["id": id(symbol.id), "description": try descriptionJSON(symbol.description)])
         }
-        return .object(["format": .string(format), "version": j(version), "recordingID": id(value.recordingID), "name": .string(value.name),
+        return .object(["format": .string(format), "version": j(fileVersion), "recordingID": id(value.recordingID), "name": .string(value.name),
             "origin": .object(["imageLabel": .string(value.origin.imageLabel), "initialWidth": j(value.origin.initialWidth), "initialHeight": j(value.origin.initialHeight)]),
             "symbols": .array(symbols), "records": .array(records)])
     }
@@ -53,6 +60,27 @@ extension RecorderFileCodec {
     private static func colorJSON(_ value: RecorderColor) throws -> RecorderJSON {
         .object(["space": .string("srgb"), "red": try d(value.red), "green": try d(value.green), "blue": try d(value.blue), "alpha": try d(value.alpha)])
     }
+    private static func strokePointJSON(_ value: RecorderStrokeTrace.Point) throws -> RecorderJSON {
+        .object(["x": try d(value.x), "y": try d(value.y), "pressure": try d(value.pressure),
+            "xTilt": try d(value.xTilt), "yTilt": try d(value.yTilt), "timeMilliseconds": j(Int(value.timeMilliseconds))])
+    }
+    private static func strokeJSON(_ value: RecorderStrokeCommand) throws -> RecorderJSON {
+        let brush = value.settings
+        var settings: [String: RecorderJSON] = [
+            "tool": .string(brush.tool.rawValue), "size": try d(brush.size), "opacity": try d(brush.opacity),
+            "red": try d(brush.red), "green": try d(brush.green), "blue": try d(brush.blue),
+            "pressureSize": .bool(brush.pressureSize), "antiErase": .bool(brush.antiErase),
+        ]
+        if let hardness = brush.hardness { settings["hardness"] = try d(hardness) }
+        let identity = value.facts.brush
+        var brushIdentity: [String: RecorderJSON] = ["name": .string(identity.name), "isInternal": .bool(identity.isInternal)]
+        if let collection = identity.collection { brushIdentity["collection"] = .string(collection) }
+        let facts = RecorderJSON.object(["brush": .object(brushIdentity), "fingerprint": .string(value.facts.fingerprint)])
+        let batches = try value.trace.batches.map { RecorderJSON.array(try $0.map(strokePointJSON)) }
+        return .object(["tag": .string("completeStroke"), "settings": .object(settings), "facts": facts,
+                        "first": try strokePointJSON(value.trace.first), "batches": .array(batches)])
+    }
+
     private static func commandJSON(_ command: RecorderFileCommand) throws -> RecorderJSON {
         switch command {
         case .selectionShape(let shape, let options):
@@ -79,6 +107,7 @@ extension RecorderFileCodec {
             if let opacity = properties.opacity { fields["opacity"] = try d(opacity) }
             if let mode = properties.mode { fields["mode"] = .string(mode.name) }
             return .object(["tag": .string("layerProperties"), "properties": .object(fields)])
+        case .completeStroke(let stroke): return try strokeJSON(stroke)
         }
     }
     private static func descriptionKindJSON(_ value: RecorderTargetDescription.Kind) -> RecorderJSON {
