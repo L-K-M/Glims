@@ -3165,7 +3165,17 @@ final class ImageDocument {
         guard maskStates[layer]?.editing != true else {
             return refuseMaskEdit()
         }
-        run { session, image in
+        let affine = RecorderFileCommand.Affine(a: matrix.a, b: matrix.b, c: matrix.c,
+                                                d: matrix.d, tx: matrix.tx, ty: matrix.ty)
+        guard let bounds = layers.first(where: { $0.id == layer })?.bounds,
+              affine.outputBounds(for: .init(x: bounds.minX, y: bounds.minY,
+                                             width: bounds.width, height: bounds.height)) != nil else {
+            onError?("The layer transform exceeds its supported bounds.")
+            return
+        }
+        let semantic = SemanticImageCommand.transformLayer(matrix: matrix, interpolation: interpolation)
+        run(semantic: semantic, recorderLayer: layer) { session, image in
+            try Self.requireSafeLayerTransform(matrix, layer: layer, session: session, image: image)
             try session.transformLayer(layer, image: image, matrix: matrix, interpolation: interpolation)
         }
     }
@@ -5479,6 +5489,20 @@ final class ImageDocument {
                             throw RecorderReplayError(message: "Finish editing the channel or layer mask before replaying this stroke.")
                         }
                     }
+                    if case .transformLayer(let matrix, _) = step.command {
+                        try Self.requireSafeLayerTransform(matrix, layer: layer, session: session, image: image)
+                        let selectedLayers = try session.selectedLayers(image)
+                        let editingMask = try (selectedLayers + [layer]).contains {
+                            try session.layerMask($0, image: image).editing
+                        }
+                        guard try !session.quickMask(image).enabled,
+                              try session.selectedItems(.channel, image: image).isEmpty, !editingMask else {
+                            throw RecorderReplayError(message: "Finish editing the channel or layer mask before replaying this transform.")
+                        }
+                        guard try session.layerState(layer, image: image).effective.isDisjoint(with: [.pixels, .position]) else {
+                            throw RecorderReplayError(message: "Unlock the recorded layer's pixels and position before replaying this transform.")
+                        }
+                    }
                     try step.command.apply(session: session, image: image, layer: layer)
                 } else if case .channel(let channel)? = context {
                     try step.command.apply(session: session, image: image, channel: channel)
@@ -5516,7 +5540,7 @@ final class ImageDocument {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
         case .channelToSelection: return true
-        case .layerProperties, .completeStroke: return true
+        case .layerProperties, .transformLayer, .completeStroke: return true
         default: return false
         }
     }
@@ -5530,6 +5554,14 @@ final class ImageDocument {
             }
             // Native ownership is confirmed behind accepted input. A layer
             // property is not bound to the current paint drawable or selection.
+            return .layer(layer)
+        }
+        if case .transformLayer = command {
+            guard let layer = explicitLayer, layer > 0 else {
+                return .unavailable("The explicit layer could not be identified when this transform was recorded.")
+            }
+            // The recorded transform binds the layer it was invoked on and
+            // never falls through to the implicit paint target or selection.
             return .layer(layer)
         }
         if case .channelToSelection = command {
@@ -5560,6 +5592,25 @@ final class ImageDocument {
         }
         return .target(RecorderTargetContext(layers: selectedLayerIDs, channels: selectedChannelIDs,
                                             target: target, masks: masks, quickMask: quickMask))
+    }
+
+    /// Fresh pre-mutation admission for a replayed absolute image-pixel
+    /// affine. The matrix acts on the bound layer's current native bounds;
+    /// recorded symbol bounds are identity hints only, never a geometry
+    /// contract, so imported files are revalidated here before anything can
+    /// mutate. The output extent shares the native 524288-pixel ceiling.
+    private nonisolated static func requireSafeLayerTransform(_ matrix: CGAffineTransform, layer: Int32,
+                                                                      session: EngineSession, image: Int32) throws {
+        guard let row = try session.layers(image).first(where: { $0.id == layer }) else {
+            throw RecorderReplayError(message: "The recorded layer no longer belongs to this native image.")
+        }
+        let affine = RecorderFileCommand.Affine(a: matrix.a, b: matrix.b, c: matrix.c,
+                                                d: matrix.d, tx: matrix.tx, ty: matrix.ty)
+        let bounds = row.bounds
+        guard affine.outputBounds(for: .init(x: bounds.minX, y: bounds.minY,
+                                              width: bounds.width, height: bounds.height)) != nil else {
+            throw RecorderReplayError(message: "The recorded layer transform's output bounds are unsafe for replay.")
+        }
     }
 
     private nonisolated static func recorderContextsMatch(_ first: RecorderContext, _ second: RecorderContext) -> Bool {

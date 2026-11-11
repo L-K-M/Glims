@@ -5,6 +5,7 @@ enum RecorderFileCodec {
     static let version = 1
     static let strokeVersion = 2
     static let channelVersion = 3
+    static let layerTransformVersion = 4
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -81,7 +82,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...channelVersion)
+        let fileVersion = try integer(root.get("version"), range: version...layerTransformVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -100,6 +101,7 @@ enum RecorderFileCodec {
         var points = 0
         var hasStroke = false
         var hasChannelSelection = false
+        var hasLayerTransform = false
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
             guard case .object(let members) = node, let outcome = members["outcome"] else { throw RecorderFileError.invalid("Missing record outcome.") }
             let outcomeName = try string(outcome)
@@ -111,6 +113,7 @@ enum RecorderFileCodec {
                 let command = try command(row.get("command"), version: fileVersion, points: &points)
                 if case .completeStroke = command { hasStroke = true }
                 if case .channelToSelection = command { hasChannelSelection = true }
+                if case .transformLayer = command { hasLayerTransform = true }
                 let binding = try binding(row.get("binding"))
                 try validate(binding, for: command, descriptions: descriptions)
                 result = .success(command, binding)
@@ -132,6 +135,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == channelVersion, !hasChannelSelection {
             throw RecorderFileError.invalid("Version 3 requires a successful channel selection.")
+        }
+        if fileVersion == layerTransformVersion, !hasLayerTransform {
+            throw RecorderFileError.invalid("Version 4 requires a successful layer transform.")
         }
         return RecorderFileValue(recordingID: try uuid(root.get("recordingID")), name: name, origin: source, symbols: symbols, records: records)
     }
@@ -283,6 +289,29 @@ enum RecorderFileCodec {
             return .layerProperties(.init(name: try properties.optional("name").map { try string($0, native: true) },
                 visible: try properties.optional("visible").map { try bool($0) }, opacity: try properties.optional("opacity").map { try number($0) },
                 mode: try properties.optional("mode").map { try RecorderFileLayerMode(string($0)) }))
+        case "transformLayer":
+            guard version >= layerTransformVersion else { throw RecorderFileError.invalid("A layer transform needs recording version 4.") }
+            let value = try Object(node, required: ["tag", "matrix", "interpolation"])
+            let matrix = try Object(value.get("matrix"), required: ["a", "b", "c", "d", "tx", "ty"])
+            let a = try number(matrix.get("a")), b = try number(matrix.get("b"))
+            let c = try number(matrix.get("c")), d = try number(matrix.get("d"))
+            let tx = try number(matrix.get("tx")), ty = try number(matrix.get("ty"))
+            guard let interpolation = RecorderFileCommand.LayerInterpolation(rawValue: try string(value.get("interpolation"))) else {
+                throw RecorderFileError.invalid("Unknown layer interpolation.")
+            }
+            // Finite coefficients alone are not safe: the affine determinant
+            // can overflow, and a degenerate matrix would flatten the layer.
+            // Matches the native 1e-9 bound in Engine/edit.c.
+            let determinant = a * d - b * c
+            guard determinant.isFinite, abs(determinant) >= 1e-9 else {
+                throw RecorderFileError.invalid("The layer transform matrix is degenerate.")
+            }
+            // Identity can never reach the file: live admission refuses it
+            // before any record exists.
+            guard a != 1 || b != 0 || c != 0 || d != 1 || tx != 0 || ty != 0 else {
+                throw RecorderFileError.invalid("The identity layer transform was never admissible.")
+            }
+            return .transformLayer(.init(a: a, b: b, c: c, d: d, tx: tx, ty: ty), interpolation: interpolation)
         case "channelToSelection":
             guard version >= channelVersion else { throw RecorderFileError.invalid("A channel selection needs recording version 3.") }
             let value = try Object(node, required: ["tag", "operation"])
@@ -394,6 +423,9 @@ enum RecorderFileCodec {
         switch (command, binding) {
         case (.layerProperties, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("Layer properties need a layer description.") }
+            return
+        case (.transformLayer, .layer(let id)):
+            guard layer(id) else { throw RecorderFileError.invalid("A layer transform needs a layer description.") }
             return
         case (.channelToSelection, .channel(let id)):
             guard descriptions[id]?.kind == .channel else { throw RecorderFileError.invalid("Channel to Selection needs a channel description.") }

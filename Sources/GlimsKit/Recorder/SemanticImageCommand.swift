@@ -44,12 +44,16 @@ enum SemanticImageCommand {
     case resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: RecorderColor)
     case crop(CGRect)
     case layerProperties(LayerProperties)
+    /// A committed Transform-tool affine in absolute image pixels, y down.
+    /// The explicit layer lives in the document's runtime binding, never in
+    /// this command, and is never silently adapted to a rebound layer.
+    case transformLayer(matrix: CGAffineTransform, interpolation: EngineSession.Interpolation)
     case completeStroke(RecorderStrokeCommand)
 
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .scale, .resizeCanvas, .crop, .completeStroke: return true
+        case .transformImage, .transformLayer, .scale, .resizeCanvas, .crop, .completeStroke: return true
         case .selectionShape, .selectColor, .selectCommand, .channelToSelection, .layerProperties: return false
         }
     }
@@ -88,6 +92,7 @@ enum SemanticImageCommand {
         case .resizeCanvas: return "Resize Canvas"
         case .crop: return "Crop Image"
         case .layerProperties: return "Layer Properties"
+        case .transformLayer: return "Transform Layer"
         case .completeStroke(let stroke): return stroke.title
         }
     }
@@ -110,7 +115,7 @@ enum SemanticImageCommand {
             try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill)
         case .crop(let rect):
             try session.crop(image: image, to: rect)
-        case .layerProperties, .completeStroke:
+        case .layerProperties, .transformLayer, .completeStroke:
             throw MissingLayerBinding()
         case .channelToSelection:
             throw MissingChannelBinding()
@@ -124,6 +129,9 @@ enum SemanticImageCommand {
         case .layerProperties(let properties):
             guard layer > 0 else { throw MissingLayerBinding() }
             try session.changeLayer(layer, image: image, properties.change)
+        case .transformLayer(let matrix, let interpolation):
+            guard layer > 0 else { throw MissingLayerBinding() }
+            try session.transformLayer(layer, image: image, matrix: matrix, interpolation: interpolation)
         case .completeStroke(let stroke):
             guard layer > 0 else { throw MissingLayerBinding() }
             try stroke.apply(session: session, image: image, layer: layer)

@@ -4278,3 +4278,20 @@ creation, unchanged underlying pixels, typed edits, cancellation, exact
 Undo/Redo output and editable XCF reopening. The Swift suite passes 1,250
 tests. This closes the tonal-picker gap in the broader editor brief; it does
 not establish complete Photoshop 4 parity or final application acceptance.
+
+### Recorded affine layer transforms (2026-11-11 candidate)
+
+The Recorder captures committed layer transforms with an explicit layer
+symbol, the six image-coordinate coefficients and a named interpolation
+choice. Saved format version 4 preserves versions 1 through 3. Loading an
+action binds its target explicitly; replay uses fresh native membership,
+mode, lock and output-geometry checks before touching pixels. Preview,
+identity, cancelled and refused transforms do not become successful actions.
+
+All 1,262 unit tests pass. The focused native workflow passes on all four
+engines, including actual asynchronous save/load, rebound targets, exact
+pixel/bounds output and Undo/Redo, stale locks, mask/channel/Quick Mask
+refusals, deleted targets and accepted-command failure settlement. Independent
+production review and follow-up fixture review have no remaining important
+findings. These checks do not exercise the binding sheet itself or establish
+complete action/batch coverage; filter and text recording remain open.

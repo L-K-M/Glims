@@ -21,6 +21,8 @@ extension RecorderFileCodec {
             case .success(.channelToSelection, _):
                 // Version 3 covers both extensions; keep the highest.
                 fileVersion = max(fileVersion, channelVersion)
+            case .success(.transformLayer, _):
+                fileVersion = max(fileVersion, layerTransformVersion)
             default: break
             }
         }
@@ -112,6 +114,10 @@ extension RecorderFileCodec {
             if let opacity = properties.opacity { fields["opacity"] = try d(opacity) }
             if let mode = properties.mode { fields["mode"] = .string(mode.name) }
             return .object(["tag": .string("layerProperties"), "properties": .object(fields)])
+        case .transformLayer(let matrix, let interpolation):
+            return .object(["tag": .string("transformLayer"), "interpolation": .string(interpolation.rawValue),
+                "matrix": .object(["a": try d(matrix.a), "b": try d(matrix.b), "c": try d(matrix.c),
+                                   "d": try d(matrix.d), "tx": try d(matrix.tx), "ty": try d(matrix.ty)])])
         case .completeStroke(let stroke): return try strokeJSON(stroke)
         }
     }
