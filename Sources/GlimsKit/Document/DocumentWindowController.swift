@@ -14,6 +14,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     var screenModeSnapshot: DocumentScreenModeSnapshot?
     private var viewAngleAlert: NSAlert?
     private var paintSourceAlert: NSAlert?
+    private var textSourceAlert: NSAlert?
     private var batchRasterizeAlert: NSAlert?
     private var batchRestoreAlert: NSAlert?
     private(set) var softProofController: SoftProofController?
@@ -214,6 +215,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         canvas.tools.onStatus = { [weak self] message in
             self?.statusIsError = false
             self?.statusBar.message = message
+        }
+        canvas.tools.onTextNeedsRestore = { [weak self] layer, version in
+            self?.presentTextSourceConfirmation(layer: layer, stateVersion: version)
         }
         canvas.tools.onHintChange = { [weak self] reason in self?.refreshIdleStatus(reason) }
         canvas.tools.onZoom = { [weak self] zoomIn, point in
@@ -2019,6 +2023,64 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    /// Restoring is its own explicit command. Opening an editor requires a
+    /// new Text click, so an old gesture never resumes after native work.
+    private func presentTextSourceConfirmation(layer: Int32, stateVersion: Int) {
+        let document = imageDocument
+        let selection = document.selectedLayerIDs
+        let drawable = document.activeDrawable
+        func isCurrent() -> Bool {
+            document.acceptsEdits && !document.targetCommandIsPending
+                && document.pendingWork == 0 && !document.strokeIsActive
+                && document.stateVersion == stateVersion
+                && document.selectedLayerIDs == selection && document.activeDrawable == drawable
+                && !document.isMaskTargetActive && !document.isChannelTargetActive
+        }
+        guard let window, window.attachedSheet == nil, textSourceAlert == nil,
+              !closeStarted, !previewBusy, isCurrent() else {
+            showStatusError(ImageDocument.DocumentError.busy.localizedDescription)
+            return
+        }
+        guard let source = document.layerSources[layer], source.kind == .text,
+              source.hasSource, source.isRasterized,
+              let info = document.layers.first(where: { $0.id == layer }) else {
+            showStatusError(ImageDocument.DocumentError.targetChanged.localizedDescription)
+            return
+        }
+        if let reason = document.restoreLayerSourcesRefusal([layer]) {
+            showStatusError(reason)
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Restore \u{201C}\(info.name)\u{201D} before editing text?"
+        alert.informativeText = "Restoring discards this layer's pixel edits and regenerates its retained text as one undo step. "
+            + "Undo brings the painted pixels back. Restore, then click the text again to edit."
+        alert.addButton(withTitle: "Restore")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.forEach { $0.setAccessibilityLabel($0.title) }
+        textSourceAlert = alert
+        alert.beginSheetModal(for: window) { [weak self, weak alert] response in
+            guard let self, let alert, self.textSourceAlert === alert else { return }
+            self.textSourceAlert = nil
+            guard response == .alertFirstButtonReturn, !self.closeStarted,
+                  self.imageDocument === document, !document.isClosing else { return }
+            guard !self.previewBusy, isCurrent() else {
+                self.showStatusError("The image changed. Click the text again.")
+                return
+            }
+            if let reason = document.restoreLayerSourcesRefusal([layer]) {
+                self.showStatusError(reason)
+                return
+            }
+            document.restoreLayerSource(layer, expectedStateVersion: stateVersion) { [weak self] result in
+                guard case .success = result, let self, !self.closeStarted,
+                      self.imageDocument === document, !document.isClosing else { return }
+                self.statusIsError = false
+                self.statusBar.message = "Source restored. Click the text again to edit."
+            }
+        }
+    }
+
     /// The confirmation sheet shared by both layer-source commands. The
     /// document and the explicit layer id are captured by value before the
     /// alert is shown, so Apply can never fall back to layer 0, the
@@ -3077,6 +3139,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             window?.endSheet(alert.window, returnCode: .abort)
         }
         paintSourceAlert = nil
+        if let alert = textSourceAlert, window?.attachedSheet === alert.window {
+            window?.endSheet(alert.window, returnCode: .abort)
+        }
+        textSourceAlert = nil
         if let alert = batchRasterizeAlert, window?.attachedSheet === alert.window {
             window?.endSheet(alert.window, returnCode: .abort)
         }

@@ -260,6 +260,9 @@ final class CanvasToolController {
 
     /// Shows a short message in the document's status strip.
     var onStatus: ((String) -> Void)?
+    /// Requests owned consent before restoring retained rasterized text.
+    /// Consent restores only; a fresh click starts an editing gesture.
+    var onTextNeedsRestore: ((_ layer: Int32, _ stateVersion: Int) -> Void)?
     /// View-only refreshes never use onStatus, which clears error latches.
     var onHintChange: ((ToolHintPolicy.Refresh) -> Void)?
 
@@ -1569,7 +1572,21 @@ final class CanvasToolController {
     /// Opens the editor: on the topmost visible text layer under `point`,
     /// or for new text with its top-left at `point`.
     private func beginTextEditing(at point: CGPoint) {
-        let hit = document.layers.first { $0.kind == .text && $0.isVisible && $0.bounds.contains(point) }
+        let hit = document.layers.first { layer in
+            guard layer.isVisible, layer.bounds.contains(point) else { return false }
+            if layer.kind == .text { return true }
+            guard let source = document.layerSources[layer.id] else { return false }
+            return source.kind == .text && source.isRasterized && source.hasSource
+        }
+        if let hit, let source = document.layerSources[hit.id], source.kind == .text,
+           source.isRasterized, source.hasSource {
+            if let request = onTextNeedsRestore {
+                request(hit.id, document.stateVersion)
+            } else {
+                onStatus?("Use Layer > Restore Layer Source before editing this text.")
+            }
+            return
+        }
         let editor: TextEditorOverlay
         let context: NewTextContext?
         if let hit, let current = document.textLayer(hit.id) {

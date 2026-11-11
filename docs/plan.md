@@ -4103,3 +4103,20 @@ four engines. Independent native and Swift production reviews found no
 important issue. See [`lens-blur-source.md`](lens-blur-source.md) for the
 observed baselines, captured-map lifetime and exact evidence limits. Final
 standalone packaging and whole-editor completion remain separate gates.
+
+### Restore consent for rasterized text (2026-11-11 candidate)
+
+Text clicks now recognize retained rasterized text and offer owned
+Restore/Cancel instead of creating an unrelated empty editor. Restore uses
+its original document/layer and counted native command, then requires a
+fresh Text click; close and stale consent cannot revive old editing work.
+The intended old-code failure was observed before implementation. Latest-Main
+source `0431845` passes 92 consent and 204 existing floating-Text checks across
+four engines, plus 1,220 unit tests. Independent production source review
+found no important issue. See [`text-source-restore-consent.md`](text-source-restore-consent.md)
+for the independently adjudicated status-oracle correction and exact limits.
+
+Current-source audits also confirm that batch Restore, all planned Image
+Adjust placements and the descriptor-supported typed metadata forms are
+already present. The completion ledger now names those finite capabilities;
+it does not infer blanket batching or every possible metadata schema editor.
