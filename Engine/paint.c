@@ -11,6 +11,7 @@
  */
 #include "engine-private.h"
 #include "brush-fingerprint.h"
+#include "stroke-dynamics-fingerprint.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -330,12 +331,19 @@ capture_stroke_facts (GlimsEngine               *engine,
       gimp_image_get_floating_selection (image) ||
       !symmetry || G_OBJECT_TYPE (symmetry) != GIMP_TYPE_SYMMETRY ||
       (paint_mode != GIMP_LAYER_MODE_NORMAL && paint_mode != GIMP_LAYER_MODE_NORMAL_LEGACY) ||
-      gimp_paint_options_are_dynamics_enabled (options) ||
       options->expand_use || options->jitter_options->use_jitter ||
       options->smoothing_options->use_smoothing ||
       (options->application_mode != GIMP_PAINT_CONSTANT &&
        options->application_mode != GIMP_PAINT_INCREMENTAL))
     return FALSE;
+
+  g_autofree gchar *dynamics = NULL;
+  if (gimp_paint_options_are_dynamics_enabled (options))
+    {
+      dynamics = glims_stroke_dynamics_fingerprint (TRUE,
+                                                   gimp_context_get_dynamics (context));
+      if (!dynamics) return FALSE;
+    }
 
   const gdouble values[] = { brush->red, brush->green, brush->blue,
     gimp_context_get_opacity (context), options->brush_size, options->brush_angle,
@@ -374,6 +382,14 @@ capture_stroke_facts (GlimsEngine               *engine,
       gchar number[G_ASCII_DTOSTR_BUF_SIZE];
       g_ascii_dtostr (number, sizeof number, values[i] == 0 ? 0 : values[i]);
       g_checksum_update (hash, (const guchar *) number, strlen (number) + 1);
+    }
+  /* Keep existing disabled-dynamics recordings byte-compatible. Enabled
+   * recordings additionally bind to the actual bounded native config. */
+  if (dynamics)
+    {
+      static const gchar dynamics_domain[] = "glims-stroke-pressure-size-v1";
+      g_checksum_update (hash, (const guchar *) dynamics_domain, sizeof dynamics_domain);
+      g_checksum_update (hash, (const guchar *) dynamics, strlen (dynamics) + 1);
     }
   facts->fingerprint = g_strdup (g_checksum_get_string (hash));
 
