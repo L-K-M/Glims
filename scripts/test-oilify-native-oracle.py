@@ -97,7 +97,7 @@ def build(producer: Path, output: Path, facade: bool = False) -> None:
     print(f"Built {binary}; use the explicit run subcommand to execute it.", flush=True)
 
 
-def run(binary: Path, work: Path, timeout: int, diagnostics: bool) -> int:
+def run(binary: Path, work: Path, timeout: int, diagnostics: bool, ui_fixture: bool) -> int:
     binary, work = binary.resolve(), work.resolve()
     require(binary.is_file() and disjoint(work, binary.parent), "binary and run directories must be disjoint")
     require(disjoint(work, ROOT), "run directory must be outside the source checkout")
@@ -116,6 +116,8 @@ def run(binary: Path, work: Path, timeout: int, diagnostics: bool) -> int:
     command = [str(binary), str(work)]
     if diagnostics:
         command.append("--diagnostics")
+    elif ui_fixture:
+        command.append("--ui-fixture")
     with (work / "native.log").open("x") as log:
         print(f"Running {binary}; output goes to {log.name}", flush=True)
         try:
@@ -131,7 +133,7 @@ def run(binary: Path, work: Path, timeout: int, diagnostics: bool) -> int:
     unchanged = digest(binary) == binary_hash
     write_json(work / "run.json", {"binary": str(binary), "binary_sha256": binary_hash,
                                    "binary_unchanged": unchanged, "exit_code": result,
-                                   "diagnostics": diagnostics,
+                                   "diagnostics": diagnostics, "ui_fixture": ui_fixture,
                                    "elapsed_seconds": time.monotonic() - started, "artifacts": artifacts})
     require(unchanged, "fixture binary changed during execution")
     return result
@@ -148,14 +150,16 @@ def main() -> None:
     run_parser.add_argument("--binary", type=Path, required=True)
     run_parser.add_argument("--work", type=Path, required=True)
     run_parser.add_argument("--timeout", type=int, default=180)
-    run_parser.add_argument("--diagnostics", action="store_true", help="retain projection and graph comparisons")
+    run_mode = run_parser.add_mutually_exclusive_group()
+    run_mode.add_argument("--diagnostics", action="store_true", help="retain projection and graph comparisons")
+    run_mode.add_argument("--ui-fixture", action="store_true", help="export AppKit inputs and direct-Core frames using the facade fixture binary")
     args = parser.parse_args()
     if args.command == "build":
         build(args.producer, args.out, args.facade)
     else:
         if args.timeout <= 0:
             parser.error("--timeout must be positive")
-        sys.exit(run(args.binary, args.work, args.timeout, args.diagnostics))
+        sys.exit(run(args.binary, args.work, args.timeout, args.diagnostics, args.ui_fixture))
 
 
 if __name__ == "__main__":
