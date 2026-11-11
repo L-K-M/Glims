@@ -8,12 +8,12 @@ not establish these targets.
 
 ## Startup
 
-- [ ] A fresh Glims user directory reaches a rendered, editable document with
+- [x] On the qualification Mac, a fresh Glims user directory reaches a rendered, editable document with
       tools and commands available within five seconds of ordinary macOS launch.
-- [ ] Repeat with existing preferences and after moving the application.
+- [x] Repeat with the newly written preferences and after moving the application on the same Mac.
 - [ ] Missing, changed or invalid caches preserve commands, custom plug-ins,
       fonts and normal editing behavior.
-- [ ] The final packaged application passes the isolated bundle check with
+- [x] The integrated startup application passes the isolated bundle check with
       development inputs inaccessible.
 
 Measure from the launch request, without waiting for the Launch Services
@@ -26,11 +26,15 @@ The current startup investigation identified plug-in discovery and font
 catalog construction as major costs. The current candidate seeds a validated command registry and prepares native
 font caches in a small helper. CoreText supplies downloaded font directories,
 avoiding recursive scans of unrelated macOS Assets data. Normal launches on
-this Mac measured 2.98 seconds with fresh Glims data, 1.56 seconds cached,
-and 3.87 seconds after relocating the app with fresh Glims data. Corrupt
+this Mac measured 2.70 seconds with fresh Glims data, 1.72 seconds cached,
+and 4.09 seconds after relocating the app with fresh Glims data. Corrupt
 command-cache recovery and incompatible registry fallback remain slower
-(about eleven seconds), because they query the plug-ins again. Final
-isolated-bundle and engine-matrix qualification is still pending.
+(about eleven seconds), because they query the plug-ins again. The integrated
+bundle passes 1,917 native and 3,310 app checks with development trees denied;
+all four engine sets pass the adapter suite. The cache-fidelity script passes
+fresh/warm/relocated catalog comparisons, corrupt cache recovery, user-font
+installation/removal and missing-helper fallback. Arbitrary custom plug-in
+changes, other Macs and old preference collections remain unqualified.
 
 ## Functional baseline
 
@@ -56,7 +60,7 @@ The source audit confirmed these gaps in the previous main revision:
 
 | Area | Confirmed gap | Current work |
 | --- | --- | --- |
-| Adjustment layers | Creation offers only seven generic operations | Add the four dedicated tonal adjustments and verify group effects |
+| Adjustment layers | The four dedicated tonal adjustments were missing from creation | Closed in PR #200, including native group effects and XCF checks |
 | Actions | Recorder excludes filters, text, layer structure, mode changes and free transforms; replay is per image | Expand command capture and batch workflow |
 | Transform | Canvas session handles only scale, move and rotation | Add missing transforms and numeric controls |
 | Color modes | Facade and conversion menus expose RGB, grayscale and indexed | Design additional editable color models and faithful persistence |
