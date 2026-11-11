@@ -10,11 +10,13 @@ GIMP image engine.
 
 **Version:** v<!-- version -->0.1.0<!-- /version -->
 
-**Status:** phase 0 is finished with a go verdict
-([`docs/phase0-report.md`](docs/phase0-report.md)) and the native editor is under active development. GIMP's engine builds
-unmodified and runs behind the C adapter in `Engine/`; the app opens, paints,
-filters, runs GIMP's plug-ins with their own dialogs and exports images
-through it, and normal app builds include the engine. Nothing has been released.
+**Status:** the native editor opens, edits, saves and exports real images.
+Normal app builds include the engine. The current implementation and its
+four-engine, standalone and interactive verification are recorded in the
+[completion ledger](docs/completion.md) and
+[verification report](docs/editor-verification.md). Public distribution still
+requires source provenance and signing/notarization qualification; nothing
+has been released.
 
 Glims pairs GIMP's GUI-free engine (layers, masks, painting, selections,
 non-destructive filters, XCF, plug-ins) with a new AppKit interface made with

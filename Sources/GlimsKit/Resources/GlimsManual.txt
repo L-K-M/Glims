@@ -233,8 +233,11 @@ Layer > Lock protects work in progress:
 
 A lock on a group applies to every layer inside it.
 
-Layer masks are not part of this release; there are no mask commands
-in the Layer menu yet.
+Layer > Mask > Add Layer Mask… creates a mask using the choices in its
+sheet. Edit Mask switches painting to the mask; Show Mask displays it
+on the canvas. Enable Mask toggles its effect without deleting it.
+Apply Mask combines the mask with the layer's pixels, while Delete Mask
+removes the mask. Mask to Selection uses the mask as a selection.
 
 # Filters
 
@@ -361,8 +364,8 @@ pixels matter.
 
 # Preferences
 
-Glims > Preferences… (Command-Comma) opens three choices; all apply
-immediately:
+Glims > Preferences… (Command-Comma) controls appearance, opening zoom
+and recovery copies:
 
   Appearance      Classic Light, Neutral Gray or Dark for Glims'
                   windows and palettes.
@@ -371,6 +374,12 @@ immediately:
                   judgement honest.
   Open Images At  whether newly opened images start at Fit Image or
                   at Actual Pixels.
+  Recovery Copies keep private periodic copies of open images.
+  Copy Every      choose the interval between recovery copies.
+
+Appearance and canvas surround apply immediately. Open Images At
+applies to newly opened images. Recovery settings update the running
+scheduler; a copy already in progress can still finish.
 
 # Keyboard & Mouse Reference
 
