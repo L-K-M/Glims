@@ -572,6 +572,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (layer restore batch)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "text-restore-consent" {
+                try exerciseTextRestoreConsent(session, documents: documents)
+                print(failures == 0 ? "PASSED (Text restore consent)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "text-floating-create" {
                 try exerciseTextFloatingCreate(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (text floating create)" : "FAILED: \(failures) failures")
@@ -10686,6 +10691,264 @@ enum EngineSmokeTest {
     /// NOT_FOUND and late-close safety. Pixel and kind oracles read the
     /// session directly, never the document cache; sheet buttons are
     /// queried by their accessibility labels.
+    /// Actual Text clicks and owned sheet buttons only: the baseline lacks
+    /// the consent, so it must fail once and close its empty new-text editor.
+    private static func exerciseTextRestoreConsent(_ session: EngineSession,
+                                                    documents: DocumentList) throws {
+        struct Content: Equatable {
+            let layers: [EngineSession.Layer]
+            let selected: [Int32]
+            let sources: [EngineSession.LayerSource]
+            let raw: Data
+            let rawWidth, rawHeight: Int
+            let rawOrigin: CGPoint
+            let merged: Data
+        }
+        struct Snapshot: Equatable {
+            let content: Content
+            let undo: EngineSession.UndoInfo
+            let history: EngineSession.History
+        }
+        var count = 0
+        func expect(_ condition: Bool, _ message: String) {
+            count += 1
+            check(condition, "Text restore: \(message)")
+        }
+        func require(_ condition: Bool, _ message: String) throws {
+            guard condition else {
+                throw NSError(domain: "TextRestoreFixture", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: message])
+            }
+        }
+        func wait(_ seconds: TimeInterval = 15, _ condition: () -> Bool) -> Bool {
+            let deadline = Date().addingTimeInterval(seconds)
+            repeat {
+                if condition() { return true }
+                EngineSmokeTestHost.pumpEvents()
+            } while Date() < deadline
+            return condition()
+        }
+        func button(_ view: NSView?, _ title: String) -> NSButton? {
+            guard let view else { return nil }
+            if let found = view as? NSButton, found.title == title { return found }
+            for child in view.subviews {
+                if let found = button(child, title) { return found }
+            }
+            return nil
+        }
+        func visibleText(_ view: NSView?) -> String {
+            guard let view, !view.isHidden else { return "" }
+            var result = (view as? NSTextField)?.stringValue ?? ""
+            for child in view.subviews { result += " " + visibleText(child) }
+            return result
+        }
+        var owners: [DocumentWindowController] = []
+        var looseImages: [Int32] = []
+        let priorTool = ToolState.shared.current
+        func gone(_ image: Int32) -> Bool {
+            do { _ = try session.info(image); return false }
+            catch { return (error as? EngineSession.EngineError)?.isNotFound == true }
+        }
+        defer {
+            for owner in owners {
+                if let sheet = owner.window?.attachedSheet {
+                    if let cancel = button(sheet.contentView, "Cancel") { cancel.performClick(nil) }
+                    else { owner.window?.endSheet(sheet) }
+                }
+                owner.window?.close()
+            }
+            expect(wait { owners.allSatisfy { gone($0.imageDocument.image) && $0.imageDocument.pendingWork == 0 } },
+                   "all owned native images and counted work close before shutdown")
+            expect(owners.allSatisfy { $0.window?.isVisible != true && $0.window?.attachedSheet == nil },
+                   "owned windows and consent sheets leave no visible UI")
+            for image in looseImages { try? session.closeImage(image) }
+            expect(looseImages.allSatisfy { gone($0) }, "independent native reference images close")
+            documents.items.removeAll { doc in owners.contains { $0.imageDocument === doc } }
+            ToolState.shared.select(priorTool)
+            print("     text-restore-consent checks: \(count)")
+        }
+        func snapshot(_ image: Int32) throws -> Snapshot {
+            let layers = try session.layers(image)
+            var sources: [EngineSession.LayerSource] = []
+            for layer in layers { sources.append(try session.layerSource(layer.id, image: image)) }
+            let raw = try session.copyPixels(image, merged: false)
+            let merged = try session.copyPixels(image, merged: true)
+            let content = Content(layers: layers, selected: try session.selectedLayers(image), sources: sources,
+                raw: raw.pixels, rawWidth: raw.width, rawHeight: raw.height, rawOrigin: raw.origin,
+                merged: merged.pixels)
+            return Snapshot(content: content, undo: try session.undoInfo(image), history: try session.history(image))
+        }
+        func matchesIndependentPixels(_ a: Content, _ reference: Content) -> Bool {
+            guard a.raw == reference.raw, a.merged == reference.merged,
+                  a.rawWidth == reference.rawWidth, a.rawHeight == reference.rawHeight,
+                  a.rawOrigin == reference.rawOrigin, a.sources == reference.sources else { return false }
+            return a.layers.map(\.bounds) == reference.layers.map(\.bounds)
+                && a.layers.map(\.kind) == reference.layers.map(\.kind)
+        }
+        func drain(_ document: ImageDocument) throws {
+            try require(wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy },
+                        "accepted work did not drain")
+        }
+        let fonts = try session.fonts()
+        guard let font = fonts.first(where: { !$0.isEmpty && $0.utf8.count < 128 }) else {
+            throw NSError(domain: "TextRestoreFixture", code: 2)
+        }
+        var style = EngineSession.TextSettings()
+        style.font = font; style.size = 18
+        style.color = NSColor(srgbRed: 0.2, green: 0.4, blue: 0.8, alpha: 1)
+        let words = "Restore me"
+        func seed() throws -> (image: Int32, text: Int32, original: Data) {
+            let image = try session.newImage(width: 160, height: 96)
+            looseImages.append(image)
+            let text = try session.addTextLayer(image: image, text: words, settings: style,
+                                                at: CGPoint(x: 10, y: 12))
+            try session.selectLayer(text, image: image)
+            let original = try session.copyPixels(image, merged: false).pixels
+            _ = try session.layerCommand(.rasterize, image: image, layer: text)
+            guard let row = try session.layers(image).first(where: { $0.id == text }) else {
+                throw NSError(domain: "TextRestoreFixture", code: 3)
+            }
+            var pencil = EngineSession.Brush()
+            pencil.tool = .pencil; pencil.size = 11; pencil.opacity = 1
+            pencil.red = 1; pencil.green = 0.1; pencil.blue = 0.2; pencil.pressureSize = false
+            let first = EngineSession.StrokePoint(x: row.bounds.minX + 4, y: row.bounds.minY + 4)
+            let last = EngineSession.StrokePoint(x: row.bounds.minX + 12, y: row.bounds.minY + 7,
+                                                  timeMilliseconds: 20)
+            let stroke = try session.beginStroke(image: image, drawable: text, brush: pencil, first: first)
+            try session.continueStroke(stroke, points: [last]); try session.endStroke(stroke)
+            return (image, text, original)
+        }
+        func owner(_ seed: (image: Int32, text: Int32, original: Data), _ name: String) throws -> DocumentWindowController {
+            let document = try ImageDocument(session: session, image: seed.image, name: name)
+            let owner = DocumentWindowController(document: document)
+            owners.append(owner); documents.items.append(document)
+            looseImages.removeAll { $0 == seed.image }
+            owner.showWindow(nil); owner.window?.contentView?.layoutSubtreeIfNeeded()
+            try drain(document)
+            return owner
+        }
+        func front(_ owner: DocumentWindowController) throws {
+            guard let window = owner.window else { throw NoWindow() }
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil); window.makeMain()
+            try require(wait { NSApp.isActive && NSApp.keyWindow === window && NSApp.mainWindow === window },
+                        "actual key/main window was not established")
+        }
+        func click(_ owner: DocumentWindowController, _ text: Int32) throws {
+            guard let window = owner.window,
+                  let row = try session.layers(owner.imageDocument.image).first(where: { $0.id == text }) else {
+                throw NoWindow()
+            }
+            let imagePoint = CGPoint(x: row.bounds.minX + 4, y: row.bounds.minY + 4)
+            let viewPoint = CGPoint(x: imagePoint.x * owner.canvas.scale, y: imagePoint.y * owner.canvas.scale)
+            let location = owner.canvas.convert(viewPoint, to: nil)
+            guard let down = NSEvent.mouseEvent(with: .leftMouseDown, location: location, modifierFlags: [],
+                timestamp: 1, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1),
+                  let up = NSEvent.mouseEvent(with: .leftMouseUp, location: location, modifierFlags: [],
+                timestamp: 1.02, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 0) else {
+                throw NSError(domain: "TextRestoreFixture", code: 4)
+            }
+            owner.canvas.mouseDown(with: down); owner.canvas.mouseUp(with: up)
+        }
+        expect(NSApp.isRunning, "a normal launched AppKit host owns the actual windows")
+        let aSeed = try seed(), reference = try seed(), bSeed = try seed()
+        let a = try owner(aSeed, "Text restore A"), b = try owner(bSeed, "Text restore B")
+        let docA = a.imageDocument
+        let painted = try snapshot(aSeed.image), bBefore = try snapshot(bSeed.image)
+        let referencePainted = try snapshot(reference.image)
+        let rasterized = EngineSession.LayerSource(kind: .text, isRasterized: true, hasSource: true)
+        expect(painted.content.raw != aSeed.original && docA.layerSources[aSeed.text] == rasterized,
+               "authentic text, Rasterize and Pencil create distinct stored painted pixels with retained text")
+        expect(matchesIndependentPixels(painted.content, referencePainted.content),
+               "an independently seeded native image has identical raw/merged pixels, bounds and source flags")
+        _ = try session.layerCommand(.restoreSource, image: reference.image, layer: reference.text)
+        let referenceRestored = try snapshot(reference.image)
+        expect(referenceRestored.undo.undoCount == referencePainted.undo.undoCount + 1
+                && referenceRestored.content.raw == reference.original,
+               "independent direct-native Restore regenerates source pixels as one ordinary Undo")
+
+        ToolState.shared.select(.text)
+        try front(a); try click(a, aSeed.text)
+        _ = wait(3) { a.window?.attachedSheet != nil || a.canvas.tools.textEditor != nil }
+        let cancelSheet = a.window?.attachedSheet
+        let cancel = button(cancelSheet?.contentView, "Cancel")
+        let restore = button(cancelSheet?.contentView, "Restore")
+        expect(cancelSheet != nil && cancel != nil && restore != nil && a.canvas.tools.textEditor == nil
+                && visibleText(cancelSheet?.contentView).contains("Restore, then click the text again to edit."),
+               "a real Text click offers owned Restore/Cancel and fresh-click guidance instead of a blank editor")
+        // On old code the preceding behavioral assertion is the only intended
+        // failure. Cleanup still closes its unmodified empty editor and images.
+        guard let cancel else { return }
+        expect(try snapshot(aSeed.image) == painted, "opening consent preserves every native pixel, source, row and history value")
+        cancel.performClick(nil)
+        try require(wait { a.window?.attachedSheet == nil }, "Cancel did not dismiss consent")
+        try drain(docA)
+        expect(try snapshot(aSeed.image) == painted && a.canvas.tools.textEditor == nil,
+               "Cancel preserves the complete painted native state and creates no editor")
+        try click(a, aSeed.text)
+        try require(wait { a.window?.attachedSheet != nil }, "second Text click did not ask again")
+        guard let apply = button(a.window?.attachedSheet?.contentView, "Restore") else {
+            throw NSError(domain: "TextRestoreFixture", code: 5)
+        }
+        try front(b)
+        expect(NSApp.mainWindow === b.window && NSApp.keyWindow === b.window,
+               "B really becomes main/key while A owns the Restore sheet")
+        apply.performClick(nil)
+        try require(wait { a.window?.attachedSheet == nil && docA.pendingWork == 0 && !EngineActivity.shared.isBusy },
+                    "accepted Restore did not finish")
+        let restored = try snapshot(aSeed.image)
+        expect(matchesIndependentPixels(restored.content, referenceRestored.content),
+               "captured A Restore matches independent direct-native raw/merged pixels, geometry and source state")
+        expect(restored.content.layers.count == painted.content.layers.count && restored.content.selected == [aSeed.text]
+                && restored.undo.undoCount == painted.undo.undoCount + 1,
+               "Restore changes the original target only and adds exactly one native Undo")
+        expect(try snapshot(bSeed.image) == bBefore, "B's full native state is unchanged by A's sheet")
+        print("OBS Text restore editorNil=\(a.canvas.tools.textEditor == nil) status=\(a.statusBar.message)")
+        // A trailing native state refresh deliberately replaces ordinary
+        // action feedback with the current tool hint. Consent above carries
+        // the explicit fresh-click instruction; the editor must stay absent.
+        expect(a.canvas.tools.textEditor == nil
+                && wait { a.statusBar.message.hasPrefix("Click to add or edit text.") },
+               "Restore leaves no old editor and returns to the normal settled Text hint")
+        docA.undo(); try drain(docA)
+        expect(try snapshot(aSeed.image).content == painted.content,
+               "ordinary Undo restores measured painted pixels, layer identities and retained rasterized source")
+        docA.redo(); try drain(docA)
+        expect(try snapshot(aSeed.image).content == restored.content,
+               "ordinary Redo regenerates the measured restored native state")
+        try front(a); try click(a, aSeed.text)
+        guard let editor = a.canvas.tools.textEditor else { throw NSError(domain: "TextRestoreFixture", code: 6) }
+        expect(editor.textLayer == aSeed.text && editor.string == words && a.window?.firstResponder === editor,
+               "a fresh explicit Text click edits the original restored text layer with real focus")
+        try drain(docA)
+        let beforeEdit = try snapshot(aSeed.image)
+        editor.string = "Edited retained source"; editor.cancelOperation(nil)
+        try drain(docA)
+        let edited = try snapshot(aSeed.image)
+        let nativeText = try session.textLayer(image: aSeed.image, layer: aSeed.text).text
+        expect(nativeText == "Edited retained source" && edited.content.layers.count == painted.content.layers.count
+                && edited.undo.undoCount == beforeEdit.undo.undoCount + 1,
+               "Escape applies new text on that same layer as one ordinary Undo")
+        docA.undo(); try drain(docA)
+        expect(try snapshot(aSeed.image).content == restored.content,
+               "Undo of the explicit text edit returns the independently measured restored pixels")
+
+        let closeSeed = try seed(), closing = try owner(closeSeed, "Text restore closing")
+        try front(closing); try click(closing, closeSeed.text)
+        try require(wait { closing.window?.attachedSheet != nil }, "closing owner did not show consent")
+        guard let lateRestore = button(closing.window?.attachedSheet?.contentView, "Restore") else {
+            throw NSError(domain: "TextRestoreFixture", code: 7)
+        }
+        closing.window?.close()
+        expect(wait { gone(closeSeed.image) && closing.imageDocument.pendingWork == 0 },
+               "closing an owner with pending consent drains and destroys its native image")
+        lateRestore.performClick(nil)
+        EngineSmokeTestHost.pumpEvents()
+        expect(gone(closeSeed.image) && closing.imageDocument.pendingWork == 0 && closing.canvas.tools.textEditor == nil,
+               "a retained late Restore button after close cannot enqueue native work or open an editor")
+        expect(try snapshot(bSeed.image) == bBefore, "all subsequent Text and close interactions still leave B unchanged")
+    }
+
     private static func exerciseLayerSourceControls(_ session: EngineSession, work: URL,
                                                     documents: DocumentList) throws {
         func wait(_ condition: () -> Bool) {

@@ -7,10 +7,10 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-These entries describe merged main through #127, plus explicitly identified
-integration candidates. Trackpad pinch/rotate, Option-scroll, typed language
-metadata and guarded saved-resource management are merged and verified. The whole editor
-remains in progress; each checked entry covers its stated behavior.
+These entries describe merged main through #189, plus the explicitly named
+Text source-consent integration candidate. The whole editor remains in
+progress; each checked entry covers its stated behavior. Historical dated
+reports retain their original scope and pending notes.
 The #126 release passes 1,917 native and 2,391 app checks in a self-contained
 bundle with the native and Swift build outputs inaccessible.
 
@@ -66,7 +66,11 @@ bundle with the native and Swift build outputs inaccessible.
       whole-request admission, retained sources, one Undo and counted close
       drain (candidate; `batch-layer-rasterize.md`). Native text-source
       fixtures pass 96 checks on all four engines; pinned actual UI passes 51.
-- [ ] Remaining batch operations and consistent gesture-time rasterize/revert policy.
+- [x] Captured batch Restore with owned plural consent and counted native work.
+- [x] Restore/Cancel before a Text click edits rasterized retained text, with
+      a fresh post-Restore click and one Undo (candidate;
+      `text-source-restore-consent.md`). Arrange, Trim, transforms and layer
+      properties retain their explicit single-layer command policy.
 - [x] Adjustment layer creation as an empty pass-through group with a filter,
       explicit placement and editable filter settings.
 - [x] Bump Map height-map chooser with immutable same-image snapshots,
@@ -82,7 +86,12 @@ bundle with the native and Swift build outputs inaccessible.
       with all-four-engine native and actual-form checks (current candidate).
 - [x] Captured input histograms for Levels/Curves and native automatic Levels,
       with transfer-curve fencing and acknowledged-field admission (candidate).
-- [ ] Remaining custom filter forms and other auxiliary inputs.
+- [x] Generic native property controls and five dedicated configuration
+      editors, plus all seven installed auxiliary-input families: Bump Map,
+      Variable Blur, Selective Gaussian Blur, Negative Darkroom, Displace,
+      Oilify and Lens Blur. The pinned 183-row catalog has exactly these
+      twelve human-titled non-generic entries; untitled infrastructure is
+      retained for lookup (`filter-inputs.md`, `lens-blur-source.md`).
 - [x] Glims XCF point-effect supplements preserve actual Curves HDR bypass
       and explicit blend/composite fields, with bounded correspondence checks
       and failed-write rollback (integration candidate; `xcf-effects.md`).
@@ -147,8 +156,12 @@ bundle with the native and Swift build outputs inaccessible.
       and subsecond companions (#132).
 - [x] Typed scalar XMP rights marker with distinct absent/True/False states,
       current native descriptor gates and queued close/refusal handling (candidate).
-- [ ] Remaining typed metadata editors, Image Adjust commands, proof view controls
-      and complete menu/keyboard coverage.
+- [x] Typed date, existing-language, rights and rating metadata, with
+      descriptor-gated scalar and existing-container edits. New XMP container
+      and language-key creation remain outside this preservation contract.
+- [x] Image Adjust placement for Exposure, Brightness/Contrast, Color Balance,
+      Hue/Saturation, Levels, Curves, Threshold and both Invert variants.
+- [ ] Remaining proof view controls and complete menu/keyboard coverage.
 - [ ] Recorder and semantic command replay.
 - [ ] Full accessibility/focus, appearance and English-copy audit.
 - [ ] Public distribution checks from `plan.md`: corresponding sources,
