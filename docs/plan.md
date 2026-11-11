@@ -4310,8 +4310,7 @@ refuses editable text/link/vector descendants until explicitly rasterized.
 Pending Apply disables repeated submission and reports success only after
 native completion and cache reconciliation. The same captured API protects
 both affine and perspective action replay. Format v6 carries all nine
-coefficients and explicit layer bindings; v5 Levels is a separate dependency
-being integrated before publication.
+coefficients and explicit layer bindings; v5 Levels is integrated and mixed files preserve both command families.
 
 All four native conformance suites pass. The 184 focused geometry/Recorder
 tests pass; a hidden-handle hit regression reproduced two failures before
@@ -4323,3 +4322,30 @@ Undo/Redo, save/load/rebinding, editable text refusal and queued stale bounds.
 Independent direct native, UI and Recorder source reviews are complete.
 Combined v5/v6, full-suite and remaining engine workflow checks are pending.
 This does not establish complete Photoshop 4 parity or interaction latency.
+
+### Recorded new Levels adjustments (2026-11-11 candidate)
+
+Apply now records a newly created Levels effect on its original explicit
+layer, with the final native settings for all five channels, the transfer
+curve and both clamp flags. Saved format version 5 retains versions 1
+through 4. Preview updates, Cancel and pre-admission refusals add no row;
+an admitted Apply still settles after Stop. Native failures retain the
+preview for retry. Applying Levels to a mask/channel or editing an existing
+effect remains usable but produces an explicit unsupported recording row.
+
+The focused native workflow passes 33 checks on each of GIMP 3.2.8, 3.2.0,
+3.0.8 and master. It verifies queued final settings, selection changes after
+preview begins, Stop with a pending Apply, actual save/load and explicit
+rebound targets, exact native-reference pixels and Undo/Redo, grayscale
+replay, indexed refusal, fresh pixel locks and mask/channel/Quick Mask roles,
+failed Apply retry, unsupported existing-effect/mask/channel capture, and
+close cleanup. The full Swift suite passes 1,291 tests, including 13 focused
+Levels format/binding tests; the valid v5 fixture failed against the prior
+codec before implementation. Independent source review found no important
+issues. The timed-out helper review supplied no approval and was superseded
+by that completed independent review. No engine or facade code changed.
+
+The existing Recorder epoch tests cover stale completions after a new
+recording; this native case does not repeat them. Other adjustment families,
+existing-effect identity replay and text recording remain open. These
+checks establish this Levels slice, not complete action/batch coverage.

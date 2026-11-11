@@ -138,6 +138,21 @@ extension RecorderFileCommand {
             case .loHalo: value = .loHalo
             }
             self = .transformProjectiveLayer(try Projective(matrix).validated(), interpolation: value)
+        case .applyLevels(let settings):
+            let trc: Levels.TRC
+            switch settings.trc {
+            case .linear: trc = .linear
+            case .nonlinear: trc = .nonlinear
+            case .perceptual: trc = .perceptual
+            case .unknown: throw RecorderFileError.invalid("A recorded Levels transfer curve is unknown.")
+            }
+            func channel(_ channel: EngineSession.LevelsSettings.Channel) -> Levels.Channel {
+                .init(lowInput: channel.lowInput, highInput: channel.highInput, gamma: channel.gamma,
+                      lowOutput: channel.lowOutput, highOutput: channel.highOutput)
+            }
+            self = .applyLevels(.init(trc: trc, clampInput: settings.clampInput, clampOutput: settings.clampOutput,
+                value: channel(settings.value), red: channel(settings.red), green: channel(settings.green),
+                blue: channel(settings.blue), alpha: channel(settings.alpha)))
         case .completeStroke(let value): self = .completeStroke(value)
         }
     }

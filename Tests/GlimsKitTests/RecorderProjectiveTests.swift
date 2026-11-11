@@ -113,13 +113,11 @@ final class RecorderProjectiveTests: XCTestCase {
         XCTAssertEqual(try RecorderFileCodec.decode(RecorderFileCodec.encode(snapshot)), snapshot)
     }
 
-    func testVersionSixIsRequiredAndFiveIsExplicitlyUnavailable() throws {
-        for version in 1...4 { XCTAssertThrowsError(try decode(document(version: version))) }
-        let versionFiveRows: [String?] = [nil, #"{"ordinal":0,"outcome":"failure","reason":"No successful command"}"#]
-        for rows in versionFiveRows {
-            XCTAssertThrowsError(try decode(document(version: 5, rows: rows))) {
-                XCTAssertTrue($0.localizedDescription.contains("Levels"), $0.localizedDescription)
-            }
+    func testVersionSixIsRequiredAndOlderVersionsKeepTheirCommandFamilies() throws {
+        for version in 1...5 { XCTAssertThrowsError(try decode(document(version: version))) }
+        XCTAssertThrowsError(try decode(document(version: 5,
+            rows: #"{"ordinal":0,"outcome":"failure","reason":"No successful command"}"#))) {
+            XCTAssertTrue($0.localizedDescription.contains("Version 5 requires a successful Levels"))
         }
         XCTAssertThrowsError(try decode(document(version: 7)))
         XCTAssertThrowsError(try decode(document(rows: #"{"ordinal":0,"outcome":"cancelled","reason":"Cancelled"}"#)))
@@ -143,6 +141,32 @@ final class RecorderProjectiveTests: XCTestCase {
         let legacy = RecorderFileValue(recordingID: base.recordingID, name: base.name, origin: base.origin,
             symbols: base.symbols, records: [.init(ordinal: 0, outcome: .success(affine, .layer(symbol)))])
         XCTAssertTrue(String(decoding: try RecorderFileCodec.encode(legacy), as: UTF8.self).contains(#""version":4"#))
+    }
+
+    func testLevelsAndProjectiveCommandsCoexistWithoutDowngradingEitherSchema() throws {
+        let base = try decode(document())
+        var settings = EngineSession.LevelsSettings()
+        settings.value.gamma = 1.8
+        settings.clampInput = false
+        let levels = try RecorderFileCommand(.applyLevels(settings))
+        let records: [RecorderFileValue.Record] = [base.records[0],
+            .init(ordinal: 1, outcome: .success(levels, .layer(symbol)))]
+        let combined = RecorderFileValue(recordingID: base.recordingID, name: base.name,
+            origin: base.origin, symbols: base.symbols, records: records)
+        let bytes = try RecorderFileCodec.encode(combined)
+        XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains(#""version":6"#))
+        XCTAssertEqual(try RecorderFileCodec.decode(bytes), combined)
+        let prepared = try RecorderFileSemanticBridge.prepare(combined)
+        guard case .success(.applyLevels(let actual)) = prepared.log.records[1].resolution else {
+            return XCTFail("Levels was lost from the v6 recording")
+        }
+        XCTAssertEqual(actual, settings)
+        let levelsOnly = RecorderFileValue(recordingID: base.recordingID, name: base.name,
+            origin: base.origin, symbols: base.symbols,
+            records: [.init(ordinal: 0, outcome: .success(levels, .layer(symbol)))])
+        let legacy = try RecorderFileCodec.encode(levelsOnly)
+        XCTAssertTrue(String(decoding: legacy, as: UTF8.self).contains(#""version":5"#))
+        XCTAssertEqual(try RecorderFileCodec.decode(legacy), levelsOnly)
     }
 
     func testStrictFieldsInterpolationBindingsAndNoNativeIDs() {

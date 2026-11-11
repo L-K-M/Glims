@@ -44,6 +44,25 @@ final class ImageDocument {
     private var recorderReplayGeneration = UUID()
     private var recorderReplayWaitingGeneration: UUID?
 
+    /// The capture context of an open native filter session, installed by a
+    /// successful begin before its completion can finish or abort it. The
+    /// begun operation and target never change while the modeless panel is
+    /// open, so a later selection, focus or frontmost-window change cannot
+    /// redirect recording. A successful finish or abort removes the entry;
+    /// a refused finish retains it for retry.
+    private struct FilterPreviewRecord {
+        let operation: String?
+        let coverage: Coverage
+        enum Coverage {
+            /// A new filter on an ordinary layer: semantic capture coverage.
+            case layer(Int32)
+            /// An existing-effect edit or a mask/channel/floating drawable:
+            /// recorded as an explicit unsupported row, never a layer Levels.
+            case unsupported(String)
+        }
+    }
+    private var filterPreviewRecords: [Int32: FilterPreviewRecord] = [:]
+
     private struct RecorderTargetContext {
         let layers: [Int32]
         let channels: [Int32]
@@ -4500,6 +4519,9 @@ final class ImageDocument {
         beginClosing()
         nativeCloseIsScheduled = true
         let close = { [session, image] in
+            // Accepted begins, Apply and abort callbacks have drained. Native
+            // close owns any remaining preview; no runtime IDs survive it.
+            self.filterPreviewRecords.removeAll()
             EngineActivity.shared.closeImage(image, session: session) { result in
                 if case .failure(let error) = result { self.onError?(String(describing: error)) }
                 completion()
@@ -4727,6 +4749,19 @@ final class ImageDocument {
             return completion(.failure(pendingTargetCommands.isEmpty ? DocumentError.noLayer : DocumentError.busy))
         }
         guard !EngineActivity.shared.isBusy else { return completion(.failure(DocumentError.busy)) }
+        // Capture the begin target's role now: the modeless panel may live
+        // across selection and focus changes that must not retarget it.
+        let coverage: FilterPreviewRecord.Coverage
+        switch paintTarget {
+        case .layer(let layer)? where !floatingState.isActive:
+            coverage = .layer(layer)
+        case .mask?:
+            coverage = .unsupported("Recorder does not yet save a filter applied to a layer mask.")
+        case .channel?:
+            coverage = .unsupported("Recorder does not yet save a filter applied to a channel.")
+        default:
+            coverage = .unsupported("Recorder does not yet save a filter applied to a floating selection.")
+        }
         pendingWork += 1
         inputQueue.async { [session, image] in
             let result = Result<FilterPreviewStart, Error> {
@@ -4735,6 +4770,9 @@ final class ImageDocument {
                 return try Self.previewStart(filter, operation: operation, properties: properties, session: session)
             }
             DispatchQueue.main.async {
+                if case .success(let start) = result {
+                    self.filterPreviewRecords[start.filter] = .init(operation: operation, coverage: coverage)
+                }
                 completion(result)
                 self.jobDidFinish(input: false)
             }
@@ -4765,6 +4803,10 @@ final class ImageDocument {
                 return try Self.previewStart(filter, operation: operation, properties: properties, session: session)
             }
             DispatchQueue.main.async {
+                if case .success(let start) = result {
+                    self.filterPreviewRecords[start.filter] = .init(operation: operation,
+                        coverage: .unsupported("Recorder does not yet save an edit to an existing effect."))
+                }
                 completion(result)
                 self.jobDidFinish(input: false)
             }
@@ -4776,21 +4818,70 @@ final class ImageDocument {
     /// session begun behind pending input still unwinds before destroy.
     /// A commit is an edit and leaves its session available if refused.
     func finishFilter(_ filter: Int32, commit: Bool, completion: @escaping @MainActor (Bool) -> Void) {
+        var capture: RecorderCapture?
+        var record: FilterPreviewRecord?
         if commit {
             guard !isClosing else { return completion(false) }
             if refuseWhileEditingUnavailable(forPreviewWork: true) { return completion(false) }
+            record = filterPreviewRecords[filter]
+            // An admitted Apply of a Levels session reserves its Recorder row
+            // now; preview writes, Cancel and refused admissions never do.
+            if record?.operation == "gimp:levels", recorder.isRecording {
+                let context: RecorderContext?
+                switch record?.coverage {
+                case .layer(let layer)?: context = .layer(layer)
+                case .unsupported(let reason)?: context = .unavailable(reason)
+                case nil: context = nil
+                }
+                do { capture = try reserveRecording(context: context) }
+                catch {
+                    assertionFailure("A recording log refused an admitted Levels apply: \(error)")
+                    return completion(false)
+                }
+            }
         }
-        enqueue(on: inputQueue, input: commit, teardown: !commit) { [session] in
-            let success: Bool
+        enqueue(on: inputQueue, input: commit, teardown: !commit) { [session, image] in
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+            var settings: EngineSession.LevelsSettings?
+            var settingsFailure: Error?
+            // The final whole settings are read behind every queued preview
+            // write, only while a supported layer capture is active; a read
+            // failure never suppresses the live commit below.
+            if commit, case .layer = capture?.context {
+                do { settings = try session.levelsSettings(filter) }
+                catch { settingsFailure = error }
+            }
+            var success = false
+            var commitError: Error?
             do {
                 if commit { try session.commitFilter(filter) } else { try session.abortFilter(filter) }
                 success = true
             } catch {
+                commitError = error
                 if commit { self.report(error) }
-                success = false
             }
-            DispatchQueue.main.async { completion(success) }
+            if commit, capture != nil {
+                let result: Result<SemanticImageCommand, Error>
+                if let commitError {
+                    result = .failure(commitError)
+                } else if let settingsFailure {
+                    result = .failure(settingsFailure)
+                } else if case .unsupported(let reason)? = record?.coverage {
+                    result = .failure(RecorderReplayError(message: reason))
+                } else if let settings {
+                    result = .success(.applyLevels(settings))
+                } else {
+                    result = .failure(RecorderReplayError(message: "The accepted Levels settings could not be read for recording."))
+                }
+                self.settleRecording(capture, result: result, confirmed: confirmed)
+            }
+            DispatchQueue.main.async {
+                if success { self.filterPreviewRecords[filter] = nil }
+                completion(success)
+            }
         }
+        // Notify only after queue admission/counting, like every reservation.
+        if capture != nil { notifyRecorderChanged() }
     }
 
     /// A live-preview property write through the typed setter, behind
@@ -5581,6 +5672,27 @@ final class ImageDocument {
                     if case .transformProjectiveLayer = step.command {
                         try Self.requireLayerTransformTarget(layer, session: session, image: image)
                     }
+                    if case .applyLevels = step.command {
+                        // Fresh admission against the live image, never the
+                        // recorded hints: membership was already confirmed;
+                        // mode, locks, masks, channels and Quick Mask are
+                        // rechecked before the new session begins.
+                        let mode = try session.colorInfo(image).mode
+                        guard mode == .rgb || mode == .grayscale else {
+                            throw RecorderReplayError(message: "Convert the image to RGB or grayscale before replaying this Levels adjustment.")
+                        }
+                        guard try session.layerState(layer, image: image).effective.isDisjoint(with: [.pixels]) else {
+                            throw RecorderReplayError(message: "Unlock the recorded layer's pixels before replaying this Levels adjustment.")
+                        }
+                        let selectedLayers = try session.selectedLayers(image)
+                        let editingMask = try (selectedLayers + [layer]).contains {
+                            try session.layerMask($0, image: image).editing
+                        }
+                        guard try !session.quickMask(image).enabled,
+                              try session.selectedItems(.channel, image: image).isEmpty, !editingMask else {
+                            throw RecorderReplayError(message: "Finish editing the channel or layer mask before replaying this Levels adjustment.")
+                        }
+                    }
                     try step.command.apply(session: session, image: image, layer: layer)
                 } else if case .channel(let channel)? = context {
                     try step.command.apply(session: session, image: image, channel: channel)
@@ -5618,7 +5730,7 @@ final class ImageDocument {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
         case .channelToSelection: return true
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .completeStroke: return true
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .completeStroke: return true
         default: return false
         }
     }
@@ -5646,6 +5758,14 @@ final class ImageDocument {
             guard let layer = explicitLayer, layer > 0 else {
                 return .unavailable("The explicit layer could not be identified when this transform was recorded.")
             }
+            return .layer(layer)
+        }
+        if case .applyLevels = command {
+            guard let layer = explicitLayer, layer > 0 else {
+                return .unavailable("The explicit layer could not be identified when this Levels adjustment was recorded.")
+            }
+            // The recorded Levels binds the layer the session began on and
+            // never falls through to the implicit paint target or selection.
             return .layer(layer)
         }
         if case .channelToSelection = command {

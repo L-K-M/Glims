@@ -7,6 +7,7 @@ enum RecorderFileCodec {
     static let channelVersion = 3
     static let layerTransformVersion = 4
     static let projectiveLayerTransformVersion = 6
+    static let levelsVersion = 5
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -84,9 +85,6 @@ enum RecorderFileCodec {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
         let fileVersion = try integer(root.get("version"), range: version...projectiveLayerTransformVersion)
-        guard fileVersion != 5 else {
-            throw RecorderFileError.invalid("Version 5 requires the Levels recording schema, which is not available in this build.")
-        }
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -107,6 +105,7 @@ enum RecorderFileCodec {
         var hasChannelSelection = false
         var hasLayerTransform = false
         var hasProjectiveLayerTransform = false
+        var hasLevels = false
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
             guard case .object(let members) = node, let outcome = members["outcome"] else { throw RecorderFileError.invalid("Missing record outcome.") }
             let outcomeName = try string(outcome)
@@ -120,6 +119,7 @@ enum RecorderFileCodec {
                 if case .channelToSelection = command { hasChannelSelection = true }
                 if case .transformLayer = command { hasLayerTransform = true }
                 if case .transformProjectiveLayer = command { hasProjectiveLayerTransform = true }
+                if case .applyLevels = command { hasLevels = true }
                 let binding = try binding(row.get("binding"))
                 try validate(binding, for: command, descriptions: descriptions)
                 result = .success(command, binding)
@@ -147,6 +147,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == projectiveLayerTransformVersion, !hasProjectiveLayerTransform {
             throw RecorderFileError.invalid("Version 6 requires a successful projective layer transform.")
+        }
+        if fileVersion == levelsVersion, !hasLevels {
+            throw RecorderFileError.invalid("Version 5 requires a successful Levels command.")
         }
         return RecorderFileValue(recordingID: try uuid(root.get("recordingID")), name: name, origin: source, symbols: symbols, records: records)
     }
@@ -336,6 +339,10 @@ enum RecorderFileCodec {
                 throw RecorderFileError.invalid("Unknown layer interpolation.")
             }
             return .transformProjectiveLayer(projective, interpolation: interpolation)
+        case "applyLevels":
+            guard version >= levelsVersion else { throw RecorderFileError.invalid("A Levels command needs recording version 5.") }
+            let value = try Object(node, required: ["tag", "settings"])
+            return .applyLevels(try levels(value.get("settings")))
         case "channelToSelection":
             guard version >= channelVersion else { throw RecorderFileError.invalid("A channel selection needs recording version 3.") }
             let value = try Object(node, required: ["tag", "operation"])
@@ -348,6 +355,30 @@ enum RecorderFileCodec {
             return .completeStroke(try stroke(node, points: &points))
         default: throw RecorderFileError.invalid("Unknown semantic command; use a compatible Glims version.")
         }
+    }
+
+    /// Whole Levels values: the owned TRC tag, both clamps and every named
+    /// channel. The same scalar and range rules as the native typed settings;
+    /// equal or inverted endpoints remain valid native mappings.
+    private static func levels(_ node: RecorderJSON) throws -> RecorderFileCommand.Levels {
+        let value = try Object(node, required: ["trc", "clampInput", "clampOutput", "value", "red", "green", "blue", "alpha"])
+        guard let trc = RecorderFileCommand.Levels.TRC(rawValue: try string(value.get("trc"))) else {
+            throw RecorderFileError.invalid("Unknown Levels transfer curve.")
+        }
+        func channel(_ key: String) throws -> RecorderFileCommand.Levels.Channel {
+            let source = try Object(value.get(key), required: ["lowInput", "highInput", "gamma", "lowOutput", "highOutput"])
+            let result = RecorderFileCommand.Levels.Channel(lowInput: try number(source.get("lowInput")),
+                highInput: try number(source.get("highInput")), gamma: try number(source.get("gamma")),
+                lowOutput: try number(source.get("lowOutput")), highOutput: try number(source.get("highOutput")))
+            guard [result.lowInput, result.highInput, result.lowOutput, result.highOutput]
+                    .allSatisfy({ (0...1).contains($0) }), (0.1...10).contains(result.gamma) else {
+                throw RecorderFileError.invalid("Levels endpoints must be inside 0...1 and gamma inside 0.1...10.")
+            }
+            return result
+        }
+        return .init(trc: trc, clampInput: try bool(value.get("clampInput")), clampOutput: try bool(value.get("clampOutput")),
+            value: try channel("value"), red: try channel("red"), green: try channel("green"),
+            blue: try channel("blue"), alpha: try channel("alpha"))
     }
 
     private static func descriptionKind(_ node: RecorderJSON) throws -> RecorderTargetDescription.Kind {
@@ -450,6 +481,9 @@ enum RecorderFileCodec {
             return
         case (.transformLayer, .layer(let id)), (.transformProjectiveLayer, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("A layer transform needs a layer description.") }
+            return
+        case (.applyLevels, .layer(let id)):
+            guard layer(id) else { throw RecorderFileError.invalid("A Levels adjustment needs a layer description.") }
             return
         case (.channelToSelection, .channel(let id)):
             guard descriptions[id]?.kind == .channel else { throw RecorderFileError.invalid("Channel to Selection needs a channel description.") }

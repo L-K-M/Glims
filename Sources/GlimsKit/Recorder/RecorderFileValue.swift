@@ -175,6 +175,29 @@ enum RecorderFileCommand: Equatable {
     /// Glims' owned interpolation tags, not native enum ordinals.
     enum LayerInterpolation: String { case none, linear, cubic, noHalo, loHalo }
 
+    /// Complete committed Levels values: an owned TRC tag, both clamps and
+    /// all five named channels, each with the five native fields. Equal or
+    /// inverted endpoints are valid native mappings.
+    struct Levels: Equatable {
+        /// Glims' owned transfer-curve tags, not native enum ordinals.
+        enum TRC: String { case linear, nonlinear, perceptual }
+        struct Channel: Equatable {
+            let lowInput: Double
+            let highInput: Double
+            let gamma: Double
+            let lowOutput: Double
+            let highOutput: Double
+        }
+        let trc: TRC
+        let clampInput: Bool
+        let clampOutput: Bool
+        let value: Channel
+        let red: Channel
+        let green: Channel
+        let blue: Channel
+        let alpha: Channel
+    }
+
     case selectionShape(Shape, Options)
     case selectColor(Point, Options)
     case selectCommand(Selection, radius: Double)
@@ -193,11 +216,15 @@ enum RecorderFileCommand: Equatable {
     /// pixels. The explicit layer is the record's `layer` binding; the
     /// command itself carries no native identity.
     case transformProjectiveLayer(Projective, interpolation: LayerInterpolation)
+    /// A newly applied Levels adjustment with its whole accepted settings.
+    /// The explicit layer is the record's `layer` binding; the command
+    /// carries no native filter/effect identity.
+    case applyLevels(Levels)
     case completeStroke(RecorderStrokeCommand)
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .completeStroke, .channelToSelection: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .completeStroke, .channelToSelection: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true
