@@ -24,6 +24,8 @@ def prepare(app):
                         "-I", str(source / "Sources/CGlimsEngine/include"),
                         str(source / "Engine/tests/startup-tests.c"), "-o", str(probe)], check=True)
         environment = dict(os.environ)
+        environment.pop("GLIMS_STARTUP_TRACE", None)
+        environment.pop("GLIMS_STARTUP_CATALOG_REPORT", None)
         # Confine native libraries and subprocesses to this disposable home.
         for key, leaf in [("HOME", "home"), ("CFFIXED_USER_HOME", "home"),
                           ("XDG_CACHE_HOME", "cache"), ("XDG_CONFIG_HOME", "config"),
@@ -33,7 +35,7 @@ def prepare(app):
             environment[key] = str(work / leaf)
         result = subprocess.run([str(probe), str(contents / "Frameworks/libglimsengine.dylib"),
                                  str(work / "user"), str(work / "cache")],
-                                env=environment, text=True, capture_output=True, timeout=180)
+                                env=environment, cwd=work, text=True, capture_output=True, timeout=180)
         if result.returncode:
             raise RuntimeError(f"Bundled engine startup failed:\n{result.stdout}\n{result.stderr}")
         rc = (work / "user/gimprc").read_text()

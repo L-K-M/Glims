@@ -4238,6 +4238,12 @@ omits the broad macOS Assets scans. The original native config remains the
 failure fallback. No system-font caches or font outlines are shipped. The
 helper alone runs with a non-root working directory to avoid a reproduced
 Fontconfig 2.18.3 absolute-glob bug; the application does not change global cwd.
+The optional helper has a three-second deadline. A stalled child is killed
+and reaped before native discovery resumes; its wait dispatches only a private
+GLib context. A CLI regression covers the deadline, reaping, working directory
+and success/failure paths without starting the editor. The packaging probe
+also confines its working directory and startup diagnostics to its temporary
+home, and catalog checks require a newly written report on every run.
 
 Integrated packaged launches reached the document in 2.70 seconds with fresh
 Glims data, 1.72 seconds cached, and 4.09 seconds relocated with fresh data.

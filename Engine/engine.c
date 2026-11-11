@@ -22,6 +22,7 @@
 #include "curves-config.h"
 #include "filter-histogram.h"
 #include "filter-input.h"
+#include "startup-helper.h"
 
 #include <dlfcn.h>
 #include <stddef.h>
@@ -759,12 +760,10 @@ engine_initialize (GlimsEngine  *engine,
       gchar *helper = g_build_filename (contents, "MacOS", "glims-font-cache", NULL);
       gchar *base = g_build_filename (contents, "etc", "fonts", "fonts-glims.conf", NULL);
       gchar *config = g_build_filename (engine->cache_directory, "fonts.conf", NULL);
-      gchar *argv[] = { helper, base, config, NULL };
-      gint result = 0;
+      const gchar *argv[] = { helper, base, config, NULL };
       if (g_file_test (helper, G_FILE_TEST_IS_EXECUTABLE))
         {
-          if (g_spawn_sync (engine->cache_directory, argv, NULL, G_SPAWN_STDOUT_TO_DEV_NULL,
-                            NULL, NULL, NULL, NULL, &result, NULL) && result == 0)
+          if (glims_run_startup_helper (engine->cache_directory, argv, 3000))
             g_setenv ("FONTCONFIG_FILE", config, TRUE);
           else
             g_printerr ("Glims: font cache preparation failed; loading fonts directly.\n");

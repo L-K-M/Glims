@@ -25,7 +25,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix='glims-startup-check-') as temporary:
         work = Path(temporary)
         clone = work / 'Relocated Glims.app'
-        subprocess.run(['cp', '-cR', str(app), str(clone)], check=True)
+        # Native plug-in cache identity includes executable mtimes. A plain
+        # recursive copy changes them and silently tests only requery fallback.
+        subprocess.run(['cp', '-cpR', str(app), str(clone)], check=True)
         probe = work / 'startup-tests'
         subprocess.run(['xcrun', 'clang', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
                         '-I', str(ROOT / 'Sources/CGlimsEngine/include'),
@@ -41,6 +43,7 @@ def main():
         environment.pop('GLIMS_STARTUP_TRACE', None)
 
         def run(label):
+            (work / 'catalog.txt').unlink(missing_ok=True)
             result = subprocess.run([str(probe), str(clone / 'Contents/Frameworks/libglimsengine.dylib'),
                                      str(work / 'user'), str(work / 'cache')],
                                     env=environment, cwd=work, capture_output=True, text=True, timeout=180)
@@ -60,7 +63,7 @@ def main():
         unchanged('warm restart', baseline)
         (work / 'user/pluginrc').write_text('invalid registry\n')
         unchanged('corrupt command cache recovery', baseline)
-        caches = list((work / 'cache/fontconfig').glob('*.cache-12'))
+        caches = list((work / 'cache/fontconfig').glob('*.cache-*'))
         assert caches, 'no native font caches were generated'
         for cache in caches:
             cache.write_bytes(b'invalid cache')

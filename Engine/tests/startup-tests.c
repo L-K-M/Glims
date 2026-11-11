@@ -3,6 +3,8 @@
  * Timing includes dlopen, engine readiness, creating and rendering a real
  * 1600x1200 document, and obtaining the command catalog. */
 #include <dlfcn.h>
+#include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -18,6 +20,15 @@ static double now (void)
 int main (int argc, char **argv)
 {
   if (argc != 4 && argc != 5) return 2;
+  double limit = INFINITY;
+  if (argc == 5)
+    {
+      char *end = NULL;
+      errno = 0;
+      limit = strtod (argv[4], &end);
+      if (errno || end == argv[4] || *end || ! isfinite (limit) || limit <= 0)
+        { fprintf (stderr, "Invalid MAX_SECONDS: %s\n", argv[4]); return 2; }
+    }
   double began = now ();
   void *library = dlopen (argv[1], RTLD_NOW | RTLD_LOCAL);
   if (! library) { fprintf (stderr, "%s\n", dlerror ()); return 2; }
@@ -37,22 +48,24 @@ int main (int argc, char **argv)
     { fprintf (stderr, "%s\n", error ? error : "Engine startup failed"); failed = 1; }
   if (! failed && (api->image_new (engine, 1600, 1200, &image, &error) != GLIMS_STATUS_OK ||
                   api->image_render (engine, image, 1, (GlimsRect) { 0, 0, 1600, 1200 }, pixels, 6400) != GLIMS_STATUS_OK ||
-                  api->procedures (engine, image, NULL, 0, &count) != GLIMS_STATUS_OK || count == 0))
+                  api->procedures (engine, image, NULL, 0, &count) != GLIMS_STATUS_OK || count <= 0))
     { fprintf (stderr, "Initial document or command catalog failed\n"); failed = 1; }
   double elapsed = now () - began;
   if (! failed)
     {
       printf ("READY %.6f seconds; %d commands; engine %s\n", elapsed, count, api->engine_version (engine));
-      if (argc == 5 && elapsed > strtod (argv[4], NULL)) failed = 1;
+      if (elapsed > limit) failed = 1;
     }
   const char *report_path = getenv ("GLIMS_STARTUP_CATALOG_REPORT");
   if (! failed && report_path)
     {
       char *fonts = NULL;
-      GlimsProcedureInfo *procedures = calloc ((size_t) count, sizeof *procedures);
+      int32_t capacity = count;
+      GlimsProcedureInfo *procedures = calloc ((size_t) capacity, sizeof *procedures);
       FILE *report = fopen (report_path, "w");
       if (! report || ! procedures || api->fonts (engine, &fonts) != GLIMS_STATUS_OK ||
-          api->procedures (engine, image, procedures, count, &count) != GLIMS_STATUS_OK)
+          api->procedures (engine, image, procedures, capacity, &count) != GLIMS_STATUS_OK ||
+          count < 0 || count > capacity)
         failed = 1;
       if (! failed)
         {
