@@ -1,6 +1,6 @@
 import Foundation
 
-/// Stable menu tags and grouping for View ▸ Tools and the color commands.
+/// Stable tags for View ▸ Tools, its color commands and View ▸ Move Target.
 /// Every tool owns an explicit, immutable tag so shortcut ids and menu
 /// dispatch never depend on `allCases` order or hashing. The groups derive
 /// from `ToolID.paletteSlots`, so the menu mirrors the palette arrangement.
@@ -9,6 +9,21 @@ enum ToolMenuCatalog {
     static let swapColorsTag = 1001
     /// The tag of the Default Colors command. Distinct from every tool tag.
     static let defaultColorsTag = 1002
+
+    static func moveTargetTag(for mode: MoveTargetMode) -> Int {
+        switch mode {
+        case .currentLayer: return 1003
+        case .pickLayerOrGuide: return 1004
+        }
+    }
+
+    static func moveTarget(forTag tag: Int) -> MoveTargetMode? {
+        switch tag {
+        case 1003: return .currentLayer
+        case 1004: return .pickLayerOrGuide
+        default: return nil
+        }
+    }
 
     /// One palette slot: the tools it offers, in palette order. Single-tool
     /// slots become direct commands; multi-tool slots become one submenu whose
