@@ -3,7 +3,7 @@ import Foundation
 /// One whole gesture. The owning document keeps the native layer binding
 /// separately. These values contain no session IDs or event objects.
 struct RecorderStrokeCommand: Equatable {
-    enum Tool: String { case pencil, eraser }
+    enum Tool: String { case pencil, eraser, paintbrush }
 
     struct Settings: Equatable {
         let tool: Tool
@@ -33,6 +33,7 @@ struct RecorderStrokeCommand: Equatable {
             switch brush.tool {
             case .pencil: tool = .pencil
             case .eraser: tool = .eraser
+            case .paintbrush: tool = .paintbrush
             default: return nil
             }
             self.init(tool: tool, size: brush.size, opacity: brush.opacity,
@@ -43,7 +44,11 @@ struct RecorderStrokeCommand: Equatable {
 
         var brush: EngineSession.Brush {
             var result = EngineSession.Brush()
-            result.tool = tool == .pencil ? .pencil : .eraser
+            switch tool {
+            case .pencil: result.tool = .pencil
+            case .eraser: result.tool = .eraser
+            case .paintbrush: result.tool = .paintbrush
+            }
             result.size = size
             result.opacity = opacity
             result.red = red
@@ -60,7 +65,13 @@ struct RecorderStrokeCommand: Equatable {
     let trace: RecorderStrokeTrace
     let facts: EngineSession.StrokeCaptureFacts
 
-    var title: String { settings.tool == .pencil ? "Pencil Stroke" : "Eraser Stroke" }
+    var title: String {
+        switch settings.tool {
+        case .pencil: return "Pencil Stroke"
+        case .eraser: return "Eraser Stroke"
+        case .paintbrush: return "Paintbrush Stroke"
+        }
+    }
 
     func apply(session: EngineSession, image: Int32, layer: Int32) throws {
         let start = try session.beginStrokeCapturing(image: image, drawable: layer, brush: settings.brush,

@@ -226,8 +226,8 @@ extension EngineSmokeTest {
 
         try doc.startRecording()
         var unsupported = brush
-        unsupported.tool = .paintbrush
-        unsupported.red = 0.12
+        unsupported.tool = .blur
+        unsupported.rate = 80
         let beforeUnsupported = try pixels(actual.image)
         doc.beginStroke(at: first, brush: unsupported)
         doc.continueStroke(firstBatch)

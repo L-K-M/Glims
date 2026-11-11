@@ -50,7 +50,7 @@ struct RecorderPalettePresentation {
         let text: String
     }
 
-    static let coverage = "Recorder supports selections, image transforms and sizes, crop, layer properties, and Pencil and Eraser strokes with supported brush settings."
+    static let coverage = "Recorder supports selections, image transforms and sizes, crop, layer properties, and Pencil, Eraser and Paintbrush strokes with supported brush settings."
     static let replayPolicy = "Replay uses each command's normal Undo behavior. On failure, earlier changes remain."
 
     let documentName: String
