@@ -4030,3 +4030,19 @@ and [the native boundary](stroke-capture-and-tablet-input.md). Hosted CI,
 final publication feedback, optional tablet-axis frontend delivery and the
 final combined bundle remain separate gates; other semantic command families
 are still outside this capture scope.
+
+### Captured optional tablet axes (2026-11-11 candidate)
+
+Matching proximity capabilities now select a press-fixed V2 input route for
+rotation and signed tangential pressure. Mouse/no-capability gestures retain
+V1; the accepted document, brush and capabilities cannot be retargeted mid-drag.
+Checked timestamps avoid integer traps, invalid release still Ends accepted
+work, and portable Recorder capture explicitly refuses optional-axis traces
+without preventing live painting.
+
+The admitted baseline's single missing-axis failure is corrected. Latest-Main
+source `4129720` passes32 actual pinned-engine checks with41 Core telemetry
+rows and all1,205 unit tests; independent source review finds no important
+issue. See [optional tablet axes](tablet-optional-axes.md) for the test-only
+window-local event correction, physical/coalescing limits and remaining
+all-four-engine, CI and final standalone-app gates.
