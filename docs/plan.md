@@ -4131,3 +4131,12 @@ the unchanged gzip identity regression passes 117 checks and the ordinary
 editor workflow passes 3,233. Independent production source review found no
 important issue. See [`compressed-xcf-fields.md`](compressed-xcf-fields.md)
 for stream limits, exact coverage and the separate standalone-release gate.
+
+### Accessible committed-filter selection (2026-11-11 candidate)
+
+The filter-selection badge now exposes its existing selected/unselected label
+as an accessibility image. Its old AX element/role failures are reproduced
+and fixed; all 13 focused AppKit tests and 1,222 integrated unit tests pass.
+Independent source review found no important issue. See
+[`effect-selection-accessibility.md`](effect-selection-accessibility.md) for
+scope and the separate spoken VoiceOver/full-keyboard audit gates.
