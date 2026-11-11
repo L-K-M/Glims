@@ -111,15 +111,25 @@ final class ToolColorEditorModel {
         applyDraft(text, for: component, scale: 1, range: 0...1, column: "float", rangeText: "0 to 1")
     }
 
-    /// Applies a color-well pick. Well colors arrive from AppKit already
-    /// valid; alpha is dropped so the tool color stays opaque.
-    func applyWellColor(_ picked: NSColor) {
-        let srgb = picked.usingColorSpace(.sRGB) ?? picked
-        red = Double(srgb.redComponent)
-        green = Double(srgb.greenComponent)
-        blue = Double(srgb.blueComponent)
+    /// Color lists can supply colors with no RGB components. Refuse those
+    /// before component access; an AppKit exception cannot be caught in Swift.
+    @discardableResult
+    func applyWellColor(_ picked: NSColor) -> Bool {
+        guard let srgb = picked.usingColorSpace(.sRGB) else {
+            lastError = "This color cannot be converted to sRGB. Choose a solid color or enter RGB values."
+            return false
+        }
+        let components = [Double(srgb.redComponent), Double(srgb.greenComponent), Double(srgb.blueComponent)]
+        guard components.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else {
+            lastError = "Tool colors need finite RGB values from 0 to 1. The color was left unchanged."
+            return false
+        }
+        red = components[0]
+        green = components[1]
+        blue = components[2]
         lastError = nil
         onCommit?(target, color)
+        return true
     }
 
     /// Re-seeds from an external `ToolState` change (swap, reset, canvas
@@ -201,6 +211,7 @@ final class ToolColorEditorController: NSWindowController, NSWindowDelegate, NST
         var bindings: [Binding] = []
         var drafts: [ObjectIdentifier: String] = [:]
         var errors: [ObjectIdentifier: String] = [:]
+        var wellError: String?
         var observerID: UUID?
         var updatingControls = false
         var suppressEditingCallbacks = false
@@ -256,6 +267,7 @@ final class ToolColorEditorController: NSWindowController, NSWindowDelegate, NST
         model.onCommit = { [weak self] committedTarget, color in
             guard let self, self.session?.id == identity,
                   committedTarget == self.session?.model.target else { return }
+            self.session?.wellError = nil
             self.state[keyPath: committedTarget.keyPath] = color
             self.state.notifyChange()
         }
@@ -264,6 +276,7 @@ final class ToolColorEditorController: NSWindowController, NSWindowDelegate, NST
             let color = self.state[keyPath: active.model.target.keyPath]
             guard !active.model.hasSameComponents(as: color) else { return }
             active.model.syncExternal(color)
+            active.wellError = nil
             self.refreshControls(active)
         }
         buildContent(current)
@@ -329,6 +342,7 @@ final class ToolColorEditorController: NSWindowController, NSWindowDelegate, NST
         }
         current.drafts.removeAll()
         current.errors.removeAll()
+        current.wellError = nil
         refreshControls(current)
         return true
     }
@@ -342,7 +356,7 @@ final class ToolColorEditorController: NSWindowController, NSWindowDelegate, NST
 
     @objc private func wellChanged(_ sender: NSColorWell) {
         guard let current = session, sender === current.well, !current.updatingControls else { return }
-        current.model.applyWellColor(sender.color)
+        if !current.model.applyWellColor(sender.color) { current.wellError = current.model.lastError }
         refreshControls(current)
     }
 
@@ -353,6 +367,7 @@ final class ToolColorEditorController: NSWindowController, NSWindowDelegate, NST
         current.suppressEditingCallbacks = false
         current.drafts.removeAll()
         current.errors.removeAll()
+        current.wellError = nil
         refreshControls(current)
     }
 
@@ -371,10 +386,10 @@ final class ToolColorEditorController: NSWindowController, NSWindowDelegate, NST
             guard current.drafts[ObjectIdentifier(field)] == nil, field.currentEditor() == nil else { continue }
             field.stringValue = text(for: binding, model: current.model)
         }
-        let error = current.bindings.compactMap { current.errors[ObjectIdentifier($0.field)] }.first
+        let error = current.bindings.compactMap { current.errors[ObjectIdentifier($0.field)] }.first ?? current.wellError
         current.errorLabel.stringValue = error.map { $0 + " Correct the entry or choose Revert Entries." } ?? ""
         current.errorLabel.isHidden = error == nil
-        current.revertButton.isEnabled = !current.drafts.isEmpty
+        current.revertButton.isEnabled = !current.drafts.isEmpty || current.wellError != nil
     }
 
     private func text(for binding: Binding, model: ToolColorEditorModel) -> String {

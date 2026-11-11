@@ -5,6 +5,19 @@ import XCTest
 @MainActor
 final class ToolColorEditorModelTests: XCTestCase {
 
+    func testNonconvertiblePatternWellColorIsRefusedWithoutAComponentException() {
+        let pattern = NSColor(patternImage: NSImage(size: NSSize(width: 1, height: 1)))
+        XCTAssertNil(pattern.usingColorSpace(.sRGB), "the fixture must have no sRGB conversion")
+        let initial = NSColor(srgbRed: 0.123456789, green: 0.4, blue: 0.6, alpha: 1)
+        let model = ToolColorEditorModel(target: .foreground, color: initial)
+        var commits = 0
+        model.onCommit = { _, _ in commits += 1 }
+        XCTAssertFalse(model.applyWellColor(pattern))
+        XCTAssertEqual(model.color, initial)
+        XCTAssertEqual(commits, 0)
+        XCTAssertTrue(model.lastError?.contains("cannot be converted to sRGB") == true)
+    }
+
     // MARK: Exact fractional roundtrip
 
     func testPercentAndFloatColumnsRoundtripExactFractionalValues() {

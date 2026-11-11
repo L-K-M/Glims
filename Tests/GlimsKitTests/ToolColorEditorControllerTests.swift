@@ -4,9 +4,32 @@ import XCTest
 
 @MainActor
 final class ToolColorEditorControllerTests: XCTestCase {
+    func testPatternWellColorPreservesTheToolColorAndShowsARevertibleMessage() throws {
+        _ = NSApplication.shared
+        let state = ToolState()
+        state.foreground = NSColor(srgbRed: 0.123456789, green: 0.4, blue: 0.6, alpha: 1)
+        let initial = state.foreground
+        let editor = ToolColorEditorController(state: state)
+        defer { tearDownEditor(editor) }
+        XCTAssertTrue(editor.open(target: .foreground))
+        let well = try control(NSColorWell.self, "Foreground color well", in: editor)
+        well.color = NSColor(patternImage: NSImage(size: NSSize(width: 1, height: 1)))
+        _ = NSApp.sendAction(try XCTUnwrap(well.action), to: editor, from: well)
+        XCTAssertEqual(state.foreground, initial)
+        XCTAssertEqual(well.color, initial)
+        let message = try control(NSTextField.self, "Color editor message", in: editor)
+        XCTAssertFalse(message.isHidden)
+        XCTAssertTrue(message.stringValue.contains("cannot be converted to sRGB"))
+        let revert = try control(NSButton.self, "Revert uncommitted color entries", in: editor)
+        XCTAssertTrue(revert.isEnabled)
+        revert.performClick(nil)
+        XCTAssertTrue(message.isHidden)
+        XCTAssertEqual(state.foreground, initial)
+    }
+
     private func find<T: NSView>(_ type: T.Type, in view: NSView, label: String) -> T? {
         if let match = view as? T, match.accessibilityLabel() == label { return match }
-        return view.subviews.lazy.compactMap { find(type, in: $0, label: label) }.first
+        return view.subviews.lazy.compactMap { self.find(type, in: $0, label: label) }.first
     }
 
     private func control<T: NSView>(_ type: T.Type, _ label: String,

@@ -4164,3 +4164,14 @@ form and Swift bridge pass25 mandatory checks, and all 1,229 units pass.
 Independent source review found no important issue. Latest-head CI and final
 integration are pending. See [soft-proof rendering](soft-proof-render.md)
 for the full contract and hardware/HDR limitations.
+
+
+### Numeric foreground and background colors (2026-11-11 candidate)
+
+The Tools swatches open an owned editor with simultaneous RGB Percent and
+Float entries and a native color well. Full fractions are retained, invalid
+drafts preserve the current color, and session/control identities fence late
+callbacks across foreground/background switches and close/reopen. All 1,242
+unit tests pass, including controller and unsupported-well recovery checks.
+Two independent source reviews found no important issue. Latest-head CI and
+final integration are pending; see [numeric tool colors](tool-color-numeric.md).
