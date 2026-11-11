@@ -360,6 +360,30 @@ lens_rect_pixels (const GeglRectangle *rect, uint64_t *pixels)
   return TRUE;
 }
 
+/* Reproduce only the integer domain of GEGL's SUPERSET alignment in int64.
+ * Never call native alignment to decide whether native alignment is safe. */
+static gboolean
+lens_tile_axis (gint origin, gint length, gint shift, gint tile, uint64_t *aligned_length)
+{
+  if (length <= 0 || tile <= 0) return FALSE;
+  gint64 first = (gint64) origin - shift, last = first + length;
+  if (!oilify_native_integer (first) || !oilify_native_integer (last)) return FALSE;
+  if (first < 0) first -= (gint64) tile - 1;
+  if (last > 0) last += (gint64) tile - 1;
+  if (!oilify_native_integer (first) || !oilify_native_integer (last)) return FALSE;
+  first = first / tile * tile;
+  last = last / tile * tile;
+  if (!oilify_native_integer ((gint64) shift + first) ||
+      !oilify_native_integer ((gint64) shift + last) ||
+      last <= first || last - first > G_MAXINT) return FALSE;
+  /* Buffer reads and COW tile-copy loops then add the storage shift to
+   * those restored coordinates, and advance one tile at the loop edge. */
+  if (!oilify_native_integer (2 * (gint64) shift + first - tile) ||
+      !oilify_native_integer (2 * (gint64) shift + last + tile)) return FALSE;
+  *aligned_length = (uint64_t) (last - first);
+  return TRUE;
+}
+
 gboolean
 glims_filter_input_lens_map_bounds (GeglBuffer *buffer)
 {
@@ -370,6 +394,35 @@ glims_filter_input_lens_map_bounds (GeglBuffer *buffer)
       !lens_rect_pixels (abyss, &abyss_pixels)) return FALSE;
   gint bpp = babl_format_get_bytes_per_pixel (gegl_buffer_get_format (buffer));
   if (bpp <= 0 || pixels > GLIMS_MAX_PIXEL_BUFFER_BYTES / (uint64_t) bpp) return FALSE;
+  gint tw, th, sx, sy;
+  g_object_get (buffer, "tile-width", &tw, "tile-height", &th,
+                "shift-x", &sx, "shift-y", &sy, NULL);
+  /* Native duplication constructs a fresh base buffer with these values.
+   * set_extent can exceed constructor ranges, so validate those ranges too. */
+  const gchar *names[] = {"x", "y", "width", "height", "abyss-x", "abyss-y",
+                         "abyss-width", "abyss-height", "shift-x", "shift-y", "tile-width", "tile-height"};
+  const gint values[] = {extent->x, extent->y, extent->width, extent->height, abyss->x, abyss->y,
+                        abyss->width, abyss->height, sx, sy, tw, th};
+  GObjectClass *klass = g_type_class_ref (GEGL_TYPE_BUFFER);
+  gboolean constructible = TRUE;
+  for (guint i = 0; i < G_N_ELEMENTS (names); i++) {
+    GParamSpec *spec = g_object_class_find_property (klass, names[i]);
+    if (!spec || !G_IS_PARAM_SPEC_INT (spec) ||
+        values[i] < G_PARAM_SPEC_INT (spec)->minimum || values[i] > G_PARAM_SPEC_INT (spec)->maximum) {
+      constructible = FALSE; break;
+    }
+  }
+  g_type_class_unref (klass);
+  if (!constructible || tw <= 0 || th <= 0 ||
+      (uint64_t) tw * (uint64_t) th > (uint64_t) G_MAXINT / (uint64_t) bpp) return FALSE;
+  uint64_t padded_width, padded_height;
+  if (!lens_tile_axis (extent->x, extent->width, sx, tw, &padded_width) ||
+      !lens_tile_axis (extent->y, extent->height, sy, th, &padded_height) ||
+      padded_width * padded_height > GLIMS_MAX_PIXEL_BUFFER_BYTES / (uint64_t) bpp) return FALSE;
+  uint64_t unused;
+  if (abyss_pixels &&
+      (!lens_tile_axis (abyss->x, abyss->width, sx, tw, &unused) ||
+       !lens_tile_axis (abyss->y, abyss->height, sy, th, &unused))) return FALSE;
   /* Bound both converted scans, including a subbuffer's distinct abyss.
    * Sparse native storage alone is not a bound on conversion work. */
   if (!gegl_rectangle_equal (extent, abyss)) pixels += abyss_pixels;
@@ -418,7 +471,7 @@ lens_target_geometry (GimpDrawable *target, GeglRectangle *extent, GeglRectangle
 {
   GeglBuffer *raw = gimp_drawable_get_buffer (target);
   uint64_t pixels, abyss_pixels;
-  if (!raw) return FALSE;
+  if (!raw || !glims_filter_input_lens_map_bounds (raw)) return FALSE;
   *extent = *gegl_buffer_get_extent (raw);
   *abyss = *gegl_buffer_get_abyss (raw);
   memset (area, 0, sizeof *area);
@@ -528,6 +581,10 @@ glims_filter_input_lens_prepare (GlimsEngine *engine, GlimsOpenImage *open,
     map = glims_lookup_drawable (open, source);
     if (!map) { status = GLIMS_STATUS_NOT_FOUND; goto done; }
     g_object_ref (map);
+    GeglBuffer *source_raw = gimp_drawable_get_buffer (map);
+    if (!source_raw || !glims_filter_input_lens_map_bounds (source_raw)) {
+      status = oilify_unsupported (error, "The blur map's native tile geometry is not supported."); goto done;
+    }
     status = source_buffer (map, &live, error);
     if (status != GLIMS_STATUS_OK) goto done;
     if (!glims_filter_input_lens_map_bounds (live)) {

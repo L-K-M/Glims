@@ -214,6 +214,8 @@ lens_copy_bounds (GlimsEngine *engine, gpointer unused)
     {0, G_MAXINT / 2 - 40, 32, 32, 0, -G_MAXINT / 2, FALSE},
     {G_MAXINT / 2, 0, 32, 32, -G_MAXINT / 2, 0, FALSE},
     {0, -G_MAXINT / 2, 32, 32, 0, G_MAXINT / 2, FALSE},
+    {G_MAXINT / 2, 0, 32, 32, G_MAXINT / 2, 0, FALSE},
+    {-G_MAXINT / 2, 0, 32, 32, -G_MAXINT / 2, 0, FALSE},
   };
   for (guint i = 0; i < G_N_ELEMENTS (cases); i++) {
     GeglBuffer *buffer = g_object_new (GEGL_TYPE_BUFFER, "format", babl_format ("R'G'B'A u8"),
