@@ -4453,9 +4453,10 @@ final class ImageDocument {
     }
 
     /// An explicit captured target and source, queued behind accepted input.
+    /// Lens Blur alone accepts a nil source as uniform blur.
     /// startPreview has already reserved the document's preview gate.
     func beginFilterPreview(operation: String, properties: [EngineSession.FilterProperty],
-                            target: Int32, source: Int32,
+                            target: Int32, source: Int32?,
                             completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
         guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
