@@ -39,7 +39,10 @@ decode_member (GInputStream *input, GOutputStream *output,
     }
     if (probing_next_member) {
       if (!stream.avail_in && eof) {
-        complete = TRUE; /* No XCF prefix was found. */
+        /* Native fallback needs a decisive non-XCF prefix. Its extension
+         * probe could otherwise send this short stream to the XCF reader. */
+        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                             "The decoded gzip header is incomplete");
         break;
       }
       probing_next_member = FALSE;
