@@ -486,6 +486,16 @@ typedef struct GlimsMatrix {
   double m[3][3];
 } GlimsMatrix;
 
+/* Captures the source rectangle a pending canvas transform describes.
+ * The expected bounds are compared atomically with native item bounds at
+ * commit. This detects geometry changes, not edits to pixels within them. */
+typedef struct GlimsLayerTransformRequest {
+  uint32_t struct_size;
+  GlimsRect expected_bounds;
+  GlimsMatrix matrix;
+  uint32_t interpolation; /* GlimsInterpolation */
+} GlimsLayerTransformRequest;
+
 typedef enum GlimsJustify {
   GLIMS_JUSTIFY_LEFT   = 1,
   GLIMS_JUSTIFY_RIGHT  = 2,
@@ -3485,6 +3495,22 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_sample_color) (GlimsEngine *engine, GlimsImageID image,
                                      int32_t x, int32_t y,
                                      GlimsSampledColor *out, char **error);
+
+  /* Slot175: commit an explicit positive layer id only if its current
+   * native bounds still equal request.expected_bounds. Resolve, compare,
+   * preflight and transform in one engine-thread dispatch. A stale rectangle
+   * is FAILED with an explanation, without pixels/bounds/Undo mutation;
+   * a missing or foreign layer is NOT_FOUND. The ordinary transform's
+   * locks, busy rules and geometry/storage admission still apply.
+   * Editable text/link/vector sources in the target or its descendants
+   * are UNSUPPORTED; rasterization must be explicit before canvas Apply.
+   * Known prefix sizes and larger future structs are accepted; no request
+   * memory is retained. Public entry clears *error when supplied. */
+  GlimsStatus (*layer_transform_matrix_captured) (GlimsEngine *engine,
+                                                 GlimsImageID image,
+                                                 GlimsItemID layer,
+                                                 const GlimsLayerTransformRequest *request,
+                                                 char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

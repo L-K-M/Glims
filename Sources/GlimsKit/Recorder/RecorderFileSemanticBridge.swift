@@ -117,6 +117,16 @@ enum RecorderFileSemanticBridge {
             }
             return .transformLayer(matrix: CGAffineTransform(a: matrix.a, b: matrix.b, c: matrix.c,
                 d: matrix.d, tx: matrix.tx, ty: matrix.ty), interpolation: value)
+        case .transformProjectiveLayer(let matrix, let interpolation):
+            let value: EngineSession.Interpolation
+            switch interpolation {
+            case .none: value = .none
+            case .linear: value = .linear
+            case .cubic: value = .cubic
+            case .noHalo: value = .noHalo
+            case .loHalo: value = .loHalo
+            }
+            return .transformProjectiveLayer(matrix: matrix.projectiveTransform, interpolation: value)
         case .completeStroke(let value): return .completeStroke(value)
         }
     }

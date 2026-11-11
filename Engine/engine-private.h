@@ -518,6 +518,10 @@ GlimsStatus glims_text_layer_set (GlimsEngine *e, GlimsImageID image, GlimsItemI
 GlimsStatus glims_layer_transform_matrix (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                           const GlimsMatrix *matrix, uint32_t interpolation,
                                           char **error);
+GlimsStatus glims_layer_transform_matrix_captured (GlimsEngine *e, GlimsImageID image,
+                                                   GlimsItemID layer,
+                                                   const GlimsLayerTransformRequest *request,
+                                                   char **error);
 GlimsStatus glims_image_scale      (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t height,
                                     char **error);
 GlimsStatus glims_image_resize_canvas (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t height,

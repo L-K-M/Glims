@@ -48,12 +48,15 @@ enum SemanticImageCommand {
     /// The explicit layer lives in the document's runtime binding, never in
     /// this command, and is never silently adapted to a rebound layer.
     case transformLayer(matrix: CGAffineTransform, interpolation: EngineSession.Interpolation)
+    /// Nine absolute image-pixel coefficients, never adapted to a rebound
+    /// layer. The explicit runtime layer binding stays outside the command.
+    case transformProjectiveLayer(matrix: ProjectiveTransform, interpolation: EngineSession.Interpolation)
     case completeStroke(RecorderStrokeCommand)
 
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .transformLayer, .scale, .resizeCanvas, .crop, .completeStroke: return true
+        case .transformImage, .transformLayer, .transformProjectiveLayer, .scale, .resizeCanvas, .crop, .completeStroke: return true
         case .selectionShape, .selectColor, .selectCommand, .channelToSelection, .layerProperties: return false
         }
     }
@@ -93,6 +96,7 @@ enum SemanticImageCommand {
         case .crop: return "Crop Image"
         case .layerProperties: return "Layer Properties"
         case .transformLayer: return "Transform Layer"
+        case .transformProjectiveLayer: return "Transform Layer Perspective"
         case .completeStroke(let stroke): return stroke.title
         }
     }
@@ -115,7 +119,7 @@ enum SemanticImageCommand {
             try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill)
         case .crop(let rect):
             try session.crop(image: image, to: rect)
-        case .layerProperties, .transformLayer, .completeStroke:
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .completeStroke:
             throw MissingLayerBinding()
         case .channelToSelection:
             throw MissingChannelBinding()
@@ -130,14 +134,38 @@ enum SemanticImageCommand {
             guard layer > 0 else { throw MissingLayerBinding() }
             try session.changeLayer(layer, image: image, properties.change)
         case .transformLayer(let matrix, let interpolation):
-            guard layer > 0 else { throw MissingLayerBinding() }
-            try session.transformLayer(layer, image: image, matrix: matrix, interpolation: interpolation)
+            try Self.applyLayerTransform(ProjectiveTransform(affine: matrix), interpolation: interpolation,
+                                         session: session, image: image, layer: layer)
+        case .transformProjectiveLayer(let matrix, let interpolation):
+            try Self.applyLayerTransform(matrix, interpolation: interpolation,
+                                         session: session, image: image, layer: layer)
         case .completeStroke(let stroke):
             guard layer > 0 else { throw MissingLayerBinding() }
             try stroke.apply(session: session, image: image, layer: layer)
         default:
             try apply(session: session, image: image)
         }
+    }
+
+    /// Both v4 affine and v6 projective replay use the captured native API:
+    /// a rebound editable source must never be rasterized implicitly. Read
+    /// fresh geometry, validate the absolute mapping, then require that exact
+    /// rectangle at commit to close the read/dispatch geometry race.
+    private static func applyLayerTransform(_ matrix: ProjectiveTransform,
+                                            interpolation: EngineSession.Interpolation,
+                                            session: EngineSession, image: Int32, layer: Int32) throws {
+        guard layer > 0 else { throw MissingLayerBinding() }
+        guard let row = try session.layers(image).first(where: { $0.id == layer }) else {
+            throw RecorderFileError.invalid("The recorded layer no longer belongs to this native image.")
+        }
+        let value = try RecorderFileCommand.Projective(matrix).validated()
+        let bounds = row.bounds
+        guard value.outputBounds(for: .init(x: bounds.origin.x, y: bounds.origin.y,
+                                           width: bounds.size.width, height: bounds.size.height)) != nil else {
+            throw RecorderFileError.invalid("The recorded layer transform's output bounds are unsafe for replay.")
+        }
+        try session.transformLayer(layer, image: image, matrix: matrix,
+                                   expectedBounds: bounds, interpolation: interpolation)
     }
 
     /// The caller freshly confirms this runtime channel against the owning

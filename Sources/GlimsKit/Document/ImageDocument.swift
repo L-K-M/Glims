@@ -3180,6 +3180,81 @@ final class ImageDocument {
         }
     }
 
+    /// Applies one captured canvas mapping. The expected rectangle is checked
+    /// in the same native dispatch as the mutation; a queued geometry change
+    /// cannot silently transform a different source. Completion follows native
+    /// result and cache reconciliation, never just queue admission.
+    func transformLayer(_ layer: Int32, matrix: ProjectiveTransform, expectedBounds: CGRect,
+                        interpolation: EngineSession.Interpolation,
+                        completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else {
+            return completion(.failure(isClosing ? DocumentError.closed : DocumentError.busy))
+        }
+        guard !refuseWhileFloatingActive(), !refuseSingleLayerCommand("Transform Layer", on: layer),
+              !isChannelTargetActive, !isMaskTargetActive,
+              activeDrawable == layer,
+              layers.first(where: { $0.id == layer })?.bounds == expectedBounds else {
+            return completion(.failure(DocumentError.targetChanged))
+        }
+        guard matrix.projectedBounds(forSource: expectedBounds) != nil else {
+            return completion(.failure(RecorderReplayError(message: "The layer transform exceeds its supported bounds.")))
+        }
+        let semantic: SemanticImageCommand
+        if matrix.h20 == 0, matrix.h21 == 0, matrix.h22 != 0 {
+            let scale = matrix.h22
+            let affine = CGAffineTransform(a: matrix.h00 / scale, b: matrix.h10 / scale,
+                c: matrix.h01 / scale, d: matrix.h11 / scale,
+                tx: matrix.h02 / scale, ty: matrix.h12 / scale)
+            if affine.isIdentity { return completion(.success(())) }
+            semantic = .transformLayer(matrix: affine, interpolation: interpolation)
+        } else {
+            semantic = .transformProjectiveLayer(matrix: matrix, interpolation: interpolation)
+        }
+        let capture: RecorderCapture?
+        do { capture = try reserveRecording(semantic, explicitLayer: layer) }
+        catch { return completion(.failure(error)) }
+        let result = LayerChangeResult()
+        pendingWork += 1 // Cache reconciliation and completion also hold close.
+        enqueue(on: inputQueue, input: true, afterFinish: {
+            EngineActivity.shared.whenIdle {
+                if !self.isClosing {
+                    do { try self.reload() }
+                    catch { self.onError?("The transformed layer could not be refreshed: \(error)") }
+                }
+                self.jobDidFinish(input: false)
+                completion(result.value ?? .failure(DocumentError.busy))
+            }
+        }) { [session, image] in
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+            let answer = Result {
+                guard try session.selectedLayers(image) == [layer],
+                      try !session.floatingSelection(image).isActive else { throw DocumentError.targetChanged }
+                try Self.requireLayerTransformTarget(layer, session: session, image: image)
+                try session.transformLayer(layer, image: image, matrix: matrix,
+                    expectedBounds: expectedBounds, interpolation: interpolation)
+            }
+            result.value = answer
+            if case .failure(let error) = answer { self.report(error) }
+            self.settleRecording(capture, result: answer.map { semantic }, confirmed: confirmed)
+        }
+        if capture != nil { notifyRecorderChanged() }
+    }
+
+    private nonisolated static func requireLayerTransformTarget(_ layer: Int32,
+                                                                session: EngineSession, image: Int32) throws {
+        let selectedLayers = try session.selectedLayers(image)
+        let editingMask = try (selectedLayers + [layer]).contains {
+            try session.layerMask($0, image: image).editing
+        }
+        guard try !session.quickMask(image).enabled,
+              try session.selectedItems(.channel, image: image).isEmpty, !editingMask else {
+            throw RecorderReplayError(message: "Finish editing the channel or layer mask before applying this transform.")
+        }
+        guard try session.layerState(layer, image: image).effective.isDisjoint(with: [.pixels, .position]) else {
+            throw RecorderReplayError(message: "Unlock the layer's pixels and position before applying this transform.")
+        }
+    }
+
     func scale(toWidth width: Int, height: Int) {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
@@ -5503,6 +5578,9 @@ final class ImageDocument {
                             throw RecorderReplayError(message: "Unlock the recorded layer's pixels and position before replaying this transform.")
                         }
                     }
+                    if case .transformProjectiveLayer = step.command {
+                        try Self.requireLayerTransformTarget(layer, session: session, image: image)
+                    }
                     try step.command.apply(session: session, image: image, layer: layer)
                 } else if case .channel(let channel)? = context {
                     try step.command.apply(session: session, image: image, channel: channel)
@@ -5540,7 +5618,7 @@ final class ImageDocument {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
         case .channelToSelection: return true
-        case .layerProperties, .transformLayer, .completeStroke: return true
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .completeStroke: return true
         default: return false
         }
     }
@@ -5562,6 +5640,12 @@ final class ImageDocument {
             }
             // The recorded transform binds the layer it was invoked on and
             // never falls through to the implicit paint target or selection.
+            return .layer(layer)
+        }
+        if case .transformProjectiveLayer = command {
+            guard let layer = explicitLayer, layer > 0 else {
+                return .unavailable("The explicit layer could not be identified when this transform was recorded.")
+            }
             return .layer(layer)
         }
         if case .channelToSelection = command {

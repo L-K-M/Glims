@@ -2166,6 +2166,29 @@ final class EngineSession: @unchecked Sendable {
                   error)
     }
 
+    /// The source bounds and actual native target are checked in the same
+    /// dispatch as the edit, so queued geometry changes cannot retarget Apply.
+    func transformLayer(_ layer: Int32, image: Int32, matrix: ProjectiveTransform,
+                        expectedBounds: CGRect, interpolation: Interpolation) throws {
+        guard let x = Int32(exactly: expectedBounds.origin.x),
+              let y = Int32(exactly: expectedBounds.origin.y),
+              let width = Int32(exactly: expectedBounds.size.width),
+              let height = Int32(exactly: expectedBounds.size.height),
+              width > 0, height > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The original layer bounds cannot be represented.")
+        }
+        var request = GlimsLayerTransformRequest(
+            struct_size: UInt32(MemoryLayout<GlimsLayerTransformRequest>.size),
+            expected_bounds: GlimsRect(x: x, y: y, width: width, height: height),
+            matrix: GlimsMatrix(m: ((matrix.h00, matrix.h01, matrix.h02),
+                                    (matrix.h10, matrix.h11, matrix.h12),
+                                    (matrix.h20, matrix.h21, matrix.h22))),
+            interpolation: interpolation.rawValue)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.layer_transform_matrix_captured(engine, image, layer, &request, &error), error)
+    }
+
     // MARK: Layer masks
 
     /// A layer's mask state (GlimsMaskState): `mask` is the mask's

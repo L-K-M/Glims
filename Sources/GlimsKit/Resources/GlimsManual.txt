@@ -134,9 +134,17 @@ grouped tools. The letter of each group:
 What the tools do:
 
   Move drags the active layer. Crop drags a rectangle; Return applies
-  it and Escape cancels it. Transform scales, moves and turns the
-  active layer: drag its handles, hold Shift to snap the rotation to
-  15-degree steps, press Return to apply and Escape to cancel.
+  it and Escape cancels it. Transform has four modes in Tool Options
+  and Layer > Transform: Scale / Rotate, Skew, Distort and Perspective.
+  Skew slides an edge along its direction; Distort moves individual
+  corners; Perspective moves a corner pair symmetrically. The first
+  horizontal or vertical movement fixes a perspective drag's direction.
+  Drag inside to move or outside to rotate; Shift snaps rotation to
+  15-degree steps. Position, size and angle control the frame while
+  preserving any warp. Return or Apply commits; Escape or Cancel drops
+  the pending transform. An accepted Apply finishes before another can
+  begin. Editable text, links and vector sources require the explicit
+  Layer > Rasterize Layer command before a destructive transform.
 
   Rectangle Select and Ellipse Select drag out a selection; Lasso
   draws one freehand. Magic Wand selects the similar colors around a
@@ -311,7 +319,8 @@ the Channels palette, with its Replace/Add/Subtract/Intersect
 operation and the explicit source channel it was invoked on; image
 rotation and flipping; image scaling; canvas resizing with offset and
 fill color; image cropping; layer name, visibility, opacity and blend
-mode changes; and complete Pencil, Eraser and Paintbrush strokes on
+mode changes; affine and perspective layer transforms with their
+resampling method; and complete Pencil, Eraser and Paintbrush strokes on
 ordinary pixel layers. A stroke keeps the settings used when it was
 drawn. Replay checks that the required brush and its supported paint
 dynamics still match the recording; unsupported brushes or dynamics
@@ -469,8 +478,9 @@ The mouse:
   Painting tools:        Option-click samples the foreground color;
                          with Clone or Heal, Option-click sets the
                          source point to copy from.
-  Transform tool:        drag the handles of the layer's box; Shift
-                         snaps rotation to 15-degree steps.
+  Transform tool:        choose Scale / Rotate, Skew, Distort or
+                         Perspective in Tool Options or Layer > Transform;
+                         Shift snaps rotation to 15-degree steps.
   Crop tool:             drag a rectangle, Return applies it,
                          Escape cancels it.
   Layers palette:        click a row to target it, drag to reorder or

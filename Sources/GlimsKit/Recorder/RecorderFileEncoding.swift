@@ -23,6 +23,8 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, channelVersion)
             case .success(.transformLayer, _):
                 fileVersion = max(fileVersion, layerTransformVersion)
+            case .success(.transformProjectiveLayer, _):
+                fileVersion = max(fileVersion, projectiveLayerTransformVersion)
             default: break
             }
         }
@@ -118,6 +120,11 @@ extension RecorderFileCodec {
             return .object(["tag": .string("transformLayer"), "interpolation": .string(interpolation.rawValue),
                 "matrix": .object(["a": try d(matrix.a), "b": try d(matrix.b), "c": try d(matrix.c),
                                    "d": try d(matrix.d), "tx": try d(matrix.tx), "ty": try d(matrix.ty)])])
+        case .transformProjectiveLayer(let matrix, let interpolation):
+            return .object(["tag": .string("transformProjectiveLayer"), "interpolation": .string(interpolation.rawValue),
+                "matrix": .object(["h00": try d(matrix.h00), "h01": try d(matrix.h01), "h02": try d(matrix.h02),
+                                   "h10": try d(matrix.h10), "h11": try d(matrix.h11), "h12": try d(matrix.h12),
+                                   "h20": try d(matrix.h20), "h21": try d(matrix.h21), "h22": try d(matrix.h22)])])
         case .completeStroke(let stroke): return try strokeJSON(stroke)
         }
     }

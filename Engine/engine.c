@@ -1175,6 +1175,8 @@ MARSHAL (text_layer_set, return glims_text_layer_set (e, a->image, a->item, a->s
                                                       a->error);)
 MARSHAL (layer_transform_matrix, return glims_layer_transform_matrix (e, a->image, a->item, a->in,
                                                                       (uint32_t) a->width, a->error);)
+MARSHAL (layer_transform_matrix_captured, return glims_layer_transform_matrix_captured (
+           e, a->image, a->item, a->in, a->error);)
 MARSHAL (image_resize_canvas, return glims_image_resize_canvas (e, a->image, a->area.width, a->area.height,
                                                                 a->area.x, a->area.y, a->in, a->error);)
 MARSHAL (procedure_run, return glims_procedure_run (e, a->image, a->string, (uint32_t) a->width, a->error);)
@@ -1935,6 +1937,21 @@ api_fonts (GlimsEngine *e, char **names)
 {
   GlimsArgs a = { .out = names };
   return glims_engine_call (e, fonts_on_engine, &a);
+}
+
+static GlimsStatus
+api_layer_transform_matrix_captured (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                     const GlimsLayerTransformRequest *request, char **error)
+{
+  GlimsLayerTransformRequest copy;
+  uint32_t size;
+  GlimsArgs a = { .image = image, .item = layer, .in = &copy, .error = error };
+  if (error) *error = NULL;
+  if (! request) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&size, request, sizeof size);
+  if (size < sizeof copy) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&copy, request, sizeof copy);
+  return glims_engine_call (e, layer_transform_matrix_captured_on_engine, &a);
 }
 
 static GlimsStatus
@@ -3551,6 +3568,7 @@ static const GlimsEngineAPI api_v1 = {
   .stroke_begin_v2 = api_stroke_begin_v2,
   .stroke_continue_v2 = api_stroke_continue_v2,
   .image_sample_color = api_image_sample_color,
+  .layer_transform_matrix_captured = api_layer_transform_matrix_captured,
 };
 
 __attribute__ ((visibility ("default")))

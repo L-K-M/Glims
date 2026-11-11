@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Owned file values. File UUIDs identify recordings and symbols only. No
@@ -92,6 +93,85 @@ enum RecorderFileCommand: Equatable {
             return Rect(x: left, y: top, width: width, height: height)
         }
     }
+    /// The nine absolute image-pixel projective coefficients, y down, in
+    /// row-major homogeneous order. Projective H and any nonzero scalar
+    /// multiple kH describe the same mapping. Stored coefficients are exact
+    /// and are never normalized; normalization happens only inside the
+    /// source-independent admissibility check.
+    struct Projective: Equatable {
+        let h00, h01, h02: Double
+        let h10, h11, h12: Double
+        let h20, h21, h22: Double
+
+        init(h00: Double, h01: Double, h02: Double,
+             h10: Double, h11: Double, h12: Double,
+             h20: Double, h21: Double, h22: Double) {
+            self.h00 = h00; self.h01 = h01; self.h02 = h02
+            self.h10 = h10; self.h11 = h11; self.h12 = h12
+            self.h20 = h20; self.h21 = h21; self.h22 = h22
+        }
+
+        init(_ transform: ProjectiveTransform) {
+            h00 = transform.h00; h01 = transform.h01; h02 = transform.h02
+            h10 = transform.h10; h11 = transform.h11; h12 = transform.h12
+            h20 = transform.h20; h21 = transform.h21; h22 = transform.h22
+        }
+
+        /// The same coefficients as a pure `ProjectiveTransform`.
+        var projectiveTransform: ProjectiveTransform {
+            ProjectiveTransform(h00: h00, h01: h01, h02: h02,
+                                h10: h10, h11: h11, h12: h12,
+                                h20: h20, h21: h21, h22: h22)
+        }
+
+        /// Source-independent admissibility: finite coefficients, a nonzero
+        /// matrix, a nonsingular normalized matrix, and not a scalar identity.
+        /// The file has no authoritative source rectangle, so no source-center
+        /// determinant, near-plane or output-size admission happens here; the
+        /// runtime validates against freshly bound layer geometry.
+        func validated() throws -> Projective {
+            let coefficients = [h00, h01, h02, h10, h11, h12, h20, h21, h22]
+            guard coefficients.allSatisfy(\.isFinite) else {
+                throw RecorderFileError.invalid("The projective matrix coefficients must be finite.")
+            }
+            let maximum = coefficients.map(\.magnitude).max() ?? 0
+            guard maximum > 0 else {
+                throw RecorderFileError.invalid("The projective matrix is zero.")
+            }
+            // Normalize by the largest magnitude before the existing inverse,
+            // so an arbitrary scalar does not overflow the raw determinant.
+            // Negative scalar multiples keep the opposite sign, which does
+            // not change the represented mapping or nonsingularity.
+            let scaled = coefficients.map { $0 / maximum }
+            guard scaled.allSatisfy(\.isFinite) else {
+                throw RecorderFileError.invalid("The projective matrix cannot be normalized.")
+            }
+            guard ProjectiveTransform(h00: scaled[0], h01: scaled[1], h02: scaled[2],
+                                      h10: scaled[3], h11: scaled[4], h12: scaled[5],
+                                      h20: scaled[6], h21: scaled[7], h22: scaled[8]).inverse != nil else {
+                throw RecorderFileError.invalid("The projective matrix is singular.")
+            }
+            // Test the original values so normalization rounding cannot
+            // erase a small nonzero coefficient and invent an identity.
+            guard !(h00 == h11 && h11 == h22 && h01 == 0 && h02 == 0 &&
+                    h10 == 0 && h12 == 0 && h20 == 0 && h21 == 0) else {
+                throw RecorderFileError.invalid("The identity projective transform was never admissible.")
+            }
+            return self
+        }
+
+        /// Pure preflight against a freshly bound layer's native bounds.
+        /// Symbol descriptions are hints and are never used for this check.
+        /// Source-specific threshold, near-plane and size admission belongs
+        /// to `ProjectiveTransform.projectedBounds(forSource:)`.
+        func outputBounds(for bounds: Rect) -> Rect? {
+            guard (try? validated()) != nil,
+                  let projected = projectiveTransform.projectedBounds(forSource:
+                    CGRect(x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height)) else { return nil }
+            return Rect(x: Double(projected.x), y: Double(projected.y),
+                        width: Double(projected.width), height: Double(projected.height))
+        }
+    }
     /// Glims' owned interpolation tags, not native enum ordinals.
     enum LayerInterpolation: String { case none, linear, cubic, noHalo, loHalo }
 
@@ -109,11 +189,15 @@ enum RecorderFileCommand: Equatable {
     /// A committed Transform-tool affine. The explicit layer is the record's
     /// `layer` binding; the command itself carries no native identity.
     case transformLayer(Affine, interpolation: LayerInterpolation)
+    /// A committed Transform-tool projective homography in absolute image
+    /// pixels. The explicit layer is the record's `layer` binding; the
+    /// command itself carries no native identity.
+    case transformProjectiveLayer(Projective, interpolation: LayerInterpolation)
     case completeStroke(RecorderStrokeCommand)
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .completeStroke, .channelToSelection: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .completeStroke, .channelToSelection: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true

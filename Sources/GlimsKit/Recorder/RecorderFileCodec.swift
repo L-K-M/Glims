@@ -6,6 +6,7 @@ enum RecorderFileCodec {
     static let strokeVersion = 2
     static let channelVersion = 3
     static let layerTransformVersion = 4
+    static let projectiveLayerTransformVersion = 6
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -82,7 +83,10 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...layerTransformVersion)
+        let fileVersion = try integer(root.get("version"), range: version...projectiveLayerTransformVersion)
+        guard fileVersion != 5 else {
+            throw RecorderFileError.invalid("Version 5 requires the Levels recording schema, which is not available in this build.")
+        }
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -102,6 +106,7 @@ enum RecorderFileCodec {
         var hasStroke = false
         var hasChannelSelection = false
         var hasLayerTransform = false
+        var hasProjectiveLayerTransform = false
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
             guard case .object(let members) = node, let outcome = members["outcome"] else { throw RecorderFileError.invalid("Missing record outcome.") }
             let outcomeName = try string(outcome)
@@ -114,6 +119,7 @@ enum RecorderFileCodec {
                 if case .completeStroke = command { hasStroke = true }
                 if case .channelToSelection = command { hasChannelSelection = true }
                 if case .transformLayer = command { hasLayerTransform = true }
+                if case .transformProjectiveLayer = command { hasProjectiveLayerTransform = true }
                 let binding = try binding(row.get("binding"))
                 try validate(binding, for: command, descriptions: descriptions)
                 result = .success(command, binding)
@@ -138,6 +144,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == layerTransformVersion, !hasLayerTransform {
             throw RecorderFileError.invalid("Version 4 requires a successful layer transform.")
+        }
+        if fileVersion == projectiveLayerTransformVersion, !hasProjectiveLayerTransform {
+            throw RecorderFileError.invalid("Version 6 requires a successful projective layer transform.")
         }
         return RecorderFileValue(recordingID: try uuid(root.get("recordingID")), name: name, origin: source, symbols: symbols, records: records)
     }
@@ -312,6 +321,21 @@ enum RecorderFileCodec {
                 throw RecorderFileError.invalid("The identity layer transform was never admissible.")
             }
             return .transformLayer(.init(a: a, b: b, c: c, d: d, tx: tx, ty: ty), interpolation: interpolation)
+        case "transformProjectiveLayer":
+            guard version >= projectiveLayerTransformVersion else {
+                throw RecorderFileError.invalid("A projective layer transform needs recording version 6.")
+            }
+            let value = try Object(node, required: ["tag", "matrix", "interpolation"])
+            let matrix = try Object(value.get("matrix"), required:
+                ["h00", "h01", "h02", "h10", "h11", "h12", "h20", "h21", "h22"])
+            let projective = try RecorderFileCommand.Projective(
+                h00: number(matrix.get("h00")), h01: number(matrix.get("h01")), h02: number(matrix.get("h02")),
+                h10: number(matrix.get("h10")), h11: number(matrix.get("h11")), h12: number(matrix.get("h12")),
+                h20: number(matrix.get("h20")), h21: number(matrix.get("h21")), h22: number(matrix.get("h22"))).validated()
+            guard let interpolation = RecorderFileCommand.LayerInterpolation(rawValue: try string(value.get("interpolation"))) else {
+                throw RecorderFileError.invalid("Unknown layer interpolation.")
+            }
+            return .transformProjectiveLayer(projective, interpolation: interpolation)
         case "channelToSelection":
             guard version >= channelVersion else { throw RecorderFileError.invalid("A channel selection needs recording version 3.") }
             let value = try Object(node, required: ["tag", "operation"])
@@ -424,7 +448,7 @@ enum RecorderFileCodec {
         case (.layerProperties, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("Layer properties need a layer description.") }
             return
-        case (.transformLayer, .layer(let id)):
+        case (.transformLayer, .layer(let id)), (.transformProjectiveLayer, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("A layer transform needs a layer description.") }
             return
         case (.channelToSelection, .channel(let id)):

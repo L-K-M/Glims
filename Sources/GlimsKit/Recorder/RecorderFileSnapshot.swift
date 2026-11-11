@@ -128,6 +128,16 @@ extension RecorderFileCommand {
             }
             self = .transformLayer(.init(a: Double(matrix.a), b: Double(matrix.b), c: Double(matrix.c),
                 d: Double(matrix.d), tx: Double(matrix.tx), ty: Double(matrix.ty)), interpolation: value)
+        case .transformProjectiveLayer(let matrix, let interpolation):
+            let value: LayerInterpolation
+            switch interpolation {
+            case .none: value = .none
+            case .linear: value = .linear
+            case .cubic: value = .cubic
+            case .noHalo: value = .noHalo
+            case .loHalo: value = .loHalo
+            }
+            self = .transformProjectiveLayer(try Projective(matrix).validated(), interpolation: value)
         case .completeStroke(let value): self = .completeStroke(value)
         }
     }

@@ -2501,6 +2501,78 @@ test_projective_source_offsets (void)
 }
 
 static void
+test_captured_layer_transform (void)
+{
+  GlimsImageID image = 0, other = 0;
+  GlimsItemID layer, foreign;
+  GlimsLayerInfo row;
+  GlimsLayerTransformRequest request = {
+    .struct_size = sizeof request,
+    .expected_bounds = { 0, 0, 8, 8 },
+    .matrix = { .m = { { 1, 0, 2 }, { 0, 1, 3 }, { 0, .01, 1 } } },
+    .interpolation = GLIMS_INTERPOLATION_NONE
+  };
+  uint8_t unaligned[sizeof request + 1];
+  uint8_t *original, *pixels;
+  char *error = NULL;
+  int before, w, h, ow, oh;
+  api->image_new (engine, 8, 8, &image, NULL);
+  layer = first_layer (image);
+  original = render_all (image, &ow, &oh);
+  before = undo_depth (image);
+  memcpy (unaligned + 1, &request, sizeof request);
+  CHECK (api->layer_transform_matrix_captured (engine, image, layer,
+           (const GlimsLayerTransformRequest *) (unaligned + 1), &error) == GLIMS_STATUS_OK &&
+         error == NULL && undo_depth (image) == before + 1,
+         "captured transform copies an unaligned known prefix and commits one Undo step");
+  api->free_string (error); error = NULL;
+  CHECK (source_test_row (image, layer, &row) && ! rect_equals (row.bounds, 0, 0, 8, 8) &&
+         api->image_undo (engine, image) == GLIMS_STATUS_OK,
+         "captured transform changes native bounds and undoes");
+  pixels = render_all (image, &w, &h);
+  CHECK (pixels && original && w == ow && h == oh &&
+         memcmp (pixels, original, (size_t) w * h * 4) == 0,
+         "captured transform Undo restores exact original pixels");
+  free (pixels); free (original);
+  api->layer_move (engine, image, layer, 1, 0);
+  original = render_all (image, &ow, &oh);
+  before = undo_depth (image);
+  CHECK (api->layer_transform_matrix_captured (engine, image, layer, &request, &error) == GLIMS_STATUS_FAILED &&
+         error && strstr (error, "layer changed") && undo_depth (image) == before,
+         "a source bounds change before dispatch refuses the captured transform atomically");
+  api->free_string (error); error = NULL;
+  pixels = render_all (image, &w, &h);
+  CHECK (pixels && original && w == ow && h == oh &&
+         memcmp (pixels, original, (size_t) w * h * 4) == 0 &&
+         source_test_row (image, layer, &row) && rect_equals (row.bounds, 1, 0, 8, 8),
+         "stale captured commit preserves pixels, bounds and history at execution");
+  free (pixels); free (original);
+  request.expected_bounds.x = 1;
+  CHECK (api->layer_transform_matrix_captured (engine, image, 0, &request, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->layer_transform_matrix_captured (engine, image, layer, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "captured commit requires an explicit positive layer and request");
+  request.struct_size = sizeof request - 1;
+  CHECK (api->layer_transform_matrix_captured (engine, image, layer, &request, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a short captured-transform prefix refuses before native mutation");
+  request.struct_size = sizeof request;
+  api->image_new (engine, 8, 8, &other, NULL);
+  foreign = first_layer (other);
+  CHECK (api->layer_transform_matrix_captured (engine, image, foreign, &request, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         undo_depth (image) == before,
+         "captured commit never resolves a foreign layer or changes the selected target");
+  api->image_close (engine, other);
+  request.expected_bounds.height = 0;
+  CHECK (api->layer_transform_matrix_captured (engine, image, layer, &request, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "captured source dimensions must be positive");
+  request.expected_bounds.height = 8;
+  request.matrix.m[2][1] = -.25;
+  CHECK (api->layer_transform_matrix_captured (engine, image, layer, &request, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == before,
+         "captured commits retain ordinary horizon admission");
+  api->image_close (engine, image);
+}
+
+static void
 test_transform_masked_projection (const char *fixtures)
 {
   GlimsImageID image = 0;
@@ -2612,6 +2684,33 @@ test_text_layers (const char *work)
          "it sits on top at (10,20), selected, as a text layer (%d,%d %dx%d)",
          rows[0].bounds.x, rows[0].bounds.y, rows[0].bounds.width, rows[0].bounds.height);
   first_width = rows[0].bounds.width;
+
+  {
+    GlimsLayerTransformRequest transform = {
+      .struct_size = sizeof transform, .expected_bounds = rows[0].bounds,
+      .matrix = { .m = { { 1.2, 0, 0 }, { 0, 1.2, 0 }, { 0, 0, 1 } } },
+      .interpolation = GLIMS_INTERPOLATION_NONE
+    };
+    GlimsItemID group = 0;
+    GlimsLayerInfo group_row;
+    before = undo_depth (image);
+    CHECK (api->layer_transform_matrix_captured (engine, image, layer, &transform, &error) == GLIMS_STATUS_UNSUPPORTED &&
+           error && strstr (error, "Rasterize") && undo_depth (image) == before,
+           "captured canvas transforms never implicitly rasterize editable text");
+    api->free_string (error); error = NULL;
+    api->create_group (engine, image, 0, 0, "Text transform owner", &group, NULL);
+    api->reparent_layer (engine, image, layer, group, 0, NULL);
+    if (source_test_row (image, group, &group_row))
+      transform.expected_bounds = group_row.bounds;
+    before = undo_depth (image);
+    CHECK (api->layer_transform_matrix_captured (engine, image, group, &transform, &error) == GLIMS_STATUS_UNSUPPORTED &&
+           error && strstr (error, "Rasterize") && undo_depth (image) == before,
+           "captured group transforms protect editable descendant sources too");
+    api->free_string (error); error = NULL;
+    CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+           api->image_undo (engine, image) == GLIMS_STATUS_OK,
+           "the text fixture restores its original hierarchy after source-protection checks");
+  }
 
   for (y = rows[0].bounds.y; y < rows[0].bounds.y + rows[0].bounds.height; y += 2)
     for (x = rows[0].bounds.x; x < rows[0].bounds.x + rows[0].bounds.width; x += 2)
@@ -14060,6 +14159,7 @@ main (int argc, char **argv)
   test_transform_tree_budget ();
   test_projective_source_offsets ();
   test_transform_masked_projection (argv[3]);
+  test_captured_layer_transform ();
   test_channels (argv[2]);
   test_drawable_filters (argv[2]);
   test_drawable_effects (argv[2]);

@@ -1410,12 +1410,13 @@ preflight_transform_tree (GimpImage *image, GimpLayer *layer,
   return status;
 }
 
-GlimsStatus
-glims_layer_transform_matrix (GlimsEngine       *engine,
+static GlimsStatus
+transform_layer_matrix (GlimsEngine       *engine,
                               GlimsImageID       id,
                               GlimsItemID        layer_id,
                               const GlimsMatrix *matrix,
                               uint32_t           interpolation,
+                              const GlimsRect   *expected_bounds,
                               char             **error)
 {
   GlimsStatus            status;
@@ -1456,6 +1457,33 @@ glims_layer_transform_matrix (GlimsEngine       *engine,
   if (! layer)
     return GLIMS_STATUS_NOT_FOUND;
 
+  if (expected_bounds)
+    {
+      gint x, y;
+      gimp_item_get_offset (GIMP_ITEM (layer), &x, &y);
+      if (x != expected_bounds->x || y != expected_bounds->y ||
+          gimp_item_get_width (GIMP_ITEM (layer)) != expected_bounds->width ||
+          gimp_item_get_height (GIMP_ITEM (layer)) != expected_bounds->height)
+        return glims_fail (error, NULL, "The layer changed while the transform was pending. Start the transform again.");
+      /* Canvas transforms never implicitly discard editable text, links or
+       * vector sources, including descendants of a selected group. */
+      GList *layers = gimp_image_get_layer_list (image);
+      gboolean editable = FALSE;
+      for (GList *node = layers; node; node = node->next)
+        {
+          GimpLayer *candidate = node->data;
+          if ((candidate == layer || gimp_viewable_is_ancestor (GIMP_VIEWABLE (layer), GIMP_VIEWABLE (candidate))) &&
+              glims_layer_editable_source_kind (candidate))
+            { editable = TRUE; break; }
+        }
+      g_list_free (layers);
+      if (editable)
+        {
+          glims_fail (error, NULL, "Rasterize editable text, link or vector layers before applying this transform (Layer > Rasterize Layers).");
+          return GLIMS_STATUS_UNSUPPORTED;
+        }
+    }
+
   status = glims_check_item_locks (GIMP_ITEM (layer), GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, error);
   if (status != GLIMS_STATUS_OK) return status;
   status = normalize_transform (layer, &transform, error);
@@ -1470,6 +1498,24 @@ glims_layer_transform_matrix (GlimsEngine       *engine,
   gimp_image_flush (image);
 
   return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_layer_transform_matrix (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                              const GlimsMatrix *matrix, uint32_t interpolation, char **error)
+{
+  return transform_layer_matrix (engine, image, layer, matrix, interpolation, NULL, error);
+}
+
+GlimsStatus
+glims_layer_transform_matrix_captured (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                                       const GlimsLayerTransformRequest *request, char **error)
+{
+  if (! request || request->struct_size < sizeof *request || layer <= 0 ||
+      request->expected_bounds.width < 1 || request->expected_bounds.height < 1)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  return transform_layer_matrix (engine, image, layer, &request->matrix, request->interpolation,
+                                  &request->expected_bounds, error);
 }
 
 GlimsStatus

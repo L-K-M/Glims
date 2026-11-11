@@ -4294,3 +4294,32 @@ refusals, deleted targets and accepted-command failure settlement. Independent
 production review and follow-up fixture review have no remaining important
 findings. These checks do not exercise the binding sheet itself or establish
 complete action/batch coverage; filter and text recording remain open.
+
+### Captured projective canvas controls (2026-11-11 candidate)
+
+Transform now exposes Scale / Rotate, Skew, Distort and Perspective in
+Tool Options and Layer > Transform. Independent warp geometry survives
+numeric frame changes and mode switches. Perspective keeps its first drag
+axis through later movement and release; hidden handle kinds do not steal
+hits. The overlay uses the actual projected source grid. It is still an
+outline preview, not a warped composite pixel preview.
+
+Apply captures the original layer rectangle and uses an additive native
+request whose bounds check and mutation share one engine dispatch. It
+refuses editable text/link/vector descendants until explicitly rasterized.
+Pending Apply disables repeated submission and reports success only after
+native completion and cache reconciliation. The same captured API protects
+both affine and perspective action replay. Format v6 carries all nine
+coefficients and explicit layer bindings; v5 Levels is a separate dependency
+being integrated before publication.
+
+All four native conformance suites pass. The 184 focused geometry/Recorder
+tests pass; a hidden-handle hit regression reproduced two failures before
+its correction. Native canvas testing reproduced a stale-field focus bug
+that blocked initial mode changes; unchanged fields now perform no target
+command, while edited stale drafts still refuse. The pinned native workflow
+passes real canvas events, analytic transformed pixels, single Undo and exact
+Undo/Redo, save/load/rebinding, editable text refusal and queued stale bounds.
+Independent direct native, UI and Recorder source reviews are complete.
+Combined v5/v6, full-suite and remaining engine workflow checks are pending.
+This does not establish complete Photoshop 4 parity or interaction latency.
