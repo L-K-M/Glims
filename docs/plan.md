@@ -4222,3 +4222,29 @@ corrects the obsolete mask and three-choice Preferences descriptions.
 See [editor verification](editor-verification.md) for evidence boundaries,
 source-review failures that were not counted as approval, and the public
 release, spoken-accessibility and physical-display qualification gates.
+
+### Five-second startup and editor quality targets (2026-11-11 candidate)
+
+The expanded user brief is tracked in [quality-targets.md](quality-targets.md);
+notarization is explicitly excluded. The previous verification totals do not
+establish Photoshop 4 parity or complete usability.
+
+Startup now packages a relocatable command registry after signing inner
+executables. A fresh matching engine/language can seed it exclusively; native
+path, mtime and protocol checks still discover changed and custom plug-ins.
+A separate native font helper links bundled HarfBuzz and uses CoreText to
+locate downloaded font assets. Its config keeps ordinary/user font roots but
+omits the broad macOS Assets scans. The original native config remains the
+failure fallback. No system-font caches or font outlines are shipped. The
+helper alone runs with a non-root working directory to avoid a reproduced
+Fontconfig 2.18.3 absolute-glob bug; the application does not change global cwd.
+
+Normal packaged launches reached the document in 2.98 seconds with fresh
+Glims data, 1.56 seconds cached, and 3.87 seconds relocated with fresh data.
+These are local measurements, not disk-cache-flushed or cross-Mac guarantees.
+The startup regression script compares font/command catalogs through corrupt
+caches, user font installation/removal, relocation, incompatible registry and
+missing-helper fallback. All pass. Corrupt command caches and incompatible
+registries use slower native discovery (about eleven seconds). The 128
+packaging checks pass; the final isolated bundle and engine matrix remain
+pending before merge.

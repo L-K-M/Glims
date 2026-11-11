@@ -352,10 +352,14 @@ write_plug_in_theme (void)
 }
 
 static void
-init_status_noop (const gchar *text1,
-                  const gchar *text2,
-                  gdouble      percentage)
+init_status (const gchar *text1,
+             const gchar *text2,
+             gdouble      percentage)
 {
+  if (g_getenv ("GLIMS_STARTUP_TRACE"))
+    g_printerr ("startup %.6f %s | %s | %.3f\n",
+                g_get_monotonic_time () / 1000000.0,
+                text1 ? text1 : "", text2 ? text2 : "", percentage);
 }
 
 /* ---- Where the engine's files are -------------------------------------- */
@@ -652,6 +656,80 @@ check_engine_interface (Gimp    *gimp,
 
 /* ---- Start-up and shut-down (engine thread) --------------------------- */
 
+/* The packager queries the signed bundled plug-ins once, in a throwaway
+ * home. Seed a missing per-user registry only for that exact engine and
+ * language. GIMP still checks every executable's path/mtime and runs init
+ * procedures, so changed and user-installed plug-ins are discovered normally.
+ * Existing registries and preferences always belong to the user. */
+static gboolean
+seed_bundle_plugin_cache (const gchar *contents,
+                          const gchar *language)
+{
+  gboolean seeded = FALSE;
+  gchar *metadata_path, *metadata = NULL, *escaped, *expected;
+  GFile *source, *destination;
+
+  if (! contents || ! language)
+    return FALSE;
+
+  metadata_path = g_build_filename (contents, "Resources", "Engine-Startup", "identity", NULL);
+  escaped = g_strescape (language, NULL);
+  expected = g_strdup_printf ("%s\n%s\n", GIMP_VERSION, escaped);
+  if (g_file_get_contents (metadata_path, &metadata, NULL, NULL) &&
+      g_strcmp0 (metadata, expected) == 0)
+    {
+      source = g_file_new_build_filename (contents, "Resources", "Engine-Startup", "pluginrc", NULL);
+      destination = gimp_directory_file ("pluginrc", NULL);
+      gchar *registry = NULL;
+      gsize length = 0;
+      if (g_file_load_contents (source, NULL, &registry, &length, NULL, NULL))
+        {
+          /* File parameter defaults can contain bundle URIs. Preserve binary
+           * registry payloads (such as icons) while relocating only our token. */
+          const gchar token[] = "@GLIMS_BUNDLE_URI@";
+          gchar *uri = g_filename_to_uri (contents, NULL, NULL);
+          gchar *quoted_uri = uri ? g_strescape (uri, NULL) : NULL;
+          GString *expanded = g_string_sized_new (length);
+          for (gsize i = 0; quoted_uri && i < length; )
+            {
+              if (length - i >= sizeof token - 1 &&
+                  memcmp (registry + i, token, sizeof token - 1) == 0)
+                {
+                  g_string_append (expanded, quoted_uri);
+                  i += sizeof token - 1;
+                }
+              else
+                g_string_append_c (expanded, registry[i++]);
+            }
+          /* Exclusive create preserves existing caches, including symlinks
+           * and a concurrent first launch. A failed write is never accepted. */
+          GFileOutputStream *output = quoted_uri
+            ? g_file_create (destination, G_FILE_CREATE_PRIVATE, NULL, NULL) : NULL;
+          if (output)
+            {
+              seeded = g_output_stream_write_all (G_OUTPUT_STREAM (output), expanded->str,
+                                                   expanded->len, NULL, NULL, NULL);
+              if (! g_output_stream_close (G_OUTPUT_STREAM (output), NULL, NULL))
+                seeded = FALSE;
+              g_object_unref (output);
+              if (! seeded)
+                g_file_delete (destination, NULL, NULL);
+            }
+          g_string_free (expanded, TRUE);
+          g_free (quoted_uri);
+          g_free (uri);
+          g_free (registry);
+        }
+      g_object_unref (destination);
+      g_object_unref (source);
+    }
+  g_free (expected);
+  g_free (escaped);
+  g_free (metadata);
+  g_free (metadata_path);
+  return seeded;
+}
+
 static gboolean
 engine_initialize (GlimsEngine  *engine,
                    GError      **error)
@@ -674,6 +752,26 @@ engine_initialize (GlimsEngine  *engine,
   if (contents)
     {
       use_bundle (engine, contents);
+      /* Prepare the same native font caches in a small child. Its config
+       * retains user font roots and discovers downloaded macOS font assets
+       * through CoreText, avoiding scans of unrelated system asset trees.
+       * If preparation fails, keep native discovery as the fallback. */
+      gchar *helper = g_build_filename (contents, "MacOS", "glims-font-cache", NULL);
+      gchar *base = g_build_filename (contents, "etc", "fonts", "fonts-glims.conf", NULL);
+      gchar *config = g_build_filename (engine->cache_directory, "fonts.conf", NULL);
+      gchar *argv[] = { helper, base, config, NULL };
+      gint result = 0;
+      if (g_file_test (helper, G_FILE_TEST_IS_EXECUTABLE))
+        {
+          if (g_spawn_sync (engine->cache_directory, argv, NULL, G_SPAWN_STDOUT_TO_DEV_NULL,
+                            NULL, NULL, NULL, NULL, &result, NULL) && result == 0)
+            g_setenv ("FONTCONFIG_FILE", config, TRUE);
+          else
+            g_printerr ("Glims: font cache preparation failed; loading fonts directly.\n");
+        }
+      g_free (config);
+      g_free (base);
+      g_free (helper);
     }
   else
     {
@@ -762,7 +860,6 @@ engine_initialize (GlimsEngine  *engine,
     use_bundle_config (gimp, contents);
   g_signal_handlers_unblock_matched (gimp->config, G_SIGNAL_MATCH_DATA,
                                      0, 0, NULL, NULL, gimp->edit_config);
-  g_free (contents);
 
   engine->icon_theme_dir = find_icon_theme_dir (gimp);
   write_plug_in_theme ();
@@ -781,6 +878,7 @@ engine_initialize (GlimsEngine  *engine,
   if (abort_message)
     {
       g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, abort_message);
+      g_free (contents);
       return FALSE;
     }
 
@@ -788,14 +886,17 @@ engine_initialize (GlimsEngine  *engine,
 
   current_language = language_init (NULL, NULL);
 
-  gimp_initialize (gimp, init_status_noop);
+  gimp_initialize (gimp, init_status);
 
   g_object_get (gimp->edit_config, "prev-language", &prev_language, NULL);
   gimp->query_all = (prev_language == NULL ||
                      g_strcmp0 (prev_language, current_language) != 0);
+  if (! prev_language && seed_bundle_plugin_cache (contents, current_language))
+    gimp->query_all = FALSE;
   g_free (prev_language);
+  g_free (contents);
 
-  gimp_restore (gimp, init_status_noop, &font_error);
+  gimp_restore (gimp, init_status, &font_error);
   if (font_error)
     {
       show_message (gimp, NULL, GIMP_MESSAGE_WARNING, NULL, font_error->message);
