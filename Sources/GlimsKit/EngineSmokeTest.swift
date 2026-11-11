@@ -168,6 +168,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (cold filter catalog completeness)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "filter-color-ack" {
+                try exerciseFilterColorAck(session, documents: documents)
+                print(failures == 0 ? "PASSED (filter color acknowledgements)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tablet-stroke-v2" {
                 try exerciseTabletStrokeV2(session, documents: documents)
                 print(failures == 0 ? "PASSED (tablet V2 input)" : "FAILED: \(failures) failure(s)")
@@ -7020,6 +7025,167 @@ enum EngineSmokeTest {
               submenu(["Filter", MainMenu.recentlyUsedTitle])?.items.first?.title == checkerboard.label,
               "Last Filter and Recently Used remember the command")
         controller.window?.orderOut(nil)
+    }
+
+    /// Real generic controls must reflect all coupled values the engine
+    /// accepted, without replacing a newer queued field edit with an old ACK.
+    private static func exerciseFilterColorAck(_ session: EngineSession, documents: DocumentList) throws {
+        var count = 0
+        func expect(_ value: Bool, _ message: String) { count += 1; check(value, "Filter color ACK: \(message)") }
+        func require(_ value: Bool, _ message: String) throws {
+            if !value { throw NSError(domain: "FilterColorAck", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+        }
+        func wait(_ condition: () -> Bool) -> Bool {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+            return condition()
+        }
+        func all<T: NSView>(_ root: NSView, _ type: T.Type) -> [T] {
+            ((root as? T).map { [$0] } ?? []) + root.subviews.flatMap { all($0, type) }
+        }
+        func sameColor(_ a: NSColor, _ b: NSColor) -> Bool {
+            guard let a = a.usingColorSpace(.sRGB), let b = b.usingColorSpace(.sRGB) else { return false }
+            return zip([a.redComponent, a.greenComponent, a.blueComponent, a.alphaComponent],
+                       [b.redComponent, b.greenComponent, b.blueComponent, b.alphaComponent]).allSatisfy { abs($0.0 - $0.1) < 0.000001 }
+        }
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(32 * 24 * 4)
+        for i in 0..<(32 * 24) {
+            let red = UInt8((i * 13 + 7) % 251)
+            let green = UInt8((i * 29 + 51) % 253)
+            let blue = UInt8((i * 7 + 113) % 255)
+            bytes.append(contentsOf: [red, green, blue, 255])
+        }
+        let pixels = Data(bytes)
+        let image = try session.newImage(pixels: .init(width: 32, height: 24, pixels: pixels, origin: .zero))
+        var owner: DocumentWindowController?
+        let release = DispatchSemaphore(value: 0)
+        defer {
+            release.signal()
+            if let owner { owner.previewPanel?.cancel(); owner.window?.close() }
+            else { try? session.closeImage(image) }
+            expect(wait {
+                do { _ = try session.info(image); return false }
+                catch { return (error as? EngineSession.EngineError)?.isNotFound == true && (owner?.imageDocument.pendingWork ?? 0) == 0 }
+            }, "the owned native image and all accepted input retire")
+            expect(owner?.window?.isVisible != true && owner?.window?.attachedSheet == nil
+                && owner?.previewPanel?.window?.isVisible != true, "no owned form, window or dialog remains")
+            documents.items.removeAll { $0.image == image }
+            print("     filter-color-ack checks: \(count)")
+        }
+        let document = try ImageDocument(session: session, image: image, name: "Color form acknowledgement")
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document); owner = controller
+        controller.showWindow(nil)
+        func drain() throws { try require(wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }, "filter input did not drain") }
+        try drain()
+        let beforeRaw = try session.copyPixels(image, merged: false).pixels
+        let beforeMerged = try session.copyPixels(image, merged: true).pixels
+        let beforeInfo = try session.info(image), beforeUndo = try session.undoInfo(image), beforeHistory = try session.history(image)
+        guard let operation = try session.filterOperations().first(where: { $0.name == "gimp:colorize" }) else {
+            throw NSError(domain: "FilterColorAck", code: 2, userInfo: [NSLocalizedDescriptionKey: "Colorize is absent from the real catalog"])
+        }
+        let properties = try session.filterOperationProperties(operation.name)
+        controller.openNativeFilter(operation)
+        try require(wait { controller.previewPanel != nil }, "the actual Colorize form did not open")
+        guard let panel = controller.previewPanel as? NativeFilterPanel, let filter = panel.filter,
+              let root = panel.window?.contentView else { throw NoWindow() }
+        try drain(); root.layoutSubtreeIfNeeded()
+        expect(panel.imageDocument === document && document.filterPreviewIsOpen && panel.window?.isVisible == true,
+               "the actual visible generic form owns the captured document and native preview")
+        func numberRow(_ name: String) -> FilterNumberRow? {
+            guard let label = properties.first(where: { $0.name == name })?.label else { return nil }
+            return all(root, FilterNumberRow.self).first { all($0, NSSlider.self).contains { $0.accessibilityLabel() == label } }
+        }
+        let colorLabel = properties.first(where: { $0.name == "color" })?.label
+        let colorRow = all(root, ClassicColorWell.self).first { $0.accessibilityLabel() == colorLabel }
+        let hueRow = numberRow("hue"), saturationRow = numberRow("saturation"), lightnessRow = numberRow("lightness")
+        expect(colorRow?.visibleRect.isEmpty == false && [hueRow, saturationRow, lightnessRow].allSatisfy { $0?.field.visibleRect.isEmpty == false },
+               "Colorize exposes a visible color well plus all three real HSL fields (missing-row baseline)")
+        guard let colorRow, let hueRow, saturationRow != nil, lightnessRow != nil else {
+            print("     coupled color/HSL, refusal and stale-ACK checks NOT RUN without all actual controls")
+            return
+        }
+        func numbers() throws -> [Double] {
+            try ["hue", "saturation", "lightness"].map {
+                guard case .number(let value) = try session.filterProperty(filter, $0) else { throw NoWindow() }
+                return value
+            }
+        }
+        func nativeColor() throws -> NSColor {
+            guard case .color(let value) = try session.filterProperty(filter, "color") else { throw NoWindow() }
+            return value
+        }
+        func controlsMatchNative() throws -> Bool {
+            for name in ["hue", "saturation", "lightness"] {
+                guard let row = numberRow(name), case .number(let value) = try session.filterProperty(filter, name),
+                      row.value == value, row.field.stringValue == row.formatter.string(from: NSNumber(value: value)) else { return false }
+            }
+            return sameColor(colorRow.color, try nativeColor())
+        }
+        func typeHue(_ text: String) throws {
+            hueRow.formatter.locale = Locale(identifier: "en_US_POSIX")
+            hueRow.field.stringValue = text
+            try require(hueRow.field.sendAction(hueRow.field.action, to: hueRow.field.target), "the real hue field action is disconnected")
+        }
+        func sendColor(alpha: CGFloat) throws {
+            colorRow.color = NSColor(srgbRed: 1, green: 0, blue: 0, alpha: alpha)
+            try require(colorRow.sendAction(colorRow.action, to: colorRow.target), "the real color-well action is disconnected")
+        }
+        try sendColor(alpha: 0.2); try drain()
+        let redAccepted = try nativeColor()
+        expect(try numbers() == [0, 1, 0] && sameColor(redAccepted, NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)),
+               "literal red changes native HSL to 0/1/0 and the native color discards requested alpha")
+        expect(try controlsMatchNative(), "every visible HSL/color row acknowledges native peers and accepted alpha")
+        let acceptedNumbers = try numbers()
+        hueRow.field.stringValue = "NaN"
+        panel.setProperty("hue", .number(.nan)); try drain()
+        expect(try numbers() == acceptedNumbers && controlsMatchNative() && panel.lastError?.isEmpty == false,
+               "a refused native NaN restores the actual accepted hue field and preserves the error")
+        try typeHue("0.25"); try drain()
+        expect(try numbers().first == 0.25 && controlsMatchNative(), "a literal typed scalar hue also refreshes the coupled native color well")
+        try sendColor(alpha: 0.4)
+        var olderAckBoundary = false, holdExited = false, holdExpired = false
+        // The older real ACK precedes this fence; the newer hue write waits behind it.
+        document.inputQueue.async {
+            DispatchQueue.main.async { olderAckBoundary = true }
+            let expired = release.wait(timeout: .now() + 20) == .timedOut
+            DispatchQueue.main.async { holdExpired = expired; holdExited = true }
+        }
+        try typeHue("0.75")
+        try require(wait { olderAckBoundary }, "the real older color acknowledgement did not reach its queue fence")
+        expect(document.pendingWork > 0 && hueRow.value == 0.75 && hueRow.field.stringValue == "0.75",
+               "an older color ACK cannot overwrite the newer queued literal hue edit")
+        release.signal()
+        try require(wait { holdExited }, "the stale-ACK queue hold did not exit")
+        try drain()
+        expect(try !holdExpired && numbers().first == 0.75 && controlsMatchNative(),
+               "explicit hold release preserves the newest native hue/color acknowledgement")
+        try require(panel.window?.makeFirstResponder(hueRow.field) == true,
+                    "the real hue field could not acquire its editor")
+        guard let editor = hueRow.field.currentEditor() as? NSTextView else { throw NoWindow() }
+        editor.string = "0.33"
+        editor.setSelectedRange(NSRange(location: 2, length: 1))
+        try sendColor(alpha: 0.2); try drain()
+        expect(try numbers().first == 0 && hueRow.value == 0 && editor.string == "0.33"
+            && editor.selectedRange() == NSRange(location: 2, length: 1),
+            "a peer acknowledgement refreshes accepted hue while preserving newer editor text and selection")
+        try require(panel.window?.makeFirstResponder(nil) == true, "the real hue draft could not finish editing")
+        try drain()
+        expect(try abs((numbers().first ?? -1) - 0.33) < 0.000001 && controlsMatchNative(),
+               "the preserved real field draft commits and refreshes the linked color")
+        expect(try session.copyPixels(image, merged: true).pixels != beforeMerged && session.undoInfo(image) == beforeUndo,
+               "the real coupled preview changes projected pixels without creating Undo")
+        guard let cancel = all(root, NSButton.self).first(where: { $0.title == "Cancel" }) else { throw NoWindow() }
+        cancel.performClick(nil); try drain()
+        expect(controller.previewPanel == nil && !document.filterPreviewIsOpen, "the actual Cancel control retires the preview form")
+        expect(try session.copyPixels(image, merged: false).pixels == beforeRaw && session.copyPixels(image, merged: true).pixels == beforeMerged
+            && session.info(image) == beforeInfo && session.undoInfo(image) == beforeUndo && session.history(image) == beforeHistory,
+            "Cancel restores exact raw/merged pixels, dirty state and history")
+        var filterRetired = false
+        do { _ = try session.filterProperty(filter, "hue") }
+        catch { filterRetired = (error as? EngineSession.EngineError)?.isNotFound == true }
+        expect(filterRetired, "Cancel destroys the actual native filter session")
     }
 
     /// The native-filter catalog, its Filter ▸ Native menu and the
