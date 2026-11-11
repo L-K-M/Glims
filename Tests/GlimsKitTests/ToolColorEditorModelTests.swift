@@ -44,7 +44,7 @@ final class ToolColorEditorModelTests: XCTestCase {
 
     // MARK: Invalid, nonfinite and out-of-range drafts
 
-    func testInvalidNonfiniteAndOutOfRangeDraftsPreserveColorAndReportActionableError() {
+    func testInvalidNonfiniteAndOutOfRangeDraftsPreserveColorAndReportActionableError() throws {
         let model = ToolColorEditorModel(target: .background,
                                          color: NSColor(srgbRed: 0.25, green: 0.5, blue: 0.75, alpha: 1))
         var committed: [(ToolColorTarget, NSColor)] = []
@@ -76,6 +76,20 @@ final class ToolColorEditorModelTests: XCTestCase {
         XCTAssertTrue(model.applyFloatDraft("0", for: .blue))
         XCTAssertEqual(model.component(.blue), 0)
         XCTAssertEqual(committed.count, 2)
+    }
+
+    func testReapplyingAnUnchangedPercentReadoutPreservesTheOriginalDouble() {
+        let original = 7.0 / 10001.0
+        XCTAssertNotEqual((original * 100) / 100, original,
+                          "the fixture must expose multiply/divide rounding")
+        let model = ToolColorEditorModel(target: .foreground,
+            color: NSColor(srgbRed: original, green: 0.5, blue: 0.75, alpha: 1))
+        let before = model.component(.red)
+        var commits = 0
+        model.onCommit = { _, _ in commits += 1 }
+        XCTAssertTrue(model.applyPercentDraft(model.percentText(.red), for: .red))
+        XCTAssertEqual(model.component(.red), before)
+        XCTAssertEqual(commits, 0)
     }
 
     // MARK: Captured target identity

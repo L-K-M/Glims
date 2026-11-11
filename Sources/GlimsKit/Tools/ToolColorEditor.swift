@@ -82,12 +82,12 @@ final class ToolColorEditorModel {
 
     /// The Percent column text (0-100) at full precision.
     func percentText(_ component: ToolColorComponent) -> String {
-        String(component(component) * 100)
+        String(self.component(component) * 100)
     }
 
     /// The Float column text (0-1) in shortest round-trip form.
     func floatText(_ component: ToolColorComponent) -> String {
-        String(component(component))
+        String(self.component(component))
     }
 
     /// Applies a Percent-column draft for `component`. Refuses (false plus
@@ -95,7 +95,13 @@ final class ToolColorEditorModel {
     /// finite number in 0...100.
     @discardableResult
     func applyPercentDraft(_ text: String, for component: ToolColorComponent) -> Bool {
-        applyDraft(text, for: component, scale: 100, range: 0...100, column: "percent", rangeText: "0 to 100")
+        // An unchanged readout must not round-trip through multiply/divide
+        // and perturb an otherwise unchanged floating-point component.
+        if text.trimmingCharacters(in: .whitespacesAndNewlines) == percentText(component) {
+            lastError = nil
+            return true
+        }
+        return applyDraft(text, for: component, scale: 100, range: 0...100, column: "percent", rangeText: "0 to 100")
     }
 
     /// Applies a Float-column draft for `component`. Refuses anything that is
@@ -123,7 +129,6 @@ final class ToolColorEditorModel {
         red = Double(srgb.redComponent)
         green = Double(srgb.greenComponent)
         blue = Double(srgb.blueComponent)
-        lastError = nil
     }
 
     /// Whether `other` has exactly the current components (full-precision
@@ -140,7 +145,7 @@ final class ToolColorEditorModel {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let parsed = Double(trimmed) else {
             return refuse(component, column: column,
-                          "\(trimmed.isEmpty ? "no value" : "\"\(trimmed)\"") is not a number; enter a finite value from \(rangeText)")
+                          "the entry is not a number; enter a finite value from \(rangeText)")
         }
         guard parsed.isFinite else {
             return refuse(component, column: column,
@@ -159,6 +164,10 @@ final class ToolColorEditorModel {
     }
 
     private func set(_ component: ToolColorComponent, _ value: Double) {
+        guard self.component(component) != value else {
+            lastError = nil
+            return
+        }
         switch component {
         case .red: red = value
         case .green: green = value
@@ -169,40 +178,46 @@ final class ToolColorEditorModel {
     }
 }
 
-/// The owned modeless tool color editor. One instance lives with the Tools
-/// palette; a Foreground/Background click opens it for that captured global
-/// `ToolState` target. It composes standard AppKit controls only: a native
-/// `NSColorWell` for visual choosing plus Percent (0-100) and Float (0-1)
-/// numeric columns for each RGB component, shown simultaneously.
-///
-/// Lifecycle: `open(target:)` captures the target and its current color NOW
-/// and starts observing `ToolState`; `windowWillClose` stops the session
-/// first, then deactivates the well and orders the shared color panel out
-/// only when this session's own well activated it, so the panel is never
-/// left belonging to the editor and a late well callback after close or
-/// reopen cannot write any target. No dialogs are used.
+/// An owned modeless editor for the global foreground or background color.
+/// Controls belong to one opening: callbacks from detached controls cannot
+/// cross into a later opening or a different color target.
 @MainActor
 final class ToolColorEditorController: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
-    private enum Column: Int {
-        case percent, float
+    private enum Column: Equatable { case percent, float }
+
+    private struct Binding {
+        let field: NSTextField
+        let component: ToolColorComponent
+        let column: Column
     }
 
-    private let colorWell = NSColorWell(frame: NSRect(x: 0, y: 0, width: 64, height: 28))
-    private let errorLabel = NSTextField(wrappingLabelWithString: "")
-    private var bindings: [(field: NSTextField, component: ToolColorComponent, column: Column)] = []
+    @MainActor
+    private final class Session {
+        let id = UUID()
+        let model: ToolColorEditorModel
+        let well = NSColorWell(frame: NSRect(x: 0, y: 0, width: 64, height: 28))
+        let errorLabel = NSTextField(wrappingLabelWithString: "")
+        let revertButton = NSButton(title: "Revert Entries", target: nil, action: nil)
+        var bindings: [Binding] = []
+        var drafts: [ObjectIdentifier: String] = [:]
+        var errors: [ObjectIdentifier: String] = [:]
+        var observerID: UUID?
+        var updatingControls = false
+        var suppressEditingCallbacks = false
+        let colorPanelWasVisible: Bool
 
-    /// The current session's model, recreated on every `open(target:)` so a
-    /// callback can only ever see the currently captured target.
-    private var model: ToolColorEditorModel?
-    /// False while the window is closed; every callback bails on it.
-    private var isOpen = false
-    private var observerID: UUID?
-    /// Whether the shared color panel was already visible when this session
-    /// opened: only a panel this session's own well activated is ordered out.
-    private var colorPanelWasVisibleAtOpen = false
+        init(model: ToolColorEditorModel) {
+            self.model = model
+            colorPanelWasVisible = NSColorPanel.sharedColorPanelExists && NSColorPanel.shared.isVisible
+        }
+    }
 
-    init() {
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 288, height: 216),
+    private let state: ToolState
+    private var session: Session?
+
+    init(state: ToolState? = nil) {
+        self.state = state ?? .shared
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 410, height: 266),
                             styleMask: [.titled, .closable, .utilityWindow],
                             backing: .buffered, defer: false)
         super.init(window: panel)
@@ -211,8 +226,6 @@ final class ToolColorEditorController: NSWindowController, NSWindowDelegate, NST
         panel.isReleasedWhenClosed = false
         panel.appearance = EditorPreferences.shared.chromeAppearance
         panel.setFrameAutosaveName("Glims.toolColorEditor")
-        buildContent(in: panel)
-        panel.initialFirstResponder = bindings.first?.field
         NotificationCenter.default.addObserver(self, selector: #selector(preferencesChanged),
                                                name: EditorPreferences.didChange, object: EditorPreferences.shared)
     }
@@ -220,220 +233,269 @@ final class ToolColorEditorController: NSWindowController, NSWindowDelegate, NST
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    deinit {
-        NotificationCenter.default.removeObserver(self)
-        if let observerID { ToolState.shared.removeObserver(observerID) }
-    }
-
-    // MARK: Opening and closing
-
-    /// Opens (or re-targets) the editor for a global tool color. The target
-    /// and its current color are captured now; a later document retarget
-    /// cannot redirect this session.
-    func open(target: ToolColorTarget) {
-        if let observerID { ToolState.shared.removeObserver(observerID); self.observerID = nil }
-        let model = ToolColorEditorModel(target: target, color: ToolState.shared[keyPath: target.keyPath])
-        model.onCommit = { [weak self] committedTarget, color in self?.commit(target: committedTarget, color: color) }
-        self.model = model
-        isOpen = true
-        colorPanelWasVisibleAtOpen = NSColorPanel.sharedColorPanelExists && NSColorPanel.shared.isVisible
-        observerID = ToolState.shared.observe { [weak self] in self?.toolStateChanged() }
+    /// A different target opens only after all existing drafts validate.
+    /// Invalid entries remain visible in their original session for correction
+    /// or an explicit Revert Entries action.
+    @discardableResult
+    func open(target: ToolColorTarget) -> Bool {
+        if let current = session, current.model.target == target {
+            showWindow(nil)
+            window?.makeKeyAndOrderFront(nil)
+            return true
+        }
+        guard finishDrafts() else {
+            showWindow(nil)
+            window?.makeKeyAndOrderFront(nil)
+            return false
+        }
+        endSession()
+        let model = ToolColorEditorModel(target: target, color: state[keyPath: target.keyPath])
+        let current = Session(model: model)
+        session = current
+        let identity = current.id
+        model.onCommit = { [weak self] committedTarget, color in
+            guard let self, self.session?.id == identity,
+                  committedTarget == self.session?.model.target else { return }
+            self.state[keyPath: committedTarget.keyPath] = color
+            self.state.notifyChange()
+        }
+        current.observerID = state.observe { [weak self] in
+            guard let self, let active = self.session, active.id == identity else { return }
+            let color = self.state[keyPath: active.model.target.keyPath]
+            guard !active.model.hasSameComponents(as: color) else { return }
+            active.model.syncExternal(color)
+            self.refreshControls(active)
+        }
+        buildContent(current)
         window?.title = "\(target.title) Color"
-        colorWell.setAccessibilityLabel("\(target.title) color well")
-        refreshControls()
+        refreshControls(current)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
-        if let first = bindings.first?.field {
-            window?.makeFirstResponder(first)
-        }
+        if let first = current.bindings.first?.field { window?.makeFirstResponder(first) }
+        return true
     }
 
-    func windowWillClose(_ notification: Notification) {
-        // End the session first: a late well or panel callback during
-        // teardown then finds no open session and cannot write any target.
-        isOpen = false
-        if let observerID { ToolState.shared.removeObserver(observerID); self.observerID = nil }
-        // Release the shared color panel from this editor: the well is
-        // deactivated so the panel no longer belongs to it, and the panel is
-        // ordered out only when this session's own well activated it.
-        if colorWell.isActive {
-            if !colorPanelWasVisibleAtOpen, NSColorPanel.sharedColorPanelExists {
+    func windowShouldClose(_ sender: NSWindow) -> Bool { finishDrafts() }
+
+    override func close() {
+        guard finishDrafts() else { return }
+        super.close()
+    }
+
+    func windowWillClose(_ notification: Notification) { endSession() }
+
+    private func endSession() {
+        guard let previous = session else { return }
+        // Invalidate identity before ending editing/deactivating the well.
+        session = nil
+        previous.model.onCommit = nil
+        if let observer = previous.observerID { state.removeObserver(observer) }
+        previous.well.target = nil
+        previous.well.action = nil
+        for binding in previous.bindings { binding.field.delegate = nil }
+        if previous.well.isActive {
+            previous.well.deactivate()
+            if !previous.colorPanelWasVisible, NSColorPanel.sharedColorPanelExists {
                 NSColorPanel.shared.orderOut(nil)
             }
-            colorWell.deactivate()
         }
-        model = nil
+        window?.makeFirstResponder(nil)
+        window?.contentView = nil
     }
 
-    // MARK: Synchronization
-
-    /// Writes an accepted edit to the captured slot of the global `ToolState`.
-    /// The resulting notification comes back through `toolStateChanged`, sees
-    /// identical components and does nothing, so there is no feedback loop.
-    private func commit(target: ToolColorTarget, color: NSColor) {
-        guard isOpen, target == model?.target else { return }
-        ToolState.shared[keyPath: target.keyPath] = color
-        ToolState.shared.notifyChange()
+    /// Validate the whole unfinished form before committing or detaching any
+    /// controls. A dry-run model has no commit callback, so an invalid entry
+    /// cannot partly change the global color during a target switch.
+    private func finishDrafts() -> Bool {
+        guard let current = session else { return true }
+        let candidate = ToolColorEditorModel(target: current.model.target, color: current.model.color)
+        for binding in current.bindings {
+            let key = ObjectIdentifier(binding.field)
+            guard let text = current.drafts[key] else { continue }
+            if !apply(text, binding: binding, model: candidate) {
+                current.errors[key] = candidate.lastError
+                refreshControls(current)
+                window?.makeFirstResponder(binding.field)
+                return false
+            }
+        }
+        current.suppressEditingCallbacks = true
+        let ended = window?.makeFirstResponder(nil) ?? true
+        current.suppressEditingCallbacks = false
+        guard ended else { return false }
+        for binding in current.bindings {
+            guard let text = current.drafts[ObjectIdentifier(binding.field)] else { continue }
+            _ = apply(text, binding: binding, model: current.model)
+        }
+        current.drafts.removeAll()
+        current.errors.removeAll()
+        refreshControls(current)
+        return true
     }
 
-    /// External `ToolState` change (swap, reset, canvas sampling): re-seed
-    /// the model and the controls, skipping any field being edited so a
-    /// focused draft is never overwritten.
-    private func toolStateChanged() {
-        guard isOpen, let model else { return }
-        let current = ToolState.shared[keyPath: model.target.keyPath]
-        guard !model.hasSameComponents(as: current) else { return }
-        model.syncExternal(current)
-        refreshControls()
+    private func apply(_ text: String, binding: Binding, model: ToolColorEditorModel) -> Bool {
+        switch binding.column {
+        case .percent: return model.applyPercentDraft(text, for: binding.component)
+        case .float: return model.applyFloatDraft(text, for: binding.component)
+        }
     }
 
     @objc private func wellChanged(_ sender: NSColorWell) {
-        guard isOpen, sender === colorWell, let model else { return }
-        model.applyWellColor(sender.color)
-        refreshControls()
+        guard let current = session, sender === current.well, !current.updatingControls else { return }
+        current.model.applyWellColor(sender.color)
+        refreshControls(current)
     }
 
-    @objc private func preferencesChanged() {
-        window?.appearance = EditorPreferences.shared.chromeAppearance
+    @objc private func revertEntries(_ sender: NSButton) {
+        guard let current = session, sender === current.revertButton else { return }
+        current.suppressEditingCallbacks = true
+        window?.makeFirstResponder(nil)
+        current.suppressEditingCallbacks = false
+        current.drafts.removeAll()
+        current.errors.removeAll()
+        refreshControls(current)
     }
 
-    /// Pushes the model into the controls. A field the user is editing right
-    /// now (it has a current editor) is left alone; the well is not rewritten
-    /// while it is active, so the shared panel keeps driving it.
-    private func refreshControls() {
-        guard let model else { return }
-        if !colorWell.isActive {
-            colorWell.color = model.color
+    @objc private func preferencesChanged() { window?.appearance = EditorPreferences.shared.chromeAppearance }
+
+    private func refreshControls(_ current: Session) {
+        guard session === current else { return }
+        current.updatingControls = true
+        defer { current.updatingControls = false }
+        // NSColorWell programmatic changes do not send an action, but fence
+        // any synchronous feedback as well. Active wells must also track
+        // numeric edits and externally sampled tool colors.
+        current.well.color = current.model.color
+        for binding in current.bindings {
+            let field = binding.field
+            guard current.drafts[ObjectIdentifier(field)] == nil, field.currentEditor() == nil else { continue }
+            field.stringValue = text(for: binding, model: current.model)
         }
-        for binding in bindings where binding.field.currentEditor() == nil {
-            switch binding.column {
-            case .percent: binding.field.stringValue = model.percentText(binding.component)
-            case .float: binding.field.stringValue = model.floatText(binding.component)
-            }
-        }
-        if let error = model.lastError {
-            errorLabel.textColor = .systemRed
-            errorLabel.stringValue = error
-            errorLabel.isHidden = false
-        } else {
-            errorLabel.stringValue = ""
-            errorLabel.isHidden = true
-        }
+        let error = current.bindings.compactMap { current.errors[ObjectIdentifier($0.field)] }.first
+        current.errorLabel.stringValue = error.map { $0 + " Correct the entry or choose Revert Entries." } ?? ""
+        current.errorLabel.isHidden = error == nil
+        current.revertButton.isEnabled = !current.drafts.isEmpty
     }
 
-    // MARK: NSTextFieldDelegate
-
-    /// A numeric edit commits when editing ends, never while typing. A refused
-    /// draft leaves the color unchanged; the field is restored to the
-    /// unchanged value and the actionable error is shown.
-    func controlTextDidEndEditing(_ notification: Notification) {
-        guard isOpen, let model,
-              let field = notification.object as? NSTextField,
-              let binding = bindings.first(where: { $0.field === field }) else { return }
+    private func text(for binding: Binding, model: ToolColorEditorModel) -> String {
         switch binding.column {
-        case .percent: _ = model.applyPercentDraft(field.stringValue, for: binding.component)
-        case .float: _ = model.applyFloatDraft(field.stringValue, for: binding.component)
+        case .percent: return model.percentText(binding.component)
+        case .float: return model.floatText(binding.component)
         }
-        refreshControls()
     }
 
-    // MARK: Content
-
-    private static func makeNumericField() -> NSTextField {
-        let field = NSTextField(string: "")
-        field.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        return field
+    func controlTextDidChange(_ notification: Notification) {
+        guard let current = session, !current.updatingControls, !current.suppressEditingCallbacks,
+              let field = notification.object as? NSTextField,
+              current.bindings.contains(where: { $0.field === field }) else { return }
+        current.drafts[ObjectIdentifier(field)] = field.currentEditor()?.string ?? field.stringValue
+        current.revertButton.isEnabled = true
     }
 
-    private func buildContent(in panel: NSPanel) {
-        guard let content = panel.contentView else { return }
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard let current = session, !current.suppressEditingCallbacks,
+              let field = notification.object as? NSTextField,
+              let binding = current.bindings.first(where: { $0.field === field }) else { return }
+        let key = ObjectIdentifier(field)
+        // Focusing a stale readout without typing must not overwrite a newer
+        // external sample when the field finally loses focus.
+        guard let draft = current.drafts[key] else {
+            field.stringValue = text(for: binding, model: current.model)
+            refreshControls(current)
+            return
+        }
+        if apply(draft, binding: binding, model: current.model) {
+            current.drafts[key] = nil
+            current.errors[key] = nil
+            field.stringValue = text(for: binding, model: current.model)
+        } else {
+            current.errors[key] = current.model.lastError
+        }
+        refreshControls(current)
+    }
 
-        colorWell.target = self
-        colorWell.action = #selector(wellChanged(_:))
-        colorWell.setAccessibilityLabel("Tool color well")
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard commandSelector == #selector(NSResponder.cancelOperation(_:)), let current = session,
+              let binding = current.bindings.first(where: { $0.field === control }) else { return false }
+        let key = ObjectIdentifier(binding.field)
+        current.drafts[key] = nil
+        current.errors[key] = nil
+        let value = text(for: binding, model: current.model)
+        binding.field.stringValue = value
+        textView.string = value
+        refreshControls(current)
+        return true
+    }
 
-        let wellCaption = NSTextField(labelWithString: "Well opens the shared color panel")
-        wellCaption.font = .systemFont(ofSize: 11)
-        wellCaption.textColor = .secondaryLabelColor
-        let wellRow = NSStackView()
+    private func buildContent(_ current: Session) {
+        let content = NSView()
+        window?.contentView = content
+        current.well.target = self
+        current.well.action = #selector(wellChanged(_:))
+        current.well.setAccessibilityLabel("\(current.model.target.title) color well")
+        current.revertButton.target = self
+        current.revertButton.action = #selector(revertEntries(_:))
+        current.revertButton.controlSize = .small
+        current.revertButton.setAccessibilityLabel("Revert uncommitted color entries")
+
+        let wellRow = NSStackView(views: [current.well, NSTextField(labelWithString: "Choose a color or enter RGB values.")])
         wellRow.orientation = .horizontal
         wellRow.spacing = 8
         wellRow.alignment = .centerY
-
-        let headerPercent = NSTextField(labelWithString: "Percent (0-100)")
-        let headerFloat = NSTextField(labelWithString: "Float (0-1)")
-        for header in [headerPercent, headerFloat] {
-            header.font = .systemFont(ofSize: 11)
-            header.textColor = .secondaryLabelColor
-            header.widthAnchor.constraint(equalToConstant: 100).isActive = true
-        }
         let spacer = NSView()
         spacer.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        let headerRow = NSStackView()
-        headerRow.orientation = .horizontal
-        headerRow.spacing = 6
-        headerRow.alignment = .centerY
-
-        var rows: [NSView] = [wellRow, headerRow]
-        for view in [colorWell, wellCaption] as [NSView] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            wellRow.addArrangedSubview(view)
+        let percentHeader = NSTextField(labelWithString: "Percent (0–100)")
+        let floatHeader = NSTextField(labelWithString: "Float (0–1)")
+        for header in [percentHeader, floatHeader] {
+            header.font = .systemFont(ofSize: 11)
+            header.textColor = .secondaryLabelColor
+            header.widthAnchor.constraint(equalToConstant: 160).isActive = true
         }
-        for view in [spacer, headerPercent, headerFloat] as [NSView] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            headerRow.addArrangedSubview(view)
-        }
-
+        let header = NSStackView(views: [spacer, percentHeader, floatHeader])
+        header.spacing = 6
+        var rows: [NSView] = [wellRow, header]
         for component in ToolColorComponent.allCases {
-            let nameLabel = NSTextField(labelWithString: component.name)
-            nameLabel.font = .systemFont(ofSize: 12)
-            nameLabel.alignment = .right
-            nameLabel.widthAnchor.constraint(equalToConstant: 44).isActive = true
-
-            let percentField = Self.makeNumericField()
-            percentField.setAccessibilityLabel("\(component.name) percent (0 to 100)")
-            percentField.widthAnchor.constraint(equalToConstant: 100).isActive = true
-            let floatField = Self.makeNumericField()
-            floatField.setAccessibilityLabel("\(component.name) float (0 to 1)")
-            floatField.widthAnchor.constraint(equalToConstant: 100).isActive = true
-            percentField.delegate = self
-            floatField.delegate = self
-            bindings.append((percentField, component, .percent))
-            bindings.append((floatField, component, .float))
-
-            let row = NSStackView()
-            row.orientation = .horizontal
-            row.spacing = 6
-            row.alignment = .centerY
-            for view in [nameLabel, percentField, floatField] as [NSView] {
-                view.translatesAutoresizingMaskIntoConstraints = false
-                row.addArrangedSubview(view)
+            let caption = NSTextField(labelWithString: component.name)
+            caption.alignment = .right
+            caption.widthAnchor.constraint(equalToConstant: 44).isActive = true
+            var fields: [NSView] = [caption]
+            for column in [Column.percent, .float] {
+                let field = NSTextField(string: "")
+                field.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+                field.widthAnchor.constraint(equalToConstant: 160).isActive = true
+                field.delegate = self
+                let unit = column == .percent ? "percent (0 to 100)" : "float (0 to 1)"
+                field.setAccessibilityLabel("\(component.name) \(unit)")
+                field.toolTip = "Enter a finite value using a period for the decimal separator. Escape reverts this entry."
+                current.bindings.append(Binding(field: field, component: component, column: column))
+                fields.append(field)
             }
+            let row = NSStackView(views: fields)
+            row.spacing = 6
             rows.append(row)
         }
-
-        errorLabel.font = .systemFont(ofSize: 11)
-        errorLabel.lineBreakMode = .byWordWrapping
-        errorLabel.maximumNumberOfLines = 2
-        errorLabel.setAccessibilityLabel("Color editor message")
-        errorLabel.isHidden = true
-        rows.append(errorLabel)
-
-        let stack = NSStackView()
+        current.errorLabel.font = .systemFont(ofSize: 11)
+        current.errorLabel.textColor = .systemRed
+        current.errorLabel.setAccessibilityLabel("Color editor message")
+        current.errorLabel.isHidden = true
+        let footer = NSStackView(views: [current.revertButton])
+        footer.alignment = .centerY
+        rows += [current.errorLabel, footer]
+        let stack = NSStackView(views: rows)
         stack.orientation = .vertical
+        stack.alignment = .leading
         stack.spacing = 6
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
-        for row in rows {
-            row.translatesAutoresizingMaskIntoConstraints = false
-            stack.addArrangedSubview(row)
-        }
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: content.topAnchor),
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            current.errorLabel.widthAnchor.constraint(equalToConstant: 376),
         ])
+        window?.initialFirstResponder = current.bindings.first?.field
+        window?.recalculateKeyViewLoop()
     }
 }
