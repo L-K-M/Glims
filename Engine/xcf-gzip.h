@@ -10,7 +10,8 @@ gboolean glims_xcf_gzip_decode (GInputStream *input, GOutputStream *output,
                                GError **error);
 
 /* For a gzip source with a non-XCF prefix, stop before staging its payload
- * and return TRUE with is_xcf false. Native loading owns that format. */
+ * and return TRUE with is_xcf false. Probe across members if necessary to
+ * identify the format, but require exactly one member for XCF. */
 gboolean glims_xcf_gzip_decode_xcf (GInputStream *input, GOutputStream *output,
                                    guint64 input_limit, guint64 output_limit,
                                    gboolean *is_xcf, GError **error);

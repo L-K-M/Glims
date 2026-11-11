@@ -20,6 +20,7 @@ decode_member (GInputStream *input, GOutputStream *output,
   guint8 incoming[32 * 1024], outgoing[32 * 1024];
   guint64 input_bytes = 0, output_bytes = 0;
   gboolean eof = FALSE, complete = FALSE;
+  gboolean probing_next_member = FALSE, previous_member = FALSE;
   for (;;) {
     if (!stream.avail_in && !eof) {
       guint64 remaining = input_limit - input_bytes;
@@ -35,6 +36,13 @@ decode_member (GInputStream *input, GOutputStream *output,
       input_bytes += (guint64) received;
       stream.next_in = incoming;
       stream.avail_in = (uInt) received;
+    }
+    if (probing_next_member) {
+      if (!stream.avail_in && eof) {
+        complete = TRUE; /* No XCF prefix was found. */
+        break;
+      }
+      probing_next_member = FALSE;
     }
 
     guint64 remaining = output_limit - output_bytes;
@@ -64,10 +72,32 @@ decode_member (GInputStream *input, GOutputStream *output,
       }
       matched += produced;
       *is_xcf = matched == magic_size;
+      if (*is_xcf && previous_member) {
+        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                             "XCF must be stored in one gzip member");
+        break;
+      }
       if (*is_xcf && !g_output_stream_write_all (output, xcf_magic, magic_size, NULL, NULL, error)) break;
     } else if (produced && !g_output_stream_write_all (output, outgoing, produced, NULL, NULL, error))
       break;
     if (result != Z_STREAM_END) continue;
+
+    if (is_xcf && !*is_xcf) {
+      /* The native gzip plug-in reads concatenated members. A leading
+       * empty member or a split prefix cannot identify the inner format.
+       * Inspect only until the prefix matches or differs; never stage a
+       * recognized XCF that consumed more than one member. */
+      Bytef *next = stream.next_in;
+      uInt unread = stream.avail_in;
+      if (inflateReset (&stream) != Z_OK) {
+        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Could not continue gzip format probe");
+        break;
+      }
+      stream.next_in = next;
+      stream.avail_in = unread;
+      probing_next_member = previous_member = TRUE;
+      continue;
+    }
 
     /* inflate validates the gzip trailer. Reject other bytes even when the
      * next member or tail begins beyond the last buffered read. */
