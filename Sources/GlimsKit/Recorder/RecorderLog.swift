@@ -58,6 +58,10 @@ struct RecorderLog<Command> {
         case staleReplayStep
     }
 
+    enum SettledRecordsError: Error, Equatable {
+        case noncontiguousOrdinals
+    }
+
     private(set) var isRecording = false
     /// Only the settled acceptance-order prefix is published. Later outcomes
     /// wait for earlier reservations, including failures and cancellations.
@@ -71,6 +75,19 @@ struct RecorderLog<Command> {
     private var replayGeneration = UUID()
     private var replayCommands: [Command] = []
     private var inFlight: ReplayToken?
+
+    init() {}
+
+    /// Construct a complete detached log with fresh reservation/replay tokens.
+    /// Validation precedes assignment, and failed/cancelled rows are retained.
+    /// This grants no permission to replace an active document's existing log.
+    init(settledRecords: [Record]) throws {
+        guard settledRecords.enumerated().allSatisfy({ $0.offset == $0.element.ordinal }) else {
+            throw SettledRecordsError.noncontiguousOrdinals
+        }
+        records = settledRecords
+        nextOrdinal = settledRecords.count
+    }
 
     var pendingCount: Int { unresolved.count }
 

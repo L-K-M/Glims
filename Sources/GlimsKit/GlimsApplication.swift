@@ -26,6 +26,14 @@ public enum GlimsApplication {
             return 0
         }
 
+        // This regression drives only a bare document and independent engine
+        // references. It does not need an AppKit application or desktop.
+        if mode == .engineSmokeTest,
+           let smokeCase = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"],
+           ["recorder-stroke-capture", "recorder-stroke-file"].contains(smokeCase) {
+            return EngineSmokeTest.run()
+        }
+
         let app = NSApplication.shared
         // Rigi draws its chrome light, so the whole app keeps the light
         // Aqua appearance even when the Mac uses Dark Mode; system-colored
@@ -44,9 +52,10 @@ public enum GlimsApplication {
             if let smokeCase = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"],
                ["metadata-rating-edit", "layer-rasterize-batch", "layer-restore-batch",
                 "tablet-eraser-proximity", "recorder-layer-properties", "text-floating-create",
-                "displace-source", "oilify-source", "selection-anchor", "lasso-anchor", "region-anchor",
-                "move-pick", "move-pick-range", "move-pick-spring", "move-pick-busy-restore",
-                "move-pick-stationary-snap"].contains(smokeCase) {
+                "displace-source", "oilify-source", "recorder-canvas-stroke-ui", "recorder-canvas-paintbrush-ui", "recorder-file-ui", "recorder-file-picker-ui",
+                "recorder-open-picker-ui", "recorder-consent-ui", "recorder-revert-ui", "recorder-quit-ui",
+                "selection-anchor", "lasso-anchor", "region-anchor", "move-pick", "move-pick-range", "move-pick-spring",
+                "move-pick-busy-restore", "move-pick-stationary-snap"].contains(smokeCase) {
                 return EngineSmokeTestHost.run()
             }
             return EngineSmokeTest.run()

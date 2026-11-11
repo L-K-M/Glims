@@ -24,6 +24,29 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// readable for the smoke test's native-slot checks.
     let scrollView = CanvasScrollView()
     private lazy var engineUndoManager = EngineUndoManager(document: imageDocument)
+    private let recorderPickerDefaults: RecorderFileCoordinator.PickerDefaults?
+    private lazy var recorderFiles = RecorderFileCoordinator(owner: self, pickerDefaults: recorderPickerDefaults)
+
+    var canPresentRecorderFileSheet: Bool { recorderFiles.canPresent }
+
+    func presentRecorderFileAction(_ action: RecorderPaletteAction) throws {
+        if action.needsFileSheet {
+            try recorderFiles.perform(action)
+        } else if (action == .record || action == .clear) && imageDocument.hasUnsavedRecordingChanges {
+            guard recorderFiles.canPresent else { throw RecorderFileCoordinator.Refusal.windowUnavailable }
+            recorderFiles.confirmLoss(.replace) { [weak self] approved in
+                guard let self, let approved else { return }
+                do {
+                    guard try self.imageDocument.recorderInstallCheckpoint() == approved else {
+                        throw RecorderFileCoordinator.Refusal.changed
+                    }
+                    try action.perform(on: self.imageDocument)
+                } catch { self.imageDocument.onError?(error.localizedDescription) }
+            }
+        } else {
+            try action.perform(on: imageDocument)
+        }
+    }
     /// The open filter preview, generic or dedicated; one at a time.
     private(set) var previewPanel: FilterPreviewPanel?
     /// Image ▸ Guides…'s sheet, retained by this window for its lifetime;
@@ -129,7 +152,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// document — the menu item stays disabled then.
     var revertHandler: ((URL, @escaping @MainActor (Result<DocumentWindowController, Error>) -> Void) -> Void)?
 
-    init(document imageDocument: ImageDocument, preferences: EditorPreferences? = nil) {
+    init(document imageDocument: ImageDocument, preferences: EditorPreferences? = nil,
+         recorderPickerDefaults: RecorderFileCoordinator.PickerDefaults? = nil) {
+        self.recorderPickerDefaults = recorderPickerDefaults
         self.imageDocument = imageDocument
         self.preferences = preferences ?? .shared
         let canvas = EngineCanvasView(document: imageDocument)
@@ -2815,19 +2840,35 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let self, response == .alertFirstButtonReturn, !self.revertIsPending else { return }
-            // The document's file cannot change under a sheet, but its
-            // lifetime can; the source check also guards a re-open.
-            guard let current = self.imageDocument.fileState.revertSource, current == source,
-                  !self.imageDocument.isClosing else { return }
-            self.revertIsPending = true
-            revertHandler(source.url) { [weak self] result in
-                guard let self else { return }
-                self.revertIsPending = false
-                if case .failure(let error) = result {
-                    self.showStatusError(error.localizedDescription)
+            DispatchQueue.main.async {
+                self.recorderFiles.confirmLoss(.revert) { [weak self] approved in
+                    guard let self, let approved,
+                          self.imageDocument.fileState.revertSource == source,
+                          !self.imageDocument.isClosing, !self.revertIsPending else { return }
+                    self.revertRecorderApproval = approved
+                    self.revertIsPending = true
+                    revertHandler(source.url) { [weak self] result in
+                        guard let self else { return }
+                        self.revertIsPending = false
+                        self.revertRecorderApproval = nil
+                        if case .failure(let error) = result {
+                            self.showStatusError(error.localizedDescription)
+                        }
+                    }
                 }
             }
         }
+    }
+
+    var canDiscardRecordingForRevert: Bool {
+        !imageDocument.hasUnsavedRecordingChanges ||
+            revertRecorderApproval == imageDocument.recorderContentCheckpoint()
+    }
+
+    func closeAfterRevert() -> Bool {
+        guard canDiscardRecordingForRevert else { return false }
+        closeDiscardingChanges()
+        return true
     }
 
     /// A confirmed Revert's discard approval: no close path may ask to
@@ -2850,6 +2891,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// Whether the user already agreed to close: Don't Save, or a save
     /// that succeeded. The next close request goes through.
     private var closeApproved = false
+    private var closeRecorderApproval: ImageDocument.RecorderInstallCheckpoint?
+    private var revertRecorderApproval: ImageDocument.RecorderInstallCheckpoint?
+    private var waitingForRecorderConsent = false
     private var savePromptVisible = false
     private var closeCompletion: ((Bool) -> Void)?
     /// Set the moment the window begins closing, before the async
@@ -2870,6 +2914,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     private func finishCloseRequest(_ closed: Bool) {
+        if !closed {
+            closeRecorderApproval = nil
+            closeApproved = false
+        }
         let completion = closeCompletion
         closeCompletion = nil
         completion?(closed)
@@ -2907,8 +2955,30 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         previewPanel?.cancel()
         cancelPendingPreview()
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
+        guard approveRecordingCloseIfNeeded(sender) else { return false }
         if closeApproved || revertIsPending || !imageDocument.hasUnsavedChanges { return true }
         askToSaveChanges()
+        return false
+    }
+
+    private func approveRecordingCloseIfNeeded(_ window: NSWindow) -> Bool {
+        guard imageDocument.hasUnsavedRecordingChanges else { return true }
+        let revision = imageDocument.recorderContentCheckpoint()
+        if closeRecorderApproval == revision || (revertIsPending && canDiscardRecordingForRevert) { return true }
+        guard !waitingForRecorderConsent else { return false }
+        waitingForRecorderConsent = true
+        recorderFiles.confirmLoss(.close) { [weak self, weak window] approved in
+            guard let self else { return }
+            self.waitingForRecorderConsent = false
+            guard let window, self.window === window, let approved else {
+                return self.finishCloseRequest(false)
+            }
+            self.closeRecorderApproval = approved
+            DispatchQueue.main.async {
+                guard !self.closeStarted, self.window === window else { return }
+                if self.windowShouldClose(window) { window.close() }
+            }
+        }
         return false
     }
 
@@ -2955,7 +3025,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     private func approveClose() {
         closeApproved = true
-        window?.close()
+        guard let window else { return }
+        let current = imageDocument.recorderContentCheckpoint()
+        if imageDocument.hasUnsavedRecordingChanges && closeRecorderApproval != current {
+            if imageDocument.isSavingForClose { imageDocument.cancelCloseSave() }
+            if windowShouldClose(window) { window.close() }
+        } else { window.close() }
     }
 
     /// Edit ▸ Undo and Redo reach the engine through this (see

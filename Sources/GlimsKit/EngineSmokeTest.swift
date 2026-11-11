@@ -127,6 +127,69 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (recorder layer properties)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-install" {
+                try exerciseRecorderInstall(session, documents: documents)
+                print(failures == 0 ? "PASSED (recorder install)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-save" {
+                try exerciseRecorderSave(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (recorder save)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-active-save" {
+                try exerciseRecorderActiveSave(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (active recorder save)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-stroke-file" {
+                try exerciseRecorderStrokeFile(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Recorder stroke file)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-stroke-capture" {
+                try exerciseRecorderStrokeCapture(session, documents: documents)
+                print(failures == 0 ? "PASSED (Recorder stroke capture)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-canvas-stroke-ui" {
+                try exerciseRecorderCanvasStrokeUI(session, documents: documents)
+                print(failures == 0 ? "PASSED (Recorder canvas stroke UI)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-canvas-paintbrush-ui" {
+                try exerciseRecorderCanvasPaintbrushUI(session, documents: documents)
+                print(failures == 0 ? "PASSED (Recorder canvas Paintbrush UI)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if let smokeCase = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"],
+               ["recorder-file-ui", "recorder-file-picker-ui", "recorder-open-picker-ui"].contains(smokeCase) {
+                try exerciseRecorderFileUI(session, work: work, documents: documents,
+                                           driveFilePickers: smokeCase != "recorder-file-ui",
+                                           openOnly: smokeCase == "recorder-open-picker-ui")
+                print(failures == 0 ? "PASSED (Recorder file UI)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-revert-ui" {
+                try exerciseRecorderRevertUI(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Recorder Revert UI)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-quit-ui" {
+                try exerciseRecorderQuitUI(session, work: work, documents: documents)
+                check(false, "Recorder Quit returned without normal application termination")
+                return 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-consent-ui" {
+                try exerciseRecorderConsentUI(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Recorder consent UI)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-quick-mask-color" {
+                try exerciseRecorderQuickMaskColor(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (recorder Quick Mask color)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents" {
                 try exerciseCloseAll(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (Close All)" : "FAILED: \(failures) failure(s)")

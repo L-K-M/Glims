@@ -89,7 +89,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         for: RecorderPaletteController.definition,
         target: { [weak self] in self?.frontDocument },
         makeContent: { [weak self] in
-            RecorderPaletteController(currentDocument: { [weak self] in self?.frontDocument })
+            RecorderPaletteController(currentDocument: { [weak self] in self?.frontDocument },
+                                      performAction: { [weak self] action, document in
+                guard let self else { throw RecorderFileCoordinator.Refusal.windowUnavailable }
+                try self.performRecorderAction(action, in: document)
+            })
         })
 
     private lazy var channelsPalette: Palette = PaletteCenter.shared.palette(
@@ -639,16 +643,28 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     @objc func recorderCommand(_ sender: NSMenuItem) {
-        guard let action = RecorderPaletteAction(rawValue: sender.tag) else { return }
+        guard let action = RecorderPaletteAction(rawValue: sender.tag),
+              let document = frontDocument else { return }
         showRecorder(sender)
-        guard let document = frontDocument else { return }
         let presentation = RecorderPalettePresentation(document: document)
         if let refusal = presentation.refusal(for: action) {
             document.onError?(refusal)
             return
         }
-        do { try action.perform(on: document) }
+        do { try performRecorderAction(action, in: document) }
         catch { document.onError?(RecorderPalettePresentation.message(for: error)) }
+    }
+
+    private func performRecorderAction(_ action: RecorderPaletteAction, in document: ImageDocument) throws {
+        if action.needsFileSheet ||
+            ((action == .record || action == .clear) && document.hasUnsavedRecordingChanges) {
+            guard let owner = documents.first(where: { $0.imageDocument === document }) else {
+                throw RecorderFileCoordinator.Refusal.windowUnavailable
+            }
+            try owner.presentRecorderFileAction(action)
+        } else {
+            try action.perform(on: document)
+        }
     }
 
     /// File ▸ Recover Documents…: the panel is never a dead end — Later
@@ -928,6 +944,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 EngineActivity.shared.closeImage(image, session: session) { _ in }
                 return completion(.failure(ImageDocument.DocumentError.closed))
             }
+            guard controller.canDiscardRecordingForRevert else {
+                EngineActivity.shared.closeImage(image, session: session) { _ in }
+                return completion(.failure(RecorderFileCoordinator.Refusal.changed))
+            }
             let frame = controller.window?.frame
             let zoom = controller.canvas.zoomPercent
             let center = controller.canvasCenter
@@ -944,7 +964,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 if let frame { replacement.window?.setFrame(frame, display: false) }
                 replacement.zoom(to: zoom)
                 replacement.center(on: center)
-                controller.closeDiscardingChanges()
+                guard controller.closeAfterRevert() else {
+                    replacement.closeDiscardingChanges()
+                    return completion(.failure(RecorderFileCoordinator.Refusal.changed))
+                }
                 completion(.success(replacement))
             } catch {
                 EngineActivity.shared.closeImage(image, session: session) { _ in }
@@ -1003,8 +1026,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             return session != nil && !terminationRequested
         case #selector(recorderCommand(_:)):
             guard session != nil, !terminationRequested,
-                  let action = RecorderPaletteAction(rawValue: menuItem.tag) else { return false }
-            return RecorderPalettePresentation(document: frontDocument).canPerform(action)
+                  let action = RecorderPaletteAction(rawValue: menuItem.tag),
+                  let document = frontDocument else { return false }
+            if action.needsFileSheet,
+               documents.first(where: { $0.imageDocument === document })?.canPresentRecorderFileSheet != true {
+                return false
+            }
+            return RecorderPalettePresentation(document: document).canPerform(action)
         case #selector(showLayers(_:)), #selector(showChannels(_:)), #selector(showPaths(_:)), #selector(showHistory(_:)), #selector(showRecorder(_:)),
              #selector(showTools(_:)), #selector(showToolOptions(_:)):
             return session != nil

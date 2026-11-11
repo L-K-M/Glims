@@ -152,7 +152,7 @@ extension EngineSmokeTest {
         }
         palette.reload()
         let titleMenu = palette.paletteMenu
-        expect(RecorderPaletteAction.allCases.allSatisfy { button($0) != nil }, "all five real actions have distinct accessible buttons")
+        expect(RecorderPaletteAction.allCases.allSatisfy { button($0) != nil }, "all real actions have distinct accessible buttons")
         expect(label("Supported Recorder actions")?.stringValue == RecorderPalettePresentation.coverage
                 && label("Recorder replay behavior")?.stringValue.contains("Undo") == true,
                "supported selections/image-only coverage, same-image replay and Undo consequences are visible")
@@ -163,7 +163,7 @@ extension EngineSmokeTest {
                "initial button gates honestly distinguish Record from unavailable commands")
         expect(RecorderPaletteAction.allCases.allSatisfy { action in
             menuItem(titleMenu, action).map { palette.validateMenuItem($0) == button(action)?.isEnabled } == true
-        }, "actual title-menu admission agrees with all five buttons")
+        }, "actual title-menu admission agrees with all buttons")
         let menu = NSApp.mainMenu
         let editRecorder = menu?.item(withTitle: "Edit")?.submenu?.item(withTitle: "Recorder")?.submenu
         let showRecorder = menu?.item(withTitle: "Window")?.submenu?.item(withTitle: "Recorder")
