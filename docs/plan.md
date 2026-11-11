@@ -4120,3 +4120,12 @@ Current-source audits also confirm that batch Restore, all planned Image
 Adjust placements and the descriptor-supported typed metadata forms are
 already present. The completion ledger now names those finite capabilities;
 it does not infer blanket batching or every possible metadata schema editor.
+
+### Accessible committed-filter selection (2026-11-11 candidate)
+
+The filter-selection badge now exposes its existing selected/unselected label
+as an accessibility image. Its old AX element/role failures are reproduced
+and fixed; all 13 focused AppKit tests and 1,222 integrated unit tests pass.
+Independent source review found no important issue. See
+[`effect-selection-accessibility.md`](effect-selection-accessibility.md) for
+scope and the separate spoken VoiceOver/full-keyboard audit gates.
