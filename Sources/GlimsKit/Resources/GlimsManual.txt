@@ -18,7 +18,12 @@ web. See "Engine Manual" at the end of this manual for the link.
 Every image opens in its own window. The image sits on a neutral
 surround whose gray you choose in Preferences. Along the bottom of the
 window a status strip shows messages on the left and the zoom on the
-right.
+right. Its information chooser shows Dimensions, Working profile,
+Precision, Canvas cache or Last tile. Canvas cache counts retained tile
+pixels, including row padding; it is not the image's total memory.
+Last tile is the elapsed time of the last accepted render, including
+its wait for the engine. It clears when the canvas generation changes.
+In a narrow window, progress and Cancel temporarily replace this readout.
 
 Seven palettes hold the controls:
 
@@ -169,6 +174,17 @@ Three keys work with any tool:
   Space (hold)    temporary Hand, to pan the view
   Command (hold)  move the active layer with any tool
   Option (hold)   sample a color with any painting tool
+
+Click either color swatch, or choose View > Tools > Foreground Color…
+or Background Color…, to edit that tool color.
+The modeless editor shows RGB Percent (0–100) and Float (0–1) entries
+at the same time, plus a native color well. Entries retain fractions;
+press Return or leave a field to apply a valid value. An invalid draft
+keeps the last valid color and stays open until you correct it, choose
+Revert Entries, or press Escape. Tool colors are opaque sRGB colors.
+The Eyedropper and Option-paint sampling retain the native pixel's
+fractions. Extended values outside the editing range are clipped with
+an explicit status message; transparent pixels select black.
 
 X swaps the foreground and background colors; D resets them to black
 on white. The arrow keys move the active layer one pixel, or ten with

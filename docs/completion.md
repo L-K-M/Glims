@@ -7,12 +7,12 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-These entries describe merged main through #189, plus the explicitly named
-Text source-consent integration candidate. The whole editor remains in
-progress; each checked entry covers its stated behavior. Historical dated
-reports retain their original scope and pending notes.
-The #126 release passes 1,917 native and 2,391 app checks in a self-contained
-bundle with the native and Swift build outputs inaccessible.
+Current source is merged through #197, with the final editor integration
+candidate adding native fractional color sampling, numeric foreground and
+background colors, selectable status information, and Rigi's Reduce Motion
+policy. The combined candidate passes 1,249 unit tests. Its four-engine and
+standalone verification is in progress; the installed local bundle still
+predates this candidate. Dated reports below retain their original scope.
 
 - [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
       fail before packaging. Hosted CI explicitly builds only the interface.
@@ -126,7 +126,11 @@ bundle with the native and Swift build outputs inaccessible.
       rejection and independent wide-source pixel-preservation checks.
 - [x] Window-owned ICC proof setup/toggle, strict proof rendering, captured
       intents/BPC and counted cancellation/close (integration candidate).
-- [ ] LUT/physical-display and higher-precision verification, HDR and remaining proof controls.
+- [x] Fractional native sRGB sampling and simultaneous Percent/Float tool
+      color entries (current integration candidate).
+- [x] Window-owned proof setup, toggle and gamut warnings (#196).
+- [ ] Physical calibrated-display verification. HDR presentation and custom
+      LUT/paper/black controls are proposed extensions, not implemented features.
 - [x] Native guides with undo/XCF persistence, per-document management
       sheets and a per-window Show Guides overlay toggle.
 - [x] Pixel rulers, grid controls/overlay and canvas guide dragging.
@@ -141,7 +145,9 @@ bundle with the native and Swift build outputs inaccessible.
       (#127).
 - [x] Stationary and release-event Shift constraints for Transform corner
       and rotation previews, with no-motion handle clicks preserving geometry.
-- [ ] Remaining snapping interactions and other modifier behavior.
+- [x] Documented Move/floating-selection snapping, stationary modifiers,
+      spring tool keys and selection/transform constraints. Other tools do
+      not promise snapping; see `canvas-snapping-controls.md`.
 - [x] Stroke Selection and explicit Paste Into/Anchor/New Layer/Discard.
 - [x] Float Selected Pixels (move/copy), existing floating-selection drag
       and arrow nudges with captured target validation.
@@ -165,8 +171,12 @@ bundle with the native and Swift build outputs inaccessible.
       and language-key creation remain outside this preservation contract.
 - [x] Image Adjust placement for Exposure, Brightness/Contrast, Color Balance,
       Hue/Saturation, Levels, Curves, Threshold and both Invert variants.
-- [ ] Remaining proof view controls and complete menu/keyboard coverage.
-- [ ] Recorder and semantic command replay.
+- [x] Proof setup/toggle/gamut controls and documented menu/keyboard routes.
+- [x] Status information: dimensions, working profile, precision, retained
+      tile payload and accepted-render timing (current integration candidate).
+- [ ] Final integrated menu/keyboard audit.
+- [x] Finite semantic Recorder capture/replay, named Save/Load and bindings;
+      unsupported commands are explicit. See `recorder.md` and shipped Help.
 - [ ] Full accessibility/focus, appearance and English-copy audit.
 - [ ] Public distribution checks from `plan.md`: corresponding sources,
       remaining license texts, signing/notarization and update process.

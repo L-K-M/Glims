@@ -30,8 +30,9 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
     private let screenModes = NSSegmentedControl(labels: DocumentScreenMode.allCases.map(\.title),
         trackingMode: .selectOne, target: nil, action: nil)
     private weak var targetDocument: ImageDocument?
-    /// Which color the shared color panel is editing for this palette.
-    private var editedColor: ReferenceWritableKeyPath<ToolState, NSColor>?
+    /// The owned modeless color editor; a Foreground/Background click
+    /// captures that global `ToolState` target in it.
+    private var colorEditor: ToolColorEditorController { .shared }
     private var observer: UUID?
 
     override func loadView() {
@@ -43,8 +44,8 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
         colors.resetShortcut = "D"
         colors.onSwap = { ToolState.shared.swapColors() }
         colors.onReset = { ToolState.shared.resetColors() }
-        colors.onEditForeground = { [weak self] in self?.editColor(\.foreground) }
-        colors.onEditBackground = { [weak self] in self?.editColor(\.background) }
+        colors.onEditForeground = { [weak self] in self?.colorEditor.open(target: .foreground) }
+        colors.onEditBackground = { [weak self] in self?.colorEditor.open(target: .background) }
 
         screenModes.controlSize = .small
         screenModes.setAccessibilityLabel("Screen mode")
@@ -123,22 +124,6 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
         ToolState.shared.select(tool)
     }
 
-    /// Opens the shared color panel on one of the two colors; its changes
-    /// go straight to `ToolState`.
-    private func editColor(_ keyPath: ReferenceWritableKeyPath<ToolState, NSColor>) {
-        editedColor = keyPath
-        let panel = NSColorPanel.shared
-        panel.setTarget(self)
-        panel.setAction(#selector(colorPanelChanged(_:)))
-        panel.color = ToolState.shared[keyPath: keyPath]
-        panel.orderFront(nil)
-    }
-
-    @objc private func colorPanelChanged(_ sender: NSColorPanel) {
-        guard let keyPath = editedColor else { return }
-        ToolState.shared[keyPath: keyPath] = sender.color
-        ToolState.shared.notifyChange()
-    }
 }
 
 /// The Tool Options palette: the current tool's settings. Its rows are

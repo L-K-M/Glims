@@ -3346,6 +3346,31 @@ api_image_render_proofed (GlimsEngine *e, GlimsImageID image, double scale, Glim
   return glims_engine_call (e, image_render_proofed_on_engine, &a);
 }
 
+typedef struct {
+  GlimsImageID image;
+  int32_t x, y;
+  GlimsSampledColor *out;
+  char **error;
+} GlimsSampleColorArgs;
+
+static GlimsStatus
+image_sample_color_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsSampleColorArgs *a = data;
+  return glims_image_sample_color (e, a->image, a->x, a->y, a->out, a->error);
+}
+
+static GlimsStatus
+api_image_sample_color (GlimsEngine *e, GlimsImageID image, int32_t x, int32_t y,
+                        GlimsSampledColor *out, char **error)
+{
+  if (error) *error = NULL;
+  if (! out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  *out = (GlimsSampledColor) {0};
+  GlimsSampleColorArgs a = {image, x, y, out, error};
+  return glims_engine_call (e, image_sample_color_on_engine, &a);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version       = GLIMS_ENGINE_API_VERSION,
   .struct_size       = sizeof (GlimsEngineAPI),
@@ -3525,6 +3550,7 @@ static const GlimsEngineAPI api_v1 = {
   .stroke_begin_with_capture_facts = api_stroke_begin_with_capture_facts,
   .stroke_begin_v2 = api_stroke_begin_v2,
   .stroke_continue_v2 = api_stroke_continue_v2,
+  .image_sample_color = api_image_sample_color,
 };
 
 __attribute__ ((visibility ("default")))

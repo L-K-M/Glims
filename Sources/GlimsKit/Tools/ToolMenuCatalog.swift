@@ -9,6 +9,8 @@ enum ToolMenuCatalog {
     static let swapColorsTag = 1001
     /// The tag of the Default Colors command. Distinct from every tool tag.
     static let defaultColorsTag = 1002
+    static let foregroundColorTag = 1005
+    static let backgroundColorTag = 1006
 
     static func moveTargetTag(for mode: MoveTargetMode) -> Int {
         switch mode {

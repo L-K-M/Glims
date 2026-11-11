@@ -736,6 +736,47 @@ glims_image_render (GlimsEngine  *engine,
   return GLIMS_STATUS_OK;
 }
 
+GlimsStatus
+glims_image_sample_color (GlimsEngine       *engine,
+                          GlimsImageID       id,
+                          int32_t            x,
+                          int32_t            y,
+                          GlimsSampledColor *out,
+                          char             **error)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GeglBuffer *buffer;
+  double rgba[4];
+  GlimsStatus status;
+
+  if (! out)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+  if (x < 0 || y < 0 || x >= gimp_image_get_width (open->image) ||
+      y >= gimp_image_get_height (open->image))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  /* This also validates the 1x1 hot-tile path after a preceding edit. */
+  status = glims_projection_prepare_read (open, 1.0, (GlimsRect) {x, y, 1, 1}, &buffer);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  /* Babl converts the working space to straight nonlinear sRGB. Never use
+   * the premultiplied u8 display path for a sampled editing color. */
+  gegl_buffer_get (buffer, GEGL_RECTANGLE (x, y, 1, 1), 1.0,
+                   babl_format ("R'G'B'A double"), rgba,
+                   GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
+  if (! isfinite (rgba[0]) || ! isfinite (rgba[1]) || ! isfinite (rgba[2]) ||
+      ! isfinite (rgba[3]) || rgba[3] < 0 || rgba[3] > 1)
+    {
+      if (error)
+        *error = strdup ("The sampled projection color contains invalid components.");
+      return GLIMS_STATUS_FAILED;
+    }
+  *out = (GlimsSampledColor) {rgba[0], rgba[1], rgba[2], rgba[3]};
+  return GLIMS_STATUS_OK;
+}
+
 /* ---- Saving and exporting ---------------------------------------------- */
 
 typedef enum

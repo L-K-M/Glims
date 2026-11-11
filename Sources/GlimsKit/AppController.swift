@@ -1000,6 +1000,20 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         ToolState.shared.setMoveTargetMode(mode)
     }
 
+    @objc func editForegroundColorFromMenu(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem, item.identifier == MenuShortcutBridge.builtinIdentifier,
+              item.action == #selector(editForegroundColorFromMenu(_:)),
+              item.tag == ToolMenuCatalog.foregroundColorTag else { return }
+        ToolColorEditorController.shared.open(target: .foreground)
+    }
+
+    @objc func editBackgroundColorFromMenu(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem, item.identifier == MenuShortcutBridge.builtinIdentifier,
+              item.action == #selector(editBackgroundColorFromMenu(_:)),
+              item.tag == ToolMenuCatalog.backgroundColorTag else { return }
+        ToolColorEditorController.shared.open(target: .background)
+    }
+
     @objc func swapColorsFromMenu(_ sender: Any?) {
         guard let item = sender as? NSMenuItem, item.identifier == MenuShortcutBridge.builtinIdentifier,
               item.action == #selector(swapColorsFromMenu(_:)), item.tag == ToolMenuCatalog.swapColorsTag else { return }
@@ -1055,6 +1069,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             }
             menuItem.state = mode == ToolState.shared.moveTargetMode ? .on : .off
             return true
+        case #selector(editForegroundColorFromMenu(_:)):
+            menuItem.state = .off
+            return menuItem.identifier == MenuShortcutBridge.builtinIdentifier && menuItem.tag == ToolMenuCatalog.foregroundColorTag
+        case #selector(editBackgroundColorFromMenu(_:)):
+            menuItem.state = .off
+            return menuItem.identifier == MenuShortcutBridge.builtinIdentifier && menuItem.tag == ToolMenuCatalog.backgroundColorTag
         case #selector(swapColorsFromMenu(_:)):
             menuItem.state = .off
             return menuItem.identifier == MenuShortcutBridge.builtinIdentifier && menuItem.tag == ToolMenuCatalog.swapColorsTag

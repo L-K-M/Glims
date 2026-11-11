@@ -268,6 +268,18 @@ enum MainMenu {
             } + [
                 .separator(),
                 {
+                    let entry = item("Foreground Color…", #selector(AppController.editForegroundColorFromMenu(_:)))
+                    entry.tag = ToolMenuCatalog.foregroundColorTag
+                    entry.keyEquivalentModifierMask = []
+                    return entry
+                }(),
+                {
+                    let entry = item("Background Color…", #selector(AppController.editBackgroundColorFromMenu(_:)))
+                    entry.tag = ToolMenuCatalog.backgroundColorTag
+                    entry.keyEquivalentModifierMask = []
+                    return entry
+                }(),
+                {
                     let entry = item("Swap Colors", #selector(AppController.swapColorsFromMenu(_:)))
                     entry.tag = ToolMenuCatalog.swapColorsTag
                     entry.keyEquivalentModifierMask = []

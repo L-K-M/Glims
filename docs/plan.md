@@ -4164,3 +4164,45 @@ form and Swift bridge pass25 mandatory checks, and all 1,229 units pass.
 Independent source review found no important issue. Latest-head CI and final
 integration are pending. See [soft-proof rendering](soft-proof-render.md)
 for the full contract and hardware/HDR limitations.
+
+
+### Native float color sampling (2026-11-11 candidate)
+
+The Color Picker and Option-paint sampling now use a straight nonlinear sRGB
+double read from the native projection, before display-byte quantization.
+Owned output type and slot 174 extend API version 1. Opaque tool colors keep
+native fractions and explicitly report clipping of extended samples to the
+editing range. Image pixels, profile, selection and Undo stay unchanged.
+The independent native fixture passes 480 checks across four engines, and
+the actual picker/wide-gamut workflows pass 48. General conformance and codec
+checks pass on all four engines; source review found no important issue.
+Latest-head unit/CI and final packaging remain pending. See
+[the sampling contract](float-color-sampling.md).
+
+
+### Numeric foreground and background colors (2026-11-11 candidate)
+
+The Tools swatches open an owned editor with simultaneous RGB Percent and
+Float entries and a native color well. Full fractions are retained, invalid
+drafts preserve the current color, and session/control identities fence late
+callbacks across foreground/background switches and close/reopen. All 1,242
+unit tests pass, including controller and unsupported-well recovery checks.
+Two independent source reviews found no important issue. Latest-head CI and
+final integration are pending; see [numeric tool colors](tool-color-numeric.md).
+
+
+### Final editor integration (2026-11-11 candidate)
+
+The final integration combines the independently reviewed native float
+sampling, numeric tool-color editor and status information slices. Glims
+pins merged Rigi `3f277226df3b5b66c5198d4cb4acd64fc14fe544`, whose 154
+unit tests, gallery smoke, release build and native CI pass. Popovers read
+and observe the workspace Reduce Motion policy on the main queue.
+The final color-menu check reproduced seven failures with the missing
+foreground/background commands. Both menu commands and swatches now share
+one editor; all 1,249 combined unit tests pass, including actual panel
+switching and foreign-sender refusal. The broad source review found no
+important issue; the small menu delta has its own follow-up review. Four-engine ordinary
+workflows, latest-head CI, final standalone assembly and interactive checks
+remain pending at this checkpoint. The completion ledger separates the
+implemented editor from public distribution and physical-display gates.

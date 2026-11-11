@@ -1823,6 +1823,26 @@ final class EngineSession: @unchecked Sendable {
 
     // MARK: Editing
 
+    struct SampledColor: Equatable, Sendable {
+        let red: Double
+        let green: Double
+        let blue: Double
+        let alpha: Double
+    }
+
+    /// Straight nonlinear sRGB from the native projection, before display
+    /// quantization or proofing. RGB can be outside the editing-color range.
+    func sampleColor(_ image: Int32, x: Int, y: Int) throws -> SampledColor {
+        guard let px = Int32(exactly: x), let py = Int32(exactly: y) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The sample position is outside the supported pixel range.")
+        }
+        var sample = GlimsSampledColor()
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_sample_color(engine, image, px, py, &sample, &error), error)
+        return SampledColor(red: sample.red, green: sample.green, blue: sample.blue, alpha: sample.alpha)
+    }
+
     func fill(image: Int32, at point: CGPoint, mode: FillMode, color: NSColor, opacity: Double = 1,
               threshold: Double = 15.0 / 255.0, sampleMerged: Bool = false) throws {
         var settings = GlimsFillSettings(struct_size: UInt32(MemoryLayout<GlimsFillSettings>.size),
