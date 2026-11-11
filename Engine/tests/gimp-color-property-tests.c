@@ -12,6 +12,9 @@
 #include "core/gimplayer.h"
 #include "core/gimplayer-new.h"
 #include "core/gimppickable.h"
+#if GIMP_CHECK_VERSION (3, 2, 0)
+#include "gegl/gimp-gegl-utils.h"
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -278,6 +281,28 @@ exercise (GlimsEngine *engine, const gchar *name)
     (!colorize || (test.changed.alpha == 1.0 && test.changed.alpha != requested.alpha &&
                    !pixels_close (test.colored, test.scalar_pixels))), name,
     "native color and scalar reference changes are nondegenerate; Colorize reconstructs opaque color from HSL");
+#if GIMP_CHECK_VERSION (3, 2, 0)
+  if (!strcmp (name, "gimp:offset")) {
+    GError *reason = NULL;
+    gboolean allowed = gimp_gegl_op_nde_allowed (name, &reason);
+    if (!allowed) {
+      /* 3.2.0's native gate predates the Offset transform exception.
+       * Keep that engine policy; do not enable a hidden operation to test it. */
+      gint32 count = 777;
+      CHECK (reason != NULL && api->filter_operation_properties (engine, name, NULL, 0, &count) == GLIMS_STATUS_INVALID_ARGUMENT,
+             name, "native NDE refusal also gates public form metadata");
+      filter = 777;
+      GlimsStatus refused = api->filter_begin (engine, test.image, test.target, name, &filter, &error);
+      CHECK (refused == GLIMS_STATUS_INVALID_ARGUMENT && filter == 0,
+             name, "native-gated Offset refuses public Begin without a live session");
+      CHECK (matches (&test, test.original, TRUE, 0), name,
+             "native-gated Offset leaves raw/projected pixels and history unchanged");
+      g_clear_error (&reason);
+      goto cleanup;
+    }
+    g_clear_error (&reason);
+  }
+#endif
   gboolean listed = property_metadata (engine, name, &metadata);
   CHECK (listed, name, "public property catalog contains the real color row");
   CHECK (listed && metadata.kind == GLIMS_FILTER_VALUE_COLOR && color_close (metadata.default_color, test.declared),
