@@ -969,6 +969,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         ToolState.shared.select(tool)
     }
 
+    @objc func selectMoveTargetFromMenu(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem,
+              item.identifier == MenuShortcutBridge.builtinIdentifier,
+              item.action == #selector(selectMoveTargetFromMenu(_:)),
+              let mode = ToolMenuCatalog.moveTarget(forTag: item.tag) else { return }
+        ToolState.shared.setMoveTargetMode(mode)
+    }
+
     @objc func swapColorsFromMenu(_ sender: Any?) {
         guard let item = sender as? NSMenuItem, item.identifier == MenuShortcutBridge.builtinIdentifier,
               item.action == #selector(swapColorsFromMenu(_:)), item.tag == ToolMenuCatalog.swapColorsTag else { return }
@@ -1011,6 +1019,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 menuItem.state = .off; return false
             }
             menuItem.state = tool == ToolState.shared.current ? .on : .off
+            return true
+        case #selector(selectMoveTargetFromMenu(_:)):
+            guard menuItem.identifier == MenuShortcutBridge.builtinIdentifier,
+                  let mode = ToolMenuCatalog.moveTarget(forTag: menuItem.tag) else {
+                menuItem.state = .off; return false
+            }
+            menuItem.state = mode == ToolState.shared.moveTargetMode ? .on : .off
             return true
         case #selector(swapColorsFromMenu(_:)):
             menuItem.state = .off
