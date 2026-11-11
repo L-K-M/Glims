@@ -40,6 +40,8 @@
 
 #include "file/file-open.h"
 #include "file/file-save.h"
+#include "pdb/gimppdb.h"
+#include "xcf/xcf.h"
 
 #if GIMP_CHECK_VERSION (3, 2, 0)
 #include "path/gimpvectorlayer.h"
@@ -316,6 +318,43 @@ glims_image_new (GlimsEngine   *engine,
   return glims_adopt_image (engine, image, out);
 }
 
+static GimpImage *
+open_spooled_xcf (GlimsEngine *engine, GFileIOStream *spool, GFile *original,
+                  GError **error)
+{
+  GimpProcedure *procedure = gimp_pdb_lookup_procedure (engine->gimp->pdb, "gimp-xcf-load");
+  if (!GIMP_IS_PLUG_IN_PROCEDURE (procedure)) {
+    g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "Native XCF loading is unavailable");
+    return NULL;
+  }
+  GInputStream *base = g_io_stream_get_input_stream (G_IO_STREAM (spool));
+  g_autoptr(GInputStream) input = g_buffered_input_stream_new (base);
+  g_filter_input_stream_set_close_base_stream (G_FILTER_INPUT_STREAM (input), FALSE);
+  if (!g_seekable_can_seek (G_SEEKABLE (input))) {
+    g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "Native XCF loading requires seekable input");
+    return NULL;
+  }
+
+  /* The core closes the wrapper. The retained spool is rewound for the
+   * metadata reader. Keep the original GFile for link resolution. */
+  gimp_set_busy (engine->gimp);
+  GimpImage *image = xcf_load_stream (engine->gimp, input, original, NULL, error);
+  gimp_unset_busy (engine->gimp);
+  if (!image) return NULL;
+  gimp_image_set_file (image, original);
+  gimp_image_set_load_proc (image, GIMP_PLUG_IN_PROCEDURE (procedure));
+
+  /* Same native XCF sanitization as file_open_image with as_new false. */
+  gimp_image_undo_disable (image);
+  gimp_image_undo_free (image);
+  while (!gimp_image_undo_is_enabled (image))
+    gimp_image_undo_thaw (image);
+  gimp_image_clean_all (image);
+  gimp_image_invalidate_all (image);
+  gimp_image_flush (image);
+  return image;
+}
+
 GlimsStatus
 glims_image_open (GlimsEngine   *engine,
                   const char    *path,
@@ -342,20 +381,42 @@ glims_image_open (GlimsEngine   *engine,
   GFileInfo *source_info = g_file_query_info (file, GLIMS_FOREIGN_SOURCE_ATTRIBUTES,
                                              G_FILE_QUERY_INFO_NONE, NULL, NULL);
 
+  g_autoptr(GFileIOStream) spool = NULL;
+  gboolean gzip_source = FALSE;
+  if (!glims_foreign_gzip_spool (file, source_info, &spool, &gzip_source, &gerror))
+    {
+      g_clear_object (&source_info);
+      g_object_unref (file);
+      if (g_error_matches (gerror, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE))
+        {
+          g_clear_error (&gerror);
+          return glims_fail (error, NULL, "Gzip XCF exceeds the 4 GiB input or decoded limit.");
+        }
+      return glims_fail (error, gerror, "The gzip XCF could not be staged.");
+    }
+
   /* Loading a non-XCF file runs a plug-in, which nests a main loop. */
   engine->busy++;
   vector_guard = glims_vector_load_guard_begin (engine, NULL);
+  if (spool)
+    {
+      image = open_spooled_xcf (engine, spool, file, &gerror);
+      mime_type = "image/x-xcf";
+    }
+  else
+    {
 #if GIMP_CHECK_VERSION (3, 2, 0)
-  image = file_open_image (engine->gimp, gimp_get_user_context (engine->gimp), NULL, file,
-                           0, 0, FALSE, FALSE, NULL, GIMP_RUN_NONINTERACTIVE,
-                           &handles_vector, &status, &mime_type, &gerror);
+      image = file_open_image (engine->gimp, gimp_get_user_context (engine->gimp), NULL, file,
+                               0, 0, FALSE, FALSE, NULL, GIMP_RUN_NONINTERACTIVE,
+                               &handles_vector, &status, &mime_type, &gerror);
 #else
-  /* GIMP 3.0 has no vector aspect-ratio option and no vector-handling report. */
-  image = file_open_image (engine->gimp, gimp_get_user_context (engine->gimp), NULL, file,
-                           0, 0, FALSE, NULL, GIMP_RUN_NONINTERACTIVE,
-                           &status, &mime_type, &gerror);
-  (void) handles_vector;
+      /* GIMP 3.0 has no vector aspect-ratio option and no vector-handling report. */
+      image = file_open_image (engine->gimp, gimp_get_user_context (engine->gimp), NULL, file,
+                               0, 0, FALSE, NULL, GIMP_RUN_NONINTERACTIVE,
+                               &status, &mime_type, &gerror);
+      (void) handles_vector;
 #endif
+    }
   glims_vector_load_guard_end (vector_guard);
   engine->busy--;
 
@@ -369,7 +430,14 @@ glims_image_open (GlimsEngine   *engine,
   g_clear_error (&gerror);
 
   GlimsStatus restore_status = glims_foreign_effects_load (image, file, mime_type,
-                                                          source_info, error);
+                                                          source_info, spool, gzip_source, error);
+  if (spool)
+    {
+      GError *close_error = NULL;
+      if (!g_io_stream_close (G_IO_STREAM (spool), NULL, &close_error) && restore_status == GLIMS_STATUS_OK)
+        restore_status = glims_fail (error, g_steal_pointer (&close_error), "The private XCF spool could not be closed.");
+      g_clear_error (&close_error);
+    }
   if (restore_status == GLIMS_STATUS_OK)
     restore_status = glims_effect_state_load (image, error);
   g_clear_object (&source_info);

@@ -22,8 +22,9 @@ Ordinary effect-mask presence, dimensions, name and tattoo are metadata
 only, and effects nested on per-effect masks remain unsupported in this
 bounded slice.
 
-The scope is a seekable regular local file with an uncompressed XCF
-container version 20 through 26. Versions 20 and 21 have no serialized
+The metadata reader accepts a seekable regular local XCF from version
+20 through 26. The gzip recovery path stages the inner XCF for this
+same reader. Versions 20 and 21 have no serialized
 operation version. On those versions the native correspondence check still
 requires the exact operation name and all other existing fields. Versions
 22 and later retain the operation-version check. Version 26 carries per-channel
@@ -117,14 +118,15 @@ uninterpretable triplet through a varargs mismatch. This does not recover
 unknown values, admit mixed invalid words, or replace registered explicit
 values with AUTO.
 
-The loader compares pre-load and post-decode file size, required ETag and
-available device/inode attributes. This detects ordinary observable source
-changes; it is not an FD-bound snapshot, content-hash attestation or protection
-against an adversarial ABA replacement with the same metadata. Missing
-required identity evidence refuses recovery. The reader's bounds and
-unsupported formats remain admission limits: plain XCF v20–26 only, with no compressed
-outer containers, effects nested on effect masks, or general
-promise to recover effects discarded by native loading.
+For plain XCF, the loader compares pre-load and post-decode file size,
+required ETag and available device/inode attributes. This detects ordinary
+observable changes. It does not bind both plain-XCF reads to one descriptor.
+Gzip uses the shared spool described below. Missing required identity
+evidence refuses recovery. The reader's bounds apply
+to plain XCF v20–26 and to the inner XCF of a single gzip member.
+Bzip2, xz, nested compressed wrappers and effects nested on effect masks
+remain outside recovery. The native loader may discard unsupported effects
+before recovery can run.
 
 The preserved native runs, checked against their manifests at source
 `946ded1`, record:
@@ -193,8 +195,8 @@ A separate ordinary LaunchServices document-open event accepted the complex
 8×6 foreign file with three layers in the app, then exited cleanly. The
 File > Open panel choose-file route remains unverified; this event does not
 stand in for that interaction or a final self-contained release workflow.
-Compressed containers, nested effect masks and stronger file attestation
-remain outside the current scope.
+Nested effect masks and stronger file attestation remain outside the
+current scope.
 
 ## Legacy effect records
 
@@ -208,3 +210,45 @@ configured native effect, source and rendered pixels, retain the mask,
 start with empty Undo/Redo, and leave the files unchanged. The pure suite
 passes 78 checks with the preserved native corpus. The other engine builds
 exercise general conformance; the legacy native oracle is pinned to 3.2.8.
+
+## Gzip-wrapped effect records
+
+The loader opens one local regular source descriptor and compares its
+size, device and inode with the original file stamp. It checks the gzip
+signature and decoded XCF prefix before dispatching the native load.
+For XCF, it decodes one complete member into a private seekable spool,
+checks the trailer, rejects trailing data and limits input and decoded
+output separately to 4 GiB. The loader unlinks the spool before writing
+any image bytes and closes it when the open finishes.
+
+GIMP's XCF stream loader and the bounded effect reader read the same
+decoded spool. Replacing the original pathname between their reads
+cannot mix one image's pixels with another image's effect settings.
+GIMP receives the original `GFile` for image identity, Save and Revert,
+and as the base for resolving relative linked files. The source stamp
+is checked again before publication. Glims supplements and images
+without effects skip the foreign metadata reader. The original native
+loader still handles other gzip formats, with foreign XCF effect
+recovery disabled on that fallback. The format probe can read across an
+empty member or a split prefix to identify the inner format. It refuses
+an incomplete prefix at EOF and refuses an XCF that spans members.
+
+The pinned 3.2.8 fixture switches a private alias from A to B immediately
+before native load, then back to A before metadata recovery. The two XCFs
+have the same topology and different pixels and fields. The old adapter
+failed two of 117 checks: native pixels came from B while restored effect
+fields came from A. The shared-spool adapter passes all 117 checks. It
+keeps A's raw and rendered pixels, fields and mask; the original alias,
+load procedure and clean opening history; and both source files' bytes.
+The twelve private gzip checks pass. Each supported engine also passes
+the eight-case native fallback test: a compressed PNG with a leading
+empty member opens with the exact expected pixels, while the equivalent
+multi-member XCF refuses without publishing an image. General
+conformance passes on
+3.2.8 (1,917), 3.2.0 (1,917), 3.0.8 (1,703) and master (1,917).
+
+The fixture verifies the lexical parent passed to the native loader. It
+does not freeze separate linked assets or test opening one, nor does it
+exercise Save and Revert through the app. The plain XCF route still uses
+separate native and metadata reads with its existing source stamp checks.
+Bzip2, xz and nested effect-mask cases remain outside this change.
