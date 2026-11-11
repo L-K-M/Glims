@@ -4131,3 +4131,12 @@ owned teardown. The consumer's 1,220 unit tests and Rigi's 143 native tests,
 Gallery smoke and release build pass. See
 [`palette-keyboard-focus.md`](palette-keyboard-focus.md) for exact scope and
 the separate full accessibility audit.
+
+### Accessible committed-filter selection (2026-11-11 candidate)
+
+The filter-selection badge now exposes its existing selected/unselected label
+as an accessibility image. Its old AX element/role failures are reproduced
+and fixed; all 13 focused AppKit tests and 1,222 integrated unit tests pass.
+Independent source review found no important issue. See
+[`effect-selection-accessibility.md`](effect-selection-accessibility.md) for
+scope and the separate spoken VoiceOver/full-keyboard audit gates.

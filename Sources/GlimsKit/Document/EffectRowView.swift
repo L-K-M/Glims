@@ -118,6 +118,8 @@ private final class EffectBadge: NSView {
         super.init(frame: .zero)
         widthAnchor.constraint(equalToConstant: 16).isActive = true
         heightAnchor.constraint(equalToConstant: 13).isActive = true
+        setAccessibilityRole(.image)
+        setAccessibilityElement(true)
         setAccessibilityLabel("Filter")
         setAccessibilityHelp("A committed filter on this layer.")
     }
