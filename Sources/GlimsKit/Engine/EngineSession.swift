@@ -754,6 +754,11 @@ final class EngineSession: @unchecked Sendable {
 
     // MARK: Painting
 
+    struct StrokeCaptureFacts: Equatable {
+        let brush: ResourceIdentity
+        let fingerprint: String
+    }
+
     /// Starts a stroke on `drawable` — a layer or a layer mask's drawable
     /// id — and returns the stroke session `continueStroke`/`endStroke`
     /// take.
@@ -770,6 +775,49 @@ final class EngineSession: @unchecked Sendable {
             try check(api.stroke_begin(engine, image, drawable, &settings, &point, &stroke, &error), error)
         }
         return stroke
+    }
+
+    /// Captures the actual brush in the same engine call as first paint.
+    /// A supported live stroke can report no facts and still paint normally.
+    /// Guarded replay must match its recorded facts before any first paint.
+    func beginStrokeCapturing(image: Int32, drawable: Int32, brush: Brush, first: StrokePoint,
+                              expected: StrokeCaptureFacts? = nil) throws -> (stroke: Int32, facts: StrokeCaptureFacts?) {
+        guard let begin = api.stroke_begin_with_capture_facts else {
+            guard expected == nil else {
+                throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                                  message: "This engine cannot replay recorded strokes.")
+            }
+            return (try beginStroke(image: image, drawable: drawable, brush: brush, first: first), nil)
+        }
+        let identity = expected?.brush ?? brush.resource
+        let resource = try identity.map { try resolveResource($0, kind: .brush) } ?? 0
+        var settings = Self.nativeBrush(brush)
+        var point = Self.point(first)
+        var facts = GlimsStrokeCaptureFacts()
+        facts.struct_size = UInt32(MemoryLayout<GlimsStrokeCaptureFacts>.size)
+        var stroke: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        defer {
+            for pointer in [facts.brush_name, facts.brush_collection, facts.fingerprint].compactMap({ $0 }) {
+                api.free_string(pointer)
+            }
+        }
+        let status: GlimsStatus
+        if let expected {
+            status = expected.fingerprint.withCString {
+                begin(engine, image, drawable, resource, &settings, &point, $0, &stroke, &facts, &error)
+            }
+        } else {
+            status = begin(engine, image, drawable, resource, &settings, &point, nil, &stroke, &facts, &error)
+        }
+        try check(status, error)
+        guard stroke > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The stroke did not start.")
+        }
+        guard let name = facts.brush_name, let digest = facts.fingerprint else { return (stroke, nil) }
+        return (stroke, StrokeCaptureFacts(brush: .init(name: String(cString: name),
+            collection: facts.brush_collection.map { String(cString: $0) }, isInternal: facts.brush_internal),
+            fingerprint: String(cString: digest)))
     }
 
     func continueStroke(_ stroke: Int32, points: [StrokePoint]) throws {
