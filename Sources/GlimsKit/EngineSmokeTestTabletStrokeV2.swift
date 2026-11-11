@@ -306,7 +306,73 @@ extension EngineSmokeTest {
         }
         expect(try errors.isEmpty && rows().count == 30 && pixels(other.image) == otherBefore,
                "all native calls are accounted for without duplicate strokes or other-document mutation")
+
+        // The original 22-check baseline above stays intact. These additional
+        // cases cover press-time ownership, invalid release and Recorder truth.
+        try front(ownerA); try proximity(42, capabilities: optionalBits, probe: matched[0])
+        let heldCapture = try XCTUnwrapTabletCapture(monitor.strokeCapture(for: matched[0]))
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        expect(monitor.strokeCapture(for: matched[0]) == nil && heldCapture.capabilities.hasOptionalAxes,
+               "deactivation clears future captures without changing an owned press snapshot")
+        try front(ownerA); try proximity(42, capabilities: optionalBits, probe: matched[0])
+        guard let badCG = matched[0].cgEvent?.copy() else { throw NSError(domain: "TabletV2Fixture", code: 7) }
+        badCG.location = CGPoint(x: 10_000_000, y: 10_000_000)
+        guard let badDown = NSEvent(cgEvent: badCG) else { throw NSError(domain: "TabletV2Fixture", code: 8) }
+        try require(abs(canvas.imagePoint(for: badDown).x) > 524_288, "Invalid-down setup must be outside the V2 coordinate range")
+        let beforeBadDown = try rows().count
+        canvas.mouseDown(with: badDown); try drain(a)
+        expect(try !a.strokeIsActive && rows().count == beforeBadDown && pixels(source.image) == before,
+               "invalid matching-tablet press admits no native stroke, pixels or history")
+
+        try a.startRecording()
+        let lifecycleFence = try rows().last!.sequence
+        canvas.mouseDown(with: matched[0]); try a.stopRecording()
+        expect(!a.recorder.isRecording && a.recorder.pendingCount == 1,
+               "Stop waits for the accepted V2 gesture rather than publishing a partial recording")
+        // A press-fixed capture survives the cache clear and a global tool pick.
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        state.select(.text)
+        canvas.mouseDragged(with: matched[1]); try drain(a)
+        let afterDrag = try pixels(source.image)
+        guard let window = ownerA.window, let invalidRelease = NSEvent.mouseEvent(with: .leftMouseUp,
+            location: canvas.convert(CGPoint(x: 600_000 * canvas.scale, y: 16 * canvas.scale), to: nil),
+            modifierFlags: [], timestamp: 11, windowNumber: window.windowNumber, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: 1) else { throw NSError(domain: "TabletV2Fixture", code: 9) }
+        canvas.mouseUp(with: invalidRelease); try drain(a)
+        let lifecycleRows = try rows().filter { $0.sequence > lifecycleFence && $0.image == source.image }
+        expect(lifecycleRows.map(\.kind) == ["start", "init", "motion", "interpolate", "finish"]
+            && lifecycleRows[3].rotation == 0.5 && lifecycleRows[3].wheel == 0.74999237060546875
+            && !a.strokeIsActive && state.current == .text,
+               "captured axes survive leave/tool change and invalid release still delivers exactly one End")
+        expect(try pixels(source.image) == afterDrag && afterDrag != before
+            && session.undoInfo(source.image).undoCount == undoBefore.undoCount + 1,
+               "invalid release adds no samples and preserves the accepted stroke's pixels and single Undo")
+        let unsupported: Bool
+        if a.recorder.records.count == 1, case .failure(let reason) = a.recorder.records[0].resolution {
+            unsupported = reason.contains("rotation") && reason.contains("tangential pressure")
+        } else { unsupported = false }
+        expect(unsupported && a.recorder.pendingCount == 0,
+               "Recorder settles one explicit unsupported row for live V2 optional axes")
+        a.undo(); try drain(a)
+        expect(try pixels(source.image) == before && a.clearRecording(), "accepted V2 Undo restores pixels and the settled unsupported recording can clear")
+
+        state.select(.pencil); try a.startRecording()
+        let mouseEvents = try (0..<3).map { try point($0, device: nil) }
+        canvas.mouseDown(with: mouseEvents[0]); canvas.mouseDragged(with: mouseEvents[1]); canvas.mouseUp(with: mouseEvents[2])
+        try a.stopRecording(); try drain(a)
+        let recordedMouse: Bool
+        if a.recorder.records.count == 1, case .success(.completeStroke(let command)) = a.recorder.records[0].resolution {
+            recordedMouse = command.trace.first.pressure == 1 && command.trace.first.xTilt == 0
+                && command.trace.batches.count == 2 && command.facts.fingerprint.count == 64
+        } else { recordedMouse = false }
+        expect(try recordedMouse && a.recorder.pendingCount == 0 && pixels(source.image) == mousePainted,
+               "ordinary mouse still records complete V1 facts and exact pixels after the V2 refusal")
         print("OBS tablet V2 native trace retained at \(traceURL.path)")
         complete = true
+    }
+
+    private static func XCTUnwrapTabletCapture(_ capture: TabletStrokeInput.Capture?) throws -> TabletStrokeInput.Capture {
+        guard let capture else { throw NSError(domain: "TabletV2Fixture", code: 10) }
+        return capture
     }
 }

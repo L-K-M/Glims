@@ -803,15 +803,28 @@ final class EngineCanvasView: NSView {
         CanvasGeometry.imagePoint(viewPoint: viewPoint, zoomPercent: zoomPercent, backingFactor: backingScale)
     }
 
-    func strokePoint(for event: NSEvent) -> EngineSession.StrokePoint {
+    func strokePoint(for event: NSEvent) -> EngineSession.StrokePoint? {
+        guard TabletEraserProximity.isMouseEvent(event) || event.type == .tabletPoint,
+              !TabletEraserProximity.isProximityEvent(event),
+              let time = TabletStrokeInput.milliseconds(event.timestamp) else { return nil }
         let point = imagePoint(for: event)
-        let isTablet = event.subtype == .tabletPoint
-        return EngineSession.StrokePoint(
+        let isTablet = TabletEraserProximity.isTabletPoint(event)
+        let value = EngineSession.StrokePoint(
             x: point.x, y: point.y,
             pressure: isTablet ? Double(event.pressure) : 1,
             xTilt: isTablet ? Double(event.tilt.x) : 0,
             yTilt: isTablet ? Double(event.tilt.y) : 0,
-            timeMilliseconds: UInt32(truncatingIfNeeded: Int(event.timestamp * 1000)))
+            timeMilliseconds: time)
+        return [value.x, value.y, value.pressure, value.xTilt, value.yTilt].allSatisfy(\.isFinite) ? value : nil
+    }
+
+    func tabletStrokePoint(for event: NSEvent, capture: TabletStrokeInput.Capture) -> EngineSession.StrokeSampleV2? {
+        guard let point = strokePoint(for: event) else { return nil }
+        let device = TabletEraserProximity.isTabletPoint(event) ? UInt(exactly: event.deviceID) : nil
+        let matching = device == capture.deviceID
+        return TabletStrokeInput.sample(point: point, capture: capture, deviceID: device,
+            rotationDegrees: matching && capture.capabilities.rotation ? Double(event.rotation) : nil,
+            tangentialPressure: matching && capture.capabilities.tangentialPressure ? Double(event.tangentialPressure) : nil)
     }
 
     override func mouseDown(with event: NSEvent) {
