@@ -3990,3 +3990,17 @@ exporter passes20 per engine and general conformance passes7,454 total.
 The corrected History fixture and full pinned editor pass3,231 checks.
 See [Oilify evidence](oilify-native-oracle.md) for the reproduced fixture
 race, source review and remaining integration/release gates.
+
+
+### Captured floating gestures and stationary picks (2026-11-11 candidate)
+
+Rectangle, ellipse, Lasso, Wand and Select by Color now retain the original
+floating identity through their measured pointer-release policies. Native
+opacity reads, empty-mask checks, pixel locks and worker admission remain
+captured and cancellable. Pick Layer or Guide also preserves geometry,
+clean state and Undo when a stationary click is near a snap target; real
+drags keep snapping. The combined source passes924 focused checks across
+four engines and1,115 unit tests, with independent source review. The
+stationary defect was reproduced before its fix. See
+[floating-tool-policy.md](floating-tool-policy.md) for exact behavior and
+remaining final-release scope.
