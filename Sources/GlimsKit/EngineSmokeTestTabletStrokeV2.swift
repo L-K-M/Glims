@@ -125,18 +125,24 @@ extension EngineSmokeTest {
         state.update(.eraser) { $0 = eraser }; state.update(.pencil) { $0 = pencil }; state.select(.pencil)
         let eventTimes = [10.0, 10.0625, 10.125]
         let positions = [CGPoint(x: 12, y: 16), CGPoint(x: 36, y: 16), CGPoint(x: 52, y: 16)]
-        let pressures = [0.5, 0.75, 1.0]
+        // Actual public CGEvent/NSEvent readback on this Mac encodes mouse
+        // pressure in 8 bits and signed tilt/tangent in 16 bits. Keep the
+        // submitted values separate from these independent literal oracles.
+        let requestedPressures = [0.5, 0.75, 1.0]
+        let pressures = [Double(Float(127.0 / 255.0)), Double(Float(191.0 / 255.0)), 1.0]
+        let tiltX = 8191.0 / 32767.0, tiltY = 16383.0 / 32767.0
+        let tangents = [1.0, Double(Float(16383.0 / 32767.0)), 0.0]
         func reference(_ scene: Scene, brush: EngineSession.Brush, tablet: Bool) throws -> Pixels {
             var stroke: Int32?
             defer { if let stroke { try? session.endStroke(stroke) } }
             stroke = try session.beginStroke(image: scene.image, drawable: scene.layer, brush: brush,
-                first: .init(x: 12, y: 16, pressure: tablet ? 0.5 : 1,
-                             xTilt: tablet ? 0.25 : 0, yTilt: tablet ? 0.5 : 0, timeMilliseconds: 10_000))
+                first: .init(x: 12, y: 16, pressure: tablet ? pressures[0] : 1,
+                             xTilt: tablet ? tiltX : 0, yTilt: tablet ? tiltY : 0, timeMilliseconds: 10_000))
             try session.continueStroke(stroke!, points: [
-                .init(x: 36, y: 16, pressure: tablet ? 0.75 : 1, xTilt: tablet ? 0.25 : 0,
-                      yTilt: tablet ? 0.5 : 0, timeMilliseconds: 10_062),
-                .init(x: 52, y: 16, pressure: 1, xTilt: tablet ? 0.25 : 0,
-                      yTilt: tablet ? 0.5 : 0, timeMilliseconds: 10_125)])
+                .init(x: 36, y: 16, pressure: tablet ? pressures[1] : 1, xTilt: tablet ? tiltX : 0,
+                      yTilt: tablet ? tiltY : 0, timeMilliseconds: 10_062),
+                .init(x: 52, y: 16, pressure: 1, xTilt: tablet ? tiltX : 0,
+                      yTilt: tablet ? tiltY : 0, timeMilliseconds: 10_125)])
             try session.endStroke(stroke!); stroke = nil
             return try pixels(scene.image)
         }
@@ -147,8 +153,8 @@ extension EngineSmokeTest {
             return entries.prefix(5).enumerated().allSatisfy { offset, row in
                 let i = offset < 3 ? 0 : offset - 2
                 return abs(row.x - positions[i].x) < 0.001 && abs(row.y - positions[i].y) < 0.001
-                    && abs(row.pressure - (tablet ? pressures[i] : 1)) < 0.001
-                    && abs(row.xtilt - (tablet ? 0.25 : 0)) < 0.001 && abs(row.ytilt - (tablet ? 0.5 : 0)) < 0.001
+                    && row.pressure == (tablet ? pressures[i] : 1)
+                    && row.xtilt == (tablet ? tiltX : 0) && row.ytilt == (tablet ? tiltY : 0)
                     && row.distance == 0 && row.slider == 0 && row.velocity == 0 && row.direction == 0
                     && row.xscale == 1 && row.yscale == 1 && row.angle == 0 && !row.reflect
             }
@@ -189,8 +195,8 @@ extension EngineSmokeTest {
             guard let cg = template.cgEvent else { throw NSError(domain: "TabletV2Fixture", code: 3) }
             cg.setIntegerValueField(.mouseEventSubtype, value: Int64(CGEventMouseSubtype.tabletPoint.rawValue))
             cg.setIntegerValueField(.tabletEventDeviceID, value: Int64(device))
-            cg.setDoubleValueField(.mouseEventPressure, value: pressures[index])
-            cg.setDoubleValueField(.tabletEventPointPressure, value: pressures[index])
+            cg.setDoubleValueField(.mouseEventPressure, value: requestedPressures[index])
+            cg.setDoubleValueField(.tabletEventPointPressure, value: requestedPressures[index])
             cg.setDoubleValueField(.tabletEventTiltX, value: 0.25); cg.setDoubleValueField(.tabletEventTiltY, value: 0.5)
             cg.setDoubleValueField(.tabletEventRotation, value: [90.0, 180.0, 270.0][index])
             cg.setDoubleValueField(.tabletEventTangentialPressure, value: [1.0, 0.5, 0.0][index])
@@ -199,10 +205,10 @@ extension EngineSmokeTest {
             let mapped = canvas.imagePoint(for: event)
             let admitted = event.type == type && event.subtype == .tabletPoint && UInt(exactly: event.deviceID) == device
                 && abs(mapped.x - positions[index].x) < 0.001 && abs(mapped.y - positions[index].y) < 0.001
-                && abs(Double(event.pressure) - pressures[index]) < 0.001
-                && abs(Double(event.tilt.x) - 0.25) < 0.001 && abs(Double(event.tilt.y) - 0.5) < 0.001
+                && Double(event.pressure) == pressures[index]
+                && Double(event.tilt.x) == tiltX && Double(event.tilt.y) == tiltY
                 && abs(Double(event.rotation) - [90, 180, 270][index]) < 0.001
-                && abs(Double(event.tangentialPressure) - [1, 0.5, 0][index]) < 0.001
+                && Double(event.tangentialPressure) == tangents[index]
             if !admitted {
                 let mouse: Bool
                 switch event.type {
@@ -269,9 +275,9 @@ extension EngineSmokeTest {
         canvas.mouseDragged(with: matched[1]); canvas.mouseUp(with: matched[2]); try drain(a)
         let first = try rows().filter { $0.sequence > firstSequence && $0.image == source.image }
         expect(baseDelivery(first, scene: source, tablet: true), "A while B is main delivers exactly one ordered native three-sample gesture to A's image/layer")
-        let rotations = [0.25, 0.25, 0.25, 0.5, 0.75], wheels = [1.0, 1.0, 1.0, 0.75, 0.5]
+        let rotations = [0.25, 0.25, 0.25, 0.5, 0.75], wheels = [1.0, 1.0, 1.0, 0.74999237060546875, 0.5]
         expect(first.count == 6 && zip(first.prefix(5), zip(rotations, wheels)).allSatisfy {
-            abs($0.0.rotation - $0.1.0) < 0.001 && abs($0.0.wheel - $0.1.1) < 0.001
+            $0.0.rotation == $0.1.0 && $0.0.wheel == $0.1.1
         }, "matching optional tablet axes reach actual Core with literal turns and signed-tangent wheel mapping")
         expect(try pixels(source.image) == erased && session.undoInfo(source.image).undoCount == undoBefore.undoCount + 1,
                "matched stroke raw/composite pixels and one Undo equal independent native Eraser")
