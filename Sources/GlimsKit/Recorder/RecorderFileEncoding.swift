@@ -17,7 +17,10 @@ extension RecorderFileCodec {
             case .success(.completeStroke(let stroke), _):
                 let count = try RecorderFileLimits.strokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 pointCount += count
-                fileVersion = strokeVersion
+                fileVersion = max(fileVersion, strokeVersion)
+            case .success(.channelToSelection, _):
+                // Version 3 covers both extensions; keep the highest.
+                fileVersion = max(fileVersion, channelVersion)
             default: break
             }
         }
@@ -95,6 +98,8 @@ extension RecorderFileCodec {
             return .object(["tag": .string("selectColor"), "point": try pointJSON(point), "options": try optionsJSON(options)])
         case .selectCommand(let command, let radius):
             return .object(["tag": .string("selectCommand"), "command": .string(command.rawValue), "radius": try d(radius)])
+        case .channelToSelection(let operation):
+            return .object(["tag": .string("channelToSelection"), "operation": .string(operation.rawValue)])
         case .transformImage(let transform): return .object(["tag": .string("transformImage"), "transform": .string(transform.rawValue)])
         case .scale(let width, let height): return .object(["tag": .string("scale"), "width": j(width), "height": j(height)])
         case .resizeCanvas(let width, let height, let offset, let color):
@@ -130,6 +135,7 @@ extension RecorderFileCodec {
         switch value {
         case .none: return .object(["kind": .string("none")])
         case .layer(let symbol): return .object(["kind": .string("layer"), "symbol": id(symbol)])
+        case .channel(let symbol): return .object(["kind": .string("channel"), "symbol": id(symbol)])
         case .unavailable(let reason): throw RecorderFileError.invalid("The original target description is unavailable: \(reason)")
         case .context(let context):
             let target: RecorderJSON
