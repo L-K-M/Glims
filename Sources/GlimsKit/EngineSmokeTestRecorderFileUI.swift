@@ -110,6 +110,11 @@ extension EngineSmokeTest {
                "cancelling the native Save panel leaves the recording dirty")
 
         if driveFilePickers {
+            // The earlier Name check deliberately made B key. A person now
+            // operating the native picker needs the owner's actual key focus.
+            windowA.makeKeyAndOrderFront(nil)
+            windowA.makeMain()
+            try require(wait { windowA.isKeyWindow }, "the picker owner did not receive keyboard focus")
             try a.presentRecorderFileAction(.saveRecording)
             try require(wait { windowA.attachedSheet?.isVisible == true && windowA.attachedSheet is NSSavePanel },
                         "second native Save panel did not attach")
