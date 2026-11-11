@@ -193,6 +193,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (numeric transform)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "projective-transform" {
+                try exerciseProjectiveTransform(session)
+                print(failures == 0 ? "PASSED (projective transform bridge)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-install" {
                 try exerciseRecorderInstall(session, documents: documents)
                 print(failures == 0 ? "PASSED (recorder install)" : "FAILED: \(failures) failure(s)")
@@ -888,6 +893,7 @@ enum EngineSmokeTest {
             try exerciseExposureAdjust(session, work: work, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)
             try exerciseFloatingMove(session, work: work, documents: documents)
+            try exerciseProjectiveTransform(session)
             try exerciseFloatSelectedPixels(session, work: work, documents: documents)
 
             try exerciseStrokeSelectionControls(session, work: work, documents: documents)

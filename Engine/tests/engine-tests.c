@@ -2212,6 +2212,353 @@ test_matrix_transform (void)
          "a missing matrix is refused");
 
   api->image_close (engine, image);
+
+  /* A small, finite projective fixture keeps the baseline reproduction
+   * bounded: native near-plane clipping otherwise produces only a few
+   * hundred output pixels per side, but silently discards half the layer. */
+  image = 0;
+  api->image_new (engine, 8, 8, &image, NULL);
+  {
+    GlimsMatrix horizon = { { { 1, 0, 0 }, { 0, 1, 0 }, { 0, -0.25, 1 } } };
+    error = NULL;
+    before = undo_depth (image);
+    CHECK (api->layer_transform_matrix (engine, image, 0, &horizon, GLIMS_INTERPOLATION_NONE, &error)
+             == GLIMS_STATUS_INVALID_ARGUMENT && error && undo_depth (image) == before,
+           "a projective horizon crossing refuses before clipping pixels or adding Undo");
+    api->free_string (error);
+  }
+  api->image_close (engine, image);
+}
+
+/* Independent keystone geometry, asymmetric pixels and a half-height mask
+ * exercise homogeneous division rather than only affine matrix storage. */
+static void
+test_projective_transform (const char *work)
+{
+  GlimsImageID image = 0, reopened = 0;
+  GlimsItemID layer, mask = 0;
+  GlimsLayerInfo row;
+  GlimsSelectOptions select = { .struct_size = sizeof select };
+  GlimsFillSettings black = { .struct_size = sizeof black, .mode = GLIMS_FILL_SELECTION,
+                              .color = { 0, 0, 0, 1 }, .opacity = 1 };
+  GlimsMatrix keystone = { { { 1, 0, 0 }, { 0, 1, 0 }, { 0, .01, 1 } } };
+  const double multipliers[] = { 1, 2, -3 };
+  uint8_t *original = NULL, *reference = NULL, *pixels = NULL;
+  int32_t width = 0, height = 0, w = 0, h = 0, count = 0, before;
+  char xcf[1024], *error = NULL;
+
+  CHECK (api->image_new (engine, 100, 100, &image, NULL) == GLIMS_STATUS_OK,
+         "the projective fixture is created");
+  if (! image) return;
+  layer = first_layer (image);
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 0, 0 }, { 50, 50 } }, 2, &select);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &black, NULL);
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 0, 0 }, { 100, 50 } }, 2, &select);
+  CHECK (api->layer_mask_add (engine, image, layer, GLIMS_MASK_SELECTION, false, &mask, NULL) == GLIMS_STATUS_OK,
+         "a half-height selection becomes an attached projective mask");
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  original = render_all (image, &width, &height);
+  for (size_t i = 0; i < sizeof multipliers / sizeof *multipliers; i++)
+    {
+      GlimsMatrix matrix = keystone;
+      for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++) matrix.m[r][c] *= multipliers[i];
+      before = undo_depth (image);
+      error = NULL;
+      CHECK (api->layer_transform_matrix (engine, image, layer, &matrix, GLIMS_INTERPOLATION_NONE, &error)
+               == GLIMS_STATUS_OK && error == NULL,
+             "equivalent projective matrix H times %g is accepted", multipliers[i]);
+      api->free_string (error);
+      CHECK (api->image_layers (engine, image, &row, 1, &count) == GLIMS_STATUS_OK &&
+             row.bounds.x == 0 && row.bounds.y == 0 && row.bounds.width == 100 && row.bounds.height == 50,
+             "the analytic keystone maps a 100x100 layer to a 100x50 trapezoid");
+      CHECK (undo_depth (image) == before + 1, "layer and attached mask transform in one Undo step");
+      pixels = render_all (image, &w, &h);
+      CHECK (pixels && original && w == width && h == height &&
+             memcmp (pixels, original, (size_t) width * height * 4) != 0,
+             "the keystone changes the asymmetric masked composite");
+      if (pixels)
+        {
+          const uint8_t *dark = pixel_at (pixels, w, 10, 10);
+          const uint8_t *light = pixel_at (pixels, w, 70, 10);
+          const uint8_t *masked = pixel_at (pixels, w, 30, 40);
+          CHECK (dark[0] == 0 && dark[3] == 255 && light[0] == 255 && light[3] == 255 && masked[3] == 0,
+                 "analytic interior samples retain black/white while the mask boundary follows the warp");
+        }
+      if (i == 0) { reference = pixels; pixels = NULL; }
+      else CHECK (pixels && reference && memcmp (pixels, reference, (size_t) width * height * 4) == 0,
+                  "scale-equivalent homogeneous matrices produce identical pixels");
+      free (pixels); pixels = NULL;
+      CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK, "projective Undo succeeds");
+      pixels = render_all (image, &w, &h);
+      CHECK (pixels && original && w == width && h == height &&
+             memcmp (pixels, original, (size_t) width * height * 4) == 0 &&
+             api->image_layers (engine, image, &row, 1, &count) == GLIMS_STATUS_OK &&
+             row.bounds.width == 100 && row.bounds.height == 100,
+             "projective Undo restores exact original masked pixels and bounds");
+      free (pixels); pixels = NULL;
+      if (i == 2)
+        {
+          CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK, "projective Redo succeeds");
+          pixels = render_all (image, &w, &h);
+          CHECK (pixels && reference && memcmp (pixels, reference, (size_t) width * height * 4) == 0,
+                 "projective Redo restores exact transformed mask and pixels");
+          free (pixels); pixels = NULL;
+        }
+    }
+  snprintf (xcf, sizeof xcf, "%s/projective-mask.xcf", work);
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK,
+         "the transformed masked document saves and reopens");
+  if (reopened)
+    {
+      pixels = render_all (reopened, &w, &h);
+      CHECK (pixels && reference && w == width && h == height &&
+             memcmp (pixels, reference, (size_t) width * height * 4) == 0,
+             "XCF reopening preserves the exact projective masked composite");
+      free (pixels); pixels = NULL;
+      api->image_close (engine, reopened);
+    }
+  free (original); free (reference);
+  api->image_close (engine, image);
+
+  /* These are rejected before allocating any large destination. */
+  image = 0;
+  api->image_new (engine, 8, 8, &image, NULL);
+  original = render_all (image, &width, &height);
+  {
+    const GlimsMatrix invalid[] = {
+      { { { 1e308, 0, 0 }, { 0, 1e308, 0 }, { 0, 0, 1 } } },
+      { { { 1, 0, 2e6 }, { 0, 1, 0 }, { 0, 0, 1 } } },
+      { { { 65537, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } } },
+      { { { 1500, 0, 0 }, { 0, 1500, 0 }, { 0, 0, 1 } } },
+      { { { 1, 0, 0 }, { 0, 1, 0 }, { 0, -.124, 1 } } }
+    };
+    for (size_t i = 0; i < sizeof invalid / sizeof *invalid; i++)
+      {
+        before = undo_depth (image); error = NULL;
+        CHECK (api->layer_transform_matrix (engine, image, 0, &invalid[i], GLIMS_INTERPOLATION_NONE, &error)
+                 == GLIMS_STATUS_INVALID_ARGUMENT && error && undo_depth (image) == before,
+               "unsafe projective output case %zu refuses before mutation", i);
+        api->free_string (error);
+        pixels = render_all (image, &w, &h);
+        CHECK (pixels && original && w == width && h == height &&
+               memcmp (pixels, original, (size_t) width * height * 4) == 0,
+               "refused projective output case %zu preserves every composite pixel", i);
+        free (pixels); pixels = NULL;
+      }
+  }
+  free (original);
+  api->image_close (engine, image);
+}
+
+/* A bounded reproduction: the old path grows only a 600008x8 parent,
+ * rather than allocating a large square to demonstrate the same gap. */
+static void
+test_transform_ancestor_dimension (void)
+{
+  GlimsImageID image = 0;
+  GlimsItemID group = 0, sibling = 0, layer = 0;
+  GlimsLayerInfo row;
+  GlimsMatrix matrix = { .m = { { 1, 0, 600000 }, { 0, 1, 0 }, { 0, 0, 1 } } };
+  char *error = NULL;
+  int before;
+  api->image_new (engine, 8, 8, &image, NULL);
+  layer = first_layer (image);
+  api->layer_command (engine, image, layer, GLIMS_LAYER_DUPLICATE, &sibling, NULL);
+  api->create_group (engine, image, 0, 0, "Parent", &group, NULL);
+  api->reparent_layer (engine, image, layer, group, 0, NULL);
+  api->reparent_layer (engine, image, sibling, group, 1, NULL);
+  before = undo_depth (image);
+  CHECK (api->layer_transform_matrix (engine, image, layer, &matrix, GLIMS_INTERPOLATION_NONE, &error)
+           == GLIMS_STATUS_INVALID_ARGUMENT && error && undo_depth (image) == before &&
+         source_test_row (image, group, &row) && rect_equals (row.bounds, 0, 0, 8, 8),
+         "moving a small child refuses oversized ancestor growth before mutation");
+  api->free_string (error);
+  api->image_close (engine, image);
+}
+
+static void
+test_transform_tree_budget (void)
+{
+  GlimsImageID image = 0;
+  GlimsItemID layer = 0, group = 0, sibling = 0, outer = 0;
+  GlimsLayerInfo row;
+  GlimsMatrix grow = { .m = { { 1300, 0, 0 }, { 0, 1300, 0 }, { 0, 0, 1 } } };
+  GlimsMatrix move = { .m = { { 1, 0, 15000 }, { 0, 1, 15000 }, { 0, 0, 1 } } };
+  GlimsMatrix safe = { .m = { { 1, 0, 2 }, { 0, 1, 3 }, { 0, .01, 1 } } };
+  char *error = NULL;
+  int before, w, h, ow, oh;
+  uint8_t *original, *pixels;
+  api->image_new (engine, 8, 8, &image, NULL);
+  layer = first_layer (image);
+  api->layer_mask_add (engine, image, layer, GLIMS_MASK_WHITE, false, NULL, NULL);
+  before = undo_depth (image);
+  CHECK (api->layer_transform_matrix (engine, image, layer, &grow, GLIMS_INTERPOLATION_NONE, &error)
+           == GLIMS_STATUS_INVALID_ARGUMENT && error && strstr (error, "output limit") &&
+         undo_depth (image) == before,
+         "layer plus attached mask share the destination byte budget");
+  api->free_string (error); error = NULL;
+  api->layer_command (engine, image, layer, GLIMS_LAYER_DUPLICATE, &sibling, NULL);
+  api->create_group (engine, image, 0, 0, "Outer", &outer, NULL);
+  api->create_group (engine, image, outer, 0, "Inner", &group, NULL);
+  api->reparent_layer (engine, image, layer, group, 0, NULL);
+  api->reparent_layer (engine, image, sibling, group, 1, NULL);
+  api->layer_mask_add (engine, image, outer, GLIMS_MASK_WHITE, false, NULL, NULL);
+  before = undo_depth (image);
+  original = render_all (image, &ow, &oh);
+  CHECK (api->layer_transform_matrix (engine, image, layer, &move, GLIMS_INTERPOLATION_NONE, &error)
+           == GLIMS_STATUS_INVALID_ARGUMENT && error && strstr (error, "output limit") &&
+         undo_depth (image) == before && source_test_row (image, outer, &row) &&
+         rect_equals (row.bounds, 0, 0, 8, 8),
+         "a tiny child cannot expand ancestor projections beyond the shared byte budget");
+  api->free_string (error); error = NULL;
+  grow.m[0][0] = grow.m[1][1] = 1100;
+  CHECK (api->layer_transform_matrix (engine, image, group, &grow, GLIMS_INTERPOLATION_NONE, &error)
+           == GLIMS_STATUS_INVALID_ARGUMENT && error && strstr (error, "output limit") &&
+         undo_depth (image) == before,
+         "group projections, descendant layers and masks share the destination budget");
+  api->free_string (error); error = NULL;
+  api->set_layer_locks (engine, image, sibling, GLIMS_LOCK_POSITION, GLIMS_LOCK_POSITION, NULL);
+  before = undo_depth (image);
+  CHECK (api->layer_transform_matrix (engine, image, group, &safe, GLIMS_INTERPOLATION_NONE, &error)
+           == GLIMS_STATUS_LOCKED && undo_depth (image) == before,
+         "a locked descendant refuses the whole group transform before any sibling changes");
+  api->free_string (error); error = NULL;
+  pixels = render_all (image, &w, &h);
+  CHECK (pixels && original && w == ow && h == oh &&
+         memcmp (pixels, original, (size_t) w * h * 4) == 0,
+         "refused tree transforms preserve every composite pixel");
+  free (pixels);
+  api->set_layer_locks (engine, image, sibling, GLIMS_LOCK_POSITION, 0, NULL);
+  before = undo_depth (image);
+  CHECK (api->layer_transform_matrix (engine, image, group, &safe, GLIMS_INTERPOLATION_NONE, &error)
+           == GLIMS_STATUS_OK && error == NULL && undo_depth (image) == before + 1,
+         "a bounded projective transform of nested masked layers remains one Undo step");
+  api->free_string (error);
+  pixels = render_all (image, &w, &h);
+  CHECK (pixels && original && w == ow && h == oh &&
+         memcmp (pixels, original, (size_t) w * h * 4) != 0 &&
+         source_test_row (image, layer, &row) && ! rect_equals (row.bounds, 0, 0, 8, 8),
+         "the group commit changes child bounds and the visible masked composite");
+  free (pixels);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK,
+         "the nested group transform undoes");
+  pixels = render_all (image, &w, &h);
+  CHECK (pixels && original && w == ow && h == oh &&
+         memcmp (pixels, original, (size_t) w * h * 4) == 0 &&
+         source_test_row (image, outer, &row) && rect_equals (row.bounds, 0, 0, 8, 8),
+         "group Undo restores exact masked pixels and ancestor bounds");
+  free (pixels); free (original);
+  api->image_close (engine, image);
+}
+
+static void
+test_projective_source_offsets (void)
+{
+  GlimsImageID image = 0;
+  GlimsItemID layer;
+  GlimsLayerInfo row;
+  GlimsSelectOptions select = { .struct_size = sizeof select };
+  GlimsFillSettings black = { .struct_size = sizeof black, .mode = GLIMS_FILL_SELECTION,
+                              .color = { 0, 0, 0, 1 }, .opacity = 1 };
+  /* Translate (-20,-10) to the origin, apply the analytic keystone,
+   * then place its result at (30,20). */
+  GlimsMatrix matrix = { .m = { { 1, .3, 53 }, { 0, 1.2, 32 }, { 0, .01, 1.1 } } };
+  int before;
+  char *error = NULL;
+  api->image_new (engine, 100, 100, &image, NULL);
+  layer = first_layer (image);
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 0, 0 }, { 50, 50 } }, 2, &select);
+  api->fill (engine, image, (GlimsPoint) { 0, 0 }, &black, NULL);
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  api->layer_move (engine, image, layer, -20, -10);
+  before = undo_depth (image);
+  CHECK (api->layer_transform_matrix (engine, image, layer, &matrix, GLIMS_INTERPOLATION_NONE, &error)
+           == GLIMS_STATUS_OK && error == NULL && undo_depth (image) == before + 1 &&
+         source_test_row (image, layer, &row) && rect_equals (row.bounds, 30, 20, 100, 50) &&
+         red_at (image, 40, 30) == 0 && red_at (image, 90, 30) == 255,
+         "an offset source uses image coordinates and preserves analytic interior samples");
+  api->free_string (error); error = NULL;
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         source_test_row (image, layer, &row) && rect_equals (row.bounds, -20, -10, 100, 100),
+         "offset projective Undo restores the original negative origin");
+  api->image_close (engine, image);
+
+  api->image_new (engine, 8, 8, &image, NULL);
+  layer = first_layer (image);
+  api->layer_move (engine, image, layer, INT32_MAX - 4, 0);
+  matrix = (GlimsMatrix) { .m = { { 1, 0, -(double) (INT32_MAX - 4) }, { 0, 1, 0 }, { 0, 0, 1 } } };
+  before = undo_depth (image);
+  CHECK (api->layer_transform_matrix (engine, image, layer, &matrix, GLIMS_INTERPOLATION_NONE, &error)
+           == GLIMS_STATUS_INVALID_ARGUMENT && error && undo_depth (image) == before,
+         "a small destination cannot bypass native source-edge integer limits");
+  api->free_string (error);
+  api->image_close (engine, image);
+}
+
+static void
+test_transform_masked_projection (const char *fixtures)
+{
+  GlimsImageID image = 0;
+  GlimsItemID moving = 0, effect_layer = 0, group = 0;
+  GlimsLayerInfo rows[3], row;
+  GlimsEffectInfo effect;
+  GlimsEffectChange disable = { .struct_size = sizeof disable,
+                                .properties = GLIMS_EFFECT_ENABLED, .enabled = false };
+  GlimsMatrix move = { .m = { { 1, 0, -1 }, { 0, 1, 0 }, { 0, 0, 1 } } };
+  int32_t count = 0;
+  int before, w, h, ow, oh;
+  uint8_t *original, *pixels;
+  char path[1024], *error = NULL;
+  snprintf (path, sizeof path, "%s/projective-parent-effect.xcf", fixtures);
+  CHECK (api->image_open (engine, path, &image, &error) == GLIMS_STATUS_OK,
+         "the independently generated masked-parent projection fixture opens%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error); error = NULL;
+  if (! image) return;
+  api->image_layers (engine, image, rows, 3, &count);
+  for (int i = 0; i < count && i < 3; i++)
+    {
+      if (! strcmp (rows[i].name, "Moving")) moving = rows[i].id;
+      if (! strcmp (rows[i].name, "Offset effect")) effect_layer = rows[i].id;
+      if (! strcmp (rows[i].name, "Masked parent")) group = rows[i].id;
+    }
+  CHECK (count == 3 && moving && effect_layer && group && source_test_row (image, group, &row) &&
+         rect_equals (row.bounds, 0, 0, 8, 8) &&
+         api->drawable_effects (engine, image, effect_layer, &effect, 1, &count) == GLIMS_STATUS_OK && count == 1,
+         "the fixture has small item bounds and one unchanged sibling effect");
+  if (! moving || ! effect_layer || ! group || count != 1) { api->image_close (engine, image); return; }
+  original = render_all (image, &ow, &oh);
+  before = undo_depth (image);
+  CHECK (api->layer_transform_matrix (engine, image, moving, &move, GLIMS_INTERPOLATION_NONE, &error)
+           == GLIMS_STATUS_INVALID_ARGUMENT && error && undo_depth (image) == before,
+         "an applied group mask cannot hide oversized raw projection growth from admission");
+  api->free_string (error); error = NULL;
+  /* Keep the next admission check independent when running this regression
+   * against an older adapter that unexpectedly committed the first edit. */
+  if (undo_depth (image) != before) api->image_undo (engine, image);
+  CHECK (api->layer_transform_matrix (engine, image, effect_layer, &move, GLIMS_INTERPOLATION_NONE, &error)
+           == GLIMS_STATUS_INVALID_ARGUMENT && error && strstr (error, "Merge or disable") &&
+         undo_depth (image) == before,
+         "an active unclipped effect refuses an unbounded future transform explicitly");
+  api->free_string (error); error = NULL;
+  pixels = render_all (image, &w, &h);
+  CHECK (pixels && original && w == ow && h == oh &&
+         memcmp (pixels, original, (size_t) w * h * 4) == 0,
+         "masked projection refusals leave the visible composite unchanged");
+  free (pixels); free (original);
+  CHECK (api->effect_change (engine, image, effect_layer, effect.id, &disable, NULL) == GLIMS_STATUS_OK,
+         "disabling the unbounded effect is an available recovery");
+  before = undo_depth (image);
+  CHECK (api->layer_transform_matrix (engine, image, moving, &move, GLIMS_INTERPOLATION_NONE, &error)
+           == GLIMS_STATUS_OK && error == NULL && undo_depth (image) == before + 1,
+         "the bounded child transform succeeds after disabling the overhanging effect");
+  api->free_string (error);
+  api->image_close (engine, image);
 }
 
 /* Text layers: the font list, creating a layer from settings, reading it
@@ -13708,6 +14055,11 @@ main (int argc, char **argv)
   test_render_freshness ();
   test_transforms ();
   test_matrix_transform ();
+  test_projective_transform (argv[2]);
+  test_transform_ancestor_dimension ();
+  test_transform_tree_budget ();
+  test_projective_source_offsets ();
+  test_transform_masked_projection (argv[3]);
   test_channels (argv[2]);
   test_drawable_filters (argv[2]);
   test_drawable_effects (argv[2]);

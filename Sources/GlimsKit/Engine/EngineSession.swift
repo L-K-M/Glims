@@ -2150,9 +2150,17 @@ final class EngineSession: @unchecked Sendable {
     /// Applies `matrix` (image pixels, y down) to the layer as one undo step.
     func transformLayer(_ layer: Int32, image: Int32, matrix: CGAffineTransform,
                         interpolation: Interpolation) throws {
-        var values = GlimsMatrix(m: ((Double(matrix.a), Double(matrix.c), Double(matrix.tx)),
-                                     (Double(matrix.b), Double(matrix.d), Double(matrix.ty)),
-                                     (0, 0, 1)))
+        try transformLayer(layer, image: image, matrix: ProjectiveTransform(affine: matrix),
+                           interpolation: interpolation)
+    }
+
+    /// Applies a homogeneous image-coordinate transform. Native admission
+    /// checks fresh bounds, descendants, masks and output storage before editing.
+    func transformLayer(_ layer: Int32, image: Int32, matrix: ProjectiveTransform,
+                        interpolation: Interpolation) throws {
+        var values = GlimsMatrix(m: ((matrix.h00, matrix.h01, matrix.h02),
+                                     (matrix.h10, matrix.h11, matrix.h12),
+                                     (matrix.h20, matrix.h21, matrix.h22)))
         var error: UnsafeMutablePointer<CChar>?
         try check(api.layer_transform_matrix(engine, image, layer, &values, interpolation.rawValue, &error),
                   error)

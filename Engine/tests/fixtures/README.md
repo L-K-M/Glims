@@ -83,3 +83,11 @@ Default rights, ja 権利), plus Artist Fixture Artist and Caption Fixture capti
 The Core-only generator validates those independent expected maps before saving.
 `scripts/test-metadata-language-facade.py` reads it using only the public facade,
 checks ownership/refusals/history/read-during-edit, then saves/reopens a copy.
+
+`projective-parent-effect.xcf` is made with GIMP 3.0.8 by
+`scripts/make-projective-fixture.sh`. Two 8×8 layers share an 8×8 masked
+group. An unclipped public-API Drop Shadow effect on the unchanged sibling
+has x=600000, y=0, radius=0 and grow-radius=0. Its raw group projection
+extends to 600008 pixels horizontally even though the item and displayed
+masked bounds remain 8×8. This bounded, narrow fixture checks transform
+admission against raw projection extents, not the visible mask bounds.

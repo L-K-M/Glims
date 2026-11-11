@@ -474,8 +474,14 @@ typedef enum GlimsInterpolation {
   GLIMS_INTERPOLATION_LOHALO  = 5
 } GlimsInterpolation;
 
-/* A transform of image pixel coordinates, row-major, applied to column
- * vectors (x, y, 1): x' = m[0][0] x + m[0][1] y + m[0][2]. */
+/* A forward transform of image pixel coordinates, row-major, applied to
+ * column vectors (x, y, 1). Divide the first two resulting components by
+ * W = m[2][0] x + m[2][1] y + m[2][2]. Affine transforms have W = 1.
+ * The adapter normalizes W at the source center and refuses horizon
+ * crossing, unrepresentable source edges, invalid output bounds and more
+ * than 512 MiB of aggregate destination storage, including masks and
+ * containing-group growth. Active unclipped effects are refused because
+ * their future render bounds cannot be inferred from their old extent. */
 typedef struct GlimsMatrix {
   double m[3][3];
 } GlimsMatrix;

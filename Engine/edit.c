@@ -19,11 +19,15 @@
 #include "operations/layer-modes/gimp-layer-modes.h"
 #include "core/gimp-gradients.h"
 #include "core/gimpcontext.h"
+#include "core/gimpcontainer.h"
 #include "core/gimpdrawable.h"
+#include "core/gimpdrawable-filters.h"
+#include "core/gimpdrawablefilter.h"
 #include "core/gimpdrawable-bucket-fill.h"
 #include "core/gimpdrawable-edit.h"
 #include "core/gimpdrawable-gradient.h"
 #include "core/gimpfilloptions.h"
+#include "core/gimpfilter.h"
 #include "core/gimpgrouplayer.h"
 #include "core/gimpimage.h"
 #include "core/gimpimage-crop.h"
@@ -35,10 +39,14 @@
 #include "core/gimpimage-undo.h"
 #include "core/gimpitem.h"
 #include "core/gimplayer.h"
+#include "core/gimplayermask.h"
 #include "core/gimplayer-new.h"
+#include "core/gimp-transform-resize.h"
+#include "core/gimp-transform-utils.h"
 #include "core/gimppickable.h"
 #include "core/gimppickable-auto-shrink.h"
 #include "core/gimppattern.h"
+#include "core/gimpprojectable.h"
 
 #include "config/gimpcoreconfig.h"
 
@@ -1203,6 +1211,205 @@ glims_image_scale (GlimsEngine  *engine,
   return GLIMS_STATUS_OK;
 }
 
+static GlimsStatus
+invalid_transform (char **error, const char *message)
+{
+  glims_fail (error, NULL, message);
+  return GLIMS_STATUS_INVALID_ARGUMENT;
+}
+
+/* An unclipped effect can change its extent when its input size changes.
+ * Its old margins do not bound a future render, so do not guess. Ordinary
+ * Glims effects are clipped; imported unbounded effects need an explicit
+ * merge or disable before this pixel transform. */
+static GlimsStatus
+check_transform_effect_bounds (GimpDrawable *drawable, char **error)
+{
+  GimpContainer *filters = gimp_drawable_get_filters (drawable);
+  for (gint i = 0; i < gimp_container_get_n_children (filters); i++)
+    {
+      GimpObject *filter = gimp_container_get_child_by_index (filters, i);
+      if (GIMP_IS_DRAWABLE_FILTER (filter) && gimp_filter_get_active (GIMP_FILTER (filter)) &&
+          ! gimp_drawable_filter_get_clip (GIMP_DRAWABLE_FILTER (filter)))
+        return invalid_transform (error,
+          "Merge or disable effects that extend beyond layer bounds before transforming this layer.");
+    }
+  return GLIMS_STATUS_OK;
+}
+
+static GlimsStatus
+admit_transform_storage (GimpDrawable *drawable, gint64 left, gint64 top,
+                          gint64 right, gint64 bottom, guint64 *remaining, char **error)
+{
+  const gint64 limit = 2 * GIMP_MAX_IMAGE_SIZE;
+  guint64 pixels;
+  gint bpp;
+  if (left < -limit || top < -limit || right > limit || bottom > limit ||
+      right <= left || bottom <= top || right - left > GIMP_MAX_IMAGE_SIZE ||
+      bottom - top > GIMP_MAX_IMAGE_SIZE)
+    return invalid_transform (error, "The transformed layer or its group would exceed the supported size or coordinates.");
+  pixels = (guint64) (right - left) * (guint64) (bottom - top);
+  bpp = babl_format_get_bytes_per_pixel (gimp_drawable_get_format_with_alpha (drawable));
+  if (bpp < 1 || pixels > *remaining / (guint64) bpp)
+    return invalid_transform (error, "Transformed layers and masks would exceed the 512 MiB output limit. Reduce the size or transform layers separately.");
+  *remaining -= pixels * (guint64) bpp;
+  return GLIMS_STATUS_OK;
+}
+
+/* Native projective sampling clips at near-Z. Normalize the homogeneous
+ * representation so equivalent H, 2H and -3H use the same near plane.
+ * Keep affine W=1 unchanged, including its existing rounding behavior. */
+static GlimsStatus
+normalize_transform (GimpLayer *layer, GimpMatrix3 *matrix, char **error)
+{
+  gint x, y;
+  gdouble cx, cy, w, determinant;
+  GimpMatrix3 inverse;
+  gimp_item_get_offset (GIMP_ITEM (layer), &x, &y);
+  cx = x + gimp_item_get_width (GIMP_ITEM (layer)) / 2.0;
+  cy = y + gimp_item_get_height (GIMP_ITEM (layer)) / 2.0;
+  w = matrix->coeff[2][0] * cx + matrix->coeff[2][1] * cy + matrix->coeff[2][2];
+  if (! isfinite (w) || w == 0)
+    return invalid_transform (error, "The transform crosses a perspective horizon. Move its corners closer together.");
+  for (gint row = 0; row < 3; row++)
+    for (gint column = 0; column < 3; column++)
+      {
+        matrix->coeff[row][column] /= w;
+        if (! isfinite (matrix->coeff[row][column]))
+          return invalid_transform (error, "The normalized transform is not finite.");
+      }
+  determinant = gimp_matrix3_determinant (matrix);
+  if (! isfinite (determinant) || fabs (determinant) < 1e-9)
+    return invalid_transform (error, "The transform would flatten the layer or exceed its numeric range.");
+  inverse = *matrix;
+  gimp_matrix3_invert (&inverse);
+  for (gint row = 0; row < 3; row++)
+    for (gint column = 0; column < 3; column++)
+      if (! isfinite (inverse.coeff[row][column]))
+        return invalid_transform (error, "The inverse transform is not finite.");
+  return GLIMS_STATUS_OK;
+}
+
+/* Bound every destination before native integer casts or mutation. The
+ * aggregate budget counts output storage for all layers and attached masks;
+ * it is not a promise about total GEGL working memory or Undo retention. */
+static GlimsStatus
+preflight_transformed_drawable (GimpDrawable *drawable, const GimpMatrix3 *matrix,
+                                guint64 *remaining, GeglRectangle *result, char **error)
+{
+  GimpItem *item = GIMP_ITEM (drawable);
+  gint x, y, left, top, right, bottom;
+  const gint width = gimp_item_get_width (item), height = gimp_item_get_height (item);
+  const gdouble coordinate_limit = 2.0 * GIMP_MAX_IMAGE_SIZE;
+  GlimsStatus status = glims_check_item_locks (item, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = check_transform_effect_bounds (drawable, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (width < 1 || height < 1)
+    return invalid_transform (error, "The layer has no transformable pixel area.");
+  gimp_item_get_offset (item, &x, &y);
+  /* Native boundary and sampling code also stores the source far edges
+   * in gint before applying H, even when the destination is small. */
+  if ((gint64) x + width > G_MAXINT || (gint64) y + height > G_MAXINT)
+    return invalid_transform (error, "Move the source layer within the supported coordinates before transforming it.");
+  for (gint corner = 0; corner < 4; corner++)
+    {
+      const gdouble px = (gdouble) x + (corner & 1 ? width : 0);
+      const gdouble py = (gdouble) y + (corner & 2 ? height : 0);
+      const gdouble w = matrix->coeff[2][0] * px + matrix->coeff[2][1] * py + matrix->coeff[2][2];
+      gdouble out_x, out_y;
+      if (! isfinite (w) || w <= GIMP_TRANSFORM_NEAR_Z + 1e-9)
+        return invalid_transform (error, "The transform crosses a perspective horizon. Move its corners closer together.");
+      out_x = (matrix->coeff[0][0] * px + matrix->coeff[0][1] * py + matrix->coeff[0][2]) / w;
+      out_y = (matrix->coeff[1][0] * px + matrix->coeff[1][1] * py + matrix->coeff[1][2]) / w;
+      if (! isfinite (out_x) || ! isfinite (out_y) ||
+          fabs (out_x) > coordinate_limit || fabs (out_y) > coordinate_limit)
+        return invalid_transform (error, "The transformed layer would exceed the supported coordinates.");
+    }
+  /* With a positive W throughout the rectangle, extrema occur at corners.
+   * Their checked range makes native epsilon-aware integer rounding safe. */
+  if (! gimp_transform_resize_boundary (matrix, GIMP_TRANSFORM_RESIZE_ADJUST,
+                                        x, y, (gdouble) x + width, (gdouble) y + height,
+                                        &left, &top, &right, &bottom) ||
+      right <= left || bottom <= top || right - left > GIMP_MAX_IMAGE_SIZE ||
+      bottom - top > GIMP_MAX_IMAGE_SIZE)
+    return invalid_transform (error, "The transformed layer would exceed 524288 pixels per side.");
+  if (result) *result = (GeglRectangle) { left, top, right - left, bottom - top };
+  return admit_transform_storage (drawable, left, top, right, bottom, remaining, error);
+}
+
+static GlimsStatus
+preflight_transform_tree (GimpImage *image, GimpLayer *layer,
+                          const GimpMatrix3 *matrix, char **error)
+{
+  GList *layers = gimp_image_get_layer_list (image);
+  guint64 remaining = GLIMS_MAX_PIXEL_BUFFER_BYTES;
+  GlimsStatus status = GLIMS_STATUS_OK;
+  GeglRectangle changed = { 0 };
+  for (GList *node = layers; node; node = node->next)
+    {
+      GimpLayer *candidate = node->data;
+      GimpLayerMask *mask;
+      if (candidate != layer && ! gimp_viewable_is_ancestor (GIMP_VIEWABLE (layer), GIMP_VIEWABLE (candidate)))
+        continue;
+      status = preflight_transformed_drawable (GIMP_DRAWABLE (candidate), matrix, &remaining,
+                                               candidate == layer ? &changed : NULL, error);
+      if (status != GLIMS_STATUS_OK) break;
+      mask = gimp_layer_get_mask (candidate);
+      if (mask)
+        {
+          status = preflight_transformed_drawable (GIMP_DRAWABLE (mask), matrix, &remaining, NULL, error);
+          if (status != GLIMS_STATUS_OK) break;
+        }
+    }
+  g_list_free (layers);
+  if (status != GLIMS_STATUS_OK) return status;
+
+  /* A small child can grow every containing group. Union the old parent
+   * rectangle with the changed branch rather than subtracting old pixels:
+   * this conservatively covers intermediate as well as final bounds.
+   * Charge actual old effect/projection overhang separately from the item
+   * envelope that sizes parent masks. Future unbounded effects are refused. */
+  for (GimpLayer *parent = gimp_layer_get_parent (layer); parent;
+       parent = gimp_layer_get_parent (parent))
+    {
+      GimpDrawable *drawable = GIMP_DRAWABLE (parent);
+      GimpItem *item = GIMP_ITEM (parent);
+      GimpLayerMask *mask = gimp_layer_get_mask (parent);
+      gint x, y;
+      gint64 left, top, right, bottom;
+      GeglRectangle projection;
+      status = check_transform_effect_bounds (drawable, error);
+      if (status != GLIMS_STATUS_OK) return status;
+      gimp_item_get_offset (item, &x, &y);
+      left = MIN ((gint64) x, changed.x);
+      top = MIN ((gint64) y, changed.y);
+      right = MAX ((gint64) x + gimp_item_get_width (item), (gint64) changed.x + changed.width);
+      bottom = MAX ((gint64) y + gimp_item_get_height (item), (gint64) changed.y + changed.height);
+      /* Bound before converting the envelope to native rectangle fields. */
+      if (right - left > GIMP_MAX_IMAGE_SIZE || bottom - top > GIMP_MAX_IMAGE_SIZE ||
+          left < -2 * GIMP_MAX_IMAGE_SIZE || top < -2 * GIMP_MAX_IMAGE_SIZE ||
+          right > 2 * GIMP_MAX_IMAGE_SIZE || bottom > 2 * GIMP_MAX_IMAGE_SIZE)
+        return invalid_transform (error, "The transform would grow a containing group beyond the supported size or coordinates.");
+      changed = (GeglRectangle) { left, top, right - left, bottom - top };
+      if (mask)
+        {
+          status = admit_transform_storage (GIMP_DRAWABLE (mask), left, top, right, bottom, &remaining, error);
+          if (status != GLIMS_STATUS_OK) return status;
+        }
+      /* The displayed drawable bound can be clipped by a group mask.
+       * The raw projection still allocates its full child-effect extent. */
+      projection = gimp_projectable_get_bounding_box (GIMP_PROJECTABLE (parent));
+      left = MIN (left, (gint64) x + projection.x);
+      top = MIN (top, (gint64) y + projection.y);
+      right = MAX (right, (gint64) x + projection.x + projection.width);
+      bottom = MAX (bottom, (gint64) y + projection.y + projection.height);
+      status = admit_transform_storage (drawable, left, top, right, bottom, &remaining, error);
+      if (status != GLIMS_STATUS_OK) return status;
+    }
+  return status;
+}
+
 GlimsStatus
 glims_layer_transform_matrix (GlimsEngine       *engine,
                               GlimsImageID       id,
@@ -1234,14 +1441,6 @@ glims_layer_transform_matrix (GlimsEngine       *engine,
         transform.coeff[row][column] = matrix->m[row][column];
       }
 
-  /* A matrix that maps the layer onto a line or a point has nothing to
-   * invert, and the engine's transform needs its inverse. */
-  if (fabs (gimp_matrix3_determinant (&transform)) < 1e-9)
-    {
-      glims_fail (error, NULL, "The transform would flatten the layer.");
-      return GLIMS_STATUS_INVALID_ARGUMENT;
-    }
-
   switch (interpolation)
     {
     case GLIMS_INTERPOLATION_DEFAULT: type = engine->gimp->config->interpolation_type; break;
@@ -1258,6 +1457,10 @@ glims_layer_transform_matrix (GlimsEngine       *engine,
     return GLIMS_STATUS_NOT_FOUND;
 
   status = glims_check_item_locks (GIMP_ITEM (layer), GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = normalize_transform (layer, &transform, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = preflight_transform_tree (image, layer, &transform, error);
   if (status != GLIMS_STATUS_OK) return status;
   /* Forward, grown to the result, as the unified transform tool commits
    * a layer (app/tools/gimptransformgridtool.c). gimp_item_transform opens

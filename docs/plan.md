@@ -4250,3 +4250,30 @@ creation, unchanged underlying pixels, typed edits, cancellation, exact
 Undo/Redo output and editable XCF reopening. The Swift suite passes 1,250
 tests. This closes the tonal-picker gap in the broader editor brief; it does
 not establish complete Photoshop 4 parity or final application acceptance.
+
+### Projective transform foundation (2026-11-11 candidate)
+
+The owned Swift transform type now carries all nine homogeneous coefficients,
+with checked composition, inverse mapping and a rectangle-to-quad solver.
+The native boundary normalizes equivalent matrices and refuses horizons,
+invalid source/output coordinates and excessive destination storage before
+editing. The shared 512 MiB budget includes descendants, attached masks and
+containing-group growth, using raw projection extents even behind a group
+mask. It bounds destination storage, not total working memory or Undo history.
+Active unclipped effects require merge or disable because their future extent
+cannot be predicted from their old margins. Ordinary clipped effects retain
+their existing path.
+
+All four native suites pass analytic perspective pixels, equivalent positive
+and negative matrix multiples, negative source origins, masks, exact Undo/Redo
+and XCF reopen. Bounded regressions reproduced both ancestor growth and a
+masked raw-projection admission gap before their fixes. The pure geometry has
+21 tests; the integrated Swift suite passes 1,287 tests. A focused native
+Swift bridge workflow verifies the complete coefficient mapping. Independent
+direct review is complete; a timed-out SWE-2 review supplied no verdict and
+is not counted as approval.
+
+This foundation does not expose skew/distort/perspective canvas modes yet.
+Captured-target atomic commits, the new handles, warped pixel previews,
+structured-layer qualification and large-image interaction timing remain
+separate work. It does not establish Photoshop 4 parity.
