@@ -417,7 +417,7 @@ lifetime_case (GlimsEngine *engine, gpointer data)
   gboolean y_role = GPOINTER_TO_INT (data);
   Fixture f = {0}; GimpLayer *ysrc = NULL; GlimsFilterID filter = 0;
   GWeakRef weak; gboolean weak_ready = FALSE; char *error = NULL;
-  guint8 target[BYTES], x[BYTES], y[BYTES], preview[BYTES], actual[BYTES];
+  guint8 target[BYTES], x[BYTES], y[BYTES], preview[BYTES], actual[BYTES], victim_before[BYTES];
   NEED (fixture_open (engine, &f, FALSE), "source lifetime fixture opens");
   ysrc = add_layer (f.image, "Y lifetime map", FALSE, FALSE);
   NEED (ysrc != NULL, "Y lifetime map attaches");
@@ -426,10 +426,17 @@ lifetime_case (GlimsEngine *engine, gpointer data)
   NEED (begin_maps (&f, item_id (f.source), item_id (ysrc), &filter, &error) == GLIMS_STATUS_OK && set_displace (engine, filter, &settings) && read_pixels (f.target, TRUE, preview), "captured dual-map preview renders before source destruction");
   GimpLayer *victim = y_role ? ysrc : f.source;
   g_weak_ref_init (&weak, G_OBJECT (victim)); weak_ready = TRUE;
+  NEED (read_pixels (victim, FALSE, victim_before), "raw victim bytes are readable before mutation");
   write_pixels (victim, FALSE, FALSE);
-  settings.amount_x += 1;
+  CHECK (read_pixels (victim, FALSE, actual) && memcmp (victim_before, actual, BYTES),
+         "the selected live map's raw pixels changed");
+  /* Make the intermediate change visible after 8-bit quantization. */
+  const gdouble amount_delta = 8.0;
+  settings.amount_x += amount_delta;
   NEED (set_displace (engine, filter, &settings), "intervening parameter change invalidates the preview");
-  settings.amount_x -= 1;
+  CHECK (read_pixels (f.target, TRUE, actual) && memcmp (preview, actual, BYTES),
+         "the perturbed amount renders different pixels after source mutation");
+  settings.amount_x = cartesian_default.amount_x;
   NEED (set_displace (engine, filter, &settings), "original settings force a fresh graph evaluation");
   CHECK (read_pixels (f.target, TRUE, actual) && !memcmp (preview, actual, BYTES), "mutating the live role cannot change captured output");
   gimp_image_remove_layer (f.image, victim, FALSE, NULL);
@@ -437,8 +444,12 @@ lifetime_case (GlimsEngine *engine, gpointer data)
   gimp_image_undo_free (f.image);
   GObject *probe = g_weak_ref_get (&weak);
   CHECK (probe == NULL, "removed source finalizes after history purge while the preview survives"); g_clear_object (&probe);
-  settings.amount_y += 1; NEED (set_displace (engine, filter, &settings), "deleted-source preview invalidates");
-  settings.amount_y -= 1; NEED (set_displace (engine, filter, &settings), "deleted-source preview reevaluates with original settings");
+  settings.amount_y += amount_delta;
+  NEED (set_displace (engine, filter, &settings), "deleted-source preview invalidates");
+  CHECK (read_pixels (f.target, TRUE, actual) && memcmp (preview, actual, BYTES),
+         "the perturbed amount renders different pixels after source finalization");
+  settings.amount_y = cartesian_default.amount_y;
+  NEED (set_displace (engine, filter, &settings), "deleted-source preview reevaluates with original settings");
   CHECK (read_pixels (f.target, TRUE, actual) && !memcmp (preview, actual, BYTES), "source destruction cannot change captured role output");
   NEED (api->filter_abort (engine, filter) == GLIMS_STATUS_OK, "source-independent preview cancels"); filter = 0;
   CHECK (read_pixels (f.target, FALSE, actual) && !memcmp (target, actual, BYTES), "lifetime Cancel preserves original target bytes");
@@ -565,11 +576,19 @@ cleanup:
   }
   clear_error (&error); fixture_close (&f);
   /* A separate small fixture verifies image-close teardown, not budget data. */
-  if (!fixture_open (engine, &f, FALSE)) { CHECK (FALSE, "close fixture opens"); return GLIMS_STATUS_OK; }
+  if (!fixture_open (engine, &f, FALSE)) {
+    CHECK (FALSE, "close fixture opens");
+    fixture_close (&f);
+    return GLIMS_STATUS_OK;
+  }
   CHECK (begin_maps (&f, item_id (f.source), item_id (f.source), &filter, &error) == GLIMS_STATUS_OK && filter > 0, "dual-source preview begins before close");
   GlimsFilterID old = filter;
-  CHECK (api->image_close (engine, f.id) == GLIMS_STATUS_OK, "image closes with accepted preview"); f.id = 0;
+  GlimsStatus close_status = api->image_close (engine, f.id);
+  CHECK (close_status == GLIMS_STATUS_OK, "image closes with accepted preview");
+  if (close_status == GLIMS_STATUS_OK) f.id = 0;
   CHECK (g_hash_table_size (engine->filters) == 0 && api->filter_abort (engine, old) == GLIMS_STATUS_NOT_FOUND, "close removes the dual-source session and repeated Abort reports finished");
+  if (f.id && filter > 0) api->filter_abort (engine, filter);
+  fixture_close (&f);
   clear_error (&error);
   return GLIMS_STATUS_OK;
 }
