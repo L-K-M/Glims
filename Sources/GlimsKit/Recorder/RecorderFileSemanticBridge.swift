@@ -21,10 +21,10 @@ enum RecorderFileSemanticBridge {
         // Caller-created values need the same whole-file semantic/resource
         // validation as decoded bytes. Never convert a successful prefix.
         _ = try RecorderFileCodec.encode(file)
-        let records = file.records.map { row -> RecorderLog<SemanticImageCommand>.Record in
+        let records = try file.records.map { row -> RecorderLog<SemanticImageCommand>.Record in
             let resolution: RecorderLog<SemanticImageCommand>.Resolution
             switch row.outcome {
-            case .success(let value, _): resolution = .success(command(value))
+            case .success(let value, _): resolution = .success(try command(value))
             case .failure(let reason): resolution = .failure(reason)
             case .cancelled(let reason): resolution = .cancelled(reason)
             }
@@ -54,7 +54,7 @@ enum RecorderFileSemanticBridge {
                      contiguous: value.contiguous, sampleMerged: value.sampleMerged)
     }
 
-    private static func command(_ value: RecorderFileCommand) -> SemanticImageCommand {
+    private static func command(_ value: RecorderFileCommand) throws -> SemanticImageCommand {
         switch value {
         case .selectionShape(let shape, let settings):
             let frontendShape: EngineSession.SelectShape
@@ -148,6 +148,7 @@ enum RecorderFileSemanticBridge {
             settings.blue = channel(levels.blue)
             settings.alpha = channel(levels.alpha)
             return .applyLevels(settings)
+        case .applyCurves(let value): return .applyCurves(try value.settings())
         case .completeStroke(let value): return .completeStroke(value)
         }
     }

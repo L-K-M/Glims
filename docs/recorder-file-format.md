@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 6
+# Recorder file format, versions 1 to 7
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,17 +7,17 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is integer `1`, `2`, `3`, `4`, `5` or `6`. `recordingID` is a file UUID. `origin` contains
+`version` is integer `1`, `2`, `3`, `4`, `5`, `6` or `7`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
 The writer chooses the highest version required by a successful record:
 `completeStroke` requires 2, `channelToSelection` 3, `transformLayer` 4,
-`applyLevels` 5 and `transformProjectiveLayer` 6. A file declaring one of
+`applyLevels` 5, `transformProjectiveLayer` 6 and `applyCurves` 7. A file declaring one of
 those versions must contain at least one successful command from that
 version's family. It may also contain commands from all earlier versions.
 Failure/cancelled rows do not raise the version. With no extended successful
-commands, the writer uses version 1. Integers outside 1...6 refuse the file.
+commands, the writer uses version 1. Integers outside 1...7 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -49,8 +49,9 @@ Commands have an owned `tag` and the following exact fields:
 | `channelToSelection` | `operation` (version 3 and later) |
 | `transformImage` | `transform` |
 | `transformLayer` | `matrix`, `interpolation` (version 4 and later) |
-| `transformProjectiveLayer` | `matrix`, `interpolation` (version 6) |
+| `transformProjectiveLayer` | `matrix`, `interpolation` (version 6 and later) |
 | `applyLevels` | `settings` (version 5 and later) |
+| `applyCurves` | `settings` (version 7) |
 | `scale` | integer `width`, `height` |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |
@@ -75,7 +76,7 @@ worker to native resize. No NSColor or late conversion enters the file.
 
 Bindings are `kind:"none"`, `kind:"layer"` with `symbol`, `kind:"channel"`
 with `symbol`, or `kind:"context"` with `context`. Layer properties, layer
-transforms and Levels require a layer symbol (any layer-kind description);
+transforms, Levels and Curves require a layer symbol (any layer-kind description);
 `channelToSelection` requires a channel symbol whose description kind is
 `channel` — the explicit source channel, never the active paint target.
 Select Alpha and color selection with `sampleMerged:false` require context;
@@ -153,6 +154,33 @@ Both affine and projective semantic replay now call the captured native
 transform API, which checks that the freshly read rectangle still matches
 at mutation and refuses to implicitly rasterize editable text/link/vector
 sources or descendants. Existing version 4 wire values are unchanged.
+
+## Curves (version 7)
+
+`applyCurves` has exactly `settings`, with `trc` and the five named channels
+`value`, `red`, `green`, `blue`, `alpha`. `trc` is `linear`, `nonlinear` or
+`perceptual`. Each channel has exactly `kind` (`smooth` or `free`), Boolean
+`identity`, `points` and `samples`. Each point has finite `x` and `y` in 0...1
+and `kind` (`smooth` or `corner`). Points are ordered by nondecreasing x;
+zero points and duplicate x values are allowed. Each channel has at most
+65,536 points. Points also consume the shared whole-file 100,000-point
+budget. Samples are exactly 256 finite numbers in 0...1 per channel.
+
+Both points and actual sample tables are stored, including inactive points
+and imported Smooth tables that differ from what those points would derive.
+The identity flag is the native HDR bypass behavior, never inferred from
+points or samples. Replay installs a complete independent native candidate;
+replaying graph-edit patches would lose some of this state. No native filter
+or effect identity is serialized. A layer binding is required. Version 7
+requires a successful Curves command and accepts all earlier command families.
+
+Apply records final settings behind queued preview writes. Cancel adds no
+row. An accepted commit that later fails settles a failure row while retaining
+its capture metadata for retry. Mask/channel targets and existing-effect edits
+produce explicit unsupported rows instead of inventing layer actions. Replay
+checks current membership, color mode, locks and editing role, then commits
+one new effect with one Undo step. This format preserves exact Curves values;
+it does not change the native XCF format's handling of identity flags.
 
 ## Levels (version 5)
 
@@ -234,7 +262,7 @@ use finite IEEE binary64 values with normal nearest representation.
 The limits below are **file-format resource policy**, not engine/hardware limits:
 
 - 16 MiB UTF-8 input/output, 10,000 records and 10,000 symbols.
-- 100,000 points summed across successful polygon vertices and successful
+- 100,000 points summed across successful Curves channel points, polygon vertices and successful
   stroke samples (`first` included); each stroke is additionally capped at
   65,536 samples. Only successful records consume the budget.
 - 64 KiB decoded UTF-8 bytes per string, including keys.

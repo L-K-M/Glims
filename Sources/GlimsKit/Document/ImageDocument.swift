@@ -57,7 +57,7 @@ final class ImageDocument {
             /// A new filter on an ordinary layer: semantic capture coverage.
             case layer(Int32)
             /// An existing-effect edit or a mask/channel/floating drawable:
-            /// recorded as an explicit unsupported row, never a layer Levels.
+            /// recorded as an explicit unsupported row, never a layer adjustment.
             case unsupported(String)
         }
     }
@@ -4907,9 +4907,9 @@ final class ImageDocument {
             guard !isClosing else { return completion(false) }
             if refuseWhileEditingUnavailable(forPreviewWork: true) { return completion(false) }
             record = filterPreviewRecords[filter]
-            // An admitted Apply of a Levels session reserves its Recorder row
+            // An admitted Apply of a supported session reserves its Recorder row
             // now; preview writes, Cancel and refused admissions never do.
-            if record?.operation == "gimp:levels", recorder.isRecording {
+            if ["gimp:levels", "gimp:curves"].contains(record?.operation ?? ""), recorder.isRecording {
                 let context: RecorderContext?
                 switch record?.coverage {
                 case .layer(let layer)?: context = .layer(layer)
@@ -4918,20 +4918,26 @@ final class ImageDocument {
                 }
                 do { capture = try reserveRecording(context: context) }
                 catch {
-                    assertionFailure("A recording log refused an admitted Levels apply: \(error)")
+                    assertionFailure("A recording log refused an admitted adjustment apply: \(error)")
                     return completion(false)
                 }
             }
         }
         enqueue(on: inputQueue, input: commit, teardown: !commit) { [session, image] in
             let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
-            var settings: EngineSession.LevelsSettings?
+            var command: SemanticImageCommand?
             var settingsFailure: Error?
             // The final whole settings are read behind every queued preview
             // write, only while a supported layer capture is active; a read
             // failure never suppresses the live commit below.
             if commit, case .layer = capture?.context {
-                do { settings = try session.levelsSettings(filter) }
+                do {
+                    if record?.operation == "gimp:curves" {
+                        command = .applyCurves(try session.curvesSettings(filter))
+                    } else {
+                        command = .applyLevels(try session.levelsSettings(filter))
+                    }
+                }
                 catch { settingsFailure = error }
             }
             var success = false
@@ -4951,10 +4957,10 @@ final class ImageDocument {
                     result = .failure(settingsFailure)
                 } else if case .unsupported(let reason)? = record?.coverage {
                     result = .failure(RecorderReplayError(message: reason))
-                } else if let settings {
-                    result = .success(.applyLevels(settings))
+                } else if let command {
+                    result = .success(command)
                 } else {
-                    result = .failure(RecorderReplayError(message: "The accepted Levels settings could not be read for recording."))
+                    result = .failure(RecorderReplayError(message: "The accepted adjustment settings could not be read for recording."))
                 }
                 self.settleRecording(capture, result: result, confirmed: confirmed)
             }
@@ -5759,17 +5765,17 @@ final class ImageDocument {
                     if case .transformProjectiveLayer = step.command {
                         try Self.requireLayerTransformTarget(layer, session: session, image: image)
                     }
-                    if case .applyLevels = step.command {
+                    if step.command.isLayerAdjustment {
                         // Fresh admission against the live image, never the
                         // recorded hints: membership was already confirmed;
                         // mode, locks, masks, channels and Quick Mask are
                         // rechecked before the new session begins.
                         let mode = try session.colorInfo(image).mode
                         guard mode == .rgb || mode == .grayscale else {
-                            throw RecorderReplayError(message: "Convert the image to RGB or grayscale before replaying this Levels adjustment.")
+                            throw RecorderReplayError(message: "Convert the image to RGB or grayscale before replaying this \(step.command.title) adjustment.")
                         }
                         guard try session.layerState(layer, image: image).effective.isDisjoint(with: [.pixels]) else {
-                            throw RecorderReplayError(message: "Unlock the recorded layer's pixels before replaying this Levels adjustment.")
+                            throw RecorderReplayError(message: "Unlock the recorded layer's pixels before replaying this \(step.command.title) adjustment.")
                         }
                         let selectedLayers = try session.selectedLayers(image)
                         let editingMask = try (selectedLayers + [layer]).contains {
@@ -5777,7 +5783,7 @@ final class ImageDocument {
                         }
                         guard try !session.quickMask(image).enabled,
                               try session.selectedItems(.channel, image: image).isEmpty, !editingMask else {
-                            throw RecorderReplayError(message: "Finish editing the channel or layer mask before replaying this Levels adjustment.")
+                            throw RecorderReplayError(message: "Finish editing the channel or layer mask before replaying this \(step.command.title) adjustment.")
                         }
                     }
                     try step.command.apply(session: session, image: image, layer: layer)
@@ -5817,7 +5823,7 @@ final class ImageDocument {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
         case .channelToSelection: return true
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .completeStroke: return true
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .completeStroke: return true
         default: return false
         }
     }
@@ -5847,11 +5853,11 @@ final class ImageDocument {
             }
             return .layer(layer)
         }
-        if case .applyLevels = command {
+        if command.isLayerAdjustment {
             guard let layer = explicitLayer, layer > 0 else {
-                return .unavailable("The explicit layer could not be identified when this Levels adjustment was recorded.")
+                return .unavailable("The explicit layer could not be identified when this \(command.title) adjustment was recorded.")
             }
-            // The recorded Levels binds the layer the session began on and
+            // The recorded adjustment binds the layer the session began on and
             // never falls through to the implicit paint target or selection.
             return .layer(layer)
         }

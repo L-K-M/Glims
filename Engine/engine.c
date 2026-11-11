@@ -3265,6 +3265,7 @@ static GlimsStatus api_image_restore_layer_sources (GlimsEngine *e, GlimsImageID
 typedef struct {
   GlimsFilterID filter;
   const GlimsCurveEdit *edit;
+  const GlimsCurvesSnapshot *settings;
   uint32_t trc;
   GlimsCurvesSnapshot *out;
   char **error;
@@ -3283,6 +3284,24 @@ static GlimsStatus filter_curves_set_trc_on_engine (GlimsEngine *e, gpointer dat
 {
   GlimsCurvesArgs *a = data;
   return glims_filter_curves_set_trc (e, a->filter, a->trc, a->out, a->error);
+}
+static GlimsStatus filter_curves_set_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsCurvesArgs *a = data;
+  return glims_filter_curves_set (e, a->filter, a->settings, a->error);
+}
+static GlimsStatus api_filter_curves_set (GlimsEngine *e, GlimsFilterID filter,
+                                         const GlimsCurvesSnapshot *settings, char **error)
+{
+  GlimsCurvesSnapshot copy;
+  uint32_t size;
+  if (error) *error = NULL;
+  if (!settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&size, settings, sizeof size);
+  if (size < sizeof copy) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&copy, settings, sizeof copy);
+  GlimsCurvesArgs a = { .filter = filter, .settings = &copy, .error = error };
+  return glims_engine_call (e, filter_curves_set_on_engine, &a);
 }
 static GlimsStatus api_filter_curves_get (GlimsEngine *e, GlimsFilterID filter,
                                          GlimsCurvesSnapshot *out, char **error)
@@ -3589,6 +3608,7 @@ static const GlimsEngineAPI api_v1 = {
   .image_sample_color = api_image_sample_color,
   .layer_transform_matrix_captured = api_layer_transform_matrix_captured,
   .image_transform_preview = api_image_transform_preview,
+  .filter_curves_set = api_filter_curves_set,
 };
 
 __attribute__ ((visibility ("default")))

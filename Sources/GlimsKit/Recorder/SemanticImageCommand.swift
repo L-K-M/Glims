@@ -55,12 +55,22 @@ enum SemanticImageCommand {
     /// settings. The explicit layer lives in the document's runtime binding,
     /// never in this command; there is no active-layer fallback.
     case applyLevels(EngineSession.LevelsSettings)
+    /// A newly applied Curves adjustment, including hidden points, actual
+    /// samples and HDR bypass flags. Its layer is explicitly bound outside.
+    case applyCurves(EngineSession.CurvesSettings)
     case completeStroke(RecorderStrokeCommand)
+
+    var isLayerAdjustment: Bool {
+        switch self {
+        case .applyLevels, .applyCurves: return true
+        default: return false
+        }
+    }
 
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .transformLayer, .transformProjectiveLayer, .applyLevels, .scale, .resizeCanvas, .crop, .completeStroke: return true
+        case .transformImage, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .scale, .resizeCanvas, .crop, .completeStroke: return true
         case .selectionShape, .selectColor, .selectCommand, .channelToSelection, .layerProperties: return false
         }
     }
@@ -102,6 +112,7 @@ enum SemanticImageCommand {
         case .transformLayer: return "Transform Layer"
         case .transformProjectiveLayer: return "Transform Layer Perspective"
         case .applyLevels: return "Levels"
+        case .applyCurves: return "Curves"
         case .completeStroke(let stroke): return stroke.title
         }
     }
@@ -124,7 +135,7 @@ enum SemanticImageCommand {
             try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill)
         case .crop(let rect):
             try session.crop(image: image, to: rect)
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .completeStroke:
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .completeStroke:
             throw MissingLayerBinding()
         case .channelToSelection:
             throw MissingChannelBinding()
@@ -152,6 +163,16 @@ enum SemanticImageCommand {
             let filter = try session.beginFilter(image: image, drawable: layer, operation: "gimp:levels")
             do {
                 try session.setLevelsSettings(filter, to: settings)
+                try session.commitFilter(filter)
+            } catch {
+                try? session.abortFilter(filter)
+                throw error
+            }
+        case .applyCurves(let settings):
+            guard layer > 0 else { throw MissingLayerBinding() }
+            let filter = try session.beginFilter(image: image, drawable: layer, operation: "gimp:curves")
+            do {
+                try session.setCurvesSettings(filter, to: settings)
                 try session.commitFilter(filter)
             } catch {
                 try? session.abortFilter(filter)

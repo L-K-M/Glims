@@ -1428,6 +1428,44 @@ final class EngineSession: @unchecked Sendable {
         return try decodeCurves(raw)
     }
 
+    /// Install a whole value without deriving samples or identity from points.
+    /// Each borrowed channel buffer stays alive until the synchronous facade
+    /// call returns; the engine owns an independent candidate afterward.
+    func setCurvesSettings(_ filter: Int32, to settings: CurvesSettings) throws {
+        guard settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Curves needs five complete valid channels and a known transfer curve.")
+        }
+        let channels = CurveChannel.allCases.map { settings[$0] }
+        var error: UnsafeMutablePointer<CChar>?
+        func withChannels(_ index: Int, _ raw: [GlimsCurveState]) -> GlimsStatus {
+            if index == channels.count {
+                var input = GlimsCurvesSnapshot()
+                input.struct_size = UInt32(MemoryLayout<GlimsCurvesSnapshot>.size)
+                input.trc = settings.trc.rawValue
+                input.value = raw[0]; input.red = raw[1]; input.green = raw[2]
+                input.blue = raw[3]; input.alpha = raw[4]
+                return api.filter_curves_set(engine, filter, &input, &error)
+            }
+            let channel = channels[index]
+            var points = channel.points.map { GlimsCurvePoint(x: $0.x, y: $0.y, kind: $0.kind.rawValue) }
+            var samples = channel.samples
+            return points.withUnsafeMutableBufferPointer { pointBuffer in
+                samples.withUnsafeMutableBufferPointer { sampleBuffer in
+                    var state = GlimsCurveState()
+                    state.kind = channel.kind.rawValue
+                    state.identity = channel.identity ? 1 : 0
+                    state.point_count = UInt32(pointBuffer.count)
+                    state.points = pointBuffer.isEmpty ? nil : pointBuffer.baseAddress
+                    state.sample_count = UInt32(sampleBuffer.count)
+                    state.samples = sampleBuffer.baseAddress
+                    return withChannels(index + 1, raw + [state])
+                }
+            }
+        }
+        try check(withChannels(0, []), error)
+    }
+
     func setCurvesTRC(_ filter: Int32, to trc: ColorTRC) throws -> CurvesSettings {
         guard trc != .unknown else {
             throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: "Choose a transfer curve.")

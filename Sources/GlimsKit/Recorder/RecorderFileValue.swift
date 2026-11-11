@@ -220,11 +220,17 @@ enum RecorderFileCommand: Equatable {
     /// The explicit layer is the record's `layer` binding; the command
     /// carries no native filter/effect identity.
     case applyLevels(Levels)
+    /// A newly applied Curves adjustment with its whole accepted settings:
+    /// the owned TRC tag and all five named channels, each preserving both
+    /// curve representations and the HDR bypass flag. The explicit layer is
+    /// the record's `layer` binding; the command carries no native
+    /// filter/effect identity.
+    case applyCurves(RecorderCurvesValue)
     case completeStroke(RecorderStrokeCommand)
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .completeStroke, .channelToSelection: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .completeStroke, .channelToSelection: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true

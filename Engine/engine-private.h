@@ -326,6 +326,7 @@ GlimsStatus glims_filter_levels_set (GlimsEngine *, GlimsFilterID, const GlimsLe
 GlimsStatus glims_filter_levels_auto (GlimsEngine *, GlimsFilterID, GlimsLevelsSettings *, char **);
 GlimsStatus glims_filter_curves_get (GlimsEngine *, GlimsFilterID, GlimsCurvesSnapshot *, char **);
 GlimsStatus glims_filter_curves_edit (GlimsEngine *, GlimsFilterID, const GlimsCurveEdit *, GlimsCurvesSnapshot *, char **);
+GlimsStatus glims_filter_curves_set (GlimsEngine *, GlimsFilterID, const GlimsCurvesSnapshot *, char **);
 GlimsStatus glims_filter_curves_set_trc (GlimsEngine *, GlimsFilterID, uint32_t, GlimsCurvesSnapshot *, char **);
 GlimsStatus glims_filter_commit    (GlimsEngine *e, GlimsFilterID id, char **error);
 GlimsStatus glims_filter_abort     (GlimsEngine *e, GlimsFilterID id);

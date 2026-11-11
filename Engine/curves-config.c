@@ -479,6 +479,112 @@ install_result (GimpOperationPointFilter *point, GimpCurvesConfig *copy,
   return status;
 }
 
+static const GlimsCurveState *
+input_state_at (const GlimsCurvesSnapshot *settings, guint index)
+{
+  switch (index) {
+    case 0: return &settings->value;
+    case 1: return &settings->red;
+    case 2: return &settings->green;
+    case 3: return &settings->blue;
+    default: return &settings->alpha;
+  }
+}
+
+static gboolean
+valid_settings (const GlimsCurvesSnapshot *settings)
+{
+  GimpTRCType trc;
+  if (!settings || settings->struct_size < sizeof *settings || !native_trc (settings->trc, &trc)) return FALSE;
+  for (guint c = 0; c < 5; c++) {
+    const GlimsCurveState *state = input_state_at (settings, c);
+    if ((state->kind != GLIMS_CURVE_KIND_SMOOTH && state->kind != GLIMS_CURVE_KIND_FREE) ||
+        state->identity > 1 || state->point_count > GLIMS_CURVE_MAX_POINTS ||
+        (!!state->point_count != !!state->points) ||
+        state->sample_count != GLIMS_CURVE_SAMPLE_COUNT || !state->samples) return FALSE;
+    for (guint p = 0; p < state->point_count; p++) {
+      const GlimsCurvePoint *point = &state->points[p];
+      if (!unit_value (point->x) || !unit_value (point->y) ||
+          (point->kind != GLIMS_CURVE_POINT_SMOOTH && point->kind != GLIMS_CURVE_POINT_CORNER) ||
+          (p && point->x < state->points[p - 1].x)) return FALSE;
+    }
+    for (guint s = 0; s < state->sample_count; s++) if (!unit_value (state->samples[s])) return FALSE;
+  }
+  return TRUE;
+}
+
+static gboolean
+settings_match (GimpCurvesConfig *config, const GlimsCurvesSnapshot *settings)
+{
+  if (own_trc (config->trc) != settings->trc) return FALSE;
+  for (guint c = 0; c < 5; c++) {
+    const GlimsCurveState *state = input_state_at (settings, c);
+    const GimpCurve *curve = curve_at (config, c);
+    uint32_t kind = curve->curve_type == GIMP_CURVE_SMOOTH ? GLIMS_CURVE_KIND_SMOOTH : GLIMS_CURVE_KIND_FREE;
+    if (kind != state->kind || (uint32_t) curve->identity != state->identity ||
+        (guint) curve->n_points != state->point_count) return FALSE;
+    for (guint p = 0; p < state->point_count; p++)
+      if (curve->points[p].x != state->points[p].x || curve->points[p].y != state->points[p].y ||
+          own_point_type (curve->points[p].type) != state->points[p].kind) return FALSE;
+    if (memcmp (curve->samples, state->samples, GLIMS_CURVE_SAMPLE_COUNT * sizeof (double))) return FALSE;
+  }
+  return TRUE;
+}
+
+/* A recorded whole value must retain hidden points, noncanonical Smooth
+ * samples and identity's HDR bypass. Replaying editing patches would derive
+ * and discard some of those fields. Replace them only in an independent,
+ * unpublished candidate; dirty/thaw would recompute Smooth samples again. */
+GlimsStatus
+glims_curves_config_set (GeglNode *node, const GlimsCurvesSnapshot *settings,
+                         gboolean *changed, char **error)
+{
+  GimpOperationPointFilter *point;
+  GimpCurvesConfig *source, *copy = NULL;
+  GimpTRCType trc;
+  GlimsStatus status;
+  if (changed) *changed = FALSE;
+  if (!changed || !valid_settings (settings))
+    return curves_error (GLIMS_STATUS_INVALID_ARGUMENT, error, "Curves requires five complete finite channel states, known kinds and TRC, ordered points and 256 samples per channel.");
+  status = checked_point (node, FALSE, &point, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  source = GIMP_CURVES_CONFIG (point->config);
+  if (settings_match (source, settings)) return GLIMS_STATUS_OK;
+  status = clone_config (source, &copy, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  native_trc (settings->trc, &trc);
+  g_object_set (copy, "trc", trc, NULL);
+  for (guint c = 0; c < 5; c++) {
+    const GlimsCurveState *state = input_state_at (settings, c);
+    GimpCurve *curve = curve_at (copy, c);
+    GimpCurvePoint *points = state->point_count ? g_try_new (GimpCurvePoint, state->point_count) : NULL;
+    if (state->point_count && !points) {
+      status = curves_error (GLIMS_STATUS_FAILED, error, "Memory could not be allocated for the complete Curves settings.");
+      goto done;
+    }
+    for (guint p = 0; p < state->point_count; p++)
+      points[p] = (GimpCurvePoint) { state->points[p].x, state->points[p].y, native_point_type (state->points[p].kind) };
+    g_free (curve->points);
+    curve->points = points;
+    curve->n_points = (gint) state->point_count;
+    curve->curve_type = state->kind == GLIMS_CURVE_KIND_SMOOTH ? GIMP_CURVE_SMOOTH : GIMP_CURVE_FREE;
+    memcpy (curve->samples, state->samples, GLIMS_CURVE_SAMPLE_COUNT * sizeof *curve->samples);
+    curve->identity = state->identity != 0;
+  }
+  status = validate_config (copy, error);
+  if (status != GLIMS_STATUS_OK) goto done;
+  if (!same_base (copy, source, FALSE) || !settings_match (copy, settings)) {
+    status = curves_error (GLIMS_STATUS_FAILED, error, "The native Curves candidate did not preserve the complete requested settings.");
+    goto done;
+  }
+  GlimsPointConfigTRCSpec spec = curves_spec ();
+  status = glims_point_config_trc_install (point, G_OBJECT (copy), &spec, error);
+  if (status == GLIMS_STATUS_OK) *changed = TRUE;
+done:
+  g_object_unref (copy);
+  return status;
+}
+
 GlimsStatus
 glims_curves_config_edit (GeglNode *node, const GlimsCurveEdit *edit,
                          GlimsCurvesSnapshot *out, gboolean *changed, char **error)

@@ -3526,6 +3526,20 @@ typedef struct GlimsEngineAPI {
                                          GlimsItemID layer,
                                          const GlimsLayerTransformRequest *request,
                                          GlimsImageID *result, char **error);
+
+  /* Slot177: replace a Curves preview's entire immutable channel/TRC value.
+   * All five channels include kind, identity, ordered points and exactly 256
+   * samples, including inactive data. Identity controls HDR bypass; it is
+   * never inferred from points or samples. Input arrays are borrowed, remain
+   * naturally aligned and immutable/alive until return, and are not retained. Empty points require
+   * a NULL pointer. Every channel is validated before candidate construction;
+   * failed validation/allocation/install changes no preview or Undo state.
+   * Equal values are a no-op. A changed preview still commits as one Undo
+   * through filter_commit. Normal filter edit/busy/lock admission applies.
+   * An unaligned known prefix and larger future tail are accepted; public
+   * entry clears *error when supplied. */
+  GlimsStatus (*filter_curves_set) (GlimsEngine *engine, GlimsFilterID filter,
+                                   const GlimsCurvesSnapshot *settings, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

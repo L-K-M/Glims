@@ -4427,3 +4427,30 @@ preview completion for the existing 800x600 viewport, versus 808 / 796 ms for
 the eager copy. Main-loop lateness was below 6 ms. These are single-run results
 on this Mac for eligible layers, not a guarantee for structured layers or
 arbitrary images. Full app, final packaging and hosted CI/review are pending.
+
+
+### Whole-value Curves recording (2026-11-12 candidate)
+
+New Curves Apply records its final native TRC and all five channels behind
+queued preview edits, retaining its begin-time layer if selection changes.
+Each channel stores kind, identity, points and all 256 actual samples,
+including inactive points and noncanonical Smooth tables. Format version 7
+uses owned named tags and shares the existing point/resource budgets; versions
+1 through 6 retain their existing meaning. Cancel records nothing, failed
+commits settle failure and retain retry metadata, and mask/channel targets or
+existing-effect edits remain explicit unsupported rows.
+
+Additive facade slot 177 installs an independent whole native Curves value.
+Validation precedes cloning, raw table/identity restoration happens only in
+an unpublished candidate, and the existing atomic configuration binding
+installs it. Replay checks the explicitly rebound layer's current membership,
+mode, locks and editing role before committing one effect with one Undo.
+The native fixtures pass on all four engines, including exact hidden state,
+HDR arithmetic, all TRCs, input lifetime, future/unaligned prefixes, invalid
+last-channel atomicity, real pixels, Cancel and Undo/Redo. Independent native
+review found no important defect; two inexpensive boundary cases and an array
+alignment contract note address its useful minor suggestions. All 1,380 Swift
+tests and the focused save/load/rebind/replay workflow pass on all four
+engines. The complete editor matrix and independent integration review are
+running.
+This slice does not establish complete Recorder coverage or Photoshop 4 parity.

@@ -400,6 +400,114 @@ cleanup:
   if(reopened)api->image_close(engine,reopened);
   clear_error(&error);api->free_curves_snapshot(&a);api->free_curves_snapshot(&b);api->free_curves_snapshot(&c);api->free_curves_snapshot(&out);fixture_close(&f);return GLIMS_STATUS_OK;
 }
+static GlimsStatus whole_value_cases(GlimsEngine *engine,gpointer unused) {
+  (void)unused; char *error=NULL; gboolean changed=FALSE;
+  GeglNode *node=gegl_node_new_child(NULL,"operation","gimp:curves",NULL);
+  GlimsCurvesSnapshot desired=empty(),out=empty(),original=empty();
+  GObject *held=NULL; Fixture f={0}; GlimsFilterID filter=0;
+  NEED(glims_curves_config_prepare(node,&error)==GLIMS_STATUS_OK,"whole-value fixture prepares");
+  NEED(glims_curves_config_get(node,&desired,&error)==GLIMS_STATUS_OK&&
+       glims_curves_config_get(node,&original,&error)==GLIMS_STATUS_OK,"whole-value inputs own complete snapshots");
+  GlimsCurveState *states[]={&desired.value,&desired.red,&desired.green,&desired.blue,&desired.alpha};
+  for(guint c=0;c<5;c++) {
+    states[c]->kind=c%2?GLIMS_CURVE_KIND_FREE:GLIMS_CURVE_KIND_SMOOTH;
+    states[c]->identity=c%2;
+    states[c]->points[0].kind=GLIMS_CURVE_POINT_CORNER;
+    states[c]->points[1].y=.2+c*.1;
+    for(guint s=0;s<256;s++)states[c]->samples[s]=(s+c)/(259.0);
+  }
+  g_free(desired.green.points);desired.green.points=NULL;desired.green.point_count=0;
+  held=g_object_ref(point(node)->config);
+  for(guint trc=GLIMS_COLOR_TRC_LINEAR;trc<=GLIMS_COLOR_TRC_PERCEPTUAL;trc++) {
+    desired.trc=trc;
+    NEED(glims_curves_config_set(node,&desired,&changed,&error)==GLIMS_STATUS_OK&&changed,"whole-value set accepts all five channels and each TRC");
+    NEED(glims_curves_config_get(node,&out,&error)==GLIMS_STATUS_OK,"whole-value read succeeds");
+    CHECK(same_snapshot(&desired,&out),"whole-value set preserves kinds, HDR identity, inactive points and noncanonical samples exactly");
+    api->free_curves_snapshot(&out);
+    GObject *same=point(node)->config;changed=TRUE;
+    CHECK(glims_curves_config_set(node,&desired,&changed,&error)==GLIMS_STATUS_OK&&!changed&&point(node)->config==same,"equal whole-value set keeps config identity");
+  }
+  CHECK(GIMP_CURVES_CONFIG(held)->curve[0]->points[1].y==original.value.points[1].y&&
+        !memcmp(GIMP_CURVES_CONFIG(held)->curve[0]->samples,original.value.samples,256*sizeof(double)),"whole-value installation never mutates held source config");
+  GObject *accepted=point(node)->config;
+  for(guint bad=0;bad<14;bad++) {
+    GlimsCurvesSnapshot invalid=desired;
+    GlimsCurvePoint bad_points[]={{0,0,GLIMS_CURVE_POINT_SMOOTH},{1,1,GLIMS_CURVE_POINT_SMOOTH}};
+    double bad_samples[256];memcpy(bad_samples,desired.alpha.samples,sizeof bad_samples);
+    if(bad==0)invalid.trc=999;
+    if(bad==1)invalid.alpha.kind=999;
+    if(bad==2)invalid.alpha.identity=2;
+    if(bad==3)invalid.alpha.point_count=GLIMS_CURVE_MAX_POINTS+1;
+    if(bad==4)invalid.alpha.points=NULL;
+    if(bad==5)invalid.alpha.sample_count=255;
+    if(bad==6)invalid.alpha.samples=NULL;
+    if(bad==7){bad_points[0].x=NAN;invalid.alpha.points=bad_points;}
+    if(bad==8){bad_points[1].y=1.1;invalid.alpha.points=bad_points;}
+    if(bad==9){bad_points[0].kind=999;invalid.alpha.points=bad_points;}
+    if(bad==10){bad_points[0].x=1;bad_points[1].x=0;invalid.alpha.points=bad_points;}
+    if(bad==11){bad_samples[255]=NAN;invalid.alpha.samples=bad_samples;}
+    if(bad==12)invalid.alpha.point_count=0;
+    if(bad==13)invalid.value.sample_count=257;
+    changed=TRUE;
+    CHECK(glims_curves_config_set(node,&invalid,&changed,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&!changed&&point(node)->config==accepted,"invalid last-channel whole value refuses atomically before installation");clear_error(&error);
+  }
+  NEED(glims_curves_config_get(node,&out,&error)==GLIMS_STATUS_OK,"read after invalid whole values");
+  CHECK(same_snapshot(&desired,&out),"all invalid whole values preserve all five accepted channels");api->free_curves_snapshot(&out);
+  /* Deliberately contradictory Smooth points/table plus bypassed garbage in
+   * the other channels: literal HDR arithmetic detects any reconstruction. */
+  desired.trc=GLIMS_COLOR_TRC_LINEAR;
+  for(guint c=0;c<5;c++) {
+    states[c]->identity=c!=0;
+    for(guint s=0;s<256;s++)states[c]->samples[s]=c?.37:(double)s/510;
+  }
+  NEED(glims_curves_config_set(node,&desired,&changed,&error)==GLIMS_STATUS_OK,"HDR whole value installs");
+  const gfloat input[]={-.5,.5,1.5,1.25},expected[]={0,.25,.5,1.25};gfloat actual[4]={0};
+  map(node,input,actual);CHECK(close4(actual,expected),"whole-value rendering obeys literal sample interpolation and independent HDR bypass");
+  double saved=desired.value.samples[128];desired.value.samples[128]=.99;
+  map(node,input,actual);CHECK(close4(actual,expected),"caller mutation after return cannot alter installed curves");desired.value.samples[128]=saved;
+
+  NEED(fixture_open(engine,&f),"public whole-value image opens");
+  GlimsUndoInfo before={0},after={0};gfloat raw[VALUES],preview[VALUES],pixels[VALUES];
+  NEED(api->image_undo_info(engine,f.id,&before)==GLIMS_STATUS_OK&&read_pixels(&f,FALSE,raw),"whole-value captures source and Undo");
+  NEED(api->filter_begin(engine,f.id,layer_id(&f),"gimp:curves",&filter,&error)==GLIMS_STATUS_OK,"whole-value preview begins");
+  LifetimeSnapshot future={.value=desired,.tail=G_GUINT64_CONSTANT(0xfedcba9876543210)};
+  future.value.struct_size=sizeof future;
+  unsigned char unaligned[sizeof future+1];memcpy(unaligned+1,&future,sizeof future);
+  NEED(api->filter_curves_set(engine,filter,(const GlimsCurvesSnapshot *)(unaligned+1),&error)==GLIMS_STATUS_OK,"public whole-value setter accepts unaligned prefix and future tail");
+  CHECK(!memcmp(unaligned+1,&future,sizeof future),"borrowed future input remains byte identical");
+  NEED(api->filter_curves_get(engine,filter,&out,&error)==GLIMS_STATUS_OK,"whole-value public read");
+  CHECK(same_snapshot(&desired,&out),"public whole-value call preserves complete borrowed state");api->free_curves_snapshot(&out);
+  CHECK(read_pixels(&f,TRUE,preview)&&fabs(preview[0]-.125)<2e-4&&fabs(preview[1]-.25)<2e-4&&fabs(preview[2]-.375)<2e-4&&fabs(preview[3]-.25)<2e-4,"real image graph renders sample-table half RGB and bypassed alpha");
+  CHECK(read_pixels(&f,FALSE,pixels)&&!memcmp(raw,pixels,sizeof raw),"whole-value live preview keeps source pixels immutable");
+  CHECK(api->image_undo_info(engine,f.id,&after)==GLIMS_STATUS_OK&&before.undo_count==after.undo_count,"whole-value preview adds no native Undo before Commit");
+  GlimsCurvesSnapshot short_input=desired;short_input.struct_size--;
+  error=(char *)(uintptr_t)1;
+  CHECK(api->filter_curves_set(engine,filter,&short_input,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&!error,"short prefix clears error and refuses");
+  CHECK(api->filter_curves_set(engine,filter,NULL,&error)==GLIMS_STATUS_INVALID_ARGUMENT,"missing whole value refuses");clear_error(&error);
+  engine->busy++;
+  CHECK(api->filter_curves_set(engine,filter,&desired,&error)==GLIMS_STATUS_BUSY,"busy engine refuses whole-value set");clear_error(&error);engine->busy--;
+  GlimsFilter *session=g_hash_table_lookup(engine->filters,GINT_TO_POINTER(filter));
+  GimpOperationPointFilter *p=point(session->operation);GimpTRCType old=p->trc;
+  p->trc=old==GIMP_TRC_LINEAR?GIMP_TRC_NON_LINEAR:GIMP_TRC_LINEAR;
+  CHECK(api->filter_curves_set(engine,filter,&desired,&error)==GLIMS_STATUS_UNSUPPORTED,"incoherent native TRC refuses whole-value replacement");clear_error(&error);p->trc=old;
+  NEED(api->filter_commit(engine,filter,&error)==GLIMS_STATUS_OK,"whole-value preview commits");filter=0;
+  CHECK(api->image_undo_info(engine,f.id,&after)==GLIMS_STATUS_OK&&after.undo_count==before.undo_count+1,"whole-value Commit contributes one Undo");
+  CHECK(api->image_undo(engine,f.id)==GLIMS_STATUS_OK&&read_pixels(&f,TRUE,pixels)&&close_pixels(raw,pixels),"whole-value Undo restores original image pixels");
+  CHECK(api->image_redo(engine,f.id)==GLIMS_STATUS_OK&&read_pixels(&f,TRUE,pixels)&&close_pixels(preview,pixels),"whole-value Redo restores exact rendered pixels");
+  GlimsEffectInfo effects[2]={{0}};int32_t count=0;
+  NEED(api->drawable_effects(engine,f.id,layer_id(&f),effects,2,&count)==GLIMS_STATUS_OK&&count==1,"whole-value effect survives Redo");
+  NEED(api->filter_edit_begin(engine,f.id,layer_id(&f),effects[0].id,&filter,&error)==GLIMS_STATUS_OK,"whole-value effect reopens");
+  NEED(api->filter_curves_get(engine,filter,&out,&error)==GLIMS_STATUS_OK,"whole-value reopens with payload");
+  CHECK(same_snapshot(&desired,&out),"Undo/Redo retains every whole-value field, including inactive state");api->free_curves_snapshot(&out);
+  NEED(api->filter_curves_set(engine,filter,&original,&error)==GLIMS_STATUS_OK,"whole-value existing edit accepts replacement");
+  NEED(api->filter_abort(engine,filter)==GLIMS_STATUS_OK,"whole-value existing edit Cancel");filter=0;
+  NEED(api->filter_edit_begin(engine,f.id,layer_id(&f),effects[0].id,&filter,&error)==GLIMS_STATUS_OK&&api->filter_curves_get(engine,filter,&out,&error)==GLIMS_STATUS_OK,"whole-value Cancel result reopens");
+  CHECK(same_snapshot(&desired,&out),"whole-value Cancel restores exact accepted payload");
+cleanup:
+  if(filter)api->filter_abort(engine,filter);
+  clear_error(&error);api->free_curves_snapshot(&desired);api->free_curves_snapshot(&out);api->free_curves_snapshot(&original);
+  g_clear_object(&held);g_clear_object(&node);fixture_close(&f);return GLIMS_STATUS_OK;
+}
 static GlimsStatus begin_guards(GlimsEngine *engine,gpointer unused) {
   (void)unused;
   for(guint mode=0;mode<3;mode++) {
@@ -449,5 +557,6 @@ int main(int argc,char **argv) {
   CHECK(glims_engine_call(engine,core_cases,NULL)==GLIMS_STATUS_OK,"Core snapshots and independent raw oracles run on worker");
   CHECK(glims_engine_call(engine,begin_guards,NULL)==GLIMS_STATUS_OK,"new Curves Begin history admission runs on worker");
   CHECK(glims_engine_call(engine,image_cases,NULL)==GLIMS_STATUS_OK,"real preview/Cancel/Undo/Redo/XCF guards run on worker");
+  CHECK(glims_engine_call(engine,whole_value_cases,NULL)==GLIMS_STATUS_OK,"whole-value Curves storage, HDR, lifetime, admission and native history run on worker");
   api->stop(engine);host_output_cases(&retained);g_free(user);g_free(cache);printf("%s: %d failures\n",failures?"FAILED":"PASSED",failures);return failures!=0;
 }

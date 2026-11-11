@@ -221,6 +221,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (projective transform bridge)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-curves" {
+                try exerciseRecorderCurves(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Curves recorder)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-levels" {
                 try exerciseRecorderLevels(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (Levels recorder)" : "FAILED: \(failures) failure(s)")
