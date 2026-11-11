@@ -4,9 +4,9 @@ import UniformTypeIdentifiers
 /// The Soft Proof Setup sheet: chooses the ICC profile and the proof and
 /// display intents used to preview this image on the window's own
 /// display. The proof is view state only — it never changes the image,
-/// its working profile or its saved simulation metadata, and there are
-/// deliberately no gamut, paper-white or black-simulation controls: the
-/// native transform offers none.
+/// its working profile or its saved simulation metadata. Gamut warnings
+/// mark out-of-gamut colors in gray. Independent paper-white
+/// and black-simulation controls remain separate from this view simulation.
 ///
 /// Every file read and the 1×1 native preflight run inside the document's
 /// counted off-main services; this controller performs only syntactic
@@ -28,6 +28,7 @@ final class SoftProofController: NSWindowController, NSWindowDelegate {
     let displayIntentPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let blackPointCompensationCheck =
         NSButton(checkboxWithTitle: "Black point compensation", target: nil, action: nil)
+    let gamutWarningsCheck = NSButton(checkboxWithTitle: "Gamut warnings", target: nil, action: nil)
     let currentProofLabel = NSTextField(labelWithString: "None")
     let applyButton = NSButton(title: "Apply", target: nil, action: nil)
     let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
@@ -76,6 +77,7 @@ final class SoftProofController: NSWindowController, NSWindowDelegate {
             displayIntentPopup.selectItem(at: index)
         }
         blackPointCompensationCheck.state = (initial?.blackPointCompensation ?? false) ? .on : .off
+        gamutWarningsCheck.state = (initial?.gamutWarnings ?? false) ? .on : .off
         currentProofLabel.stringValue = initial?.profileName ?? "None"
         buildContent(in: panel)
         panel.initialFirstResponder = pathField
@@ -143,10 +145,11 @@ final class SoftProofController: NSWindowController, NSWindowDelegate {
             return showError("Choose both a proof intent and a display intent.")
         }
         let compensation = blackPointCompensationCheck.state == .on
+        let warnings = gamutWarningsCheck.state == .on
         let rawPath = pathField.stringValue
 
         // An empty path reuses the retained profile bytes of the current
-        // proof: only the intents and BPC change, so no file is read.
+        // proof: only the rendering options change, so no file is read.
         if rawPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             guard let initial = initialProof else {
                 return showError("Choose an ICC profile file (.icc or .icm).")
@@ -156,7 +159,8 @@ final class SoftProofController: NSWindowController, NSWindowDelegate {
                                                     profileName: initial.profileName,
                                                     proofIntent: proofIntent,
                                                     displayIntent: displayIntent,
-                                                    blackPointCompensation: compensation)
+                                                    blackPointCompensation: compensation,
+                                                    gamutWarnings: warnings)
                 queueProofValidation(candidate)
             } catch {
                 showError(String(describing: error))
@@ -169,7 +173,7 @@ final class SoftProofController: NSWindowController, NSWindowDelegate {
             showError(error.localizedDescription)
         case .success(let path):
             queueProfileRead(at: URL(fileURLWithPath: path), proofIntent: proofIntent,
-                             displayIntent: displayIntent, compensation: compensation)
+                             displayIntent: displayIntent, compensation: compensation, gamutWarnings: warnings)
         }
     }
 
@@ -228,13 +232,13 @@ final class SoftProofController: NSWindowController, NSWindowDelegate {
 
     private func queueProfileRead(at url: URL, proofIntent: EngineSession.ProfileIntent,
                                   displayIntent: EngineSession.ProfileIntent,
-                                  compensation: Bool) {
+                                  compensation: Bool, gamutWarnings: Bool) {
         guard let generation = beginProofRequest() else { return }
         let destination = destinationProvider()
         imageDocument.readSoftProofProfile(at: url, proofIntent: proofIntent,
                                       displayIntent: displayIntent,
                                       blackPointCompensation: compensation,
-                                      destination: destination) { [weak self] result in
+                                      destination: destination, gamutWarnings: gamutWarnings) { [weak self] result in
             self?.proofDidFinish(result, generation: generation)
         }
     }
@@ -288,6 +292,7 @@ final class SoftProofController: NSWindowController, NSWindowDelegate {
         proofIntentPopup.isEnabled = editable
         displayIntentPopup.isEnabled = editable
         blackPointCompensationCheck.isEnabled = editable
+        gamutWarningsCheck.isEnabled = editable
         applyButton.isEnabled = editable
         cancelButton.isEnabled = !isInvalidated
         window?.standardWindowButton(.closeButton)?.isEnabled = !isInvalidated
@@ -316,6 +321,9 @@ final class SoftProofController: NSWindowController, NSWindowDelegate {
         proofIntentPopup.setAccessibilityLabel("Proof rendering intent")
         displayIntentPopup.setAccessibilityLabel("Display rendering intent")
         blackPointCompensationCheck.setAccessibilityLabel("Black point compensation")
+        gamutWarningsCheck.setAccessibilityLabel("Gamut warnings")
+        gamutWarningsCheck.setAccessibilityHelp("Marks colors outside the proof profile's gamut in gray.")
+        gamutWarningsCheck.toolTip = "Marks colors outside the proof profile's gamut in gray."
         currentProofLabel.setAccessibilityLabel("Current proof profile")
         currentProofLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 300).isActive = true
         applyButton.setAccessibilityLabel("Apply soft proof")
@@ -332,6 +340,7 @@ final class SoftProofController: NSWindowController, NSWindowDelegate {
             [NSTextField(labelWithString: "Proof intent:"), proofIntentPopup],
             [NSTextField(labelWithString: "Display intent:"), displayIntentPopup],
             [NSGridCell.emptyContentView, blackPointCompensationCheck],
+            [NSGridCell.emptyContentView, gamutWarningsCheck],
         ]
         let grid = NSGridView(views: rows)
         grid.column(at: 0).xPlacement = .trailing

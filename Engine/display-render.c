@@ -389,7 +389,8 @@ glims_image_render_proofed (GlimsEngine             *engine,
    * ignored, while unknown owned flags and intent values are refused. */
   if (! settings || settings->struct_size < sizeof *settings)
     return GLIMS_STATUS_INVALID_ARGUMENT;
-  if ((settings->flags & ~((uint32_t) GLIMS_PROOF_BLACK_POINT_COMPENSATION)) != 0 ||
+  if ((settings->flags & ~((uint32_t) (GLIMS_PROOF_BLACK_POINT_COMPENSATION |
+                                     GLIMS_PROOF_GAMUT_CHECK))) != 0 ||
       ! proof_render_intent (settings->proof_intent, &proof_intent) ||
       ! proof_render_intent (settings->display_intent, &display_intent))
     return GLIMS_STATUS_INVALID_ARGUMENT;
@@ -399,6 +400,8 @@ glims_image_render_proofed (GlimsEngine             *engine,
     return GLIMS_STATUS_INVALID_ARGUMENT;
   if (settings->flags & GLIMS_PROOF_BLACK_POINT_COMPENSATION)
     flags |= GIMP_COLOR_TRANSFORM_FLAGS_BLACK_POINT_COMPENSATION;
+  if (settings->flags & GLIMS_PROOF_GAMUT_CHECK)
+    flags |= GIMP_COLOR_TRANSFORM_FLAGS_GAMUT_CHECK;
 
   return display_render (engine, id, scale, area, destination_icc, destination_icc_length,
                          proof_icc, proof_icc_length, proof_intent, display_intent,

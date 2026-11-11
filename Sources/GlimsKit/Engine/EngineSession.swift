@@ -574,9 +574,11 @@ final class EngineSession: @unchecked Sendable {
         var error: UnsafeMutablePointer<CChar>?
         try destinationICC.withUnsafeBytes { icc in
             if let proof {
+                var flags: UInt32 = proof.blackPointCompensation ? GLIMS_PROOF_BLACK_POINT_COMPENSATION.rawValue : 0
+                if proof.gamutWarnings { flags |= GLIMS_PROOF_GAMUT_CHECK.rawValue }
                 var settings = GlimsProofSettings(struct_size: UInt32(MemoryLayout<GlimsProofSettings>.size),
                     proof_intent: proof.proofIntent.rawValue, display_intent: proof.displayIntent.rawValue,
-                    flags: proof.blackPointCompensation ? GLIMS_PROOF_BLACK_POINT_COMPENSATION.rawValue : 0)
+                    flags: flags)
                 try proof.profileICC.withUnsafeBytes { simulation in
                     try check(api.image_render_proofed(engine, image, scale, rect,
                         icc.baseAddress?.assumingMemoryBound(to: UInt8.self), destinationICC.count,

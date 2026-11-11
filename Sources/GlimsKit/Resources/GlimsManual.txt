@@ -20,13 +20,15 @@ surround whose gray you choose in Preferences. Along the bottom of the
 window a status strip shows messages on the left and the zoom on the
 right.
 
-Five palettes hold the controls:
+Seven palettes hold the controls:
 
   Tools        the tool buttons, two columns.
   Tool Options the settings of the current tool.
   Layers       the image's layers and groups.
+  Channels     the image's channels, saved selections and Quick Mask.
   Paths        the image's vector paths.
   History      the edit history and snapshots.
+  Recorder     the recorded commands and their replay.
 
 Palettes always follow the front image. The Window menu shows and
 hides them by name, Hide Palettes (which becomes Show Palettes) hides
@@ -253,6 +255,78 @@ Image > New Snapshot (also the Snapshot button in the History palette)
 opens an independent copy of the current image in a new window, named
 after the original with " snapshot" added. It is an ordinary document:
 edit it, export it or close it without affecting the original.
+
+# Recorder
+
+The Recorder palette records the edits Glims can replay and runs them
+again later. Window > Recorder shows the palette; Edit > Recorder and
+the palette's own buttons expose the same commands.
+
+  Record             start a fresh recording for the front image,
+                     replacing the commands it recorded before.
+  Stop               stop accepting new commands; commands already
+                     accepted still finish and keep their order.
+  Replay             run the recorded commands in their recorded order.
+  Cancel Replay      stop scheduling further commands; accepted work
+                     may still finish.
+  Clear              remove the recorded commands without touching the
+                     image.
+  Name Recording…    change the recording's title.
+  Save Recording…    write the recording to a .glimsrecording file.
+  Load Recording…    read a .glimsrecording file into this image.
+
+While a recording runs, the palette lists each command in acceptance
+order, marked Recorded, Failed or Cancelled, and shows how many
+accepted commands are still pending. Stop leaves that count visible
+until the accepted work settles, and the palette waits for it before
+offering Replay or a new Record.
+
+Stop recording and wait for pending work before naming, saving or
+loading a recording.
+
+Recorded commands cover: rectangle, ellipse and polygon selections
+with their options; Select by Color with its point and options; the
+selection commands (All, None, Invert, Feather, Grow, Shrink, Border,
+Sharpen, Select Alpha) with their radius; Channel to Selection from
+the Channels palette, with its Replace/Add/Subtract/Intersect
+operation and the explicit source channel it was invoked on; image
+rotation and flipping; image scaling; canvas resizing with offset and
+fill color; image cropping; layer name, visibility, opacity and blend
+mode changes; and complete Pencil, Eraser and Paintbrush strokes on
+ordinary pixel layers. A stroke keeps the settings used when it was
+drawn. Replay checks that the required brush and its supported paint
+dynamics still match the recording; unsupported brushes or dynamics
+cannot be recorded. To Selection from the Quick Mask channel still
+applies the live edit but records a failed row.
+
+Not every edit is recorded: other layer changes, effects and file
+operations stay outside the capture. A live recording belongs to one
+open image; to reuse a saved recording in another image, load it
+there.
+
+Save Recording… writes a .glimsrecording file with the commands,
+their settings, outcomes and original target descriptions. The file
+holds no image pixels and is separate from the image's own files; Save
+still writes only the XCF working file. Load Recording… reads the
+file in the window that invoked it; when commands name specific
+layers, channels or masks, a binding sheet asks you to choose each
+live target explicitly, because a matching name is only a description
+and never picks a target by itself. Loading installs the command list;
+Replay is what edits the image.
+
+Before replacing an unsaved recording or closing, quitting or
+reverting its image, Glims offers Save, Discard Changes or Cancel for
+the recording separately from the image's own changes.
+
+Replay runs against the image's current state. Each replayed command
+keeps its normal Undo behavior; the recording is not one single undo
+step, and a command that changes nothing need not add an Undo step. If
+a command fails, replay stops at that command and reports its number
+and reason, and the changes already made stay in place. Cancel Replay
+works the same way: later commands are not scheduled, a command
+already running may still finish, and nothing is rolled back. A
+recording with any Failed or Cancelled row cannot be replayed, so a
+partial success never passes for a complete macro.
 
 # Zoom and Pixels
 

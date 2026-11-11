@@ -10,13 +10,15 @@ struct CanvasSoftProof: Equatable, Sendable {
     let proofIntent: EngineSession.ProfileIntent
     let displayIntent: EngineSession.ProfileIntent
     let blackPointCompensation: Bool
+    let gamutWarnings: Bool
 
     static let maximumICCBytes = 16 * 1024 * 1024
 
     init(profileICC: Data, profileName: String,
          proofIntent: EngineSession.ProfileIntent = .relativeColorimetric,
          displayIntent: EngineSession.ProfileIntent = .relativeColorimetric,
-         blackPointCompensation: Bool = false) throws {
+         blackPointCompensation: Bool = false,
+         gamutWarnings: Bool = false) throws {
         guard (1...Self.maximumICCBytes).contains(profileICC.count) else {
             throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
                 message: "The proof profile must contain between 1 byte and 16 MiB of ICC data.")
@@ -32,5 +34,6 @@ struct CanvasSoftProof: Equatable, Sendable {
         self.proofIntent = proofIntent
         self.displayIntent = displayIntent
         self.blackPointCompensation = blackPointCompensation
+        self.gamutWarnings = gamutWarnings
     }
 }
