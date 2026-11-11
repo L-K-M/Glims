@@ -970,7 +970,7 @@ final class CanvasToolController {
         let raw = row.bounds.offsetBy(dx: point.x - start.x, dy: point.y - start.y)
         guard Self.isUsableRect(raw) else { return nil }
         let plan: CanvasSnapPlanner.Result
-        if canvas.snapTo.isEmpty { plan = .none }
+        if canvas.snapTo.isEmpty || point == start { plan = .none }
         else {
             plan = CanvasSnapPlanner.plan(input: SnapTargetCache.plannerInput(
                 movingRect: raw,

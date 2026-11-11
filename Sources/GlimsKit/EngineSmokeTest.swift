@@ -403,6 +403,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Move Pick and Spring)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "move-pick-stationary-snap" {
+                try exerciseMovePickStationarySnap(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Move Pick stationary snap)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "move-pick-range" {
                 try exerciseMovePickRange(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (Move pick range)" : "FAILED: \(failures) failures")
