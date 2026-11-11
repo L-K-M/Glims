@@ -132,8 +132,10 @@ bundle with the native and Swift build outputs inaccessible.
 - [x] Stroke Selection and explicit Paste Into/Anchor/New Layer/Discard.
 - [x] Float Selected Pixels (move/copy), existing floating-selection drag
       and arrow nudges with captured target validation.
-- [ ] Interaction-specific automatic anchoring. A blanket tool-switch anchor
-      policy is unsupported.
+- [x] Interaction-specific automatic anchoring for Move, rectangle, ellipse,
+      Lasso, Wand, Select by Color and Text creation. Choosing a tool keeps
+      the float. The three focused selection suites pass 572 checks across
+      four engines (candidate; `floating-tool-policy.md`).
 - [x] Shortcut customization and menu integration using immutable defaults.
 - [x] Registered image metadata editing with descriptor gates and value
       preservation; layer-boundary and selection-edge view toggles.
