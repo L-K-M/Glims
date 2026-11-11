@@ -56,12 +56,11 @@ final class ToolOptionsFontTests: XCTestCase {
     }
 
     private static func fontPopUp(in view: NSView) -> NSPopUpButton? {
-        for row in view.subviews {
-            guard let stack = row as? NSStackView,
-                  (stack.arrangedSubviews.first as? NSTextField)?.stringValue == "Font" else { continue }
-            return stack.arrangedSubviews.compactMap { $0 as? NSPopUpButton }.first
+        if let row = view as? NSStackView,
+           (row.arrangedSubviews.first as? NSTextField)?.stringValue == "Font" {
+            return row.arrangedSubviews.compactMap { $0 as? NSPopUpButton }.first
         }
-        return nil
+        return view.subviews.lazy.compactMap { fontPopUp(in: $0) }.first
     }
 
     /// Spacing, feather and sizes take fractions, as the engine does.

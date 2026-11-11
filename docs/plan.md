@@ -4251,6 +4251,20 @@ bundle passes 1,917 native and 3,310 application checks with development
 trees denied. Other Macs, old preference collections and arbitrary custom
 plug-in changes remain outside this qualification.
 
+### Typed transform controls (2026-11-11 candidate)
+
+Transform options now edit X/Y, Width/Height and clockwise Angle through the
+existing pending canvas preview. Apply creates one native Undo step; Cancel
+does not edit pixels. Captured document/layer/session identities reject late
+field callbacks, while invalid drafts survive refresh and block Apply. The
+options scroll in short palettes instead of compressing controls away.
+
+Geometry, draft, accessibility and full unit checks pass. The native AppKit
+workflow verifies real text input, preview/cancel, exact Undo/Redo pixels and
+stale selection refusal. Independent reviews cover the implementation and
+the subsequent focus and palette fixes. See [numeric-transform.md](numeric-transform.md).
+This does not close skew, distortion or perspective support.
+
 ### Dedicated tonal adjustment layers (2026-11-11)
 
 New Adjustment Layer offers Levels, Curves, Color Balance and Hue-Saturation,

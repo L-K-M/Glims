@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 
 /// The transform being built with the Transform tool: the selected layer's
 /// box scaled, moved and turned by its handles until it is applied or
@@ -30,6 +31,10 @@ struct LayerTransformSession: Equatable {
     /// The smallest box a scale handle can make, so the matrix stays
     /// invertible.
     static let minimumSide: Double = 1
+    /// The largest coordinate or side a numeric box edit accepts, so the
+    /// derived matrix and turned corners stay well inside what the
+    /// native affine transform can represent.
+    static let maximumCoordinate: Double = 524288
     /// Shift-rotation snaps to multiples of this.
     static let rotationStep: Double = .pi / 12
 
@@ -129,6 +134,56 @@ struct LayerTransformSession: Equatable {
         }
     }
 
+    /// Atomically replaces the box's origin, unrotated size and turn —
+    /// the numeric fields in the Transform options. `degrees` is
+    /// clockwise on screen and normalized to (-180, 180] before the
+    /// radians conversion; width and height anchor the box at `origin`,
+    /// so a size edit never moves the X/Y values. Refuses without
+    /// changing anything when a value is non-finite, a side falls below
+    /// `minimumSide`, a coordinate lies outside ±`maximumCoordinate`, or
+    /// the derived matrix or turned corners could not be represented.
+    @discardableResult
+    mutating func setGeometry(origin: CGPoint, width: Double, height: Double,
+                              degrees: Double) -> Bool {
+        let bound = Self.maximumCoordinate
+        guard origin.x.isFinite, origin.y.isFinite,
+              width.isFinite, height.isFinite, degrees.isFinite,
+              width >= Self.minimumSide, height >= Self.minimumSide,
+              width <= bound, height <= bound,
+              abs(origin.x) <= bound, abs(origin.y) <= bound,
+              abs(origin.x + width) <= bound, abs(origin.y + height) <= bound
+        else { return false }
+
+        var normalized = degrees.truncatingRemainder(dividingBy: 360)
+        if normalized <= -180 { normalized += 360 }
+        else if normalized > 180 { normalized -= 360 }
+        let radians = normalized * .pi / 180
+        guard radians.isFinite else { return false }
+
+        var candidate = self
+        candidate.box = CGRect(x: origin.x, y: origin.y, width: width, height: height)
+        candidate.angle = radians
+
+        let matrix = candidate.matrix
+        let determinant = matrix.a * matrix.d - matrix.b * matrix.c
+        guard [matrix.a, matrix.b, matrix.c, matrix.d, matrix.tx, matrix.ty]
+                .allSatisfy(\.isFinite),
+              determinant.isFinite, abs(determinant) >= 1e-9 else { return false }
+        // A turn around the center can swing a corner up to the half
+        // diagonal past the box, so bound the result, not just the inputs.
+        guard candidate.corners.allSatisfy({
+            $0.x.isFinite && $0.y.isFinite
+                && abs($0.x) <= 2 * bound && abs($0.y) <= 2 * bound
+        }) else { return false }
+
+        let corners = candidate.corners
+        guard let minX = corners.map(\.x).min(), let maxX = corners.map(\.x).max(),
+              let minY = corners.map(\.y).min(), let maxY = corners.map(\.y).max(),
+              ceil(maxX) - floor(minX) <= bound, ceil(maxY) - floor(minY) <= bound else { return false }
+        self = candidate
+        return true
+    }
+
     /// Scales from the opposite corner or edge, which stays where it is on
     /// the image, measured in the box's own unturned frame.
     private mutating func scale(_ drag: Drag, cornerIndex: Int?, edgeIndex: Int?,
@@ -199,5 +254,47 @@ struct LayerTransformSession: Equatable {
 
     private static func distance(_ a: CGPoint, _ b: CGPoint) -> Double {
         hypot(a.x - b.x, a.y - b.y)
+    }
+}
+
+/// The Transform options' numeric drafts: strict parsing and the
+/// per-field reason a value cannot go into the box. Pure so the rules
+/// are unit-testable without the palette.
+enum TransformNumericInput {
+    enum Field {
+        case x, y, width, height, angle
+    }
+
+    /// Strictly parses a decimal number: an optional sign, digits, one
+    /// decimal point or an exponent, with surrounding whitespace allowed.
+    /// Non-finite results such as "1e999" are not numbers here.
+    static func parse(_ text: String) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        // Double() also accepts hexadecimal floats ("0x10"), which a
+        // decimal field must not.
+        guard !trimmed.isEmpty,
+              trimmed.allSatisfy({ $0.isNumber || "+-.eE".contains($0) }),
+              let value = Double(trimmed), value.isFinite else { return nil }
+        return value
+    }
+
+    /// Why `value` cannot go into `field`, or nil when it can. Geometry
+    /// built from individually valid values is still validated as a
+    /// whole by `LayerTransformSession.setGeometry`.
+    static func problem(_ value: Double, for field: Field) -> String? {
+        let bound = Int(LayerTransformSession.maximumCoordinate)
+        switch field {
+        case .x, .y:
+            return abs(value) <= LayerTransformSession.maximumCoordinate ? nil
+                : "Keep the position between \(-bound) and \(bound) px."
+        case .width, .height:
+            if value < LayerTransformSession.minimumSide {
+                return "Keep the size at least \(Int(LayerTransformSession.minimumSide)) px."
+            }
+            return value <= LayerTransformSession.maximumCoordinate ? nil
+                : "Keep the size at most \(bound) px."
+        case .angle:
+            return nil
+        }
     }
 }
