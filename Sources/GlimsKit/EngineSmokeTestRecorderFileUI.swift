@@ -45,9 +45,10 @@ extension EngineSmokeTest {
             print("     recorder-file-ui checks: \(checks)")
         }
 
-        func host(_ image: Int32, _ name: String) throws -> DocumentWindowController {
+        func host(_ image: Int32, _ name: String,
+                  pickerDefaults: RecorderFileCoordinator.PickerDefaults? = nil) throws -> DocumentWindowController {
             let document = try ImageDocument(session: session, image: image, name: name)
-            let controller = DocumentWindowController(document: document)
+            let controller = DocumentWindowController(document: document, recorderPickerDefaults: pickerDefaults)
             owned.append(controller)
             documents.items.append(document)
             unowned.removeAll { $0 == image }
@@ -67,7 +68,8 @@ extension EngineSmokeTest {
         try session.changeLayer(base, image: imageA, .init(name: "Duplicate name"))
         guard let later = try session.layerCommand(.new, image: imageA) else { throw NSError(domain: "RecorderFileUI", code: 3) }
         try session.changeLayer(later, image: imageA, .init(name: "Later unique target"))
-        let a = try host(imageA, "Recording owner A")
+        let a = try host(imageA, "Recording owner A", pickerDefaults: driveFilePickers
+            ? .init(directory: work, saveFilename: fileURL.lastPathComponent) : nil)
         let b = try host(imageB, "Other image B")
         guard let windowA = a.window, let windowB = b.window else { throw NSError(domain: "RecorderFileUI", code: 4) }
         NSApp.activate(ignoringOtherApps: true)

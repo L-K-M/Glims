@@ -24,7 +24,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// readable for the smoke test's native-slot checks.
     let scrollView = CanvasScrollView()
     private lazy var engineUndoManager = EngineUndoManager(document: imageDocument)
-    private lazy var recorderFiles = RecorderFileCoordinator(owner: self)
+    private let recorderPickerDefaults: RecorderFileCoordinator.PickerDefaults?
+    private lazy var recorderFiles = RecorderFileCoordinator(owner: self, pickerDefaults: recorderPickerDefaults)
 
     var canPresentRecorderFileSheet: Bool { recorderFiles.canPresent }
 
@@ -151,7 +152,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// document — the menu item stays disabled then.
     var revertHandler: ((URL, @escaping @MainActor (Result<DocumentWindowController, Error>) -> Void) -> Void)?
 
-    init(document imageDocument: ImageDocument, preferences: EditorPreferences? = nil) {
+    init(document imageDocument: ImageDocument, preferences: EditorPreferences? = nil,
+         recorderPickerDefaults: RecorderFileCoordinator.PickerDefaults? = nil) {
+        self.recorderPickerDefaults = recorderPickerDefaults
         self.imageDocument = imageDocument
         self.preferences = preferences ?? .shared
         let canvas = EngineCanvasView(document: imageDocument)
