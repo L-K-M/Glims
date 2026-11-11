@@ -45,7 +45,7 @@ public enum GlimsApplication {
                ["metadata-rating-edit", "layer-rasterize-batch", "layer-restore-batch",
                 "tablet-eraser-proximity", "recorder-layer-properties", "text-floating-create",
                 "displace-source", "move-pick", "move-pick-range", "move-pick-spring",
-                "move-pick-busy-restore"].contains(smokeCase) {
+                "move-pick-busy-restore", "move-pick-stationary-snap"].contains(smokeCase) {
                 return EngineSmokeTestHost.run()
             }
             return EngineSmokeTest.run()
