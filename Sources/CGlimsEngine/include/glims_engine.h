@@ -215,6 +215,42 @@ typedef struct GlimsStrokePoint {
   uint32_t time_ms;
 } GlimsStrokePoint;
 
+/* Owned optional axes for V2 samples, independent of platform event enums. */
+typedef enum GlimsStrokeSampleFlags {
+  GLIMS_STROKE_SAMPLE_HAS_ROTATION            = 1u << 0,
+  GLIMS_STROKE_SAMPLE_HAS_TANGENTIAL_PRESSURE = 1u << 1
+} GlimsStrokeSampleFlags;
+
+typedef struct GlimsStrokeSampleV2 {
+  uint32_t struct_size;       /* known prefix <= struct_size <= sample_stride */
+  uint32_t flags;             /* GlimsStrokeSampleFlags; no unknown bits */
+  double   x, y;             /* image pixels, finite within -524288 ... 524288 */
+  double   pressure;         /* finite 0 ... 1 */
+  double   xtilt, ytilt;      /* finite -1 ... 1 */
+  uint32_t time_ms;
+  uint32_t reserved;          /* zero */
+  double   rotation_turns;    /* finite 0 <= value < 1; zero when absent */
+  double   tangential_pressure; /* finite -1 ... 1; zero when absent */
+} GlimsStrokeSampleV2;
+
+typedef struct GlimsStrokePacketV2 {
+  uint32_t    struct_size;    /* at least sizeof(GlimsStrokePacketV2) */
+  uint32_t    sample_stride;  /* at least sizeof(GlimsStrokeSampleV2) */
+  const void *samples;        /* arbitrary alignment; immutable until return */
+  size_t      count;          /* at most 4096 */
+  size_t      byte_count;     /* count * sample_stride, at most 1 MiB */
+} GlimsStrokePacketV2;
+
+/* Owned facts for a supported deterministic V1 stroke. Initialize to zero
+ * except struct_size. Free each non-NULL string with free_string. */
+typedef struct GlimsStrokeCaptureFacts {
+  uint32_t struct_size;
+  bool     brush_internal;
+  char    *brush_name;
+  char    *brush_collection; /* NULL and empty are distinct resource identities */
+  char    *fingerprint;      /* 64 lowercase hexadecimal characters when present */
+} GlimsStrokeCaptureFacts;
+
 /* Selections. */
 typedef enum GlimsSelectOperation {
   GLIMS_SELECT_REPLACE   = 0,
@@ -3355,6 +3391,64 @@ typedef struct GlimsEngineAPI {
                                                   GlimsItemID exponent_source,
                                                   GlimsFilterID *out,
                                                   char **error);
+
+  /* Slot171: atomically begin a live V1 stroke and capture owned facts about
+   * the brush and effective paint configuration actually used at first paint.
+   * brush_resource zero chooses the actual inherited brush. With no expected
+   * fingerprint, unsupported capture does not prevent live painting; on
+   * success *out is a stroke and facts->fingerprint can be NULL. When an
+   * expected fingerprint is supplied, a positive explicit brush resource
+   * and an exact supported fingerprint match are required before first paint.
+   * All failures clear *out and the supported facts fields; struct_size and
+   * any future tail remain unchanged. Finish with the ordinary V1 end call. */
+  GlimsStatus (*stroke_begin_with_capture_facts) (GlimsEngine *engine,
+                                                  GlimsImageID image,
+                                                  GlimsItemID drawable,
+                                                  GlimsResourceID brush_resource,
+                                                  const GlimsBrushSettings *brush,
+                                                  const GlimsStrokePoint *first,
+                                                  const char *expected_fingerprint,
+                                                  GlimsStrokeID *out,
+                                                  GlimsStrokeCaptureFacts *facts,
+                                                  char **error);
+
+  /* Slot172: begin a V2 stroke with exactly one sample. Resource zero keeps
+   * the inherited-brush convention; a positive resource is resolved/pinned
+   * once as in stroke_begin_with_brush_resource. Finish with stroke_end.
+   * Coordinates and mandatory base axes follow the ranges above. Optional
+   * rotation maps to native turns; tangential pressure maps to native wheel
+   * (value + 1) / 2. Absent axes use fresh rotation 0 / wheel 0.5 defaults.
+   * This transports coordinates; it does not enable tablet brush dynamics.
+   *
+   * Both V2 entries copy aligned known prefixes and ignore future tail bytes;
+   * no caller memory is retained after the synchronous call. Unknown flags,
+   * nonzero reserved/absent-axis values, nonfinite/out-of-range fields,
+   * malformed sizes/strides/counts or payloads over the limits are refused
+   * before native paint, timestamp, pixel or history mutation. The packet's
+   * sample_stride applies even to an empty packet. Empty continuation is
+   * canonical only with NULL samples and zero byte_count; it is a no-op.
+   *
+   * First time_ms is arbitrary. Later samples, including packet boundaries,
+   * require unsigned modular (next - previous) <= 0x7fffffff. Equal times
+   * and forward UInt32 wrap are valid. A whole packet validates before any
+   * sample is delivered or the accepted time changes. This is invalid-input
+   * atomicity, not rollback of an unexpected native paint failure.
+   * V1/V2 continuation on the other input version is INVALID_ARGUMENT with
+   * no paint/time mutation. V1 layout and valid V1 behavior are unchanged.
+   * Every failed begin clears *out (including stopped-engine dispatch);
+   * public entry clears *error when supplied. */
+  GlimsStatus (*stroke_begin_v2) (GlimsEngine *engine,
+                                  GlimsImageID image,
+                                  GlimsItemID drawable,
+                                  GlimsResourceID brush_resource,
+                                  const GlimsBrushSettings *brush,
+                                  const GlimsStrokePacketV2 *packet,
+                                  GlimsStrokeID *out, char **error);
+  /* Slot173: deliver a validated packet to an existing V2 stroke. */
+  GlimsStatus (*stroke_continue_v2) (GlimsEngine *engine,
+                                     GlimsStrokeID stroke,
+                                     const GlimsStrokePacketV2 *packet,
+                                     char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
