@@ -42,6 +42,15 @@ final class RecorderFileCodecTests: XCTestCase {
         }
     }
 
+    private let transformSymbolJSON = #"{"id":"55555555-5555-5555-5555-555555555555","description":{"name":"Transform me","kind":"pixel","ancestors":[],"siblingIndex":0,"bounds":{"x":-4,"y":7,"width":41,"height":29}}}"#
+    private let transformBinding = #"{"kind":"layer","symbol":"55555555-5555-5555-5555-555555555555"}"#
+    private let transformCommand = #"{"tag":"transformLayer","matrix":{"a":0.5,"b":0.25,"c":-0.75,"d":1.25,"tx":-4.5,"ty":8},"interpolation":"loHalo"}"#
+    private func transformDocument(_ command: String? = nil, binding: String? = nil, symbols: String? = nil, version: Int = 4) -> String {
+        let text = document(success(command ?? transformCommand, binding: binding ?? transformBinding),
+                            symbols: symbols ?? transformSymbolJSON)
+        return text.replacingOccurrences(of: "\"version\":1", with: "\"version\":\(version)")
+    }
+
     func testIndependentLiteralHasEveryFamilyAndBothUnsuccessfulOutcomes() throws {
         let value = try RecorderFileCodec.decode(bytes(allFamilies))
         XCTAssertEqual(value.recordingID, recordingID)
@@ -181,6 +190,90 @@ final class RecorderFileCodecTests: XCTestCase {
                                                        descriptions: .init(), bindings: [:])
         XCTAssertEqual(snapshot, expected)
         XCTAssertEqual(try RecorderFileCodec.decode(RecorderFileCodec.encode(snapshot)), expected)
+    }
+
+    func testLayerTransformKeepsExactCoefficientsAndNamedInterpolation() throws {
+        let value = try RecorderFileCodec.decode(bytes(transformDocument()))
+        let encoded = try RecorderFileCodec.encode(value)
+        XCTAssertEqual(try RecorderFileCodec.decode(encoded), value)
+        // The codec must not renumber, reorder or drop the six exact
+        // coefficients or the owned interpolation tag on re-export.
+        let text = String(decoding: encoded, as: UTF8.self)
+        for fragment in [#""a":0.5"#, #""b":0.25"#, #""c":-0.75"#, #""d":1.25"#, #""tx":-4.5"#, #""ty":8"#,
+                         #""interpolation":"loHalo""#, #""version":4"#] {
+            XCTAssertTrue(text.contains(fragment), fragment)
+        }
+    }
+
+    func testLayerTransformRejectsWrongVersionMissingVersionAnchorAndEveryUnsafeMatrix() {
+        rejects(transformDocument(version: 3), reason: "version 4")
+        rejects(transformDocument(#"{"tag":"scale","width":1,"height":1}"#, binding: #"{"kind":"none"}"#),
+                reason: "Version 4 requires a successful layer transform")
+        let degenerate = #"{"a":1,"b":1,"c":1,"d":1,"tx":0,"ty":0}"#
+        let overflowing = #"{"a":1e308,"b":0,"c":0,"d":1e308,"tx":0,"ty":0}"#
+        let identity = #"{"a":1,"b":0,"c":0,"d":1,"tx":0,"ty":0}"#
+        for matrix in [degenerate, overflowing] {
+            let command = #"{"tag":"transformLayer","matrix":"# + matrix + #","interpolation":"cubic"}"#
+            rejects(transformDocument(command), reason: "matrix")
+        }
+        rejects(transformDocument(#"{"tag":"transformLayer","matrix":"# + identity + #","interpolation":"cubic"}"#),
+                reason: "identity")
+        let underThreshold = #"{"a":1e-10,"b":0,"c":0,"d":1,"tx":0,"ty":0}"#
+        rejects(transformDocument(#"{"tag":"transformLayer","matrix":"# + underThreshold + #","interpolation":"cubic"}"#), reason: "matrix")
+    }
+
+    func testRecordedLayerTransformSnapshotsAsVersion4WithExplicitLayerSymbol() throws {
+        var log = RecorderLog<SemanticImageCommand>()
+        try log.startRecording()
+        let token = try log.reserve()
+        try log.resolve(token, with: .success(.transformLayer(
+            matrix: CGAffineTransform(a: 0.5, b: 0.25, c: -0.75, d: 1.25, tx: -4.5, ty: 8),
+            interpolation: .loHalo)))
+        try log.stopRecording()
+        let symbol = UUID(uuidString: "55555555-5555-5555-5555-555555555555")!
+        let description = RecorderTargetDescription(name: "Transform me", kind: .pixel, ancestors: [],
+            siblingIndex: 0, bounds: .init(x: -4, y: 7, width: 41, height: 29))
+        var catalog = RecorderDescriptionCatalog()
+        catalog.acceptFirst([symbol: .available(description)])
+        let snapshot = try RecorderFileCodec.snapshot(log, recordingID: recordingID, name: "Named",
+                                                      origin: origin, descriptions: catalog, bindings: [0: .layer(symbol)])
+        guard case .success(.transformLayer(let matrix, let interpolation), .layer(let id)) = snapshot.records[0].outcome else {
+            return XCTFail("The recorded transform or its explicit layer binding was lost")
+        }
+        XCTAssertEqual(matrix, .init(a: 0.5, b: 0.25, c: -0.75, d: 1.25, tx: -4.5, ty: 8))
+        XCTAssertEqual(interpolation, .loHalo)
+        XCTAssertEqual(id, symbol)
+        let encoded = try RecorderFileCodec.encode(snapshot)
+        XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains(#""version":4"#))
+        XCTAssertEqual(try RecorderFileCodec.decode(encoded), snapshot)
+    }
+
+    func testLayerTransformWithoutCapturedBindingNeverSnapshots() throws {
+        var log = RecorderLog<SemanticImageCommand>()
+        try log.startRecording()
+        let token = try log.reserve()
+        try log.resolve(token, with: .success(.transformLayer(matrix: CGAffineTransform(a: 2, b: 0, c: 0, d: 2, tx: 0, ty: 0),
+                                                            interpolation: .linear)))
+        try log.stopRecording()
+        XCTAssertThrowsError(try RecorderFileCodec.snapshot(log, recordingID: recordingID, name: "Named",
+                                                          origin: origin, descriptions: .init(), bindings: [:]))
+    }
+
+    func testLayerTransformRejectsUnknownFieldsValuesAndForeignBindings() {
+        let mutations = [
+            (#""a":0.5"#, #""a":0.5,"future":0"#),
+            (#","ty":8"#, ""), // missing member
+            (#""interpolation":"loHalo""#, #""interpolation":"bilinear""#),
+            (#""interpolation":"loHalo""#, #""interpolation":2"#),
+            (#""matrix":{"a""#, #""future":0,"matrix":{"a""#),
+            (#""kind":"layer","symbol":"55555555-5555-5555-5555-555555555555""#, #""kind":"none""#),
+            (#""kind":"layer","symbol":"55555555-5555-5555-5555-555555555555""#, #""kind":"channel","symbol":"55555555-5555-5555-5555-555555555555""#),
+            (#""kind":"pixel","ancestors""#, #""kind":"channel","ancestors""#),
+            (#""kind":"pixel","ancestors""#, #""kind":"quickMask","ancestors""#),
+        ]
+        for (old, new) in mutations {
+            XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(replace(transformDocument(), old, new))), old)
+        }
     }
 
     func testEveryResourcePolicyLimitIsEnforced() throws {

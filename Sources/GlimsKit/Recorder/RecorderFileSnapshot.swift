@@ -117,6 +117,17 @@ extension RecorderFileCommand {
         case .crop(let value): self = .crop(rect(value))
         case .layerProperties(let value): self = .layerProperties(.init(name: value.name, visible: value.isVisible, opacity: value.opacity,
             mode: try value.mode.map { try RecorderFileLayerMode($0) }))
+        case .transformLayer(let matrix, let interpolation):
+            let value: LayerInterpolation
+            switch interpolation {
+            case .none: value = .none
+            case .linear: value = .linear
+            case .cubic: value = .cubic
+            case .noHalo: value = .noHalo
+            case .loHalo: value = .loHalo
+            }
+            self = .transformLayer(.init(a: Double(matrix.a), b: Double(matrix.b), c: Double(matrix.c),
+                d: Double(matrix.d), tx: Double(matrix.tx), ty: Double(matrix.ty)), interpolation: value)
         case .completeStroke(let value): self = .completeStroke(value)
         }
     }

@@ -51,6 +51,49 @@ enum RecorderFileCommand: Equatable {
         let opacity: Double?
         let mode: RecorderFileLayerMode?
     }
+    /// The six absolute image-pixel affine coefficients, y down. Owned file
+    /// values keep CoreGraphics and native matrix layouts out of the model.
+    struct Affine: Equatable {
+        let a: Double
+        let b: Double
+        let c: Double
+        let d: Double
+        let tx: Double
+        let ty: Double
+
+        /// Pure preflight against the freshly bound layer's native bounds.
+        /// Symbol descriptions are hints and are never used for this check.
+        func outputBounds(for bounds: Rect) -> Rect? {
+            let determinant = a * d - b * c
+            guard [a, b, c, d, tx, ty].allSatisfy(\.isFinite), determinant.isFinite,
+                  abs(determinant) >= 1e-9,
+                  a != 1 || b != 0 || c != 0 || d != 1 || tx != 0 || ty != 0 else { return nil }
+            guard [bounds.x, bounds.y, bounds.width, bounds.height].allSatisfy(\.isFinite),
+                  bounds.width >= 1, bounds.height >= 1 else { return nil }
+            let maximumDimension = 524288.0
+            let maximumCoordinate = 2 * maximumDimension
+            var minX = Double.infinity, minY = Double.infinity
+            var maxX = -Double.infinity, maxY = -Double.infinity
+            for (x, y) in [(bounds.x, bounds.y), (bounds.x + bounds.width, bounds.y),
+                           (bounds.x, bounds.y + bounds.height),
+                           (bounds.x + bounds.width, bounds.y + bounds.height)] {
+                let resultX = a * x + c * y + tx
+                let resultY = b * x + d * y + ty
+                guard resultX.isFinite, resultY.isFinite,
+                      abs(resultX) <= maximumCoordinate, abs(resultY) <= maximumCoordinate else { return nil }
+                minX = min(minX, resultX); maxX = max(maxX, resultX)
+                minY = min(minY, resultY); maxY = max(maxY, resultY)
+            }
+            // Native layer storage grows outward to whole pixel bounds.
+            let left = floor(minX), top = floor(minY)
+            let width = ceil(maxX) - left, height = ceil(maxY) - top
+            guard width.isFinite, height.isFinite, width >= 1, height >= 1,
+                  width <= maximumDimension, height <= maximumDimension else { return nil }
+            return Rect(x: left, y: top, width: width, height: height)
+        }
+    }
+    /// Glims' owned interpolation tags, not native enum ordinals.
+    enum LayerInterpolation: String { case none, linear, cubic, noHalo, loHalo }
 
     case selectionShape(Shape, Options)
     case selectColor(Point, Options)
@@ -63,11 +106,14 @@ enum RecorderFileCommand: Equatable {
     case resizeCanvas(width: Int, height: Int, offset: Point, fill: RecorderColor)
     case crop(Rect)
     case layerProperties(LayerProperties)
+    /// A committed Transform-tool affine. The explicit layer is the record's
+    /// `layer` binding; the command itself carries no native identity.
+    case transformLayer(Affine, interpolation: LayerInterpolation)
     case completeStroke(RecorderStrokeCommand)
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .completeStroke, .channelToSelection: return false
+        case .layerProperties, .transformLayer, .completeStroke, .channelToSelection: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true
