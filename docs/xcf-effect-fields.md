@@ -230,3 +230,19 @@ is checked again before publication. Glims supplements and images
 without effects skip the foreign metadata reader. The original native
 loader still handles other gzip formats, with foreign XCF effect
 recovery disabled on that fallback.
+
+The pinned 3.2.8 fixture switches a private alias from A to B immediately
+before native load, then back to A before metadata recovery. The two XCFs
+have the same topology and different pixels and fields. The old adapter
+failed two of 117 checks: native pixels came from B while restored effect
+fields came from A. The shared-spool adapter passes all 117 checks. It
+keeps A's raw and rendered pixels, fields and mask; the original alias,
+load procedure and clean opening history; and both source files' bytes.
+The nine private gzip checks pass, as do general conformance checks on
+3.2.8 (1,917), 3.2.0 (1,917), 3.0.8 (1,703) and master (1,917).
+
+The fixture verifies the lexical parent passed to the native loader. It
+does not freeze separate linked assets or test opening one, nor does it
+exercise Save and Revert through the app. The plain XCF route still uses
+separate native and metadata reads with its existing source stamp checks.
+Bzip2, xz and nested effect-mask cases remain outside this change.

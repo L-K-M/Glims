@@ -3687,7 +3687,7 @@ evidence limits. Independent review/integration remain pending.
 
 ### Foreign XCF effect fields (2026-11-10 candidate)
 
-Read-only plain XCF v22–26 metadata now binds to the complete unpublished
+The initial plain XCF v22–26 reader binds metadata to the complete unpublished
 native layer/group/mask/channel tree before restoring blend space, composite
 space and composite mode. Whole-image validation precedes every setter;
 source files, raw buffers, Undo and supplement state are unchanged. Native
@@ -3707,7 +3707,7 @@ normal foreign-file GUI acceptance is separate. An earlier strict decoder
 and native-writer interpretation caused ten general failures, fixed before
 this matrix. Source-only loader/binding audits are recorded; this authored
 documentation is not another independent approval. See `xcf-effect-fields.md`
-for hashes, oracle scope and remaining compressed/v20/v21/nested-mask limits.
+for hashes, oracle scope and the later legacy and gzip extensions.
 Fresh API165 integration source`c0acf2d` repeats all-four general conformance
 and pinned original41/complex43 checks. Independent Glyph review covers the
 unchanged seven production files; the earlier hosted timeout is not approval.
@@ -3723,6 +3723,16 @@ version 22 and later keep the strict existing operation-version check.
 Two formerly refused files now match direct native rendered pixels and
 preserve their effect masks, original bytes and empty opening history.
 See [the native and parser checks](xcf-effect-fields.md#legacy-effect-records).
+
+### Gzip XCF effects
+
+For a local single-member gzip XCF, GIMP and Glims's foreign effect reader
+now read the same private decoded stream. A pinned native test reproduced
+two failures when the pathname briefly pointed to another image with the
+same topology; the shared-spool implementation passes all 117 checks,
+including source and rendered pixel equality. The original file identity
+and lexical parent still go to GIMP. See
+[the gzip scope and evidence](xcf-effect-fields.md#gzip-wrapped-effect-records).
 
 ### Accepted RPC caller drain (2026-11-10 candidate)
 
