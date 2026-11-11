@@ -4073,3 +4073,16 @@ each engine; the ordinary full bundled debug workflow passes3,233 with
 build trees denied. Source review found no important issue. See
 [`revert-load-fixture.md`](revert-load-fixture.md) for the exact sources,
 execution scope and final-release limits.
+
+### Native filter colors and linked control readback (2026-11-11)
+
+Colorize, Offset and Semi-flatten expose their GIMP color parameters through
+the existing typed facade. Generic forms read actual linked values behind
+the write in one counted input job, preserve newer queued/text drafts and
+restore refused fields without echoing a value the engine changed. Native
+baselines reproduced nine missing-color assertions; the actual Colorize
+form reproduced four acknowledgement failures. All four engines now pass
+223 focused native, 64 actual form and 7,454 general native checks, with
+1,216 unit tests passing. Native and Swift source reviews found no
+important issue. See [`gimp-filter-colors.md`](gimp-filter-colors.md) for
+source revisions, Offset's native gate differences and release limits.
