@@ -146,9 +146,9 @@ extension EngineSmokeTest {
         documents.items.append(replacement.imageDocument)
         let restored = replacement.imageDocument
         try require(wait { restored.pendingWork == 0 }, "The replacement did not settle")
-        expect(restored !== document && restored.image != image && restored.fileState.nativeURL == source
+        expect(try restored !== document && restored.image != image && restored.fileState.nativeURL == source
             && !restored.hasUnsavedChanges && restored.undoInfo.undoCount == 0
-            && (try session.copyPixels(restored.image, merged: true).pixels) == originalPixels,
+            && session.copyPixels(restored.image, merged: true).pixels == originalPixels,
                "accepted Discard opens the saved pixels in one clean replacement with fresh history")
         expect(restored.recorder.records.isEmpty && !restored.recorder.isRecording && !restored.hasUnsavedRecordingChanges
             && restored.recorderFileMetadata.recordingID != metadata.recordingID && a.closeStarted && !window.isVisible,
