@@ -1655,12 +1655,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func cropToSelection(_ sender: Any?) {
-        guard let bounds = try? imageDocument.session.selectionBounds(image: imageDocument.image) else {
-            statusBar.message = "Select the area to keep first."
-            NSSound.beep()
-            return
-        }
-        imageDocument.crop(to: bounds)
+        imageDocument.cropToSelection()
     }
 
     // MARK: Select menu

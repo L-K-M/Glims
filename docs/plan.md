@@ -4325,7 +4325,9 @@ checks on each of the four engines pass. This includes numeric controls,
 affine recording, Levels capture/replay, perspective pointer gestures,
 actual v6 file save/load/rebinding, source preservation and exact Undo/Redo.
 Independent merge-resolution review confirms both capture paths remain
-intact. Ordinary full editor workflows are still running at this checkpoint.
+intact. The frozen integrated controls app also passes the ordinary full
+editor workflows on all four engines: 3,315 checks each on 3.2.8, 3.2.0
+and master, and 3,289 on 3.0.8, with zero failures.
 This does not establish complete Photoshop 4 parity or interaction latency.
 
 ### Recorded new Levels adjustments (2026-11-11 candidate)
@@ -4354,3 +4356,36 @@ The existing Recorder epoch tests cover stale completions after a new
 recording; this native case does not repeat them. Other adjustment families,
 existing-effect identity replay and text recording remain open. These
 checks establish this Levels slice, not complete action/batch coverage.
+
+
+### Transform composite pixel preview (2026-11-11 work in progress)
+
+The canvas now previews transformed composite pixels through a private image
+copy. It preserves the source raster resolution and uses the same captured
+native transform as Apply, including masks and group children. Only the
+visible viewport is rendered, with the window display profile and soft proof;
+a 4,096-pixel output edge limit bounds unusually large viewports. One native
+job and the latest requested mapping replace a queue of pointer samples.
+Cancel and source changes invalidate late results; clone destruction remains
+counted through document close. The temporary image is never saved or recorded.
+
+Private previews also have a read gate, separate from the edit gate. Native
+cache-reading command completions retain document ownership until their
+refresh finishes. Deferred Text and color picks retain cancellation and target
+generations. Crop to Selection reads the native selection on the input queue,
+so later selection changes cannot overtake the accepted crop.
+
+Initial pinned-engine tests compare complete source state and exact preview
+pixels against independently committed projective and affine transforms,
+including nested masked groups, P3 display conversion, grayscale proofing,
+bounded and fractional 2x viewport output, repeated previews, stale bounds,
+multi-selection refusal, cancellation, target acknowledgement and close drain.
+All pass. Eighty focused Swift tests pass, including nine preview/coalescing
+and read-gate tests. Resample invalidation reproduced a failed observer test
+before its fix. The 24 MP characterization measured 808 ms affine and 796 ms
+projective preview completion for an 800x600 viewport, with idle main-loop
+lateness below 7 ms. This is not yet low-latency interaction qualification.
+
+Remaining in this slice: residual synchronous UI read paths, real canvas
+preview/cancellation checks, all-engine final runs, full-suite verification,
+independent final review and hosted CI. Photoshop 4 parity is still incomplete.

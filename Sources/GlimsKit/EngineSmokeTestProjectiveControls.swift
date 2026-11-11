@@ -106,6 +106,7 @@ extension EngineSmokeTest {
         choose("Perspective")
         cancel.performClick(nil); drain(document)
         check(tools.transformSession == nil && document.undoInfo.undoCount == undo, "Cancel drops a warp without Undo")
+        check(canvas.transformPreviewImage == nil, "Cancel immediately removes the warped pixel preview")
         choose("Skew")
         mouse(.leftMouseDown, CGPoint(x: 70, y: 20)); mouse(.leftMouseDragged, CGPoint(x: 85, y: 27)); mouse(.leftMouseUp, CGPoint(x: 85, y: 27))
         check(tools.transformPreview.map { hypot($0.imageCorners[0].x - 35, $0.imageCorners[0].y - 20) < 1e-8 } == true, "Skew edge follows its tangent")
@@ -121,6 +122,26 @@ extension EngineSmokeTest {
             h10: 0, h11: 0.52, h12: 9.6, h20: 0, h21: -0.004, h22: 1.08)
         try session.transformLayer(oracleLayer, image: oracle, matrix: expectedMatrix, interpolation: .none)
         let expectedPixels = try session.copyPixels(oracle, merged: true).pixels
+        canvas.refreshTransformPixelPreview()
+        let previewDeadline = Date().addingTimeInterval(15)
+        while (canvas.transformPreviewIsPending || canvas.transformPreviewImage == nil) && Date() < previewDeadline {
+            spin(0.01)
+        }
+        if let shown = canvas.transformPreviewImage, let request = canvas.transformPreviewRequest {
+            let reference = try CanvasDisplayDestination.render(session, image: oracle,
+                scale: request.renderScale, area: request.renderArea, destination: request.destination, proof: request.proof)
+            check((shown.dataProvider?.data as Data?) == (reference.dataProvider?.data as Data?),
+                  "the actual canvas pixel preview matches the independent transformed viewport")
+            check(try session.copyPixels(image, merged: true).pixels == original,
+                  "showing warped canvas pixels leaves the document's committed pixels unchanged")
+            if let path = ProcessInfo.processInfo.environment["GLIMS_SMOKE_ARTIFACT_DIR"],
+               let bitmap = canvas.bitmapImageRepForCachingDisplay(in: canvas.visibleRect) {
+                canvas.cacheDisplay(in: canvas.visibleRect, to: bitmap)
+                try bitmap.representation(using: .png, properties: [:])?.write(
+                    to: URL(fileURLWithPath: path).appendingPathComponent("projective-pixel-preview.png"))
+            }
+        } else { check(false, "the actual canvas publishes its warped pixel preview") }
+        drain(document)
         try document.startRecording()
         // Hold input to prove UI acknowledgement follows the result, and that
         // an accepted Apply cannot be resubmitted or misleadingly cancelled.
@@ -224,6 +245,24 @@ extension EngineSmokeTest {
               "captured commit refuses intervening geometry without pixels or Undo changes")
         check(errors.contains(where: { $0.contains("layer changed") }), "stale captured geometry has an actionable reason")
         check(!tools.transformCommitIsPending, "native refusal releases pending UI state")
+        // A Text click may wait for a private transform read in another
+        // document. Escape must cancel that intent before the read drains.
+        ToolState.shared.select(.text)
+        canvas.window?.makeFirstResponder(canvas)
+        EngineActivity.shared.beginTransformPreview()
+        mouse(.leftMouseDown, CGPoint(x: 5, y: 5))
+        mouse(.leftMouseUp, CGPoint(x: 5, y: 5))
+        check(tools.textEditor == nil, "Text waits for a private transform read without blocking the canvas")
+        if let window = canvas.window, let escape = NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil, characters: "\u{1b}",
+            charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53) {
+            _ = tools.keyDown(with: escape)
+        } else { check(false, "deferred Text regression creates an Escape event") }
+        EngineActivity.shared.endTransformPreview()
+        spin()
+        check(tools.textEditor == nil, "Escape prevents a late text editor after the preview read drains")
+        ToolState.shared.select(.transform)
         if let path = ProcessInfo.processInfo.environment["GLIMS_SMOKE_ARTIFACT_DIR"],
            let bitmap = options.view.bitmapImageRepForCachingDisplay(in: options.view.bounds) {
             options.view.cacheDisplay(in: options.view.bounds, to: bitmap)

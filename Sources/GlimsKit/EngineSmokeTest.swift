@@ -198,6 +198,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (numeric transform)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "transform-pixel-preview" {
+                try exerciseTransformPixelPreview(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED" : "FAILED")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "projective-integration" {
                 try exerciseNumericTransform(session, documents: documents)
                 try exerciseRecorderAffine(session, work: work, documents: documents)
