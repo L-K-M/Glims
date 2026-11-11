@@ -7,7 +7,9 @@
 #include "core/gimpdynamics.h"
 #include "core/gimpdynamicsoutput.h"
 #include "core/gimppaintinfo.h"
+#include "core/gimpviewable.h"
 #include "paint/gimppaintoptions.h"
+#include <gdk-pixbuf/gdk-pixbuf.h>
 
 typedef struct {
   GimpDynamics *dynamics;
@@ -248,6 +250,133 @@ cleanup:
   if (unsupported.image) CHECK (api->image_close (engine, unsupported.image) == GLIMS_STATUS_OK, "unsupported dynamics image closes");
 }
 
+typedef struct {
+  PressureProbe *pressure;
+  gboolean nested, pixbuf;
+  GimpViewable *target; /* Borrowed while PressureProbe owns both objects. */
+  gchar *original_icon;
+  GdkPixbuf *original_pixbuf;
+  gboolean saved;
+} MetadataProbe;
+
+static gboolean
+original_metadata (PressureProbe *probe)
+{
+  gchar *serialized = gimp_config_serialize_to_string (GIMP_CONFIG (probe->dynamics), NULL);
+  gboolean same = serialized && !g_strcmp0 (serialized, probe->serialized);
+  g_free (serialized);
+  return same;
+}
+
+static GlimsStatus
+alter_metadata (GlimsEngine *engine, gpointer data)
+{
+  (void) engine;
+  MetadataProbe *probe = data;
+  if (probe->saved || !original_metadata (probe->pressure)) return GLIMS_STATUS_FAILED;
+  probe->target = probe->nested ? GIMP_VIEWABLE (probe->pressure->curve)
+                               : GIMP_VIEWABLE (probe->pressure->dynamics);
+  probe->original_icon = g_strdup (gimp_viewable_get_icon_name (probe->target));
+  g_object_get (probe->target, "icon-pixbuf", &probe->original_pixbuf, NULL);
+  probe->saved = TRUE;
+  gboolean changed = FALSE;
+  if (probe->pixbuf) {
+    GdkPixbuf *image = gdk_pixbuf_new (GDK_COLORSPACE_RGB, TRUE, 8, 2, 2);
+    if (!image) return GLIMS_STATUS_FAILED;
+    gdk_pixbuf_fill (image, 0x123456ff);
+    g_object_set (probe->target, "icon-pixbuf", image, NULL);
+    GdkPixbuf *actual = NULL;
+    g_object_get (probe->target, "icon-pixbuf", &actual, NULL);
+    changed = actual == image && gdk_pixbuf_get_width (actual) == 2 &&
+              gdk_pixbuf_get_height (actual) == 2;
+    g_clear_object (&actual);
+    g_object_unref (image);
+  } else {
+    gchar icon[257];
+    memset (icon, 'x', sizeof icon - 1);
+    icon[sizeof icon - 1] = '\0';
+    gimp_viewable_set_icon_name (probe->target, icon);
+    changed = !g_strcmp0 (gimp_viewable_get_icon_name (probe->target), icon);
+  }
+  return changed && !original_metadata (probe->pressure) ? GLIMS_STATUS_OK : GLIMS_STATUS_FAILED;
+}
+
+static GlimsStatus
+restore_metadata (GlimsEngine *engine, gpointer data)
+{
+  (void) engine;
+  MetadataProbe *probe = data;
+  if (probe->saved) {
+    /* Native setters normalize the default icon name to absent metadata.
+     * Do not copy the curve config: that recalculates stock sample values. */
+    gimp_viewable_set_icon_name (probe->target, probe->original_icon);
+    g_object_set (probe->target, "icon-pixbuf", probe->original_pixbuf, NULL);
+  }
+  return original_metadata (probe->pressure) ? GLIMS_STATUS_OK : GLIMS_STATUS_FAILED;
+}
+
+static GlimsStatus
+release_metadata (GlimsEngine *engine, gpointer data)
+{
+  MetadataProbe *probe = data;
+  GlimsStatus status = restore_metadata (engine, data);
+  g_clear_pointer (&probe->original_icon, g_free);
+  g_clear_object (&probe->original_pixbuf);
+  probe->saved = FALSE;
+  probe->target = NULL;
+  return status;
+}
+
+static void
+metadata_case (GlimsEngine *engine, const BrushIdentity *brush, PressureProbe *pressure,
+               const char *digest, const Snapshot *golden, gboolean nested, gboolean pixbuf)
+{
+  MetadataProbe probe = {.pressure = pressure, .nested = nested, .pixbuf = pixbuf};
+  Scene live = {0}, replayed = {0};
+  Snapshot before, actual;
+  GlimsStrokeID stroke = 0;
+  char *error = NULL;
+  GlimsBrushSettings settings = pencil;
+  settings.pressure_size = true;
+  FactsWithTail unrecordable = fact_box (sizeof unrecordable, FALSE), facts = fact_box (sizeof facts, FALSE);
+  printf ("OBS pressure-size %s %s metadata\n", nested ? "nested curve" : "top dynamics",
+          pixbuf ? "2x2 icon-pixbuf" : "256-byte icon-name");
+  NEED (glims_engine_call (engine, seed_image, &live) == GLIMS_STATUS_OK &&
+        glims_engine_call (engine, seed_image, &replayed) == GLIMS_STATUS_OK &&
+        read_image (engine, &live, &before) && read_image (engine, &replayed, &actual) && same_image (&before, &actual),
+        "metadata live and guarded replay images have identical untouched seeds");
+  NEED (glims_engine_call (engine, alter_metadata, &probe) == GLIMS_STATUS_OK,
+        "small native metadata mutation changes the actual stock serialized config");
+  NEED (refused_before_paint (engine, &replayed, &before, brush->id, &settings, digest, GLIMS_STATUS_FAILED),
+        "unsupported metadata refuses the original guarded fingerprint before pixels or history");
+  NEED (api->stroke_begin_with_capture_facts (engine, live.image, live.layer, brush->id,
+          &settings, trace, NULL, &stroke, &unrecordable.facts, &error) == GLIMS_STATUS_OK &&
+        !error && stroke > 0 && finish_trace (engine, &stroke),
+        "ordinary live pressure painting completes despite unsupported cosmetic metadata");
+  CHECK (facts_empty (&unrecordable.facts) && tail_intact (&unrecordable, sizeof unrecordable) &&
+         read_image (engine, &live, &actual) && changed_once (&before, &actual) && same_image (golden, &actual),
+         "unsupported metadata yields nil facts and the exact independent V1 pixels and one Undo");
+  NEED (glims_engine_call (engine, restore_metadata, &probe) == GLIMS_STATUS_OK,
+        "official setters restore the exact original stock metadata and serialized config");
+  NEED (api->stroke_begin_with_capture_facts (engine, replayed.image, replayed.layer, brush->id,
+          &settings, trace, digest, &stroke, &facts.facts, &error) == GLIMS_STATUS_OK &&
+        !error && stroke > 0 && finish_trace (engine, &stroke),
+        "the original guarded fingerprint admits replay after exact metadata restoration");
+  CHECK (matches_identity (&facts.facts, brush) && !strcmp (facts.facts.fingerprint, digest) &&
+         tail_intact (&facts, sizeof facts), "restored metadata returns the original supported facts");
+  CHECK (read_image (engine, &replayed, &actual) && same_image (golden, &actual),
+         "metadata-restored replay matches independent V1 raw, merged and history");
+cleanup:
+  if (stroke > 0) api->stroke_end (engine, stroke);
+  free_error (error);
+  free_facts (&unrecordable.facts);
+  free_facts (&facts.facts);
+  CHECK (glims_engine_call (engine, release_metadata, &probe) == GLIMS_STATUS_OK,
+         "metadata cleanup restores exact stock state and releases saved references on the worker");
+  if (live.image) CHECK (api->image_close (engine, live.image) == GLIMS_STATUS_OK, "metadata live image closes");
+  if (replayed.image) CHECK (api->image_close (engine, replayed.image) == GLIMS_STATUS_OK, "metadata replay image closes");
+}
+
 int
 main (int argc, char **argv)
 {
@@ -276,9 +405,12 @@ main (int argc, char **argv)
     Snapshot golden[2] = {{0}};
     pressure_case (engine, &brushes[0], TRUE, FALSE, digests[0], &golden[0]);
     pressure_case (engine, &brushes[1], FALSE, TRUE, digests[1], &golden[1]);
-    if (valid_digest (digests[0]))
+    if (valid_digest (digests[0])) {
       mutation_cases (engine, &brushes[0], &probe, digests[0], &golden[0]);
-    else
+      for (guint nested = 0; nested < 2; nested++)
+        for (guint pixbuf = 0; pixbuf < 2; pixbuf++)
+          metadata_case (engine, &brushes[0], &probe, digests[0], &golden[0], nested != 0, pixbuf != 0);
+    } else
       printf ("OBS curve and unsupported-flag replay cases NOT RUN without supported pressure-size facts\n");
   }
   if (probe.dynamics)
