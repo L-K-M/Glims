@@ -3612,7 +3612,7 @@ enum EngineSmokeTest {
         func expect(_ value: Bool, _ text: String) { checks += 1; check(value, "Lens UI: \(text)") }
         func wait(_ ready: () -> Bool) -> Bool {
             let end = Date().addingTimeInterval(15)
-            while !ready() && Date() < end { spin(0.01) }
+            while !ready() && Date() < end { EngineSmokeTestHost.pumpEvents(for: 0.01) }
             return ready()
         }
         func views<T: NSView>(_ root: NSView?, _ type: T.Type) -> [T] {
@@ -3661,7 +3661,15 @@ enum EngineSmokeTest {
         guard let operation = operations.first(where: { $0.name == "gegl:lens-blur" }), let menu = NSApp.mainMenu else { return expect(false, "installed native Lens catalog and main menu exist") }
         NativeFilterMenus.install(operations, in: menu)
         let candidate = items(menu).first { ($0.representedObject as? NativeFilterCommand)?.operation.name == operation.name }
+        // AppKit enables responder-chain menu actions for the actual key
+        // document. Establish A's real focus before asking the menu to update.
+        NSApp.activate(ignoringOtherApps: true)
+        a.window?.makeMain(); a.window?.makeKeyAndOrderFront(nil)
+        guard wait({ NSApp.isActive && NSApp.mainWindow === a.window && NSApp.keyWindow === a.window }) else {
+            return expect(false, "A owns actual main/key focus before menu validation")
+        }
         candidate?.menu?.update()
+        print("OBS Lens menu present=\(candidate != nil) title=\(candidate?.title ?? "nil") enabled=\(candidate?.isEnabled ?? false) action=\(String(describing: candidate?.action)) validates=\(candidate.map(a.validateMenuItem) ?? false) expectedTarget=\(target) activeLayer=\(String(describing: doc.activeLayer)) activeDrawable=\(String(describing: doc.activeDrawable)) selected=\(doc.selectedLayerIDs) refusal=\(doc.sourceFilterRefusal(target: target) ?? "nil")")
         let enabled = candidate.map { a.validateMenuItem($0) && $0.isEnabled && $0.action != nil && $0.title == "\(operation.title)…" } ?? false
         expect(enabled, "the installed Lens Blur menu admits its source chooser")
         guard enabled, let item = candidate, let action = item.action else { return }

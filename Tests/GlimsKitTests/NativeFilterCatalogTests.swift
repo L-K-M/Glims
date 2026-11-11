@@ -115,8 +115,9 @@ final class NativeFilterCatalogTests: XCTestCase {
         XCTAssertEqual(NativeFilterMenuLayout.itemTitle(displace), "Displace…")
         XCTAssertTrue(NativeFilterMenuLayout.usesCurvesEditor(curves))
         XCTAssertEqual(NativeFilterMenuLayout.itemTitle(curves), "Curves…")
-        XCTAssertFalse(NativeFilterMenuLayout.usesSourceChooser(lensBlur))
-        XCTAssertEqual(NativeFilterMenuLayout.itemTitle(lensBlur), "Lens Blur (needs a second layer as its source)")
+        XCTAssertTrue(NativeFilterMenuLayout.usesSourceChooser(lensBlur))
+        XCTAssertEqual(NativeFilterMenuLayout.itemTitle(lensBlur), "Lens Blur…")
+        XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(lensBlur))
     }
 
     /// Native after plug-ins: the catalog's operations merge into the
