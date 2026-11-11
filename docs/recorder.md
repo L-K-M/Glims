@@ -14,10 +14,36 @@ Current capture covers these command families:
 - Canvas resizing, with offset and fill color.
 - Image cropping.
 - Supported layer property changes: name, visibility, opacity and blend mode.
+- Complete Pencil, Eraser and Paintbrush gestures with supported brush settings.
 
-Strokes, other layer changes, effects and file operations remain outside this
+Other layer changes, effects and file operations remain outside this
 capture scope. A live recording belongs to one open image. To use a saved
 recording in another image, load it in that image and choose its targets.
+
+## Stroke capture
+
+A stroke reserves one row when its owning document accepts the press. Its
+copied tool settings, explicit pixel-layer binding and ordered samples stay
+with that document even if another window becomes frontmost. Stop refuses
+new rows but lets an accepted gesture finish. The row becomes successful only
+after native End; a failed begin, sample batch or End leaves a failed row.
+An unsupported recording never prevents otherwise valid live painting.
+
+Replay resolves the recorded brush identity and checks its complete supported
+fingerprint before starting a native stroke. The fingerprint includes the
+brush mask and generated-brush recipe, consumed paint options and supported
+size-from-pressure dynamics. A changed brush or configuration refuses replay
+before painting. Supported dynamics have only the size output driven by
+pressure; other outputs, pixmap/pipe brushes and unknown configurations refuse
+capture. There is no promise of portable pixels across engine versions.
+
+The trace stores image coordinates, pressure, signed tilt and millisecond
+timestamps, with the accepted batch boundaries intact. It does not infer
+velocity or direction. Only ordinary pixel layers can be bound for stroke
+recording; painting a mask/channel or using another paint tool produces an
+explicit unsupported row. Saved strokes use recording format version 2;
+recordings without successful strokes retain version 1. See
+[the file format](recorder-file-format.md) for its closed schema and limits.
 
 Record starts a fresh log, replacing the prior recording. Stop stops accepting
 new recorded commands; accepted work still finishes and settles into its
@@ -85,10 +111,29 @@ cache-XML diagnostics on master; the separate source audit identifies older
 upstream selection-buffer ownership and unsaved-cache cleanup paths. Those
 diagnostics are not evidence of a clean resource audit and are not fixed here.
 
-The persistence candidate adds explicit binding and detached Save checks.
-The pinned 3.2.8 runs pass 51 installation, 24 save, 16 default Quick Mask
-color, 15 close-consent and 18 active-snapshot checks. The separate native
-picker acceptance, remaining engine runs and integrated bundle checks
-remain pending. Long failure text at the three-line status limit still
-needs the final accessibility check; no clipping defect has been reproduced.
-Broader semantic capture remains open.
+The persistence work adds explicit binding and detached Save checks. Earlier
+pinned runs pass 51 installation, 24 save, 16 default Quick Mask color,
+15 close-consent and 18 active-snapshot checks. Subsequent focused matrices
+include actual Save/Load picker and consent workflows; these individual runs
+do not establish a final combined release.
+
+The combined native source at `28ae33c` passes 7,454 general conformance checks
+across the four engines, plus 142 versioned-input, 100 pressure-fingerprint,
+60 original capture-facts and 52 Paintbrush checks per engine: 8,870 total.
+The 142 input checks exercise the native V2 packet API; they do not establish
+frontend delivery of optional tablet axes or physical device calibration.
+
+The integrated Recorder source at `8155565` passes 22 capture and 26 saved-file
+checks per engine. Its actual Paintbrush canvas fixture passes 23 per engine,
+including captured-document ownership, Stop before release, explicitly bound
+replay, independently seeded native pixels and Undo/Redo. The preceding
+Pencil/Eraser canvas, Revert and real application-Quit fixtures respectively
+pass 23, 10 and 13 checks per engine. Each matrix uses temporary signed hosts
+and immutable native adapters, with owned teardown and desktop release.
+The latest-Main integration at `555792d` passes all 1,195 unit tests; its
+independent file/consent source review found no important issue.
+
+Hosted CI, final publication feedback and the final
+self-contained bundle remain separate gates. Long failure text at the
+three-line status limit still needs the final accessibility check; no clipping
+defect has been reproduced. Broader semantic capture remains open.
