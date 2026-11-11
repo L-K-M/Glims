@@ -13,6 +13,8 @@ typedef struct {
   GimpDynamics *dynamics;
   GimpDynamicsOutput *size;
   GimpCurve *curve, *original;
+  gdouble original_samples[256];
+  gboolean original_identity;
   gchar *serialized;
 } PressureProbe;
 
@@ -31,6 +33,10 @@ discover_pressure (GlimsEngine *engine, gpointer data)
   g_object_get (probe->size, "use-pressure", &pressure, "use-random", &random,
                  "pressure-curve", &probe->curve, NULL);
   if (!pressure || random || !probe->curve) return GLIMS_STATUS_FAILED;
+  if (probe->curve->n_samples != G_N_ELEMENTS (probe->original_samples) || !probe->curve->samples)
+    return GLIMS_STATUS_FAILED;
+  memcpy (probe->original_samples, probe->curve->samples, sizeof probe->original_samples);
+  probe->original_identity = probe->curve->identity;
   probe->original = GIMP_CURVE (gimp_config_duplicate (GIMP_CONFIG (probe->curve)));
   probe->serialized = gimp_config_serialize_to_string (GIMP_CONFIG (probe->dynamics), NULL);
   return probe->original && probe->serialized ? GLIMS_STATUS_OK : GLIMS_STATUS_FAILED;
@@ -73,6 +79,13 @@ restore_pressure (GlimsEngine *engine, gpointer data)
   PressureProbe *probe = data;
   if (!probe->original || !probe->curve || !probe->size) return GLIMS_STATUS_FAILED;
   gboolean copied = gimp_config_copy (GIMP_CONFIG (probe->original), GIMP_CONFIG (probe->curve), 0);
+  if (probe->curve->n_samples != G_N_ELEMENTS (probe->original_samples) || !probe->curve->samples)
+    return GLIMS_STATUS_FAILED;
+  /* Native config-copy recalculates a smooth curve from its points. The
+   * installed file has rounded sample values, so preserve its actual
+   * original samples as well, rather than accepting normalized substitutes. */
+  memcpy (probe->curve->samples, probe->original_samples, sizeof probe->original_samples);
+  probe->curve->identity = probe->original_identity;
   g_object_set (probe->size, "use-random", FALSE, NULL);
   gchar *restored = gimp_config_serialize_to_string (GIMP_CONFIG (probe->dynamics), NULL);
   gboolean same = restored && !g_strcmp0 (restored, probe->serialized);
