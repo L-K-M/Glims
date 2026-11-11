@@ -44,7 +44,8 @@ public enum GlimsApplication {
             if let smokeCase = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"],
                ["metadata-rating-edit", "layer-rasterize-batch", "layer-restore-batch",
                 "tablet-eraser-proximity", "recorder-layer-properties", "text-floating-create",
-                "displace-source", "oilify-source"].contains(smokeCase) {
+                "displace-source", "oilify-source", "move-pick", "move-pick-range", "move-pick-spring",
+                "move-pick-busy-restore"].contains(smokeCase) {
                 return EngineSmokeTestHost.run()
             }
             return EngineSmokeTest.run()
