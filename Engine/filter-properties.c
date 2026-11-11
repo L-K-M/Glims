@@ -23,6 +23,8 @@
 
 #include <math.h>
 #include <string.h>
+#include <cairo.h>
+#include "libgimpcolor/gimpcolor.h"
 
 /* Not part of gegl.h: the spec structs (ui ranges, excluded enum values)
  * and the sink check. */
@@ -219,7 +221,7 @@ property_kind (const GParamSpec *pspec)
     return GLIMS_FILTER_VALUE_BOOL;
   if (G_IS_PARAM_SPEC_ENUM (pspec))
     return GLIMS_FILTER_VALUE_ENUM;
-  if (GEGL_IS_PARAM_SPEC_COLOR (pspec))
+  if (GEGL_IS_PARAM_SPEC_COLOR (pspec) || GIMP_IS_PARAM_SPEC_COLOR (pspec))
     return GLIMS_FILTER_VALUE_COLOR;
   if (G_IS_PARAM_SPEC_STRING (pspec))
     return GLIMS_FILTER_VALUE_STRING;
@@ -400,12 +402,24 @@ property_row (GParamSpec *pspec, GlimsFilterProperty *row)
 
     case GLIMS_FILTER_VALUE_COLOR:
       {
-        GeglColor *color = gegl_param_spec_color_get_default (pspec);
+        GValue native_default = G_VALUE_INIT;
+        GeglColor *color;
         gdouble    rgba[4] = { 0.0, 0.0, 0.0, 1.0 };
+
+        if (GEGL_IS_PARAM_SPEC_COLOR (pspec))
+          color = gegl_param_spec_color_get_default (pspec);
+        else {
+          /* GIMP's color spec derives from its object-default spec, not
+           * GeglParamColor. Let its virtual default method own that layout. */
+          g_value_init (&native_default, G_PARAM_SPEC_VALUE_TYPE (pspec));
+          g_param_value_set_default (pspec, &native_default);
+          color = g_value_get_object (&native_default);
+        }
 
         if (color)
           gegl_color_get_pixel (color, babl_format ("R'G'B'A double"), rgba);
         row->default_color = (GlimsColor) { rgba[0], rgba[1], rgba[2], rgba[3] };
+        if (G_IS_VALUE (&native_default)) g_value_unset (&native_default);
       }
       break;
 

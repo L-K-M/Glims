@@ -16,6 +16,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 HARNESS = ROOT / "Engine/tests/gimp-color-property-tests.c"
+READER = ROOT / "Engine/filter-properties.c"
 RESPONSE_HELPER = ROOT / "scripts/test-displace-source.py"
 RUNTIME_HELPER = ROOT / "scripts/test-tablet-stroke-v2.py"
 _native = runpy.run_path(str(RESPONSE_HELPER))
@@ -34,7 +35,7 @@ def build(producer: Path, output: Path) -> None:
     inputs = set(objects)
     responses = ("compile.rsp", "objects.rsp", "link.rsp")
     expanded = {name: response_tokens(producer / name, inputs, set()) for name in responses}
-    inputs.update({HARNESS, RESPONSE_HELPER, RUNTIME_HELPER, Path(__file__).resolve(),
+    inputs.update({HARNESS, READER, RESPONSE_HELPER, RUNTIME_HELPER, Path(__file__).resolve(),
                    ROOT / "Sources/CGlimsEngine/include/glims_engine.h"})
     inputs.update((ROOT / "Engine").glob("*.h"))
     inputs = {path.resolve() for path in inputs}
@@ -48,11 +49,17 @@ def build(producer: Path, output: Path) -> None:
     for name, path in normalized.items():
         path.write_text(shlex.join(expanded[name]) + "\n")
     obj, binary = output / (NAME + ".o"), output / NAME
+    reader_obj = output / "filter-properties.o"
     commands = [
         ["xcrun", "clang", f"@{normalized['compile.rsp']}",
          "-I", str(ROOT / "Sources/CGlimsEngine/include"), "-I", str(ROOT / "Engine"),
+         "-fvisibility=hidden", "-Wall", "-Wextra", "-Werror=implicit-function-declaration",
+         "-c", str(READER), "-o", str(reader_obj)],
+        ["xcrun", "clang", f"@{normalized['compile.rsp']}",
+         "-I", str(ROOT / "Sources/CGlimsEngine/include"), "-I", str(ROOT / "Engine"),
          "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-c", str(HARNESS), "-o", str(obj)],
-        ["xcrun", "clang++", "-o", str(binary), str(obj), *map(str, objects),
+        ["xcrun", "clang++", "-o", str(binary), str(obj), str(reader_obj),
+         *[str(path) for path in objects if path.stem != "filter-properties"],
          f"@{normalized['objects.rsp']}", f"@{normalized['link.rsp']}"],
     ]
     try:
@@ -72,7 +79,7 @@ def build(producer: Path, output: Path) -> None:
             print(message, file=sys.stderr)
     write_json(output / "build.json", {"producer": str(producer), "commands": commands,
         "inputs": before, "binary": str(binary), "binary_sha256": digest(binary),
-        "excluded_objects": [], "scope": "three GIMP color paramspecs; no UI or new production code"})
+        "excluded_objects": ["filter-properties.o"], "scope": "three GIMP color paramspecs; current property implementation; no UI"})
     print(f"Built {binary}; NOT EXECUTED.", flush=True)
 
 
