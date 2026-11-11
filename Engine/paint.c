@@ -326,6 +326,7 @@ capture_stroke_facts (GlimsEngine               *engine,
       !recordable_first_point (first) ||
       G_OBJECT_TYPE (drawable) != GIMP_TYPE_LAYER ||
       !gimp_drawable_is_rgb (drawable) || !gimp_drawable_has_alpha (drawable) ||
+      gimp_drawable_get_active_mask (drawable) != GIMP_COMPONENT_MASK_ALL ||
       gimp_image_get_floating_selection (image) ||
       !symmetry || G_OBJECT_TYPE (symmetry) != GIMP_TYPE_SYMMETRY ||
       (paint_mode != GIMP_LAYER_MODE_NORMAL && paint_mode != GIMP_LAYER_MODE_NORMAL_LEGACY) ||
