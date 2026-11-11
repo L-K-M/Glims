@@ -28,9 +28,17 @@ enum SemanticImageCommand {
         var errorDescription: String? { "This recorded edit has no explicit layer binding." }
     }
 
+    private struct MissingChannelBinding: LocalizedError {
+        var errorDescription: String? { "This recorded edit has no explicit channel binding." }
+    }
+
     case selectionShape(EngineSession.SelectShape, options: EngineSession.SelectOptions)
     case selectColor(CGPoint, options: EngineSession.SelectOptions)
     case selectCommand(EngineSession.SelectCommand, radius: Double)
+    /// Channel ▸ To Selection: the explicit source channel lives in the
+    /// document's runtime binding, never in this command, and may differ
+    /// from the active paint target.
+    case channelToSelection(EngineSession.SelectOperation)
     case transformImage(EngineSession.Transform)
     case scale(width: Int, height: Int)
     case resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: RecorderColor)
@@ -42,7 +50,7 @@ enum SemanticImageCommand {
     var requiresResolvedFloatingSelection: Bool {
         switch self {
         case .transformImage, .scale, .resizeCanvas, .crop, .completeStroke: return true
-        case .selectionShape, .selectColor, .selectCommand, .layerProperties: return false
+        case .selectionShape, .selectColor, .selectCommand, .channelToSelection, .layerProperties: return false
         }
     }
 
@@ -67,6 +75,7 @@ enum SemanticImageCommand {
             case .sharpen: return "Sharpen Selection"
             case .fromAlpha: return "Select Alpha"
             }
+        case .channelToSelection: return "Channel to Selection"
         case .transformImage(let transform):
             switch transform {
             case .rotate90: return "Rotate Image 90°"
@@ -103,6 +112,8 @@ enum SemanticImageCommand {
             try session.crop(image: image, to: rect)
         case .layerProperties, .completeStroke:
             throw MissingLayerBinding()
+        case .channelToSelection:
+            throw MissingChannelBinding()
         }
     }
 
@@ -116,6 +127,19 @@ enum SemanticImageCommand {
         case .completeStroke(let stroke):
             guard layer > 0 else { throw MissingLayerBinding() }
             try stroke.apply(session: session, image: image, layer: layer)
+        default:
+            try apply(session: session, image: image)
+        }
+    }
+
+    /// The caller freshly confirms this runtime channel against the owning
+    /// image. It is never stored in the command and never falls back to the
+    /// active paint target or selection.
+    func apply(session: EngineSession, image: Int32, channel: Int32) throws {
+        switch self {
+        case .channelToSelection(let operation):
+            guard channel > 0 else { throw MissingChannelBinding() }
+            try session.channelToSelection(channel, image: image, operation: operation)
         default:
             try apply(session: session, image: image)
         }

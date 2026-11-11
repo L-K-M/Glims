@@ -55,6 +55,9 @@ enum RecorderFileCommand: Equatable {
     case selectionShape(Shape, Options)
     case selectColor(Point, Options)
     case selectCommand(Selection, radius: Double)
+    /// Channel ▸ To Selection: only the combination operation is a command
+    /// value; the explicit source channel is the record's `channel` binding.
+    case channelToSelection(Operation)
     case transformImage(Transform)
     case scale(width: Int, height: Int)
     case resizeCanvas(width: Int, height: Int, offset: Point, fill: RecorderColor)
@@ -64,7 +67,7 @@ enum RecorderFileCommand: Equatable {
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .completeStroke: return false
+        case .layerProperties, .completeStroke, .channelToSelection: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true

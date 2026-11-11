@@ -4,6 +4,7 @@ enum RecorderFileCodec {
     static let format = "ch.lkmc.Glims.recording"
     static let version = 1
     static let strokeVersion = 2
+    static let channelVersion = 3
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -80,7 +81,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...strokeVersion)
+        let fileVersion = try integer(root.get("version"), range: version...channelVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -98,6 +99,7 @@ enum RecorderFileCodec {
         }
         var points = 0
         var hasStroke = false
+        var hasChannelSelection = false
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
             guard case .object(let members) = node, let outcome = members["outcome"] else { throw RecorderFileError.invalid("Missing record outcome.") }
             let outcomeName = try string(outcome)
@@ -108,6 +110,7 @@ enum RecorderFileCodec {
                 row = try Object(node, required: ["ordinal", "outcome", "command", "binding"])
                 let command = try command(row.get("command"), version: fileVersion, points: &points)
                 if case .completeStroke = command { hasStroke = true }
+                if case .channelToSelection = command { hasChannelSelection = true }
                 let binding = try binding(row.get("binding"))
                 try validate(binding, for: command, descriptions: descriptions)
                 result = .success(command, binding)
@@ -122,8 +125,13 @@ enum RecorderFileCodec {
             }
             return .init(ordinal: index, outcome: result)
         }
-        guard fileVersion == version || hasStroke else {
+        // Each extended version requires its own successful command, exactly
+        // as version 2 always required a complete stroke.
+        if fileVersion == strokeVersion, !hasStroke {
             throw RecorderFileError.invalid("Version 2 requires a successful complete stroke.")
+        }
+        if fileVersion == channelVersion, !hasChannelSelection {
+            throw RecorderFileError.invalid("Version 3 requires a successful channel selection.")
         }
         return RecorderFileValue(recordingID: try uuid(root.get("recordingID")), name: name, origin: source, symbols: symbols, records: records)
     }
@@ -275,8 +283,15 @@ enum RecorderFileCodec {
             return .layerProperties(.init(name: try properties.optional("name").map { try string($0, native: true) },
                 visible: try properties.optional("visible").map { try bool($0) }, opacity: try properties.optional("opacity").map { try number($0) },
                 mode: try properties.optional("mode").map { try RecorderFileLayerMode(string($0)) }))
+        case "channelToSelection":
+            guard version >= channelVersion else { throw RecorderFileError.invalid("A channel selection needs recording version 3.") }
+            let value = try Object(node, required: ["tag", "operation"])
+            guard let operation = RecorderFileCommand.Operation(rawValue: try string(value.get("operation"))) else {
+                throw RecorderFileError.invalid("Unknown selection operation.")
+            }
+            return .channelToSelection(operation)
         case "completeStroke":
-            guard version == strokeVersion else { throw RecorderFileError.invalid("A complete stroke needs recording version 2.") }
+            guard version >= strokeVersion else { throw RecorderFileError.invalid("A complete stroke needs recording version 2.") }
             return .completeStroke(try stroke(node, points: &points))
         default: throw RecorderFileError.invalid("Unknown semantic command; use a compatible Glims version.")
         }
@@ -315,6 +330,9 @@ enum RecorderFileCodec {
         case "layer":
             let value = try Object(node, required: ["kind", "symbol"])
             return .layer(try uuid(value.get("symbol")))
+        case "channel":
+            let value = try Object(node, required: ["kind", "symbol"])
+            return .channel(try uuid(value.get("symbol")))
         case "context":
             let value = try Object(node, required: ["kind", "context"])
             let context = try Object(value.get("context"), required: ["layers", "channels", "target", "masks", "quickMask"])
@@ -357,7 +375,7 @@ enum RecorderFileCodec {
     static func referencedSymbols(_ binding: RecorderBindingDescription) throws -> Set<UUID> {
         switch binding {
         case .none: return []
-        case .layer(let id): return [id]
+        case .layer(let id), .channel(let id): return [id]
         case .unavailable(let reason): throw RecorderFileError.invalid("The recording has an unavailable original target: \(reason)")
         case .context(let context):
             var result = Set(context.layers + context.channels + context.masks.map(\.owner))
@@ -376,6 +394,9 @@ enum RecorderFileCodec {
         switch (command, binding) {
         case (.layerProperties, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("Layer properties need a layer description.") }
+            return
+        case (.channelToSelection, .channel(let id)):
+            guard descriptions[id]?.kind == .channel else { throw RecorderFileError.invalid("Channel to Selection needs a channel description.") }
             return
         case (.completeStroke, .layer(let id)):
             guard descriptions[id]?.kind == .pixel else { throw RecorderFileError.invalid("A complete stroke needs a pixel layer description.") }

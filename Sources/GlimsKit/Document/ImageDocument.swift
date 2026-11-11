@@ -61,6 +61,9 @@ final class ImageDocument {
     private enum RecorderContext {
         case target(RecorderTargetContext)
         case layer(Int32)
+        /// An explicit source channel (Channel ▸ To Selection). It may differ
+        /// from the active paint target, which is never substituted.
+        case channel(Int32)
         case unavailable(String)
     }
 
@@ -3075,7 +3078,12 @@ final class ImageDocument {
     func channelToSelection(_ id: Int32, operation: EngineSession.SelectOperation) {
         guard !refuseWhileEditingUnavailable(), channels.contains(where: { $0.id == id }) else { return }
         endPendingUserEdits()
-        run { session, image in try session.channelToSelection(id, image: image, operation: operation) }
+        let semantic = SemanticImageCommand.channelToSelection(operation)
+        // The explicit source channel `id` — not the active paint target — is
+        // bound for recording and replay.
+        run(semantic: semantic, recorderChannel: id) { session, image in
+            try session.channelToSelection(id, image: image, operation: operation)
+        }
     }
 
     func setQuickMask(_ enabled: Bool) {
@@ -5310,6 +5318,7 @@ final class ImageDocument {
             case .none: break
             case .unavailable(let reason): throw RecorderFileError.invalid(reason)
             case .layer(let symbol): contexts[row.ordinal] = .layer(try layer(symbol))
+            case .channel(let symbol): contexts[row.ordinal] = .channel(try channel(symbol))
             case .context(let saved):
                 var masks: [Int32: EngineSession.MaskState] = [:]
                 for mask in saved.masks {
@@ -5428,6 +5437,10 @@ final class ImageDocument {
                     guard layers.contains(where: { $0.id == layer }) else {
                         throw RecorderReplayError(message: "The recorded layer is no longer in this image.")
                     }
+                case .channel(let channel):
+                    guard channels.contains(where: { $0.id == channel }) else {
+                        throw RecorderReplayError(message: "The recorded source channel is no longer in this image.")
+                    }
                 case .target:
                     guard captureRecorderContext(for: step.command).map({ Self.recorderContextsMatch($0, context) }) == true else {
                         throw RecorderReplayError(message: "The recorded layer, channel, mask or Quick Mask target has changed.")
@@ -5462,6 +5475,8 @@ final class ImageDocument {
                         }
                     }
                     try step.command.apply(session: session, image: image, layer: layer)
+                } else if case .channel(let channel)? = context {
+                    try step.command.apply(session: session, image: image, channel: channel)
                 } else {
                     try step.command.apply(session: session, image: image)
                 }
@@ -5495,12 +5510,14 @@ final class ImageDocument {
         switch command {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
+        case .channelToSelection: return true
         case .layerProperties, .completeStroke: return true
         default: return false
         }
     }
 
-    private func captureRecorderContext(for command: SemanticImageCommand, explicitLayer: Int32? = nil) -> RecorderContext? {
+    private func captureRecorderContext(for command: SemanticImageCommand, explicitLayer: Int32? = nil,
+                                        explicitChannel: Int32? = nil) -> RecorderContext? {
         guard Self.recorderCommandNeedsTarget(command) else { return nil }
         if case .layerProperties = command {
             guard let layer = explicitLayer, layer > 0 else {
@@ -5509,6 +5526,15 @@ final class ImageDocument {
             // Native ownership is confirmed behind accepted input. A layer
             // property is not bound to the current paint drawable or selection.
             return .layer(layer)
+        }
+        if case .channelToSelection = command {
+            // Bind the explicitly invoked source channel, validated against
+            // the cached channel list; the active paint target is not consulted.
+            guard let channel = explicitChannel, channel > 0,
+                  channels.contains(where: { $0.id == channel }) else {
+                return .unavailable("The recorded source channel is not a current channel of this image; record it again.")
+            }
+            return .channel(channel)
         }
         guard pendingTargetPick == nil, pendingLayerSelection == nil, pendingChannelSelection == nil,
               pendingTargetCommands.isEmpty, quickMaskIntent == nil,
@@ -5544,6 +5570,14 @@ final class ImageDocument {
             }
             return
         }
+        if case .channel(let channel) = context {
+            // Fresh native validation of the explicit source channel before
+            // any mutation; the active paint target is never substituted.
+            guard channel > 0, try session.channels(image).contains(where: { $0.id == channel }) else {
+                throw RecorderReplayError(message: "The recorded source channel no longer belongs to this native image.")
+            }
+            return
+        }
         guard case .target(let expected) = context else {
             throw RecorderReplayError(message: "This recording has no executable target binding.")
         }
@@ -5566,9 +5600,11 @@ final class ImageDocument {
         }
     }
 
-    private func reserveRecording(_ command: SemanticImageCommand?, explicitLayer: Int32? = nil) throws -> RecorderCapture? {
+    private func reserveRecording(_ command: SemanticImageCommand?, explicitLayer: Int32? = nil,
+                                  explicitChannel: Int32? = nil) throws -> RecorderCapture? {
         guard let command, recorder.isRecording else { return nil }
-        return try reserveRecording(context: captureRecorderContext(for: command, explicitLayer: explicitLayer))
+        return try reserveRecording(context: captureRecorderContext(for: command, explicitLayer: explicitLayer,
+                                                                   explicitChannel: explicitChannel))
     }
 
     private func reserveRecording(context: RecorderContext?) throws -> RecorderCapture {
@@ -5578,6 +5614,7 @@ final class ImageDocument {
         var targets: [RecorderRuntimeTarget] = []
         switch context {
         case .layer(let layer)?: targets = [.layer(layer)]
+        case .channel(let channel)?: targets = [.channel(channel)]
         case .target(let target)?:
             targets = target.layers.map { .layer($0) } + target.channels.map { .channel($0) }
             switch target.target {
@@ -5695,6 +5732,7 @@ final class ImageDocument {
         switch context {
         case .unavailable(let reason): return .unavailable(reason)
         case .layer(let layer): return .layer(try symbol(.layer(layer)))
+        case .channel(let channel): return .channel(try symbol(.channel(channel)))
         case .target(let expected):
             let target: RecorderBindingDescription.Target
             switch expected.target {
@@ -5754,13 +5792,14 @@ final class ImageDocument {
 
     @discardableResult
     func run(effect: CommandEffect = .changesImage, semantic: SemanticImageCommand? = nil, recorderLayer: Int32? = nil,
+             recorderChannel: Int32? = nil,
              _ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
         guard !isClosing else { return false }
         if effect != .readsPixels && refuseWhileEditingUnavailable(forPreviewWork: effect == .changesPreview) {
             return false
         }
         let capture: RecorderCapture?
-        do { capture = try reserveRecording(semantic, explicitLayer: recorderLayer) }
+        do { capture = try reserveRecording(semantic, explicitLayer: recorderLayer, explicitChannel: recorderChannel) }
         catch {
             assertionFailure("A recording log refused an admitted command: \(error)")
             return false
