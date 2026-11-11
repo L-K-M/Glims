@@ -198,6 +198,14 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (numeric transform)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "projective-integration" {
+                try exerciseNumericTransform(session, documents: documents)
+                try exerciseRecorderAffine(session, work: work, documents: documents)
+                try exerciseRecorderLevels(session, work: work, documents: documents)
+                try exerciseProjectiveControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (projective integration)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "projective-controls" {
                 try exerciseProjectiveControls(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (projective controls)" : "FAILED: \(failures) failure(s)")

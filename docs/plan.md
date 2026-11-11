@@ -4320,7 +4320,12 @@ command, while edited stale drafts still refuse. The pinned native workflow
 passes real canvas events, analytic transformed pixels, single Undo and exact
 Undo/Redo, save/load/rebinding, editable text refusal and queued stale bounds.
 Independent direct native, UI and Recorder source reviews are complete.
-Combined v5/v6, full-suite and remaining engine workflow checks are pending.
+After v5/v6 integration, all 1,351 Swift tests and 111 focused native editor
+checks on each of the four engines pass. This includes numeric controls,
+affine recording, Levels capture/replay, perspective pointer gestures,
+actual v6 file save/load/rebinding, source preservation and exact Undo/Redo.
+Independent merge-resolution review confirms both capture paths remain
+intact. Ordinary full editor workflows are still running at this checkpoint.
 This does not establish complete Photoshop 4 parity or interaction latency.
 
 ### Recorded new Levels adjustments (2026-11-11 candidate)

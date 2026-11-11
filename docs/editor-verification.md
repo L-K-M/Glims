@@ -69,10 +69,11 @@ the desktop was released.
 
 ## Qualification limits
 
-This is a working local development app, not a public notarized release.
+This verifies a working local development app. Notarization is excluded by
+the user’s instruction.
 Remaining public distribution gates include complete binary-bound dependency
 sources and historical patches, license/source packaging, Developer ID
-signing/notarization and update qualification. Partial source archives and an
+signing and update qualification. Partial source archives and an
 Apple Development signature do not close those gates.
 
 Spoken VoiceOver, system Full Keyboard Access and physical calibrated-display
