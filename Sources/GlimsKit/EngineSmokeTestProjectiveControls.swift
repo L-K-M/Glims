@@ -262,6 +262,54 @@ extension EngineSmokeTest {
         EngineActivity.shared.endTransformPreview()
         spin()
         check(tools.textEditor == nil, "Escape prevents a late text editor after the preview read drains")
+        ToolState.shared.select(.path)
+        let pathCount = document.paths.count
+        let creationHold = DispatchSemaphore(value: 0)
+        document.inputQueue.async { creationHold.wait() }
+        defer { creationHold.signal() }
+        EngineActivity.shared.beginTransformPreview()
+        let pathTool = tools.pathTool
+        pathTool.mouseDown(at: CGPoint(x: 12, y: 18), flags: [])
+        pathTool.mouseUp()
+        let creationWork = document.pendingWork
+        check(creationWork > 0 && pathTool.shape.subpaths.first?.anchors.first?.point == CGPoint(x: 12, y: 18),
+              "first Path anchor queues counted creation and stays visible without waiting for the engine")
+        pathTool.mouseDown(at: CGPoint(x: 25, y: 30), flags: [])
+        pathTool.mouseUp()
+        check(document.pendingWork == creationWork, "a second click during path creation cannot create a duplicate path")
+        _ = pathTool.keyDown(keyCode: 53)
+        creationHold.signal()
+        EngineActivity.shared.endTransformPreview()
+        drain(document)
+        check(document.paths.count == pathCount + 1 && pathTool.extending == nil && pathTool.selectedAnchors.isEmpty,
+              "accepted path creation completes once and Escape keeps its continuation ended")
+        // An optimistic selection can identify a hidden path before its
+        // queued geometry read completes. It must not become an empty edit.
+        guard let createdPath = document.activePath else {
+            return check(false, "asynchronous path creation selects its native result")
+        }
+        let hiddenShape = VectorPath(subpaths: [.init(anchors: [
+            .init(CGPoint(x: 45, y: 40)), .init(CGPoint(x: 85, y: 75))
+        ])])
+        let hiddenPath = try session.setPath(nil, image: image, name: "Hidden geometry", hiddenShape)
+        try session.changePath(hiddenPath, image: image, visible: false)
+        try session.selectItems([createdPath], kind: .path, image: image)
+        try document.reload(); drain(document)
+        check(document.pathShapes[hiddenPath] == nil, "hidden-path fixture starts without cached geometry")
+        EngineActivity.shared.beginTransformPreview()
+        document.selectPath(hiddenPath)
+        check(document.activePath == hiddenPath && document.pathShapes[hiddenPath] == nil,
+              "path selection is mirrored before its deferred geometry read")
+        let loadingWork = document.pendingWork
+        pathTool.mouseDown(at: CGPoint(x: 115, y: 110), flags: [])
+        pathTool.mouseUp()
+        check(pathTool.keyDown(keyCode: 51), "Delete is consumed while selected path geometry is loading")
+        check(document.pendingWork == loadingWork && document.pathShapes[hiddenPath] == nil,
+              "pointer and keyboard edits never submit an empty shape for an uncached path")
+        EngineActivity.shared.endTransformPreview()
+        drain(document)
+        check(try session.path(hiddenPath, image: image) == hiddenShape && document.pathShapes[hiddenPath] == hiddenShape,
+              "a hidden path keeps its original geometry after delayed selection loads")
         ToolState.shared.select(.transform)
         if let path = ProcessInfo.processInfo.environment["GLIMS_SMOKE_ARTIFACT_DIR"],
            let bitmap = options.view.bitmapImageRepForCachingDisplay(in: options.view.bounds) {

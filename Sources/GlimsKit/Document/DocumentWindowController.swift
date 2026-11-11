@@ -1767,7 +1767,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     @objc func newPath(_ sender: Any?) {
         guard pathActionsAvailable else { return }
-        imageDocument.addPath(VectorPath())
+        imageDocument.addPath(VectorPath()) { _ in }
     }
 
     @objc func deletePath(_ sender: Any?) {

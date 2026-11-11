@@ -4375,17 +4375,29 @@ refresh finishes. Deferred Text and color picks retain cancellation and target
 generations. Crop to Selection reads the native selection on the input queue,
 so later selection changes cannot overtake the accepted crop.
 
-Initial pinned-engine tests compare complete source state and exact preview
+Tests on all four engines compare complete source state and exact preview
 pixels against independently committed projective and affine transforms,
 including nested masked groups, P3 display conversion, grayscale proofing,
 bounded and fractional 2x viewport output, repeated previews, stale bounds,
 multi-selection refusal, cancellation, target acknowledgement and close drain.
-All pass. Eighty focused Swift tests pass, including nine preview/coalescing
-and read-gate tests. Resample invalidation reproduced a failed observer test
-before its fix. The 24 MP characterization measured 808 ms affine and 796 ms
+All pass. The complete 1,360-test Swift suite passes, including nine
+preview/coalescing and read-gate tests. Resample invalidation reproduced a
+failed observer test before its fix. The 24 MP characterization measured 808 ms affine and 796 ms
 projective preview completion for an 800x600 viewport, with idle main-loop
 lateness below 7 ms. This is not yet low-latency interaction qualification.
 
-Remaining in this slice: residual synchronous UI read paths, real canvas
-preview/cancellation checks, all-engine final runs, full-suite verification,
-independent final review and hosted CI. Photoshop 4 parity is still incomplete.
+The actual canvas matches an independent transformed viewport on every engine.
+Its cancellation checks reproduce the late Text editor after Escape, then pass
+with generation checks. All three path-creation UI routes now queue counted
+input. The first anchor remains visible while its ID is pending; another click
+cannot duplicate it, and Escape ends extension without undoing accepted input.
+Selecting a hidden path waits for its geometry before allowing edits. Removing
+those guards produces two failing native assertions, including changed path
+geometry. Both pass with the guards restored. Mask toggles resolve prior queued
+values, and unknown-mask picks retain target admission until reconciliation.
+These focused UI and native checks pass on all four engines. Independent API
+and caller reviews found no remaining important issues after their fixes.
+
+Remaining in this slice: full ordinary workflow matrix, hosted CI and review,
+and merged bundle verification. Large-image preview latency needs further
+work. Photoshop 4 parity is still incomplete.

@@ -233,6 +233,23 @@ extension EngineSmokeTest {
               "masked nested-group preview matches the independent native group transform")
         check(try state(grouped.image) == groupBefore,
               "masked group preview preserves source ancestry, mask ownership, selected IDs and history")
+        if let masked = groupedDocument.layers.first(where: \.hasMask) {
+            groupedDocument.selectLayer(masked.id)
+            try drain(groupedDocument)
+            let maskBefore = try session.layerMask(masked.id, image: grouped.image)
+            let toggleHold = DispatchSemaphore(value: 0)
+            releases.append(toggleHold)
+            groupedDocument.inputQueue.async { toggleHold.wait() }
+            groupedDocument.toggleMaskEnabled()
+            groupedDocument.toggleMaskEnabled()
+            groupedDocument.toggleMaskShowing(masked.id)
+            groupedDocument.toggleMaskShowing(masked.id)
+            toggleHold.signal()
+            try drain(groupedDocument)
+            let maskAfter = try session.layerMask(masked.id, image: grouped.image)
+            check(maskAfter.enabled == maskBefore.enabled && maskAfter.showing == maskBefore.showing,
+                  "queued mask toggles resolve each preceding native value instead of reusing stale cached flags")
+        } else { check(false, "masked group fixture exposes its masked child") }
 
         // Cached admission still sees one selected layer. Fresh native
         // selection must not preview an edit that Apply would refuse.

@@ -692,11 +692,6 @@ final class ImageDocument {
         guard !refuseWhileFloatingActive() else { return }
         endPendingUserEdits()
         guard let layer = layers.first(where: { $0.id == id }), layer.hasMask else { return }
-        // Without a cached state the mask's drawable id is unknown, and
-        // activeDrawable could not name it; read it now — a cheap engine
-        // read, no pixels.
-        if maskStates[id] == nil { maskStates[id] = try? session.layerMask(id, image: image) }
-        guard let mask = maskStates[id], mask.mask != 0 else { return }
         selectTarget(id, editingMask: true)
     }
 
@@ -708,12 +703,27 @@ final class ImageDocument {
     /// authoritative state, which also covers a refused flag change.
     private func selectTarget(_ id: Int32, editingMask: Bool) {
         guard layers.contains(where: { $0.id == id }) else { return }
-        // A masked layer whose state was never read gets one now, so a
-        // stale engine-side EDITING flag cannot disagree with
-        // activeDrawable in either direction.
+        // An unknown mask ID cannot be mirrored as a drawable. Resolve and
+        // select it together on the input queue, blocking target-dependent
+        // edits until reconciliation rather than painting the previous layer.
         if maskStates[id] == nil,
            layers.first(where: { $0.id == id })?.hasMask == true {
-            maskStates[id] = try? session.layerMask(id, image: image)
+            enqueueTargetCommand({ session, image in
+                let state = try session.layerMask(id, image: image)
+                guard !editingMask || state.mask != 0 else { throw DocumentError.targetChanged }
+                guard try !session.floatingSelection(image).isActive else { throw DocumentError.targetChanged }
+                try session.channelCommand(.select, channel: 0, image: image)
+                for row in try session.layers(image) where row.id != id && row.hasMask {
+                    if try session.layerMask(row.id, image: image).editing {
+                        try session.setLayerMask(row.id, image: image, flags: [.editing], values: [])
+                    }
+                }
+                try session.selectLayers([id], image: image)
+                if state.mask != 0 {
+                    try session.setLayerMask(id, image: image, flags: [.editing], values: editingMask ? [.editing] : [])
+                }
+            }, input: false, rejectFailedTarget: true)
+            return
         }
         let mask = maskStates[id]?.mask
         guard !editingMask || (mask != nil && mask != 0) else { return }
@@ -3480,8 +3490,28 @@ final class ImageDocument {
     /// selection (the native contract), and changes no paint target.
     func selectPath(_ id: Int32) {
         guard paths.contains(where: { $0.id == id }), !refuseWhileEditingUnavailable() else { return }
-        if pathShapes[id] == nil { pathShapes[id] = try? session.path(id, image: image) }
+        // The ordered selection's gated reload reads the newly active shape.
         queueItemSelection([id], kind: .path)
+    }
+
+    /// UI creation never waits on the native engine. Its accepted first
+    /// anchor remains counted input until the new ID and caches are available.
+    func addPath(_ shape: VectorPath,
+                 completion: @escaping @MainActor (Result<Int32, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let result = Result { () throws -> Int32 in
+                let id = try session.setPath(nil, image: image, shape)
+                try session.selectItems([id], kind: .path, image: image)
+                return id
+            }
+            self.dispatchReadWhenReady {
+                if !self.isClosing { try? self.reload() }
+                if case .failure(let error) = result { self.report(error) }
+                completion(self.isClosing ? .failure(DocumentError.closed) : result)
+            }
+        }
     }
 
     /// Adds a path with `shape` and makes it the active one. Waits for the
@@ -3514,6 +3544,10 @@ final class ImageDocument {
     /// the new shape at once.
     func updatePath(_ id: Int32, to shape: VectorPath) {
         guard !refuseWhileEditingUnavailable() else { return }
+        guard paths.contains(where: { $0.id == id }), pathShapes[id] != nil else {
+            onError?("Wait for the selected path to finish loading before editing it.")
+            return
+        }
         pathShapes[id] = shape
         pendingPathEdits[id, default: 0] += 1
         enqueue(on: inputQueue, input: true) { [session, image] in
@@ -3604,9 +3638,12 @@ final class ImageDocument {
     /// mask affects the composite.
     func toggleMaskEnabled() {
         guard let layer = activeLayer, !refuseWhileFloatingActive(),
-              let state = maskState(for: layer) else { return }
+              layers.first(where: { $0.id == layer })?.hasMask == true else { return }
         guard !refuseSingleLayerCommand("Enable Mask", on: layer) else { return }
-        setMaskFlags(layer, flags: [.enabled], values: state.enabled ? [] : [.enabled])
+        runMaskCommand { session, image in
+            let state = try session.layerMask(layer, image: image)
+            try session.setLayerMask(layer, image: image, flags: [.enabled], values: state.enabled ? [] : [.enabled])
+        }
     }
 
     /// Layer ▸ Mask ▸ Edit Mask: toggles mask editing on the active
@@ -3627,11 +3664,14 @@ final class ImageDocument {
     /// multi-selection; only the active-layer menu route is gated.
     func toggleMaskShowing(_ layer: Int32? = nil) {
         guard let id = layer ?? activeLayer, !refuseWhileFloatingActive(),
-              let state = maskState(for: id) else { return }
+              layers.first(where: { $0.id == id })?.hasMask == true else { return }
         if layer == nil {
             guard !refuseSingleLayerCommand("Show Mask", on: id) else { return }
         }
-        setMaskFlags(id, flags: [.showing], values: state.showing ? [] : [.showing])
+        runMaskCommand { session, image in
+            let state = try session.layerMask(id, image: image)
+            try session.setLayerMask(id, image: image, flags: [.showing], values: state.showing ? [] : [.showing])
+        }
     }
 
     /// Layer ▸ Mask ▸ Mask to Selection ▸ …: combines the active
@@ -3642,24 +3682,6 @@ final class ImageDocument {
         runMaskCommand { session, image in
             try session.layerMaskToSelection(layer, image: image, operation: operation)
         }
-    }
-
-    /// Sets mask flags on any layer — the rows' Option-click needs it
-    /// for a layer that is not the active one.
-    private func setMaskFlags(_ layer: Int32, flags: EngineSession.MaskFlags,
-                              values: EngineSession.MaskFlags) {
-        runMaskCommand { session, image in
-            try session.setLayerMask(layer, image: image, flags: flags, values: values)
-        }
-    }
-
-    /// The layer's mask state, reading it once when the cache missed.
-    private func maskState(for layer: Int32) -> EngineSession.MaskState? {
-        if let state = maskStates[layer], state.mask != 0 { return state }
-        guard layers.first(where: { $0.id == layer })?.hasMask == true else { return nil }
-        let state = try? session.layerMask(layer, image: image)
-        if let state, state.mask != 0 { maskStates[layer] = state }
-        return state?.mask != 0 ? state : nil
     }
 
     /// Mask commands are edits: they queue as counted input behind
@@ -5180,6 +5202,8 @@ final class ImageDocument {
     /// which could land between another operation's pixel read and its
     /// deferred write.
     private func enqueueTargetCommand(_ work: @escaping (EngineSession, Int32) throws -> Void,
+                                      input: Bool = true,
+                                      rejectFailedTarget: Bool = false,
                                       completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
         guard !isClosing else {
             completion?(.failure(DocumentError.closed))
@@ -5191,21 +5215,23 @@ final class ImageDocument {
         // Hold the deferred cache/completion stage too, so an exclusive
         // operation admitted after this input cannot overtake its cleanup.
         pendingWork += 1
-        enqueue(on: inputQueue, input: true) { [session, image] in
+        enqueue(on: inputQueue, input: input) { [session, image] in
             // While the command runs the target it replaces cannot be
             // painted; a success leaves a fresh native selection the
-            // edits behind it may use, while a failure keeps the
-            // queue's prior answer rather than reopening a refused one.
+            // edits behind it may use. An ordinary failed edit keeps the
+            // prior answer; a failed explicit pick closes painting until
+            // another pick resolves the target.
             let targetWasValid = self.paintTargetIsValid
             self.paintTargetIsValid = false
             let result = Result { try work(session, image) }
-            self.paintTargetIsValid = targetWasValid
+            self.paintTargetIsValid = rejectFailedTarget ? false : targetWasValid
             if case .success = result { self.paintTargetIsValid = true }
             self.dispatchReadWhenReady {
                 EngineActivity.shared.whenIdle {
                     defer { self.jobDidFinish(input: false) }
-                    if self.pendingTargetCommands.remove(token) != nil, case .success = result {
-                        self.rejectedTargetPick = false
+                    if self.pendingTargetCommands.remove(token) != nil {
+                        if case .success = result { self.rejectedTargetPick = false }
+                        else if rejectFailedTarget { self.rejectedTargetPick = true }
                     }
                     if !self.isClosing {
                         // Core can report a partial native insertion failure;

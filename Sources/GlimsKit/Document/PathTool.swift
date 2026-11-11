@@ -44,6 +44,18 @@ final class PathTool {
     /// drag is dropped rather than written over the change.
     private var dragBase: (path: Int32?, shape: VectorPath)?
 
+    /// The first accepted anchor has no native ID until creation finishes.
+    /// Keep its overlay, but do not admit another creation or edit against an
+    /// unknown target. Ending extension never cancels this accepted edit.
+    private struct PendingCreation {
+        let token: UUID
+        let shape: VectorPath
+        let toolRevision: UInt64
+        let itemSelectionRevision: Int
+    }
+    private var pendingCreation: PendingCreation?
+    private var toolObserver: UUID?
+
     var onStatus: ((String) -> Void)?
 
     /// How near a press must be to grab an anchor or handle, in view points.
@@ -68,17 +80,53 @@ final class PathTool {
 
     init(canvas: EngineCanvasView) {
         self.canvas = canvas
+        toolObserver = ToolState.shared.observe { [weak self] in
+            guard let self, let pending = self.pendingCreation,
+                  pending.toolRevision != ToolState.shared.selectionRevision else { return }
+            self.extending = nil
+            self.selectedAnchors = []
+            self.canvas.needsDisplay = true
+        }
+    }
+
+    deinit {
+        if let token = toolObserver {
+            Task { @MainActor in ToolState.shared.removeObserver(token) }
+        }
     }
 
     /// The active path's shape, as being edited.
     var shape: VectorPath {
-        working ?? document.activePath.flatMap { document.pathShapes[$0] } ?? VectorPath()
+        if let working { return working }
+        // A later palette selection takes precedence over the pending
+        // overlay, even before its creation completion arrives.
+        if let pendingCreation, document.selectedPathIDs.isEmpty,
+           pendingCreation.itemSelectionRevision == document.moveTargetRevision.items {
+            return pendingCreation.shape
+        }
+        return document.activePath.flatMap { document.pathShapes[$0] } ?? VectorPath()
+    }
+
+    /// Selection can be mirrored before the queued shape read completes.
+    /// An existing path without cached geometry is never an empty edit base.
+    private var activePathIsLoading: Bool {
+        guard let id = document.activePath else { return false }
+        return document.pathShapes[id] == nil
     }
 
     /// Forgets the subpath being drawn and clears the selected set when
     /// another path became active; prunes the selected anchors an undo or
     /// an edit took away.
     private func syncWithDocument() {
+        // A native creation can emit selection events before its completion.
+        // That completion alone associates the retained anchor state with ID.
+        if let pendingCreation {
+            if pendingCreation.itemSelectionRevision != document.moveTargetRevision.items {
+                extending = nil
+                selectedAnchors = []
+            }
+            return
+        }
         if statePath != document.activePath {
             statePath = document.activePath
             extending = nil
@@ -95,6 +143,14 @@ final class PathTool {
     // MARK: Pointer
 
     func mouseDown(at point: CGPoint, flags: NSEvent.ModifierFlags) {
+        guard pendingCreation == nil else {
+            onStatus?("Creating the path…")
+            return
+        }
+        guard !activePathIsLoading else {
+            onStatus?("Loading the path…")
+            return
+        }
         syncWithDocument()
         // Several selected paths are ambiguous: the click is consumed —
         // no anchor edit, and never an implicit new path or a fall
@@ -222,6 +278,10 @@ final class PathTool {
             canvas.needsDisplay = true
         }
         guard let path = working, drag != nil, let base = dragBase else { return }
+        guard !activePathIsLoading else {
+            onStatus?("Loading the path…")
+            return
+        }
         let current = document.activePath.flatMap { document.pathShapes[$0] } ?? VectorPath()
         guard document.activePath == base.path, current.isUnchanged(from: base.shape) else {
             onStatus?("The path changed during the drag, so the drag was not applied.")
@@ -237,15 +297,43 @@ final class PathTool {
     /// Sends the edit; the first anchor of a document without an active
     /// path makes a new path.
     private func commit(_ path: VectorPath) {
+        guard pendingCreation == nil else {
+            onStatus?("Creating the path…")
+            return
+        }
         if let id = document.activePath {
             // Compared bit for bit, so an unchanged shape holding a NaN (a
             // damaged file) is not sent back, where the engine refuses it.
             if let current = document.pathShapes[id], path.isUnchanged(from: current) { return }
             document.updatePath(id, to: path)
         } else {
-            guard !path.isEmpty, let id = document.addPath(path) else { return }
-            statePath = id
-            onStatus?("Added a path; the Paths palette lists it.")
+            guard !path.isEmpty else { return }
+            let document = document
+            let pending = PendingCreation(token: UUID(), shape: path,
+                toolRevision: ToolState.shared.selectionRevision,
+                itemSelectionRevision: document.moveTargetRevision.items)
+            pendingCreation = pending
+            onStatus?("Creating the path…")
+            document.addPath(path) { [weak self, weak document] result in
+                guard let self, let document, self.document === document,
+                      self.pendingCreation?.token == pending.token else { return }
+                self.pendingCreation = nil
+                self.canvas.needsDisplay = true
+                guard case .success(let id) = result, !document.isClosing,
+                      document.activePath == id,
+                      ToolState.shared.current == .path,
+                      ToolState.shared.selectionRevision == pending.toolRevision,
+                      document.moveTargetRevision.items == pending.itemSelectionRevision else {
+                    self.extending = nil
+                    self.selectedAnchors = []
+                    return
+                }
+                self.statePath = id
+                // Escape/Return may already have cleared these fields. The
+                // completion prunes them, never restores cancelled extension.
+                self.syncWithDocument()
+                self.onStatus?("Added a path; the Paths palette lists it.")
+            }
         }
     }
 
@@ -256,6 +344,25 @@ final class PathTool {
     private static let deleteKeys: Set<Int> = [51, 117]   // Delete, Forward Delete
 
     func keyDown(keyCode: Int) -> Bool {
+        if pendingCreation != nil {
+            if Self.returnKeys.contains(keyCode) || keyCode == Self.escapeKey {
+                extending = nil
+                selectedAnchors = []
+                canvas.needsDisplay = true
+                onStatus?("Creating the path…")
+                return true
+            }
+            if Self.deleteKeys.contains(keyCode) || CanvasKeyboardPolicy.Arrow(keyCode: keyCode) != nil {
+                onStatus?("Creating the path…")
+                return true
+            }
+        }
+        if activePathIsLoading,
+           Self.returnKeys.contains(keyCode) || keyCode == Self.escapeKey
+            || Self.deleteKeys.contains(keyCode) || CanvasKeyboardPolicy.Arrow(keyCode: keyCode) != nil {
+            onStatus?("Loading the path…")
+            return true
+        }
         // While the pointer holds an anchor or handle, keys wait: an edit now
         // would be undone by the drag's own edit on release.
         if drag != nil, Self.deleteKeys.contains(keyCode) || Self.returnKeys.contains(keyCode)
@@ -311,13 +418,17 @@ final class PathTool {
         syncWithDocument()
         let path = shape
         guard !path.isEmpty else { return }
+        // While the new ID is unknown, never paint its selected handles over
+        // a different path the palette has selected in the meantime.
+        let selected: Set<VectorPath.AnchorIndex> = pendingCreation != nil && !document.selectedPathIDs.isEmpty
+            ? [] : selectedAnchors
         let outline = NSBezierPath(cgPath: path.cgPath(scale: scale))
         outline.lineWidth = 1.5
         Self.pathColor.setStroke()
         outline.stroke()
 
         let toView = { (point: CGPoint) in NSPoint(x: point.x * scale, y: point.y * scale) }
-        for index in selectedAnchors where path.contains(index) {
+        for index in selected where path.contains(index) {
             let anchor = path[index]
             for handle in [anchor.handleIn, anchor.handleOut] where handle != anchor.point {
                 let line = NSBezierPath()
@@ -335,7 +446,7 @@ final class PathTool {
             for (a, anchor) in subpath.anchors.enumerated() {
                 let center = toView(anchor.point)
                 let square = NSRect(x: center.x - 3.5, y: center.y - 3.5, width: 7, height: 7)
-                let isSelected = selectedAnchors.contains(VectorPath.AnchorIndex(subpath: s, anchor: a))
+                let isSelected = selected.contains(VectorPath.AnchorIndex(subpath: s, anchor: a))
                 (isSelected ? Self.pathColor : NSColor.white).setFill()
                 square.fill()
                 Self.pathColor.setStroke()

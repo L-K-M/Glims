@@ -1884,7 +1884,9 @@ final class CanvasToolController {
     /// refresh their unfocused fields and readiness.
     func transformDocumentStateDidChange() {
         canvas.invalidateTransformPixelPreview()
-        transformSessionDidChange()
+        // A reload can be nested inside a larger native read completion.
+        // Start the next copy at draw time, after that callback unwinds.
+        onTransformSessionChange?()
     }
 
     private func transformSessionDidChange() {
