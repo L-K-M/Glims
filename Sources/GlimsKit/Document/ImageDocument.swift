@@ -5116,7 +5116,7 @@ final class ImageDocument {
                             try session.layerMask($0, image: image).editing
                         }
                         guard try !session.quickMask(image).enabled,
-                              session.selectedItems(.channel, image: image).isEmpty, !editingMask else {
+                              try session.selectedItems(.channel, image: image).isEmpty, !editingMask else {
                             throw RecorderReplayError(message: "Finish editing the channel or layer mask before replaying this stroke.")
                         }
                     }
