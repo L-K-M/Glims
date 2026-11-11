@@ -3,7 +3,7 @@ import AppKit
 @MainActor
 extension EngineSmokeTest {
     static func exerciseRecorderFileUI(_ session: EngineSession, work: URL, documents: DocumentList,
-                                       driveFilePickers: Bool) throws {
+                                       driveFilePickers: Bool, openOnly: Bool) throws {
         var checks = 0
         func expect(_ condition: Bool, _ message: String) {
             checks += 1
@@ -117,6 +117,8 @@ extension EngineSmokeTest {
             windowA.makeKeyAndOrderFront(nil)
             windowA.makeMain()
             try require(wait { windowA.isKeyWindow }, "the picker owner did not receive keyboard focus")
+        }
+        if driveFilePickers && !openOnly {
             try a.presentRecorderFileAction(.saveRecording)
             try require(wait { windowA.attachedSheet?.isVisible == true && windowA.attachedSheet is NSSavePanel },
                         "second native Save panel did not attach")

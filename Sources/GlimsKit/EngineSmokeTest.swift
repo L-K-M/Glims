@@ -143,9 +143,10 @@ enum EngineSmokeTest {
                 return failures == 0 ? 0 : 1
             }
             if let smokeCase = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"],
-               ["recorder-file-ui", "recorder-file-picker-ui"].contains(smokeCase) {
+               ["recorder-file-ui", "recorder-file-picker-ui", "recorder-open-picker-ui"].contains(smokeCase) {
                 try exerciseRecorderFileUI(session, work: work, documents: documents,
-                                           driveFilePickers: smokeCase == "recorder-file-picker-ui")
+                                           driveFilePickers: smokeCase != "recorder-file-ui",
+                                           openOnly: smokeCase == "recorder-open-picker-ui")
                 print(failures == 0 ? "PASSED (Recorder file UI)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
