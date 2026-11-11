@@ -4004,3 +4004,29 @@ four engines and1,115 unit tests, with independent source review. The
 stationary defect was reproduced before its fix. See
 [floating-tool-policy.md](floating-tool-policy.md) for exact behavior and
 remaining final-release scope.
+
+### Durable recordings and complete ordinary strokes (2026-11-11 candidate)
+
+Recorder files now retain named, settled semantic logs, explicit target
+descriptions and guarded cross-image bindings. Save/Load use owned native
+panels and bounded atomic file transactions. Close, Quit and Revert separately
+protect unsaved recordings and image pixels, including a detached save of
+accepted work in an active recording. Cancel leaves the original recording
+available.
+
+Pencil, Eraser and Paintbrush gestures capture immutable settings, ordered
+V1 samples and supported brush/configuration fingerprints. Replay validates
+the brush and explicit pixel-layer binding before painting; unsupported
+capture stays a failed row while ordinary live painting can continue.
+Successful strokes use the closed version-2 format, preserving version-1
+files for other supported semantic commands.
+
+The combined native foundation passes8,870 checks across four engines.
+Recorder capture22, saved-file26, actual Paintbrush canvas23, earlier
+Pencil/Eraser canvas23, Revert10 and real Quit13 each pass on all four.
+Latest-Main source `555792d` passes1,195 units and independent file/consent
+source review. See [Recorder](recorder.md), [its file format](recorder-file-format.md)
+and [the native boundary](stroke-capture-and-tablet-input.md). Hosted CI,
+final publication feedback, optional tablet-axis frontend delivery and the
+final combined bundle remain separate gates; other semantic command families
+are still outside this capture scope.
