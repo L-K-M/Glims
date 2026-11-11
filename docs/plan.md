@@ -3957,3 +3957,14 @@ every engine, plus1,050 units. Native170 checks per engine and all7,454
 general checks pass. See [text-floating-creation.md](text-floating-creation.md)
 for scope and the existing Escape Apply/close policy. Hosted CI/current
 feedback, combined integration and final release remain separate gates.
+
+
+### Move Target modes
+
+Move keeps Current Layer by default. Pick Layer or Guide uses the native
+opacity hit at press and keeps the captured target through release. Escape,
+focus loss and an explicit newer target are distinguished, including when
+an exclusive engine operation delays restoration. Tool Options and View >
+Move Target share one setting. The combined editor passes 1,712 focused
+checks across four engines and 1,115 unit tests, including Spring, modifier
+hints, Text and the existing Tools menu. See [floating selections](floating-tool-policy.md).
