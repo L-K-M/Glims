@@ -17,9 +17,16 @@ a real Tab event stays inside its panel; Layers and Tool Options accept
 keyboard entry. Document pixels, Undo and main-window identity stay unchanged,
 and owned panels, rendering and native image close during teardown.
 
-Rigi's new API passes 143 native unit tests, Gallery smoke and a release
+Rigi's new API passes 145 native unit tests, Gallery smoke and a release
 build. The consumer passes 1,220 unit tests before the separate filter-badge
 AX integration. Local results are ephemeral under `/tmp/glims-completion/`,
 with prefixes `text-restore-focused` and `palette-keyboard-23e6-full-units`.
 The tests do not change the Mac's Full Keyboard Access preference and do not
 establish a complete spoken VoiceOver or appearance audit.
+
+Independent source review identified a same-turn grouped-opening defect in
+the first Rigi revision: explicit focus could enter the previous tab or a
+collapsed title bar. Two real AppKit regressions first fail six assertions,
+then pass after explicitly selecting and expanding the requested tab.
+The consumer now pins that corrected revision; its new checks are tracked
+separately from the first 48 application checks above.
