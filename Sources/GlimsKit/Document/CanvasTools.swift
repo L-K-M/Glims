@@ -122,7 +122,7 @@ final class CanvasToolController {
     private var pickedMove: PickedMove?
     private var pickedMoveWasRequested = false
 
-    /// A Rectangle or Ellipse capture with an active float. Release may
+    /// A Rectangle, Ellipse or Lasso capture with an active float. Release may
     /// arrive before the counted opacity read returns.
     @MainActor
     private final class FloatingShape {
@@ -149,6 +149,7 @@ final class CanvasToolController {
         let operation: EngineSession.SelectOperation
         var hit: Hit
         var latest: CGPoint
+        var lassoPoints: [CGPoint]
         var receivedDrag = false
         var release: Release?
         var preview: (rect: CGRect, plan: CanvasSnapPlanner.Result)?
@@ -166,6 +167,7 @@ final class CanvasToolController {
             expected = document.floatingState
             revision = document.moveTargetRevision
             latest = start
+            lassoPoints = tool == .lasso ? [start] : []
             hit = checkOpacity ? .pending : .shape
         }
     }
@@ -423,7 +425,7 @@ final class CanvasToolController {
             lassoPoints = [point]
             dragOperation = Self.operation(for: event.modifierFlags)
             selectionDragFlags = event.modifierFlags
-            if tool != .lasso, document.floatingState.isActive {
+            if document.floatingState.isActive {
                 beginFloatingShape(tool, at: point, event: event)
             }
         case .magicWand, .selectByColor:
@@ -504,6 +506,10 @@ final class CanvasToolController {
             guard request.release == nil else { return }
             request.receivedDrag = true
             request.latest = canvas.imagePoint(for: event)
+            if request.tool == .lasso {
+                guard request.latest.x.isFinite, request.latest.y.isFinite else { return cancelFloatingShape() }
+                _ = Self.recordLassoPoint(request.latest, in: &request.lassoPoints)
+            }
             dragCurrent = request.latest
             selectionDragFlags = event.modifierFlags
             updateFloatingShapePreview(request)
@@ -537,8 +543,7 @@ final class CanvasToolController {
             }
             canvas.needsDisplay = true
         case .lasso:
-            if let last = lassoPoints.last, hypot(point.x - last.x, point.y - last.y) >= 1 {
-                lassoPoints.append(point)
+            if Self.recordLassoPoint(point, in: &lassoPoints) {
                 canvas.needsDisplay = true
             }
         case .transform:
@@ -1007,7 +1012,7 @@ final class CanvasToolController {
         hintChanged(.afterAction)
     }
 
-    // MARK: Rectangle and Ellipse with an active floating selection
+    // MARK: Shape selection with an active float
 
     private func beginFloatingShape(_ tool: ToolID, at point: CGPoint, event: NSEvent) {
         let interval = NSEvent.doubleClickInterval
@@ -1076,8 +1081,17 @@ final class CanvasToolController {
             request.document.movePickedLayer(row, expected: request.expected, ownership: nil, by: offset,
                                            requireUnlockedPixels: true)
         case .shape:
-            if !request.receivedDrag, release.point == request.start, release.elapsed <= request.clickInterval {
+            // Lasso confirms both a short click and a long stationary press.
+            // Delivered motion disqualifies either, even at the press point.
+            if !request.receivedDrag, release.point == request.start,
+               request.tool == .lasso || release.elapsed <= request.clickInterval {
                 request.document.anchorPickedFloating(request.expected, selectingWith: request.operation)
+                return
+            }
+            if request.tool == .lasso {
+                guard request.lassoPoints.count >= 3 else { return }
+                request.document.selectFloatingShape(.polygon(request.lassoPoints), options: release.options,
+                                                     expected: request.expected)
                 return
             }
             guard let rect = SelectionDragGeometry.rect(start: request.start, end: release.point,
@@ -1092,6 +1106,12 @@ final class CanvasToolController {
         guard floatingShape != nil else { return }
         floatingShape = nil
         finishTrackedPointerInteraction()
+    }
+
+    private static func recordLassoPoint(_ point: CGPoint, in points: inout [CGPoint]) -> Bool {
+        guard let last = points.last, hypot(point.x - last.x, point.y - last.y) >= 1 else { return false }
+        points.append(point)
+        return true
     }
 
     /// A rect usable as the captured move geometry.
@@ -1378,23 +1398,25 @@ final class CanvasToolController {
     func drawOverlay(scale: Double) {
         let path: NSBezierPath
         switch dragTool {
-        case .rectangleSelect?, .ellipseSelect?:
+        case .rectangleSelect?, .ellipseSelect?, .lasso?:
             if let preview = floatingShape?.preview {
                 let bounds = preview.rect
                 path = NSBezierPath(rect: NSRect(x: bounds.minX * scale, y: bounds.minY * scale,
                                                  width: bounds.width * scale, height: bounds.height * scale))
                 drawSnapIndicators(scale: scale)
+            } else if dragTool == .lasso {
+                if let request = floatingShape, case .pending = request.hit { return }
+                let points = floatingShape?.lassoPoints ?? lassoPoints
+                guard points.count > 1 else { return }
+                path = NSBezierPath()
+                path.move(to: NSPoint(x: points[0].x * scale, y: points[0].y * scale))
+                points.dropFirst().forEach { path.line(to: NSPoint(x: $0.x * scale, y: $0.y * scale)) }
             } else {
                 guard let bounds = selectionDragRect else { return }
                 let rect = NSRect(x: bounds.minX * scale, y: bounds.minY * scale,
                                   width: bounds.width * scale, height: bounds.height * scale)
                 path = dragTool == .ellipseSelect ? NSBezierPath(ovalIn: rect) : NSBezierPath(rect: rect)
             }
-        case .lasso?:
-            guard lassoPoints.count > 1 else { return }
-            path = NSBezierPath()
-            path.move(to: NSPoint(x: lassoPoints[0].x * scale, y: lassoPoints[0].y * scale))
-            lassoPoints.dropFirst().forEach { path.line(to: NSPoint(x: $0.x * scale, y: $0.y * scale)) }
         case .crop?:
             guard let start = dragStart, let end = dragCurrent else { return }
             path = NSBezierPath(rect: NSRect(x: min(start.x, end.x) * scale, y: min(start.y, end.y) * scale,
