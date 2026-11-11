@@ -457,6 +457,424 @@ test_nested_placement (void)
   CHECK (api->image_close (engine, image) == GLIMS_STATUS_OK, "the nested-test image closes");
 }
 
+/* ---- Tonal operations: gimp:levels, gimp:curves, gimp:color-balance,
+ * gimp:hue-saturation, admitted as adjustment layers. Each carries an
+ * owned-config get/set pair on the live filter session; the shape of the
+ * lifecycle is shared, so one driver walks a per-operation vtable. */
+#define BASE_R 180
+#define BASE_G 90
+#define BASE_B 40
+
+typedef struct {
+  const char *operation;
+  /* Typed get verifies the factory default; typed set installs a visibly
+   * non-neutral config; typed get reads the committed value back. */
+  bool (*is_neutral)   (GlimsFilterID filter);
+  bool (*apply_change) (GlimsFilterID filter);
+  bool (*is_changed)   (GlimsFilterID filter);
+} TonalOp;
+
+static GlimsImageID
+new_colored_image (void)
+{
+  uint8_t      px[IMG_W * IMG_H * 4];
+  GlimsImageID image = 0;
+  size_t       i;
+
+  for (i = 0; i < sizeof px; i += 4)
+    {
+      px[i] = BASE_R; px[i + 1] = BASE_G; px[i + 2] = BASE_B; px[i + 3] = 255;
+    }
+  if (api->image_from_pixels (engine, IMG_W, IMG_H, px, sizeof px, &image, NULL) != GLIMS_STATUS_OK)
+    return 0;
+  return image;
+}
+
+/* The selected drawable's raw stored pixels still read as the flat base
+ * color: the effect never merged into the layer beneath the group. */
+static bool
+base_pixels_intact (GlimsImageID image, GlimsItemID base)
+{
+  GlimsPixelBuffer buffer;
+  bool             ok = false;
+  size_t           i;
+
+  memset (&buffer, 0, sizeof buffer);
+  if (api->layer_select (engine, image, base) != GLIMS_STATUS_OK ||
+      api->image_copy_pixels (engine, image, false, &buffer, NULL) != GLIMS_STATUS_OK)
+    return false;
+  if (buffer.pixels && buffer.byte_count == IMG_W * IMG_H * 4 &&
+      buffer.bounds.width == IMG_W && buffer.bounds.height == IMG_H)
+    {
+      ok = true;
+      for (i = 0; i < buffer.byte_count; i += 4)
+        if (abs (buffer.pixels[i] - BASE_R) > 2 || abs (buffer.pixels[i + 1] - BASE_G) > 2 ||
+            abs (buffer.pixels[i + 2] - BASE_B) > 2 || buffer.pixels[i + 3] != 255)
+          ok = false;
+    }
+  api->free_pixels (buffer.pixels);
+  return ok;
+}
+
+static bool
+composite_base (GlimsImageID image)
+{
+  return composite_is (image, BASE_R, BASE_G, BASE_B, 2);
+}
+
+static bool
+composite_changed (GlimsImageID image)
+{
+  uint8_t px[IMG_W * IMG_H * 4];
+  bool changed = false;
+
+  /* A render failure or lost opacity is not evidence of a tonal edit. */
+  if (api->image_render (engine, image, 1.0, (GlimsRect) { 0, 0, IMG_W, IMG_H },
+                         px, IMG_W * 4) != GLIMS_STATUS_OK)
+    return false;
+  for (size_t i = 0; i < sizeof px; i += 4)
+    {
+      if (px[i + 3] != 255) return false;
+      changed |= abs (px[i] - BASE_R) > 2 || abs (px[i + 1] - BASE_G) > 2 ||
+                 abs (px[i + 2] - BASE_B) > 2;
+    }
+  return changed;
+}
+
+/* gimp:levels */
+
+static bool
+levels_channel_neutral (const GlimsLevelsChannel *c)
+{
+  return c->low_input == 0 && c->high_input == 1 && c->gamma == 1 &&
+         c->low_output == 0 && c->high_output == 1;
+}
+
+static bool
+levels_is_neutral (GlimsFilterID filter)
+{
+  GlimsLevelsSettings s = { .struct_size = sizeof s };
+
+  return api->filter_levels_get (engine, filter, &s, NULL) == GLIMS_STATUS_OK &&
+         s.trc == GLIMS_COLOR_TRC_LINEAR && ! s.clamp_input && ! s.clamp_output &&
+         levels_channel_neutral (&s.value) && levels_channel_neutral (&s.red) &&
+         levels_channel_neutral (&s.green) && levels_channel_neutral (&s.blue) &&
+         levels_channel_neutral (&s.alpha);
+}
+
+static bool
+levels_apply_change (GlimsFilterID filter)
+{
+  GlimsLevelsSettings s = { .struct_size = sizeof s };
+
+  if (api->filter_levels_get (engine, filter, &s, NULL) != GLIMS_STATUS_OK)
+    return false;
+  s.value.gamma = 2.0;
+  return api->filter_levels_set (engine, filter, &s, NULL) == GLIMS_STATUS_OK;
+}
+
+static bool
+levels_is_changed (GlimsFilterID filter)
+{
+  GlimsLevelsSettings s = { .struct_size = sizeof s };
+
+  return api->filter_levels_get (engine, filter, &s, NULL) == GLIMS_STATUS_OK &&
+         s.value.gamma == 2.0;
+}
+
+/* gimp:curves */
+
+static const GlimsCurvePoint CURVE_DARKEN[2] = {
+  { 0, 0, GLIMS_CURVE_POINT_SMOOTH },
+  { 1, 0.5, GLIMS_CURVE_POINT_SMOOTH }
+};
+
+static bool
+curves_is_neutral (GlimsFilterID filter)
+{
+  GlimsCurvesSnapshot s;
+  bool                ok;
+
+  memset (&s, 0, sizeof s);
+  s.struct_size = sizeof s;
+  ok = api->filter_curves_get (engine, filter, &s, NULL) == GLIMS_STATUS_OK &&
+       s.trc == GLIMS_COLOR_TRC_PERCEPTUAL && s.value.kind == GLIMS_CURVE_KIND_SMOOTH &&
+       s.value.point_count == 2 && s.value.points &&
+       s.value.points[0].x == 0 && s.value.points[0].y == 0 &&
+       s.value.points[1].x == 1 && s.value.points[1].y == 1;
+  api->free_curves_snapshot (&s);
+  return ok;
+}
+
+static bool
+curves_apply_change (GlimsFilterID filter)
+{
+  GlimsCurveEdit      edit = { .struct_size = sizeof edit,
+                               .channel = GLIMS_CURVE_CHANNEL_VALUE,
+                               .mode = GLIMS_CURVE_EDIT_SMOOTH_POINTS,
+                               .point_count = 2, .points = CURVE_DARKEN };
+  GlimsCurvesSnapshot out;
+  bool                ok;
+
+  memset (&out, 0, sizeof out);
+  out.struct_size = sizeof out;
+  ok = api->filter_curves_edit (engine, filter, &edit, &out, NULL) == GLIMS_STATUS_OK;
+  api->free_curves_snapshot (&out);
+  return ok;
+}
+
+static bool
+curves_is_changed (GlimsFilterID filter)
+{
+  GlimsCurvesSnapshot s;
+  bool                ok;
+
+  memset (&s, 0, sizeof s);
+  s.struct_size = sizeof s;
+  ok = api->filter_curves_get (engine, filter, &s, NULL) == GLIMS_STATUS_OK &&
+       s.value.point_count == 2 && s.value.points &&
+       s.value.points[1].x == 1 && s.value.points[1].y == 0.5;
+  api->free_curves_snapshot (&s);
+  return ok;
+}
+
+/* gimp:color-balance */
+
+static bool
+balance_range_zero (const GlimsColorBalanceRange *r)
+{
+  return r->cyan_red == 0 && r->magenta_green == 0 && r->yellow_blue == 0;
+}
+
+static bool
+balance_is_neutral (GlimsFilterID filter)
+{
+  GlimsColorBalanceSettings s = { .struct_size = sizeof s };
+
+  return api->filter_color_balance_get (engine, filter, &s, NULL) == GLIMS_STATUS_OK &&
+         s.preserve_luminosity == 1 && balance_range_zero (&s.shadows) &&
+         balance_range_zero (&s.midtones) && balance_range_zero (&s.highlights);
+}
+
+static bool
+balance_apply_change (GlimsFilterID filter)
+{
+  GlimsColorBalanceSettings s = { .struct_size = sizeof s };
+
+  if (api->filter_color_balance_get (engine, filter, &s, NULL) != GLIMS_STATUS_OK)
+    return false;
+  s.midtones.cyan_red = 0.5;
+  return api->filter_color_balance_set (engine, filter, &s, NULL) == GLIMS_STATUS_OK;
+}
+
+static bool
+balance_is_changed (GlimsFilterID filter)
+{
+  GlimsColorBalanceSettings s = { .struct_size = sizeof s };
+
+  return api->filter_color_balance_get (engine, filter, &s, NULL) == GLIMS_STATUS_OK &&
+         s.midtones.cyan_red == 0.5;
+}
+
+/* gimp:hue-saturation */
+
+static bool
+hue_range_zero (const GlimsHueSaturationRange *r)
+{
+  return r->hue == 0 && r->saturation == 0 && r->lightness == 0;
+}
+
+static bool
+hue_is_neutral (GlimsFilterID filter)
+{
+  GlimsHueSaturationSettings s = { .struct_size = sizeof s };
+
+  return api->filter_hue_saturation_get (engine, filter, &s, NULL) == GLIMS_STATUS_OK &&
+         s.overlap == 0 && hue_range_zero (&s.master) && hue_range_zero (&s.red) &&
+         hue_range_zero (&s.yellow) && hue_range_zero (&s.green) && hue_range_zero (&s.cyan) &&
+         hue_range_zero (&s.blue) && hue_range_zero (&s.magenta);
+}
+
+static bool
+hue_apply_change (GlimsFilterID filter)
+{
+  GlimsHueSaturationSettings s = { .struct_size = sizeof s };
+
+  if (api->filter_hue_saturation_get (engine, filter, &s, NULL) != GLIMS_STATUS_OK)
+    return false;
+  s.master.saturation = -1.0;
+  return api->filter_hue_saturation_set (engine, filter, &s, NULL) == GLIMS_STATUS_OK;
+}
+
+static bool
+hue_is_changed (GlimsFilterID filter)
+{
+  GlimsHueSaturationSettings s = { .struct_size = sizeof s };
+
+  return api->filter_hue_saturation_get (engine, filter, &s, NULL) == GLIMS_STATUS_OK &&
+         s.master.saturation == -1.0;
+}
+
+static const TonalOp TONAL_OPS[4] = {
+  { "gimp:levels",          levels_is_neutral,  levels_apply_change,  levels_is_changed  },
+  { "gimp:curves",          curves_is_neutral,  curves_apply_change,  curves_is_changed  },
+  { "gimp:color-balance",   balance_is_neutral, balance_apply_change, balance_is_changed },
+  { "gimp:hue-saturation",  hue_is_neutral,     hue_apply_change,     hue_is_changed     }
+};
+
+/* The shared lifecycle on an RGB image: neutral pass-through group, one
+ * creation undo, typed get/set preview without touching base pixels,
+ * abort with no undo, one-step commit, undo/redo, XCF round trip that
+ * stays re-editable. */
+static void
+test_tonal_adjustment (const TonalOp *op, const char *work)
+{
+  GlimsImageID    image, reopened = 0;
+  GlimsItemID     bg = 0, layer = 0;
+  GlimsEffectID   effect = 0;
+  GlimsFilterID   filter = 0;
+  GlimsLayerInfo  rows[MAX_ROWS];
+  GlimsEffectInfo effects[4];
+  uint8_t         changed_px[IMG_W * IMG_H * 4] = { 0 };
+  uint8_t         committed_px[IMG_W * IMG_H * 4] = { 0 };
+  int32_t         n = 0, count = 0, depth;
+  bool            ok;
+  char           *error = NULL, xcf[1024];
+
+  image = new_colored_image ();
+  CHECK (image != 0 && composite_base (image), "%s: a colored opaque base", op->operation);
+  if (! image) return;
+  bg = first_layer (image);
+  depth = undo_depth (image);
+
+  ok = api->adjustment_layer_new (engine, image, 0, 0, op->operation, "Tonal",
+                                  &layer, &effect, &error) == GLIMS_STATUS_OK && layer > 0 && effect > 0;
+  CHECK (ok, "%s: admitted as an adjustment layer%s%s", op->operation,
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  if (! ok) { api->image_close (engine, image); return; }
+
+  CHECK (api->image_layers (engine, image, rows, MAX_ROWS, &n) == GLIMS_STATUS_OK && n == 2 &&
+         rows[0].id == layer && rows[0].kind == GLIMS_LAYER_GROUP &&
+         strcmp (rows[0].mode, "pass-through") == 0 && rows[0].parent == 0 && rows[0].depth == 0 &&
+         rows[0].filter_count == 1 && rows[1].id == bg,
+         "%s: a pass-through group with one filter above the base", op->operation);
+  CHECK (api->drawable_effects (engine, image, layer, effects, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && effects[0].id == effect && strcmp (effects[0].operation, op->operation) == 0 &&
+         effects[0].enabled, "%s: the committed effect reads back under the returned id", op->operation);
+  CHECK (composite_base (image) && undo_depth (image) == depth + 1,
+         "%s: the default config is neutral and exactly one undo covers creation", op->operation);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == depth &&
+         api->image_layers (engine, image, rows, MAX_ROWS, &n) == GLIMS_STATUS_OK && n == 1 &&
+         rows[0].id == bg && composite_base (image),
+         "%s: one undo removes the group and restores the base", op->operation);
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == depth + 1 &&
+         api->image_layers (engine, image, rows, MAX_ROWS, &n) == GLIMS_STATUS_OK && n == 2 &&
+         rows[0].id == layer &&
+         api->drawable_effects (engine, image, layer, effects, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && effects[0].id == effect,
+         "%s: redo restores the same group and effect ids", op->operation);
+
+  CHECK (api->filter_edit_begin (engine, image, layer, effect, &filter, &error) == GLIMS_STATUS_OK &&
+         filter != 0, "%s: the committed effect opens for editing%s%s", op->operation,
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  if (! filter) { api->image_close (engine, image); return; }
+
+  CHECK (op->is_neutral (filter), "%s: the typed get reports the factory-neutral config", op->operation);
+  CHECK (op->apply_change (filter) && composite_changed (image),
+         "%s: the typed set previews a changed composite", op->operation);
+  CHECK (base_pixels_intact (image, bg), "%s: the preview left the base layer's pixels untouched", op->operation);
+  CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK && undo_depth (image) == depth + 1 &&
+         composite_base (image), "%s: abort restores the composite and adds no undo", op->operation);
+
+  CHECK (api->filter_edit_begin (engine, image, layer, effect, &filter, NULL) == GLIMS_STATUS_OK &&
+         filter != 0 && op->apply_change (filter) &&
+         api->filter_commit (engine, filter, NULL) == GLIMS_STATUS_OK && undo_depth (image) == depth + 2 &&
+         composite_changed (image) &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 0, 0, IMG_W, IMG_H },
+                            committed_px, IMG_W * 4) == GLIMS_STATUS_OK,
+         "%s: commit applies the config as exactly one undo step", op->operation);
+  CHECK (base_pixels_intact (image, bg), "%s: the committed effect leaves base pixels untouched", op->operation);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == depth + 1 &&
+         composite_base (image), "%s: one undo restores the neutral composite", op->operation);
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == depth + 2 &&
+         composite_changed (image) &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 0, 0, IMG_W, IMG_H },
+                            changed_px, IMG_W * 4) == GLIMS_STATUS_OK &&
+         memcmp (changed_px, committed_px, sizeof changed_px) == 0,
+         "%s: redo restores the exact committed composite", op->operation);
+
+  snprintf (xcf, sizeof xcf, "%s/%s-adjustment.xcf", work, op->operation + 5);
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_close (engine, image) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK && reopened != 0,
+         "%s: the image with its adjustment saves and reopens as XCF", op->operation);
+  if (! reopened) return;
+
+  CHECK (api->image_layers (engine, reopened, rows, MAX_ROWS, &n) == GLIMS_STATUS_OK && n == 2 &&
+         rows[0].kind == GLIMS_LAYER_GROUP && strcmp (rows[0].mode, "pass-through") == 0 &&
+         rows[0].filter_count == 1 &&
+         api->drawable_effects (engine, reopened, rows[0].id, effects, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && strcmp (effects[0].operation, op->operation) == 0,
+         "%s: reopen keeps the pass-through group and the operation", op->operation);
+  {
+    uint8_t px[IMG_W * IMG_H * 4];
+
+    CHECK (api->image_render (engine, reopened, 1.0, (GlimsRect) { 0, 0, IMG_W, IMG_H },
+                              px, IMG_W * 4) == GLIMS_STATUS_OK &&
+           memcmp (px, changed_px, sizeof px) == 0,
+           "%s: reopen keeps the adjusted composite output", op->operation);
+    CHECK (api->filter_edit_begin (engine, reopened, rows[0].id, effects[0].id, &filter, NULL) == GLIMS_STATUS_OK &&
+           filter != 0 && op->is_changed (filter) &&
+           api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+           "%s: the reloaded config reads back and remains re-editable", op->operation);
+  }
+  api->image_close (engine, reopened);
+}
+
+/* The adapter gates creation on the image base type: indexed is refused
+ * for every operation, grayscale is admitted like RGB — no per-operation
+ * color-only carve-out exists in adjustment.c. Each creation must stay
+ * neutral and collapse into one undo step on a gray image too. */
+static void
+test_tonal_grayscale (const TonalOp *op)
+{
+  GlimsImageID   image;
+  GlimsItemID    layer = 0;
+  GlimsEffectID  effect = 0;
+  GlimsLayerInfo rows[MAX_ROWS];
+  uint8_t        before_px[IMG_W * IMG_H * 4] = { 0 }, after_px[IMG_W * IMG_H * 4] = { 0 };
+  int32_t        n = 0;
+  char          *error = NULL;
+
+  image = new_colored_image ();
+  if (! image) { CHECK (false, "%s: no image for the grayscale check", op->operation); return; }
+  CHECK (api->image_convert_mode (engine, image, GLIMS_COLOR_MODE_GRAYSCALE, NULL) == GLIMS_STATUS_OK &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 0, 0, IMG_W, IMG_H },
+                            before_px, IMG_W * 4) == GLIMS_STATUS_OK,
+         "%s: the fixture converts to grayscale", op->operation);
+  CHECK (api->adjustment_layer_new (engine, image, 0, 0, op->operation, NULL,
+                                    &layer, &effect, &error) == GLIMS_STATUS_OK && layer > 0 && effect > 0,
+         "%s: grayscale admits the adjustment layer%s%s", op->operation,
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  if (! layer) { api->image_close (engine, image); return; }
+  CHECK (api->image_layers (engine, image, rows, MAX_ROWS, &n) == GLIMS_STATUS_OK && n == 2 &&
+         rows[0].id == layer && rows[0].kind == GLIMS_LAYER_GROUP &&
+         strcmp (rows[0].mode, "pass-through") == 0 && rows[0].filter_count == 1 &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 0, 0, IMG_W, IMG_H },
+                            after_px, IMG_W * 4) == GLIMS_STATUS_OK &&
+         memcmp (before_px, after_px, sizeof before_px) == 0,
+         "%s: the grayscale adjustment group is pass-through and neutral", op->operation);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, MAX_ROWS, &n) == GLIMS_STATUS_OK && n == 1,
+         "%s: one undo removes the grayscale adjustment", op->operation);
+  api->image_close (engine, image);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -465,6 +883,7 @@ main (int argc, char **argv)
   char user_dir[1024], cache_dir[1024];
   char *error = NULL;
   void *library;
+  int32_t i;
 
   if (argc != 3)
     {
@@ -524,9 +943,17 @@ main (int argc, char **argv)
   if (indexed) {
     expect_refusal (indexed, 0, 0, "gegl:invert-gamma", NULL, GLIMS_STATUS_UNSUPPORTED,
                     "indexed images require RGB or grayscale before adjustment creation");
+    for (i = 0; i < (int32_t) (sizeof TONAL_OPS / sizeof TONAL_OPS[0]); i++)
+      expect_refusal (indexed, 0, 0, TONAL_OPS[i].operation, NULL, GLIMS_STATUS_UNSUPPORTED,
+                      TONAL_OPS[i].operation);
     api->image_close (engine, indexed);
   }
   test_nested_placement ();
+  for (i = 0; i < (int32_t) (sizeof TONAL_OPS / sizeof TONAL_OPS[0]); i++)
+    {
+      test_tonal_adjustment (&TONAL_OPS[i], argv[2]);
+      test_tonal_grayscale (&TONAL_OPS[i]);
+    }
 
   api->stop (engine);
   printf ("adjustment-layer-tests: %d checks, %d failures, %d skips\n", checks, failures, skips);

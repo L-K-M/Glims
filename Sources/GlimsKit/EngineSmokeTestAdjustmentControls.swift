@@ -209,6 +209,42 @@ extension EngineSmokeTest {
         check(docA.layers.first { $0.name == "Brightness Test" } != nil,
               "Redo brings the adjustment layer back")
 
+        // All dedicated tonal choices must reach their actual parameter
+        // editor from the creation sheet, then cancel without an edit undo.
+        let tonalPanels: [(String, (FilterPreviewPanel) -> Bool)] = [
+            ("gimp:levels", { $0 is LevelsPanel }),
+            ("gimp:curves", { $0 is CurvesPanel }),
+            ("gimp:color-balance", { $0 is ColorBalancePanel }),
+            ("gimp:hue-saturation", { $0 is HueSaturationPanel }),
+        ]
+        for (operation, isExpectedPanel) in tonalPanels {
+            docA.selectLayer(layerA)
+            settle(docA)
+            let previousUndo = docA.undoInfo.undoCount
+            a.newAdjustmentLayer(nil)
+            guard let tonalSheet = a.adjustmentSheet else {
+                return check(false, "creation sheet opens for \(operation)")
+            }
+            wait { !tonalSheet.isLoadingOperations }
+            guard let index = tonalSheet.availableOperations.firstIndex(where: { $0.name == operation }) else {
+                return check(false, "creation picker offers \(operation)")
+            }
+            control(a.window?.attachedSheet, "Adjustment", as: NSPopUpButton.self)?.selectItem(at: index)
+            control(a.window?.attachedSheet, "Create adjustment layer", as: NSButton.self)?.performClick(nil)
+            wait { !tonalSheet.isCreating && a.previewPanel != nil }
+            settle(docA)
+            check(a.previewPanel.map(isExpectedPanel) == true,
+                  "\(operation) creation opens its dedicated parameter editor")
+            check(docA.undoInfo.undoCount == previousUndo + 1,
+                  "\(operation) sheet creation adds one undo step")
+            a.previewPanel?.cancel()
+            settle(docA)
+            check(a.previewPanel == nil && docA.undoInfo.undoCount == previousUndo + 1,
+                  "\(operation) editor cancel preserves creation without an edit undo")
+            docA.undo()
+            settle(docA)
+        }
+
         // MARK: Floating-selection refusal
 
         var options = EngineSession.SelectOptions()
