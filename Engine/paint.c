@@ -25,9 +25,11 @@
 #include "core/gimpdynamics.h"
 #include "core/gimpgrouplayer.h"
 #include "core/gimpimage.h"
+#include "core/gimpimage-symmetry.h"
 #include "core/gimpitem.h"
 #include "core/gimplayer.h"
 #include "core/gimppaintinfo.h"
+#include "core/gimpsymmetry.h"
 
 #include "paint/gimpairbrush.h"
 #include "paint/gimppaintcore.h"
@@ -319,11 +321,13 @@ capture_stroke_facts (GlimsEngine               *engine,
 {
   GimpContext *context = GIMP_CONTEXT (options);
   GimpLayerMode paint_mode = gimp_context_get_paint_mode (context);
+  GimpSymmetry *symmetry = gimp_image_get_active_symmetry (image);
   if ((brush->tool != GLIMS_PAINT_PENCIL && brush->tool != GLIMS_PAINT_ERASER) ||
       !recordable_first_point (first) ||
       G_OBJECT_TYPE (drawable) != GIMP_TYPE_LAYER ||
       !gimp_drawable_is_rgb (drawable) || !gimp_drawable_has_alpha (drawable) ||
       gimp_image_get_floating_selection (image) ||
+      !symmetry || G_OBJECT_TYPE (symmetry) != GIMP_TYPE_SYMMETRY ||
       (paint_mode != GIMP_LAYER_MODE_NORMAL && paint_mode != GIMP_LAYER_MODE_NORMAL_LEGACY) ||
       gimp_paint_options_are_dynamics_enabled (options) ||
       options->expand_use || options->jitter_options->use_jitter ||
