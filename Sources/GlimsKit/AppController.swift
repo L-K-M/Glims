@@ -615,31 +615,31 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     @objc func showTools(_ sender: Any?) {
-        toolsPalette.isPresented ? toolsPalette.bringToFront() : toolsPalette.showPanel()
+        toolsPalette.focusPanel()
     }
 
     @objc func showToolOptions(_ sender: Any?) {
-        toolOptionsPalette.isPresented ? toolOptionsPalette.bringToFront() : toolOptionsPalette.showPanel()
+        toolOptionsPalette.focusPanel()
     }
 
     @objc func showLayers(_ sender: Any?) {
-        layersPalette.isPresented ? layersPalette.bringToFront() : layersPalette.showPanel()
+        layersPalette.focusPanel()
     }
 
     @objc func showChannels(_ sender: Any?) {
-        channelsPalette.isPresented ? channelsPalette.bringToFront() : channelsPalette.showPanel()
+        channelsPalette.focusPanel()
     }
 
     @objc func showPaths(_ sender: Any?) {
-        pathsPalette.isPresented ? pathsPalette.bringToFront() : pathsPalette.showPanel()
+        pathsPalette.focusPanel()
     }
 
     @objc func showHistory(_ sender: Any?) {
-        historyPalette.isPresented ? historyPalette.bringToFront() : historyPalette.showPanel()
+        historyPalette.focusPanel()
     }
 
     @objc func showRecorder(_ sender: Any?) {
-        recorderPalette.isPresented ? recorderPalette.bringToFront() : recorderPalette.showPanel()
+        recorderPalette.focusPanel()
     }
 
     @objc func recorderCommand(_ sender: NSMenuItem) {
