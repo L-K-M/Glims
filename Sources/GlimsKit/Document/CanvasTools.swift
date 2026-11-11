@@ -122,13 +122,18 @@ final class CanvasToolController {
     private var pickedMove: PickedMove?
     private var pickedMoveWasRequested = false
 
-    /// A Rectangle, Ellipse or Lasso capture with an active float. Release may
-    /// arrive before the counted opacity read returns.
+    /// A selection gesture with an active float. Release may arrive before
+    /// the counted opacity read returns.
     @MainActor
     private final class FloatingShape {
         enum Hit {
             case pending, shape
             case move(EngineSession.Layer)
+        }
+
+        enum RegionAction {
+            case anchor
+            case selectColor(EngineSession.SelectOptions)
         }
 
         struct Release {
@@ -147,6 +152,7 @@ final class CanvasToolController {
         let pressedAt: TimeInterval
         let clickInterval: TimeInterval
         let operation: EngineSession.SelectOperation
+        let regionAction: RegionAction?
         var hit: Hit
         var latest: CGPoint
         var lassoPoints: [CGPoint]
@@ -156,7 +162,7 @@ final class CanvasToolController {
 
         init(window: NSWindow, document: ImageDocument, tool: ToolID, start: CGPoint,
              pressedAt: TimeInterval, clickInterval: TimeInterval, operation: EngineSession.SelectOperation,
-             checkOpacity: Bool) {
+             checkOpacity: Bool, regionOptions: EngineSession.SelectOptions?) {
             self.window = window
             self.document = document
             self.tool = tool
@@ -164,6 +170,7 @@ final class CanvasToolController {
             self.pressedAt = pressedAt
             self.clickInterval = clickInterval
             self.operation = operation
+            regionAction = regionOptions.map { checkOpacity ? RegionAction.anchor : .selectColor($0) }
             expected = document.floatingState
             revision = document.moveTargetRevision
             latest = start
@@ -432,7 +439,11 @@ final class CanvasToolController {
             var options = ToolState.shared.selectOptions
             options.operation = Self.operation(for: event.modifierFlags)
             options.contiguous = tool == .magicWand
-            document.selectColor(at: point, options: options)
+            if document.floatingState.isActive {
+                beginFloatingShape(tool, at: point, event: event, regionOptions: options)
+            } else {
+                document.selectColor(at: point, options: options)
+            }
         case .eyedropper:
             pickColor(at: point)
         case .hand:
@@ -506,8 +517,10 @@ final class CanvasToolController {
             guard request.release == nil else { return }
             request.receivedDrag = true
             request.latest = canvas.imagePoint(for: event)
-            if request.tool == .lasso {
+            if request.tool == .lasso || request.regionAction != nil {
                 guard request.latest.x.isFinite, request.latest.y.isFinite else { return cancelFloatingShape() }
+            }
+            if request.tool == .lasso {
                 _ = Self.recordLassoPoint(request.latest, in: &request.lassoPoints)
             }
             dragCurrent = request.latest
@@ -1012,9 +1025,10 @@ final class CanvasToolController {
         hintChanged(.afterAction)
     }
 
-    // MARK: Shape selection with an active float
+    // MARK: Selection gestures with an active float
 
-    private func beginFloatingShape(_ tool: ToolID, at point: CGPoint, event: NSEvent) {
+    private func beginFloatingShape(_ tool: ToolID, at point: CGPoint, event: NSEvent,
+                                    regionOptions: EngineSession.SelectOptions? = nil) {
         let interval = NSEvent.doubleClickInterval
         guard let window = canvas.window, !document.targetCommandIsPending, !document.strokeIsActive,
               point.x.isFinite, point.y.isFinite, event.timestamp.isFinite, interval.isFinite, interval > 0 else {
@@ -1023,7 +1037,8 @@ final class CanvasToolController {
         }
         let checkOpacity = event.modifierFlags.intersection([.shift, .option]).isEmpty
         let request = FloatingShape(window: window, document: document, tool: tool, start: point,
-            pressedAt: event.timestamp, clickInterval: interval, operation: dragOperation, checkOpacity: checkOpacity)
+            pressedAt: event.timestamp, clickInterval: interval, operation: regionOptions?.operation ?? dragOperation,
+            checkOpacity: checkOpacity, regionOptions: regionOptions)
         floatingShape = request
         guard checkOpacity else { return }
 
@@ -1081,6 +1096,17 @@ final class CanvasToolController {
             request.document.movePickedLayer(row, expected: request.expected, ownership: nil, by: offset,
                                            requireUnlockedPixels: true)
         case .shape:
+            if let action = request.regionAction {
+                // GIMP 3.2.8 (7addd2b7) resolves Region's press action on any
+                // noncancel release. Only SELECT uses the selection combiner.
+                switch action {
+                case .anchor:
+                    request.document.anchorPickedFloating(request.expected)
+                case .selectColor(let options):
+                    request.document.selectFloatingColor(at: request.start, options: options, expected: request.expected)
+                }
+                return
+            }
             // Lasso confirms both a short click and a long stationary press.
             // Delivered motion disqualifies either, even at the press point.
             if !request.receivedDrag, release.point == request.start,
@@ -1396,15 +1422,18 @@ final class CanvasToolController {
     /// The rubber band or lasso path of a selection being drawn, in view
     /// coordinates (the canvas is flipped).
     func drawOverlay(scale: Double) {
+        if dragTool != nil, let preview = floatingShape?.preview {
+            let bounds = preview.rect
+            let outline = NSBezierPath(rect: NSRect(x: bounds.minX * scale, y: bounds.minY * scale,
+                                                    width: bounds.width * scale, height: bounds.height * scale))
+            drawSnapIndicators(scale: scale)
+            EngineCanvasView.strokeMarchingAnts(outline, phase: 0)
+            return
+        }
         let path: NSBezierPath
         switch dragTool {
         case .rectangleSelect?, .ellipseSelect?, .lasso?:
-            if let preview = floatingShape?.preview {
-                let bounds = preview.rect
-                path = NSBezierPath(rect: NSRect(x: bounds.minX * scale, y: bounds.minY * scale,
-                                                 width: bounds.width * scale, height: bounds.height * scale))
-                drawSnapIndicators(scale: scale)
-            } else if dragTool == .lasso {
+            if dragTool == .lasso {
                 if let request = floatingShape, case .pending = request.hit { return }
                 let points = floatingShape?.lassoPoints ?? lassoPoints
                 guard points.count > 1 else { return }

@@ -1016,6 +1016,20 @@ final class ImageDocument {
         run(semantic: command, command.apply)
     }
 
+    func selectFloatingColor(at point: CGPoint, options: EngineSession.SelectOptions,
+                             expected: EngineSession.FloatingState) {
+        guard expected.isActive, acceptsEdits, !strokeIsActive, pendingInput == 0,
+              !targetCommandIsPending, floatingState == expected else {
+            onError?(DocumentError.targetChanged.localizedDescription)
+            return
+        }
+        let command = SemanticImageCommand.selectColor(point, options: options)
+        run(semantic: command) { session, image in
+            try Self.requireFloatingGestureState(expected, operation: options.operation, session: session, image: image)
+            try command.apply(session: session, image: image)
+        }
+    }
+
     func select(_ command: EngineSession.SelectCommand, radius: Double = 0) {
         guard !refuseWhileEditingUnavailable() else { return }
         let semantic = SemanticImageCommand.selectCommand(command, radius: radius)
