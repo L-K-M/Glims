@@ -71,6 +71,54 @@ final class NativeFilterCatalogTests: XCTestCase {
                        "unavailable operations keep their place in the catalog menu")
     }
 
+    func testUntitledGimpInternalsStayInCatalogButNotFilterMenu() {
+        // Literal rows from the cold 3.2.8 catalog after lazy discovery.
+        let internals = [
+            operation("gimp:profile-transform", title: "", categories: ["color"]),
+            operation("gimp:buffer-source-validate", title: "", categories: ["gimp"]),
+            operation("gimp:fill-source", title: "", categories: ["gimp"]),
+            operation("gimp:layer-mode", title: "", support: .needsAuxInput),
+        ]
+        let colorize = operation("gimp:colorize", title: "Colorize", categories: ["color"])
+        let operations = internals + [colorize]
+        let catalog = NativeFilterCatalog()
+        catalog.install(operations)
+        XCTAssertEqual(catalog.operations, operations, "menu policy must not truncate the complete lookup catalog")
+        for row in internals {
+            XCTAssertEqual(catalog.operation(named: row.name), row, "an internal effect remains resolvable by exact name")
+        }
+        let entries = NativeFilterMenuLayout(operations: operations).sections.flatMap(\.entries)
+        XCTAssertEqual(entries.map(\.name), ["gimp:colorize"],
+                       "untitled GIMP infrastructure is omitted without hiding titled GIMP commands")
+        XCTAssertEqual(NativeFilterMenuLayout.itemTitle(colorize), "Colorize…")
+    }
+
+    func testUntitledExternalOperationsRetainNameFallbackMenuTitles() {
+        // Synthetic extension rows: absent human metadata is not proof
+        // that a GEGL or third-party operation is internal infrastructure.
+        let gegl = operation("gegl:untitled-fixture", title: "", categories: ["artistic"])
+        let extensionMap = operation("fixture:untitled-map", title: "", support: .needsAuxInput)
+        let entries = NativeFilterMenuLayout(operations: [gegl, extensionMap]).sections.flatMap(\.entries)
+        XCTAssertEqual(Set(entries.map(\.name)), Set([gegl.name, extensionMap.name]))
+        XCTAssertEqual(NativeFilterMenuLayout.itemTitle(gegl), "gegl:untitled-fixture…")
+        XCTAssertEqual(NativeFilterMenuLayout.itemTitle(extensionMap),
+                       "fixture:untitled-map (needs a second layer as its source)")
+    }
+
+    func testTitledSourceAndDedicatedEditorsKeepTheirMenuBehavior() {
+        let displace = operation("gegl:displace", title: "Displace", categories: ["map"], support: .needsAuxInput)
+        let curves = operation("gimp:curves", title: "Curves", categories: ["color"], support: .needsConfig)
+        let lensBlur = operation("gegl:lens-blur", title: "Lens Blur", categories: ["blur"], support: .needsAuxInput)
+        let entries = NativeFilterMenuLayout(operations: [displace, curves, lensBlur]).sections.flatMap(\.entries)
+        XCTAssertEqual(Set(entries.map(\.name)), Set([displace.name, curves.name, lensBlur.name]))
+        XCTAssertTrue(NativeFilterMenuLayout.usesSourceChooser(displace))
+        XCTAssertEqual(NativeFilterMenuLayout.itemTitle(displace), "Displace…")
+        XCTAssertTrue(NativeFilterMenuLayout.usesCurvesEditor(curves))
+        XCTAssertEqual(NativeFilterMenuLayout.itemTitle(curves), "Curves…")
+        XCTAssertFalse(NativeFilterMenuLayout.usesSourceChooser(lensBlur))
+        XCTAssertEqual(NativeFilterMenuLayout.itemTitle(lensBlur), "Lens Blur (needs a second layer as its source)")
+    }
+
     /// Native after plug-ins: the catalog's operations merge into the
     /// Filter categories next to dedicated and plug-in items.
     func testInstallMergesIntoFilterCategoriesAlongsidePlugIns() {
