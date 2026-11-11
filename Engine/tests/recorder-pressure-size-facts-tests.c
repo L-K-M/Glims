@@ -76,6 +76,13 @@ restore_pressure (GlimsEngine *engine, gpointer data)
   g_object_set (probe->size, "use-random", FALSE, NULL);
   gchar *restored = gimp_config_serialize_to_string (GIMP_CONFIG (probe->dynamics), NULL);
   gboolean same = restored && !g_strcmp0 (restored, probe->serialized);
+  if (!same && restored && probe->serialized) {
+    gsize offset = 0;
+    while (restored[offset] && probe->serialized[offset] &&
+           restored[offset] == probe->serialized[offset]) offset++;
+    fprintf (stderr, "OBS pressure restore copied=%d differs at %zu expected=%.100s actual=%.100s\n",
+             copied, offset, probe->serialized + offset, restored + offset);
+  }
   g_free (restored);
   return copied && same ? GLIMS_STATUS_OK : GLIMS_STATUS_FAILED;
 }
