@@ -3636,7 +3636,14 @@ enum EngineSmokeTest {
         }
         var bytes: [UInt8] = []
         for y in 0..<32 { for x in 0..<32 {
-            bytes.append(contentsOf: [UInt8((18 + x * 7 + (y & 3) * 13) % 256), UInt8((41 + y * 5 + (x & 7) * 9) % 256), UInt8((73 + x * 3 + y * 11) % 256), UInt8(60 + (x * 11 + y * 17) % 176)])
+            let red: Int = (18 + x * 7 + (y & 3) * 13) % 256
+            let green: Int = (41 + y * 5 + (x & 7) * 9) % 256
+            let blue: Int = (73 + x * 3 + y * 11) % 256
+            let alpha: Int = 60 + (x * 11 + y * 17) % 176
+            bytes.append(UInt8(red))
+            bytes.append(UInt8(green))
+            bytes.append(UInt8(blue))
+            bytes.append(UInt8(alpha))
         } }
         let imageA = try session.newImage(pixels: .init(width: 32, height: 32, pixels: Data(bytes), origin: .zero)); images.append(imageA)
         guard let target = try session.layers(imageA).first?.id else { return expect(false, "the texture owns a native target") }

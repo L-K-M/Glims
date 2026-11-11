@@ -66,3 +66,10 @@ These runs use explicit source adapters and do not establish standalone
 bundle loading. The general native runs retain the older 3.0.8 two-buffer
 cleanup diagnostic and master cache-XML cleanup messages; this slice does
 not fix those upstream paths.
+
+The combined ordinary editor workflow also passes all 3,233 checks with
+no filter case selected: `/tmp/glims-completion/lens-5c0ef00-broad.CO8ywN`.
+This uses the signed debug app and explicit current pinned adapter, with
+Main's Swift build tree denied; it is not a standalone release check.
+Xcode 26 CI initially rejected the fixture's combined channel expression
+at type checking. Explicit typed per-channel appends retain the same bytes.
