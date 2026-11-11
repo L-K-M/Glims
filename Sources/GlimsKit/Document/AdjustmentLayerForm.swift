@@ -13,16 +13,13 @@ enum AdjustmentLayerLogic {
         var errorDescription: String? { message }
     }
 
-    /// The small useful set of generic single-input color adjustments,
-    /// by the engine's operation names, in display order. The `gimp:`
-    /// entries are the dedicated config operations whose native editors
-    /// the effect-parameter routing already drives on a committed effect.
-    /// Only these are offered; the catalog decides which of them are
-    /// actually supported.
+    /// Color adjustments with an available parameter editor. The runtime
+    /// catalog decides which generic and dedicated operations can be offered.
     static let knownOperations: [(name: String, title: String)] = [
         ("gegl:brightness-contrast", "Brightness/Contrast"),
         ("gimp:levels", "Levels"),
         ("gimp:curves", "Curves"),
+        ("gimp:threshold", "Threshold"),
         ("gimp:color-balance", "Color Balance"),
         ("gimp:hue-saturation", "Hue-Saturation"),
         ("gegl:exposure", "Exposure"),

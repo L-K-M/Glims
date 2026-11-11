@@ -97,6 +97,20 @@ final class AdjustmentLayerControlsTests: XCTestCase {
                            + "config ops outside the known set never do")
     }
 
+    func testThresholdIsOfferedInKnownOrderWhenTheCatalogSupportsIt() {
+        let catalog = [
+            operation("gimp:hue-saturation", support: .needsConfig),
+            operation("gimp:threshold", title: "Threshold"),
+            operation("gimp:curves", support: .needsConfig),
+        ]
+        XCTAssertEqual(AdjustmentLayerLogic.availableOperations(in: catalog).map(\.name),
+                       ["gimp:curves", "gimp:threshold", "gimp:hue-saturation"],
+                       "a supported gimp:threshold appears in known-set order, after Curves")
+        XCTAssertTrue(AdjustmentLayerLogic.availableOperations(in: [
+            operation("gimp:threshold", support: .needsAuxInput),
+        ]).isEmpty, "a threshold the runtime catalog does not support is not offered")
+    }
+
     func testCanonicalInvertOperationsFromTheNativeCatalogAreOffered() {
         let catalog = [operation("gegl:invert-gamma"), operation("gegl:invert-linear")]
         XCTAssertEqual(AdjustmentLayerLogic.availableOperations(in: catalog).map(\.name),

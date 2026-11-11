@@ -4251,6 +4251,22 @@ Undo/Redo output and editable XCF reopening. The Swift suite passes 1,250
 tests. This closes the tonal-picker gap in the broader editor brief; it does
 not establish complete Photoshop 4 parity or final application acceptance.
 
+### Threshold in the adjustment chooser (2026-11-12)
+
+New Adjustment Layer also offers Threshold. `gimp:threshold` is a generic
+single-input operation — not a dedicated config op — so no engine change was
+needed: `adjustment_layer_new` already admits it and the generic
+effect-parameter session edits its `low`/`high` properties. The chooser's
+known set simply lists it; the runtime catalog's support gate still decides
+whether it is offered.
+
+The focused native suite passes 229 checks on each of all four engines, including
+threshold creation, non-default low/high edits against a literal
+max-channel composite oracle, untouched base pixels, exact Undo/Redo output,
+Cancel, an indexed refusal and editable XCF reopening (reloaded parameters
+read back within serialization tolerance). Swift and real chooser/editor
+checks are pending.
+
 ### Recorded affine layer transforms (2026-11-11 candidate)
 
 The Recorder captures committed layer transforms with an explicit layer
