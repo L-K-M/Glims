@@ -5108,7 +5108,8 @@ the numeric, cancellation, independent reader-appearance and full editor suites.
 The standalone package passes native/full/CMYK/Multichannel checks with development
 trees blocked; fresh/cached/relocated launch measures 1.73/1.45/3.25 seconds.
 Three independent source reviews found no important findings. Qualified source
-`40c3b74` is awaiting latest CI and merge before replacing the installed app.
+`40c3b74` is installed after PR #233 passed latest CI and merged; the last
+fixture-only compatibility fix leaves the qualified editor behavior unchanged.
 See [native-cmyk-psd-export.md](native-cmyk-psd-export.md).
 
 ### Native ink Fill, Clear and Invert (2026-11-12)
@@ -5151,9 +5152,9 @@ Recorder labels accepted edits unsupported until replay has a native route.
 
 All four engines pass 662 snapshot checks plus prior native ink edit suites.
 Twelve panel/coalescer units pass, including two reproduced retry regressions.
-The pinned real-window fixture passes 462 checks across both modes and U8/float,
+The pinned real-window fixture passes 505 checks across both modes and U8/float,
 including actual field editing, supported maximum zoom/pan, stale target refusal,
 Cancel, source close, Apply, Undo/Redo and Recorder admission. A cached calculated
 image reduces repeated 12 MP preview retrieval from 310–338 ms to 0.87–1.41 ms,
-before viewport rendering. Remaining-engine UI and standalone qualification are
-in progress. See [ink-levels-preview.md](ink-levels-preview.md).
+before viewport rendering. Full-engine UI and standalone results are tracked
+with the integration pull request. See [ink-levels-preview.md](ink-levels-preview.md).
