@@ -5090,3 +5090,7 @@ byte fixture now passes 315 checks in optimized and ASan/UBSan builds; source
 review found no confirmed important findings. Native adapter and CI checks
 remain pending. See
 [cmyk-psd-codec.md](cmyk-psd-codec.md).
+
+The private PSD codec now compiles into all four adapters, whose normal
+conformance, XCF and TIFF suites pass 9,818 checks in total. Actual native
+file export is a separate integration; the codec remains unused by the editor.

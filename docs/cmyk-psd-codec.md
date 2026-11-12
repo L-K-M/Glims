@@ -42,8 +42,11 @@ The independent fixture passes 315 checks in both optimized and ASan/UBSan
 builds. It checks literal headers, exact ICC bytes and padding, every sample
 across long/chunked rows, both integer depths, preflight size boundaries and
 immediate callback-failure propagation. Source review found no confirmed
-important findings. The native adapter matrix, actual-file integration and
-latest CI remain pending. Reproduce the portable checks with:
+important findings. All four adapters build and pass normal conformance:
+2,268 checks each on 3.2.8, 3.2.0 and master; 2,054 on 3.0.8, plus 34 XCF
+and 206 TIFF checks per engine (9,818 total, zero failures). This compiles the
+unused codec into each adapter; it does not qualify a native export route.
+Actual-file integration and latest CI remain pending. Reproduce the portable checks with:
 
 ```sh
 bash scripts/test-cmyk-psd-codec.sh
