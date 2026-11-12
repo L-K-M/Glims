@@ -246,6 +246,23 @@ final class ImageDocument {
     private(set) var components: EngineSession.ComponentState?
     private(set) var channels: [EngineSession.Channel] = []
     private(set) var labAxes: EngineSession.LabAxes?
+    private var labBrushDrafts: [UUID: String] = [:]
+    func labBrushDraft(for axis: EngineSession.LabAxis) -> String {
+        labBrushDrafts[axis.uuid] ?? (axis.role == .lightness ? "50" : "0")
+    }
+    func setLabBrushDraft(_ text: String, for axis: EngineSession.LabAxis) {
+        guard selectedLabAxis?.uuid == axis.uuid, selectedLabAxis?.id == axis.id,
+              selectedLabAxis?.role == axis.role, !isClosing else { return }
+        labBrushDrafts[axis.uuid] = text
+    }
+    func labBrushValue(for axis: EngineSession.LabAxis) -> Result<Double, LabFillValidation.Rejection> {
+        LabFillValidation.settings(amount: labBrushDraft(for: axis), opacity: "100",
+            role: axis.role, component: colorInfo.component).map(\.value)
+    }
+    func toolIsAvailable(_ tool: ToolID) -> Bool {
+        tool.isAvailable(in: colorInfo.mode)
+            && (colorInfo.mode != .lab || tool != .paintbrush || session.supportsLabBrush)
+    }
     var selectedLabAxis: EngineSession.LabAxis? {
         guard !targetCommandIsPending, !rejectedTargetPick,
               let selected = labAxes?.axes.filter(\.isSelected), selected.count == 1 else { return nil }
@@ -461,8 +478,10 @@ final class ImageDocument {
     /// Touched only on `inputQueue`.
     private nonisolated(unsafe) var currentStroke: Int32?
     private nonisolated(unsafe) var currentStrokeUsesV2 = false
+    private nonisolated(unsafe) var currentStrokeIsLab = false
     private nonisolated(unsafe) var strokeRecordingDraft: StrokeRecordingDraft?
     private(set) var strokeIsActive = false
+    private(set) var labBrushStrokeIsActive = false
     private var strokeRecordingInterleaved = false
 
     /// Which plug-in commands can run on the selected layers, by name;
@@ -1134,6 +1153,10 @@ final class ImageDocument {
     }
 
     private func beginStroke(input: StrokeInput, brush: EngineSession.Brush) {
+        if colorInfo.mode == .lab {
+            beginLabBrushStroke(input: input, brush: brush)
+            return
+        }
         guard !strokeIsActive else { return }
         guard !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
         guard !refuseSingleLayerCommand("Paint") else { return }
@@ -1207,15 +1230,106 @@ final class ImageDocument {
         if capture != nil { notifyRecorderChanged() }
     }
 
+    private func beginLabBrushStroke(input: StrokeInput, brush: EngineSession.Brush) {
+        guard !strokeIsActive, !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
+        // Admission observers may accept their own stroke or close/retarget
+        // this document synchronously, just as on the ordinary paint path.
+        guard !strokeIsActive, !isClosing, acceptsEdits, !targetCommandIsPending else { return }
+        guard toolIsAvailable(.paintbrush), brush.tool == .paintbrush, let axis = selectedLabAxis else {
+            onError?("Select a Lab channel and an available Brush before painting.")
+            return
+        }
+        let value: Double
+        switch labBrushValue(for: axis) {
+        case .success(let physical): value = physical
+        case .failure(let rejection): onError?(rejection.message); return
+        }
+        let unsupported = "Physical Lab brush strokes cannot be replayed by Recorder yet."
+        let capture: RecorderCapture?
+        do {
+            capture = recorder.isRecording ? try reserveRecording(context: .unavailable(unsupported)) : nil
+        } catch {
+            onError?("Recorder could not accept this stroke: \(error.localizedDescription)")
+            return
+        }
+        // Capture identity and physical value before dispatch. A later palette
+        // edit or front-window change cannot retarget an accepted gesture.
+        strokeIsActive = true
+        labBrushStrokeIsActive = true
+        strokeRecordingInterleaved = false
+        enqueue(on: inputQueue, input: true, strokePart: true) { [session, image] in
+            if let capture {
+                let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+                self.strokeRecordingDraft = .init(capture: capture, confirmed: confirmed,
+                    settings: .init(brush), trace: nil)
+                self.strokeRecordingDraft?.refuse(RecorderReplayError(message: unsupported))
+            }
+            do {
+                let sample: EngineSession.StrokeSampleV2
+                switch input {
+                case .tablet(let point): sample = point
+                case .v1(let point): sample = .init(point: point, rotationTurns: nil, tangentialPressure: nil)
+                }
+                self.currentStrokeUsesV2 = true
+                self.currentStrokeIsLab = true
+                self.currentStroke = try session.beginLabStroke(image: image, axis: axis,
+                    value: value, brush: brush, first: sample)
+            } catch {
+                self.currentStroke = nil
+                self.currentStrokeUsesV2 = false
+                self.currentStrokeIsLab = false
+                self.strokeRecordingDraft?.refuse(error)
+                self.report(error)
+            }
+        }
+        if capture != nil { notifyRecorderChanged() }
+    }
+
+    /// Escape aborts the captured Lab gesture, including queued begin/dabs.
+    /// The same serial input queue guarantees Cancel follows those writes.
+    func cancelLabBrushStroke() {
+        guard strokeIsActive, labBrushStrokeIsActive else { return }
+        strokeIsActive = false
+        labBrushStrokeIsActive = false
+        strokeRecordingInterleaved = false
+        enqueue(on: inputQueue, input: true, strokePart: true) { [session] in
+            let stroke = self.currentStroke
+            self.currentStroke = nil
+            self.currentStrokeUsesV2 = false
+            self.currentStrokeIsLab = false
+            let draft = self.strokeRecordingDraft
+            self.strokeRecordingDraft = nil
+            if let stroke {
+                do { try session.cancelLabStroke(stroke) }
+                catch { self.report(error) }
+            }
+            if let draft {
+                self.settleRecording(draft.capture,
+                    result: .failure(RecorderReplayError(message: "Lab brush stroke cancelled.")),
+                    confirmed: draft.confirmed)
+            }
+        }
+    }
+
     func continueStroke(_ points: [EngineSession.StrokePoint]) {
         guard strokeIsActive else { return }
         enqueue(on: inputQueue, input: true, strokePart: true) { [session] in
             guard let stroke = self.currentStroke else { return }
             do {
-                guard !self.currentStrokeUsesV2 else { throw RecorderReplayError(message: "The stroke's input format changed.") }
-                try session.continueStroke(stroke, points: points)
+                if self.currentStrokeIsLab {
+                    try session.continueTabletStroke(stroke, points: points.map {
+                        .init(point: $0, rotationTurns: nil, tangentialPressure: nil)
+                    })
+                } else {
+                    guard !self.currentStrokeUsesV2 else { throw RecorderReplayError(message: "The stroke's input format changed.") }
+                    try session.continueStroke(stroke, points: points)
+                }
             }
             catch {
+                if self.currentStrokeIsLab {
+                    try? session.cancelLabStroke(stroke)
+                    self.currentStroke = nil
+                }
                 self.strokeRecordingDraft?.refuse(error)
                 self.report(error)
                 return
@@ -1235,6 +1349,10 @@ final class ImageDocument {
                 guard self.currentStrokeUsesV2 else { throw RecorderReplayError(message: "The stroke's input format changed.") }
                 try session.continueTabletStroke(stroke, points: points)
             } catch {
+                if self.currentStrokeIsLab {
+                    try? session.cancelLabStroke(stroke)
+                    self.currentStroke = nil
+                }
                 self.strokeRecordingDraft?.refuse(error)
                 self.report(error)
             }
@@ -1246,10 +1364,12 @@ final class ImageDocument {
         let interleaved = strokeRecordingInterleaved
         strokeRecordingInterleaved = false
         strokeIsActive = false
+        labBrushStrokeIsActive = false
         enqueue(on: inputQueue, input: true, strokePart: true) { [session] in
             let stroke = self.currentStroke
             self.currentStroke = nil
             self.currentStrokeUsesV2 = false
+            self.currentStrokeIsLab = false
             var draft = self.strokeRecordingDraft
             self.strokeRecordingDraft = nil
             if let stroke {
@@ -4563,7 +4683,7 @@ final class ImageDocument {
     /// imported image never written as XCF, edits still queued on their
     /// way to the engine, or a plug-in command still working on it.
     var hasUnsavedChanges: Bool {
-        fileState.hasUnsavedChanges || pendingInput > 0
+        fileState.hasUnsavedChanges || pendingInput > 0 || labBrushStrokeIsActive
             || PlugInCommands.running?.document === self
     }
 

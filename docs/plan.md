@@ -5265,3 +5265,16 @@ each of four engines pass, including disk round trips, XCF reopen, independent
 scalar oracles, Undo/Redo and stale-target refusal. Independent file/runtime
 reviews found no important issue. Full UI, bundle and launch qualification are
 in progress. See `ink-recorder.md` for scope and remaining selection/Batch work.
+
+
+### Physical Lab Brush candidate (2026-11-12)
+
+Typed Begin/Cancel and a private native brush core now paint one physical
+L*, a* or b* value with captured identity, bounded per-dab staging and exact
+whole-stroke cancellation. Tool Options keeps per-document/axis drafts;
+Escape cancels queued or active gestures. Save refuses tentative native
+pixels, and image close retires its strokes. All four engines pass native,
+queued Swift and actual-window checks after retained regressions; all 1,598
+Swift and 130 Python tests pass. Independent production and fixture reviews
+are clear. Bundled and hosted qualification remain in progress. See
+[lab-brush.md](lab-brush.md) for the numeric contract and limits.

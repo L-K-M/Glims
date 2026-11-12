@@ -49,6 +49,8 @@ jobs:
         run: python3 scripts/test-lab-samples.py
       - name: Check optimized and sanitized physical Lab fills
         run: python3 scripts/test-lab-fill.py
+      - name: Check optimized and sanitized Lab brush coverage
+        run: python3 scripts/test-lab-brush-coverage.py
 
   build-test:
     name: Build, Test & Package
@@ -117,6 +119,10 @@ jobs:
       - name: Check physical Lab fills
         timeout-minutes: 5
         run: python3 scripts/test-lab-fill.py optimized
+
+      - name: Check Lab brush coverage
+        timeout-minutes: 5
+        run: python3 scripts/test-lab-brush-coverage.py optimized
 
       - name: Build
         run: swift build

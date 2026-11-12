@@ -1213,6 +1213,18 @@ typedef struct GlimsLabFillSettings {
   double opacity;         /* Finite [0,1], multiplied once by selection coverage. */
 } GlimsLabFillSettings;
 
+/* Physical sample and captured axis identity for one mask-brush stroke. */
+typedef struct GlimsLabBrushSettings {
+  uint32_t struct_size;
+  GlimsItemID axis;
+  uint32_t role;           /* GlimsLabAxisRole. */
+  uint8_t uuid[16];
+  double value;           /* Same physical ranges as image_fill_lab. */
+  double opacity;         /* Finite [0,1], applied to the stroke-start samples. */
+  double size;            /* Diameter in image pixels, finite [1,10000]. */
+  double hardness;        /* Finite [0,1]. */
+} GlimsLabBrushSettings;
+
 /* The palette an indexed conversion builds, as image_convert_indexed's
  * settings name it. Facade-owned values; the engine's
  * GimpConvertPaletteType never crosses this boundary. */
@@ -3823,6 +3835,27 @@ typedef struct GlimsEngineAPI {
    * axes are unchanged. Ordinary and ink documents refuse. */
   GlimsStatus (*image_fill_lab) (GlimsEngine *engine, GlimsImageID image,
                                  const GlimsLabFillSettings *settings, char **error);
+  /* Slot193: selected-axis physical Lab Brush. Normal constant application,
+   * native mask geometry, captured selection, no color/dynamics/symmetry.
+   * Zero brush selects the current resource at press; its mask is retained
+   * for the stroke. Pixmap colors are ignored. Size/hardness are explicit;
+   * spacing is 15%, angle/aspect are zero and brush force is 0.5.
+   * Feed stroke_continue_v2 and finish with stroke_end, or explicitly abort
+   * with stroke_cancel_lab. Packet validation refuses before changing a dab;
+   * sample/target failures cancel the complete stroke and retire its handle.
+   * Every continuation and finish revalidates captured axis identity and
+   * sole selection. Successful changed strokes create exactly one Undo;
+   * zero-change strokes create none. Legacy RGB/ink begin calls still refuse
+   * Lab documents. Clears *error and zeros *result on every begin failure. */
+  GlimsStatus (*stroke_begin_lab) (GlimsEngine *engine, GlimsImageID image,
+                                   GlimsResourceID brush,
+                                   const GlimsLabBrushSettings *settings,
+                                   const GlimsStrokePacketV2 *first,
+                                   GlimsStrokeID *result, char **error);
+  /* Slot194: abort only a typed Lab stroke, restoring exact starting pixels
+   * without Undo, even if axis metadata/selection changed. Ordinary strokes
+   * refuse; expired handles return NOT_FOUND. */
+  GlimsStatus (*stroke_cancel_lab) (GlimsEngine *engine, GlimsStrokeID stroke);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

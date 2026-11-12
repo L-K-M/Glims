@@ -323,7 +323,8 @@ extension EngineSmokeTest {
                 func enabled() -> Set<String> { Set(grid.slots.flatMap(\.tools).filter(\.isEnabled).map(\.id)) }
                 expect(enabled().contains(ToolID.paintbrush.rawValue), "RGB tool grid initially enables Paintbrush")
                 tools.retarget(to: document)
-                expect(enabled() == Set([ToolID.hand.rawValue, ToolID.zoom.rawValue]), "Lab tool grid enables exactly Hand and Zoom")
+                let allowed = [ToolID.paintbrush, .hand, .zoom].filter { document.toolIsAvailable($0) }
+                expect(enabled() == Set(allowed.map(\.rawValue)), "Lab tool grid enables only qualified Brush, Hand and Zoom routes")
                 tools.retarget(to: rgb)
                 expect(enabled().contains(ToolID.paintbrush.rawValue), "RGB tool grid restores Paintbrush after Lab retarget")
                 tools.retarget(to: document)

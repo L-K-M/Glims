@@ -257,6 +257,55 @@ final class EngineSession: @unchecked Sendable {
         return api.image_fill_lab != nil
     }
 
+    var supportsLabBrush: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.stroke_cancel_lab),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.stroke_cancel_lab) else { return false }
+        return supportsLabAxes && api.stroke_begin_lab != nil && api.stroke_cancel_lab != nil
+            && api.stroke_continue_v2 != nil && api.stroke_end != nil
+    }
+
+    /// Physical scalar painting. Brush colors and pressure dynamics have no
+    /// meaning here; only the chosen mask, size, hardness and opacity are used.
+    func beginLabStroke(image: Int32, axis: LabAxis, value: Double,
+                        brush: Brush, first: StrokeSampleV2) throws -> Int32 {
+        guard supportsLabBrush, let begin = api.stroke_begin_lab else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support the Lab brush.")
+        }
+        let hardness = brush.hardness ?? 0.5
+        guard image > 0, axis.id > 0, brush.tool == .paintbrush,
+              value.isFinite, abs(value) <= Double(Float.greatestFiniteMagnitude),
+              brush.opacity.isFinite, (0...1).contains(brush.opacity),
+              brush.size.isFinite, brush.size >= 1, brush.size <= 10_000,
+              hardness.isFinite, (0...1).contains(hardness), first.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a valid Lab axis, physical value and brush settings.")
+        }
+        let resource = try brush.resource.map { try resolveResource($0, kind: .brush) } ?? 0
+        var settings = GlimsLabBrushSettings()
+        settings.struct_size = UInt32(MemoryLayout<GlimsLabBrushSettings>.size)
+        settings.axis = axis.id; settings.role = axis.role.rawValue; settings.uuid = axis.uuid.uuid
+        settings.value = value; settings.opacity = brush.opacity
+        settings.size = brush.size; settings.hardness = hardness
+        var stroke: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try withTabletPacket([first]) { packet in
+            try check(begin(engine, image, resource, &settings, packet, &stroke, &error), error)
+        }
+        guard stroke > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Lab brush stroke did not start.")
+        }
+        return stroke
+    }
+
+    func cancelLabStroke(_ stroke: Int32) throws {
+        guard supportsLabBrush, let cancel = api.stroke_cancel_lab else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot cancel a Lab brush stroke.")
+        }
+        try check(cancel(engine, stroke), nil)
+    }
+
     /// The owning image and the captured role/UUID must still identify its sole
     /// selected axis. Native admission checks them again before publication.
     func fillLab(_ image: Int32, axis: LabAxis, value: Double, opacity: Double) throws {

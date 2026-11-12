@@ -295,6 +295,17 @@ GlimsStatus glims_image_redo       (GlimsEngine *e, GlimsImageID id);
 
 /* paint.c */
 GlimsStatus glims_stroke_component_ready (GlimsEngine *engine, GlimsStrokeID id);
+gboolean glims_stroke_is_lab (GlimsEngine *engine, GlimsStrokeID id);
+/* Query active Lab strokes, or cancel them before their image is released. */
+typedef enum { GLIMS_LAB_STROKES_QUERY, GLIMS_LAB_STROKES_CANCEL } GlimsLabStrokeAction;
+gboolean glims_lab_strokes_for_image (GlimsEngine *engine, GimpImage *image,
+                                    GlimsLabStrokeAction action);
+GlimsStatus glims_stroke_begin_lab (GlimsEngine *engine, GlimsImageID image,
+                                    GlimsResourceID brush,
+                                    const GlimsLabBrushSettings *settings,
+                                    const GlimsStrokePacketV2 *first,
+                                    GlimsStrokeID *result, char **error);
+GlimsStatus glims_stroke_cancel_lab (GlimsEngine *engine, GlimsStrokeID stroke);
 GlimsStatus glims_stroke_begin     (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                     const GlimsBrushSettings *brush, const GlimsStrokePoint *first,
                                     GlimsStrokeID *out, char **error);

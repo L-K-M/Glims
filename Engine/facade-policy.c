@@ -34,6 +34,7 @@ component_lab_operation_allowed (GlimsFacadeOperation operation)
     case GLIMS_FACADE_OP_image_color_info:
     case GLIMS_FACADE_OP_image_lab_axes:
     case GLIMS_FACADE_OP_image_fill_lab:
+    case GLIMS_FACADE_OP_stroke_begin_lab:
     case GLIMS_FACADE_OP_channel_command:
     case GLIMS_FACADE_OP_image_render:
     case GLIMS_FACADE_OP_image_render_to_profile:
@@ -183,6 +184,14 @@ dispatch (GlimsEngine *engine, gpointer data)
     {
       if (stroke_references_lab_image (engine, call->target.id))
         {
+          /* Typed Lab continuation owns target revalidation and whole-stroke
+           * cancellation on failure. Do not strand it behind storage admission. */
+          if (call->operation == GLIMS_FACADE_OP_stroke_continue_v2 &&
+              glims_stroke_is_lab (engine, call->target.id))
+            {
+              if (call->invoked) *call->invoked = TRUE;
+              return call->func (engine, call->data);
+            }
           if (call->error) *call->error = strdup ("This command is not available for Lab component documents.");
           return GLIMS_STATUS_UNSUPPORTED;
         }
