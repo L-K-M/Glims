@@ -28,6 +28,7 @@ def check(root=ROOT):
               'free_curves_snapshot', 'free_histogram_snapshot'}
     cleanup = {'image_close', 'stroke_end', 'filter_abort', 'procedure_cancel'}
     component = {'image_grid', 'image_history', 'image_info', 'stroke_begin_with_brush_resource', 'image_render_to_profile', 'image_select_items', 'image_quick_mask', 'image_history_move', 'select_shape', 'image_guides', 'image_color_info', 'image_duplicate', 'drawable_thumbnail', 'stroke_begin_with_capture_facts', 'image_redo', 'image_selected_items', 'stroke_begin', 'image_selected_layers', 'image_floating_selection', 'image_undo_info', 'image_channels', 'image_components', 'channel_command', 'channel_change', 'image_undo', 'select_command', 'image_render', 'selection_bounds', 'selection_outline', 'image_layers', 'image_save_copy', 'stroke_begin_v2', 'paths', 'image_save'}
+    component.add('image_export_native_cmyk_psd')
     component_stroke = {'stroke_continue', 'stroke_continue_v2'}
     for name, wrapper, kind, policy in entries:
         if name in direct:
@@ -48,10 +49,13 @@ def check(root=ROOT):
         body = masked[start:end - 1]
         if re.search(r'\b(glims_engine_call|call_on_engine)\s*\(', body):
             errors.append(f'{name}: bypasses facade admission')
-        calls = re.findall(r'glims_facade_call(?:_reporting_admission)?\s*\(\s*e\s*,\s*GLIMS_FACADE_OP_(\w+)', body)
+        params = masked[match.start(1):match.end(1)]
+        engine = re.search(r'GlimsEngine\s*\*\s*(\w+)\b', params)
+        engine_name = re.escape(engine.group(1)) if engine else '(?!)'
+        calls = re.findall(r'glims_facade_call(?:_reporting_admission)?\s*\(\s*'
+                           + engine_name + r'\s*,\s*GLIMS_FACADE_OP_(\w+)', body)
         if calls != [name]:
             errors.append(f'{name}: must use its own operation ID exactly once')
-        params = masked[match.start(1):match.end(1)]
         image = re.search(r'GlimsImageID\s+(\w+)\b', params)
         session_filter = re.search(r'GlimsFilterID\s+(\w+)\b', params)
         stroke = re.search(r'GlimsStrokeID\s+(\w+)\b', params)

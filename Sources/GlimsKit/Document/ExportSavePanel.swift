@@ -8,17 +8,17 @@ final class ExportSavePanel: NSObject, NSOpenSavePanelDelegate {
     let panel = NSSavePanel()
     let form: ExportOptionsForm
 
-    init(baseName: String, settings: ExportSettings) {
-        form = ExportOptionsForm(settings: settings)
+    init(baseName: String, settings: ExportSettings, context: ExportOptionsForm.Context = .ordinary) {
+        form = ExportOptionsForm(settings: settings, context: context)
         super.init()
         panel.title = "Export Image"
         panel.prompt = "Export"
         panel.allowsOtherFileTypes = false
         panel.canSelectHiddenExtension = true
-        panel.nameFieldStringValue = baseName + "." + settings.format.preferredExtension
+        panel.nameFieldStringValue = baseName + "." + form.settings.format.preferredExtension
         panel.accessoryView = form
         panel.delegate = self
-        setFormat(settings.format)
+        setFormat(form.settings.format)
         form.onFormatChange = { [weak self] format in self?.setFormat(format) }
     }
 

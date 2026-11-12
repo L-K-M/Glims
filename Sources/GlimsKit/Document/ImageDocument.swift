@@ -6344,7 +6344,7 @@ final class ImageDocument {
         // may have changed cached targets or started another operation.
         guard admission?() != false else { return rejected() }
         pendingWork += 1
-        let accepted = EngineActivity.shared.perform(label: label, work: work) {
+        let accepted = EngineActivity.shared.perform(label: label, document: self, work: work) {
             self.jobDidFinish(input: false)
         }
         if accepted && strokeIsActive && effect != .readsPixels { strokeRecordingInterleaved = true }
