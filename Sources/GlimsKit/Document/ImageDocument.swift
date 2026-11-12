@@ -4909,7 +4909,7 @@ final class ImageDocument {
             record = filterPreviewRecords[filter]
             // An admitted Apply of a supported session reserves its Recorder row
             // now; preview writes, Cancel and refused admissions never do.
-            if ["gimp:levels", "gimp:curves"].contains(record?.operation ?? ""), recorder.isRecording {
+            if ["gimp:levels", "gimp:curves", "gimp:color-balance"].contains(record?.operation ?? ""), recorder.isRecording {
                 let context: RecorderContext?
                 switch record?.coverage {
                 case .layer(let layer)?: context = .layer(layer)
@@ -4934,6 +4934,8 @@ final class ImageDocument {
                 do {
                     if record?.operation == "gimp:curves" {
                         command = .applyCurves(try session.curvesSettings(filter))
+                    } else if record?.operation == "gimp:color-balance" {
+                        command = .applyColorBalance(try session.colorBalanceSettings(filter))
                     } else {
                         command = .applyLevels(try session.levelsSettings(filter))
                     }
@@ -5823,7 +5825,7 @@ final class ImageDocument {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
         case .channelToSelection: return true
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .completeStroke: return true
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .completeStroke: return true
         default: return false
         }
     }

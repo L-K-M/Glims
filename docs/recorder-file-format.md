@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 7
+# Recorder file format, versions 1 to 8
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,17 +7,18 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is integer `1`, `2`, `3`, `4`, `5`, `6` or `7`. `recordingID` is a file UUID. `origin` contains
+`version` is integer `1`, `2`, `3`, `4`, `5`, `6`, `7` or `8`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
 The writer chooses the highest version required by a successful record:
 `completeStroke` requires 2, `channelToSelection` 3, `transformLayer` 4,
-`applyLevels` 5, `transformProjectiveLayer` 6 and `applyCurves` 7. A file declaring one of
+`applyLevels` 5, `transformProjectiveLayer` 6, `applyCurves` 7 and
+`applyColorBalance` 8. A file declaring one of
 those versions must contain at least one successful command from that
 version's family. It may also contain commands from all earlier versions.
 Failure/cancelled rows do not raise the version. With no extended successful
-commands, the writer uses version 1. Integers outside 1...7 refuse the file.
+commands, the writer uses version 1. Integers outside 1...8 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -52,6 +53,7 @@ Commands have an owned `tag` and the following exact fields:
 | `transformProjectiveLayer` | `matrix`, `interpolation` (version 6 and later) |
 | `applyLevels` | `settings` (version 5 and later) |
 | `applyCurves` | `settings` (version 7) |
+| `applyColorBalance` | `settings` (version 8) |
 | `scale` | integer `width`, `height` |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |
@@ -76,7 +78,7 @@ worker to native resize. No NSColor or late conversion enters the file.
 
 Bindings are `kind:"none"`, `kind:"layer"` with `symbol`, `kind:"channel"`
 with `symbol`, or `kind:"context"` with `context`. Layer properties, layer
-transforms, Levels and Curves require a layer symbol (any layer-kind description);
+transforms, Levels, Curves and Color Balance require a layer symbol (any layer-kind description);
 `channelToSelection` requires a channel symbol whose description kind is
 `channel` — the explicit source channel, never the active paint target.
 Select Alpha and color selection with `sampleMerged:false` require context;
@@ -181,6 +183,36 @@ produce explicit unsupported rows instead of inventing layer actions. Replay
 checks current membership, color mode, locks and editing role, then commits
 one new effect with one Undo step. This format preserves exact Curves values;
 it does not change the native XCF format's handling of identity flags.
+
+## Color Balance (version 8)
+
+`applyColorBalance` is the version 8 command. It records one committed newly
+applied Color Balance adjustment on the explicitly bound layer, exactly as
+accepted by the live preview's Apply. `settings` has exactly `shadows`,
+`midtones`, `highlights` and `preserveLuminosity`. Each tonal range has
+exactly `cyanRed`, `magentaGreen` and `yellowBlue`; `preserveLuminosity` is
+a Boolean. The whole accepted settings are stored by reading the open native
+preview immediately before commit; visible panel fields, range selection or
+a read after commit never substitute.
+
+Every correction must be finite and inside −1...1, matching the typed native
+settings contract; the closed bounds stay valid. The record's `layer`
+binding names the explicit target layer symbol, never the implicit paint
+target or selection; the command always requires one. Live filter, effect
+and native layer IDs are never serialized. The command is refused in a
+version 1 through 7 file, and a version 8 file without a successful
+`applyColorBalance` is refused, exactly as earlier extensions always
+required their own successful command. Fresh image/layer membership, mode,
+lock, channel, Quick Mask, mask-editing and floating-selection gates against
+the freshly bound layer remain replay duties; the codec cannot prove a
+binding-time target.
+
+Apply records final settings behind queued preview writes. Cancel adds no
+row. An accepted commit that later fails settles a failure row while
+retaining its capture metadata for retry. Mask/channel targets and
+existing-effect edits produce explicit unsupported rows instead of inventing
+layer actions. Replay checks current membership, color mode, locks and
+editing role, then commits one new effect with one Undo step.
 
 ## Levels (version 5)
 

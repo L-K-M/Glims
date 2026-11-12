@@ -35,6 +35,8 @@ extension RecorderFileCodec {
                 }
                 pointCount += count
                 fileVersion = max(fileVersion, curvesVersion)
+            case .success(.applyColorBalance, _):
+                fileVersion = max(fileVersion, colorBalanceVersion)
             default: break
             }
         }
@@ -157,6 +159,16 @@ extension RecorderFileCodec {
                 "trc": .string(curves.trc.rawValue), "value": try channelJSON(curves.value),
                 "red": try channelJSON(curves.red), "green": try channelJSON(curves.green),
                 "blue": try channelJSON(curves.blue), "alpha": try channelJSON(curves.alpha)])])
+        case .applyColorBalance(let balance):
+            let balance = try balance.validated()
+            func rangeJSON(_ range: RecorderColorBalanceValue.Range) throws -> RecorderJSON {
+                .object(["cyanRed": try d(range.cyanRed), "magentaGreen": try d(range.magentaGreen),
+                    "yellowBlue": try d(range.yellowBlue)])
+            }
+            return .object(["tag": .string("applyColorBalance"), "settings": .object([
+                "shadows": try rangeJSON(balance.shadows), "midtones": try rangeJSON(balance.midtones),
+                "highlights": try rangeJSON(balance.highlights),
+                "preserveLuminosity": .bool(balance.preserveLuminosity)])])
         case .completeStroke(let stroke): return try strokeJSON(stroke)
         }
     }

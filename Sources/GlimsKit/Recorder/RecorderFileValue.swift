@@ -226,11 +226,16 @@ enum RecorderFileCommand: Equatable {
     /// the record's `layer` binding; the command carries no native
     /// filter/effect identity.
     case applyCurves(RecorderCurvesValue)
+    /// A newly applied Color Balance adjustment with its whole accepted
+    /// settings: all three tonal ranges' signed corrections and Preserve
+    /// Lightness. The explicit layer is the record's `layer` binding; the
+    /// command carries no native filter/effect identity.
+    case applyColorBalance(RecorderColorBalanceValue)
     case completeStroke(RecorderStrokeCommand)
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .completeStroke, .channelToSelection: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .completeStroke, .channelToSelection: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true

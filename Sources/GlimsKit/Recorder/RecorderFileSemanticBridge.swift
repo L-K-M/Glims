@@ -149,6 +149,7 @@ enum RecorderFileSemanticBridge {
             settings.alpha = channel(levels.alpha)
             return .applyLevels(settings)
         case .applyCurves(let value): return .applyCurves(try value.settings())
+        case .applyColorBalance(let value): return .applyColorBalance(try value.settings())
         case .completeStroke(let value): return .completeStroke(value)
         }
     }

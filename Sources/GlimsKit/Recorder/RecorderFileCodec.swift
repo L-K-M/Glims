@@ -9,6 +9,7 @@ enum RecorderFileCodec {
     static let projectiveLayerTransformVersion = 6
     static let levelsVersion = 5
     static let curvesVersion = 7
+    static let colorBalanceVersion = 8
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -85,7 +86,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...curvesVersion)
+        let fileVersion = try integer(root.get("version"), range: version...colorBalanceVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -108,6 +109,7 @@ enum RecorderFileCodec {
         var hasProjectiveLayerTransform = false
         var hasLevels = false
         var hasCurves = false
+        var hasColorBalance = false
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
             guard case .object(let members) = node, let outcome = members["outcome"] else { throw RecorderFileError.invalid("Missing record outcome.") }
             let outcomeName = try string(outcome)
@@ -123,6 +125,7 @@ enum RecorderFileCodec {
                 if case .transformProjectiveLayer = command { hasProjectiveLayerTransform = true }
                 if case .applyLevels = command { hasLevels = true }
                 if case .applyCurves = command { hasCurves = true }
+                if case .applyColorBalance = command { hasColorBalance = true }
                 let binding = try binding(row.get("binding"))
                 try validate(binding, for: command, descriptions: descriptions)
                 result = .success(command, binding)
@@ -156,6 +159,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == curvesVersion, !hasCurves {
             throw RecorderFileError.invalid("Version 7 requires a successful Curves command.")
+        }
+        if fileVersion == colorBalanceVersion, !hasColorBalance {
+            throw RecorderFileError.invalid("Version 8 requires a successful Color Balance command.")
         }
         return RecorderFileValue(recordingID: try uuid(root.get("recordingID")), name: name, origin: source, symbols: symbols, records: records)
     }
@@ -353,6 +359,10 @@ enum RecorderFileCodec {
             guard version >= curvesVersion else { throw RecorderFileError.invalid("A Curves command needs recording version 7.") }
             let value = try Object(node, required: ["tag", "settings"])
             return .applyCurves(try curves(value.get("settings"), points: &points))
+        case "applyColorBalance":
+            guard version >= colorBalanceVersion else { throw RecorderFileError.invalid("A Color Balance command needs recording version 8.") }
+            let value = try Object(node, required: ["tag", "settings"])
+            return .applyColorBalance(try colorBalance(value.get("settings")))
         case "channelToSelection":
             guard version >= channelVersion else { throw RecorderFileError.invalid("A channel selection needs recording version 3.") }
             let value = try Object(node, required: ["tag", "operation"])
@@ -421,6 +431,22 @@ enum RecorderFileCodec {
         }
         return RecorderCurvesValue(trc: trc, value: try channel("value"), red: try channel("red"),
             green: try channel("green"), blue: try channel("blue"), alpha: try channel("alpha"))
+    }
+
+    /// Whole Color Balance values: every named tonal range with its three
+    /// signed corrections plus Preserve Lightness. Corrections follow the
+    /// same finite −1...1 contract as the native typed settings.
+    private static func colorBalance(_ node: RecorderJSON) throws -> RecorderColorBalanceValue {
+        let value = try Object(node, required: ["shadows", "midtones", "highlights", "preserveLuminosity"])
+        func range(_ key: String) throws -> RecorderColorBalanceValue.Range {
+            let source = try Object(value.get(key), required: ["cyanRed", "magentaGreen", "yellowBlue"])
+            return try RecorderColorBalanceValue.Range(cyanRed: number(source.get("cyanRed")),
+                magentaGreen: number(source.get("magentaGreen")),
+                yellowBlue: number(source.get("yellowBlue"))).validated()
+        }
+        return try RecorderColorBalanceValue(shadows: range("shadows"), midtones: range("midtones"),
+            highlights: range("highlights"),
+            preserveLuminosity: bool(value.get("preserveLuminosity"))).validated()
     }
 
     private static func descriptionKind(_ node: RecorderJSON) throws -> RecorderTargetDescription.Kind {
@@ -529,6 +555,9 @@ enum RecorderFileCodec {
             return
         case (.applyCurves, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("A Curves adjustment needs a layer description.") }
+            return
+        case (.applyColorBalance, .layer(let id)):
+            guard layer(id) else { throw RecorderFileError.invalid("A Color Balance adjustment needs a layer description.") }
             return
         case (.channelToSelection, .channel(let id)):
             guard descriptions[id]?.kind == .channel else { throw RecorderFileError.invalid("Channel to Selection needs a channel description.") }
