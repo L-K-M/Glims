@@ -5126,3 +5126,14 @@ pass. The pinned actual-window fixture passes 246 checks, including the observed
 and fixed six-failure Recorder regression. All 1,526 units pass. All-engine UI
 and packaged qualification continue; no installed-app or parity claim yet. See
 [component-edits.md](component-edits.md).
+
+### Native ink Levels foundation (2026-11-12)
+
+An additive scalar Levels transaction now preserves native CMYK/Multichannel
+samples, selection weighting and exact Undo without RGB conversion. The kernel
+passes 131,713 optimized/sanitized checks. All four engines pass 1,534 Levels,
+1,314 prior scalar-edit and 39 ownership/cancellation checks each, as well as
+general conformance. Numeric and native integration reviews found no remaining
+important findings. A frozen-source modeless preview and its controls are next;
+the foundation does not enable an ink Levels menu by itself. See
+[component-levels.md](component-levels.md).

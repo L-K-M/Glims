@@ -3,6 +3,7 @@
 #include "engine-private.h"
 #include "plate-storage.h"
 #include "component-scalar.h"
+#include "component-levels.h"
 
 #include <math.h>
 #include <string.h>
@@ -60,18 +61,15 @@ selected_ink (GlimsOpenImage *open, GlimsItemID id, const GlimsPlateStorage *sto
   return NULL;
 }
 
-GlimsStatus
-glims_image_edit_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
-                      uint32_t operation, double intensity, double opacity, char **error)
-{
-  if (error) *error = NULL;
-  if (!channel || operation > GLIMS_INK_EDIT_INVERT ||
-      !isfinite (intensity) || intensity < 0 || intensity > 1 ||
-      !isfinite (opacity) || opacity < 0 || opacity > 1 ||
-      (operation == GLIMS_INK_EDIT_CLEAR && (intensity != 1 || opacity != 1)) ||
-      (operation == GLIMS_INK_EDIT_INVERT && (intensity != 0 || opacity != 1)))
-    return GLIMS_STATUS_INVALID_ARGUMENT;
+typedef bool (*InkRow) (GlimsComponentScalarFormat format, const void *settings,
+                        size_t count, const void *source, const float *mask,
+                        void *destination, bool *changed);
 
+static GlimsStatus
+apply_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
+           const char *title, gboolean skip_calculation,
+           InkRow calculate, const void *settings, char **error)
+{
   GlimsOpenImage *open = glims_lookup_image (engine, id);
   if (!open) return GLIMS_STATUS_NOT_FOUND;
   GlimsStatus status = glims_edit_ready (engine, open, error);
@@ -92,7 +90,7 @@ glims_image_edit_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
     }
   status = glims_check_item_locks (GIMP_ITEM (target), GLIMS_LOCK_PIXELS, error);
   if (status != GLIMS_STATUS_OK) return status;
-  if (opacity == 0) return GLIMS_STATUS_OK;
+  if (skip_calculation) return GLIMS_STATUS_OK;
 
   GlimsComponentScalarFormat format;
   switch (storage.map.storage)
@@ -109,8 +107,6 @@ glims_image_edit_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
     return GLIMS_STATUS_OK;
   GimpChannel *selection = gimp_image_get_mask (open->image);
   gboolean masked = !gimp_channel_is_empty (selection);
-  const char *title = operation == GLIMS_INK_EDIT_FILL ? "Fill Ink" :
-                      operation == GLIMS_INK_EDIT_CLEAR ? "Clear Ink" : "Invert Ink";
 
   /* Own every native object used after dispatch. Busy gates other edits;
    * the candidate and selection snapshot contain no borrowed storage state. */
@@ -146,11 +142,10 @@ glims_image_edit_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
           gegl_buffer_get (mask, &row, 1, babl_format ("Y float"), coverage,
                             GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
         bool row_changed = false;
-        if (!glims_component_scalar_row (format,
-              operation == GLIMS_INK_EDIT_INVERT ? GLIMS_COMPONENT_SCALAR_INVERT : GLIMS_COMPONENT_SCALAR_FILL,
-              intensity, opacity, count, input, mask ? coverage : NULL, output, &row_changed))
+        if (!calculate (format, settings, count, input,
+                         mask ? coverage : NULL, output, &row_changed))
           {
-            if (error) *error = g_strdup ("The selected ink or selection contains nonfinite or invalid samples. No pixels were changed.");
+            if (error) *error = g_strdup ("The ink edit contains invalid samples or produces an unrepresentable value. No pixels were changed.");
             status = GLIMS_STATUS_INVALID_ARGUMENT;
             goto finish;
           }
@@ -203,4 +198,68 @@ finish:
   g_object_unref (image);
   engine->busy--;
   return status;
+}
+
+typedef struct {
+  GlimsComponentScalarOperation operation;
+  double intensity, opacity;
+} ScalarEdit;
+
+static bool
+scalar_row (GlimsComponentScalarFormat format, const void *settings,
+            size_t count, const void *source, const float *mask,
+            void *destination, bool *changed)
+{
+  const ScalarEdit *s = settings;
+  return glims_component_scalar_row (format, s->operation, s->intensity, s->opacity,
+                                     count, source, mask, destination, changed);
+}
+
+static bool
+levels_row (GlimsComponentScalarFormat format, const void *settings,
+            size_t count, const void *source, const float *mask,
+            void *destination, bool *changed)
+{
+  return glims_component_levels_row (format, settings, count, source, mask,
+                                     destination, changed);
+}
+
+GlimsStatus
+glims_image_edit_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
+                      uint32_t operation, double intensity, double opacity, char **error)
+{
+  if (error) *error = NULL;
+  if (!channel || operation > GLIMS_INK_EDIT_INVERT ||
+      !isfinite (intensity) || intensity < 0 || intensity > 1 ||
+      !isfinite (opacity) || opacity < 0 || opacity > 1 ||
+      (operation == GLIMS_INK_EDIT_CLEAR && (intensity != 1 || opacity != 1)) ||
+      (operation == GLIMS_INK_EDIT_INVERT && (intensity != 0 || opacity != 1)))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  const char *title = operation == GLIMS_INK_EDIT_FILL ? "Fill Ink" :
+                      operation == GLIMS_INK_EDIT_CLEAR ? "Clear Ink" : "Invert Ink";
+  const ScalarEdit settings = {
+    operation == GLIMS_INK_EDIT_INVERT ? GLIMS_COMPONENT_SCALAR_INVERT : GLIMS_COMPONENT_SCALAR_FILL,
+    intensity, opacity
+  };
+  return apply_ink (engine, id, channel, title, opacity == 0, scalar_row, &settings, error);
+}
+
+GlimsStatus
+glims_image_levels_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
+                        const GlimsInkLevelsSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  if (!channel || !settings || settings->struct_size < sizeof *settings)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  /* Copy and validate before owning native objects or entering nested dispatch. */
+  const GlimsComponentLevels values = {
+    settings->value.low_input, settings->value.high_input, settings->value.gamma,
+    settings->value.low_output, settings->value.high_output,
+    settings->clamp_input, settings->clamp_output
+  };
+  bool changed;
+  if (!glims_component_levels_row (GLIMS_COMPONENT_SCALAR_U8, &values, 0,
+                                   NULL, NULL, NULL, &changed))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  return apply_ink (engine, id, channel, "Levels Ink", FALSE, levels_row, &values, error);
 }
