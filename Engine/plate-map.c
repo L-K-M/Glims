@@ -41,7 +41,8 @@ bool glims_plate_map_validate(const GlimsPlateMap *map)
     if (!map || !map->width || map->width > INT32_MAX ||
         !map->height || map->height > INT32_MAX ||
         !map->count || map->count > GLIMS_PLATE_LIMIT ||
-        map->mode != GLIMS_PLATE_MODE_MULTICHANNEL ||
+        !(map->mode == GLIMS_PLATE_MODE_MULTICHANNEL ||
+          (map->mode == GLIMS_PLATE_MODE_CMYK && map->count == 4)) ||
         map->storage < GLIMS_PLATE_STORAGE_U8 || map->storage > GLIMS_PLATE_STORAGE_FLOAT ||
         map->encoding != GLIMS_PLATE_ENCODING_INTENSITY)
         return false;

@@ -83,7 +83,7 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
 
     func retarget(to target: ImageDocument?) {
         targetDocument = target
-        let ink = target?.colorInfo.mode == .multichannel
+        let ink = target?.colorInfo.mode.usesInkChannels == true
         if showsInkTools != ink {
             showsInkTools = ink
             grid.slots = ToolID.paletteSlots.map { group in
@@ -381,7 +381,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
 
         if tool.paintTool != nil {
             addPaintRows(for: tool, brush: state.brush(for: tool))
-            if document?.colorInfo.mode == .multichannel {
+            if document?.colorInfo.mode.usesInkChannels == true {
                 stack.addArrangedSubview(hint("Paint the selected ink channel. Black adds full ink; white removes ink. Gray sets intermediate coverage."))
             }
         } else if tool.isSelectionTool {

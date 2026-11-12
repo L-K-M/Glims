@@ -53,7 +53,7 @@ final class ChannelsPaletteController: NSViewController, PaletteContent, Palette
                           hasSelectedChannels: document.isChannelTargetActive,
                           quickMask: document.quickMaskState,
                           acceptsEdits: document.acceptsEdits,
-                          multichannel: document.colorInfo.mode == .multichannel))
+                          multichannel: document.colorInfo.mode.usesInkChannels))
         let owner = ObjectIdentifier(document), version = document.stateVersion
         guard thumbnailOwner != owner || thumbnailVersion != version else { return }
         thumbnailRequest?.cancel()
@@ -85,7 +85,7 @@ final class ChannelsPaletteController: NSViewController, PaletteContent, Palette
 
     func perform(_ action: ChannelsPaletteView.Action) {
         guard let document, document.acceptsEdits,
-              ChannelMenuPolicy.permits(action, multichannel: document.colorInfo.mode == .multichannel) else { return }
+              ChannelMenuPolicy.permits(action, multichannel: document.colorInfo.mode.usesInkChannels) else { return }
         switch action {
         case .setComponentActive(let component, let enabled): document.setComponentActive(component, to: enabled)
         case .setComponentVisible(let component, let visible): document.setComponentVisible(component, to: visible)
@@ -142,7 +142,7 @@ final class ChannelsPaletteController: NSViewController, PaletteContent, Palette
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         guard let document, document.acceptsEdits,
               let action = menuItem.representedObject as? ChannelsPaletteView.Action,
-              ChannelMenuPolicy.permits(action, multichannel: document.colorInfo.mode == .multichannel) else { return false }
+              ChannelMenuPolicy.permits(action, multichannel: document.colorInfo.mode.usesInkChannels) else { return false }
         switch action {
         case .setQuickMask:
             menuItem.state = document.quickMaskState?.enabled == true ? .on : .off

@@ -22,4 +22,10 @@ GlimsStatus glims_image_new_multichannel (GlimsEngine *engine,
                                           GlimsImageID *result,
                                           char       **error);
 
+/* Same native scalar storage, with exactly four C/M/Y/K planes and a required
+ * immutable CMYK source profile copied into the native XCF metadata. */
+GlimsStatus glims_image_new_cmyk (GlimsEngine *engine, int32_t width, int32_t height,
+                                  uint32_t component, const guint8 *icc, gsize size,
+                                  GlimsImageID *result, char **error);
+
 #endif

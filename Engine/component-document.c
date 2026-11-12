@@ -95,12 +95,14 @@ plane_display_name (uint32_t index,
   return g_strdup_printf ("Ink %u", index + 1);
 }
 
-GlimsStatus
-glims_image_new_multichannel (GlimsEngine *engine,
+static GlimsStatus
+new_component_image (GlimsEngine *engine,
                               int32_t      width,
                               int32_t      height,
                               uint32_t     component,
                               uint32_t     channel_count,
+                              uint32_t     mode,
+                              const guint8 *icc, gsize icc_size,
                               GlimsImageID *result,
                               char       **error)
 {
@@ -131,7 +133,7 @@ glims_image_new_multichannel (GlimsEngine *engine,
   map.width    = (uint32_t) width;
   map.height   = (uint32_t) height;
   map.count    = channel_count;
-  map.mode     = GLIMS_PLATE_MODE_MULTICHANNEL;
+  map.mode     = mode;
   map.encoding = GLIMS_PLATE_ENCODING_INTENSITY;
 
   for (uint32_t i = 0; i < channel_count; i++)
@@ -156,7 +158,7 @@ glims_image_new_multichannel (GlimsEngine *engine,
     return glims_fail (error, NULL,
                        "The component image definition is invalid.");
 
-  image = glims_plate_storage_create (engine, &map, error);
+  image = glims_plate_storage_create_profiled (engine, &map, icc, icc_size, error);
   if (! image)
     return GLIMS_STATUS_FAILED;
 
@@ -195,4 +197,22 @@ glims_image_new_multichannel (GlimsEngine *engine,
     }
 
   return status;
+}
+
+GlimsStatus
+glims_image_new_multichannel (GlimsEngine *engine, int32_t width, int32_t height,
+                              uint32_t component, uint32_t channel_count,
+                              GlimsImageID *result, char **error)
+{
+  return new_component_image (engine, width, height, component, channel_count,
+                               GLIMS_PLATE_MODE_MULTICHANNEL, NULL, 0, result, error);
+}
+
+GlimsStatus
+glims_image_new_cmyk (GlimsEngine *engine, int32_t width, int32_t height,
+                      uint32_t component, const guint8 *icc, gsize size,
+                      GlimsImageID *result, char **error)
+{
+  return new_component_image (engine, width, height, component, 4,
+                               GLIMS_PLATE_MODE_CMYK, icc, size, result, error);
 }

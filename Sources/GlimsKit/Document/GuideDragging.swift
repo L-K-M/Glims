@@ -185,7 +185,7 @@ final class GuideDragController {
     /// refuse guides.
     @discardableResult
     func beginFromRuler(orientation: EngineSession.GuideOrientation, event: NSEvent, ruler: PixelRulerView) -> Bool {
-        guard document.colorInfo.mode != .multichannel,
+        guard !document.colorInfo.mode.usesInkChannels,
               let window = canvas.window, !document.isClosing, document.acceptsEdits,
               ruler.canvas === canvas, ruler.window === window,
               let scrollView = ruler.scrollView, scrollView.rulersVisible else { return false }
@@ -201,7 +201,7 @@ final class GuideDragController {
     /// is within the view-point tolerance.
     @discardableResult
     func beginMoveOfGuide(at event: NSEvent) -> Bool {
-        guard document.colorInfo.mode != .multichannel,
+        guard !document.colorInfo.mode.usesInkChannels,
               let window = canvas.window, !document.isClosing, document.acceptsEdits,
               canvas.showsGuides else { return false }
         let viewPoint = canvas.convert(event.locationInWindow, from: nil)

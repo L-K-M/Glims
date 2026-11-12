@@ -11,7 +11,7 @@ enum ToolHintPolicy {
 
     static func hint(tool: ToolID, phase: Phase, flags: NSEvent.ModifierFlags,
                      mode: EngineSession.ColorMode = .rgb) -> String {
-        if mode == .multichannel {
+        if mode.usesInkChannels {
             guard tool.isAvailable(in: mode) else {
                 return "Choose a painting, selection, Hand or Zoom tool for this ink document."
             }

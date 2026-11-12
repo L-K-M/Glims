@@ -29,13 +29,15 @@ enum ChannelForms {
     static func edit(_ id: Int32, in document: ImageDocument, on window: NSWindow) {
         guard document.acceptsEdits, window.attachedSheet == nil,
               let row = document.channels.first(where: { $0.id == id }) else { return }
-        let isInk = document.colorInfo.mode == .multichannel
+        let isInk = document.colorInfo.mode.usesInkChannels
+        let isCmyk = document.colorInfo.mode == .cmyk
         let name = NSTextField(string: row.name)
         name.isEnabled = !row.isQuickMask
         name.setAccessibilityLabel("Channel name")
         let color = NSColorWell(frame: NSRect(x: 0, y: 0, width: 64, height: 28))
         color.color = row.color.withAlphaComponent(1)
         color.setAccessibilityLabel(isInk ? "Ink color" : "Overlay color")
+        color.isEnabled = !isCmyk
         let opacity = NSTextField(string: NumberFormatter.localizedString(from: NSNumber(value: row.opacity * 100), number: .decimal))
         opacity.setAccessibilityLabel("Overlay opacity, percent")
         var fields: [[NSView]] = [
@@ -50,7 +52,9 @@ enum ChannelForms {
         grid.setFrameSize(grid.fittingSize)
         let alert = NSAlert()
         alert.messageText = isInk ? "Ink Attributes" : row.isQuickMask ? "Quick Mask Attributes" : "Channel Attributes"
-        alert.informativeText = isInk
+        alert.informativeText = isCmyk
+            ? "The document's source profile defines CMYK ink color. Black pixels carry full ink; white pixels show the paper."
+            : isInk
             ? "Choose the ink's preview color. Black pixels carry full ink; white pixels show the paper."
             : "The overlay marks the masked-out area. Opacity changes its display, not the channel pixels."
         alert.accessoryView = grid
@@ -71,7 +75,7 @@ enum ChannelForms {
             }
             document.changeChannel(id, .init(name: row.isQuickMask ? nil : value,
                                              opacity: isInk ? nil : alpha,
-                                             color: color.color.withAlphaComponent(alpha)))
+                                             color: isCmyk ? nil : color.color.withAlphaComponent(alpha)))
         }
     }
 

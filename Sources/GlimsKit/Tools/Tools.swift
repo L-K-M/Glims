@@ -19,7 +19,7 @@ enum ToolID: String, CaseIterable {
     /// Match the native component routes; unavailable tools are excluded
     /// from shortcuts and disabled in the palette before an interaction starts.
     func isAvailable(in mode: EngineSession.ColorMode?) -> Bool {
-        guard mode == .multichannel else { return true }
+        guard mode?.usesInkChannels == true else { return true }
         switch self {
         case .paintbrush, .pencil, .airbrush, .rectangleSelect, .ellipseSelect, .lasso, .hand, .zoom:
             return true

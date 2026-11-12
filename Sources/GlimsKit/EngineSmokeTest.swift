@@ -108,7 +108,7 @@ enum EngineSmokeTest {
     }
 
     static func run() -> Int32 {
-        if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "multichannel", !NSApp.isRunning {
+        if ["multichannel", "cmyk"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
             return EngineSmokeTestHost.run()
         }
         if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents", !NSApp.isRunning {
@@ -169,6 +169,11 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "multichannel" {
                 try exerciseMultichannel(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (multichannel)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "cmyk" {
+                try exerciseCmyk(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (CMYK)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "filter-catalog-complete" {

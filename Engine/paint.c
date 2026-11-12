@@ -97,7 +97,7 @@ glims_stroke_component_ready (GlimsEngine *engine, GlimsStrokeID id)
   if (!stroke || !stroke->component_stroke) return GLIMS_STATUS_UNSUPPORTED;
   GlimsOpenImage *open = glims_lookup_image (engine, gimp_image_get_id (stroke->image));
   if (!open || open->image != stroke->image || !open->component_document ||
-      glims_plate_storage_read (stroke->image, &storage) != GLIMS_PLATE_STORAGE_VALID)
+      !glims_plate_storage_read_open (open, &storage))
     return GLIMS_STATUS_UNSUPPORTED;
   for (guint i = 0; i < storage.map.count; i++)
     if (GIMP_DRAWABLE (storage.planes[i]) == stroke->drawable) return GLIMS_STATUS_OK;
