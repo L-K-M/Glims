@@ -7,23 +7,24 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-The installed editor is merged through [#226](https://github.com/L-K-M/Glims/pull/226)
-(`7bca6be`), with a tree identical to qualified source `dbeefe9`. This includes
+The installed editor is merged through [#229](https://github.com/L-K-M/Glims/pull/229)
+(`f890954`), with a tree identical to qualified source `ee552de`. It includes
+native Multichannel ink editing, the merged Rigi tool-availability controls,
 Sponge saturation tools, GIF/BMP/TGA export, explicit CMYK PSD output and the
-preceding reviewed editor work. All 1,510 units, the focused Sponge/tool-menu
-and full app checks on four engines, and standalone bundle checks pass. The
-latest release launched in 1.75 seconds fresh, 1.47 cached and 3.44 after
-relocation on this Mac. These timings do not establish every machine's latency.
-No notarization is requested or required for this task.
+preceding reviewed editor work. All 1,516 units, the focused Multichannel app
+matrix and native checks on four engines pass. The final standalone pinned
+bundle passed native, full app and focused ink checks, plus actual New Image,
+pointer painting and menu/keyboard Undo/Redo. Fresh/cached/relocated launch
+measured 1.82/1.40/3.40 seconds on this Mac. Those timings do not establish every
+machine's latency. No notarization is requested or required for this task.
 
 This is not yet a claim of complete Photoshop 4 parity. Native CMYK/Lab,
-duotone editing, broader Recorder coverage, PSD fidelity and physical-input/
-VoiceOver qualification remain open. The Multichannel editor in PR #229 builds
-on merged component storage and offers real ink-channel painting, selection,
-attributes, Undo and XCF persistence; final qualification is still in progress. See [the plan](plan.md) for current
-slice evidence and [the earlier verification report](editor-verification.md)
-for its exact historical scope. Dated reports below retain their original
-scope and pending notes.
+duotone editing, broader Recorder coverage, PSD fidelity and physical-tablet/
+VoiceOver qualification remain open. A private CMYK conversion foundation is
+in PR #230; native CMYK document integration is still in development. See
+[the plan](plan.md) for current slice evidence and [the earlier verification
+report](editor-verification.md) for its exact historical scope. Dated reports
+below retain their original scope and pending notes.
 
 - [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
       fail before packaging. Hosted CI explicitly builds only the interface.
