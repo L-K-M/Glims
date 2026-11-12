@@ -5460,3 +5460,15 @@ The first pinned native fixture passes 1,042 checks; the complete four-engine
 regression run and independent review are pending. No Lab adjustment panel,
 preview or Recorder behavior is enabled by this direct engine operation yet.
 See [lab-curves-edit.md](lab-curves-edit.md).
+
+### Captured Lab Curves previews (candidate)
+
+Slots 203–206 add immutable Lab preview baselines and separately owned rendered
+copies. Apply shares the staged component transaction and verifies every source
+axis, selection and captured target before one Undo publication. Cancel keeps
+source pixels and history intact. Ink and Lab preview tokens use one unique
+engine counter. The pinned native fixture passes 819 checks after reproducing
+and fixing a token collision; all 1,677 Swift tests pass with the new transport.
+The remaining engine regression run and independent reviews are in progress.
+The Lab panel and Recorder route remain subsequent work. See
+[lab-curves-preview.md](lab-curves-preview.md).

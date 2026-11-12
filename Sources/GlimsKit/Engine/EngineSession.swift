@@ -280,6 +280,127 @@ final class EngineSession: @unchecked Sendable {
         return api.image_fill_lab != nil
     }
 
+    /// Normalized table coordinates map to physical L*, a* or b*. These are
+    /// distinct from ink intensity even though both use unit sample tables.
+    struct LabCurvesSettings: Equatable {
+        static let sampleCount = 256
+        static let identitySamples = (0..<sampleCount).map { Double($0) / 255 }
+        var samples: [Double] = identitySamples
+
+        var isValid: Bool {
+            samples.count == Self.sampleCount && samples.allSatisfy { $0.isFinite && (0...1).contains($0) }
+        }
+    }
+
+    var supportsLabCurves: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_curves_lab),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_curves_lab) else { return false }
+        return api.image_curves_lab != nil
+    }
+
+    var supportsLabCurveSnapshots: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_lab_snapshot_end),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_lab_snapshot_end) else { return false }
+        return api.image_lab_snapshot_begin != nil && api.image_lab_snapshot_curves != nil
+            && api.image_lab_snapshot_apply_curves != nil && api.image_lab_snapshot_end != nil
+    }
+
+    func applyLabCurves(_ image: Int32, axis: LabAxis, settings: LabCurvesSettings) throws {
+        guard supportsLabCurves, let slot = api.image_curves_lab else { throw labCurvesUnavailable() }
+        var native = try labCurves(image, axis: axis, settings: settings)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(slot(engine, image, &native, &error), error)
+    }
+
+    func beginLabCurvesSnapshot(_ image: Int32, axis: LabAxis) throws -> UInt64 {
+        guard supportsLabCurveSnapshots, let slot = api.image_lab_snapshot_begin else { throw labCurvesUnavailable() }
+        try validateLabCurveTarget(image, axis: axis)
+        var target = GlimsLabSnapshotTarget()
+        target.struct_size = UInt32(MemoryLayout<GlimsLabSnapshotTarget>.size)
+        target.axis = axis.id
+        target.role = axis.role.rawValue
+        target.uuid = axis.uuid.uuid
+        var token: UInt64 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(slot(engine, image, &target, &token, &error), error)
+        guard token != 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine returned no Lab Curves preview token.")
+        }
+        return token
+    }
+
+    /// The caller owns the returned preview image and must close it. The
+    /// captured axis identifies the source, never a handle from the copy.
+    func renderLabCurvesSnapshot(_ image: Int32, token: UInt64, axis: LabAxis,
+                                 settings: LabCurvesSettings) throws -> Int32 {
+        guard supportsLabCurveSnapshots, let slot = api.image_lab_snapshot_curves else { throw labCurvesUnavailable() }
+        try validateLabCurveToken(image, token: token)
+        var native = try labCurves(image, axis: axis, settings: settings)
+        var copy: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(slot(engine, image, token, &native, &copy, &error), error)
+        guard copy > 0, copy != image else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine returned no separate Lab Curves preview image.")
+        }
+        return copy
+    }
+
+    /// Success consumes the native token. Errors retain it for cancellation
+    /// or retry; the owning document keeps that distinction when closing.
+    func applyLabCurvesSnapshot(_ image: Int32, token: UInt64, axis: LabAxis,
+                                settings: LabCurvesSettings) throws {
+        guard supportsLabCurveSnapshots, let slot = api.image_lab_snapshot_apply_curves else { throw labCurvesUnavailable() }
+        try validateLabCurveToken(image, token: token)
+        var native = try labCurves(image, axis: axis, settings: settings)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(slot(engine, image, token, &native, &error), error)
+    }
+
+    func endLabCurvesSnapshot(_ image: Int32, token: UInt64) throws {
+        guard supportsLabCurveSnapshots, let slot = api.image_lab_snapshot_end else { throw labCurvesUnavailable() }
+        try validateLabCurveToken(image, token: token)
+        try check(slot(engine, image, token), nil)
+    }
+
+    private func labCurvesUnavailable() -> EngineError {
+        EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                    message: "This image engine does not support the requested Lab Curves operation.")
+    }
+
+    private func validateLabCurveTarget(_ image: Int32, axis: LabAxis) throws {
+        guard image > 0, axis.id > 0, axis.isSelected,
+              withUnsafeBytes(of: axis.uuid.uuid, { $0.contains(where: { $0 != 0 }) }) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose one Lab channel to adjust.")
+        }
+    }
+
+    private func validateLabCurveToken(_ image: Int32, token: UInt64) throws {
+        guard image > 0, token != 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "A valid Lab Curves preview is required.")
+        }
+    }
+
+    private func labCurves(_ image: Int32, axis: LabAxis, settings: LabCurvesSettings) throws -> GlimsLabCurvesSettings {
+        try validateLabCurveTarget(image, axis: axis)
+        guard settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Lab Curves needs 256 samples between 0 and 1.")
+        }
+        var native = GlimsLabCurvesSettings()
+        native.struct_size = UInt32(MemoryLayout<GlimsLabCurvesSettings>.size)
+        native.axis = axis.id
+        native.role = axis.role.rawValue
+        native.uuid = axis.uuid.uuid
+        settings.samples.withUnsafeBytes { source in
+            withUnsafeMutableBytes(of: &native.samples) { $0.copyMemory(from: source) }
+        }
+        return native
+    }
+
     var supportsLabBrush: Bool {
         guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.stroke_cancel_lab),
               Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.stroke_cancel_lab) else { return false }

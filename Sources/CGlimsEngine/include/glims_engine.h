@@ -1263,6 +1263,16 @@ typedef struct GlimsLabBrushSettings {
   double hardness;        /* Finite [0,1]. */
 } GlimsLabBrushSettings;
 
+/* Captured physical Lab axis identity for immutable Lab Curves previews.
+ * axis is the current native handle at capture, role is a GlimsLabAxisRole
+ * and uuid is the durable document-scoped identity. */
+typedef struct GlimsLabSnapshotTarget {
+  uint32_t struct_size;
+  GlimsItemID axis;
+  uint32_t role;
+  uint8_t uuid[16];
+} GlimsLabSnapshotTarget;
+
 /* Direct selected-axis Lab Curves request. samples[i] is a normalized unit
  * table output in [0,1] for domain position i/255, mapped into physical Lab
  * coordinates (L* = 100 * sample, a/b = 255 * sample - 128). Not physical values and
@@ -3997,6 +4007,40 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_curves_lab) (GlimsEngine *engine, GlimsImageID image,
                                    const GlimsLabCurvesSettings *settings,
                                    char **error);
+
+  /* Slot203 (appended after slot202 image_curves_lab): begin an immutable
+   * Lab Curves preview baseline for one captured physical Lab axis. Target
+   * identifies the sole selected unlocked axis by current handle, role and
+   * durable UUID within this image. The baseline captures the whole image
+   * (all axes, selection mask, profile and display metadata). Tokens are
+   * engine-wide unique and never reused. Only one preview token per image.
+   * Clears *token and *error on entry; on any failure *token remains 0. */
+  GlimsStatus (*image_lab_snapshot_begin) (GlimsEngine *engine, GlimsImageID image,
+                                          const GlimsLabSnapshotTarget *target,
+                                          uint64_t *token, char **error);
+  /* Slot204: render Lab Curves against the frozen baseline. settings must
+   * match the captured source identity (axis/role/UUID) and contain 256
+   * normalized unit samples. Returns a separately owned image derived from a
+   * private copy; editing it cannot corrupt baseline/cache. Clears *result
+   * and *error on entry. */
+  GlimsStatus (*image_lab_snapshot_curves) (GlimsEngine *engine, GlimsImageID image,
+                                           uint64_t token,
+                                           const GlimsLabCurvesSettings *settings,
+                                           GlimsImageID *result, char **error);
+  /* Slot205: apply Lab Curves from the frozen baseline. Compares all live
+   * planes, mask and metadata with the captured baseline, revalidates the
+   * selected axis/locks/identity and publishes exactly one Undo only if
+   * changed. Success (including no-op) consumes the token; errors/cancel/stale
+   * retain it. Clears *error on entry. */
+  GlimsStatus (*image_lab_snapshot_apply_curves) (GlimsEngine *engine, GlimsImageID image,
+                                                 uint64_t token,
+                                                 const GlimsLabCurvesSettings *settings,
+                                                 char **error);
+  /* Slot206: discard the Lab preview baseline without mutating pixels/history.
+   * Refuses BUSY during an active cooperative operation. NOT_FOUND for
+   * wrong/expired tokens. */
+  GlimsStatus (*image_lab_snapshot_end) (GlimsEngine *engine, GlimsImageID image,
+                                        uint64_t token);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
