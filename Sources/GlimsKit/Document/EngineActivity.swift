@@ -145,15 +145,16 @@ final class EngineActivity {
     /// Snapshot cleanup stays off the main thread and retries only native BUSY.
     /// An accepted Apply may already have consumed this exact token.
     func endInkSnapshot(_ token: UInt64, image: Int32, session: EngineSession,
+                        kind: InkAdjustmentKind = .levels,
                         completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
         queue.async {
-            let result = Result { try session.endInkLevelsSnapshot(image, token: token) }
+            let result = Result { try kind.end(session, image: image, token: token) }
             DispatchQueue.main.async {
                 if case .failure(let error) = result,
                    let native = error as? EngineSession.EngineError {
                     if native.isBusy {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                            self.endInkSnapshot(token, image: image, session: session, completion: completion)
+                            self.endInkSnapshot(token, image: image, session: session, kind: kind, completion: completion)
                         }
                         return
                     }

@@ -2,6 +2,7 @@
  * No RGB color conversion or native background-color Clear is involved. */
 #include "engine-private.h"
 #include "plate-storage.h"
+#include "component-curves.h"
 #include "component-scalar.h"
 #include "component-levels.h"
 #include "lab-fill.h"
@@ -15,6 +16,13 @@
 #include "core/gimpitem.h"
 #include "core/gimpprogress.h"
 
+/* The calculated cache holds one render. Its kind tag keeps Levels and
+ * Curves values from ever being compared or served across requests. */
+typedef enum {
+  INK_SNAPSHOT_CALC_LEVELS,
+  INK_SNAPSHOT_CALC_CURVES
+} InkSnapshotCalc;
+
 typedef struct _GlimsInkSnapshot {
   guint64 token;
   GlimsItemID target;
@@ -26,7 +34,9 @@ typedef struct _GlimsInkSnapshot {
   /* One private calculated image avoids repeating the full-plane edit for
    * each viewport. Public results are duplicates, never this cached image. */
   GimpImage *calculated;
+  InkSnapshotCalc calculated_kind;
   GlimsComponentLevels calculated_levels;
+  GlimsComponentCurve calculated_curve;
 } GlimsInkSnapshot;
 
 void
@@ -424,6 +434,15 @@ levels_row (GlimsComponentScalarFormat format, const void *settings,
                                      destination, changed);
 }
 
+static bool
+curves_row (GlimsComponentScalarFormat format, const void *settings,
+            size_t count, const void *source, const float *mask,
+            void *destination, bool *changed)
+{
+  return glims_component_curves_row (format, settings, count, source, mask,
+                                     destination, changed);
+}
+
 GlimsStatus
 glims_image_edit_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
                       uint32_t operation, double intensity, double opacity, char **error)
@@ -467,6 +486,29 @@ glims_image_levels_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channe
   if (!channel || !read_levels (settings, &values))
     return GLIMS_STATUS_INVALID_ARGUMENT;
   return apply_ink (engine, id, channel, "Levels Ink", FALSE, levels_row, &values, NULL, error);
+}
+
+static gboolean
+read_curves (const GlimsInkCurvesSettings *settings, GlimsComponentCurve *values)
+{
+  G_STATIC_ASSERT (GLIMS_CURVE_SAMPLE_COUNT == GLIMS_COMPONENT_CURVE_SAMPLES);
+  if (!settings || settings->struct_size < sizeof *settings) return FALSE;
+  /* Own the borrowed immutable table before any nested dispatch. */
+  memcpy (values->samples, settings->samples, sizeof values->samples);
+  bool changed;
+  return glims_component_curves_row (GLIMS_COMPONENT_SCALAR_U8, values, 0,
+                                     NULL, NULL, NULL, &changed);
+}
+
+GlimsStatus
+glims_image_curves_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
+                        const GlimsInkCurvesSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  GlimsComponentCurve values;
+  if (!channel || !read_curves (settings, &values))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  return apply_ink (engine, id, channel, "Curves Ink", FALSE, curves_row, &values, NULL, error);
 }
 
 GlimsStatus
@@ -527,6 +569,80 @@ same_levels (const GlimsComponentLevels *a, const GlimsComponentLevels *b)
          a->clamp_output == b->clamp_output;
 }
 
+/* Compare cache only within the same calculation kind: a Levels hit never
+ * serves a Curves request or vice versa. Values is the owned request copy. */
+static gboolean
+same_calculated (const GlimsInkSnapshot *snapshot, InkSnapshotCalc kind,
+                 const void *values)
+{
+  if (snapshot->calculated_kind != kind) return FALSE;
+  return kind == INK_SNAPSHOT_CALC_CURVES
+           ? !memcmp (&snapshot->calculated_curve, values,
+                      sizeof snapshot->calculated_curve)
+           : same_levels (&snapshot->calculated_levels, values);
+}
+
+static void
+store_calculated (GlimsInkSnapshot *snapshot, InkSnapshotCalc kind,
+                  const void *values)
+{
+  snapshot->calculated_kind = kind;
+  if (kind == INK_SNAPSHOT_CALC_CURVES)
+    snapshot->calculated_curve = *(const GlimsComponentCurve *) values;
+  else
+    snapshot->calculated_levels = *(const GlimsComponentLevels *) values;
+}
+
+/* Shared preview body: values is the caller's owned stack copy, valid across
+ * the nested apply_ink dispatch. Both kinds share ownership and cleanup. */
+static GlimsStatus
+ink_snapshot_render (GlimsEngine *engine,
+                     GlimsInkSnapshot *snapshot, const char *title,
+                     InkRow calculate, const void *values,
+                     InkSnapshotCalc kind, GlimsImageID *result, char **error)
+{
+  gboolean cached = snapshot->calculated &&
+                    same_calculated (snapshot, kind, values);
+  engine->busy++;
+  GimpImage *copy = gimp_image_duplicate (cached ? snapshot->calculated : snapshot->frozen);
+  engine->busy--;
+  if (!copy) return glims_fail (error, NULL, "The ink preview could not be rendered.");
+  GlimsImageID copy_id = 0;
+  GlimsStatus status = glims_adopt_image (engine, copy, &copy_id);
+  if (status != GLIMS_STATUS_OK) { g_object_unref (copy); return status; }
+  GlimsPlateStorage storage;
+  GlimsOpenImage *copy_open = glims_lookup_image (engine, copy_id);
+  if (!glims_plate_storage_read_open (copy_open, &storage) ||
+      snapshot->target_index >= storage.map.count ||
+      memcmp (storage.map.entries[snapshot->target_index].uuid, snapshot->target_uuid, 16))
+    status = GLIMS_STATUS_UNSUPPORTED;
+  else if (!cached)
+    {
+      GlimsItemID target = gimp_item_get_id (GIMP_ITEM (storage.planes[snapshot->target_index]));
+      status = apply_ink (engine, copy_id, target, title, FALSE,
+                          calculate, values, NULL, error);
+    }
+  if (status != GLIMS_STATUS_OK) glims_release_image (engine, copy_id);
+  else
+    {
+      if (!cached)
+        {
+          engine->busy++;
+          GimpImage *calculated = gimp_image_duplicate (copy);
+          engine->busy--;
+          /* A cache allocation failure does not invalidate the owned result. */
+          if (calculated)
+            {
+              g_clear_object (&snapshot->calculated);
+              snapshot->calculated = calculated;
+              store_calculated (snapshot, kind, values);
+            }
+        }
+      *result = copy_id;
+    }
+  return status;
+}
+
 GlimsStatus
 glims_image_ink_snapshot_levels (GlimsEngine *engine, GlimsImageID id,
                                  uint64_t token, const GlimsInkLevelsSettings *settings,
@@ -542,43 +658,46 @@ glims_image_ink_snapshot_levels (GlimsEngine *engine, GlimsImageID id,
   GlimsStatus status = glims_edit_ready (engine, open, error);
   if (status != GLIMS_STATUS_OK) return status;
   if (g_hash_table_size (engine->filters)) return GLIMS_STATUS_BUSY;
-  gboolean cached = snapshot->calculated && same_levels (&snapshot->calculated_levels, &values);
-  engine->busy++;
-  GimpImage *copy = gimp_image_duplicate (cached ? snapshot->calculated : snapshot->frozen);
-  engine->busy--;
-  if (!copy) return glims_fail (error, NULL, "The ink preview could not be rendered.");
-  GlimsImageID copy_id = 0;
-  status = glims_adopt_image (engine, copy, &copy_id);
-  if (status != GLIMS_STATUS_OK) { g_object_unref (copy); return status; }
-  GlimsPlateStorage storage;
-  GlimsOpenImage *copy_open = glims_lookup_image (engine, copy_id);
-  if (!glims_plate_storage_read_open (copy_open, &storage) ||
-      snapshot->target_index >= storage.map.count ||
-      memcmp (storage.map.entries[snapshot->target_index].uuid, snapshot->target_uuid, 16))
-    status = GLIMS_STATUS_UNSUPPORTED;
-  else if (!cached)
+  return ink_snapshot_render (engine, snapshot, "Preview Levels",
+                              levels_row, &values, INK_SNAPSHOT_CALC_LEVELS,
+                              result, error);
+}
+
+GlimsStatus
+glims_image_ink_snapshot_curves (GlimsEngine *engine, GlimsImageID id,
+                                 uint64_t token, const GlimsInkCurvesSettings *settings,
+                                 GlimsImageID *result, char **error)
+{
+  if (error) *error = NULL;
+  if (result) *result = 0;
+  GlimsComponentCurve values;
+  if (!result || !read_curves (settings, &values)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GlimsInkSnapshot *snapshot = find_snapshot (open, token);
+  if (!snapshot) return GLIMS_STATUS_NOT_FOUND;
+  GlimsStatus status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (g_hash_table_size (engine->filters)) return GLIMS_STATUS_BUSY;
+  return ink_snapshot_render (engine, snapshot, "Preview Curves",
+                              curves_row, &values, INK_SNAPSHOT_CALC_CURVES,
+                              result, error);
+}
+
+/* Success (including a no-op) consumes the token; errors retain it. */
+static GlimsStatus
+ink_snapshot_apply (GlimsEngine *engine, GlimsImageID id, uint64_t token,
+                    const char *title, InkRow calculate, const void *values,
+                    char **error)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GlimsInkSnapshot *snapshot = find_snapshot (open, token);
+  if (!snapshot) return GLIMS_STATUS_NOT_FOUND;
+  GlimsStatus status = apply_ink (engine, id, snapshot->target, title, FALSE,
+                                  calculate, values, snapshot, error);
+  if (status == GLIMS_STATUS_OK)
     {
-      GlimsItemID target = gimp_item_get_id (GIMP_ITEM (storage.planes[snapshot->target_index]));
-      status = apply_ink (engine, copy_id, target, "Preview Levels", FALSE,
-                          levels_row, &values, NULL, error);
-    }
-  if (status != GLIMS_STATUS_OK) glims_release_image (engine, copy_id);
-  else
-    {
-      if (!cached)
-        {
-          engine->busy++;
-          GimpImage *calculated = gimp_image_duplicate (copy);
-          engine->busy--;
-          /* A cache allocation failure does not invalidate the owned result. */
-          if (calculated)
-            {
-              g_clear_object (&snapshot->calculated);
-              snapshot->calculated = calculated;
-              snapshot->calculated_levels = values;
-            }
-        }
-      *result = copy_id;
+      open->ink_snapshot = NULL;
+      glims_ink_snapshot_free (snapshot);
     }
   return status;
 }
@@ -591,17 +710,20 @@ glims_image_ink_snapshot_apply (GlimsEngine *engine, GlimsImageID id,
   if (error) *error = NULL;
   GlimsComponentLevels values;
   if (!read_levels (settings, &values)) return GLIMS_STATUS_INVALID_ARGUMENT;
-  GlimsOpenImage *open = glims_lookup_image (engine, id);
-  GlimsInkSnapshot *snapshot = find_snapshot (open, token);
-  if (!snapshot) return GLIMS_STATUS_NOT_FOUND;
-  GlimsStatus status = apply_ink (engine, id, snapshot->target, "Levels Ink", FALSE,
-                                 levels_row, &values, snapshot, error);
-  if (status == GLIMS_STATUS_OK)
-    {
-      open->ink_snapshot = NULL;
-      glims_ink_snapshot_free (snapshot);
-    }
-  return status;
+  return ink_snapshot_apply (engine, id, token, "Levels Ink",
+                             levels_row, &values, error);
+}
+
+GlimsStatus
+glims_image_ink_snapshot_apply_curves (GlimsEngine *engine, GlimsImageID id,
+                                       uint64_t token, const GlimsInkCurvesSettings *settings,
+                                       char **error)
+{
+  if (error) *error = NULL;
+  GlimsComponentCurve values;
+  if (!read_curves (settings, &values)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  return ink_snapshot_apply (engine, id, token, "Curves Ink",
+                             curves_row, &values, error);
 }
 
 GlimsStatus

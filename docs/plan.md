@@ -5387,3 +5387,28 @@ four engines pass 720 independent preservation checks and 62 hosted app
 workflow checks each; all 1,623 Swift tests pass. Native and Swift source
 reviews are clear. Final packaging/startup and hosted CI remain pending. See [cmyk-psd-import.md](cmyk-psd-import.md) for the exact
 subset and qualification limits. This does not establish Photoshop 4 parity.
+
+### Native scalar ink Curves candidate (2026-11-12)
+
+Slots 199–201 add direct selected-ink Curves and snapshot preview/Apply for
+CMYK and Multichannel. Owned sample tables preserve native precision and
+selection coverage; a calculation-kind tag separates Levels and Curves caches.
+The shared lifecycle retains source ownership, stale-state refusal and exact
+Undo behavior. Existing conformance and ink Levels/snapshot checks pass on all
+four engines. Every producer also passes 741 new literal/public-facade
+checks. All 1,632 Swift and 130 Python tests pass, including guarded transport
+prefixes and exact sample ownership. Independent native, fixture and Swift
+transport reviews are clear. Hosted CI and the application panel remain
+separate gates. See
+[ink-curves.md](ink-curves.md); this does not claim Photoshop parity.
+
+### Selected-ink freehand Curves panel candidate (2026-11-12)
+
+The actual CMYK/Multichannel Curves menu now routes to a modeless freehand
+panel, with whole-table graph edits, explicit sample index/output, Reset,
+owned preview, Apply and Cancel. Levels and Curves share counted snapshot
+cleanup while retaining separate typed capability gates. All 1,644 Swift
+tests pass; all four engines pass 174 Curves and 505 existing Levels workflow
+checks each. Independent panel and lifecycle reviews are clear. Hosted CI
+remains open. Smooth points and Curves Recorder commands are subsequent work;
+this is neither an installed feature nor a Photoshop-parity claim.

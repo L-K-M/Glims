@@ -18,7 +18,7 @@ destination write. Exact in-place evaluation and unaligned pixel buffers are
 supported. The header specifies the remaining input and ownership conditions.
 
 `scripts/test-component-curves.sh` runs the standalone numeric checks in
-optimized and ASan/UBSan builds. The kernel has no GIMP dependency or public
-adapter caller yet. Native captured-target preview, Apply/Undo,
-Recorder and panel integration remain separate work. These semantics do not
-claim Photoshop spline or numeric equivalence.
+optimized and ASan/UBSan builds. The kernel has no GIMP dependency. The native
+[ink Curves candidate](ink-curves.md) uses it for captured-target preview and
+Apply/Undo; Recorder and panel integration remain separate work. These semantics
+do not claim Photoshop spline or numeric equivalence.

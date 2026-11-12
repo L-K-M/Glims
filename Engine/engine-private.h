@@ -222,6 +222,15 @@ GlimsStatus glims_image_ink_snapshot_apply (GlimsEngine *engine, GlimsImageID im
                                             char **error);
 GlimsStatus glims_image_ink_snapshot_end (GlimsEngine *engine, GlimsImageID image,
                                           uint64_t token);
+GlimsStatus glims_image_curves_ink (GlimsEngine *engine, GlimsImageID image,
+                                    GlimsItemID channel, const GlimsInkCurvesSettings *settings,
+                                    char **error);
+GlimsStatus glims_image_ink_snapshot_curves (GlimsEngine *engine, GlimsImageID image,
+                                             uint64_t token, const GlimsInkCurvesSettings *settings,
+                                             GlimsImageID *copy, char **error);
+GlimsStatus glims_image_ink_snapshot_apply_curves (GlimsEngine *engine, GlimsImageID image,
+                                                   uint64_t token, const GlimsInkCurvesSettings *settings,
+                                                   char **error);
 GlimsStatus glims_image_ink_channel_identity (GlimsEngine *engine, GlimsImageID image,
                                               GlimsItemID channel,
                                               GlimsInkChannelIdentity *out);
