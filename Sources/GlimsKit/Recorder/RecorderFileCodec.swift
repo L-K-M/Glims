@@ -13,6 +13,7 @@ enum RecorderFileCodec {
     static let hueSaturationVersion = 9
     static let brightnessContrastVersion = 10
     static let inkVersion = 11
+    static let inkCurvesVersion = 12
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -89,7 +90,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...inkVersion)
+        let fileVersion = try integer(root.get("version"), range: version...inkCurvesVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -116,6 +117,7 @@ enum RecorderFileCodec {
         var hasHueSaturation = false
         var hasBrightnessContrast = false
         var hasInkCommand = false
+        var hasInkCurves = false
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
             guard case .object(let members) = node, let outcome = members["outcome"] else { throw RecorderFileError.invalid("Missing record outcome.") }
@@ -137,6 +139,7 @@ enum RecorderFileCodec {
                 if case .applyBrightnessContrast = command { hasBrightnessContrast = true }
                 if case .editInk = command { hasInkCommand = true }
                 if case .applyInkLevels = command { hasInkCommand = true }
+                if case .applyInkCurves = command { hasInkCurves = true }
                 let binding = try binding(row.get("binding"))
                 try validate(binding, for: command, descriptions: descriptions)
                 if case .ink(let symbol, let identity) = binding {
@@ -188,6 +191,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == inkVersion, !hasInkCommand {
             throw RecorderFileError.invalid("Version 11 requires a successful ink command.")
+        }
+        if fileVersion == inkCurvesVersion, !hasInkCurves {
+            throw RecorderFileError.invalid("Version 12 requires a successful ink Curves command.")
         }
         return RecorderFileValue(recordingID: try uuid(root.get("recordingID")), name: name, origin: source, symbols: symbols, records: records)
     }
@@ -416,6 +422,13 @@ enum RecorderFileCodec {
                 clampInput: try bool(value.get("clampInput")), clampOutput: try bool(value.get("clampOutput")))
             guard levels.isValid else { throw RecorderFileError.invalid("Invalid ink Levels values.") }
             return .applyInkLevels(levels)
+        case "applyInkCurves":
+            guard version >= inkCurvesVersion else { throw RecorderFileError.invalid("Ink Curves needs recording version 12.") }
+            let value = try Object(node, required: ["tag", "samples"])
+            let samples = try array(value.get("samples"), maximum: 256).map { try number($0) }
+            let curves = RecorderFileCommand.InkCurves(samples: samples)
+            guard curves.isValid else { throw RecorderFileError.invalid("Invalid ink Curves values.") }
+            return .applyInkCurves(curves)
         case "channelToSelection":
             guard version >= channelVersion else { throw RecorderFileError.invalid("A channel selection needs recording version 3.") }
             let value = try Object(node, required: ["tag", "operation"])
@@ -662,7 +675,7 @@ enum RecorderFileCodec {
         case (.completeStroke, .layer(let id)):
             guard descriptions[id]?.kind == .pixel else { throw RecorderFileError.invalid("A complete stroke needs a pixel layer description.") }
             return
-        case (.editInk, .ink(let id, let identity)), (.applyInkLevels, .ink(let id, let identity)):
+        case (.editInk, .ink(let id, let identity)), (.applyInkLevels, .ink(let id, let identity)), (.applyInkCurves, .ink(let id, let identity)):
             guard descriptions[id]?.kind == .channel else { throw RecorderFileError.invalid("An ink command needs a channel description.") }
             guard identity.isValid else { throw RecorderFileError.invalid("Invalid ink identity.") }
             return

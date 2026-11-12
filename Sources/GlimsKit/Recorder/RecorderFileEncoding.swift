@@ -8,6 +8,7 @@ extension RecorderFileCodec {
         var pointCount = 0
         var fileVersion = version
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
+        var hasInkCurves = false
         for record in value.records {
             switch record.outcome {
             case .success(.selectionShape(.polygon(let points), _), _):
@@ -50,6 +51,15 @@ extension RecorderFileCodec {
                     }
                     inkIdentities[symbol] = identity
                 }
+            case .success(.applyInkCurves, let binding):
+                fileVersion = max(fileVersion, inkCurvesVersion)
+                hasInkCurves = true
+                if case .ink(let symbol, let identity) = binding {
+                    if let seen = inkIdentities[symbol], seen != identity {
+                        throw RecorderFileError.invalid("Ink identity is inconsistent across records.")
+                    }
+                    inkIdentities[symbol] = identity
+                }
             default: break
             }
         }
@@ -64,6 +74,9 @@ extension RecorderFileCodec {
             case .cancelled(let reason): fields["outcome"] = .string("cancelled"); fields["reason"] = .string(reason)
             }
             return .object(fields)
+        }
+        if fileVersion == inkCurvesVersion, !hasInkCurves {
+            throw RecorderFileError.invalid("Version 12 requires a successful ink Curves command.")
         }
         let symbols = try value.symbols.map { symbol in
             RecorderJSON.object(["id": id(symbol.id), "description": try descriptionJSON(symbol.description)])
@@ -207,6 +220,9 @@ extension RecorderFileCodec {
                 "highInput": try d(levels.highInput), "gamma": try d(levels.gamma),
                 "lowOutput": try d(levels.lowOutput), "highOutput": try d(levels.highOutput),
                 "clampInput": .bool(levels.clampInput), "clampOutput": .bool(levels.clampOutput)])
+        case .applyInkCurves(let curves):
+            guard curves.isValid else { throw RecorderFileError.invalid("Invalid ink Curves values.") }
+            return .object(["tag": .string("applyInkCurves"), "samples": .array(try curves.samples.map { try d($0) })])
         case .completeStroke(let stroke): return try strokeJSON(stroke)
         }
     }

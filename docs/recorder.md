@@ -25,6 +25,9 @@ Current capture covers these command families:
   Brightness/Contrast adjustment on an explicitly bound layer, with the whole
   accepted settings.
 
+- Native CMYK/Multichannel Fill, Clear, Invert, Levels and Curves Apply with
+  an explicitly bound ink. See [native ink recording](ink-recorder.md).
+
 Other layer changes, other effects (including edits to an existing effect)
 and file operations remain outside this capture scope. A live recording
 belongs to one open image. To use a saved recording in another image, load
@@ -34,7 +37,7 @@ Levels, Curves, Color Balance, Hue/Saturation and Brightness/Contrast record
 the final native settings when Apply is admitted. Preview updates, Cancel and refused Apply
 add no row. An admitted Apply retains its place if recording stops while it
 is pending. A native failure becomes a failure row. Applying any of these
-adjustments to a mask/channel or editing an existing effect also produces an
+ordinary layer adjustments to a mask/channel or editing an existing effect also produces an
 explicit unsupported row after a successful commit, so the recording cannot
 silently replay an incomplete sequence. A settings capture failure preserves
 the live edit and marks the recording as failed.
@@ -67,7 +70,8 @@ raises it to version 4, a committed Levels adjustment raises it to
 version 5, a perspective layer transform raises it to version 6, a Curves
 adjustment raises it to version 7, a Color Balance adjustment raises it
 to version 8, a Hue/Saturation adjustment raises it to version 9, and a
-Brightness/Contrast adjustment raises it to version 10. Mixed recordings use
+Brightness/Contrast adjustment raises it to version 10. Native ink Fill/Clear/
+Invert and Levels use version 11; native ink Curves uses version 12. Mixed recordings use
 the highest required version. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
