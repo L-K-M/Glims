@@ -124,6 +124,20 @@ extension EngineSmokeTest {
         check(try Data(contentsOf: layeredInput) == layeredOriginal,
               "Layered and merged PSD Batch exports preserve the source file")
 
+        var gifSettings = ExportSettings()
+        gifSettings.format = .gif
+        let gifItems = try run(flip, [layeredInput], folder("gif"), format: .exported(gifSettings))
+        try require(gifItems.count == 1, "GIF Batch result missing")
+        let gifOutput = try saved(gifItems[0])
+        let gifImage = try session.openImage(path: gifOutput.path)
+        check(try session.layers(gifImage).count == 1 && gifOutput.pathExtension == "gif",
+              "GIF Batch publishes one still image from the layered source")
+        check(try session.copyPixels(gifImage, merged: true).pixels == Data(flipped),
+              "GIF Batch contains the independently expected flipped palette pixels")
+        try session.closeImage(gifImage)
+        check(try Data(contentsOf: layeredInput) == layeredOriginal,
+              "GIF Batch leaves its source file unchanged")
+
         let symbol = UUID()
         let description = RecorderTargetDescription(name: "Subject", kind: .pixel, ancestors: [], siblingIndex: 0,
                                                    bounds: .init(x: 0, y: 0, width: 4, height: 3))
