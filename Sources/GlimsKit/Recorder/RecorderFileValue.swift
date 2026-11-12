@@ -209,6 +209,17 @@ enum RecorderFileCommand: Equatable {
         }
     }
 
+    /// One ink plane's paper-intensity Curves mapping: exactly 256 output
+    /// samples at inputs i/255 (0 = full ink, 1 = paper), no RGB/TRC tags.
+    /// Samples may rise or fall; a nonmonotone table is valid.
+    struct InkCurves: Equatable {
+        let samples: [Double]
+
+        var isValid: Bool {
+            samples.count == 256 && samples.allSatisfy { $0.isFinite && (0...1).contains($0) }
+        }
+    }
+
     /// Complete committed Levels values: an owned TRC tag, both clamps and
     /// all five named channels, each with the five native fields. Equal or
     /// inverted endpoints are valid native mappings.
@@ -256,6 +267,7 @@ enum RecorderFileCommand: Equatable {
     case applyLevels(Levels)
     case editInk(InkEdit)
     case applyInkLevels(InkLevels)
+    case applyInkCurves(InkCurves)
     /// A newly applied Curves adjustment with its whole accepted settings:
     /// the owned TRC tag and all five named channels, each preserving both
     /// curve representations and the HDR bypass flag. The explicit layer is
@@ -281,7 +293,7 @@ enum RecorderFileCommand: Equatable {
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection, .editInk, .applyInkLevels: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true

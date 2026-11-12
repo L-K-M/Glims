@@ -5424,3 +5424,13 @@ fixed draft-loss, rounding and keyboard ownership defects. Pinned native UI
 passes 243 checks and the full prior Swift suite passes 1,665; additional
 pointer cancellation tests pass. Independent production review is clear.
 Four-engine UI qualification, fixture review and hosted CI remain in progress.
+
+### Recorded selected-ink Curves (candidate)
+
+An admitted Curves Apply now captures its exact owned table and original ink
+identity. Version 12 stores 256 finite unit samples with explicit destination
+binding; versions 1–11 remain compatible. Preview/Cancel add no rows and
+failed native work remains a failure. All 1,650 Swift tests pass. All four
+engines pass 423 ink Recorder checks and 186 actual Curves panel checks each.
+Independent production review is clear; hosted CI and combined qualification
+remain pending. See [ink-recorder.md](ink-recorder.md).
