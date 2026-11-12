@@ -62,8 +62,11 @@ using a test-only nested checkpoint. The actual CMYK workflow, native Export
 sheet, Repeat Export, incompatible-setting preservation and float refusal pass.
 All 1,523 Swift tests and rebuilt native adapter conformance pass. Three
 independent reviews of the bridge, file transaction and UI found no important
-findings. The full app matrix, PSD reader appearance,
-standalone packaging, startup and latest CI remain pending.
+findings. An independent reader fixture passes 38 checks on each engine:
+the unmodified PSD loader imports U8/U16 files as RGB, with appearance within
+one 8-bit level of a double-precision LittleCMS oracle using the actual effective
+imported profile. This is appearance interoperability, not native CMYK reimport.
+The full app matrix, standalone packaging, startup and latest CI remain pending.
 
 Reproduce with a matching isolated adapter producer and an external CMYK ICC:
 
@@ -73,6 +76,8 @@ bash scripts/test-cmyk-psd-file-faults.sh
 python3 scripts/test-native-cmyk-export.py --producer /absolute/adapters/GIMP_3_2_8 \
   --cmyk-profile /absolute/source.icc
 python3 scripts/test-native-cmyk-export-control.py --producer /absolute/adapters/GIMP_3_2_8 \
+  --cmyk-profile /absolute/source.icc
+python3 scripts/test-native-cmyk-psd-import.py --producer /absolute/adapters/GIMP_3_2_8 \
   --cmyk-profile /absolute/source.icc
 ```
 
