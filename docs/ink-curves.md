@@ -76,3 +76,32 @@ preview and Cancel add no rows. The expanded four-engine fixture passes 186
 panel and 423 ink Recorder checks per engine, including saved replay and
 Undo/Redo. See [ink-recorder.md](ink-recorder.md). This
 candidate has not replaced the installed, separately qualified editor.
+
+## Smooth control-point candidate
+
+The selected-ink panel now switches between Freehand and Smooth. Freehand to
+Smooth uses nine evenly spaced sample positions, so it can approximate a drawn
+curve; Smooth to Freehand retains the current table exactly. Smooth supports
+point input/output fields, Smooth/Corner types, click/drag, arrow keys and
+Delete. Reset restores exact two-point identity. Removing the final point
+retains the last sample table. At most 256 points are accepted.
+
+Invalid drafts remain visible and block mode/type changes and Apply. Browsing
+points or leaving an unchanged rounded readout never modifies exact values.
+Graph edits publish once when completed; Escape or focus loss discards the
+pointer draft. Selection-only and unchanged-sample actions keep a current
+preview usable. A refused insertion restores the accepted graph.
+
+The initial helper implementation's draft-loss, rounding, keyboard ownership,
+Reset and point-limit defects were reproduced by parent regression tests and
+fixed before integration. The pinned actual AppKit fixture passes 243 checks,
+including an independent Fill oracle for Smooth preview and committed pixels
+in both ink modes at all three precisions, invalid live editors, keyboard
+editing, Undo/Redo and Close. All 1,665 Swift tests passed before an additional
+pointer-cancel test; that test and the 11 surrounding focused tests also pass.
+The remaining engine UI matrix and latest-head CI are in progress.
+
+Independent production review found no important issue. A later wording-only
+change displays "1 point" correctly. Fixture review is in progress. This does
+not qualify physical tablet input, VoiceOver, Photoshop spline equivalence or
+the installed bundle, which remains separately qualified.

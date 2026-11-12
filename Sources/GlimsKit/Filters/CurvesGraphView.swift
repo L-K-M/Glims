@@ -198,6 +198,9 @@ final class CurvesGraphView: NSView {
               [UInt16(51), 117, 123, 124, 125, 126].contains(event.keyCode),
               state.kind == .smooth, selection != nil else { super.keyDown(with: event); return }
         guard onBeginEdit?() ?? true else { return }
+        // Keyboard edits own the same begin/end lifetime as a pointer gesture,
+        // including a no-op at a bound. Panels use End to release draft gates.
+        defer { onEndInteraction?(selection) }
         cancelGesture()
         guard state.isValid, let index = selection, state.points.indices.contains(index) else { return }
         var next = state
