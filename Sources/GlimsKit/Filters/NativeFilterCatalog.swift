@@ -107,6 +107,13 @@ struct NativeFilterMenuLayout: Equatable {
         operation.name == "gimp:color-balance" && operation.support == .needsConfig
     }
 
+    /// The owned selective-color operation reports generic `.supported`
+    /// properties; its compact editor reuses the generic transport, so
+    /// support stays — only the layout differs.
+    static func usesSelectiveColorEditor(_ operation: EngineSession.FilterOperation) -> Bool {
+        operation.name == SelectiveColorPanel.operation && operation.support == .supported
+    }
+
     static func supportsParameterEditor(_ operation: EngineSession.FilterOperation?) -> Bool {
         guard let operation, operation.name != SourceFilterOperation.oilify.rawValue,
               operation.name != SourceFilterOperation.lensBlur.rawValue else { return false }
@@ -217,6 +224,7 @@ enum NativeFilterMenus {
         ("gimp:brightness-contrast", "Brightness/Contrast"),
         ("gimp:color-balance", "Color Balance"),
         ("gimp:hue-saturation", "Hue/Saturation"),
+        ("glims:selective-color", "Selective Color"),
         ("gimp:levels", "Levels"),
         ("gimp:curves", "Curves"),
         ("gimp:threshold", "Threshold"),

@@ -23,6 +23,7 @@ enum AdjustmentLayerLogic {
         ("glims:posterize", "Posterize"),
         ("gimp:color-balance", "Color Balance"),
         ("gimp:hue-saturation", "Hue-Saturation"),
+        ("glims:selective-color", "Selective Color"),
         ("gegl:exposure", "Exposure"),
         ("gegl:hue-chroma", "Hue/Chroma"),
         ("gegl:saturation", "Saturation"),

@@ -670,6 +670,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (color balance)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "selective-color" {
+                try exerciseSelectiveColor(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (selective color)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brightness-contrast" {
                 try exerciseBrightnessContrast(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (brightness contrast)" : "FAILED: \(failures) failure(s)")
@@ -922,6 +927,7 @@ enum EngineSmokeTest {
             try exerciseSelectiveGaussianSource(session, documents: documents)
             try exerciseBrightnessContrast(session, work: work, documents: documents)
             try exerciseColorBalance(session, work: work, documents: documents)
+            try exerciseSelectiveColor(session, work: work, documents: documents)
             try exerciseInputHistogram(session, work: work, documents: documents)
             try exerciseCurves(session, work: work, documents: documents)
             try exerciseLevels(session, work: work, documents: documents)

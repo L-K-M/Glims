@@ -216,6 +216,7 @@ extension EngineSmokeTest {
             ("gimp:curves", { $0 is CurvesPanel }),
             ("gimp:threshold", { $0 is NativeFilterPanel }),
             ("glims:posterize", { $0 is NativeFilterPanel }),
+            ("glims:selective-color", { $0 is SelectiveColorPanel }),
             ("gimp:color-balance", { $0 is ColorBalancePanel }),
             ("gimp:hue-saturation", { $0 is HueSaturationPanel }),
         ]
