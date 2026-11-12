@@ -7,24 +7,30 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-The installed editor uses qualified source `eee1f48`, merged with ink Levels
-controls [#237](https://github.com/L-K-M/Glims/pull/237). It includes native
-CMYK and Multichannel creation, conversion, ink painting and XCF persistence,
+The installed editor uses qualified source `451fd798`, integrated through
+[#243](https://github.com/L-K-M/Glims/pull/243) at `bc440485`. It includes native
+CMYK and Multichannel creation, ink painting and XCF persistence,
 plus native U8/U16 CMYK PSD export retaining the original inks and profile,
 the merged Rigi tool-availability controls, Sponge saturation tools, GIF/BMP/TGA
-export, scalar ink Fill/Clear/Invert, modeless ink Levels and the preceding
-reviewed editor work. All 1,538 units and native/app checks on four engines
-pass. Its standalone pinned bundle passed native, full app, ink edits, ink
-Levels, CMYK and Multichannel checks with development trees denied.
-Fresh/cached/relocated launch measured 1.763/1.449/3.522 seconds on this Mac.
+export, scalar ink Fill/Clear/Invert, modeless ink Levels, durable ink
+identities, ink Recorder capture/replay, taller Tool Options and protected
+Close while an exclusive edit drains. All 1,570 units and the relevant
+native/app checks on four engines pass. Its standalone pinned bundle passed
+all ten cases: native conformance, full app, exclusive Close, ink Levels,
+ink edits, ink Recorder, Recorder bindings, Brightness, CMYK and Multichannel,
+with development trees denied. The exact integration CI head `e111945`
+passed; its only addition to the qualified app source was the unused private
+Lab foundation and associated tests/docs/CI.
+Fresh/cached/relocated launch measured 1.898/1.474/3.421 seconds on this Mac.
 Those timings do not establish every
 machine's latency. No notarization is requested or required for this task.
 
 This is not yet a claim of complete Photoshop 4 parity. Native ink adjustment
 breadth, Lab and duotone editing, broader Recorder coverage, PSD fidelity and
-physical-tablet/VoiceOver qualification remain open. Ink identity is merged;
-ink Recorder capture/replay is a subsequent integration candidate, whose
-source, review and qualification evidence does not imply it is installed. See
+physical-tablet/VoiceOver qualification remain open. Native Lab documents,
+physical Fill/Brush and selections are subsequent integration candidates;
+their source, review and qualification evidence does not imply an installed
+Lab editor. See
 [the plan](plan.md) for current slice evidence and [the earlier verification
 report](editor-verification.md) for its exact historical scope. Dated reports
 below retain their original scope and pending notes.

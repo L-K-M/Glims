@@ -339,7 +339,10 @@ glims_release_image (GlimsEngine  *engine,
   /* Sessions own image/drawable refs. Do not let an unfinished preview
    * retain a closed image or block subsequent plug-in commands. */
   if (open)
-    glims_filters_abort_for_image (engine, open->image);
+    {
+      glims_filters_abort_for_image (engine, open->image);
+      glims_lab_strokes_for_image (engine, open->image, GLIMS_LAB_STROKES_CANCEL);
+    }
   g_hash_table_remove (engine->images, GINT_TO_POINTER (id));
 }
 
@@ -927,6 +930,11 @@ save_with_group (GlimsEngine            *engine,
   if (saving && glims_filters_active_for_image (engine, open->image))
     {
       if (error) *error = g_strdup ("Apply or cancel the filter preview before saving.");
+      return GLIMS_STATUS_BUSY;
+    }
+  if (saving && glims_lab_strokes_for_image (engine, open->image, GLIMS_LAB_STROKES_QUERY))
+    {
+      if (error) *error = g_strdup ("Finish or cancel the Lab brush stroke before saving.");
       return GLIMS_STATUS_BUSY;
     }
 

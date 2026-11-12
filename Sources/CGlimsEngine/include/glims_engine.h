@@ -321,6 +321,36 @@ typedef struct GlimsSelectOptions {
                             * active layer */
 } GlimsSelectOptions;
 
+/* Bounded, mask-only selection settings for native Lab documents. The
+ * borrowed settings and points may be unaligned; they must remain readable
+ * and immutable until the synchronous call returns. Extension tails are
+ * accepted and ignored. No native enum or C bool layout crosses this contract. */
+#define GLIMS_LAB_SELECT_MAX_POINTS       65536u
+#define GLIMS_LAB_SELECT_COORDINATE_LIMIT 1048576.0
+#define GLIMS_LAB_SELECT_RADIUS_LIMIT     1000.0
+
+typedef struct GlimsLabSelectOptions {
+  uint32_t struct_size;    /* Complete prefix through corner_radius required. */
+  uint32_t operation;      /* GlimsSelectOperation. */
+  uint32_t antialias;      /* Exactly 0 or 1. */
+  double feather;         /* Finite [0, GLIMS_LAB_SELECT_RADIUS_LIMIT] pixels. */
+  double corner_radius;   /* Same range; used only for rectangles. */
+} GlimsLabSelectOptions;
+
+/* Explicit pixel-only copy; settings may be unaligned and future tails are
+ * ignored. The complete known prefix is required. Borrowed input stays readable
+ * and unchanged until the synchronous call returns. */
+typedef enum GlimsLabCopyContent {
+  GLIMS_LAB_COPY_MERGED_CANVAS = 1
+} GlimsLabCopyContent;
+
+typedef struct GlimsLabCopySettings {
+  uint32_t struct_size;
+  uint32_t destination_mode; /* GLIMS_COLOR_MODE_LAB or GLIMS_COLOR_MODE_RGB. */
+  uint32_t content;          /* GLIMS_LAB_COPY_MERGED_CANVAS only. */
+  uint32_t output_component; /* GLIMS_COLOR_COMPONENT_FLOAT only. */
+} GlimsLabCopySettings;
+
 typedef struct GlimsPoint {
   double x, y;             /* image pixels */
 } GlimsPoint;
@@ -1212,6 +1242,18 @@ typedef struct GlimsLabFillSettings {
   double value;           /* Physical L*, a* or b*, never normalized ink intensity. */
   double opacity;         /* Finite [0,1], multiplied once by selection coverage. */
 } GlimsLabFillSettings;
+
+/* Physical sample and captured axis identity for one mask-brush stroke. */
+typedef struct GlimsLabBrushSettings {
+  uint32_t struct_size;
+  GlimsItemID axis;
+  uint32_t role;           /* GlimsLabAxisRole. */
+  uint8_t uuid[16];
+  double value;           /* Same physical ranges as image_fill_lab. */
+  double opacity;         /* Finite [0,1], applied to the stroke-start samples. */
+  double size;            /* Diameter in image pixels, finite [1,10000]. */
+  double hardness;        /* Finite [0,1]. */
+} GlimsLabBrushSettings;
 
 /* The palette an indexed conversion builds, as image_convert_indexed's
  * settings name it. Facade-owned values; the engine's
@@ -3823,6 +3865,64 @@ typedef struct GlimsEngineAPI {
    * axes are unchanged. Ordinary and ink documents refuse. */
   GlimsStatus (*image_fill_lab) (GlimsEngine *engine, GlimsImageID image,
                                  const GlimsLabFillSettings *settings, char **error);
+  /* Slot193: selected-axis physical Lab Brush. Normal constant application,
+   * native mask geometry, captured selection, no color/dynamics/symmetry.
+   * Zero brush selects the current resource at press; its mask is retained
+   * for the stroke. Pixmap colors are ignored. Size/hardness are explicit;
+   * spacing is 15%, angle/aspect are zero and brush force is 0.5.
+   * Feed stroke_continue_v2 and finish with stroke_end, or explicitly abort
+   * with stroke_cancel_lab. Packet validation refuses before changing a dab;
+   * sample/target failures cancel the complete stroke and retire its handle.
+   * Every continuation and finish revalidates captured axis identity and
+   * sole selection. Successful changed strokes create exactly one Undo;
+   * zero-change strokes create none. Legacy RGB/ink begin calls still refuse
+   * Lab documents. Clears *error and zeros *result on every begin failure. */
+  GlimsStatus (*stroke_begin_lab) (GlimsEngine *engine, GlimsImageID image,
+                                   GlimsResourceID brush,
+                                   const GlimsLabBrushSettings *settings,
+                                   const GlimsStrokePacketV2 *first,
+                                   GlimsStrokeID *result, char **error);
+  /* Slot194: abort only a typed Lab stroke, restoring exact starting pixels
+   * without Undo, even if axis metadata/selection changed. Ordinary strokes
+   * refuse; expired handles return NOT_FOUND. */
+  GlimsStatus (*stroke_cancel_lab) (GlimsEngine *engine, GlimsStrokeID stroke);
+  /* Slot195: native Lab root selection mask only. Rectangle/ellipse require
+   * exactly two opposite corners; polygon requires 3..MAX_POINTS vertices.
+   * Every coordinate must be finite within +/-COORDINATE_LIMIT; rounded
+   * rectangle/ellipse bounds must have positive width and height. Settings
+   * are required. Axis pixels, identity, selection of axes and locks are not
+   * changed or interpreted. A changed mask uses native selection Undo.
+   * Ordinary/ink images and damaged Lab storage refuse. BUSY during a stroke,
+   * engine activity, image filter preview, disabled Undo or an open Undo group.
+   * Invalid input refuses before any mask/history change. Clears *error on
+   * entry; any returned string belongs to the caller (free_string). General
+   * select_shape/select_command remain unavailable for Lab documents. */
+  GlimsStatus (*image_select_lab_shape) (GlimsEngine *engine, GlimsImageID image,
+                                        uint32_t shape, const GlimsPoint *points,
+                                        size_t count, const GlimsLabSelectOptions *options,
+                                        char **error);
+  /* Slot196: the same mask-only admission and failure contract as slot195.
+   * Only GLIMS_SELECT_ALL, GLIMS_SELECT_NONE and GLIMS_SELECT_INVERT are
+   * supported; every other command returns UNSUPPORTED without mutation. */
+  GlimsStatus (*image_select_lab_command) (GlimsEngine *engine, GlimsImageID image,
+                                          uint32_t command, char **error);
+  /* Slot197: creates a separate, fully constructed unsaved pixel-only image.
+   * Opaque standard-sRGB/linear-sRGB U8/U16/FLOAT RGB -> physical D50 FLOAT Lab;
+   * validated native U8/U16/FLOAT Lab -> opaque FLOAT linear-sRGB raster.
+   * Custom RGB profiles, linked-layer objects (including frozen ones), same-mode copies
+   * and transparency refuse.
+   * Full canvas regardless of selection; RGB merges visible layers. Copies only
+   * dimensions, resolution and pixels, with fresh identities, empty history and
+   * selection. No source pixel/metadata/history/file-state mutation. Effective
+   * output RGB profile is builtin linear-sRGB (native may omit redundant ICC).
+   * Finite extended values are retained where representable; no silent clipping.
+   * Global activity/strokes/filter previews, open Undo groups or disabled Undo
+   * refuse BUSY. Floating selection and Quick Mask refuse UNSUPPORTED.
+   * Cancellation or any failure leaves *result zero; no partial image is adopted.
+   * Clears *error on entry; caller owns returned error via free_string. */
+  GlimsStatus (*image_convert_lab_copy) (GlimsEngine *engine, GlimsImageID image,
+                                         const GlimsLabCopySettings *settings,
+                                         GlimsImageID *result, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

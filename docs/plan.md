@@ -5276,3 +5276,72 @@ the unchanged reverse suite passes 7,800 in each mode. Source review found
 no important issue. This is numeric preparation only: profile admission,
 alpha/layer policy and the actual document conversion workflow remain open.
 See [lab-transform.md](lab-transform.md).
+
+### Physical Lab Brush candidate (2026-11-12)
+
+Typed Begin/Cancel and a private native brush core now paint one physical
+L*, a* or b* value with captured identity, bounded per-dab staging and exact
+whole-stroke cancellation. Tool Options keeps per-document/axis drafts;
+Escape cancels queued or active gestures. Save refuses tentative native
+pixels, and image close retires its strokes. All four engines pass native,
+queued Swift and actual-window checks after retained regressions; all 1,598
+Swift and 130 Python tests pass. Independent production and fixture reviews
+are clear. Bundled and hosted qualification remain in progress. See
+[lab-brush.md](lab-brush.md) for the numeric contract and limits.
+
+
+### Native Lab selections candidate (2026-11-12)
+
+Typed slots 195/196 add native root-mask Rectangle/Ellipse/Lasso selections
+with Replace/Add/Subtract/Intersect and All/None/Invert. Physical Lab Fill
+and Brush honor that coverage; authoritative axes stay unchanged by selection.
+Old general selection APIs remain blocked, and the Swift service and tool/menu
+routes require the explicit new capability. All four engines pass 1,380
+focused native and 312 Lab admission checks, plus general conformance
+(2,268/2,054/2,268/2,268), 34 compressed-XCF and 206 TIFF checks per engine.
+The headless Swift case passes 55 checks and actual U8/float selection UI
+passes 179 checks on each engine, with surrounding Brush/Fill/axes/Close
+regressions green. All 1,599 Swift and 130 Python tests pass; real older
+slot192/194 adapters preserve capability refusal. UI qualification reproduced
+and fixed a clipped selection-mode control; independent reviews are clear.
+Bundle and hosted qualification remain pending, with no Photoshop-parity claim. See
+[lab-selections.md](lab-selections.md) for contracts, evidence and limits.
+
+### Lab editor integration (2026-11-12)
+
+The reviewed Brush and selection branches are integrated with the private
+forward Lab transform from current main. Their only merge conflict was the
+append-only plan log; both entries are retained. The qualified app remains
+exact selection source `11dd996`, not a relabelled binary from this merge.
+Its 18 standalone cases pass with development paths denied; fresh, cached
+and relocated-fresh launches measure 2.044, 1.609 and 3.590 seconds. It adds
+physical Lab Fill/Brush and root-mask selection tools to the previously
+installed editor. All 1,599 Swift and 130 Python tests pass on that source.
+Both feature heads have successful hosted CI. The integrated merge also
+requires its own latest-head CI before publication. No notarization.
+
+The only code difference from that qualified source is the separately tested
+private RGB-to-Lab arithmetic, with no public caller yet. Actual converted
+copies remain a subsequent candidate; layers and broader Lab interchange
+remain open. Qualification does not establish full Photoshop 4 parity.
+
+### Explicit RGB/Lab converted copies (candidate)
+
+Image > Create Lab Copy and Create Linear RGB Copy create a separate,
+unsaved 32-bit document while preserving the source. Slot 197 copies the
+full canvas and resolution, with opaque standard-sRGB admission and native
+physical Lab samples. A confirmation explains the merged pixel-only scope;
+unsupported transparency, profiles and linked-layer objects refuse. Private
+candidate construction prevents publication of partial results. Source Close
+and application Quit wait for accepted work and asynchronous result cleanup.
+
+Independent native checks pass on all four engine sets: 412 conversion
+assertions on 3.2.8, 3.2.0 and master; 392 on 3.0.8, where linked layers are
+unavailable; and 314 admission assertions each. Fixed LCMS/literal bounds,
+source preservation, cancellation, row/chunk boundaries and XCF persistence
+are covered. The full Swift suite passes 1,608 tests. A native
+AppKit regression reproduced six BUSY-cleanup failures, then passed unchanged
+after retaining discarded handles through retries, across all four engines.
+The pinned real-menu workflow passes 58 assertions. All-engine menu and final
+app/bundle qualification remain in progress. See
+[lab-converted-copy.md](lab-converted-copy.md) for the contract and limits.

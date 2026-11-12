@@ -236,6 +236,11 @@ gboolean         glims_stroke_references_image (GlimsEngine *engine, GlimsStroke
 #define GLIMS_MAX_PIXEL_BUFFER_BYTES ((uint64_t) 512 * 1024 * 1024)
 gboolean         glims_pixel_bytes       (int width, int height, size_t *bytes);
 
+/* lab-copy.c: publishes only fully converted, independent images. */
+GlimsStatus glims_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID image,
+                                          const GlimsLabCopySettings *settings,
+                                          GlimsImageID *result, char **error);
+
 /* image.c */
 GlimsStatus glims_image_new        (GlimsEngine *e, int32_t w, int32_t h, GlimsImageID *out, char **error);
 GlimsStatus glims_image_open       (GlimsEngine *e, const char *path, GlimsImageID *out, char **error);
@@ -295,6 +300,17 @@ GlimsStatus glims_image_redo       (GlimsEngine *e, GlimsImageID id);
 
 /* paint.c */
 GlimsStatus glims_stroke_component_ready (GlimsEngine *engine, GlimsStrokeID id);
+gboolean glims_stroke_is_lab (GlimsEngine *engine, GlimsStrokeID id);
+/* Query active Lab strokes, or cancel them before their image is released. */
+typedef enum { GLIMS_LAB_STROKES_QUERY, GLIMS_LAB_STROKES_CANCEL } GlimsLabStrokeAction;
+gboolean glims_lab_strokes_for_image (GlimsEngine *engine, GimpImage *image,
+                                    GlimsLabStrokeAction action);
+GlimsStatus glims_stroke_begin_lab (GlimsEngine *engine, GlimsImageID image,
+                                    GlimsResourceID brush,
+                                    const GlimsLabBrushSettings *settings,
+                                    const GlimsStrokePacketV2 *first,
+                                    GlimsStrokeID *result, char **error);
+GlimsStatus glims_stroke_cancel_lab (GlimsEngine *engine, GlimsStrokeID stroke);
 GlimsStatus glims_stroke_begin     (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                     const GlimsBrushSettings *brush, const GlimsStrokePoint *first,
                                     GlimsStrokeID *out, char **error);
@@ -460,6 +476,14 @@ GlimsStatus glims_image_set_quick_mask (GlimsEngine *e, GlimsImageID image,
 
 /* progress.c */
 GlimsProgress * glims_progress_new (GlimsEngine *engine);
+
+/* lab-select.c: bounded root-mask writers; never interpret Lab axis values. */
+GlimsStatus glims_image_select_lab_shape (GlimsEngine *engine, GlimsImageID image,
+                                         uint32_t shape, const GlimsPoint *points,
+                                         size_t count, const GlimsLabSelectOptions *options,
+                                         char **error);
+GlimsStatus glims_image_select_lab_command (GlimsEngine *engine, GlimsImageID image,
+                                           uint32_t command, char **error);
 
 /* select.c */
 GlimsStatus glims_select_shape     (GlimsEngine *e, GlimsImageID image, uint32_t shape,

@@ -1,8 +1,29 @@
-/* Engine-thread-only factory for validated, adopted component documents. */
+/* Engine-thread-only preparation and factories for component documents. */
 #ifndef GLIMS_COMPONENT_DOCUMENT_H
 #define GLIMS_COMPONENT_DOCUMENT_H
 
 #include "engine-private.h"
+
+/* Prepares validated native component storage without publishing it through
+ * the facade. Uses the same dimensions, component, map, profile and busy
+ * checks as the public factories; `mode` is a private GLIMS_PLATE_MODE_* value.
+ * Applies UUIDs, names, initial pixels, empty history and clean state.
+ * Clears *result and *error on entry when supplied. On success *result owns
+ * one GimpImage reference; the caller must unref it on abandonment or failed
+ * adoption. glims_adopt_image consumes that reference only on success.
+ * No dispatch, progress callback or event pumping occurs here. Prepare before
+ * taking a long-operation busy guard, on the engine thread, and retain the
+ * owned image until publication or cleanup. */
+GlimsStatus glims_component_image_prepare (GlimsEngine  *engine,
+                                           int32_t       width,
+                                           int32_t       height,
+                                           uint32_t      component,
+                                           uint32_t      channel_count,
+                                           uint32_t      mode,
+                                           const guint8 *icc,
+                                           gsize         icc_size,
+                                           GimpImage   **result,
+                                           char        **error);
 
 /* Creates and adopts a flat Multichannel document of `channel_count`
  * authoritative scalar ink planes (1..GLIMS_PLATE_LIMIT), each initially

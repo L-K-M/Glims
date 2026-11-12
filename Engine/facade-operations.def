@@ -192,3 +192,8 @@ GLIMS_FACADE(image_ink_channel_identity, api_image_ink_channel_identity, IMAGE, 
 GLIMS_FACADE(image_new_lab, api_image_new_lab, NONE, GLOBAL)
 GLIMS_FACADE(image_lab_axes, api_image_lab_axes, IMAGE, COMPONENT)
 GLIMS_FACADE(image_fill_lab, api_image_fill_lab, IMAGE, COMPONENT)
+GLIMS_FACADE(stroke_begin_lab, api_stroke_begin_lab, IMAGE, COMPONENT)
+GLIMS_FACADE(stroke_cancel_lab, api_stroke_cancel_lab, STROKE, CLEANUP)
+GLIMS_FACADE(image_select_lab_shape, api_image_select_lab_shape, IMAGE, COMPONENT)
+GLIMS_FACADE(image_select_lab_command, api_image_select_lab_command, IMAGE, COMPONENT)
+GLIMS_FACADE(image_convert_lab_copy, api_image_convert_lab_copy, IMAGE, COMPONENT)
