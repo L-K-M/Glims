@@ -5070,8 +5070,12 @@ and the 177-check actual CMYK window workflow. All 1,519 units pass; the pinned
 full editor suite passes 3,352 checks. Three independent source reviews found
 no confirmed important findings. A 12 MP CMYK image measured about 7.5 ms for
 post-dab redraws and 1.9 seconds for its first fit-view conversion under shared
-load. Full app checks on the other engines, packaging and CI remain in progress;
-this integration has not replaced the qualified installed app. See
+load. Full app checks now pass on all four engines; one retained 3.2.0 timing
+outlier passed isolated and full repeats without changing its threshold. The
+standalone package passes native/full/CMYK/Multichannel checks with development
+libraries blocked. Fresh/cached/relocated launches measure 1.83/1.52/3.47 seconds;
+ordinary profile selection, painting and keyboard Undo/Redo pass. Latest CI and
+merge remain pending; the installed app has not yet been replaced. See
 [cmyk-documents.md](cmyk-documents.md) for the admitted command scope and tests.
 
 ### Private native-CMYK PSD codec (2026-11-12)
@@ -5086,6 +5090,10 @@ byte fixture now passes 315 checks in optimized and ASan/UBSan builds; source
 review found no confirmed important findings. Native adapter and CI checks
 remain pending. See
 [cmyk-psd-codec.md](cmyk-psd-codec.md).
+
+The private PSD codec now compiles into all four adapters, whose normal
+conformance, XCF and TIFF suites pass 9,818 checks in total. Actual native
+file export is a separate integration; the codec remains unused by the editor.
 
 ### Native CMYK PSD export integration (2026-11-12)
 

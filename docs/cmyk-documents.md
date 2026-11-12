@@ -32,7 +32,7 @@ export, RGB conversion, layers, filters and profile reassignment are not enabled
 by this slice. Existing RGB/Grayscale/Indexed and Multichannel behavior remains
 separately tested.
 
-## Verification in progress
+## Verification
 
 All four adapters pass 181 public CMYK checks and 227 native storage/preview
 checks, plus the existing 4,060 Multichannel, 171 storage and 216 command-admission
@@ -45,11 +45,24 @@ not a claim for every press profile.
 
 All 1,519 unit tests pass. The actual CMYK window workflow passes 177 checks on
 each engine, covering all three precisions, profile selection, two ink targets,
-responder Undo/Redo, channel attributes and XCF reopening. The pinned full editor
-suite passes 3,352 checks. Independent source reviews of preview ownership/cache,
-document admission/profile lifetime and UI integration found no confirmed
-important findings. The remaining full-engine app matrix, standalone bundle
-and latest CI qualification are still pending for this integration.
+responder Undo/Redo, channel attributes and XCF reopening. Full editor checks
+pass on all four engines (3,352 on the pinned engine). One initial 3.2.0 run
+exceeded the existing synchronous-render RPC timing threshold at 133.6 ms;
+functional checks passed. An isolated responsiveness run measured 19.5 ms and
+the full repeat measured 37.4 ms with our own compilers and benchmarks stopped.
+The initial timing failure is retained; shared load is not proven as its cause.
+Independent source reviews of preview ownership/cache, document admission/profile
+lifetime and UI integration found no confirmed important findings.
+
+The packaged pinned-engine app passes conformance, full editor, focused CMYK
+and Multichannel checks with development dependencies inaccessible. Ordinary
+LaunchServices launches measured 1.83 seconds with fresh settings, 1.52 seconds
+cached and 3.47 seconds from a relocated path with fresh settings. Actual New
+Image profile controls, canvas painting and physical keyboard Undo/Redo passed
+in the packaged app. The owned app exited and the desktop was released. The
+first bundle full run was interrupted by a screenshot-directory collision in
+the test harness, with no app failure reported; the corrected capture harness
+completed successfully. Latest CI and merge remain pending. No notarization.
 
 At 4096 × 3072 pixels with a 1024 × 768 viewport, shared-load measurements on
 this Mac took 133–143 ms for the cold 100% viewport and 1.87–1.89 seconds for
