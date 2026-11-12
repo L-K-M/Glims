@@ -60,6 +60,7 @@ struct GlimsEngine
    * reused, never reset. 0 is never issued. At UINT64_MAX the allocation
    * fails closed (no identity is handed out, none is reused). */
   guint64             next_item_set_token;
+  guint64             next_ink_snapshot_token;
 
   /* Transport lifetime, guarded by `lock`. A registered external caller
    * remains counted until it consumes its result and leaves the transport,
@@ -155,6 +156,7 @@ typedef struct
   GBytes    *component_cmyk_profile;
   gchar     *component_profile_label;
   struct _GlimsPlatePreview *component_preview;
+  struct _GlimsInkSnapshot *ink_snapshot;
   GimpDrawable *component_planes[32];
   gulong component_updates[32];
 } GlimsOpenImage;
@@ -208,6 +210,17 @@ GlimsStatus      glims_image_edit_ink    (GlimsEngine *engine, GlimsImageID imag
 GlimsStatus      glims_image_levels_ink  (GlimsEngine *engine, GlimsImageID image,
                                          GlimsItemID channel, const GlimsInkLevelsSettings *settings,
                                          char **error);
+void glims_ink_snapshot_free (struct _GlimsInkSnapshot *snapshot);
+GlimsStatus glims_image_ink_snapshot_begin (GlimsEngine *engine, GlimsImageID image,
+                                            GlimsItemID channel, uint64_t *token, char **error);
+GlimsStatus glims_image_ink_snapshot_levels (GlimsEngine *engine, GlimsImageID image,
+                                             uint64_t token, const GlimsInkLevelsSettings *settings,
+                                             GlimsImageID *copy, char **error);
+GlimsStatus glims_image_ink_snapshot_apply (GlimsEngine *engine, GlimsImageID image,
+                                            uint64_t token, const GlimsInkLevelsSettings *settings,
+                                            char **error);
+GlimsStatus glims_image_ink_snapshot_end (GlimsEngine *engine, GlimsImageID image,
+                                          uint64_t token);
 gboolean         glims_stroke_references_image (GlimsEngine *engine, GlimsStrokeID stroke, GimpImage *image);
 
 /* The largest pixel buffer the facade accepts, and its overflow-safe

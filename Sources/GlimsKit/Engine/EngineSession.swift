@@ -95,6 +95,22 @@ final class EngineSession: @unchecked Sendable {
         return api.image_edit_ink != nil
     }
 
+    /// Scalar ink Levels settings (0 = full ink, 1 = paper); no RGB/TRC properties.
+    struct InkLevelsSettings: Equatable {
+        var value: LevelsSettings.Channel = .init()
+        var clampInput = false
+        var clampOutput = false
+
+        var isValid: Bool { value.isValid }
+    }
+
+    var supportsInkLevelSnapshots: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_ink_snapshot_end),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_ink_snapshot_end) else { return false }
+        return api.image_ink_snapshot_begin != nil && api.image_ink_snapshot_levels != nil
+            && api.image_ink_snapshot_apply != nil && api.image_ink_snapshot_end != nil
+    }
+
     func editInk(_ image: Int32, channel: Int32, settings: InkEdit) throws {
         guard supportsInkEdits, let edit = api.image_edit_ink else {
             throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
@@ -107,6 +123,98 @@ final class EngineSession: @unchecked Sendable {
         var error: UnsafeMutablePointer<CChar>?
         try check(edit(engine, image, channel, settings.operation.rawValue,
                        settings.intensity, settings.opacity, &error), error)
+    }
+
+    private func inkLevels(_ settings: InkLevelsSettings) -> GlimsInkLevelsSettings {
+        GlimsInkLevelsSettings(struct_size: UInt32(MemoryLayout<GlimsInkLevelsSettings>.size),
+                                value: GlimsLevelsChannel(low_input: settings.value.lowInput,
+                                                          high_input: settings.value.highInput,
+                                                          gamma: settings.value.gamma,
+                                                          low_output: settings.value.lowOutput,
+                                                          high_output: settings.value.highOutput),
+                                clamp_input: settings.clampInput ? 1 : 0,
+                                clamp_output: settings.clampOutput ? 1 : 0)
+    }
+
+    func beginInkLevelsSnapshot(_ image: Int32, channel: Int32) throws -> UInt64 {
+        guard supportsInkLevelSnapshots, let begin = api.image_ink_snapshot_begin else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support ink Levels previews.")
+        }
+        guard image > 0, channel > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose one ink channel to preview Levels.")
+        }
+        var token: UInt64 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        let status = begin(engine, image, channel, &token, &error)
+        try check(status, error)
+        guard token != 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine returned no ink Levels snapshot token.")
+        }
+        return token
+    }
+
+    /// Renders a preview from the frozen snapshot baseline. The returned copy is a separate
+    /// owned image the caller must close with `closeImage` when finished with it.
+    func renderInkLevelsSnapshot(_ image: Int32, token: UInt64, settings: InkLevelsSettings) throws -> Int32 {
+        guard supportsInkLevelSnapshots, let render = api.image_ink_snapshot_levels else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support ink Levels previews.")
+        }
+        guard image > 0, token != 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "A valid ink Levels snapshot is required.")
+        }
+        guard settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Levels endpoints must be between 0 and 1 and gamma between 0.1 and 10.")
+        }
+        var nativeSettings = inkLevels(settings)
+        var copy: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        let status = render(engine, image, token, &nativeSettings, &copy, &error)
+        try check(status, error)
+        guard copy > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine returned no ink Levels preview image.")
+        }
+        return copy
+    }
+
+    /// Applies the snapshot Levels edit. The engine consumes the token on success; do not end it after a successful apply.
+    func applyInkLevelsSnapshot(_ image: Int32, token: UInt64, settings: InkLevelsSettings) throws {
+        guard supportsInkLevelSnapshots, let apply = api.image_ink_snapshot_apply else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support ink Levels previews.")
+        }
+        guard image > 0, token != 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "A valid ink Levels snapshot is required.")
+        }
+        guard settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Levels endpoints must be between 0 and 1 and gamma between 0.1 and 10.")
+        }
+        var nativeSettings = inkLevels(settings)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = apply(engine, image, token, &nativeSettings, &error)
+        try check(status, error)
+    }
+
+    /// Discards the snapshot baseline without changing source pixels/history. Not needed after a successful apply, which consumes the token.
+    func endInkLevelsSnapshot(_ image: Int32, token: UInt64) throws {
+        guard supportsInkLevelSnapshots, let end = api.image_ink_snapshot_end else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support ink Levels previews.")
+        }
+        guard image > 0, token != 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "A valid ink Levels snapshot is required.")
+        }
+        let status = end(engine, image, token)
+        try check(status, nil)
     }
 
     /// How a pattern fill paints (GlimsPatternFillSettings): the pattern
