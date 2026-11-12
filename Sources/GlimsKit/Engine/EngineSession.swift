@@ -216,6 +216,77 @@ final class EngineSession: @unchecked Sendable {
             && api.image_ink_snapshot_apply != nil && api.image_ink_snapshot_end != nil
     }
 
+    /// Lab axes have physical color semantics, not scalar ink intensity.
+    enum LabAxisRole: UInt32, CaseIterable {
+        case lightness = 0, a = 1, b = 2
+    }
+
+    struct LabAxis: Equatable {
+        let id: Int32
+        let role: LabAxisRole
+        let isSelected: Bool
+        let uuid: UUID
+        let name: String
+    }
+
+    struct LabAxes: Equatable {
+        let component: ColorComponent
+        let axes: [LabAxis]
+    }
+
+    var supportsLabCreation: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_new_lab),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_new_lab) else { return false }
+        return api.image_new_lab != nil
+    }
+
+    var supportsLabAxes: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_lab_axes),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_lab_axes) else { return false }
+        return api.image_lab_axes != nil
+    }
+
+    /// Native metadata only. This does not expose Lab editing or UI creation.
+    func labAxes(_ image: Int32) throws -> LabAxes {
+        guard supportsLabAxes, let slot = api.image_lab_axes else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support Lab component information.")
+        }
+        guard image > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a valid Lab image.")
+        }
+        var out = GlimsLabAxes()
+        out.struct_size = UInt32(MemoryLayout<GlimsLabAxes>.size)
+        try check(slot(engine, image, &out), nil)
+        return try Self.decodeLabAxes(from: out)
+    }
+
+    static func decodeLabAxes(from out: GlimsLabAxes) throws -> LabAxes {
+        let malformed = EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                    message: "Malformed Lab component information.")
+        guard out.struct_size == UInt32(MemoryLayout<GlimsLabAxes>.size), out.count == 3,
+              let component = ColorComponent(rawValue: out.component),
+              [.u8, .u16, .float].contains(component) else { throw malformed }
+        let native = [out.axes.0, out.axes.1, out.axes.2]
+        var ids = Set<Int32>(), uuids = Set<UUID>()
+        var axes: [LabAxis] = []
+        for (index, row) in native.enumerated() {
+            guard row.id > 0, ids.insert(row.id).inserted,
+                  let role = LabAxisRole(rawValue: row.role), role.rawValue == UInt32(index),
+                  row.selected <= 1,
+                  withUnsafeBytes(of: row.uuid, { $0.contains(where: { $0 != 0 }) }) else { throw malformed }
+            let uuid = UUID(uuid: row.uuid)
+            guard uuids.insert(uuid).inserted else { throw malformed }
+            let bytes = withUnsafeBytes(of: row.name) { Array($0) }
+            guard let end = bytes.firstIndex(of: 0),
+                  let name = String(bytes: bytes[..<end], encoding: .utf8) else { throw malformed }
+            axes.append(LabAxis(id: row.id, role: role, isSelected: row.selected == 1,
+                                uuid: uuid, name: name))
+        }
+        return LabAxes(component: component, axes: axes)
+    }
+
     func editInk(_ image: Int32, channel: Int32, settings: InkEdit) throws {
         guard supportsInkEdits, let edit = api.image_edit_ink else {
             throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
@@ -724,6 +795,25 @@ final class EngineSession: @unchecked Sendable {
             try check(api.image_new_cmyk(engine, Int32(width), Int32(height), component.rawValue,
                                         bytes.bindMemory(to: UInt8.self).baseAddress, profileICC.count,
                                         &image, &error), error)
+        }
+        return image
+    }
+
+    func newLabImage(width: Int, height: Int, component: ColorComponent) throws -> Int32 {
+        guard supportsLabCreation, let slot = api.image_new_lab else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support Lab images.")
+        }
+        guard (1...524_288).contains(width), (1...524_288).contains(height),
+              [.u8, .u16, .float].contains(component) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose valid Lab dimensions and precision.")
+        }
+        var image: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(slot(engine, Int32(width), Int32(height), component.rawValue, &image, &error), error)
+        guard image > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Lab image has no valid identity.")
         }
         return image
     }

@@ -161,6 +161,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "lab-axes" {
+                try exerciseLabAxes(session, work: work)
+                print(failures == 0 ? "PASSED (Lab axes)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "ink-identity" {
                 try exerciseInkIdentity(session)
                 print(failures == 0 ? "PASSED (ink identity)" : "FAILED: \(failures) failure(s)")

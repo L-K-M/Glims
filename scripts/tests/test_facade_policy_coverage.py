@@ -14,7 +14,7 @@ class FacadePolicyCoverageTests(unittest.TestCase):
     def test_current_bindings_are_complete(self):
         errors, count = COVERAGE.check(ROOT)
         self.assertEqual(errors, [])
-        self.assertEqual(count, 189)
+        self.assertEqual(count, 191)
 
     def test_missing_misrouted_and_bypassing_bindings_refuse(self):
         cases = [

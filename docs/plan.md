@@ -5224,3 +5224,19 @@ layers, conversion and interchange work. It is not installed or a claim of
 Photoshop 4 parity. Existing Multichannel/CMYK editor and scalar-edit fixtures
 also pass on every engine (4,060 / 181 / 1,314 checks each). Hosted CI remains
 an integration gate for this candidate.
+
+### Typed Lab axis metadata (2026-11-12)
+
+Slot 191 exposes canonical L/a/b roles, document-scoped UUIDs, current handles,
+selection and UTF-8 display names without interpreting them as ink channels.
+It reads metadata only and preserves caller output boundaries on success and
+failure. Swift validates the returned record and gates Lab creation and axis
+metadata independently, retaining support for older producers. The app still
+refuses Lab document construction until its editing/UI workflow is ready.
+
+All four engines pass 6,270 native axis checks, 304 admission checks, general
+conformance and 26 Swift checks each. Real 189- and 190-slot engines pass five
+compatibility checks apiece. All 1,560 Swift tests and 130 Python checks pass;
+independent native and Swift source reviews found no important issue. See
+[lab-documents.md](lab-documents.md). Hosted CI and subsequent UI qualification
+remain integration gates; this is not installed Lab editing or PS4 parity.
