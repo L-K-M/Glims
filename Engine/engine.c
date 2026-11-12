@@ -3420,8 +3420,13 @@ static GlimsStatus api_image_export_configured (GlimsEngine *e, GlimsImageID ima
   if (error) *error = NULL;
   if (!settings || !path || !*path) return GLIMS_STATUS_INVALID_ARGUMENT;
   memcpy (&size, settings, sizeof size);
-  if (size < sizeof a.settings) return GLIMS_STATUS_INVALID_ARGUMENT;
-  memcpy (&a.settings, settings, sizeof a.settings);
+  const size_t prefix = offsetof (GlimsExportSettings, psd_layout);
+  const size_t tail_end = prefix + sizeof a.settings.psd_layout;
+  if (size < prefix || (size > prefix && size < tail_end))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&a.settings, settings, MIN (size, sizeof a.settings));
+  if (a.settings.format == GLIMS_EXPORT_PSD && size < tail_end)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
   return glims_engine_call (e, image_export_configured_on_engine, &a);
 }
 

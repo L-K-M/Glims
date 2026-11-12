@@ -13,6 +13,7 @@ extension ExportSettings {
         case .png: value.format = GLIMS_EXPORT_PNG.rawValue
         case .jpeg: value.format = GLIMS_EXPORT_JPEG.rawValue
         case .tiff: value.format = GLIMS_EXPORT_TIFF.rawValue
+        case .psd: value.format = GLIMS_EXPORT_PSD.rawValue
         }
         value.jpeg_quality = jpegQuality
         value.jpeg_progressive = jpegProgressive ? 1 : 0
@@ -33,6 +34,7 @@ extension ExportSettings {
         case .packBits: value.tiff_compression = GLIMS_TIFF_PACK_BITS.rawValue
         }
         value.tiff_preserve_transparent_color = tiffPreserveTransparentColor ? 1 : 0
+        value.psd_layout = psdLayout == .layers ? GLIMS_PSD_LAYERS.rawValue : GLIMS_PSD_MERGED.rawValue
         return value
     }
 }

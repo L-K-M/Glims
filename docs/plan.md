@@ -4765,3 +4765,48 @@ completion flag is also respected. Cancel drains accepted document callbacks
 but can proceed to cleanup without waiting for that foreign status flag;
 native image destruction still queues behind real engine work. The latter
 regression failed before the fix. Final checks on this follow-up remain open.
+
+Batch final qualification: all 1,481 unit tests, native conformance, full app
+and Batch checks pass across four engines. The standalone bundle passes with
+development libraries blocked. Launch measured 1.725 seconds fresh, 1.476
+cached and 3.497 after relocation. The cancellation follow-up review found
+no important issue. Hosted macOS CI passed and PR #220 merged as 9a30627.
+
+### Typed PSD export candidate (2026-11-12)
+
+PSD now has explicit Layers and Merged appearance choices in the shared
+Export form, preserving the choice for Repeat Export. Layers retain the
+native writer's raster layers and masks, with baked effects and potentially
+changed blending. Merged appearance copies the canvas-clipped visible
+projection into one alpha-capable layer of a private image. The source's
+layers, selected target, effects, pixels, dirty state and Undo remain intact.
+The private duplicate preserves its working profile and image metadata.
+The stable engines write 8-bit for u8 source channels and 16-bit for higher
+precision; HDR range cannot survive that integer encoding. The development
+engine also writes 32-bit PSD for float/u32 sources. XCF remains the editable save.
+
+The additive facade tail retains the historical 48-byte PNG/JPEG/TIFF
+settings prefix, accepts unaligned and larger future structs, and requires
+an explicit complete PSD layout field. The bounded format accepts RGB and
+grayscale, refuses indexed and does not include PSB or CMYK/duotone export.
+
+The first pinned native fixture passed 114 checks, including non-white masks,
+effects, negative offsets, hidden content, full transparency, RGB/grayscale
+ICC profiles and u8/u16/float sources. Cross-engine qualification reproduced
+an older upstream PSD profile mismatch. Upstream fix 62f1d4909f first ships
+in 3.2.6; older adapters now refuse profiles outside their default encoding
+space before writing. No upstream source is patched. This guard and the
+expanded matrix, actual save-panel workflow, full app and bundle checks
+remain in progress. Independent C source review found no important issue
+before the profile guard; the follow-up and Swift form review remain open.
+
+
+PSD matrix follow-up: all four native conformance suites pass. The stable
+engines pass PSD cases with the explicit old-profile refusals. Master exposed
+an overly narrow test/documentation assumption: its PSD writer supports
+32-bit float/u32 output, unlike the stable writers. Source inspection and the
+actual file headers confirm this improvement; the oracle and copy now state
+the engine-specific depth without suppressing the newer capability. All native PSD and existing PNG/JPEG/TIFF export suites now pass on all four
+engines. Both independent C and Swift/profile-guard reviews found no important
+issues. Actual Export/Repeat Export and combined Batch app qualification
+remain in progress.

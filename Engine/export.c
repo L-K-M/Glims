@@ -3,12 +3,19 @@
  * GIMP_3_2_8 app/file/file-save.c (GPL-3.0-or-later). Only local paths are
  * accepted by the facade. Upstream file plug-ins run in their own processes. */
 #include "engine-private.h"
+#include <cairo.h>
 #include <math.h>
 #include <string.h>
 #include "core/gimp.h"
 #include "core/gimpcontext.h"
+#include "libgimpcolor/gimpcolor.h"
 #include "core/gimpdocumentlist.h"
 #include "core/gimpimage.h"
+#include "core/gimpimage-duplicate.h"
+#include "core/gimpimage-undo.h"
+#include "core/gimplayer.h"
+#include "core/gimplayer-new.h"
+#include "core/gimppickable.h"
 #include "core/gimpprogress.h"
 #include "pdb/gimpprocedure.h"
 #include "plug-in/gimppluginmanager-file.h"
@@ -17,14 +24,14 @@
 static gboolean
 settings_valid (const GlimsExportSettings *s)
 {
-  return s->format >= GLIMS_EXPORT_PNG && s->format <= GLIMS_EXPORT_TIFF &&
+  return s->format >= GLIMS_EXPORT_PNG && s->format <= GLIMS_EXPORT_PSD &&
          isfinite (s->jpeg_quality) && s->jpeg_quality >= 0 && s->jpeg_quality <= 1 &&
          s->jpeg_progressive <= 1 && s->jpeg_optimize <= 1 &&
          s->jpeg_subsampling <= GLIMS_JPEG_BOTH &&
          s->png_compression >= 0 && s->png_compression <= 9 &&
          s->png_interlaced <= 1 && s->png_preserve_transparent_color <= 1 &&
          s->tiff_compression <= GLIMS_TIFF_PACK_BITS &&
-         s->tiff_preserve_transparent_color <= 1;
+         s->tiff_preserve_transparent_color <= 1 && s->psd_layout <= GLIMS_PSD_MERGED;
 }
 
 /* Bind by name and type, never by incidental upstream argument offsets.
@@ -87,9 +94,47 @@ configure (GimpProcedure *p, GimpValueArray *a, const GlimsExportSettings *s)
               * IFD as a layer. Omit that redundant image so round trips keep
               * the exported dimensions and composite. */
              set_bool (p, a, "include-thumbnail", FALSE);
+    case GLIMS_EXPORT_PSD:
+      return set_bool (p, a, "cmyk", FALSE) &&
+             set_bool (p, a, "duotone", FALSE) &&
+             set_bool (p, a, "clippingpath", FALSE);
     default:
       return FALSE;
     }
+}
+
+/* Follow GIMP_3_2_8 app/pdb/layer-cmds.c's new-from-visible template.
+ * Preserve the source profile/precision and alpha, and explicitly clip the
+ * projection to the canvas. Flatten would replace alpha with a background.
+ * The duplicate retains image metadata; none of its layers reach the file. */
+static GimpImage *
+merged_export_image (GimpImage *source)
+{
+  GimpImage *copy = gimp_image_duplicate (source);
+  GimpLayer *layer;
+  GeglBuffer *projection, *clipped;
+  GList *layers;
+  GeglRectangle bounds = { 0, 0, gimp_image_get_width (source), gimp_image_get_height (source) };
+  if (!copy) return NULL;
+  gimp_image_undo_disable (copy);
+  gimp_pickable_flush (GIMP_PICKABLE (source));
+  projection = gimp_pickable_get_buffer (GIMP_PICKABLE (source));
+  clipped = gegl_buffer_new (&bounds, gegl_buffer_get_format (projection));
+  gegl_buffer_copy (projection, &bounds, GEGL_ABYSS_NONE, clipped, &bounds);
+  layer = gimp_layer_new_from_gegl_buffer (clipped, copy,
+            gimp_image_get_layer_format (copy, TRUE), "Merged appearance",
+            GIMP_OPACITY_OPAQUE, GIMP_LAYER_MODE_NORMAL,
+            gimp_color_managed_get_color_profile (GIMP_COLOR_MANAGED (source)));
+  g_object_unref (clipped);
+  if (!layer) { g_object_unref (copy); return NULL; }
+  /* Only remove roots: removing a group also destroys its children. */
+  while ((layers = gimp_image_get_layer_iter (copy)))
+    gimp_image_remove_layer (copy, layers->data, FALSE, NULL);
+  if (!gimp_image_add_layer (copy, layer, NULL, 0, FALSE))
+    { g_object_unref (layer); g_object_unref (copy); return NULL; }
+  gimp_image_unset_selected_channels (copy);
+  gimp_image_flush (copy);
+  return copy;
 }
 
 GlimsStatus
@@ -97,11 +142,11 @@ glims_image_export_configured (GlimsEngine *engine, GlimsImageID id,
                                const char *path, const GlimsExportSettings *settings,
                                char **error)
 {
-  static const char *procedures[] = { NULL, "file-png-export", "file-jpeg-export", "file-tiff-export" };
+  static const char *procedures[] = { NULL, "file-png-export", "file-jpeg-export", "file-tiff-export", "file-psd-export" };
   GlimsOpenImage *open = glims_lookup_image (engine, id);
   GimpPlugInProcedure *file_proc;
   GimpProcedure *proc;
-  GimpImage *image;
+  GimpImage *image, *private_image = NULL;
   GimpExportOptions *options;
   GimpValueArray *args, *returns;
   GValue *run, *image_arg, *file_arg, *options_arg;
@@ -115,6 +160,39 @@ glims_image_export_configured (GlimsEngine *engine, GlimsImageID id,
   if (!open) return GLIMS_STATUS_NOT_FOUND;
   if (engine->busy || g_hash_table_size (engine->strokes) ||
       g_hash_table_size (engine->filters)) return GLIMS_STATUS_BUSY;
+  if (settings->format == GLIMS_EXPORT_PSD)
+    {
+      const char *extension = strrchr (path, '.');
+      if (!extension || g_ascii_strcasecmp (extension, ".psd") != 0)
+        {
+          if (error) *error = g_strdup ("PSD export requires a .psd filename.");
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        }
+    }
+  if (settings->format == GLIMS_EXPORT_PSD && gimp_image_get_base_type (open->image) == GIMP_INDEXED)
+    {
+      if (error) *error = g_strdup ("PSD export requires an RGB or grayscale image. Convert its mode before exporting.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+#if !GIMP_CHECK_VERSION (3, 2, 6)
+  if (settings->format == GLIMS_EXPORT_PSD)
+    {
+      /* Upstream 62f1d4909f (first released in 3.2.6) made PSD pixel
+       * encoding honor its embedded profile. Earlier writers use babl's
+       * default space while still attaching the image's ICC profile.
+       * Refuse that mismatch before touching a destination. */
+      GimpColorProfile *profile = gimp_color_managed_get_color_profile (GIMP_COLOR_MANAGED (open->image));
+      GimpColorProfile *standard = gimp_image_get_base_type (open->image) == GIMP_GRAY
+        ? gimp_color_profile_new_d65_gray_srgb_trc () : gimp_color_profile_new_rgb_srgb ();
+      gboolean compatible = profile && gimp_color_profile_is_equal (profile, standard);
+      g_object_unref (standard);
+      if (!compatible)
+        {
+          if (error) *error = g_strdup ("This image engine cannot preserve this color profile in PSD. Use TIFF or a newer image engine.");
+          return GLIMS_STATUS_UNSUPPORTED;
+        }
+    }
+#endif
 
   file = g_file_new_for_path (path);
   file_proc = gimp_plug_in_manager_file_procedure_find (engine->gimp->plug_in_manager,
@@ -179,6 +257,18 @@ glims_image_export_configured (GlimsEngine *engine, GlimsImageID id,
 
   /* Plug-ins nest a main loop: retain the image, never use `open` afterward. */
   image = g_object_ref (open->image);
+  if (settings->format == GLIMS_EXPORT_PSD && settings->psd_layout == GLIMS_PSD_MERGED)
+    {
+      private_image = merged_export_image (image);
+      if (!private_image)
+        {
+          gimp_value_array_unref (args);
+          g_object_unref (file);
+          g_object_unref (image);
+          return glims_fail (error, NULL, "The visible image could not be prepared for PSD export.");
+        }
+      g_value_set_object (image_arg, private_image);
+    }
   gimp_image_saving (image);
   progress = glims_progress_new (engine);
   engine->progress = progress;
@@ -193,6 +283,7 @@ glims_image_export_configured (GlimsEngine *engine, GlimsImageID id,
   status = returns ? g_value_get_enum (gimp_value_array_index (returns, 0)) : GIMP_PDB_EXECUTION_ERROR;
   g_clear_pointer (&returns, gimp_value_array_unref);
   gimp_value_array_unref (args);
+  g_clear_object (&private_image);
   if (status == GIMP_PDB_SUCCESS)
     {
       gimp_image_set_exported_file (image, file);

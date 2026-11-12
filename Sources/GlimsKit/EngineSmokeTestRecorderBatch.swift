@@ -92,6 +92,38 @@ extension EngineSmokeTest {
         check(try FileManager.default.contentsOfDirectory(atPath: outputs.path).allSatisfy { !$0.hasPrefix(".glims-batch-") },
               "Completed Batch leaves no temporary export directories")
 
+        // The shared export form must carry its PSD layout through Batch's
+        // private document, staging filename and asynchronous publication.
+        let layeredInput = root.appendingPathComponent("Layered.xcf")
+        let layeredImage = try session.newImage(pixels: sourcePixels)
+        do {
+            _ = try session.duplicateLayers(layeredImage, layers: [session.layers(layeredImage)[0].id])
+            try session.save(layeredImage, to: layeredInput.path)
+        } catch {
+            try? session.closeImage(layeredImage)
+            throw error
+        }
+        try session.closeImage(layeredImage)
+        let layeredOriginal = try Data(contentsOf: layeredInput)
+        for layout in ExportSettings.PsdLayout.allCases {
+            var settings = ExportSettings()
+            settings.format = .psd
+            settings.psdLayout = layout
+            let destination = try folder("psd-\(layout)")
+            let items = try run(flip, [layeredInput], destination, format: .exported(settings))
+            try require(items.count == 1, "PSD Batch result missing")
+            let output = try saved(items[0])
+            let reopened = try session.openImage(path: output.path)
+            defer { try? session.closeImage(reopened) }
+            let reopenedLayers = try session.layers(reopened)
+            check(output.pathExtension == "psd" && reopenedLayers.count == (layout == .layers ? 2 : 1),
+                  "Batch publishes PSD with the selected layered or merged structure")
+            check(try session.copyPixels(reopened, merged: true).pixels == Data(flipped),
+                  "Batch PSD contains the independently expected replayed pixels")
+        }
+        check(try Data(contentsOf: layeredInput) == layeredOriginal,
+              "Layered and merged PSD Batch exports preserve the source file")
+
         let symbol = UUID()
         let description = RecorderTargetDescription(name: "Subject", kind: .pixel, ancestors: [], siblingIndex: 0,
                                                    bounds: .init(x: 0, y: 0, width: 4, height: 3))

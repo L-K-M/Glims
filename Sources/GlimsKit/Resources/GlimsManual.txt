@@ -62,10 +62,18 @@ Saving and exporting are two separate jobs:
   name. Save a Copy… writes an XCF copy without changing the file you
   are editing.
 
-  Export… (Shift-Command-E) writes a finished image as PNG, JPEG or
-  TIFF. After exporting once, File > Export Again… (Command-E) reads
+  Export… (Shift-Command-E) writes an image as PNG, JPEG, TIFF or PSD. After exporting once, File > Export Again… (Command-E) reads
   "Export to name.png" and overwrites that file with the current
   image.
+
+PSD offers Layers and Merged appearance for RGB and grayscale images.
+Layers retains raster layers and masks, but renders effects into their pixels;
+blending can change when the exported file is reopened. Merged appearance
+captures the visible image as one layer, including transparency. The bundled image
+engine exports 8-bit source channels at 8-bit and higher precision at 16-bit,
+which cannot retain out-of-range HDR values. The supported development engine
+also writes 32-bit PSD for float/u32 sources. Keep XCF for full editing and
+the original precision.
 
 Exporting never marks the document saved; only Save does. The window
 title and the close prompt always name the XCF file that Save writes.
@@ -363,7 +371,7 @@ partial success never passes for a complete macro.
 # Batch
 
 File > Batch… runs a saved .glimsrecording on several images. Choose the
-recording, input files or folders, an output folder, and XCF or PNG/JPEG/TIFF.
+recording, input files or folders, an output folder, and XCF or PNG/JPEG/TIFF/PSD.
 Folders contribute visible files directly inside them, without subfolders
 or links. Files the editor cannot open appear as individual failures.
 
