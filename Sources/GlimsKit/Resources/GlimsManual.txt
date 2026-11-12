@@ -360,6 +360,30 @@ already running may still finish, and nothing is rolled back. A
 recording with any Failed or Cancelled row cannot be replayed, so a
 partial success never passes for a complete macro.
 
+# Batch
+
+File > Batch… runs a saved .glimsrecording on several images. Choose the
+recording, input files or folders, an output folder, and XCF or PNG/JPEG/TIFF.
+Folders contribute visible files directly inside them, without subfolders
+or links. Files the editor cannot open appear as individual failures.
+
+The default target policy accepts recordings that need no particular
+layer or channel. For target-bound recordings, explicitly choose matching
+by name and kind, or by name, kind and the full group path. A missing or
+ambiguous target refuses that image. Batch never guesses from layer order
+or dimensions, and required layer masks must exist.
+
+Each image is opened privately. Only a complete successful replay and save
+publishes an output, with “edited” and a number as needed in its name.
+Original inputs and existing output files are never replaced. The results
+list gives each saved path or failure; later inputs continue after a failure.
+
+Cancel stops later inputs and prevents publishing the current image once
+its accepted work drains. Already published results remain. Batch waits
+between commands when another document uses the engine. Closing the Batch
+window requests cancellation; quitting waits for its cleanup to finish.
+Only commands supported by the Recorder can be used in Batch.
+
 # Zoom and Pixels
 
 View > Zoom In (Command-Plus), Zoom Out (Command-Minus), Fit Image
