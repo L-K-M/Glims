@@ -4916,3 +4916,13 @@ selection strokes and alpha/pixel locks, plus non-RGB refusals. The previous
 implementation fails the neutral and dynamics counterexamples. Native matrix,
 actual Tool Options/canvas fixture, independent review, CI and standalone
 release qualification are still in progress.
+
+
+### Private component command admission (2026-11-12)
+
+A single internal manifest now binds every public facade function and its typed
+owner before engine-thread execution. The initial policy refuses ordinary image
+operations on synthetic component witnesses, including cross-image sources and
+handle-only continuations, while preserving cleanup and ordinary-document work.
+No new document mode is exposed. See [component-admission.md](component-admission.md)
+for boundaries, reproduced review findings and pending final qualification.
