@@ -5337,6 +5337,17 @@ private RGB-to-Lab arithmetic, with no public caller yet. Actual converted
 copies remain a subsequent candidate; layers and broader Lab interchange
 remain open. Qualification does not establish full Photoshop 4 parity.
 
+### Scalar ink Curves foundation (candidate)
+
+A private 256-sample scalar lookup table preserves native U8/U16/float ink
+precision, blends selection coverage once and validates a complete row before
+writing it. It is preparation for selected CMYK/Multichannel Curves; no menu
+or native snapshot route is enabled by this numeric slice. The 10,120 literal
+checks pass in optimized and ASan/UBSan builds. A separate 6,400-case exact
+rational oracle passes for U16 curves and selection coverage. One local 12 MP
+U16 kernel run took 133 ms; this is not an end-to-end preview measurement.
+See [component-curves.md](component-curves.md).
+
 ### Explicit RGB/Lab converted copies (candidate)
 
 Image > Create Lab Copy and Create Linear RGB Copy create a separate,
