@@ -5065,7 +5065,11 @@ channel selection/visibility/naming and XCF preserve the source representation.
 The pinned engine passes 181 public and 227 internal CMYK checks, including
 independent numeric color, malformed profile admission, failed-cache recovery,
 exact raw Undo/Redo and XCF identity. Existing 4,060 Multichannel checks pass.
-Two independent source reviews found no confirmed important findings. Remaining
-engine, window, performance, packaging and CI qualification is in progress;
+All four engines now pass the native CMYK/Multichannel/storage/admission suites
+and the 177-check actual CMYK window workflow. All 1,519 units pass; the pinned
+full editor suite passes 3,352 checks. Three independent source reviews found
+no confirmed important findings. A 12 MP CMYK image measured about 7.5 ms for
+post-dab redraws and 1.9 seconds for its first fit-view conversion under shared
+load. Full app checks on the other engines, packaging and CI remain in progress;
 this integration has not replaced the qualified installed app. See
 [cmyk-documents.md](cmyk-documents.md) for the admitted command scope and tests.

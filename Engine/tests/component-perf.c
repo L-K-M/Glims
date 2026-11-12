@@ -3,6 +3,7 @@
  * Each plane starts as paper with a separate Pencil dab. The cold read,
  * five warm reads and a full-viewport read following a local dab are timed.
  * This measures engine work, not end-to-end pointer/display latency.
+ * With an explicit CMYK ICC, measures four CMYK inks at U8/U16/float instead.
  * Run through scripts/test-component-perf.py for isolated engine settings.
  */
 #include "glims_engine.h"
@@ -50,11 +51,26 @@ int
 main (int argc, char **argv)
 {
   const unsigned counts[] = { 4, 16, 32 };
-  const unsigned components[] = { GLIMS_COLOR_COMPONENT_U8, GLIMS_COLOR_COMPONENT_FLOAT };
+  const unsigned components[] = { GLIMS_COLOR_COMPONENT_U8, GLIMS_COLOR_COMPONENT_FLOAT, GLIMS_COLOR_COMPONENT_U16 };
   const double scales[] = { 1, .25 };
   char user[4096], cache[4096];
 
-  if (argc != 3) return 2;
+  if (argc != 3 && argc != 4) return 2;
+  unsigned char *icc = NULL;
+  size_t icc_size = 0;
+  if (argc == 4)
+    {
+      FILE *profile = fopen (argv[3], "rb");
+      if (!profile) return 2;
+      long length = fseek (profile, 0, SEEK_END) == 0 ? ftell (profile) : -1;
+      if (length < 128 || length > 4 * 1024 * 1024 || fseek (profile, 0, SEEK_SET))
+        { fclose (profile); return 2; }
+      icc_size = (size_t) length;
+      icc = malloc (icc_size);
+      if (!icc || fread (icc, 1, icc_size, profile) != icc_size)
+        { free (icc); fclose (profile); return 2; }
+      fclose (profile);
+    }
   void *lib = dlopen (argv[1], RTLD_NOW | RTLD_LOCAL);
   GlimsEngineGetAPIFunction get = lib ? (GlimsEngineGetAPIFunction) dlsym (lib, "glims_engine_get_api") : NULL;
   api = get ? get (GLIMS_ENGINE_API_VERSION) : NULL;
@@ -68,17 +84,21 @@ main (int argc, char **argv)
   if (snprintf (user, sizeof user, "%s/user", argv[2]) >= (int) sizeof user ||
       snprintf (cache, sizeof cache, "%s/cache", argv[2]) >= (int) sizeof cache)
     return 2;
+  if (icc && (api->struct_size < offsetof (GlimsEngineAPI, image_new_cmyk) + sizeof api->image_new_cmyk ||
+              !api->image_new_cmyk))
+    { fprintf (stderr, "Adapter lacks CMYK document creation\n"); free (icc); return 2; }
   GlimsEngineConfig config = { .struct_size = sizeof config, .user_directory = user, .cache_directory = cache };
   require (api->start (&config, &engine, NULL), "start");
   unsigned char *pixels = malloc (1024 * 768 * 4);
   if (!pixels) return 2;
 
-  for (unsigned p = 0; p < 2; p++)
-    for (unsigned n = 0; n < 3; n++)
+  for (unsigned p = 0; p < (icc ? 3u : 2u); p++)
+    for (unsigned n = 0; n < (icc ? 1u : 3u); n++)
       {
         double start = now_ms ();
         GlimsImageID id = 0;
-        require (api->image_new_multichannel (engine, 4096, 3072, components[p], counts[n], &id, NULL), "new");
+        require (icc ? api->image_new_cmyk (engine, 4096, 3072, components[p], icc, icc_size, &id, NULL)
+                     : api->image_new_multichannel (engine, 4096, 3072, components[p], counts[n], &id, NULL), "new");
         double create = now_ms () - start;
         GlimsChannelInfo channels[32];
         int32_t count = 0;
@@ -116,5 +136,6 @@ main (int argc, char **argv)
       }
   api->stop (engine);
   free (pixels);
+  free (icc);
   return 0;
 }

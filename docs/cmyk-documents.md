@@ -34,18 +34,29 @@ separately tested.
 
 ## Verification in progress
 
-The pinned adapter passes 181 public CMYK checks and 227 native storage/preview
-checks, plus the existing 4,060 Multichannel checks. Native checks use an
+All four adapters pass 181 public CMYK checks and 227 native storage/preview
+checks, plus the existing 4,060 Multichannel, 171 storage and 216 command-admission
+checks. Native checks use an
 independent double-precision LittleCMS oracle, exact raw-plane comparisons,
 Undo/Redo, nonzero-origin crops, full/half-scale previews, XCF identity, damaged
 profiles and nonfinite-sample recovery. The installed system CMYK profile is
 read in place and is not redistributed. These results are one-profile evidence,
 not a claim for every press profile.
 
-Independent source reviews of preview ownership/cache handling and document
-admission/profile lifetime found no confirmed important findings. All-engine
-native checks, actual window workflow, performance, standalone bundle and
-latest CI qualification are still pending for this integration.
+All 1,519 unit tests pass. The actual CMYK window workflow passes 177 checks on
+each engine, covering all three precisions, profile selection, two ink targets,
+responder Undo/Redo, channel attributes and XCF reopening. The pinned full editor
+suite passes 3,352 checks. Independent source reviews of preview ownership/cache,
+document admission/profile lifetime and UI integration found no confirmed
+important findings. The remaining full-engine app matrix, standalone bundle
+and latest CI qualification are still pending for this integration.
+
+At 4096 × 3072 pixels with a 1024 × 768 viewport, shared-load measurements on
+this Mac took 133–143 ms for the cold 100% viewport and 1.87–1.89 seconds for
+the first 25% fit view. Warm and post-dab renders took 7.2–7.6 ms. Peak process
+RSS was 764 MiB across three sequential precision cases. The fit read reuses
+the earlier viewport cache; the source is mostly paper with a few pencil dabs.
+These timings measure engine calls, not complete pointer-to-display latency.
 
 Reproduce against a matching adapter producer, with a compatible external ICC:
 
@@ -56,6 +67,9 @@ python3 scripts/test-cmyk-editor.py \
   --cmyk-profile /absolute/source.icc
 python3 scripts/test-cmyk-storage-preview.py \
   --producer /absolute/adapters/GIMP_3_2_8 \
+  --cmyk-profile /absolute/source.icc
+python3 scripts/test-component-perf.py \
+  --library /absolute/adapters/GIMP_3_2_8/libglimsengine.dylib \
   --cmyk-profile /absolute/source.icc
 ```
 
