@@ -244,6 +244,33 @@ static GlimsStatus prepare_native(GlimsEngine *engine, gpointer data) {
   g_object_unref(file);
   gimp_image_undo_free(open->image);
   gimp_image_clean_all(open->image);
+  /* Keep real content history on both sides of the cursor. A clean baseline
+   * cannot detect a metadata reader that incorrectly marks the image clean. */
+  GimpDrawable *history_axis = GIMP_DRAWABLE(storage.planes[0]);
+  const Babl *history_format = gimp_drawable_get_format(history_axis);
+  guint8 second[sizeof(float)] = {0};
+  if (s->component == GLIMS_COLOR_COMPONENT_U8) {
+    s->seed[0][0] = 17; second[0] = 42;
+  } else if (s->component == GLIMS_COLOR_COMPONENT_U16) {
+    const guint16 first = 1717, next = 4242;
+    memcpy(s->seed[0], &first, sizeof first); memcpy(second, &next, sizeof next);
+  } else {
+    const float first = .375f, next = 42.f;
+    memcpy(s->seed[0], &first, sizeof first); memcpy(second, &next, sizeof next);
+  }
+  gimp_drawable_push_undo(history_axis, "First axis fixture edit", NULL, 0, 0, 1, 1);
+  gegl_buffer_set(gimp_drawable_get_buffer(history_axis), GEGL_RECTANGLE(0, 0, 1, 1),
+                  0, history_format, s->seed[0], GEGL_AUTO_ROWSTRIDE);
+  gimp_drawable_update(history_axis, 0, 0, 1, 1);
+  gimp_drawable_push_undo(history_axis, "Second axis fixture edit", NULL, 0, 0, 1, 1);
+  gegl_buffer_set(gimp_drawable_get_buffer(history_axis), GEGL_RECTANGLE(0, 0, 1, 1),
+                  0, history_format, second, GEGL_AUTO_ROWSTRIDE);
+  gimp_drawable_update(history_axis, 0, 0, 1, 1);
+  if (!gimp_image_undo(open->image)) return GLIMS_STATUS_FAILED;
+  CHECK(gimp_undo_stack_get_depth(gimp_image_get_undo_stack(open->image)) == 1 &&
+        gimp_undo_stack_get_depth(gimp_image_get_redo_stack(open->image)) == 1 &&
+        gimp_image_is_dirty(open->image),
+        "metadata fixture starts dirty with genuine Undo and Redo entries");
   return GLIMS_STATUS_OK;
 }
 

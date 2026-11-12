@@ -5234,7 +5234,7 @@ failure. Swift validates the returned record and gates Lab creation and axis
 metadata independently, retaining support for older producers. The app still
 refuses Lab document construction until its editing/UI workflow is ready.
 
-All four engines pass 6,270 native axis checks, 304 admission checks, general
+All four engines pass 6,288 native axis checks, 304 admission checks, general
 conformance and 26 Swift checks each. Real 189- and 190-slot engines pass five
 compatibility checks apiece. All 1,560 Swift tests and 130 Python checks pass;
 independent native and Swift source reviews found no important issue. See

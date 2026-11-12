@@ -79,10 +79,11 @@ These checks are separate from physical input, accessibility, performance on
 large Lab documents, or Photoshop interchange qualification. No notarization
 is requested or performed.
 
-The axis-state fixture adds 6,270 checks per engine for canonical identities,
+The axis-state fixture adds 6,288 checks per engine for canonical identities,
 selection, renaming/reordering, UTF-8 truncation/refusal, short/extended output,
 guard pages, damaged metadata, ordinary/ink refusal and unchanged native
-state. All four engines pass it, the expanded 304-check admission fixture,
+state, including a dirty image with nonempty Undo and Redo stacks. All four
+engines pass it, the expanded 304-check admission fixture,
 general conformance and 26 Swift transport checks. Real 189- and 190-slot
 producers each pass five compatibility checks. The six pure decoder tests,
 1,560 full Swift tests and 130 Python preflight checks pass. Independent native
