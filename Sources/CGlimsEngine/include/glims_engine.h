@@ -962,7 +962,8 @@ typedef enum GlimsComponentMode {
   GLIMS_COMPONENT_MODE_RGB     = 1,
   GLIMS_COMPONENT_MODE_GRAY    = 2,
   GLIMS_COMPONENT_MODE_INDEXED = 3,
-  GLIMS_COMPONENT_MODE_MULTICHANNEL = 4 /* No fixed color-component bits; use image_channels. */
+  GLIMS_COMPONENT_MODE_MULTICHANNEL = 4, /* No fixed color-component bits; use image_channels. */
+  GLIMS_COMPONENT_MODE_CMYK = 5 /* Fixed C/M/Y/K order, exposed through image_channels. */
 } GlimsComponentMode;
 
 /* `supported` is the components the image's model actually has;
@@ -1086,7 +1087,8 @@ typedef enum GlimsColorMode {
   GLIMS_COLOR_MODE_RGB       = 1,
   GLIMS_COLOR_MODE_GRAYSCALE = 2,
   GLIMS_COLOR_MODE_INDEXED   = 3,
-  GLIMS_COLOR_MODE_MULTICHANNEL = 4
+  GLIMS_COLOR_MODE_MULTICHANNEL = 4,
+  GLIMS_COLOR_MODE_CMYK = 5
 } GlimsColorMode;
 
 /* The component type of the image's precision. */
@@ -3624,6 +3626,16 @@ typedef struct GlimsEngineAPI {
                                          int32_t height, uint32_t component,
                                          uint32_t channel_count,
                                          GlimsImageID *result, char **error);
+
+  /* Slot181: create four native C/M/Y/K ink planes with a required, usable
+   * CMYK ICC source profile (128 bytes..4 MiB). Precision/intensity semantics
+   * match slot180. Exact source ICC bytes persist in XCF. The derived preview
+   * uses relative colorimetric with black-point compensation before display
+   * conversion; it is not editable pixel storage. ICC bytes are borrowed
+   * until return and copied on success. Clears *result and *error. */
+  GlimsStatus (*image_new_cmyk) (GlimsEngine *engine, int32_t width, int32_t height,
+                                 uint32_t component, const uint8_t *profile_icc,
+                                 size_t profile_length, GlimsImageID *result, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

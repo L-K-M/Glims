@@ -5055,3 +5055,17 @@ Fresh/cached/relocated launch measured 1.82/1.40/3.40 seconds. The installed
 6,708 payload files/symlinks match the tested copy. The previous app is retained
 as a backup. No notarization. Native CMYK work is continuing separately; this
 is not Photoshop 4 parity.
+
+### Native CMYK document integration (2026-11-12)
+
+New Image now offers profile-backed CMYK documents at u8/u16/float precision,
+with four authoritative ink planes and exact ICC persistence. A bounded lazy
+preview converts full-resolution samples before mipmaps; native painting,
+channel selection/visibility/naming and XCF preserve the source representation.
+The pinned engine passes 181 public and 227 internal CMYK checks, including
+independent numeric color, malformed profile admission, failed-cache recovery,
+exact raw Undo/Redo and XCF identity. Existing 4,060 Multichannel checks pass.
+Two independent source reviews found no confirmed important findings. Remaining
+engine, window, performance, packaging and CI qualification is in progress;
+this integration has not replaced the qualified installed app. See
+[cmyk-documents.md](cmyk-documents.md) for the admitted command scope and tests.

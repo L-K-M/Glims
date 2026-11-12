@@ -1,4 +1,5 @@
 #include "plate-storage.h"
+#include "cmyk-transform.h"
 #include <string.h>
 #include "core/gimp.h"
 #include "core/gimpchannel.h"
@@ -46,7 +47,8 @@ glims_plate_storage_read (GimpImage *image, GlimsPlateStorage *out)
   parasite = gimp_image_parasite_find (image, GLIMS_PLATE_MAP_PARASITE);
   if (!parasite)
     {
-      state = GLIMS_PLATE_STORAGE_NONE;
+      state = gimp_image_parasite_find (image, GLIMS_PLATE_PROFILE_PARASITE)
+        ? GLIMS_PLATE_STORAGE_INVALID : GLIMS_PLATE_STORAGE_NONE;
       /* Stripped image metadata must not silently turn ink planes into
        * ordinary alpha channels on the next open. */
       for (GList *iter = channels; iter; iter = iter->next)
@@ -65,6 +67,21 @@ glims_plate_storage_read (GimpImage *image, GlimsPlateStorage *out)
       gimp_image_get_quick_mask_state (image) ||
       g_list_length (channels) != result.map.count)
     goto done;
+
+  parasite = gimp_image_parasite_find (image, GLIMS_PLATE_PROFILE_PARASITE);
+  if (result.map.mode == GLIMS_PLATE_MODE_CMYK)
+    {
+      if (!persistent_data (parasite, &bytes, &size) || size < 128 ||
+          size > GLIMS_CMYK_ICC_MAX_BYTES) goto done;
+      const guint8 *icc = bytes;
+      guint32 declared = ((guint32) icc[0] << 24) | ((guint32) icc[1] << 16) |
+                         ((guint32) icc[2] << 8) | icc[3];
+      if (declared != size || memcmp (icc + 36, "acsp", 4) ||
+          memcmp (icc + 16, "CMYK", 4)) goto done;
+      result.profile = icc;
+      result.profile_size = size;
+    }
+  else if (parasite) goto done;
 
   for (GList *iter = channels; iter; iter = iter->next)
     {
@@ -103,8 +120,34 @@ done:
   return state;
 }
 
+gboolean
+glims_plate_storage_read_open (GlimsOpenImage *open, GlimsPlateStorage *out)
+{
+  if (!open || !open->component_document ||
+      glims_plate_storage_read (open->image, out) != GLIMS_PLATE_STORAGE_VALID)
+    return FALSE;
+  if (out->map.mode == GLIMS_PLATE_MODE_CMYK)
+    {
+      gsize size = 0;
+      const guint8 *bytes = open->component_cmyk_profile
+        ? g_bytes_get_data (open->component_cmyk_profile, &size) : NULL;
+      if (bytes && size == out->profile_size && !memcmp (bytes, out->profile, size))
+        return TRUE;
+    }
+  else if (!open->component_cmyk_profile) return TRUE;
+  memset (out, 0, sizeof *out);
+  return FALSE;
+}
+
 GimpImage *
 glims_plate_storage_create (GlimsEngine *engine, const GlimsPlateMap *map, char **error)
+{
+  return glims_plate_storage_create_profiled (engine, map, NULL, 0, error);
+}
+
+GimpImage *
+glims_plate_storage_create_profiled (GlimsEngine *engine, const GlimsPlateMap *map,
+                                     const guint8 *icc, gsize size, char **error)
 {
   uint8_t encoded[GLIMS_PLATE_MAP_MAX_SIZE];
   size_t length = 0;
@@ -113,6 +156,16 @@ glims_plate_storage_create (GlimsEngine *engine, const GlimsPlateMap *map, char 
   if (!engine || !glims_plate_map_encode (map, encoded, sizeof encoded, &length) ||
       map->width > GIMP_MAX_IMAGE_SIZE || map->height > GIMP_MAX_IMAGE_SIZE)
     { glims_fail (error, NULL, "The component image dimensions or ink definitions are invalid."); return NULL; }
+  if (map->mode == GLIMS_PLATE_MODE_CMYK)
+    {
+      GError *gerror = NULL;
+      GlimsCmykTransform *transform = glims_cmyk_transform_new (icc, size, &gerror);
+      if (!transform)
+        { glims_fail (error, gerror, "The CMYK profile cannot provide a preview."); return NULL; }
+      glims_cmyk_transform_free (transform);
+    }
+  else if (icc || size)
+    { glims_fail (error, NULL, "Multichannel images do not take a CMYK profile."); return NULL; }
   image = gimp_create_image (engine->gimp, map->width, map->height, GIMP_GRAY,
                              storage_precision (map->storage), FALSE);
   if (!image)
@@ -139,6 +192,13 @@ glims_plate_storage_create (GlimsEngine *engine, const GlimsPlateMap *map, char 
     GIMP_PARASITE_PERSISTENT | GIMP_PARASITE_UNDOABLE, length, encoded);
   gimp_image_parasite_attach (image, mapping, FALSE);
   gimp_parasite_free (mapping);
+  if (icc)
+    {
+      GimpParasite *profile = gimp_parasite_new (GLIMS_PLATE_PROFILE_PARASITE,
+        GIMP_PARASITE_PERSISTENT | GIMP_PARASITE_UNDOABLE, (guint32) size, icc);
+      gimp_image_parasite_attach (image, profile, FALSE);
+      gimp_parasite_free (profile);
+    }
   if (glims_plate_storage_read (image, &storage) != GLIMS_PLATE_STORAGE_VALID) goto failed;
   GList *selected = g_list_prepend (NULL, storage.planes[0]);
   gimp_image_set_selected_channels (image, selected);

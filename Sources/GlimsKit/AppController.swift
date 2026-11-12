@@ -494,7 +494,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         panel.onCreate = { [weak self] settings in
             self?.createDocument(width: settings.width, height: settings.height,
                                  kind: settings.kind, component: settings.component,
-                                 channelCount: settings.channelCount)
+                                 channelCount: settings.channelCount, profileICC: settings.profileICC)
         }
         panel.onClose = { [weak self] in self?.newImagePanel = nil }
         newImagePanel = panel
@@ -502,15 +502,24 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
 
     private func createDocument(width: Int, height: Int, kind: NewImageSettings.Kind = .rgb,
-                                component: EngineSession.ColorComponent = .u8, channelCount: Int = 4) {
+                                component: EngineSession.ColorComponent = .u8, channelCount: Int = 4,
+                                profileICC: Data? = nil) {
         guard let session, !terminationRequested else { return }
         pendingFileOperations += 1
         EngineActivity.shared.performWhenReady(label: "Creating an image", work: {
-            let result = Result {
-                try kind == .multichannel
-                    ? session.newMultichannelImage(width: width, height: height,
-                                                   component: component, channelCount: channelCount)
-                    : session.newImage(width: width, height: height)
+            let result = Result<Int32, Error> {
+                switch kind {
+                case .rgb: return try session.newImage(width: width, height: height)
+                case .multichannel:
+                    return try session.newMultichannelImage(width: width, height: height,
+                                                            component: component, channelCount: channelCount)
+                case .cmyk:
+                    guard let profileICC else {
+                        throw EngineSession.EngineError(status: 1, message: "Choose a CMYK source profile before creating the image.")
+                    }
+                    return try session.newCmykImage(width: width, height: height,
+                                                   component: component, profileICC: profileICC)
+                }
             }
             DispatchQueue.main.async {
                 self.pendingFileOperations -= 1

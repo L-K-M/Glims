@@ -1014,6 +1014,8 @@ open_image_free (gpointer data)
 
   glims_item_sets_free (open->item_sets);
   glims_plate_preview_free (open->component_preview);
+  g_clear_pointer (&open->component_cmyk_profile, g_bytes_unref);
+  g_clear_pointer (&open->component_profile_label, g_free);
   for (guint i = 0; i < G_N_ELEMENTS (open->component_planes); i++)
     if (open->component_planes[i])
       {
@@ -3981,6 +3983,36 @@ api_image_new_multichannel (GlimsEngine *e, int32_t width, int32_t height,
   return glims_facade_call (e, GLIMS_FACADE_OP_image_new_multichannel,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
                             image_new_multichannel_on_engine, &a, error);
+}
+
+typedef struct {
+  int32_t width, height;
+  uint32_t component;
+  const uint8_t *icc;
+  size_t size;
+  GlimsImageID *result;
+  char **error;
+} CmykNewArgs;
+
+static GlimsStatus
+image_new_cmyk_on_engine (GlimsEngine *e, gpointer data)
+{
+  CmykNewArgs *a = data;
+  return glims_image_new_cmyk (e, a->width, a->height, a->component,
+                              a->icc, a->size, a->result, a->error);
+}
+
+static GlimsStatus
+api_image_new_cmyk (GlimsEngine *e, int32_t width, int32_t height,
+                     uint32_t component, const uint8_t *icc, size_t size,
+                     GlimsImageID *result, char **error)
+{
+  if (error) *error = NULL;
+  if (result) *result = 0;
+  CmykNewArgs a = { width, height, component, icc, size, result, error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_new_cmyk,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            image_new_cmyk_on_engine, &a, error);
 }
 
 static const GlimsEngineAPI api_v1 = {

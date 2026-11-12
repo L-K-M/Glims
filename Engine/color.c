@@ -147,8 +147,10 @@ glims_image_color_info (GlimsEngine   *engine,
 
   if (open->component_document)
     {
-      info->mode = GLIMS_COLOR_MODE_MULTICHANNEL;
-      g_strlcpy (info->profile_label, "Ink preview (sRGB)", sizeof info->profile_label);
+      info->mode = open->component_cmyk_profile ? GLIMS_COLOR_MODE_CMYK : GLIMS_COLOR_MODE_MULTICHANNEL;
+      info->profile_embedded = open->component_cmyk_profile != NULL;
+      g_strlcpy (info->profile_label, open->component_profile_label ? open->component_profile_label : "Ink preview (sRGB)",
+                  sizeof info->profile_label);
       return GLIMS_STATUS_OK;
     }
 

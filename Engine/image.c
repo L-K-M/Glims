@@ -7,6 +7,7 @@
 #include "foreign-effect-load.h"
 #include "tiff-import.h"
 #include "plate-preview.h"
+#include "cmyk-transform.h"
 
 #include <math.h>
 #include <string.h>
@@ -36,6 +37,7 @@
 #include "core/gimpprojection.h"
 
 #include <cairo.h>
+#include "libgimpcolor/gimpcolor.h"
 
 #include "gegl/gimptilehandlervalidate.h"
 #include "core/gimpundostack.h"
@@ -253,7 +255,23 @@ glims_adopt_image (GlimsEngine  *engine,
   GlimsPlateStorageState state = glims_plate_storage_read (image, &storage);
   if (id) *id = 0;
   if (state == GLIMS_PLATE_STORAGE_INVALID) return GLIMS_STATUS_UNSUPPORTED;
+  GimpColorProfile *cmyk_profile = NULL;
+  if (state == GLIMS_PLATE_STORAGE_VALID && storage.map.mode == GLIMS_PLATE_MODE_CMYK)
+    {
+      GlimsCmykTransform *transform = glims_cmyk_transform_new (storage.profile, storage.profile_size, NULL);
+      if (!transform) return GLIMS_STATUS_UNSUPPORTED;
+      glims_cmyk_transform_free (transform);
+      cmyk_profile = gimp_color_profile_new_from_icc_profile (storage.profile, storage.profile_size, NULL);
+      if (!cmyk_profile) return GLIMS_STATUS_UNSUPPORTED;
+    }
   GlimsOpenImage *open = g_new0 (GlimsOpenImage, 1);
+  if (cmyk_profile)
+    {
+      open->component_cmyk_profile = g_bytes_new (storage.profile, storage.profile_size);
+      const gchar *label = gimp_color_profile_get_label (cmyk_profile);
+      open->component_profile_label = g_strdup (label && *label ? label : "CMYK Profile");
+      g_object_unref (cmyk_profile);
+    }
   open->component_document = state == GLIMS_PLATE_STORAGE_VALID;
   if (open->component_document)
     for (guint i = 0; i < storage.map.count; i++)
@@ -742,6 +760,7 @@ glims_projection_prepare_read (GlimsOpenImage  *open,
       if (status != GLIMS_STATUS_OK) return status;
       if (scale != 1.0 || (area.width == 1 && area.height == 1))
         validate_area (buffer, scale, area);
+      if (!glims_plate_preview_succeeded (open->component_preview)) return GLIMS_STATUS_FAILED;
       *buffer_out = buffer;
       return GLIMS_STATUS_OK;
     }
@@ -817,6 +836,7 @@ glims_image_render (GlimsEngine  *engine,
         validate_area (buffer, scale, (GlimsRect) { area.x, rect.y, 1, 1 });
       gegl_buffer_get (buffer, &rect, scale, babl_format ("R'aG'aB'aA u8"),
                        pixels + (size_t) row * stride, (gint) stride, GEGL_ABYSS_NONE);
+      if (!glims_plate_preview_succeeded (open->component_preview)) return GLIMS_STATUS_FAILED;
       row += rows;
     }
 

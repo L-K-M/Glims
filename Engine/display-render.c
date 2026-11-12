@@ -39,6 +39,7 @@
  * unusable proof can select the unproofed branch through that entry.
  */
 #include "engine-private.h"
+#include "plate-preview.h"
 
 #include <string.h>
 
@@ -316,6 +317,8 @@ display_render (GlimsEngine   *engine,
         }
       gegl_buffer_get (buffer, &rect, scale, src_format,
                        tmp_src, (gint) row_src, GEGL_ABYSS_NONE);
+      if (!glims_plate_preview_succeeded (open->component_preview))
+        { status = GLIMS_STATUS_FAILED; goto out; }
       gimp_color_transform_process_pixels (transform, src_format, tmp_src,
                                            dest_plain, tmp_dst,
                                            (gsize) rows * (gsize) area.width);

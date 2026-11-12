@@ -134,7 +134,7 @@ final class ChannelsPaletteView: NSView {
             case .rgb: primaries = [.red, .green, .blue]
             case .grayscale: primaries = [.gray]
             case .indexed: primaries = [.indexed]
-            case .multichannel: primaries = []
+            case .multichannel, .cmyk: primaries = []
             }
             var rows = primaries.filter { state.supported.contains($0.bit) }
             if state.supported.contains(alpha.bit) { rows.append(.alpha) }

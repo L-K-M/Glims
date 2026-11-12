@@ -103,7 +103,10 @@ glims_image_components (GlimsEngine         *engine,
 
   memset (state, 0, sizeof (*state));
   if (open->component_document)
-    { state->mode = GLIMS_COMPONENT_MODE_MULTICHANNEL; return GLIMS_STATUS_OK; }
+    {
+      state->mode = open->component_cmyk_profile ? GLIMS_COMPONENT_MODE_CMYK : GLIMS_COMPONENT_MODE_MULTICHANNEL;
+      return GLIMS_STATUS_OK;
+    }
   switch (gimp_image_get_base_type (open->image))
     {
     case GIMP_RGB:     state->mode = GLIMS_COMPONENT_MODE_RGB;     break;
@@ -343,6 +346,11 @@ component_channel_change (GlimsOpenImage *open, GimpChannel *channel,
   GError *gerror = NULL;
   if (glims_plate_storage_read (open->image, &storage) != GLIMS_PLATE_STORAGE_VALID)
     return GLIMS_STATUS_UNSUPPORTED;
+  if (storage.map.mode == GLIMS_PLATE_MODE_CMYK && (change->properties & GLIMS_CHANNEL_COLOR))
+    {
+      glims_fail (error, NULL, "CMYK ink color is defined by the document's source profile.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
   for (index = 0; index < storage.map.count; index++)
     if (storage.planes[index] == channel) break;
   if (index == storage.map.count) return GLIMS_STATUS_NOT_FOUND;

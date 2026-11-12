@@ -1,4 +1,5 @@
 #include "plate-preview.h"
+#include "plate-cmyk-preview.h"
 #include <cairo.h>
 #include <math.h>
 #include <string.h>
@@ -7,6 +8,7 @@
 
 struct _GlimsPlatePreview {
   GlimsPlateMap map;
+  GBytes *profile;
   gboolean visible[GLIMS_PLATE_LIMIT];
   GeglNode *graph;
   GeglBuffer *buffer;
@@ -54,6 +56,7 @@ glims_plate_preview_free (GlimsPlatePreview *preview)
   g_clear_object (&preview->buffer);
   g_clear_object (&preview->validate);
   g_clear_object (&preview->graph);
+  g_clear_pointer (&preview->profile, g_bytes_unref);
   g_mutex_clear (&preview->dirty_lock);
   g_free (preview);
 }
@@ -81,6 +84,13 @@ matches (GlimsPlatePreview *preview, const GlimsPlateStorage *storage)
   if (!preview || memcmp (&preview->map, &storage->map, sizeof preview->map) ||
       memcmp (preview->visible, storage->visible, sizeof preview->visible))
     return FALSE;
+  if (storage->profile)
+    {
+      gsize size = 0;
+      const guint8 *bytes = preview->profile ? g_bytes_get_data (preview->profile, &size) : NULL;
+      if (!bytes || size != storage->profile_size || memcmp (bytes, storage->profile, size)) return FALSE;
+    }
+  else if (preview->profile) return FALSE;
   for (guint i = 0; i < storage->map.count; i++)
     if (preview->planes[i] != gimp_drawable_get_buffer (GIMP_DRAWABLE (storage->planes[i])))
       return FALSE;
@@ -98,8 +108,9 @@ create (const GlimsPlateStorage *storage)
   GeglNode *last, *crop;
   GeglRectangle extent = { 0, 0, storage->map.width, storage->map.height };
 
-  for (guint i = 0; i < G_N_ELEMENTS (required); i++)
-    if (!gegl_has_operation (required[i])) return NULL;
+  if (storage->map.mode != GLIMS_PLATE_MODE_CMYK)
+    for (guint i = 0; i < G_N_ELEMENTS (required); i++)
+      if (!gegl_has_operation (required[i])) return NULL;
   preview = g_try_new0 (GlimsPlatePreview, 1);
   if (!preview) return NULL;
   g_mutex_init (&preview->dirty_lock);
@@ -107,6 +118,21 @@ create (const GlimsPlateStorage *storage)
   preview->dirty = TRUE;
   preview->dirty_rect = extent;
   memcpy (preview->visible, storage->visible, sizeof preview->visible);
+  if (storage->map.mode == GLIMS_PLATE_MODE_CMYK)
+    {
+      preview->profile = g_bytes_new (storage->profile, storage->profile_size);
+      for (guint i = 0; i < 4; i++)
+        {
+          preview->planes[i] = g_object_ref (gimp_drawable_get_buffer (GIMP_DRAWABLE (storage->planes[i])));
+          preview->changed[i] = g_signal_connect (preview->planes[i], "changed",
+                                                  G_CALLBACK (plane_changed), preview);
+        }
+      preview->validate = glims_plate_cmyk_preview_new (storage);
+      if (!preview->validate) { glims_plate_preview_free (preview); return NULL; }
+      preview->buffer = gegl_buffer_new (&extent, babl_format ("RGBA float"));
+      gimp_tile_handler_validate_assign (preview->validate, preview->buffer);
+      return preview;
+    }
   preview->graph = gegl_node_new ();
   last = solid (preview->graph, white);
   for (guint i = 0; i < storage->map.count; i++)
@@ -175,6 +201,18 @@ glims_plate_preview_prepare (GimpImage *image, GlimsPlatePreview **preview,
   g_mutex_unlock (&(*preview)->dirty_lock);
   if (dirty)
     gimp_tile_handler_validate_invalidate ((*preview)->validate, &damage);
+  if ((*preview)->map.mode == GLIMS_PLATE_MODE_CMYK)
+    {
+      GeglRectangle extent = { 0, 0, storage.map.width, storage.map.height };
+      glims_plate_cmyk_preview_prepare ((*preview)->validate, &extent);
+    }
   *buffer = (*preview)->buffer;
   return GLIMS_STATUS_OK;
+}
+
+gboolean
+glims_plate_preview_succeeded (GlimsPlatePreview *preview)
+{
+  return !preview || preview->map.mode != GLIMS_PLATE_MODE_CMYK ||
+         glims_plate_cmyk_preview_succeeded (preview->validate);
 }

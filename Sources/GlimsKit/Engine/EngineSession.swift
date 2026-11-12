@@ -449,6 +449,22 @@ final class EngineSession: @unchecked Sendable {
         return image
     }
 
+    func newCmykImage(width: Int, height: Int, component: ColorComponent, profileICC: Data) throws -> Int32 {
+        guard (1...524_288).contains(width), (1...524_288).contains(height),
+              [.u8, .u16, .float].contains(component), PsdCmykProfile.isValidICCData(profileICC) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose valid dimensions, precision and a CMYK source profile.")
+        }
+        var image: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try profileICC.withUnsafeBytes { bytes in
+            try check(api.image_new_cmyk(engine, Int32(width), Int32(height), component.rawValue,
+                                        bytes.bindMemory(to: UInt8.self).baseAddress, profileICC.count,
+                                        &image, &error), error)
+        }
+        return image
+    }
+
     func openImage(path: String) throws -> Int32 {
         var image: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
@@ -2476,7 +2492,7 @@ final class EngineSession: @unchecked Sendable {
     }
 
     enum ComponentMode: UInt32 {
-        case rgb = 1, grayscale, indexed, multichannel
+        case rgb = 1, grayscale, indexed, multichannel, cmyk
     }
 
     struct ComponentState: Equatable {
@@ -2623,15 +2639,18 @@ final class EngineSession: @unchecked Sendable {
     /// goes through `convertToIndexed`, which takes palette and dither
     /// settings; an indexed image's info still reports `.indexed`.
     enum ColorMode: UInt32 {
-        case unknown = 0, rgb = 1, grayscale = 2, indexed = 3, multichannel = 4
+        case unknown = 0, rgb = 1, grayscale = 2, indexed = 3, multichannel = 4, cmyk = 5
 
         /// The model's name in the window title and menus.
+        var usesInkChannels: Bool { self == .multichannel || self == .cmyk }
+
         var title: String {
             switch self {
             case .rgb: return "RGB"
             case .grayscale: return "Grayscale"
             case .indexed: return "Indexed"
             case .multichannel: return "Multichannel"
+            case .cmyk: return "CMYK"
             case .unknown: return "Unknown"
             }
         }

@@ -414,7 +414,7 @@ final class CanvasToolController {
         let tool = pointerTool(for: event)
         let optionDown = keyboard.optionIsDown(flags: event.modifierFlags)
         guard tool.isAvailable(in: document.colorInfo.mode),
-              !(document.colorInfo.mode == .multichannel && optionDown && tool.paintTool != nil) else {
+              !(document.colorInfo.mode.usesInkChannels && optionDown && tool.paintTool != nil) else {
             onStatus?("Choose Brush, Pencil, Airbrush or a selection tool to edit ink channels.")
             return
         }
@@ -1358,7 +1358,7 @@ final class CanvasToolController {
             }
             return true
         case "q":
-            guard document.colorInfo.mode != .multichannel else { return true }
+            guard !document.colorInfo.mode.usesInkChannels else { return true }
             if !event.isARepeat {
                 document.setQuickMask(!(document.quickMaskState?.enabled ?? false))
             }

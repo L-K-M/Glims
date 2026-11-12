@@ -464,7 +464,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     private func refreshIdleStatus(_ reason: ToolHintPolicy.Refresh) {
         let undo = imageDocument.undoInfo.nextUndo.isEmpty ? "" : " · Undo \(imageDocument.undoInfo.nextUndo)"
-        let multichannel = imageDocument.colorInfo.mode == .multichannel
+        let multichannel = imageDocument.colorInfo.mode.usesInkChannels
         let count = multichannel ? imageDocument.channels.count : imageDocument.info.layerCount
         let item = multichannel ? "ink channel" : "layer"
         let summary = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(count) \(item)\(count == 1 ? "" : "s")\(undo)"
@@ -1353,12 +1353,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func toggleMaskEditing(_ sender: Any?) { imageDocument.toggleMaskEditing() }
 
     @objc func toggleQuickMask(_ sender: Any?) {
-        guard imageDocument.colorInfo.mode != .multichannel else { return }
+        guard !imageDocument.colorInfo.mode.usesInkChannels else { return }
         imageDocument.setQuickMask(!(imageDocument.quickMaskState?.enabled ?? false))
     }
 
     @objc func saveSelectionAsChannel(_ sender: Any?) {
-        guard let window, imageDocument.colorInfo.mode != .multichannel else { return }
+        guard let window, !imageDocument.colorInfo.mode.usesInkChannels else { return }
         endPendingEdits()
         ChannelForms.saveSelection(in: imageDocument, on: window)
     }
@@ -1396,14 +1396,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func duplicateChannelMenu(_ sender: Any?) {
-        guard imageDocument.colorInfo.mode != .multichannel,
+        guard !imageDocument.colorInfo.mode.usesInkChannels,
               channelMenuBaseAllowed, !imageDocument.floatingState.isActive,
               let channel = selectedSavedChannelMenuTarget else { return }
         imageDocument.duplicateChannel(channel.id)
     }
 
     @objc func deleteChannelMenu(_ sender: Any?) {
-        guard imageDocument.colorInfo.mode != .multichannel,
+        guard !imageDocument.colorInfo.mode.usesInkChannels,
               channelMenuBaseAllowed, !imageDocument.floatingState.isActive,
               let channel = selectedSavedChannelMenuTarget else { return }
         imageDocument.deleteChannel(channel.id)
@@ -1420,7 +1420,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func channelToSelectionMenu(_ sender: NSMenuItem) {
-        guard imageDocument.colorInfo.mode != .multichannel,
+        guard !imageDocument.colorInfo.mode.usesInkChannels,
               channelMenuBaseAllowed, let channel = selectedSavedChannelMenuTarget,
               let tag = UInt32(exactly: sender.tag),
               let operation = EngineSession.SelectOperation(rawValue: tag) else { return }
@@ -2221,7 +2221,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if imageDocument.colorInfo.mode == .multichannel && !permitsMultichannelMenu(menuItem.action) {
+        if imageDocument.colorInfo.mode.usesInkChannels && !permitsMultichannelMenu(menuItem.action) {
             menuItem.toolTip = "This command is unavailable for ink-channel documents."
             return false
         }

@@ -110,7 +110,7 @@ dispatch (GlimsEngine *engine, gpointer data)
       if (open && open->component_document)
         {
           GlimsPlateStorage storage;
-          if (glims_plate_storage_read (open->image, &storage) != GLIMS_PLATE_STORAGE_VALID)
+          if (!glims_plate_storage_read_open (open, &storage))
             {
               if (call->error) *call->error = strdup ("The document's component storage is damaged or unsupported.");
               return GLIMS_STATUS_UNSUPPORTED;
