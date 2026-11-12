@@ -63,11 +63,16 @@ enum SemanticImageCommand {
     /// explicit layer lives in the document's runtime binding, never in this
     /// command; there is no active-layer fallback.
     case applyColorBalance(EngineSession.ColorBalanceSettings)
+    /// A newly applied Hue/Saturation adjustment with its whole accepted
+    /// native settings: the global overlap and all seven named ranges. The
+    /// explicit layer lives in the document's runtime binding, never in this
+    /// command; there is no active-layer fallback.
+    case applyHueSaturation(EngineSession.HueSaturationSettings)
     case completeStroke(RecorderStrokeCommand)
 
     var isLayerAdjustment: Bool {
         switch self {
-        case .applyLevels, .applyCurves, .applyColorBalance: return true
+        case .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation: return true
         default: return false
         }
     }
@@ -75,7 +80,7 @@ enum SemanticImageCommand {
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .scale, .resizeCanvas, .crop, .completeStroke: return true
+        case .transformImage, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .scale, .resizeCanvas, .crop, .completeStroke: return true
         case .selectionShape, .selectColor, .selectCommand, .channelToSelection, .layerProperties: return false
         }
     }
@@ -119,6 +124,7 @@ enum SemanticImageCommand {
         case .applyLevels: return "Levels"
         case .applyCurves: return "Curves"
         case .applyColorBalance: return "Color Balance"
+        case .applyHueSaturation: return "Hue/Saturation"
         case .completeStroke(let stroke): return stroke.title
         }
     }
@@ -141,7 +147,7 @@ enum SemanticImageCommand {
             try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill)
         case .crop(let rect):
             try session.crop(image: image, to: rect)
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .completeStroke:
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .completeStroke:
             throw MissingLayerBinding()
         case .channelToSelection:
             throw MissingChannelBinding()
@@ -189,6 +195,16 @@ enum SemanticImageCommand {
             let filter = try session.beginFilter(image: image, drawable: layer, operation: "gimp:color-balance")
             do {
                 try session.setColorBalanceSettings(filter, to: settings)
+                try session.commitFilter(filter)
+            } catch {
+                try? session.abortFilter(filter)
+                throw error
+            }
+        case .applyHueSaturation(let settings):
+            guard layer > 0 else { throw MissingLayerBinding() }
+            let filter = try session.beginFilter(image: image, drawable: layer, operation: "gimp:hue-saturation")
+            do {
+                try session.setHueSaturationSettings(filter, to: settings)
                 try session.commitFilter(filter)
             } catch {
                 try? session.abortFilter(filter)

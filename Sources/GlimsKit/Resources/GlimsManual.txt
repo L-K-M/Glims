@@ -320,8 +320,9 @@ operation and the explicit source channel it was invoked on; image
 rotation and flipping; image scaling; canvas resizing with offset and
 fill color; image cropping; layer name, visibility, opacity and blend
 mode changes; affine and perspective layer transforms with their
-resampling method; newly applied Levels adjustments with all five channel
-settings, transfer curve and clamps; and complete Pencil, Eraser and Paintbrush strokes on
+resampling method; newly applied Levels, Curves, Color Balance and
+Hue/Saturation adjustments with their complete channel/range settings;
+and complete Pencil, Eraser and Paintbrush strokes on
 ordinary pixel layers. A stroke keeps the settings used when it was
 drawn. Replay checks that the required brush and its supported paint
 dynamics still match the recording; unsupported brushes or dynamics
@@ -329,8 +330,8 @@ cannot be recorded. To Selection from the Quick Mask channel still
 applies the live edit but records a failed row.
 
 Not every edit is recorded: other layer changes, other effects and file
-operations stay outside the capture. Editing an existing Levels effect or
-applying Levels to a mask/channel adds an explicit unsupported recording row;
+operations stay outside the capture. Editing an existing adjustment effect or
+applying a recorded adjustment to a mask/channel adds an explicit unsupported row;
 the live edit still works. A live recording belongs to one
 open image; to reuse a saved recording in another image, load it
 there.

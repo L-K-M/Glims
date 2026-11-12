@@ -155,6 +155,7 @@ extension RecorderFileCommand {
                 blue: channel(settings.blue), alpha: channel(settings.alpha)))
         case .applyCurves(let settings): self = .applyCurves(try RecorderCurvesValue(settings))
         case .applyColorBalance(let settings): self = .applyColorBalance(try RecorderColorBalanceValue(settings))
+        case .applyHueSaturation(let settings): self = .applyHueSaturation(try RecorderHueSaturationValue(settings))
         case .completeStroke(let value): self = .completeStroke(value)
         }
     }

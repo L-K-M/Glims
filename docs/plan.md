@@ -4598,3 +4598,42 @@ an external selection change. No production admission was relaxed.
 CI and final integrated-package promotion remain open. This slice adds the
 Color Balance family only; other adjustments and existing-effect replay
 remain open.
+
+
+### Recorded new Hue/Saturation adjustments (2026-11-12 candidate, unrun)
+
+New Hue/Saturation Apply records its final native settings — the global
+overlap plus all seven named ranges' signed hue, saturation and lightness
+corrections (21 values) — behind queued preview writes, retaining its
+begin-time layer if selection changes. Format version 9 uses owned semantic
+JSON field names; versions 1 through 8 retain their existing meaning and
+strict tagged schemas. Cancel records nothing, a failed commit settles
+failure while retaining its capture metadata for retry, and mask/channel
+targets or existing-effect edits remain explicit unsupported rows after a
+successful commit.
+
+`RecorderHueSaturationValue` detaches the owned file value and validates
+the finite −1...1 correction and 0...1 overlap contracts at codec decode,
+encode, both bridge directions and the snapshot boundary. Replay reuses
+the shared layer-adjustment admission: current membership, RGB/grayscale
+mode, pixel lock and mask/channel/Quick Mask role checks against the
+freshly bound layer, then one new `gimp:hue-saturation` effect with one
+Undo; a failed set or commit aborts the fresh session. No engine or
+facade code changed and no new native slot was needed; the typed
+whole-settings read/set API already existed.
+
+The focused `GLIMS_SMOKE_CASE=recorder-hue-saturation` workflow drives the
+real panel through openNativeFilter: accepted Apply and Cancel,
+successful-only capture, save/load, explicit rebinding on a second image,
+exact pixels against an independent native oracle, committed-effect
+setting preservation, Undo/Redo, lock and role refusals, failed-Apply
+retry, and unsupported existing-effect/mask/channel rows. Focused
+codec/value/binding/snapshot tests cover independent all-nonzero fixtures,
+unknown/missing/extra fields, wrong types, nonfinite and out-of-range
+corrections and overlap, version anchoring and wrong bindings.
+
+This slice adds the Hue/Saturation family only; other adjustments and
+existing-effect replay remain open. Status: the code builds with
+`swift build --build-tests`, but no `swift test` run and no GUI or
+native-engine check has run on this change yet — the root's full
+GUI/native run remains outstanding before this can be called verified.

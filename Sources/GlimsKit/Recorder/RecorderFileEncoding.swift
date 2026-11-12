@@ -37,6 +37,8 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, curvesVersion)
             case .success(.applyColorBalance, _):
                 fileVersion = max(fileVersion, colorBalanceVersion)
+            case .success(.applyHueSaturation, _):
+                fileVersion = max(fileVersion, hueSaturationVersion)
             default: break
             }
         }
@@ -169,6 +171,17 @@ extension RecorderFileCodec {
                 "shadows": try rangeJSON(balance.shadows), "midtones": try rangeJSON(balance.midtones),
                 "highlights": try rangeJSON(balance.highlights),
                 "preserveLuminosity": .bool(balance.preserveLuminosity)])])
+        case .applyHueSaturation(let hueSaturation):
+            let hueSaturation = try hueSaturation.validated()
+            func rangeJSON(_ range: RecorderHueSaturationValue.Range) throws -> RecorderJSON {
+                .object(["hue": try d(range.hue), "saturation": try d(range.saturation),
+                    "lightness": try d(range.lightness)])
+            }
+            return .object(["tag": .string("applyHueSaturation"), "settings": .object([
+                "overlap": try d(hueSaturation.overlap), "master": try rangeJSON(hueSaturation.master),
+                "red": try rangeJSON(hueSaturation.red), "yellow": try rangeJSON(hueSaturation.yellow),
+                "green": try rangeJSON(hueSaturation.green), "cyan": try rangeJSON(hueSaturation.cyan),
+                "blue": try rangeJSON(hueSaturation.blue), "magenta": try rangeJSON(hueSaturation.magenta)])])
         case .completeStroke(let stroke): return try strokeJSON(stroke)
         }
     }
