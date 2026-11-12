@@ -44,6 +44,10 @@ final class ImageDocument {
     private static let recorderFileQueue = DispatchQueue(label: "ch.lkmc.Glims.recorder.file", qos: .userInitiated)
     private var recorderReplayGeneration = UUID()
     private var recorderReplayWaitingGeneration: UUID?
+    private var recorderReplayEngineWaitingGeneration: UUID?
+    private var recorderReplayEnginePolicy = RecorderEngineActivityPolicy.refuse
+
+    enum RecorderEngineActivityPolicy { case refuse, wait }
 
     /// The capture context of an open native filter session, installed by a
     /// successful begin before its completion can finish or abort it. The
@@ -5539,6 +5543,45 @@ final class ImageDocument {
               pendingWork == workCount, !recorderTargetWorkPending else { throw DocumentError.busy }
     }
 
+    /// A detached Batch-matching proposal: every recordable target this image
+    /// currently offers, described as a capture would have described it. The
+    /// snapshot reads only the settled cached state; `installRecording` still
+    /// revalidates native membership, masks, roles and editability before any
+    /// replay is admitted. Interactive Load never consults it.
+    func recorderBatchCandidates() throws -> [RecorderBatchBindings.Candidate] {
+        try requireRecorderReadiness(holding: 0)
+        return try Self.recorderBatchCandidates(layers: layers, channels: channels, masks: maskStates,
+                                                quickMask: quickMaskState, info: info)
+    }
+
+    /// The pure snapshot the instance entry point exposes, kept internal so
+    /// unit tests can drive the same computation without an engine.
+    nonisolated static func recorderBatchCandidates(layers: [EngineSession.Layer],
+                                                    channels: [EngineSession.Channel],
+                                                    masks: [Int32: EngineSession.MaskState],
+                                                    quickMask: EngineSession.QuickMaskState?,
+                                                    info: EngineSession.ImageInfo) throws -> [RecorderBatchBindings.Candidate] {
+        var candidates: [RecorderBatchBindings.Candidate] = []
+        candidates.reserveCapacity(layers.count + channels.count + 1)
+        for row in layers {
+            candidates.append(.init(choice: .layer(row.id),
+                description: try describeRecordedLayer(row.id, in: layers),
+                hasMask: (masks[row.id]?.mask ?? 0) > 0))
+        }
+        let liveQuickMask = quickMask.flatMap { $0.enabled && $0.channel > 0 ? $0.channel : nil }
+        for row in channels where !row.isQuickMask && row.id != liveQuickMask {
+            candidates.append(.init(choice: .channel(row.id),
+                description: try describeRecordedChannel(row.id, quickMask: false, in: channels, info: info),
+                hasMask: false))
+        }
+        if let liveQuickMask {
+            candidates.append(.init(choice: .quickMask(liveQuickMask),
+                description: try describeRecordedChannel(liveQuickMask, quickMask: true, in: channels, info: info),
+                hasMask: false))
+        }
+        return candidates
+    }
+
     private nonisolated static func bindRecording(_ prepared: RecorderFileSemanticBridge.PreparedRecording,
                                                   choices: [UUID: RecorderInstallChoice],
                                                   session: EngineSession, image: Int32) throws -> RecorderInstallation {
@@ -5653,13 +5696,15 @@ final class ImageDocument {
 
     /// Replay uses this document's current native image only. Each step keeps
     /// its normal Undo entry; earlier successful steps are not rolled back.
-    func startReplay() throws {
+    func startReplay(engineActivity policy: RecorderEngineActivityPolicy = .refuse) throws {
         if let reason = recorderReplayBlockReason() { throw RecorderReplayError(message: reason) }
         endPendingUserEdits()
         if let reason = recorderReplayBlockReason() { throw RecorderReplayError(message: reason) }
         try recorder.beginReplay()
         recorderReplayGeneration = UUID()
         recorderReplayWaitingGeneration = nil
+        recorderReplayEngineWaitingGeneration = nil
+        recorderReplayEnginePolicy = policy
         let generation = recorderReplayGeneration
         notifyRecorderChanged()
         continueRecorderReplay(generation: generation)
@@ -5669,6 +5714,7 @@ final class ImageDocument {
         try recorder.cancelReplay()
         recorderReplayGeneration = UUID()
         recorderReplayWaitingGeneration = nil
+        recorderReplayEngineWaitingGeneration = nil
         notifyRecorderChanged()
     }
 
@@ -5701,6 +5747,24 @@ final class ImageDocument {
             // Counted reads may remain available during replay. They finish
             // before the next semantic edit, without claiming another step.
             recorderReplayWaitingGeneration = generation
+            return
+        }
+        if recorderReplayEnginePolicy == .wait,
+           EngineActivity.shared.isBusy || PlugInCommands.isRunning || EngineActivity.shared.isRenderingTransformPreview {
+            // Batch is modeless. Wait before claiming the next semantic step
+            // when another document owns the engine. Cancel/close fences this
+            // continuation with the same generation as accepted replay work.
+            guard recorderReplayEngineWaitingGeneration != generation else { return }
+            recorderReplayEngineWaitingGeneration = generation
+            EngineActivity.shared.whenReadyForSynchronousRead { [weak self] in
+                // Plug-in completion can clear its separate flag a turn after
+                // the engine becomes idle. Avoid synchronous retry recursion.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                    guard let self, self.recorderReplayEngineWaitingGeneration == generation else { return }
+                    self.recorderReplayEngineWaitingGeneration = nil
+                    self.continueRecorderReplay(generation: generation)
+                }
+            }
             return
         }
         let step: RecorderLog<SemanticImageCommand>.ReplayStep
@@ -6039,11 +6103,7 @@ final class ImageDocument {
                         quickMask = expected.quickMask.enabled && expected.quickMask.channel == id
                     } else { quickMask = false }
                     guard let info else { throw RecorderReplayError(message: "The recorded channel dimensions were unavailable.") }
-                    let row = channels.first { $0.id == id }
-                    guard quickMask || row != nil else { throw RecorderReplayError(message: "The recorded channel description was unavailable.") }
-                    description = RecorderTargetDescription(name: row?.name ?? "Quick Mask", kind: quickMask ? .quickMask : .channel,
-                        ancestors: [], siblingIndex: quickMask ? 0 : channels.firstIndex(where: { $0.id == id })!,
-                        bounds: .init(x: 0, y: 0, width: Double(info.width), height: Double(info.height)))
+                    description = try describeRecordedChannel(id, quickMask: quickMask, in: channels, info: info)
                 }
                 observations[symbol] = .available(description)
             }
@@ -6087,6 +6147,21 @@ final class ImageDocument {
         return RecorderTargetDescription(name: row.name, kind: recordedKind(row.kind), ancestors: Array(ancestors.reversed()),
             siblingIndex: index(row), bounds: .init(x: Double(row.bounds.origin.x), y: Double(row.bounds.origin.y),
                                                    width: Double(row.bounds.width), height: Double(row.bounds.height)))
+    }
+
+    /// A recorded channel or Quick Mask target description. `channels` is the
+    /// engine's whole list, so an ordinary channel's sibling index counts the
+    /// Quick Mask row while it is enabled.
+    private nonisolated static func describeRecordedChannel(_ id: Int32, quickMask: Bool,
+                                                            in channels: [EngineSession.Channel],
+                                                            info: EngineSession.ImageInfo) throws -> RecorderTargetDescription {
+        let row = channels.first { $0.id == id }
+        guard quickMask || row != nil else {
+            throw RecorderReplayError(message: "The recorded channel description was unavailable.")
+        }
+        return RecorderTargetDescription(name: row?.name ?? "Quick Mask", kind: quickMask ? .quickMask : .channel,
+            ancestors: [], siblingIndex: quickMask ? 0 : channels.firstIndex(where: { $0.id == id })!,
+            bounds: .init(x: 0, y: 0, width: Double(info.width), height: Double(info.height)))
     }
 
     private nonisolated static func describeRecordedBinding(_ context: RecorderContext,

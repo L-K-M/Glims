@@ -231,6 +231,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Levels recorder)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-batch" {
+                try exerciseRecorderBatch(session, work: work)
+                print(failures == 0 ? "PASSED (recorder Batch)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-color-balance" {
                 try exerciseRecorderColorBalance(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (Color Balance recorder)" : "FAILED: \(failures) failure(s)")

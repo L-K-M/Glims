@@ -4713,3 +4713,39 @@ and Export sheet spacing are now integrated and are undergoing the affected
 checks and final application/package qualification. No completed package is
 claimed for this combined revision yet; Photoshop 4 parity, native CMYK/Lab
 editing, wider Recorder coverage and folder batch processing remain open.
+
+### Export/Recorder integration qualification and Batch candidate (2026-11-12)
+
+The combined file/adjustment tree at c930487 is qualified locally. All 1,442
+Swift tests, full app checks and the focused Color Balance/Hue-Saturation
+workflows pass on GIMP 3.2.8, 3.2.0, 3.0.8 and master. Native conformance,
+60 export and 102 TIFF checks also pass on each engine. The standalone bundle
+passes its native and app workflows, including actual Export/Repeat Export,
+with development libraries blocked. Ordinary launch measured 1.656 seconds
+with fresh user paths, 1.406 cached and 3.388 after relocation on this Mac.
+That candidate is installed locally with the previous bundle preserved;
+PR #219 still awaits hosted macOS CI and merge. No notarization is requested.
+
+The next candidate adds File > Batch for saved recordings and selected files
+or flat folders. Matching is an explicit policy: no targets, exact name/kind,
+or exact name/kind/ancestor path. Missing or ambiguous targets refuse the
+individual image. A private image is opened, rebound, replayed and drained
+before the next input. XCF save-copy or typed PNG/JPEG/TIFF export writes to
+a private staging directory; successful publication uses an exclusive rename
+to a distinct edited filename and never replaces an input or existing output.
+Per-file errors continue to the next source; Cancel fences future inputs and
+current publication while accepted work and image close drain. Closing or
+quitting waits for that lifetime. Folder scans and recording matching run on
+the file queue; folder entries are bounded, flat and deterministic.
+
+Independent reviews of matching and file publication found no important
+findings. Service review identified interference from other documents' engine
+work and loss of real errors concurrent with Cancel. Both were reproduced in
+the native fixture and fixed: Batch opts into a generation-fenced wait between
+replay steps, while interactive Replay keeps its existing admission behavior;
+real open/apply/export failures retain their diagnostics. The expanded pinned
+native fixture passes actual pixel comparisons, partial failure, both Cancel
+races, the real Batch window and picker teardown. All 39 new model/filesystem
+tests pass. Final cross-engine, full-suite, visual and independent follow-up
+qualification is pending. This does not establish complete Recorder coverage,
+PSD fidelity or native CMYK/Lab/duotone/multichannel editing.
