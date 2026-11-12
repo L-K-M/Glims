@@ -47,5 +47,6 @@ reproduced them. The corrected pinned fixture passes 214 checks, including real
 queued/inline refusals, exact witness pixels/Undo, destination-file preservation,
 overlapping arrays, live sessions and cleanup. Follow-up direct review closed
 both findings. The single independent helper timed out without a verdict; it is
-not counted as a completed clean review. Final rebuilt adapter/app matrices,
-latest CI and integration remain pending.
+not counted as a completed clean review. Rebuilt adapter conformance, all
+214 admission checks and full app checks pass on all four engines. Latest
+native CI passes; PR #228 merged at `3965d22`. No public mode is activated.
