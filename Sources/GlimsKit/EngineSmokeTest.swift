@@ -181,6 +181,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Lab axes)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "exclusive-edit-close" {
+                try exerciseExclusiveEditClose(session, documents: documents)
+                print(failures == 0 ? "PASSED (exclusive edit close)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-ink-bindings" {
                 try exerciseRecorderInkBindings(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (ink Recorder binding UI)" : "FAILED: \(failures) failure(s)")
