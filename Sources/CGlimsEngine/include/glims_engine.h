@@ -1438,6 +1438,12 @@ typedef enum GlimsResourceMutationFlag {
   GLIMS_RESOURCE_CAN_DELETE = 1u << 1
 } GlimsResourceMutationFlag;
 
+typedef enum GlimsInkEditOperation {
+  GLIMS_INK_EDIT_FILL = 0,
+  GLIMS_INK_EDIT_CLEAR = 1,
+  GLIMS_INK_EDIT_INVERT = 2
+} GlimsInkEditOperation;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -3650,6 +3656,21 @@ typedef struct GlimsEngineAPI {
    * Borrowed immutable path lives until return. Clears *error. */
   GlimsStatus (*image_export_native_cmyk_psd) (GlimsEngine *engine, GlimsImageID image,
                                              const char *path, char **error);
+  /* Slot183: edit the sole selected authoritative ink channel of an admitted
+   * Multichannel/CMYK document. channel must be its explicit nonzero item ID;
+   * a retargeted, locked, missing or non-ink target refuses before mutation.
+   * operation is a GlimsInkEditOperation. Fill uses finite intensity/opacity
+   * in [0,1], where intensity 0 is ink and 1 is paper. Clear requires (1,1);
+   * Invert requires (0,1). The current selection blends each affected scalar
+   * once; no active selection means the whole channel. Extended finite float
+   * samples are preserved without clipping, and affected nonfinite values
+   * refuse atomically. A changed edit makes one Undo step; a byte-identical
+   * result makes none. Cancellation before publication leaves pixels/Undo
+   * unchanged. Other inks, profile and file identity remain unchanged.
+   * Busy engine/strokes/filters refuse. Clears *error. */
+  GlimsStatus (*image_edit_ink) (GlimsEngine *engine, GlimsImageID image,
+                                GlimsItemID channel, uint32_t operation,
+                                double intensity, double opacity, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

@@ -41,6 +41,8 @@ jobs:
         run: bash scripts/test-cmyk-psd-file.sh
       - name: Check optimized and sanitized CMYK PSD transaction faults
         run: bash scripts/test-cmyk-psd-file-faults.sh
+      - name: Check optimized and sanitized scalar ink arithmetic
+        run: bash scripts/test-component-scalar.sh
 
   build-test:
     name: Build, Test & Package
@@ -94,6 +96,9 @@ jobs:
       - name: Check native CMYK PSD transaction faults
         timeout-minutes: 5
         run: bash scripts/test-cmyk-psd-file-faults.sh optimized
+      - name: Check scalar ink arithmetic
+        timeout-minutes: 5
+        run: bash scripts/test-component-scalar.sh optimized
 
       - name: Build
         run: swift build
