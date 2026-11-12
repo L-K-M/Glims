@@ -63,6 +63,16 @@ Fill sheets, admitted Fill/Clear/Delete/linear Invert, exact display Undo/Redo,
 unsupported filter gating, Recorder Stop/restart isolation and accepted Close
 drain. The Recorder observer regression produced six failures before its fix.
 All 1,526 Swift tests pass. Artifact-only PNG capture adds two visual checks to
-the final packaged run. All-engine UI, standalone package/startup and latest CI
-qualification remain in progress. This does not complete ink-mode adjustment
-coverage, Recorder replay support or Photoshop 4 parity.
+the final packaged run. All 16 actual-window cases pass: ink edits, CMYK,
+Multichannel and the full workflow on each engine. A manual check of the real
+Edit > Fill sheet confirms that its fields, validation text and buttons fit.
+
+The standalone app built from `a30da43` passes native, full, ink-edit, CMYK and
+Multichannel checks with development trees blocked. Fresh, cached and relocated
+launches take 1.720, 1.408 and 3.202 seconds. Its unsigned executable SHA-256 is
+`8364ed31fd2946c0d7d029e2dc8eb2e8376bf8d4763a56de7f7b50d196f406cd`;
+all 6,708 bundled payload entries match the qualified manifest. The separate
+Tool Options scroll presentation is being checked after the manual run.
+
+Latest CI and merge remain pending before installation. This does not complete
+ink-mode adjustment coverage, Recorder replay support or Photoshop 4 parity.
