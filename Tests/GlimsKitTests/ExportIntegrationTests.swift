@@ -5,6 +5,19 @@ import XCTest
 
 @MainActor
 final class ExportIntegrationTests: XCTestCase {
+    func testGifChoiceReachesNativeSettingsAndPanel() throws {
+        var settings = ExportSettings()
+        settings.format = .gif
+        XCTAssertEqual(try settings.nativeValue().format, GLIMS_EXPORT_GIF.rawValue)
+        let export = ExportSavePanel(baseName: "photo.version2", settings: settings)
+        XCTAssertEqual(export.panel.nameFieldStringValue, "photo.version2.gif")
+        XCTAssertEqual(export.panel.allowedContentTypes, [.gif])
+        export.form.selectFormat(.psd)
+        export.form.selectFormat(.gif)
+        XCTAssertEqual(export.panel.nameFieldStringValue, "photo.version2.gif")
+        XCTAssertTrue(export.form.commitEditing())
+    }
+
     func testNativeMappingCarriesTheExactEncoderChoices() throws {
         var settings = ExportSettings()
         settings.format = .jpeg
