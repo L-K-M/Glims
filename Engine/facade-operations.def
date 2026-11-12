@@ -201,3 +201,4 @@ GLIMS_FACADE(image_import_native_cmyk_psd, api_image_import_native_cmyk_psd, NON
 GLIMS_FACADE(image_curves_ink, api_image_curves_ink, IMAGE, COMPONENT)
 GLIMS_FACADE(image_ink_snapshot_curves, api_image_ink_snapshot_curves, IMAGE, COMPONENT)
 GLIMS_FACADE(image_ink_snapshot_apply_curves, api_image_ink_snapshot_apply_curves, IMAGE, COMPONENT)
+GLIMS_FACADE(image_curves_lab, api_image_curves_lab, IMAGE, COMPONENT)

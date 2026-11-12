@@ -1263,6 +1263,18 @@ typedef struct GlimsLabBrushSettings {
   double hardness;        /* Finite [0,1]. */
 } GlimsLabBrushSettings;
 
+/* Direct selected-axis Lab Curves request. samples[i] is a normalized unit
+ * table output in [0,1] for domain position i/255, mapped into physical Lab
+ * coordinates (L* = 100 * sample, a/b = 255 * sample - 128). Not physical values and
+ * not ink/paper semantics. Canonical identity: sample[i] == (double)i / 255. */
+typedef struct GlimsLabCurvesSettings {
+  uint32_t struct_size;
+  GlimsItemID axis;        /* Captured current handle; must remain solely selected. */
+  uint32_t role;           /* GlimsLabAxisRole, bound to the captured UUID. */
+  uint8_t uuid[16];        /* Identity within the supplied owning image. */
+  double samples[256];     /* Normalized unit table outputs in [0,1]. */
+} GlimsLabCurvesSettings;
+
 /* The palette an indexed conversion builds, as image_convert_indexed's
  * settings name it. Facade-owned values; the engine's
  * GimpConvertPaletteType never crosses this boundary. */
@@ -3972,6 +3984,19 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_ink_snapshot_apply_curves) (GlimsEngine *engine, GlimsImageID image,
                                                  uint64_t token, const GlimsInkCurvesSettings *settings,
                                                  char **error);
+  /* Slot202 (appended after slot201 image_ink_snapshot_apply_curves in the
+   * facade definition order): apply one normalized 256-sample table to the
+   * captured Lab axis as a direct physical Lab edit. samples[] are unit table
+   * outputs mapped into physical Lab coordinates (L* = 100 * sample,
+   * a/b = 255 * sample - 128), never raw physical table values and never
+   * ink/paper semantics. Identity is exactly sample[i] == (double)i / 255.
+   * Same capture, admission, selection/lock, cancellation, staging and
+   * single-undo publication contract as Lab Fill: zero coverage preserves
+   * exact bytes, affected nonfinite samples refuse before publication,
+   * ordinary/CMYK/Multichannel documents refuse. */
+  GlimsStatus (*image_curves_lab) (GlimsEngine *engine, GlimsImageID image,
+                                   const GlimsLabCurvesSettings *settings,
+                                   char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

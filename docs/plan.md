@@ -5448,3 +5448,15 @@ oracle. A kernel-only 24 MP float-axis pass measured 0.172 seconds on this Mac;
 this excludes native transactions, rendering and UI work. Independent numerical/fixture review found no important issue. Hosted CI
 remains pending. This private slice does not yet expose Lab
 Curves in the editor. See [lab-curves.md](lab-curves.md).
+
+### Direct physical Lab Curves transaction (candidate)
+
+Additive slot202 applies a normalized 256-sample curve to a captured physical
+Lab axis. The existing staged component transaction preserves exact other-axis,
+selection, profile and metadata bytes, rejects changed target identities and
+publishes one Undo step only after validation and cancellation checks.
+Canonical identity still validates affected float samples and mask values.
+The first pinned native fixture passes 1,042 checks; the complete four-engine
+regression run and independent review are pending. No Lab adjustment panel,
+preview or Recorder behavior is enabled by this direct engine operation yet.
+See [lab-curves-edit.md](lab-curves-edit.md).

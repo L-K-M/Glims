@@ -6,6 +6,7 @@
 #include "component-scalar.h"
 #include "component-levels.h"
 #include "lab-fill.h"
+#include "lab-curves.h"
 
 #include <math.h>
 #include <string.h>
@@ -292,7 +293,7 @@ apply_component (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
                          mask ? coverage : NULL, output, &row_changed))
           {
             if (error) *error = g_strdup (lab ?
-              "The Lab fill contains invalid samples or produces an unrepresentable value. No pixels were changed." :
+              "The Lab edit contains invalid samples or produces an unrepresentable value. No pixels were changed." :
               "The ink edit contains invalid samples or produces an unrepresentable value. No pixels were changed.");
             status = GLIMS_STATUS_INVALID_ARGUMENT;
             goto finish;
@@ -323,7 +324,7 @@ apply_component (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
           (!lab && current_storage.map.mode == GLIMS_PLATE_MODE_LAB) ||
           gimp_drawable_get_buffer (target) != source)
         {
-          if (error) *error = g_strdup (lab ? "The selected Lab channel changed before the fill could finish." :
+          if (error) *error = g_strdup (lab ? "The selected Lab channel changed before the Lab edit could finish." :
                                               "The selected ink changed before the edit could finish.");
           status = GLIMS_STATUS_INVALID_ARGUMENT;
           goto finish;
@@ -408,6 +409,55 @@ glims_image_fill_lab (GlimsEngine *engine, GlimsImageID id,
   GlimsLabFillSettings fill = *settings;
   return apply_component (engine, id, fill.axis, "Fill Lab Channel", fill.opacity == 0,
                            lab_fill_row, &fill, NULL, &fill, error);
+}
+
+static bool
+lab_curves_row (GlimsComponentScalarFormat format, const void *settings,
+                size_t count, const void *source, const float *mask,
+                void *destination, bool *changed)
+{
+  const GlimsLabCurvesSettings *curves = settings;
+  GlimsLabFormat lab_format;
+  switch (format)
+    {
+    case GLIMS_COMPONENT_SCALAR_U8: lab_format = GLIMS_LAB_FORMAT_U8; break;
+    case GLIMS_COMPONENT_SCALAR_U16: lab_format = GLIMS_LAB_FORMAT_U16; break;
+    case GLIMS_COMPONENT_SCALAR_FLOAT: lab_format = GLIMS_LAB_FORMAT_FLOAT; break;
+    default: return false;
+    }
+  if (curves->role > GLIMS_LAB_AXIS_B) return false;
+  GlimsLabCurve curve;
+  memcpy (curve.samples, curves->samples, sizeof curve.samples);
+  return glims_lab_curves_row ((GlimsLabRole[]) { GLIMS_LAB_ROLE_L, GLIMS_LAB_ROLE_A, GLIMS_LAB_ROLE_B }[curves->role],
+                               lab_format, &curve, count, source, mask, destination, changed);
+}
+
+GlimsStatus
+glims_image_curves_lab (GlimsEngine *engine, GlimsImageID id,
+                        const GlimsLabCurvesSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  if (!settings || settings->struct_size < sizeof *settings || settings->axis <= 0 ||
+      settings->role > GLIMS_LAB_AXIS_B)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  for (guint i = 0; i < G_N_ELEMENTS (settings->samples); i++)
+    if (!isfinite (settings->samples[i]) || settings->samples[i] < 0 || settings->samples[i] > 1)
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+  /* Own the immutable request across cooperative progress callbacks. The UUID
+   * and role bind this handle to the document's canonical captured axis. The
+   * Lab Fill binding checks only axis/role/uuid, so reuse it as an explicit
+   * identity bridge without widening ink/fill semantics. */
+  GlimsLabCurvesSettings curves = *settings;
+  GlimsLabFillSettings identity = { 0 };
+  identity.struct_size = sizeof identity;
+  identity.axis = curves.axis;
+  identity.role = curves.role;
+  memcpy (identity.uuid, curves.uuid, sizeof identity.uuid);
+  identity.value = curves.role == GLIMS_LAB_AXIS_LIGHTNESS ? 0 : -128;
+  identity.opacity = 1;
+  /* Even identity must validate affected source samples and selection masks. */
+  return apply_component (engine, id, curves.axis, "Curves Lab", FALSE,
+                          lab_curves_row, &curves, NULL, &identity, error);
 }
 
 typedef struct {

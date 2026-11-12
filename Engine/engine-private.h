@@ -238,6 +238,8 @@ GlimsStatus glims_image_lab_axes (GlimsEngine *engine, GlimsImageID image,
                                   GlimsLabAxes *out);
 GlimsStatus glims_image_fill_lab (GlimsEngine *engine, GlimsImageID image,
                                   const GlimsLabFillSettings *settings, char **error);
+GlimsStatus glims_image_curves_lab (GlimsEngine *engine, GlimsImageID image,
+                                    const GlimsLabCurvesSettings *settings, char **error);
 gboolean         glims_stroke_references_image (GlimsEngine *engine, GlimsStrokeID stroke, GimpImage *image);
 
 /* The largest pixel buffer the facade accepts, and its overflow-safe

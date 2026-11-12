@@ -4518,6 +4518,33 @@ api_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID image,
     image_convert_lab_copy_on_engine, &a, error);
 }
 
+typedef struct {
+  GlimsImageID image;
+  GlimsLabCurvesSettings settings;
+  char **error;
+} LabCurvesArgs;
+
+static GlimsStatus
+image_curves_lab_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabCurvesArgs *a = data;
+  return glims_image_curves_lab (engine, a->image, &a->settings, a->error);
+}
+
+static GlimsStatus
+api_image_curves_lab (GlimsEngine *engine, GlimsImageID image,
+                      const GlimsLabCurvesSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  if (!settings || settings->struct_size < sizeof *settings)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  LabCurvesArgs a = { .image = image, .error = error };
+  memcpy (&a.settings, settings, sizeof a.settings);
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_curves_lab,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_curves_lab_on_engine, &a, error);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version = GLIMS_ENGINE_API_VERSION,
   .struct_size = sizeof (GlimsEngineAPI),
