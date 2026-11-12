@@ -337,6 +337,20 @@ typedef struct GlimsLabSelectOptions {
   double corner_radius;   /* Same range; used only for rectangles. */
 } GlimsLabSelectOptions;
 
+/* Explicit pixel-only copy; settings may be unaligned and future tails are
+ * ignored. The complete known prefix is required. Borrowed input stays readable
+ * and unchanged until the synchronous call returns. */
+typedef enum GlimsLabCopyContent {
+  GLIMS_LAB_COPY_MERGED_CANVAS = 1
+} GlimsLabCopyContent;
+
+typedef struct GlimsLabCopySettings {
+  uint32_t struct_size;
+  uint32_t destination_mode; /* GLIMS_COLOR_MODE_LAB or GLIMS_COLOR_MODE_RGB. */
+  uint32_t content;          /* GLIMS_LAB_COPY_MERGED_CANVAS only. */
+  uint32_t output_component; /* GLIMS_COLOR_COMPONENT_FLOAT only. */
+} GlimsLabCopySettings;
+
 typedef struct GlimsPoint {
   double x, y;             /* image pixels */
 } GlimsPoint;
@@ -3892,6 +3906,23 @@ typedef struct GlimsEngineAPI {
    * supported; every other command returns UNSUPPORTED without mutation. */
   GlimsStatus (*image_select_lab_command) (GlimsEngine *engine, GlimsImageID image,
                                           uint32_t command, char **error);
+  /* Slot197: creates a separate, fully constructed unsaved pixel-only image.
+   * Opaque standard-sRGB/linear-sRGB U8/U16/FLOAT RGB -> physical D50 FLOAT Lab;
+   * validated native U8/U16/FLOAT Lab -> opaque FLOAT linear-sRGB raster.
+   * Custom RGB profiles, linked-layer objects (including frozen ones), same-mode copies
+   * and transparency refuse.
+   * Full canvas regardless of selection; RGB merges visible layers. Copies only
+   * dimensions, resolution and pixels, with fresh identities, empty history and
+   * selection. No source pixel/metadata/history/file-state mutation. Effective
+   * output RGB profile is builtin linear-sRGB (native may omit redundant ICC).
+   * Finite extended values are retained where representable; no silent clipping.
+   * Global activity/strokes/filter previews, open Undo groups or disabled Undo
+   * refuse BUSY. Floating selection and Quick Mask refuse UNSUPPORTED.
+   * Cancellation or any failure leaves *result zero; no partial image is adopted.
+   * Clears *error on entry; caller owns returned error via free_string. */
+  GlimsStatus (*image_convert_lab_copy) (GlimsEngine *engine, GlimsImageID image,
+                                         const GlimsLabCopySettings *settings,
+                                         GlimsImageID *result, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

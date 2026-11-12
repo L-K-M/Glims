@@ -9,7 +9,7 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 The installed editor uses qualified source `451fd798`, integrated through
 [#243](https://github.com/L-K-M/Glims/pull/243) at `bc440485`. It includes native
-CMYK and Multichannel creation, conversion, ink painting and XCF persistence,
+CMYK and Multichannel creation, ink painting and XCF persistence,
 plus native U8/U16 CMYK PSD export retaining the original inks and profile,
 the merged Rigi tool-availability controls, Sponge saturation tools, GIF/BMP/TGA
 export, scalar ink Fill/Clear/Invert, modeless ink Levels, durable ink

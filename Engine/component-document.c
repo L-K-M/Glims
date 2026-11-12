@@ -95,26 +95,26 @@ plane_display_name (uint32_t index,
   return g_strdup_printf ("Ink %u", index + 1);
 }
 
-static GlimsStatus
-new_component_image (GlimsEngine *engine,
-                              int32_t      width,
-                              int32_t      height,
-                              uint32_t     component,
-                              uint32_t     channel_count,
-                              uint32_t     mode,
-                              const guint8 *icc, gsize icc_size,
-                              GlimsImageID *result,
-                              char       **error)
+GlimsStatus
+glims_component_image_prepare (GlimsEngine  *engine,
+                                int32_t       width,
+                                int32_t       height,
+                                uint32_t      component,
+                                uint32_t      channel_count,
+                                uint32_t      mode,
+                                const guint8 *icc,
+                                gsize         icc_size,
+                                GimpImage   **result,
+                                char        **error)
 {
   GlimsPlateMap      map = { 0 };
   GlimsPlateStorage  storage;
   GimpImage         *image;
   GError            *gerror = NULL;
   gboolean           named;
-  GlimsStatus        status;
 
   if (result)
-    *result = 0;
+    *result = NULL;
   if (error)
     *error = NULL;
 
@@ -186,6 +186,38 @@ new_component_image (GlimsEngine *engine,
       return glims_fail (error, gerror,
                          "The component planes could not be named.");
     }
+
+  *result = image;
+  return GLIMS_STATUS_OK;
+}
+
+static GlimsStatus
+new_component_image (GlimsEngine  *engine,
+                      int32_t       width,
+                      int32_t       height,
+                      uint32_t      component,
+                      uint32_t      channel_count,
+                      uint32_t      mode,
+                      const guint8 *icc,
+                      gsize         icc_size,
+                      GlimsImageID *result,
+                      char        **error)
+{
+  GimpImage  *image = NULL;
+  GlimsStatus status;
+
+  if (result)
+    *result = 0;
+  if (error)
+    *error = NULL;
+  if (! result)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  status = glims_component_image_prepare (engine, width, height, component,
+                                         channel_count, mode, icc, icc_size,
+                                         &image, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
 
   /* glims_adopt_image consumes the image's reference only on success. */
   status = glims_adopt_image (engine, image, result);

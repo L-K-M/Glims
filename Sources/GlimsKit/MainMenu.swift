@@ -117,6 +117,7 @@ enum MainMenu {
             item("Crop to Selection", #selector(DocumentWindowController.cropToSelection(_:))),
             item("Flatten Image", #selector(DocumentWindowController.flattenImage(_:))),
             item("New Snapshot", #selector(DocumentWindowController.newSnapshot(_:))),
+            item("Create Lab Copy…", #selector(DocumentWindowController.createConvertedLabCopy(_:))),
             .separator(),
             submenu("Channels", [
                 item("Channel Attributes…", #selector(DocumentWindowController.channelAttributesMenu(_:))),

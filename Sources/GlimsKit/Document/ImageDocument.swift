@@ -4249,6 +4249,59 @@ final class ImageDocument {
     /// by whoever owns document lifetime; nil without one.
     var snapshotHandler: ((ImageDocument) -> Void)?
 
+    /// App-owned adoption keeps separate copy results counted through Quit.
+    var labCopyHandler: ((ImageDocument, EngineSession.LabCopyDestination) -> Void)?
+
+    func labCopyRefusal(_ destination: EngineSession.LabCopyDestination) -> String? {
+        guard session.supportsLabConvertedCopy else { return "This image engine cannot create converted Lab copies." }
+        guard acceptsEdits, !targetCommandIsPending, !strokeIsActive else {
+            return "Finish the current edit before creating a converted copy."
+        }
+        guard quickMaskState?.enabled != true, !floatingState.isActive else {
+            return "Anchor the floating selection and leave Quick Mask first."
+        }
+        switch destination {
+        case .lab:
+            guard colorInfo.mode == .rgb, [.u8, .u16, .float].contains(colorInfo.component) else {
+                return "Choose an 8-bit, 16-bit or 32-bit RGB document."
+            }
+        case .linearRGB:
+            guard colorInfo.mode == .lab else { return "Choose a Lab document." }
+        }
+        return nil
+    }
+
+    func newLabCopy(_ destination: EngineSession.LabCopyDestination) {
+        guard let handler = labCopyHandler else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
+        if let reason = labCopyRefusal(destination) { onError?(reason); return }
+        handler(self, destination)
+    }
+
+    /// The source stays unchanged; close drains the accepted read before freeing
+    /// its image. The app owns either adopting or closing every successful result.
+    func convertedLabCopy(_ destination: EngineSession.LabCopyDestination,
+                          completion: @escaping @MainActor (Result<Int32, Error>) -> Void) {
+        if let reason = labCopyRefusal(destination) {
+            return completion(.failure(RecorderReplayError(message: reason)))
+        }
+        endPendingUserEdits()
+        if let reason = labCopyRefusal(destination) {
+            return completion(.failure(RecorderReplayError(message: reason)))
+        }
+        enqueueExclusive(effect: .readsPixels, label: "Creating a converted copy",
+                         admission: { self.labCopyRefusal(destination) == nil },
+                         rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
+            let result = Result { try session.convertedLabCopy(image: image, destination: destination) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func noteUnsavedConvertedCopy() {
+        fileState.noteUnsavedCopy()
+        onStateChange?()
+    }
+
     /// Image ▸ New Snapshot and the History palette's Snapshot button:
     /// asks the app for an independent copy of this image opened as a new
     /// document.
