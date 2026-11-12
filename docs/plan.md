@@ -5173,3 +5173,17 @@ checks each, plus general conformance. Twelve decoder/guard-page tests and
 clear after the loader fix. This is a prerequisite for ink Recorder support,
 not completed recording/replay. See `ink-channel-identity.md`. CI and full app
 qualification remain integration gates.
+
+
+### Native ink Recorder candidate (2026-11-12)
+
+Successful Fill/Clear/Invert and Levels Apply now capture exact semantic values
+and authoritative ink bindings. Strict recording version 11 preserves owned
+settings and document-scoped identity; explicit Load choices validate CMYK
+roles and retain the destination UUID. Replay requires the bound ink already
+selected, revalidates natively and stops on failure. Batch name matching
+refuses ink recordings. Twenty pure tests and 329 document-service checks on
+each of four engines pass, including disk round trips, XCF reopen, independent
+scalar oracles, Undo/Redo and stale-target refusal. Independent file/runtime
+reviews found no important issue. Full UI, bundle and launch qualification are
+in progress. See `ink-recorder.md` for scope and remaining selection/Batch work.

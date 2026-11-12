@@ -135,10 +135,11 @@ extension EngineSmokeTest {
         guard let blur = menuItem(action: #selector(DocumentWindowController.gaussianBlur(_:)), in: menuRoot) else {
             throw NSError(domain: "InkEditsSmoke", code: 7, userInfo: [NSLocalizedDescriptionKey: "Missing dedicated Gaussian Blur menu item"])
         }
-        func unsupportedRow(_ document: ImageDocument) -> Bool {
+        func recordedInkRow(_ document: ImageDocument, settings: EngineSession.InkEdit) -> Bool {
             guard document.recorder.records.count == 1,
-                  case .failure(let reason) = document.recorder.records[0].resolution else { return false }
-            return reason.contains("Ink-channel") && reason.contains("Recorder")
+                  case .success(.editInk(let captured)) = document.recorder.records[0].resolution,
+                  case .ink(_, let identity)? = document.recorderBindingDescriptions[0] else { return false }
+            return captured == settings && identity.isValid
         }
         func newImage(_ mode: EngineSession.ColorMode, _ component: EngineSession.ColorComponent) throws -> Int32 {
             if mode == .cmyk {
@@ -287,7 +288,7 @@ extension EngineSmokeTest {
                     document.onRecorderChange = oldRecorder; document.onStateChange = oldState
                     expect(stopErrors.isEmpty && !document.recorder.isRecording && document.recorder.pendingCount == 0,
                            "\(name): Stop settles without reservation or callback errors")
-                    expect(unsupportedRow(document), "\(name): accepted ink edit retains exactly one explicit unsupported Recorder row")
+                    expect(recordedInkRow(document, settings: settings), "\(name): accepted ink edit records its exact settings and ink binding once")
                     expect(try render(image) != pixelsBefore && document.undoInfo.undoCount == undoBefore + 1,
                            "\(name): accepted edit still changes pixels with one Undo after Stop")
                 }
@@ -320,8 +321,9 @@ extension EngineSmokeTest {
                 expect(newEpochAccepted, "\(name): new epoch accepts its own subsequent edit")
                 if document.recorder.isRecording { try document.stopRecording() }
                 try drain(document)
-                expect(document.recorder.pendingCount == 0 && unsupportedRow(document),
-                       "\(name): new epoch contains only its own explicit unsupported row")
+                expect(document.recorder.pendingCount == 0 && recordedInkRow(document,
+                    settings: .init(operation: .fill, intensity: 0.125, opacity: 1)),
+                       "\(name): new epoch contains only its own recorded ink edit")
 
                 // Separate bare ImageDocument accepted edit -> Close drain.
                 let bareImage = try newImage(mode, .u8)
@@ -368,7 +370,7 @@ extension EngineSmokeTest {
                 }
                 expect(!secondAccepted && refusalCompletions == 1 && bareErrors.count == 1,
                        "\(name): post-close edit refuses once without native work")
-                expect(unsupportedRow(bare), "\(name): Close preserves one unsupported row and refusal adds none")
+                expect(recordedInkRow(bare, settings: .invert), "\(name): Close preserves one recorded ink edit and refusal adds none")
                 expect((try? session.info(bareImage)) == nil, "\(name): bare native handle absent after close")
                 expect(bare.pendingWork == 0 && bare.recorder.pendingCount == 0, "\(name): bare close leaves zero pending work/reservations")
                 bare.onError = nil

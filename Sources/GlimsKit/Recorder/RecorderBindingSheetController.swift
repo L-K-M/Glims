@@ -10,10 +10,13 @@ final class RecorderBindingSheetController: NSObject, NSWindowDelegate, NSTableV
         let choice: Choice
         let title: String
         var hasMask = false
+        var inkMode: RecorderInkIdentity.Mode?
+        var inkRole: RecorderInkIdentity.Role?
     }
 
     private let symbols: [RecorderFileValue.Symbol]
     private let maskOwners: Set<UUID>
+    private let inkTargets: [UUID: RecorderInkIdentity]
     private let layers: [Candidate]
     private let channels: [Candidate]
     private let quickMask: [Candidate]
@@ -30,15 +33,18 @@ final class RecorderBindingSheetController: NSObject, NSWindowDelegate, NSTableV
 
     init(file: RecorderFileValue, document: ImageDocument) throws {
         var required: Set<UUID> = [], masks: Set<UUID> = []
+        var inks: [UUID: RecorderInkIdentity] = [:]
         for row in file.records {
             guard case .success(_, let binding) = row.outcome else { continue }
             required.formUnion(try RecorderFileCodec.referencedSymbols(binding))
             if case .context(let context) = binding {
                 masks.formUnion(context.masks.filter(\.isPresent).map(\.owner))
             }
+            if case .ink(let symbol, let identity) = binding { inks[symbol] = identity }
         }
         symbols = file.symbols.filter { required.contains($0.id) }
         maskOwners = masks
+        inkTargets = inks
         let layerRows = document.layers
         var paths: [Int32: String] = [:]
         var siblingCounts: [Int32: Int] = [:]
@@ -52,7 +58,20 @@ final class RecorderBindingSheetController: NSObject, NSWindowDelegate, NSTableV
                              hasMask: (document.maskStates[row.id]?.mask ?? 0) > 0)
         }
         channels = document.channels.filter { !$0.isQuickMask }.enumerated().map { index, row in
-            Candidate(choice: .channel(row.id), title: "\(index + 1). \(Self.label(row.name))")
+            var candidate = Candidate(choice: .channel(row.id), title: "\(index + 1). \(Self.label(row.name))")
+            // Cached enumeration is in canonical ink-map order. These hints
+            // only narrow the picker; installation re-reads identity natively.
+            if document.colorInfo.mode == .cmyk {
+                let roles: [RecorderInkIdentity.Role] = [.cyan, .magenta, .yellow, .black]
+                if roles.indices.contains(index) {
+                    candidate.inkMode = .cmyk
+                    candidate.inkRole = roles[index]
+                }
+            } else if document.colorInfo.mode == .multichannel {
+                candidate.inkMode = .multichannel
+                candidate.inkRole = .unspecified
+            }
+            return candidate
         }
         if let mask = document.quickMaskState, mask.enabled, mask.channel > 0 {
             quickMask = [Candidate(choice: .quickMask(mask.channel), title: "Quick Mask")]
@@ -201,10 +220,15 @@ final class RecorderBindingSheetController: NSObject, NSWindowDelegate, NSTableV
         details.stringValue = "\(role(symbol)) · \(bounds.width) × \(bounds.height) px"
             + (ancestry.isEmpty ? "" : "\nOriginal group: \(ancestry)")
         let candidates: [Candidate]
-        switch descriptor.kind {
-        case .channel: candidates = channels
-        case .quickMask: candidates = quickMask
-        default: candidates = maskOwners.contains(symbol.id) ? layers.filter(\.hasMask) : layers
+        if let ink = inkTargets[symbol.id] {
+            candidates = channels.filter { $0.inkMode == ink.mode && $0.inkRole == ink.role }
+            details.stringValue += "\nChoose the destination ink explicitly. Select it before replay."
+        } else {
+            switch descriptor.kind {
+            case .channel: candidates = channels
+            case .quickMask: candidates = quickMask
+            default: candidates = maskOwners.contains(symbol.id) ? layers.filter(\.hasMask) : layers
+            }
         }
         let assignedElsewhere = Set(choices.filter { $0.key != symbol.id }.values)
         let available = candidates.filter { !assignedElsewhere.contains($0.choice) }
@@ -226,6 +250,7 @@ final class RecorderBindingSheetController: NSObject, NSWindowDelegate, NSTableV
     }
 
     private func role(_ symbol: RecorderFileValue.Symbol) -> String {
+        if let ink = inkTargets[symbol.id] { return ink.targetTitle }
         if maskOwners.contains(symbol.id) { return "Layer with mask" }
         switch symbol.description.kind {
         case .pixel: return "Pixel layer"

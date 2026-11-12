@@ -12,6 +12,7 @@ enum RecorderFileCodec {
     static let colorBalanceVersion = 8
     static let hueSaturationVersion = 9
     static let brightnessContrastVersion = 10
+    static let inkVersion = 11
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -88,7 +89,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...brightnessContrastVersion)
+        let fileVersion = try integer(root.get("version"), range: version...inkVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -114,6 +115,8 @@ enum RecorderFileCodec {
         var hasColorBalance = false
         var hasHueSaturation = false
         var hasBrightnessContrast = false
+        var hasInkCommand = false
+        var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
             guard case .object(let members) = node, let outcome = members["outcome"] else { throw RecorderFileError.invalid("Missing record outcome.") }
             let outcomeName = try string(outcome)
@@ -132,8 +135,16 @@ enum RecorderFileCodec {
                 if case .applyColorBalance = command { hasColorBalance = true }
                 if case .applyHueSaturation = command { hasHueSaturation = true }
                 if case .applyBrightnessContrast = command { hasBrightnessContrast = true }
+                if case .editInk = command { hasInkCommand = true }
+                if case .applyInkLevels = command { hasInkCommand = true }
                 let binding = try binding(row.get("binding"))
                 try validate(binding, for: command, descriptions: descriptions)
+                if case .ink(let symbol, let identity) = binding {
+                    if let seen = inkIdentities[symbol], seen != identity {
+                        throw RecorderFileError.invalid("Ink identity is inconsistent across records.")
+                    }
+                    inkIdentities[symbol] = identity
+                }
                 result = .success(command, binding)
             case "failure", "cancelled":
                 row = try Object(node, required: ["ordinal", "outcome", "reason"])
@@ -174,6 +185,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == brightnessContrastVersion, !hasBrightnessContrast {
             throw RecorderFileError.invalid("Version 10 requires a successful Brightness/Contrast command.")
+        }
+        if fileVersion == inkVersion, !hasInkCommand {
+            throw RecorderFileError.invalid("Version 11 requires a successful ink command.")
         }
         return RecorderFileValue(recordingID: try uuid(root.get("recordingID")), name: name, origin: source, symbols: symbols, records: records)
     }
@@ -383,6 +397,25 @@ enum RecorderFileCodec {
             guard version >= brightnessContrastVersion else { throw RecorderFileError.invalid("A Brightness/Contrast command needs recording version 10.") }
             let value = try Object(node, required: ["tag", "settings"])
             return .applyBrightnessContrast(try brightnessContrast(value.get("settings")))
+        case "editInk":
+            guard version >= inkVersion else { throw RecorderFileError.invalid("An ink edit needs recording version 11.") }
+            let value = try Object(node, required: ["tag", "operation", "intensity", "opacity"])
+            guard let operation = RecorderFileCommand.InkEdit.Operation(rawValue: try string(value.get("operation"))) else {
+                throw RecorderFileError.invalid("Unknown ink edit operation.")
+            }
+            let edit = RecorderFileCommand.InkEdit(operation: operation, intensity: try number(value.get("intensity")),
+                                                   opacity: try number(value.get("opacity")))
+            guard edit.isValid else { throw RecorderFileError.invalid("Invalid ink edit values.") }
+            return .editInk(edit)
+        case "applyInkLevels":
+            guard version >= inkVersion else { throw RecorderFileError.invalid("Ink Levels needs recording version 11.") }
+            let value = try Object(node, required: ["tag", "lowInput", "highInput", "gamma", "lowOutput", "highOutput", "clampInput", "clampOutput"])
+            let levels = RecorderFileCommand.InkLevels(lowInput: try number(value.get("lowInput")),
+                highInput: try number(value.get("highInput")), gamma: try number(value.get("gamma")),
+                lowOutput: try number(value.get("lowOutput")), highOutput: try number(value.get("highOutput")),
+                clampInput: try bool(value.get("clampInput")), clampOutput: try bool(value.get("clampOutput")))
+            guard levels.isValid else { throw RecorderFileError.invalid("Invalid ink Levels values.") }
+            return .applyInkLevels(levels)
         case "channelToSelection":
             guard version >= channelVersion else { throw RecorderFileError.invalid("A channel selection needs recording version 3.") }
             let value = try Object(node, required: ["tag", "operation"])
@@ -531,6 +564,17 @@ enum RecorderFileCodec {
         case "channel":
             let value = try Object(node, required: ["kind", "symbol"])
             return .channel(try uuid(value.get("symbol")))
+        case "ink":
+            let value = try Object(node, required: ["kind", "symbol", "mode", "role", "uuid"])
+            guard let mode = RecorderInkIdentity.Mode(rawValue: try string(value.get("mode"))) else {
+                throw RecorderFileError.invalid("Unknown ink mode.")
+            }
+            guard let role = RecorderInkIdentity.Role(rawValue: try string(value.get("role"))) else {
+                throw RecorderFileError.invalid("Unknown ink role.")
+            }
+            let identity = RecorderInkIdentity(mode: mode, role: role, uuid: try uuid(value.get("uuid")))
+            guard identity.isValid else { throw RecorderFileError.invalid("Invalid ink identity.") }
+            return .ink(symbol: try uuid(value.get("symbol")), identity: identity)
         case "context":
             let value = try Object(node, required: ["kind", "context"])
             let context = try Object(value.get("context"), required: ["layers", "channels", "target", "masks", "quickMask"])
@@ -574,6 +618,7 @@ enum RecorderFileCodec {
         switch binding {
         case .none: return []
         case .layer(let id), .channel(let id): return [id]
+        case .ink(let id, _): return [id]
         case .unavailable(let reason): throw RecorderFileError.invalid("The recording has an unavailable original target: \(reason)")
         case .context(let context):
             var result = Set(context.layers + context.channels + context.masks.map(\.owner))
@@ -616,6 +661,10 @@ enum RecorderFileCodec {
             return
         case (.completeStroke, .layer(let id)):
             guard descriptions[id]?.kind == .pixel else { throw RecorderFileError.invalid("A complete stroke needs a pixel layer description.") }
+            return
+        case (.editInk, .ink(let id, let identity)), (.applyInkLevels, .ink(let id, let identity)):
+            guard descriptions[id]?.kind == .channel else { throw RecorderFileError.invalid("An ink command needs a channel description.") }
+            guard identity.isValid else { throw RecorderFileError.invalid("Invalid ink identity.") }
             return
         case (.selectColor(_, let options), .context) where !options.sampleMerged: break
         case (.selectCommand(.fromAlpha, _), .context): break
