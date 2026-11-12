@@ -423,7 +423,8 @@ extension EngineSmokeTest {
                 var refused = false
                 document.export(to: exportPath, settings: incompatible) { refused = $0 != nil }
                 try drain(document)
-                expect(refused && (try Data(contentsOf: exportPath)) == bytes
+                let refusedExportBytes = try Data(contentsOf: exportPath)
+                expect(refused && refusedExportBytes == bytes
                        && document.lastExportSettings == exportSettings,
                        "incompatible export refuses and preserves prior file and settings")
             }
