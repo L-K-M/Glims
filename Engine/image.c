@@ -370,6 +370,7 @@ glims_image_open (GlimsEngine   *engine,
   GError            *gerror         = NULL;
   GlimsVectorLoadGuard *vector_guard;
   g_autoptr(GFile) tiff_source = NULL;
+  GimpPlugInProcedure *file_proc = NULL;
 
   if (! path || ! out)
     return GLIMS_STATUS_INVALID_ARGUMENT;
@@ -397,7 +398,22 @@ glims_image_open (GlimsEngine   *engine,
       return glims_fail (error, gerror, "The compressed XCF could not be staged.");
     }
 
-  if (!spool && !glims_tiff_import_prepare (file, &tiff_source, &gerror))
+  if (!spool)
+    {
+      file_proc = gimp_plug_in_manager_file_procedure_find (engine->gimp->plug_in_manager,
+                                                          GIMP_FILE_PROCEDURE_GROUP_OPEN,
+                                                          file, &gerror);
+      if (!file_proc)
+        {
+          g_clear_object (&source_info);
+          g_object_unref (file);
+          return glims_fail (error, gerror, "The file could not be opened.");
+        }
+    }
+  /* Camera-raw containers can share TIFF magic while relying on their
+   * preview directories. Prepare only the actual TIFF loader's input. */
+  if (file_proc && !g_strcmp0 (gimp_object_get_name (file_proc), "file-tiff-load") &&
+      !glims_tiff_import_prepare (file, &tiff_source, &gerror))
     {
       g_clear_object (&source_info);
       g_object_unref (file);
@@ -417,13 +433,13 @@ glims_image_open (GlimsEngine   *engine,
 #if GIMP_CHECK_VERSION (3, 2, 0)
       image = file_open_image (engine->gimp, gimp_get_user_context (engine->gimp), NULL,
                                tiff_source ? tiff_source : file,
-                               0, 0, FALSE, FALSE, NULL, GIMP_RUN_NONINTERACTIVE,
+                               0, 0, FALSE, FALSE, file_proc, GIMP_RUN_NONINTERACTIVE,
                                &handles_vector, &status, &mime_type, &gerror);
 #else
       /* GIMP 3.0 has no vector aspect-ratio option and no vector-handling report. */
       image = file_open_image (engine->gimp, gimp_get_user_context (engine->gimp), NULL,
                                tiff_source ? tiff_source : file,
-                               0, 0, FALSE, NULL, GIMP_RUN_NONINTERACTIVE,
+                               0, 0, FALSE, file_proc, GIMP_RUN_NONINTERACTIVE,
                                &status, &mime_type, &gerror);
       (void) handles_vector;
 #endif

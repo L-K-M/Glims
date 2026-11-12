@@ -4563,3 +4563,10 @@ fixes thumbnails becoming layers and enlarging the canvas without modifying
 upstream code. Linked Place retains its original monitored source path.
 See [TIFF import](tiff-import.md) for the 13 reproduced baseline failures,
 parser/cleanup tests and pending integration qualification.
+
+TIFF review follow-up: preparation is restricted to the registered TIFF
+loader, so camera-raw containers with TIFF magic retain their preview IFDs.
+The scan now also has a 512 MiB cumulative allocation cap. Strict refusal
+of malformed/over-limit chains is deliberate; externally compressed TIFFs
+remain on the native compressor path. The pinned native and staging tests
+pass after these changes; the combined four-engine check is next.

@@ -48,6 +48,7 @@
  * keeps a corrupt count from forcing an absurd allocation yet stays far
  * above the tag payloads real files carry (profiles, offset tables). */
 #define GLIMS_TIFF_MAX_SINGLE_ALLOC ((tmsize_t) 256 * 1024 * 1024)
+#define GLIMS_TIFF_MAX_TOTAL_ALLOC ((tmsize_t) 512 * 1024 * 1024)
 #define GLIMS_TIFF_STAGE_PREFIX "glims-tiff-"
 
 typedef struct
@@ -85,6 +86,7 @@ open_tiff (const char *path, const char *mode, GString *log)
   TIFFOpenOptionsSetErrorHandlerExtR (options, capture_tiff_error, log);
   TIFFOpenOptionsSetWarningHandlerExtR (options, capture_tiff_error, NULL);
   TIFFOpenOptionsSetMaxSingleMemAlloc (options, GLIMS_TIFF_MAX_SINGLE_ALLOC);
+  TIFFOpenOptionsSetMaxCumulatedMemAlloc (options, GLIMS_TIFF_MAX_TOTAL_ALLOC);
   tif = TIFFOpenExt (path, mode, options);
   TIFFOpenOptionsFree (options);
   return tif;

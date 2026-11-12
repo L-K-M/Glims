@@ -105,7 +105,8 @@ import_file_layers (GlimsEngine  *engine,
 
   /* A live link must retain its original path for later reloads. Raster
    * layer import can use the same private TIFF preparation as Open. */
-  if (!as_link && !glims_tiff_import_prepare (file, &tiff_source, &gerror))
+  if (!as_link && !g_strcmp0 (gimp_object_get_name (file_proc), "file-tiff-load") &&
+      !glims_tiff_import_prepare (file, &tiff_source, &gerror))
     {
       g_object_unref (file);
       return glims_fail (error, gerror, "The TIFF file could not be prepared for import.");
