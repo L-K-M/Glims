@@ -21,16 +21,17 @@ Current capture covers these command families:
 - Image cropping.
 - Supported layer property changes: name, visibility, opacity and blend mode.
 - Complete Pencil, Eraser and Paintbrush gestures with supported brush settings.
-- A newly applied Levels, Curves, Color Balance or Hue/Saturation adjustment
-  on an explicitly bound layer, with the whole accepted settings.
+- A newly applied Levels, Curves, Color Balance, Hue/Saturation or
+  Brightness/Contrast adjustment on an explicitly bound layer, with the whole
+  accepted settings.
 
 Other layer changes, other effects (including edits to an existing effect)
 and file operations remain outside this capture scope. A live recording
 belongs to one open image. To use a saved recording in another image, load
 it in that image and choose its targets.
 
-Levels, Curves, Color Balance and Hue/Saturation record the final native
-settings when Apply is admitted. Preview updates, Cancel and refused Apply
+Levels, Curves, Color Balance, Hue/Saturation and Brightness/Contrast record
+the final native settings when Apply is admitted. Preview updates, Cancel and refused Apply
 add no row. An admitted Apply retains its place if recording stops while it
 is pending. A native failure becomes a failure row. Applying any of these
 adjustments to a mask/channel or editing an existing effect also produces an
@@ -65,8 +66,9 @@ raises the file to version 3, a committed Transform-tool layer affine
 raises it to version 4, a committed Levels adjustment raises it to
 version 5, a perspective layer transform raises it to version 6, a Curves
 adjustment raises it to version 7, a Color Balance adjustment raises it
-to version 8, and a Hue/Saturation adjustment raises it to version 9. Mixed
-recordings use the highest required version. See
+to version 8, a Hue/Saturation adjustment raises it to version 9, and a
+Brightness/Contrast adjustment raises it to version 10. Mixed recordings use
+the highest required version. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
 Record starts a fresh log, replacing the prior recording. Stop stops accepting

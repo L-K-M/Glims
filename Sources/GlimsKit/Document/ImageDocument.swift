@@ -4922,7 +4922,7 @@ final class ImageDocument {
             record = filterPreviewRecords[filter]
             // An admitted Apply of a supported session reserves its Recorder row
             // now; preview writes, Cancel and refused admissions never do.
-            if ["gimp:levels", "gimp:curves", "gimp:color-balance", "gimp:hue-saturation"].contains(record?.operation ?? ""), recorder.isRecording {
+            if ["gimp:levels", "gimp:curves", "gimp:color-balance", "gimp:hue-saturation", "gimp:brightness-contrast"].contains(record?.operation ?? ""), recorder.isRecording {
                 let context: RecorderContext?
                 switch record?.coverage {
                 case .layer(let layer)?: context = .layer(layer)
@@ -4951,6 +4951,8 @@ final class ImageDocument {
                         command = .applyColorBalance(try session.colorBalanceSettings(filter))
                     } else if record?.operation == "gimp:hue-saturation" {
                         command = .applyHueSaturation(try session.hueSaturationSettings(filter))
+                    } else if record?.operation == "gimp:brightness-contrast" {
+                        command = .applyBrightnessContrast(try session.brightnessContrastSettings(filter))
                     } else {
                         command = .applyLevels(try session.levelsSettings(filter))
                     }

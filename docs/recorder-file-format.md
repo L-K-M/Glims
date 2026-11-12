@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 9
+# Recorder file format, versions 1 to 10
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,18 +7,19 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is integer `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8` or `9`. `recordingID` is a file UUID. `origin` contains
+`version` is integer `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`, `9` or `10`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
 The writer chooses the highest version required by a successful record:
 `completeStroke` requires 2, `channelToSelection` 3, `transformLayer` 4,
 `applyLevels` 5, `transformProjectiveLayer` 6, `applyCurves` 7,
-`applyColorBalance` 8 and `applyHueSaturation` 9. A file declaring one of
-those versions must contain at least one successful command from that
-version's family. It may also contain commands from all earlier versions.
-Failure/cancelled rows do not raise the version. With no extended successful
-commands, the writer uses version 1. Integers outside 1...9 refuse the file.
+`applyColorBalance` 8, `applyHueSaturation` 9 and `applyBrightnessContrast`
+10. A file declaring one of those versions must contain at least one
+successful command from that version's family. It may also contain
+commands from all earlier versions. Failure/cancelled rows do not raise
+the version. With no extended successful commands, the writer uses
+version 1. Integers outside 1...10 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -55,6 +56,7 @@ Commands have an owned `tag` and the following exact fields:
 | `applyCurves` | `settings` (version 7) |
 | `applyColorBalance` | `settings` (version 8) |
 | `applyHueSaturation` | `settings` (version 9) |
+| `applyBrightnessContrast` | `settings` (version 10) |
 | `scale` | integer `width`, `height` |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |
@@ -79,7 +81,8 @@ worker to native resize. No NSColor or late conversion enters the file.
 
 Bindings are `kind:"none"`, `kind:"layer"` with `symbol`, `kind:"channel"`
 with `symbol`, or `kind:"context"` with `context`. Layer properties, layer
-transforms, Levels, Curves, Color Balance and Hue/Saturation require a layer symbol (any layer-kind description);
+transforms, Levels, Curves, Color Balance, Hue/Saturation and
+Brightness/Contrast require a layer symbol (any layer-kind description);
 `channelToSelection` requires a channel symbol whose description kind is
 `channel` — the explicit source channel, never the active paint target.
 Select Alpha and color selection with `sampleMerged:false` require context;
@@ -235,6 +238,34 @@ command always requires one. Live filter, effect and native layer IDs are
 never serialized. The command is refused in a version 1 through 8 file,
 and a version 9 file without a successful `applyHueSaturation` is refused,
 exactly as earlier extensions always required their own successful
+command. Fresh image/layer membership, mode, lock, channel, Quick Mask,
+mask-editing and floating-selection gates against the freshly bound layer
+remain replay duties; the codec cannot prove a binding-time target.
+
+Apply records final settings behind queued preview writes. Cancel adds no
+row. An accepted commit that later fails settles a failure row while
+retaining its capture metadata for retry. Mask/channel targets and
+existing-effect edits produce explicit unsupported rows instead of
+inventing layer actions. Replay checks current membership, color mode,
+locks and editing role, then commits one new effect with one Undo step.
+
+
+## Brightness/Contrast (version 10)
+
+`applyBrightnessContrast` is the version 10 command. It records one
+committed newly applied Brightness/Contrast adjustment on the explicitly
+bound layer, exactly as accepted by the live preview's Apply. `settings`
+has exactly `brightness` and `contrast`. The whole accepted settings are
+stored by reading the open native preview immediately before commit;
+visible panel fields or a read after commit never substitute.
+
+Every correction must be finite and inside −1...1, matching the typed
+native settings contract. The record's `layer` binding names the explicit
+target layer symbol, never the implicit paint target or selection; the
+command always requires one. Live filter, effect and native layer IDs are
+never serialized. The command is refused in a version 1 through 9 file, and
+a version 10 file without a successful `applyBrightnessContrast` is
+refused, exactly as earlier extensions always required their own successful
 command. Fresh image/layer membership, mode, lock, channel, Quick Mask,
 mask-editing and floating-selection gates against the freshly bound layer
 remain replay duties; the codec cannot prove a binding-time target.

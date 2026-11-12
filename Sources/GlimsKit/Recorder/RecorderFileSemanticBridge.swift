@@ -151,6 +151,7 @@ enum RecorderFileSemanticBridge {
         case .applyCurves(let value): return .applyCurves(try value.settings())
         case .applyColorBalance(let value): return .applyColorBalance(try value.settings())
         case .applyHueSaturation(let value): return .applyHueSaturation(try value.settings())
+        case .applyBrightnessContrast(let value): return .applyBrightnessContrast(try value.settings())
         case .completeStroke(let value): return .completeStroke(value)
         }
     }

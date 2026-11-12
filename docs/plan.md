@@ -4840,3 +4840,24 @@ independent color values, layouts, precision conversion and source preservation.
 The development engine passes 21 refusal/source-preservation checks. Independent
 native and version-guard source reviews found no important issue. App, actual
 save-panel, Batch and standalone bundle qualification remain in progress.
+
+### Recorder Brightness/Contrast candidate (2026-11-12)
+
+A newly applied Brightness/Contrast adjustment now captures the complete
+accepted brightness/contrast pair with its explicit layer binding. Recording
+format 10 carries the finite values; earlier versions reject the new command,
+and mixed recordings choose the highest needed version. Replay retains the
+existing native admission, target and lifetime gates. Preview, Cancel and
+refused Apply add no successful row; unsupported targets/effect edits and
+actual native failures keep their explicit failure behavior.
+
+The standalone candidate passes all 1,493 unit tests and its focused native
+fixture across all four engine sets. Independent source review found no
+important issue. Combined qualification with CMYK output remains in progress.
+This expands Recorder coverage; it does not complete Photoshop 4 actions support.
+
+PSD predecessor qualification completed before this integration: all 1,483
+unit tests, actual Export/Repeat Export, full app and Batch checks passed on
+four engines. The standalone bundle passed with development trees blocked.
+Launch measured 1.634 seconds fresh, 1.379 cached and 3.386 after relocation.
+PR #221 passed hosted CI, merged as 4e93a3f, and its qualified bundle is installed.

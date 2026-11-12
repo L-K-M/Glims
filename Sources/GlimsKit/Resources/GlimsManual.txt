@@ -338,8 +338,8 @@ operation and the explicit source channel it was invoked on; image
 rotation and flipping; image scaling; canvas resizing with offset and
 fill color; image cropping; layer name, visibility, opacity and blend
 mode changes; affine and perspective layer transforms with their
-resampling method; newly applied Levels, Curves, Color Balance and
-Hue/Saturation adjustments with their complete channel/range settings;
+resampling method; newly applied Levels, Curves, Color Balance,
+Hue/Saturation and Brightness/Contrast adjustments with their complete settings;
 and complete Pencil, Eraser and Paintbrush strokes on
 ordinary pixel layers. A stroke keeps the settings used when it was
 drawn. Replay checks that the required brush and its supported paint

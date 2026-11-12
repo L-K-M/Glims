@@ -237,11 +237,15 @@ enum RecorderFileCommand: Equatable {
     /// record's `layer` binding; the command carries no native
     /// filter/effect identity.
     case applyHueSaturation(RecorderHueSaturationValue)
+    /// A newly applied Brightness/Contrast adjustment with its whole
+    /// accepted settings. The explicit layer is the record's `layer`
+    /// binding; the command carries no native filter/effect identity.
+    case applyBrightnessContrast(RecorderBrightnessContrastValue)
     case completeStroke(RecorderStrokeCommand)
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .completeStroke, .channelToSelection: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true
