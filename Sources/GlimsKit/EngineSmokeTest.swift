@@ -108,7 +108,7 @@ enum EngineSmokeTest {
     }
 
     static func run() -> Int32 {
-        if ["multichannel", "cmyk", "cmyk-import", "ink-edits", "ink-levels", "lab-ui", "lab-brush-ui", "lab-selections-ui", "lab-copy", "lab-recovery", "recorder-ink-bindings"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
+        if ["multichannel", "cmyk", "cmyk-import", "ink-edits", "ink-levels", "ink-curves", "lab-ui", "lab-brush-ui", "lab-selections-ui", "lab-copy", "lab-recovery", "recorder-ink-bindings"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
             return EngineSmokeTestHost.run()
         }
         if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents", !NSApp.isRunning {
@@ -241,6 +241,11 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "ink-levels" {
                 try exerciseInkLevels(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (ink levels)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "ink-curves" {
+                try exerciseInkCurves(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (ink curves)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "ink-edits" {
