@@ -39,6 +39,7 @@ enum MainMenu {
             item("Revert…", #selector(DocumentWindowController.revertDocument(_:))),
             item("Export…", #selector(DocumentWindowController.exportDocument(_:)), "E"),
             item("Export Again…", #selector(DocumentWindowController.repeatExport(_:)), "e"),
+            item("Batch…", #selector(AppController.showBatch(_:))),
             .separator(),
             item("Page Setup…", #selector(DocumentWindowController.runGlimsPageSetup(_:)), "P"),
             item("Print…", #selector(DocumentWindowController.printGlimsImage(_:)), "p"),

@@ -24,6 +24,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private var newImagePanel: NewImagePanel?
     private var preferencesWindow: PreferencesWindowController?
     private var helpWindow: HelpWindowController?
+    private var batchWindow: RecorderBatchWindowController?
     private var pendingOpenURLs: [URL] = []
     private var openingURLs: Set<URL> = []
     private var pendingFileOperations = 0
@@ -237,11 +238,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !terminationRequested else { return .terminateLater }
-        guard !documents.isEmpty || pendingFileOperations > 0 || closingDocument != nil else { return .terminateNow }
+        guard !documents.isEmpty || pendingFileOperations > 0 || closingDocument != nil || batchWindow?.isRunning == true else { return .terminateNow }
         terminationRequested = true
         closeAllRemaining = nil
         newImagePanel?.close()
         recoveryPanel?.close()
+        batchWindow?.cancel()
+        batchWindow?.window?.performClose(nil)
         // AppKit expects terminateLater before reply(toApplicationShouldTerminate:).
         DispatchQueue.main.async { self.advanceDocumentClosing() }
         return .terminateLater
@@ -263,7 +266,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     /// One in-flight request serves both commands. A Quit that arrives during
     /// Close All joins that request, then closes the live list if it succeeds.
     private func advanceDocumentClosing() {
-        guard closingDocument == nil, pendingFileOperations == 0 else { return }
+        guard closingDocument == nil, pendingFileOperations == 0, batchWindow?.isRunning != true else { return }
         let controller: DocumentWindowController
         if terminationRequested {
             guard let next = documents.last else {
@@ -640,6 +643,17 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     @objc func showRecorder(_ sender: Any?) {
         recorderPalette.focusPanel()
+    }
+
+    @objc func showBatch(_ sender: Any?) {
+        guard let session, !terminationRequested else { return }
+        if batchWindow == nil {
+            let controller = RecorderBatchWindowController(session: session)
+            controller.onRunStateChange = { [weak self] in self?.advanceDocumentClosing() }
+            batchWindow = controller
+        }
+        batchWindow?.showWindow(sender)
+        batchWindow?.window?.makeKeyAndOrderFront(sender)
     }
 
     @objc func recorderCommand(_ sender: NSMenuItem) {
@@ -1038,6 +1052,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             return session != nil && !PlugInCommands.isRunning && !terminationRequested
         case #selector(recoverDocuments(_:)):
             return session != nil && !terminationRequested
+        case #selector(showBatch(_:)):
+            return session != nil && !terminationRequested && !PlugInCommands.isRunning
         case #selector(recorderCommand(_:)):
             guard session != nil, !terminationRequested,
                   let action = RecorderPaletteAction(rawValue: menuItem.tag),
