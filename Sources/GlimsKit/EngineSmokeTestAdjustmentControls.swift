@@ -215,6 +215,7 @@ extension EngineSmokeTest {
             ("gimp:levels", { $0 is LevelsPanel }),
             ("gimp:curves", { $0 is CurvesPanel }),
             ("gimp:threshold", { $0 is NativeFilterPanel }),
+            ("glims:posterize", { $0 is NativeFilterPanel }),
             ("gimp:color-balance", { $0 is ColorBalancePanel }),
             ("gimp:hue-saturation", { $0 is HueSaturationPanel }),
         ]

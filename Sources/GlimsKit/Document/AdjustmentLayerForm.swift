@@ -20,6 +20,7 @@ enum AdjustmentLayerLogic {
         ("gimp:levels", "Levels"),
         ("gimp:curves", "Curves"),
         ("gimp:threshold", "Threshold"),
+        ("glims:posterize", "Posterize"),
         ("gimp:color-balance", "Color Balance"),
         ("gimp:hue-saturation", "Hue-Saturation"),
         ("gegl:exposure", "Exposure"),
