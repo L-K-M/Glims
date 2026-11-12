@@ -117,6 +117,27 @@ enum RecorderFileSemanticBridge {
             }
             return .transformLayer(matrix: CGAffineTransform(a: matrix.a, b: matrix.b, c: matrix.c,
                 d: matrix.d, tx: matrix.tx, ty: matrix.ty), interpolation: value)
+        case .applyLevels(let levels):
+            let trc: EngineSession.ColorTRC
+            switch levels.trc {
+            case .linear: trc = .linear
+            case .nonlinear: trc = .nonlinear
+            case .perceptual: trc = .perceptual
+            }
+            func channel(_ channel: RecorderFileCommand.Levels.Channel) -> EngineSession.LevelsSettings.Channel {
+                .init(lowInput: channel.lowInput, highInput: channel.highInput, gamma: channel.gamma,
+                      lowOutput: channel.lowOutput, highOutput: channel.highOutput)
+            }
+            var settings = EngineSession.LevelsSettings()
+            settings.trc = trc
+            settings.clampInput = levels.clampInput
+            settings.clampOutput = levels.clampOutput
+            settings.value = channel(levels.value)
+            settings.red = channel(levels.red)
+            settings.green = channel(levels.green)
+            settings.blue = channel(levels.blue)
+            settings.alpha = channel(levels.alpha)
+            return .applyLevels(settings)
         case .completeStroke(let value): return .completeStroke(value)
         }
     }

@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 4
+# Recorder file format, versions 1 to 5
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,22 +7,26 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is integer `1`, `2`, `3` or `4`. `recordingID` is a file UUID. `origin` contains
+`version` is integer `1`, `2`, `3`, `4` or `5`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
-The writer selects version 4 exactly when at least one successful record is a
-`transformLayer`, version 3 when at least one successful record is a
-`channelToSelection` and no layer transform exists, version 2 when at least
-one successful record is a `completeStroke` and neither exists, and version 1
-otherwise. A version 2 file must contain a successful `completeStroke`; a
-version 3 file must contain a successful `channelToSelection` (and may also
-contain strokes, which are readable from version 2 on); a version 4 file must
-contain a successful `transformLayer` (and may also contain strokes and
-channel selections). Version 1 is therefore the pre-stroke schema, version 2
-the stroke-extended schema, version 3 the channel-selection-extended schema
-and version 4 the layer-transform-extended schema.
-Version integers outside 1...4 refuse the file.
+The writer selects version 5 exactly when at least one successful record is an
+`applyLevels`, version 4 when at least one successful record is a
+`transformLayer` and no Levels exists, version 3 when at least one successful
+record is a `channelToSelection` and neither exists, version 2 when at least
+one successful record is a `completeStroke` and none of them exist, and
+version 1 otherwise. A version 2 file must contain a successful
+`completeStroke`; a version 3 file must contain a successful
+`channelToSelection` (and may also contain strokes, which are readable from
+version 2 on); a version 4 file must contain a successful `transformLayer`
+(and may also contain strokes and channel selections); a version 5 file must
+contain a successful `applyLevels` (and may also contain every earlier
+family). Version 1 is therefore the pre-stroke schema, version 2 the
+stroke-extended schema, version 3 the channel-selection-extended schema,
+version 4 the layer-transform-extended schema and version 5 the
+Levels-extended schema. Version 6 is reserved for future projective work.
+Version integers outside 1...5 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -54,6 +58,7 @@ Commands have an owned `tag` and the following exact fields:
 | `channelToSelection` | `operation` (version 3 only) |
 | `transformImage` | `transform` |
 | `transformLayer` | `matrix`, `interpolation` (version 4 only) |
+| `applyLevels` | `settings` (version 5 only) |
 | `scale` | integer `width`, `height` |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |
@@ -77,8 +82,8 @@ components inside 0...1. Canvas colors are the values actually passed by the
 worker to native resize. No NSColor or late conversion enters the file.
 
 Bindings are `kind:"none"`, `kind:"layer"` with `symbol`, `kind:"channel"`
-with `symbol`, or `kind:"context"` with `context`. Layer properties and layer
-transforms require a layer symbol (any layer-kind description);
+with `symbol`, or `kind:"context"` with `context`. Layer properties, layer
+transforms and Levels require a layer symbol (any layer-kind description);
 `channelToSelection` requires a channel symbol whose description kind is
 `channel` — the explicit source channel, never the active paint target.
 Select Alpha and color selection with `sampleMerged:false` require context;
@@ -134,6 +139,32 @@ replay both require finite transformed corners within ±1,048,576 pixels and
 outward-rounded output dimensions from 1 to 524,288 pixels. This check runs
 before native mutation; symbol-description bounds cannot substitute for the
 freshly bound layer's geometry.
+
+## Levels (version 5)
+
+`applyLevels` is the version 5 command. It records one committed newly
+applied Levels adjustment on the explicitly bound layer, exactly as
+accepted by the live preview's Apply. `settings` has exactly `trc`,
+`clampInput`, `clampOutput` and the five named channels `value`, `red`,
+`green`, `blue`, `alpha`. `trc` is a Glims-owned tag
+(`linear`/`nonlinear`/`perceptual`), not a native enum ordinal, and both
+clamps are Booleans. Every channel has exactly `lowInput`, `highInput`,
+`gamma`, `lowOutput` and `highOutput`. The whole accepted settings are stored
+by reading the open native preview immediately before commit; form defaults
+or a read after commit never substitute.
+
+Every endpoint field must be finite and inside 0...1, and `gamma` must be
+finite and inside 0.1...10, matching the typed native settings contract.
+Equal or inverted endpoints remain valid native mappings and round-trip
+unchanged. The record's `layer` binding names the explicit target layer
+symbol, never the implicit paint target or selection; the command always
+requires one. Live filter, effect and native layer IDs are never serialized.
+The command is refused in a version 1, 2, 3 or 4 file, and a version 5 file
+without a successful `applyLevels` is refused, exactly as earlier extensions
+always required their own successful command. Fresh image/layer membership,
+mode, lock, channel, Quick Mask, mask-editing and floating-selection gates
+against the freshly bound layer remain replay duties; the codec cannot prove
+a binding-time target.
 
 ## Complete strokes (version 2)
 

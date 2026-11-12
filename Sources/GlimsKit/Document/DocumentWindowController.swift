@@ -527,7 +527,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         let color = imageDocument.colorInfo
         statusInformation.update(StatusInformationSnapshot(width: info.width, height: info.height,
             profileLabel: color.profileLabel,
-            precisionLabel: "\(color.component.title) · \(color.trc.title)",
+            precisionLabel: ColorForms.precisionLabel(color),
             renderMetrics: canvas.renderMetrics))
         refreshStatusInformationVisibility()
     }
@@ -549,7 +549,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         window?.title = Self.title(name: imageDocument.name, zoomPercent: canvas.zoomPercent,
                                    isDirty: imageDocument.hasUnsavedChanges,
                                    mode: imageDocument.colorInfo.mode,
-                                   precision: imageDocument.info.precision,
+                                   precision: ColorForms.precisionLabel(imageDocument.colorInfo),
                                    profileLabel: imageDocument.colorInfo.profileLabel,
                                    viewRotation: rotationView.rotationDegrees)
         refreshStatusInformation()

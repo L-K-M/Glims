@@ -23,6 +23,8 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, channelVersion)
             case .success(.transformLayer, _):
                 fileVersion = max(fileVersion, layerTransformVersion)
+            case .success(.applyLevels, _):
+                fileVersion = max(fileVersion, levelsVersion)
             default: break
             }
         }
@@ -118,6 +120,16 @@ extension RecorderFileCodec {
             return .object(["tag": .string("transformLayer"), "interpolation": .string(interpolation.rawValue),
                 "matrix": .object(["a": try d(matrix.a), "b": try d(matrix.b), "c": try d(matrix.c),
                                    "d": try d(matrix.d), "tx": try d(matrix.tx), "ty": try d(matrix.ty)])])
+        case .applyLevels(let levels):
+            func channelJSON(_ channel: RecorderFileCommand.Levels.Channel) throws -> RecorderJSON {
+                .object(["lowInput": try d(channel.lowInput), "highInput": try d(channel.highInput),
+                    "gamma": try d(channel.gamma), "lowOutput": try d(channel.lowOutput), "highOutput": try d(channel.highOutput)])
+            }
+            return .object(["tag": .string("applyLevels"), "settings": .object([
+                "trc": .string(levels.trc.rawValue), "clampInput": .bool(levels.clampInput),
+                "clampOutput": .bool(levels.clampOutput), "value": try channelJSON(levels.value),
+                "red": try channelJSON(levels.red), "green": try channelJSON(levels.green),
+                "blue": try channelJSON(levels.blue), "alpha": try channelJSON(levels.alpha)])])
         case .completeStroke(let stroke): return try strokeJSON(stroke)
         }
     }
