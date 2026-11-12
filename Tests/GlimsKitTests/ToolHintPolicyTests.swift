@@ -27,6 +27,8 @@ final class ToolHintPolicyTests: XCTestCase {
             .sharpen: "Drag to apply sharpen. Option samples color; [ ] changes size.",
             .dodge: "Drag to apply dodge. Option samples color; [ ] changes size.",
             .burn: "Drag to apply burn. Option samples color; [ ] changes size.",
+            .spongeDesaturate: "Drag to change saturation on RGB pixels; Opacity sets strength; [ ] changes size.",
+            .spongeSaturate: "Drag to change saturation on RGB pixels; Opacity sets strength; [ ] changes size.",
             .gradient: "Drag the gradient endpoints; release to apply.",
             .bucketFill: "Click to fill using the Paint Bucket options.",
             .hand: "Drag to pan the view.",

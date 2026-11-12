@@ -68,6 +68,8 @@ enum ToolMenuCatalog {
         case .bucketFill: return 24
         case .hand: return 25
         case .zoom: return 26
+        case .spongeDesaturate: return 27
+        case .spongeSaturate: return 28
         }
     }
 
@@ -100,6 +102,8 @@ enum ToolMenuCatalog {
         case 24: return .bucketFill
         case 25: return .hand
         case 26: return .zoom
+        case 27: return .spongeDesaturate
+        case 28: return .spongeSaturate
         default: return nil
         }
     }

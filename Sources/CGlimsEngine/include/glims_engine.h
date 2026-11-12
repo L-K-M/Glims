@@ -206,7 +206,9 @@ typedef enum GlimsPaintTool {
   GLIMS_PAINT_DODGE      = 7,
   GLIMS_PAINT_BURN       = 8,
   GLIMS_PAINT_CLONE      = 9,  /* copies from source_drawable */
-  GLIMS_PAINT_HEAL       = 10  /* like clone, blended into the target */
+  GLIMS_PAINT_HEAL       = 10, /* like clone, blended into the target */
+  GLIMS_PAINT_SPONGE_DESATURATE = 11, /* RGB saturation, preserve alpha */
+  GLIMS_PAINT_SPONGE_SATURATE   = 12
 } GlimsPaintTool;
 
 /* The tonal range dodge and burn act on. */

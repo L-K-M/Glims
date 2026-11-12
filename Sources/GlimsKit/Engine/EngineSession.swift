@@ -291,7 +291,7 @@ final class EngineSession: @unchecked Sendable {
     /// default for that tool.
     struct Brush: Equatable {
         enum Tool: UInt32, CaseIterable {
-            case paintbrush = 0, pencil, airbrush, eraser, smudge, blur, sharpen, dodge, burn, clone, heal
+            case paintbrush = 0, pencil, airbrush, eraser, smudge, blur, sharpen, dodge, burn, clone, heal, spongeDesaturate, spongeSaturate
         }
 
         enum Tones: UInt32 {

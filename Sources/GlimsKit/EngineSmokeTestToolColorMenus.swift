@@ -151,10 +151,11 @@ extension EngineSmokeTest {
             ("Text", .text), ("Path", .path), ("Brush", .paintbrush), ("Pencil", .pencil), ("Airbrush", .airbrush),
             ("Eraser", .eraser), ("Clone", .clone), ("Heal", .heal), ("Smudge", .smudge),
             ("Blur", .blur), ("Sharpen", .sharpen), ("Dodge", .dodge), ("Burn", .burn),
+            ("Sponge Desaturate", .spongeDesaturate), ("Sponge Saturate", .spongeSaturate),
             ("Gradient", .gradient), ("Paint Bucket", .bucketFill), ("Hand", .hand), ("Zoom", .zoom),
         ]
-        expect(toolItems.count == 26 && Set(toolItems.map(\.tag)).count == 26 && tools.items.count == 21,
-               "actual menu mirrors exactly 26 choices in the 16 palette slots")
+        expect(toolItems.count == 28 && Set(toolItems.map(\.tag)).count == 28 && tools.items.count == 21,
+               "actual menu mirrors exactly 28 choices in the 16 palette slots")
         expect(items.allSatisfy { $0.keyEquivalent.isEmpty && $0.keyEquivalentModifierMask.isEmpty },
                "every tool and color command has an unassigned factory shortcut")
         expect(owner.session == nil && items.allSatisfy(owner.validateMenuItem), "global context commands validate without an app-owned engine session")
@@ -169,7 +170,7 @@ extension EngineSmokeTest {
                    "\(name) is the sole cached selected menu mark")
             expect(grid.selectedToolID == tool.rawValue, "the existing Tools palette follows menu selection of \(name)")
         }
-        expect(try snapshot(image) == before, "all 26 context choices leave native pixels, selection and history unchanged")
+        expect(try snapshot(image) == before, "all 28 context choices leave native pixels, selection and history unchanged")
         guard let swap = items.first(where: { $0.action == Selector(("swapColorsFromMenu:")) }),
               let reset = items.first(where: { $0.action == Selector(("resetColorsFromMenu:")) }) else {
             throw NSError(domain: "ToolMenuFixture", code: 4)
@@ -218,7 +219,7 @@ extension EngineSmokeTest {
 
         let invalid = NSMenuItem(title: "Invalid", action: Selector(("selectToolFromMenu:")), keyEquivalent: "")
         invalid.identifier = MenuShortcutBridge.builtinIdentifier
-        for tag in [-1, 0, 27, 1001, Int.max] {
+        for tag in [-1, 0, 29, 1001, Int.max] {
             invalid.tag = tag
             expect(!owner.validateMenuItem(invalid), "unknown tool tag \(tag) is refused")
             owner.selectToolFromMenu(invalid)

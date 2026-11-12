@@ -155,7 +155,7 @@ grouped tools. The letter of each group:
   E    Eraser
   S    Clone, Heal
   R    Smudge, Blur, Sharpen
-  O    Dodge, Burn
+  O    Dodge, Burn, Sponge Desaturate, Sponge Saturate
   G    Gradient, Paint Bucket
   H    Hand
   Z    Zoom
@@ -184,6 +184,13 @@ What the tools do:
   removes pixels. Clone and Heal copy from another spot: Option-click
   to set the source, then paint. Smudge, Blur and Sharpen retouch what
   is already painted, and Dodge and Burn lighten and darken it.
+  Sponge Desaturate and Sponge Saturate reduce or increase saturation under
+  the brush, preserving hue and transparency. Choose either from the O tool
+  group or View > Tools. Opacity sets strength; the foreground color is ignored.
+  Sponge requires RGB pixels; grayscale, indexed images, masks and channels
+  cannot be painted with it. Brush color and gradient color dynamics are ignored;
+  Sponge uses the brush mask. Save a preset for either Sponge tool to retain
+  its brush and strength. Sponge strokes are not yet supported by Recorder.
 
   Gradient drags out a gradient between the foreground and background
   colors; Paint Bucket fills similar colors around the click, or the
@@ -497,7 +504,7 @@ Keys on the canvas (the canvas must have focus):
     V    Move / Transform        B    Brush / Pencil / Airbrush
     M    Rectangle / Ellipse     S    Clone / Heal
     W    Wand / Select by Color  R    Smudge / Blur / Sharpen
-    G    Gradient / Paint Bucket O    Dodge / Burn
+    G    Gradient / Paint Bucket O    Dodge / Burn / Sponge
     C    Crop                    E    Eraser
     L    Lasso                   I    Eyedropper
     T    Text                    P    Path

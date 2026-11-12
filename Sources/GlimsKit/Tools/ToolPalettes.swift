@@ -768,6 +768,8 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
                                            readBrush: { [.shadows: 0, .midtones: 1, .highlights: 2][$0.tones] ?? 1 }) { index in
                 ToolState.shared.update(tool) { $0.tones = [.shadows, .midtones, .highlights][index] }
             })
+        case .spongeDesaturate, .spongeSaturate:
+            stack.addArrangedSubview(hint("Changes saturation on RGB pixels while preserving hue and transparency. Opacity sets the strength."))
         case .eraser:
             stack.addArrangedSubview(checkbox("Anti-erase (restore)", brush.antiErase,
                                              readBrush: { $0.antiErase }) { on in
