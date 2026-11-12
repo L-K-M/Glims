@@ -5,10 +5,10 @@ import Foundation
 /// Each job reads the same immutable native baseline; replies from a canceled
 /// panel cannot restore its pixels or become the next panel's accepted state.
 @MainActor
-final class InkLevelsPixelPreview {
+final class InkPixelPreview<Settings: InkPreviewSettings> {
     struct Request: Equatable {
         let token: UInt64
-        let settings: EngineSession.InkLevelsSettings
+        let settings: Settings
         let imageSize: CGSize
         let destination: CanvasDisplayDestination
         let proof: CanvasSoftProof?
@@ -118,3 +118,6 @@ final class InkLevelsPixelPreview {
         }
     }
 }
+
+typealias InkLevelsPixelPreview = InkPixelPreview<EngineSession.InkLevelsSettings>
+typealias InkCurvesPixelPreview = InkPixelPreview<EngineSession.InkCurvesSettings>

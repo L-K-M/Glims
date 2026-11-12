@@ -53,7 +53,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// The open filter preview, generic or dedicated; one at a time.
     private(set) var previewPanel: FilterPreviewPanel?
     private(set) var inkLevelsPanel: InkLevelsPanel?
-    private var inkLevelsToken: UInt64?
+    private var inkPreviewToken: UInt64?
+    private var inkPreviewKind: InkAdjustmentKind?
+    private(set) var inkCurvesPanel: InkCurvesPanel?
     /// Image ▸ Guides…'s sheet, retained by this window for its lifetime;
     /// nil while none is open. Two documents keep independent sheets
     /// through their own controllers — no global binding or singleton.
@@ -131,7 +133,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var filterSourceChooser: FilterSourceChooserController?
     private var filterSourceRequest = 0
     /// An open panel or a start still queued on the input queue.
-    private var previewBusy: Bool { previewPanel != nil || inkLevelsPanel != nil || previewStartIsPending }
+    private var previewBusy: Bool { previewPanel != nil || inkLevelsPanel != nil || inkCurvesPanel != nil || previewStartIsPending }
     /// A print job anywhere between Print… and the end of the run: a
     /// second Print is refused, and a close asked for during the engine
     /// render drops the snapshot instead of attaching a sheet.
@@ -605,6 +607,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc override func cancelOperation(_ sender: Any?) {
         if let previewPanel { previewPanel.cancel() }
         else if let inkLevelsPanel { inkLevelsPanel.cancel() }
+        else if let inkCurvesPanel { inkCurvesPanel.cancel() }
         else if previewStartIsPending { cancelPendingPreview() }
         else if screenMode != .windowed { setScreenMode(.windowed) }
         // NSWindowController's superclass does not implement this optional
@@ -1073,6 +1076,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
         if imageDocument.colorInfo.mode.usesInkChannels {
             if operation.name == "gimp:levels" { openInkLevels(); return }
+            if operation.name == "gimp:curves" { openInkCurves(); return }
             guard operation.name == "gegl:invert-linear" else {
                 imageDocument.onError?("This adjustment is unavailable for ink-channel documents.")
                 return
@@ -2247,9 +2251,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     /// The scalar preview captures this document and ink before the panel opens.
     /// A pending start uses the same close/Escape generation as layer filters.
-    private func openInkLevels() {
+    private func openInkLevels() { openInkAdjustment(.levels) }
+    private func openInkCurves() { openInkAdjustment(.curves) }
+
+    private func openInkAdjustment(_ kind: InkAdjustmentKind) {
         guard !closeStarted, !previewBusy, window?.attachedSheet == nil,
-              imageDocument.session.supportsInkLevelSnapshots else { return }
+              kind.isSupported(by: imageDocument.session) else { return }
         endPendingEdits()
         let channel = imageDocument.activeChannel ?? 0
         if let reason = imageDocument.inkEditRefusal(channel: channel) {
@@ -2261,10 +2268,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         let request = previewRequest
         previewStartIsPending = true
         imageDocument.filterPreviewIsOpen = true
-        statusBar.message = "Preparing Levels preview…"
-        imageDocument.beginInkLevelsPreview(channel: channel) { [weak self, imageDocument] result in
+        statusBar.message = "Preparing \(kind.title) preview…"
+        let captured: @MainActor (Result<UInt64, Error>) -> Void = { [weak self, imageDocument] result in
             guard let self, !self.closeStarted, self.previewStartIsPending, self.previewRequest == request else {
-                if case .success(let token) = result { imageDocument.endInkLevelsPreview(token) }
+                if case .success(let token) = result {
+                    switch kind {
+                    case .levels: imageDocument.endInkLevelsPreview(token)
+                    case .curves: imageDocument.endInkCurvesPreview(token)
+                    }
+                }
                 return
             }
             self.previewStartIsPending = false
@@ -2273,58 +2285,93 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 imageDocument.filterPreviewIsOpen = false
                 self.statusBar.message = error.localizedDescription
             case .success(let token):
-                self.inkLevelsToken = token
-                let panel = InkLevelsPanel(inkName: name, changed: { [weak self] settings in
-                    guard let self, self.inkLevelsToken == token else { return }
-                    self.canvas.setInkLevelsPreview(token: token, settings: settings)
-                }, apply: { [weak self] settings in
-                    self?.applyInkLevels(token: token, settings: settings)
-                }, cancel: { [weak self] in
-                    self?.cancelInkLevels(token: token)
-                })
-                self.inkLevelsPanel = panel
-                self.canvas.onInkLevelsPreviewChange = { [weak panel] current, error in
-                    panel?.setPreviewState(current: current, error: error)
+                self.inkPreviewToken = token
+                self.inkPreviewKind = kind
+                switch kind {
+                case .levels:
+                    let panel = InkLevelsPanel(inkName: name, changed: { [weak self] settings in
+                        guard let self, self.inkPreviewToken == token, self.inkPreviewKind == .levels else { return }
+                        self.canvas.setInkLevelsPreview(token: token, settings: settings)
+                    }, apply: { [weak self] settings in
+                        self?.applyInkAdjustment(token: token, settings: .levels(settings))
+                    }, cancel: { [weak self] in self?.cancelInkAdjustment(token: token) })
+                    self.inkLevelsPanel = panel
+                    self.canvas.onInkLevelsPreviewChange = { [weak panel] current, error in
+                        panel?.setPreviewState(current: current, error: error)
+                    }
+                    panel.showWindow(nil)
+                    self.canvas.setInkLevelsPreview(token: token)
+                case .curves:
+                    let panel = InkCurvesPanel(inkName: name, changed: { [weak self] settings in
+                        guard let self, self.inkPreviewToken == token, self.inkPreviewKind == .curves else { return }
+                        self.canvas.setInkCurvesPreview(token: token, settings: settings)
+                    }, apply: { [weak self] settings in
+                        self?.applyInkAdjustment(token: token, settings: .curves(settings))
+                    }, cancel: { [weak self] in self?.cancelInkAdjustment(token: token) })
+                    self.inkCurvesPanel = panel
+                    self.canvas.onInkCurvesPreviewChange = { [weak panel] current, error in
+                        panel?.setPreviewState(current: current, error: error)
+                    }
+                    panel.showWindow(nil)
+                    self.canvas.setInkCurvesPreview(token: token)
                 }
-                panel.showWindow(nil)
-                self.canvas.setInkLevelsPreview(token: token)
-                self.statusBar.message = "Adjust \(name) in Levels. Apply keeps the change; Cancel keeps the original."
+                self.statusBar.message = "Adjust \(name) in \(kind.title). Apply keeps the change; Cancel keeps the original."
             }
+        }
+        switch kind {
+        case .levels: imageDocument.beginInkLevelsPreview(channel: channel, completion: captured)
+        case .curves: imageDocument.beginInkCurvesPreview(channel: channel, completion: captured)
         }
     }
 
-    private func dismissInkLevels(token: UInt64) {
-        guard inkLevelsToken == token else { return }
-        inkLevelsToken = nil
+    private func dismissInkAdjustment(token: UInt64) {
+        guard inkPreviewToken == token else { return }
+        inkPreviewToken = nil
+        inkPreviewKind = nil
         canvas.onInkLevelsPreviewChange = nil
+        canvas.onInkCurvesPreviewChange = nil
         canvas.setInkLevelsPreview(token: nil)
+        canvas.setInkCurvesPreview(token: nil)
         inkLevelsPanel?.finish()
+        inkCurvesPanel?.finish()
         inkLevelsPanel = nil
+        inkCurvesPanel = nil
         imageDocument.filterPreviewIsOpen = false
         stateDidChange()
     }
 
-    private func cancelInkLevels(token: UInt64) {
-        guard inkLevelsToken == token else { return }
-        imageDocument.endInkLevelsPreview(token) { [weak self] result in
+    private func cancelInkAdjustment(token: UInt64) {
+        guard inkPreviewToken == token, let kind = inkPreviewKind else { return }
+        let ended: @MainActor (Result<Void, Error>) -> Void = { [weak self] result in
             if case .failure(let error) = result, self?.closeStarted == false {
                 self?.imageDocument.onError?(error.localizedDescription)
             }
         }
-        dismissInkLevels(token: token)
+        switch kind {
+        case .levels: imageDocument.endInkLevelsPreview(token, completion: ended)
+        case .curves: imageDocument.endInkCurvesPreview(token, completion: ended)
+        }
+        dismissInkAdjustment(token: token)
     }
 
-    private func applyInkLevels(token: UInt64, settings: EngineSession.InkLevelsSettings) {
-        guard inkLevelsToken == token, let panel = inkLevelsPanel else { return }
-        panel.setApplying(true)
-        imageDocument.applyInkLevelsPreview(token, settings: settings) { [weak self, weak panel] result in
-            guard let self, self.inkLevelsToken == token else { return }
+    private func applyInkAdjustment(token: UInt64, settings: InkAdjustmentSettings) {
+        guard inkPreviewToken == token, inkPreviewKind == settings.kind else { return }
+        inkLevelsPanel?.setApplying(true)
+        inkCurvesPanel?.setApplying(true)
+        let applied: @MainActor (Result<Void, Error>) -> Void = { [weak self] result in
+            guard let self, self.inkPreviewToken == token else { return }
             switch result {
-            case .success: self.dismissInkLevels(token: token)
+            case .success: self.dismissInkAdjustment(token: token)
             case .failure(let error):
-                panel?.setApplying(false)
-                panel?.setPreviewState(current: false, error: error.localizedDescription)
+                self.inkLevelsPanel?.setApplying(false)
+                self.inkCurvesPanel?.setApplying(false)
+                self.inkLevelsPanel?.setPreviewState(current: false, error: error.localizedDescription)
+                self.inkCurvesPanel?.setPreviewState(current: false, error: error.localizedDescription)
             }
+        }
+        switch settings {
+        case .levels(let value): imageDocument.applyInkLevelsPreview(token, settings: value, completion: applied)
+        case .curves(let value): imageDocument.applyInkCurvesPreview(token, settings: value, completion: applied)
         }
     }
 
@@ -2337,7 +2384,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(runNativeFilter(_:)):
             let operation = (item.representedObject as? NativeFilterCommand)?.operation.name
             return operation == "gegl:invert-linear" ||
-                (operation == "gimp:levels" && imageDocument.session.supportsInkLevelSnapshots)
+                (operation == "gimp:levels" && imageDocument.session.supportsInkLevelSnapshots) ||
+                (operation == "gimp:curves" && imageDocument.session.supportsInkCurveSnapshots)
         case #selector(exportDocument(_:)), #selector(repeatExport(_:)):
             return supportsNativeCmykPSD
         case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
@@ -3318,7 +3366,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         previewPanel?.cancel()
         // Closing the source must dismiss even an Apply-disabled panel. The
         // accepted transaction and token cleanup remain in the close drain.
-        if let token = inkLevelsToken { cancelInkLevels(token: token) }
+        if let token = inkPreviewToken { cancelInkAdjustment(token: token) }
         cancelPendingPreview()
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
         guard approveRecordingCloseIfNeeded(sender) else { return false }
@@ -3485,7 +3533,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         adjustmentSheet?.invalidate()
 
         previewPanel?.cancel()
-        if let token = inkLevelsToken { cancelInkLevels(token: token) }
+        if let token = inkPreviewToken { cancelInkAdjustment(token: token) }
         cancelPendingPreview()
         canvas.stopRendering { [self] in
             imageDocument.closeImageWhenDrained {
