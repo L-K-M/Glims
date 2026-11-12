@@ -41,3 +41,13 @@ reply refreshes accepted values. Twenty actual-window checks pass on each
 supported engine. The verified Brightness/Contrast bundle passes 1,917
 native and 2,457 app checks with the build trees inaccessible.
 The unchanged native module retains its177-per-engine evidence.
+
+## Recorder
+
+A committed newly applied Brightness/Contrast adjustment on an explicitly bound
+ordinary layer can be recorded. Recorder stores the complete accepted native
+brightness and contrast values at Apply, writes version 10 only when such a
+successful command is present, and replays by installing the same whole settings
+on the chosen rebound layer with one Undo step. Preview updates, Cancel, refused
+Apply and unsupported targets (including mask/channel edits and existing-effect
+edits) never produce a successful recorded Brightness/Contrast row.

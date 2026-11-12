@@ -3,7 +3,7 @@ import AppKit
 @MainActor
 extension EngineSmokeTest {
     static func exerciseExportOptions(_ session: EngineSession, work: URL,
-                                       documents: DocumentList, psd: Bool = false, gif: Bool = false) throws {
+                                       documents: DocumentList, psd: Bool = false, cmyk: Bool = false, gif: Bool = false) throws {
         func wait(seconds: TimeInterval = 20, _ condition: () -> Bool) {
             let deadline = Date().addingTimeInterval(seconds)
             while !condition() && Date() < deadline { EngineSmokeTestHost.pumpEvents() }
@@ -72,6 +72,20 @@ extension EngineSmokeTest {
                   && panel.nameFieldStringValue.hasSuffix(".gif") && !form.gifExplanation.isHidden,
                   "the actual Export sheet selects GIF and shows its color/transparency policy")
         }
+        if cmyk {
+            form.psdColorPopup.selectItem(at: PsdOutputColor.allCases.firstIndex(of: .cmyk)!)
+            form.psdColorPopup.sendAction(form.psdColorPopup.action, to: form.psdColorPopup.target)
+            check(!form.commitEditing() && form.settings.psdCmykProfile == nil,
+                  "CMYK output waits for an explicit profile choice")
+            wait { form.psdCmykProfilePopup.numberOfItems > 1 }
+            guard form.psdCmykProfilePopup.numberOfItems > 1 else {
+                return check(false, "fixture needs an installed CMYK profile")
+            }
+            form.psdCmykProfilePopup.selectItem(at: 1)
+            form.psdCmykProfilePopup.sendAction(form.psdCmykProfilePopup.action, to: form.psdCmykProfilePopup.target)
+            check(form.commitEditing() && form.settings.psdCmykProfile != nil,
+                  "the actual Export sheet captures the explicitly chosen ICC bytes")
+        }
         let file = work.appendingPathComponent("native-export-options." + (psd ? "psd" : gif ? "gif" : "jpg"))
         // The native picker resolves /var to /private/var on this Mac.
         func remembersDestination() -> Bool {
@@ -84,6 +98,16 @@ extension EngineSmokeTest {
         FileHandle.standardError.write(Data("Export picker: save only to \(file.path)\n".utf8))
         wait(seconds: 90) { controller.window?.attachedSheet == nil && document.pendingWork == 0
             && (remembersDestination() || exportError != nil) }
+        if cmyk && session.version.hasPrefix("3.3.") {
+            check(exportError?.contains("development image engine") == true
+                  && !FileManager.default.fileExists(atPath: file.path)
+                  && document.fileState.lastExportURL == nil,
+                  "development CMYK refusal publishes no file or repeat-export destination")
+            check(try session.copyPixels(image, merged: true).pixels == original
+                  && session.undoInfo(image).undoCount == undo && document.hasUnsavedChanges == dirty,
+                  "refused CMYK output preserves source pixels, Undo and dirty state")
+            return
+        }
         check(exportError == nil && FileManager.default.fileExists(atPath: file.path)
               && remembersDestination() && document.lastExportSettings == form.settings,
               "accepting Export writes the image and remembers its exact settings: \(exportError ?? "ok")")
@@ -92,6 +116,17 @@ extension EngineSmokeTest {
         check(gif ? first.starts(with: Data("GIF8".utf8)) : psd ? first.starts(with: Data("8BPS".utf8)) :
               (first.starts(with: [0xff, 0xd8]) && first.range(of: Data([0xff, 0xc0])) != nil),
               "the actual sheet produces the requested file format")
+        func checkCmykEncoding(_ bytes: Data) {
+            guard cmyk else { return }
+            check(bytes.count >= 26 && bytes[24] == 0 && bytes[25] == 4,
+                  "the published PSD header explicitly identifies CMYK encoding")
+            if let profile = form.settings.psdCmykProfile {
+                check(bytes.range(of: profile.iccData) != nil,
+                      "the published PSD retains the exact selected ICC profile")
+            } else { check(false, "CMYK settings lost their profile") }
+        }
+        checkCmykEncoding(first)
+        var firstReopened: Data?
         func checkMergedAppearance() throws {
             guard psd || gif else { return }
             var captured: Result<(Int, Data), Error>?
@@ -114,6 +149,12 @@ extension EngineSmokeTest {
                         abs(Int(pixels[offset + $0]) - Int(original[offset + $0])) <= 2
                     })
                 }, "reopened GIF retains the visible palette colors and the promised binary transparency")
+            } else if cmyk {
+                check(pixels.count == original.count && stride(from: 3, to: original.count, by: 4).allSatisfy {
+                    abs(Int(pixels[$0]) - Int(original[$0])) <= 1
+                }, "CMYK PSD retains partial alpha while converting the colors")
+                if let firstReopened { check(pixels == firstReopened, "Repeat CMYK output reproduces its converted pixels") }
+                else { firstReopened = pixels }
             } else {
                 check(pixels.count == original.count && zip(pixels, original).allSatisfy { abs(Int($0) - Int($1)) <= 1 },
                       "reopened PSD retains the visible colors and partial alpha within one 8-bit level")
@@ -128,6 +169,7 @@ extension EngineSmokeTest {
         wait { document.pendingWork == 0 && FileManager.default.fileExists(atPath: file.path) }
         check(controller.window?.attachedSheet == nil && (psd || (try? Data(contentsOf: file)) == first),
               "Repeat Export reuses the saved format and encoder settings")
+        if cmyk { checkCmykEncoding(try Data(contentsOf: file)) }
         try checkMergedAppearance()
 
         var failureReturned = false, refusedWrite = false
