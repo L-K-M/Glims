@@ -3923,6 +3923,20 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_convert_lab_copy) (GlimsEngine *engine, GlimsImageID image,
                                          const GlimsLabCopySettings *settings,
                                          GlimsImageID *result, char **error);
+  /* Slot198: explicit preserving import of flat PSD v1 RAW U8/U16 with four
+   * CMYK channels and exactly one usable embedded CMYK ICC resource. No layers,
+   * alpha, other resources or appearance fallback. Creates fresh authoritative
+   * process-ink planes with exact raw samples/profile, fresh UUIDs, empty history
+   * and the original path as imported (never native/exported) identity.
+   * Inspects and decodes one bounded private snapshot; source bytes are never
+   * written. Unsupported/malformed/cancelled input publishes no partial image.
+   * A successful caller owns the returned handle until adoption or image_close.
+   * Global activity/strokes/filter previews refuse BUSY. Clears result/error on
+   * entry, including dispatch refusal. Path is an absolute local path. */
+  GlimsStatus (*image_import_native_cmyk_psd) (GlimsEngine *engine,
+                                               const char *path,
+                                               GlimsImageID *result,
+                                               char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

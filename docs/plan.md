@@ -5357,3 +5357,22 @@ after retaining discarded handles through retries, across all four engines.
 The pinned real-menu workflow passes 58 assertions. All-engine menu and final
 app/bundle qualification remain in progress. See
 [lab-converted-copy.md](lab-converted-copy.md) for the contract and limits.
+
+### Preserving CMYK PSD import (candidate)
+
+File > Open CMYK PSD and additive facade slot 198 import exact U8/U16
+process-ink samples and the embedded CMYK profile from flat RAW PSDs. The
+source is staged into one private immutable spool; full profile admission
+precedes image allocation, and publication follows complete decoding and
+cancellation/I/O checks. Unsupported files receive an explicit refusal.
+The initial subset accepts only the profile resource, with no layers or
+other metadata. Ordinary Open remains the appearance-import route.
+
+The application preserves this import intent through Revert and forces a
+native Save As, even for a misleading XCF filename. Save changes Revert to
+the new native file; Export does not. Import results remain owned through
+adoption or asynchronous cleanup, and Quit waits for accepted work. All
+four engines pass 720 independent preservation checks and 62 hosted app
+workflow checks each; all 1,623 Swift tests pass. Native and Swift source
+reviews are clear. Final packaging/startup and hosted CI remain pending. See [cmyk-psd-import.md](cmyk-psd-import.md) for the exact
+subset and qualification limits. This does not establish Photoshop 4 parity.

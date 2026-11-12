@@ -3987,6 +3987,31 @@ api_image_new_multichannel (GlimsEngine *e, int32_t width, int32_t height,
 }
 
 typedef struct {
+  const char *path;
+  GlimsImageID *result;
+  char **error;
+} CmykImportArgs;
+
+static GlimsStatus
+image_import_native_cmyk_psd_on_engine (GlimsEngine *engine, gpointer data)
+{
+  CmykImportArgs *args = data;
+  return glims_image_import_native_cmyk_psd (engine, args->path, args->result, args->error);
+}
+
+static GlimsStatus
+api_image_import_native_cmyk_psd (GlimsEngine *engine, const char *path,
+                                  GlimsImageID *result, char **error)
+{
+  if (result) *result = 0;
+  if (error) *error = NULL;
+  CmykImportArgs args = { path, result, error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_import_native_cmyk_psd,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+    image_import_native_cmyk_psd_on_engine, &args, error);
+}
+
+typedef struct {
   int32_t width, height;
   uint32_t component;
   const uint8_t *icc;
