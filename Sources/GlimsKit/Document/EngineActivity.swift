@@ -16,6 +16,9 @@ final class EngineActivity {
     private let queue = DispatchQueue(label: "ch.lkmc.Glims.engine.activity", qos: .userInitiated)
     private var preparing = false
     private var idleActions: [@MainActor () -> Void] = []
+    private var transformPreviewReads = 0
+    private var afterTransformPreview: [@MainActor () -> Void] = []
+    var isRenderingTransformPreview: Bool { transformPreviewReads != 0 }
     private(set) var label: String?
     var isBusy: Bool { label != nil }
 
@@ -86,6 +89,27 @@ final class EngineActivity {
     /// for the engine, even though new user edits are refused meanwhile.
     func whenIdle(_ action: @escaping @MainActor () -> Void) {
         if isBusy { idleActions.append(action) } else { action() }
+    }
+
+    /// Rendering a private copy does not lock edits or finish the live
+    /// gesture. Synchronous UI reads must nevertheless wait off the main
+    /// thread's call stack until that copy has left the single native engine.
+    func beginTransformPreview() { transformPreviewReads += 1 }
+
+    func endTransformPreview() {
+        precondition(transformPreviewReads > 0)
+        transformPreviewReads -= 1
+        guard transformPreviewReads == 0 else { return }
+        let actions = afterTransformPreview
+        afterTransformPreview.removeAll()
+        actions.forEach { whenReadyForSynchronousRead($0) }
+    }
+
+    func whenReadyForSynchronousRead(_ action: @escaping @MainActor () -> Void) {
+        whenIdle {
+            if self.isRenderingTransformPreview { self.afterTransformPreview.append(action) }
+            else { action() }
+        }
     }
 
     /// Destruction follows file calls on the same queue. It needs no new

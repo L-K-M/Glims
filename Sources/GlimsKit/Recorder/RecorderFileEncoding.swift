@@ -23,8 +23,18 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, channelVersion)
             case .success(.transformLayer, _):
                 fileVersion = max(fileVersion, layerTransformVersion)
+            case .success(.transformProjectiveLayer, _):
+                fileVersion = max(fileVersion, projectiveLayerTransformVersion)
             case .success(.applyLevels, _):
                 fileVersion = max(fileVersion, levelsVersion)
+            case .success(.applyCurves(let curves), _):
+                let count = curves.value.points.count + curves.red.points.count + curves.green.points.count
+                    + curves.blue.points.count + curves.alpha.points.count
+                guard count <= RecorderFileLimits.points - pointCount else {
+                    throw RecorderFileError.invalid("Invalid Curves point count.")
+                }
+                pointCount += count
+                fileVersion = max(fileVersion, curvesVersion)
             default: break
             }
         }
@@ -120,6 +130,11 @@ extension RecorderFileCodec {
             return .object(["tag": .string("transformLayer"), "interpolation": .string(interpolation.rawValue),
                 "matrix": .object(["a": try d(matrix.a), "b": try d(matrix.b), "c": try d(matrix.c),
                                    "d": try d(matrix.d), "tx": try d(matrix.tx), "ty": try d(matrix.ty)])])
+        case .transformProjectiveLayer(let matrix, let interpolation):
+            return .object(["tag": .string("transformProjectiveLayer"), "interpolation": .string(interpolation.rawValue),
+                "matrix": .object(["h00": try d(matrix.h00), "h01": try d(matrix.h01), "h02": try d(matrix.h02),
+                                   "h10": try d(matrix.h10), "h11": try d(matrix.h11), "h12": try d(matrix.h12),
+                                   "h20": try d(matrix.h20), "h21": try d(matrix.h21), "h22": try d(matrix.h22)])])
         case .applyLevels(let levels):
             func channelJSON(_ channel: RecorderFileCommand.Levels.Channel) throws -> RecorderJSON {
                 .object(["lowInput": try d(channel.lowInput), "highInput": try d(channel.highInput),
@@ -130,6 +145,18 @@ extension RecorderFileCodec {
                 "clampOutput": .bool(levels.clampOutput), "value": try channelJSON(levels.value),
                 "red": try channelJSON(levels.red), "green": try channelJSON(levels.green),
                 "blue": try channelJSON(levels.blue), "alpha": try channelJSON(levels.alpha)])])
+        case .applyCurves(let curves):
+            func channelJSON(_ channel: RecorderCurvesValue.Channel) throws -> RecorderJSON {
+                let channel = try channel.validated()
+                return .object(["kind": .string(channel.kind.rawValue), "identity": .bool(channel.identity),
+                    "points": .array(try channel.points.map {
+                        .object(["x": try d($0.x), "y": try d($0.y), "kind": .string($0.kind.rawValue)]) }),
+                    "samples": .array(try channel.samples.map { try d($0) })])
+            }
+            return .object(["tag": .string("applyCurves"), "settings": .object([
+                "trc": .string(curves.trc.rawValue), "value": try channelJSON(curves.value),
+                "red": try channelJSON(curves.red), "green": try channelJSON(curves.green),
+                "blue": try channelJSON(curves.blue), "alpha": try channelJSON(curves.alpha)])])
         case .completeStroke(let stroke): return try strokeJSON(stroke)
         }
     }

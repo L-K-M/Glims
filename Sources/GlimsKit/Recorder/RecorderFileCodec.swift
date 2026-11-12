@@ -6,7 +6,9 @@ enum RecorderFileCodec {
     static let strokeVersion = 2
     static let channelVersion = 3
     static let layerTransformVersion = 4
+    static let projectiveLayerTransformVersion = 6
     static let levelsVersion = 5
+    static let curvesVersion = 7
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -83,7 +85,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...levelsVersion)
+        let fileVersion = try integer(root.get("version"), range: version...curvesVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -103,7 +105,9 @@ enum RecorderFileCodec {
         var hasStroke = false
         var hasChannelSelection = false
         var hasLayerTransform = false
+        var hasProjectiveLayerTransform = false
         var hasLevels = false
+        var hasCurves = false
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
             guard case .object(let members) = node, let outcome = members["outcome"] else { throw RecorderFileError.invalid("Missing record outcome.") }
             let outcomeName = try string(outcome)
@@ -116,7 +120,9 @@ enum RecorderFileCodec {
                 if case .completeStroke = command { hasStroke = true }
                 if case .channelToSelection = command { hasChannelSelection = true }
                 if case .transformLayer = command { hasLayerTransform = true }
+                if case .transformProjectiveLayer = command { hasProjectiveLayerTransform = true }
                 if case .applyLevels = command { hasLevels = true }
+                if case .applyCurves = command { hasCurves = true }
                 let binding = try binding(row.get("binding"))
                 try validate(binding, for: command, descriptions: descriptions)
                 result = .success(command, binding)
@@ -142,8 +148,14 @@ enum RecorderFileCodec {
         if fileVersion == layerTransformVersion, !hasLayerTransform {
             throw RecorderFileError.invalid("Version 4 requires a successful layer transform.")
         }
+        if fileVersion == projectiveLayerTransformVersion, !hasProjectiveLayerTransform {
+            throw RecorderFileError.invalid("Version 6 requires a successful projective layer transform.")
+        }
         if fileVersion == levelsVersion, !hasLevels {
             throw RecorderFileError.invalid("Version 5 requires a successful Levels command.")
+        }
+        if fileVersion == curvesVersion, !hasCurves {
+            throw RecorderFileError.invalid("Version 7 requires a successful Curves command.")
         }
         return RecorderFileValue(recordingID: try uuid(root.get("recordingID")), name: name, origin: source, symbols: symbols, records: records)
     }
@@ -318,10 +330,29 @@ enum RecorderFileCodec {
                 throw RecorderFileError.invalid("The identity layer transform was never admissible.")
             }
             return .transformLayer(.init(a: a, b: b, c: c, d: d, tx: tx, ty: ty), interpolation: interpolation)
+        case "transformProjectiveLayer":
+            guard version >= projectiveLayerTransformVersion else {
+                throw RecorderFileError.invalid("A projective layer transform needs recording version 6.")
+            }
+            let value = try Object(node, required: ["tag", "matrix", "interpolation"])
+            let matrix = try Object(value.get("matrix"), required:
+                ["h00", "h01", "h02", "h10", "h11", "h12", "h20", "h21", "h22"])
+            let projective = try RecorderFileCommand.Projective(
+                h00: number(matrix.get("h00")), h01: number(matrix.get("h01")), h02: number(matrix.get("h02")),
+                h10: number(matrix.get("h10")), h11: number(matrix.get("h11")), h12: number(matrix.get("h12")),
+                h20: number(matrix.get("h20")), h21: number(matrix.get("h21")), h22: number(matrix.get("h22"))).validated()
+            guard let interpolation = RecorderFileCommand.LayerInterpolation(rawValue: try string(value.get("interpolation"))) else {
+                throw RecorderFileError.invalid("Unknown layer interpolation.")
+            }
+            return .transformProjectiveLayer(projective, interpolation: interpolation)
         case "applyLevels":
             guard version >= levelsVersion else { throw RecorderFileError.invalid("A Levels command needs recording version 5.") }
             let value = try Object(node, required: ["tag", "settings"])
             return .applyLevels(try levels(value.get("settings")))
+        case "applyCurves":
+            guard version >= curvesVersion else { throw RecorderFileError.invalid("A Curves command needs recording version 7.") }
+            let value = try Object(node, required: ["tag", "settings"])
+            return .applyCurves(try curves(value.get("settings"), points: &points))
         case "channelToSelection":
             guard version >= channelVersion else { throw RecorderFileError.invalid("A channel selection needs recording version 3.") }
             let value = try Object(node, required: ["tag", "operation"])
@@ -358,6 +389,38 @@ enum RecorderFileCodec {
         return .init(trc: trc, clampInput: try bool(value.get("clampInput")), clampOutput: try bool(value.get("clampOutput")),
             value: try channel("value"), red: try channel("red"), green: try channel("green"),
             blue: try channel("blue"), alpha: try channel("alpha"))
+    }
+
+    /// Whole Curves values: the owned TRC tag and every named channel with
+    /// its owned kind tag, the stored HDR bypass flag, every point with its
+    /// owned kind tag and all 256 rendered samples. Points and samples
+    /// roundtrip independently even when noncanonical, and channel points
+    /// share the file's point budget with polygons and strokes.
+    private static func curves(_ node: RecorderJSON, points: inout Int) throws -> RecorderCurvesValue {
+        let value = try Object(node, required: ["trc", "value", "red", "green", "blue", "alpha"])
+        guard let trc = RecorderCurvesValue.TRC(rawValue: try string(value.get("trc"))) else {
+            throw RecorderFileError.invalid("Unknown Curves transfer curve.")
+        }
+        func channel(_ key: String) throws -> RecorderCurvesValue.Channel {
+            let source = try Object(value.get(key), required: ["kind", "identity", "points", "samples"])
+            guard let kind = RecorderCurvesValue.CurveKind(rawValue: try string(source.get("kind"))) else {
+                throw RecorderFileError.invalid("Unknown Curves channel kind.")
+            }
+            let pointList = try array(source.get("points"),
+                maximum: min(65_536, max(0, RecorderFileLimits.points - points))).map { node -> RecorderCurvesValue.Point in
+                let point = try Object(node, required: ["x", "y", "kind"])
+                guard let kind = RecorderCurvesValue.PointKind(rawValue: try string(point.get("kind"))) else {
+                    throw RecorderFileError.invalid("Unknown Curves point kind.")
+                }
+                return .init(x: try number(point.get("x")), y: try number(point.get("y")), kind: kind)
+            }
+            points += pointList.count
+            let samples = try array(source.get("samples"), maximum: 256).map { try number($0) }
+            return try RecorderCurvesValue.Channel(kind: kind, identity: try bool(source.get("identity")),
+                points: pointList, samples: samples).validated()
+        }
+        return RecorderCurvesValue(trc: trc, value: try channel("value"), red: try channel("red"),
+            green: try channel("green"), blue: try channel("blue"), alpha: try channel("alpha"))
     }
 
     private static func descriptionKind(_ node: RecorderJSON) throws -> RecorderTargetDescription.Kind {
@@ -458,11 +521,14 @@ enum RecorderFileCodec {
         case (.layerProperties, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("Layer properties need a layer description.") }
             return
-        case (.transformLayer, .layer(let id)):
+        case (.transformLayer, .layer(let id)), (.transformProjectiveLayer, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("A layer transform needs a layer description.") }
             return
         case (.applyLevels, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("A Levels adjustment needs a layer description.") }
+            return
+        case (.applyCurves, .layer(let id)):
+            guard layer(id) else { throw RecorderFileError.invalid("A Curves adjustment needs a layer description.") }
             return
         case (.channelToSelection, .channel(let id)):
             guard descriptions[id]?.kind == .channel else { throw RecorderFileError.invalid("Channel to Selection needs a channel description.") }

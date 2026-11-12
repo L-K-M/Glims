@@ -30,7 +30,8 @@ public enum GlimsApplication {
         // AppKit application. They do not need the desktop.
         if mode == .engineSmokeTest,
            let smokeCase = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"],
-           ["recorder-stroke-capture", "recorder-stroke-file", "filter-catalog-complete"].contains(smokeCase) {
+           ["recorder-stroke-capture", "recorder-stroke-file", "filter-catalog-complete",
+            "transform-pixel-preview"].contains(smokeCase) {
             return EngineSmokeTest.run()
         }
 

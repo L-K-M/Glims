@@ -166,7 +166,7 @@ final class RecorderLevelsTests: XCTestCase {
     func testVersionFiveAnchorAndPreVersionFiveRejection() {
         rejects(levelsDocument(version: 4), reason: "version 5")
         rejects(levelsDocument(version: 1), reason: "version 5")
-        rejects(levelsDocument(version: 6), reason: "Invalid integer")
+        rejects(levelsDocument(version: 6), reason: "Version 6 requires a successful projective")
         rejects(document(success(#"{"tag":"scale","width":1,"height":1}"#), version: 5),
                 reason: "Version 5 requires a successful Levels command")
         // A version 5 file may still carry the earlier command families.

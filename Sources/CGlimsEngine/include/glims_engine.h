@@ -474,11 +474,27 @@ typedef enum GlimsInterpolation {
   GLIMS_INTERPOLATION_LOHALO  = 5
 } GlimsInterpolation;
 
-/* A transform of image pixel coordinates, row-major, applied to column
- * vectors (x, y, 1): x' = m[0][0] x + m[0][1] y + m[0][2]. */
+/* A forward transform of image pixel coordinates, row-major, applied to
+ * column vectors (x, y, 1). Divide the first two resulting components by
+ * W = m[2][0] x + m[2][1] y + m[2][2]. Affine transforms have W = 1.
+ * The adapter normalizes W at the source center and refuses horizon
+ * crossing, unrepresentable source edges, invalid output bounds and more
+ * than 512 MiB of aggregate destination storage, including masks and
+ * containing-group growth. Active unclipped effects are refused because
+ * their future render bounds cannot be inferred from their old extent. */
 typedef struct GlimsMatrix {
   double m[3][3];
 } GlimsMatrix;
+
+/* Captures the source rectangle a pending canvas transform describes.
+ * The expected bounds are compared atomically with native item bounds at
+ * commit. This detects geometry changes, not edits to pixels within them. */
+typedef struct GlimsLayerTransformRequest {
+  uint32_t struct_size;
+  GlimsRect expected_bounds;
+  GlimsMatrix matrix;
+  uint32_t interpolation; /* GlimsInterpolation */
+} GlimsLayerTransformRequest;
 
 typedef enum GlimsJustify {
   GLIMS_JUSTIFY_LEFT   = 1,
@@ -3479,6 +3495,51 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_sample_color) (GlimsEngine *engine, GlimsImageID image,
                                      int32_t x, int32_t y,
                                      GlimsSampledColor *out, char **error);
+
+  /* Slot175: commit an explicit positive layer id only if its current
+   * native bounds still equal request.expected_bounds. Resolve, compare,
+   * preflight and transform in one engine-thread dispatch. A stale rectangle
+   * is FAILED with an explanation, without pixels/bounds/Undo mutation;
+   * a missing or foreign layer is NOT_FOUND. The ordinary transform's
+   * locks, busy rules and geometry/storage admission still apply.
+   * Editable text/link/vector sources in the target or its descendants
+   * are UNSUPPORTED; rasterization must be explicit before canvas Apply.
+   * Known prefix sizes and larger future structs are accepted; no request
+   * memory is retained. Public entry clears *error when supplied. */
+  GlimsStatus (*layer_transform_matrix_captured) (GlimsEngine *engine,
+                                                 GlimsImageID image,
+                                                 GlimsItemID layer,
+                                                 const GlimsLayerTransformRequest *request,
+                                                 char **error);
+
+  /* Slot176: create an independently owned image copy with the captured
+   * layer transformed. The original's pixels, selection, dirty state and
+   * Undo remain unchanged. The same capture, editable-source, geometry,
+   * storage and lock admission as slot175 applies before copying.
+   * A returned positive image ID is owned by the caller and must be closed
+   * with image_close. Intended for read-only previews; eligible raster
+   * transforms materialize their full-resolution pixels on demand.
+   * Other layer structures use the ordinary native transform on the copy.
+   * No caller memory is retained. Public entry clears *result and *error
+   * on failure, including engine dispatch failure. */
+  GlimsStatus (*image_transform_preview) (GlimsEngine *engine, GlimsImageID image,
+                                         GlimsItemID layer,
+                                         const GlimsLayerTransformRequest *request,
+                                         GlimsImageID *result, char **error);
+
+  /* Slot177: replace a Curves preview's entire immutable channel/TRC value.
+   * All five channels include kind, identity, ordered points and exactly 256
+   * samples, including inactive data. Identity controls HDR bypass; it is
+   * never inferred from points or samples. Input arrays are borrowed, remain
+   * naturally aligned and immutable/alive until return, and are not retained. Empty points require
+   * a NULL pointer. Every channel is validated before candidate construction;
+   * failed validation/allocation/install changes no preview or Undo state.
+   * Equal values are a no-op. A changed preview still commits as one Undo
+   * through filter_commit. Normal filter edit/busy/lock admission applies.
+   * An unaligned known prefix and larger future tail are accepted; public
+   * entry clears *error when supplied. */
+  GlimsStatus (*filter_curves_set) (GlimsEngine *engine, GlimsFilterID filter,
+                                   const GlimsCurvesSnapshot *settings, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

@@ -10,6 +10,8 @@ GlimsStatus glims_curves_config_copy (GeglNode *destination, GeglNode *source, c
 void glims_curves_snapshot_clear (GlimsCurvesSnapshot *out);
 void glims_curves_snapshot_free (GlimsCurvesSnapshot *out);
 GlimsStatus glims_curves_config_get (GeglNode *node, GlimsCurvesSnapshot *out, char **error);
+GlimsStatus glims_curves_config_set (GeglNode *node, const GlimsCurvesSnapshot *settings,
+                                    gboolean *changed, char **error);
 GlimsStatus glims_curves_config_edit (GeglNode *node, const GlimsCurveEdit *edit,
                                      GlimsCurvesSnapshot *out, gboolean *changed,
                                      char **error);

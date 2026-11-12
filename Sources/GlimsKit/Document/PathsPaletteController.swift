@@ -197,7 +197,11 @@ final class PathsPaletteController: NSViewController, PaletteContent, PaletteEdi
     func run(_ command: Command) {
         guard let document else { return }
         if command == .new {
-            document.addPath(VectorPath())
+            document.addPath(VectorPath()) { [weak self, weak document] result in
+                guard case .success = result, let self, let document,
+                      !document.isClosing, self.document === document else { return }
+                self.reload()
+            }
             return
         }
         guard let path = document.activePath else { return }

@@ -57,7 +57,7 @@ final class ImageDocument {
             /// A new filter on an ordinary layer: semantic capture coverage.
             case layer(Int32)
             /// An existing-effect edit or a mask/channel/floating drawable:
-            /// recorded as an explicit unsupported row, never a layer Levels.
+            /// recorded as an explicit unsupported row, never a layer adjustment.
             case unsupported(String)
         }
     }
@@ -692,11 +692,6 @@ final class ImageDocument {
         guard !refuseWhileFloatingActive() else { return }
         endPendingUserEdits()
         guard let layer = layers.first(where: { $0.id == id }), layer.hasMask else { return }
-        // Without a cached state the mask's drawable id is unknown, and
-        // activeDrawable could not name it; read it now — a cheap engine
-        // read, no pixels.
-        if maskStates[id] == nil { maskStates[id] = try? session.layerMask(id, image: image) }
-        guard let mask = maskStates[id], mask.mask != 0 else { return }
         selectTarget(id, editingMask: true)
     }
 
@@ -708,12 +703,27 @@ final class ImageDocument {
     /// authoritative state, which also covers a refused flag change.
     private func selectTarget(_ id: Int32, editingMask: Bool) {
         guard layers.contains(where: { $0.id == id }) else { return }
-        // A masked layer whose state was never read gets one now, so a
-        // stale engine-side EDITING flag cannot disagree with
-        // activeDrawable in either direction.
+        // An unknown mask ID cannot be mirrored as a drawable. Resolve and
+        // select it together on the input queue, blocking target-dependent
+        // edits until reconciliation rather than painting the previous layer.
         if maskStates[id] == nil,
            layers.first(where: { $0.id == id })?.hasMask == true {
-            maskStates[id] = try? session.layerMask(id, image: image)
+            enqueueTargetCommand({ session, image in
+                let state = try session.layerMask(id, image: image)
+                guard !editingMask || state.mask != 0 else { throw DocumentError.targetChanged }
+                guard try !session.floatingSelection(image).isActive else { throw DocumentError.targetChanged }
+                try session.channelCommand(.select, channel: 0, image: image)
+                for row in try session.layers(image) where row.id != id && row.hasMask {
+                    if try session.layerMask(row.id, image: image).editing {
+                        try session.setLayerMask(row.id, image: image, flags: [.editing], values: [])
+                    }
+                }
+                try session.selectLayers([id], image: image)
+                if state.mask != 0 {
+                    try session.setLayerMask(id, image: image, flags: [.editing], values: editingMask ? [.editing] : [])
+                }
+            }, input: false, rejectFailedTarget: true)
+            return
         }
         let mask = maskStates[id]?.mask
         guard !editingMask || (mask != nil && mask != 0) else { return }
@@ -773,7 +783,7 @@ final class ImageDocument {
             onUserCommand?()
             onError?(DocumentError.targetChanged.localizedDescription)
             NSSound.beep()
-            try? reload()
+            scheduleRefresh(.state)
             return
         }
         let ordered = LayerSelectionPolicy.reconcile(ids, existing: existing)
@@ -817,7 +827,7 @@ final class ImageDocument {
             } catch {
                 failure = error
             }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 if self.pendingLayerSelection?.version == pick.version {
                     self.pendingLayerSelection = nil
                 }
@@ -881,7 +891,7 @@ final class ImageDocument {
             } catch {
                 failure = error
             }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 if kind == .channel {
                     if self.pendingChannelSelection?.version == pick.version { self.pendingChannelSelection = nil }
                     if self.pendingTargetPick?.version == pickTargetVersion {
@@ -943,9 +953,7 @@ final class ImageDocument {
         case .channel(let id): selectedChannelIDs = [id]
         case .layer, .mask: selectedChannelIDs = []
         }
-        enqueue(on: inputQueue, afterFinish: {
-            acknowledged?(receipt.result)
-        }) { [session, image] in
+        enqueue(on: inputQueue) { [session, image] in
             var failure: Error?
             self.paintTargetIsValid = false
             do {
@@ -981,7 +989,7 @@ final class ImageDocument {
             } catch {
                 failure = error
             }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 if let failure { receipt.result = .failure(failure) }
                 else { receipt.result = .success(()) }
                 if self.pendingTargetPick?.version == pick.version {
@@ -990,6 +998,7 @@ final class ImageDocument {
                 }
                 if let failure { self.report(failure) }
                 try? self.reload()
+                acknowledged?(receipt.result)
             }
         }
         onStateChange?()
@@ -1044,7 +1053,7 @@ final class ImageDocument {
         pendingRefresh.formUnion(kinds)
         guard !refreshIsScheduled else { return }
         refreshIsScheduled = true
-        EngineActivity.shared.whenIdle { [weak self] in self?.runPendingRefresh() }
+        EngineActivity.shared.whenReadyForSynchronousRead { [weak self] in self?.runPendingRefresh() }
     }
 
     private func runPendingRefresh() {
@@ -1868,7 +1877,7 @@ final class ImageDocument {
         if kind == .path {
             enqueue(on: inputQueue, input: true) { [session, image] in
                 let result = Result { try work(session, image) }
-                DispatchQueue.main.async {
+                self.dispatchReadWhenReady {
                     if case .failure(let error) = result { self.onError?(String(describing: error)) }
                     try? self.reload()
                     completion(result)
@@ -1931,7 +1940,7 @@ final class ImageDocument {
         pendingWork += 1
         enqueue(on: inputQueue, input: true) { [session, image] in
             let result = Result { try session.setGrid(grid, image: image) }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 EngineActivity.shared.whenIdle {
                     defer { self.jobDidFinish(input: false) }
                     if !self.isClosing {
@@ -2405,7 +2414,7 @@ final class ImageDocument {
             refuse(self.isClosing ? DocumentError.closed : rejection)
         }) { [session, image] in
             let result = Result<Void, Error> { try session.restoreLayerSources(image, layers: captured) }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 var delivered = result
                 if !self.isClosing {
                     do { try self.reload() }
@@ -2502,7 +2511,7 @@ final class ImageDocument {
         }
         enqueue(on: inputQueue, input: true) { [session, image] in
             let result = Result<Void, Error> { _ = try session.layerCommand(.rasterize, image: image, layer: layer) }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 if !self.isClosing { try? self.reload() }
                 if case .failure(let error) = result { self.onError?(String(describing: error)) }
                 completion(result)
@@ -2556,7 +2565,7 @@ final class ImageDocument {
             completion(.failure(DocumentError.busy))
         }) { [session, image] in
             let result = Result<Void, Error> { _ = try session.layerCommand(.restoreSource, image: image, layer: layer) }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 if !self.isClosing { try? self.reload() }
                 if case .failure(let error) = result { self.onError?(String(describing: error)) }
                 completion(result)
@@ -2716,7 +2725,7 @@ final class ImageDocument {
         // work between this input and its callback. Close drains both stages.
         pendingWork += 1
         enqueue(on: inputQueue, input: true, afterFinish: {
-            EngineActivity.shared.whenIdle {
+            self.countedReadWhenReady {
                 if !self.isClosing {
                     do { try self.reload() }
                     catch { self.onError?("The layer state could not be refreshed: \(error)") }
@@ -3030,7 +3039,7 @@ final class ImageDocument {
             // Display-only state must never reopen a failed paint target.
             enqueue(on: inputQueue) { [session, image] in
                 let result = Result { try work(session, image) }
-                DispatchQueue.main.async {
+                self.dispatchReadWhenReady {
                     if case .failure(let error) = result { self.report(error) }
                     finished(result)
                 }
@@ -3085,7 +3094,7 @@ final class ImageDocument {
         }
         enqueue(on: inputQueue, input: true) { [session, image] in
             let result = Result { try session.changeChannel(id, image: image, change) }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 if self.channelVisibilityIntents[id]?.version == version {
                     self.channelVisibilityIntents[id] = nil
                 }
@@ -3199,6 +3208,81 @@ final class ImageDocument {
         }
     }
 
+    /// Applies one captured canvas mapping. The expected rectangle is checked
+    /// in the same native dispatch as the mutation; a queued geometry change
+    /// cannot silently transform a different source. Completion follows native
+    /// result and cache reconciliation, never just queue admission.
+    func transformLayer(_ layer: Int32, matrix: ProjectiveTransform, expectedBounds: CGRect,
+                        interpolation: EngineSession.Interpolation,
+                        completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else {
+            return completion(.failure(isClosing ? DocumentError.closed : DocumentError.busy))
+        }
+        guard !refuseWhileFloatingActive(), !refuseSingleLayerCommand("Transform Layer", on: layer),
+              !isChannelTargetActive, !isMaskTargetActive,
+              activeDrawable == layer,
+              layers.first(where: { $0.id == layer })?.bounds == expectedBounds else {
+            return completion(.failure(DocumentError.targetChanged))
+        }
+        guard matrix.projectedBounds(forSource: expectedBounds) != nil else {
+            return completion(.failure(RecorderReplayError(message: "The layer transform exceeds its supported bounds.")))
+        }
+        let semantic: SemanticImageCommand
+        if matrix.h20 == 0, matrix.h21 == 0, matrix.h22 != 0 {
+            let scale = matrix.h22
+            let affine = CGAffineTransform(a: matrix.h00 / scale, b: matrix.h10 / scale,
+                c: matrix.h01 / scale, d: matrix.h11 / scale,
+                tx: matrix.h02 / scale, ty: matrix.h12 / scale)
+            if affine.isIdentity { return completion(.success(())) }
+            semantic = .transformLayer(matrix: affine, interpolation: interpolation)
+        } else {
+            semantic = .transformProjectiveLayer(matrix: matrix, interpolation: interpolation)
+        }
+        let capture: RecorderCapture?
+        do { capture = try reserveRecording(semantic, explicitLayer: layer) }
+        catch { return completion(.failure(error)) }
+        let result = LayerChangeResult()
+        pendingWork += 1 // Cache reconciliation and completion also hold close.
+        enqueue(on: inputQueue, input: true, afterFinish: {
+            self.countedReadWhenReady {
+                if !self.isClosing {
+                    do { try self.reload() }
+                    catch { self.onError?("The transformed layer could not be refreshed: \(error)") }
+                }
+                self.jobDidFinish(input: false)
+                completion(result.value ?? .failure(DocumentError.busy))
+            }
+        }) { [session, image] in
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+            let answer = Result {
+                guard try session.selectedLayers(image) == [layer],
+                      try !session.floatingSelection(image).isActive else { throw DocumentError.targetChanged }
+                try Self.requireLayerTransformTarget(layer, session: session, image: image)
+                try session.transformLayer(layer, image: image, matrix: matrix,
+                    expectedBounds: expectedBounds, interpolation: interpolation)
+            }
+            result.value = answer
+            if case .failure(let error) = answer { self.report(error) }
+            self.settleRecording(capture, result: answer.map { semantic }, confirmed: confirmed)
+        }
+        if capture != nil { notifyRecorderChanged() }
+    }
+
+    private nonisolated static func requireLayerTransformTarget(_ layer: Int32,
+                                                                session: EngineSession, image: Int32) throws {
+        let selectedLayers = try session.selectedLayers(image)
+        let editingMask = try (selectedLayers + [layer]).contains {
+            try session.layerMask($0, image: image).editing
+        }
+        guard try !session.quickMask(image).enabled,
+              try session.selectedItems(.channel, image: image).isEmpty, !editingMask else {
+            throw RecorderReplayError(message: "Finish editing the channel or layer mask before applying this transform.")
+        }
+        guard try session.layerState(layer, image: image).effective.isDisjoint(with: [.pixels, .position]) else {
+            throw RecorderReplayError(message: "Unlock the layer's pixels and position before applying this transform.")
+        }
+    }
+
     func scale(toWidth width: Int, height: Int) {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
@@ -3221,6 +3305,21 @@ final class ImageDocument {
         guard !refuseWhileFloatingActive() else { return }
         let command = SemanticImageCommand.crop(rect)
         run(semantic: command, command.apply)
+    }
+
+    /// Resolve the selection behind preceding input, then crop and record
+    /// those exact bounds as one accepted command. Later selection changes
+    /// cannot overtake this read or change the saved Recorder rectangle.
+    func cropToSelection() {
+        guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
+        runDeferredImageCommand { session, image in
+            guard let bounds = try session.selectionBounds(image: image) else {
+                throw RecorderReplayError(message: "Select the area to keep first.")
+            }
+            try session.crop(image: image, to: bounds)
+            return .crop(bounds)
+        }
     }
 
     // MARK: Color mode and precision
@@ -3246,7 +3345,7 @@ final class ImageDocument {
             completion(.failure(DocumentError.busy))
         }) { [session, image] in
             let result = Result { try session.convertMode(image, to: mode) }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 // The conversion fires the engine's own events, whose
                 // coalesced refresh may still be pending behind this one.
                 if !self.isClosing { try? self.reload() }
@@ -3275,7 +3374,7 @@ final class ImageDocument {
             completion(.failure(DocumentError.busy))
         }) { [session, image] in
             let result = Result { try session.convertPrecision(image, component: component, trc: trc) }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 if !self.isClosing { try? self.reload() }
                 completion(result)
             }
@@ -3304,7 +3403,7 @@ final class ImageDocument {
             completion(.failure(DocumentError.busy))
         }) { [session, image] in
             let result = Result { try session.convertToIndexed(image, settings: settings) }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 if !self.isClosing { try? self.reload() }
                 completion(result)
             }
@@ -3336,7 +3435,7 @@ final class ImageDocument {
             completion(.failure(DocumentError.busy))
         }) { [session, image] in
             let result = Result { try session.assignProfile(image, path: path) }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 if !self.isClosing { try? self.reload() }
                 completion(result)
             }
@@ -3373,7 +3472,7 @@ final class ImageDocument {
                 try session.convertProfile(image, path: path, intent: intent,
                                            blackPointCompensation: blackPointCompensation, policy: policy)
             }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 if !self.isClosing { try? self.reload() }
                 completion(result)
             }
@@ -3391,8 +3490,28 @@ final class ImageDocument {
     /// selection (the native contract), and changes no paint target.
     func selectPath(_ id: Int32) {
         guard paths.contains(where: { $0.id == id }), !refuseWhileEditingUnavailable() else { return }
-        if pathShapes[id] == nil { pathShapes[id] = try? session.path(id, image: image) }
+        // The ordered selection's gated reload reads the newly active shape.
         queueItemSelection([id], kind: .path)
+    }
+
+    /// UI creation never waits on the native engine. Its accepted first
+    /// anchor remains counted input until the new ID and caches are available.
+    func addPath(_ shape: VectorPath,
+                 completion: @escaping @MainActor (Result<Int32, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let result = Result { () throws -> Int32 in
+                let id = try session.setPath(nil, image: image, shape)
+                try session.selectItems([id], kind: .path, image: image)
+                return id
+            }
+            self.dispatchReadWhenReady {
+                if !self.isClosing { try? self.reload() }
+                if case .failure(let error) = result { self.report(error) }
+                completion(self.isClosing ? .failure(DocumentError.closed) : result)
+            }
+        }
     }
 
     /// Adds a path with `shape` and makes it the active one. Waits for the
@@ -3425,11 +3544,15 @@ final class ImageDocument {
     /// the new shape at once.
     func updatePath(_ id: Int32, to shape: VectorPath) {
         guard !refuseWhileEditingUnavailable() else { return }
+        guard paths.contains(where: { $0.id == id }), pathShapes[id] != nil else {
+            onError?("Wait for the selected path to finish loading before editing it.")
+            return
+        }
         pathShapes[id] = shape
         pendingPathEdits[id, default: 0] += 1
         enqueue(on: inputQueue, input: true) { [session, image] in
             let result = Result { try session.setPath(id, image: image, shape) }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 self.pendingPathEdits[id, default: 1] -= 1
                 if case .failure(let error) = result {
                     self.report(error)
@@ -3515,9 +3638,12 @@ final class ImageDocument {
     /// mask affects the composite.
     func toggleMaskEnabled() {
         guard let layer = activeLayer, !refuseWhileFloatingActive(),
-              let state = maskState(for: layer) else { return }
+              layers.first(where: { $0.id == layer })?.hasMask == true else { return }
         guard !refuseSingleLayerCommand("Enable Mask", on: layer) else { return }
-        setMaskFlags(layer, flags: [.enabled], values: state.enabled ? [] : [.enabled])
+        runMaskCommand { session, image in
+            let state = try session.layerMask(layer, image: image)
+            try session.setLayerMask(layer, image: image, flags: [.enabled], values: state.enabled ? [] : [.enabled])
+        }
     }
 
     /// Layer ▸ Mask ▸ Edit Mask: toggles mask editing on the active
@@ -3538,11 +3664,14 @@ final class ImageDocument {
     /// multi-selection; only the active-layer menu route is gated.
     func toggleMaskShowing(_ layer: Int32? = nil) {
         guard let id = layer ?? activeLayer, !refuseWhileFloatingActive(),
-              let state = maskState(for: id) else { return }
+              layers.first(where: { $0.id == id })?.hasMask == true else { return }
         if layer == nil {
             guard !refuseSingleLayerCommand("Show Mask", on: id) else { return }
         }
-        setMaskFlags(id, flags: [.showing], values: state.showing ? [] : [.showing])
+        runMaskCommand { session, image in
+            let state = try session.layerMask(id, image: image)
+            try session.setLayerMask(id, image: image, flags: [.showing], values: state.showing ? [] : [.showing])
+        }
     }
 
     /// Layer ▸ Mask ▸ Mask to Selection ▸ …: combines the active
@@ -3555,24 +3684,6 @@ final class ImageDocument {
         }
     }
 
-    /// Sets mask flags on any layer — the rows' Option-click needs it
-    /// for a layer that is not the active one.
-    private func setMaskFlags(_ layer: Int32, flags: EngineSession.MaskFlags,
-                              values: EngineSession.MaskFlags) {
-        runMaskCommand { session, image in
-            try session.setLayerMask(layer, image: image, flags: flags, values: values)
-        }
-    }
-
-    /// The layer's mask state, reading it once when the cache missed.
-    private func maskState(for layer: Int32) -> EngineSession.MaskState? {
-        if let state = maskStates[layer], state.mask != 0 { return state }
-        guard layers.first(where: { $0.id == layer })?.hasMask == true else { return nil }
-        let state = try? session.layerMask(layer, image: image)
-        if let state, state.mask != 0 { maskStates[layer] = state }
-        return state?.mask != 0 ? state : nil
-    }
-
     /// Mask commands are edits: they queue as counted input behind
     /// pending work and reload afterwards — mask flag changes report no
     /// engine event of their own (EDITING has no undo record at all), so
@@ -3583,7 +3694,7 @@ final class ImageDocument {
         endPendingUserEdits()
         enqueue(on: inputQueue, input: true) { [session, image] in
             do { try work(session, image) } catch { self.report(error) }
-            DispatchQueue.main.async { try? self.reload() }
+            self.dispatchReadWhenReady { try? self.reload() }
         }
     }
 
@@ -3850,6 +3961,7 @@ final class ImageDocument {
     func canRun(_ procedure: EngineSession.Procedure) -> Bool {
         guard !recorder.isReplaying else { return false }
         if procedureSensitivity == nil {
+            guard !EngineActivity.shared.isRenderingTransformPreview else { return false }
             let rows = (try? session.procedures(image: image)) ?? []
             procedureSensitivity = Dictionary(rows.map { ($0.name, $0.isSensitive) }, uniquingKeysWith: { a, _ in a })
         }
@@ -3875,7 +3987,7 @@ final class ImageDocument {
         }
         enqueueExclusive(label: procedure.label, rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
             let result = Result { try session.runProcedure(procedure.name, image: image, mode: mode) }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 try? self.reload()
                 completion(result)
             }
@@ -3982,10 +4094,12 @@ final class ImageDocument {
         }
     }
 
-    private func finishClipboard(_ error: Error?, completion: @MainActor (Error?) -> Void) {
-        isTransferringClipboard = false
-        if !isClosing { try? reload() }
-        completion(error)
+    private func finishClipboard(_ error: Error?, completion: @escaping @MainActor (Error?) -> Void) {
+        countedReadWhenReady {
+            self.isTransferringClipboard = false
+            if !self.isClosing { try? self.reload() }
+            completion(error)
+        }
     }
 
     /// Edit ▸ Paste: the payload becomes a new layer the engine selects,
@@ -4263,7 +4377,7 @@ final class ImageDocument {
         enqueueExclusive(effect: .readsPixels, label: "Saving \(url.lastPathComponent)", rejected: { completion(DocumentError.busy) }) { [session, image] in
             let result: Error?
             do { try session.save(image, to: url.path); result = nil } catch { result = error }
-            DispatchQueue.main.async { completion(result) }
+            self.dispatchReadWhenReady { completion(result) }
         }
     }
 
@@ -4368,7 +4482,7 @@ final class ImageDocument {
                 // gate. Keep the queue-owned validity flag confined to it.
                 self.inputQueue.sync { self.paintTargetIsValid = true }
             }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 if case .success = result { self.rejectedTargetPick = false }
                 // The reload mirrors the engine's native selection — the
                 // imported top layer or the placed link — as the target.
@@ -4453,6 +4567,50 @@ final class ImageDocument {
             }
         }
         if pendingWork == 0 { close() } else { onQueueDrained = close }
+    }
+
+    /// Reads a transformed composite from a temporary image. The clone lives
+    /// through rendering and asynchronous native cleanup; that entire interval
+    /// holds document close. It never becomes a document or a Recorder target.
+    func renderTransformPreview(_ request: TransformPixelPreview.Request,
+                                completion: @escaping @MainActor (Result<CGImage, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard acceptsImageReads, !strokeIsActive, !targetCommandIsPending,
+              !floatingState.isActive, !hasMultipleSelectedLayers, !isMaskTargetActive, !isChannelTargetActive,
+              activeDrawable == request.layer, request.isValid else {
+            return completion(.failure(DocumentError.busy))
+        }
+        pendingWork += 1 // Include clone destruction and the deferred reply.
+        EngineActivity.shared.beginTransformPreview()
+        enqueue(on: inputQueue) { [session, image] in
+            var copy: Int32?
+            let result = Result { () throws -> CGImage in
+                let source = try session.layers(image)
+                let info = try session.info(image)
+                guard CGSize(width: info.width, height: info.height) == request.imageSize,
+                      try session.selectedLayers(image) == [request.layer],
+                      !(try session.floatingSelection(image)).isActive,
+                      let index = source.firstIndex(where: { $0.id == request.layer }),
+                      source[index].bounds == request.original else { throw DocumentError.targetChanged }
+                try Self.requireLayerTransformTarget(request.layer, session: session, image: image)
+                let duplicate = try session.transformedPreviewImage(image, layer: request.layer, matrix: request.matrix,
+                    expectedBounds: request.original, interpolation: request.interpolation)
+                copy = duplicate
+                return try CanvasDisplayDestination.render(session, image: duplicate, scale: request.renderScale,
+                    area: request.renderArea,
+                    destination: request.destination, proof: request.proof)
+            }
+            DispatchQueue.main.async {
+                let finish: @MainActor (Result<Void, Error>) -> Void = { cleanup in
+                    defer { self.jobDidFinish(input: false) }
+                    EngineActivity.shared.endTransformPreview()
+                    if self.isClosing { completion(.failure(DocumentError.closed)) }
+                    else { completion(cleanup.flatMap { result }) }
+                }
+                if let copy { EngineActivity.shared.closeImage(copy, session: session, completion: finish) }
+                else { finish(.success(())) }
+            }
+        }
     }
 
     // MARK: Helpers
@@ -4749,9 +4907,9 @@ final class ImageDocument {
             guard !isClosing else { return completion(false) }
             if refuseWhileEditingUnavailable(forPreviewWork: true) { return completion(false) }
             record = filterPreviewRecords[filter]
-            // An admitted Apply of a Levels session reserves its Recorder row
+            // An admitted Apply of a supported session reserves its Recorder row
             // now; preview writes, Cancel and refused admissions never do.
-            if record?.operation == "gimp:levels", recorder.isRecording {
+            if ["gimp:levels", "gimp:curves"].contains(record?.operation ?? ""), recorder.isRecording {
                 let context: RecorderContext?
                 switch record?.coverage {
                 case .layer(let layer)?: context = .layer(layer)
@@ -4760,20 +4918,26 @@ final class ImageDocument {
                 }
                 do { capture = try reserveRecording(context: context) }
                 catch {
-                    assertionFailure("A recording log refused an admitted Levels apply: \(error)")
+                    assertionFailure("A recording log refused an admitted adjustment apply: \(error)")
                     return completion(false)
                 }
             }
         }
         enqueue(on: inputQueue, input: commit, teardown: !commit) { [session, image] in
             let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
-            var settings: EngineSession.LevelsSettings?
+            var command: SemanticImageCommand?
             var settingsFailure: Error?
             // The final whole settings are read behind every queued preview
             // write, only while a supported layer capture is active; a read
             // failure never suppresses the live commit below.
             if commit, case .layer = capture?.context {
-                do { settings = try session.levelsSettings(filter) }
+                do {
+                    if record?.operation == "gimp:curves" {
+                        command = .applyCurves(try session.curvesSettings(filter))
+                    } else {
+                        command = .applyLevels(try session.levelsSettings(filter))
+                    }
+                }
                 catch { settingsFailure = error }
             }
             var success = false
@@ -4793,10 +4957,10 @@ final class ImageDocument {
                     result = .failure(settingsFailure)
                 } else if case .unsupported(let reason)? = record?.coverage {
                     result = .failure(RecorderReplayError(message: reason))
-                } else if let settings {
-                    result = .success(.applyLevels(settings))
+                } else if let command {
+                    result = .success(command)
                 } else {
-                    result = .failure(RecorderReplayError(message: "The accepted Levels settings could not be read for recording."))
+                    result = .failure(RecorderReplayError(message: "The accepted adjustment settings could not be read for recording."))
                 }
                 self.settleRecording(capture, result: result, confirmed: confirmed)
             }
@@ -5036,6 +5200,8 @@ final class ImageDocument {
     /// which could land between another operation's pixel read and its
     /// deferred write.
     private func enqueueTargetCommand(_ work: @escaping (EngineSession, Int32) throws -> Void,
+                                      input: Bool = true,
+                                      rejectFailedTarget: Bool = false,
                                       completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
         guard !isClosing else {
             completion?(.failure(DocumentError.closed))
@@ -5047,21 +5213,23 @@ final class ImageDocument {
         // Hold the deferred cache/completion stage too, so an exclusive
         // operation admitted after this input cannot overtake its cleanup.
         pendingWork += 1
-        enqueue(on: inputQueue, input: true) { [session, image] in
+        enqueue(on: inputQueue, input: input) { [session, image] in
             // While the command runs the target it replaces cannot be
             // painted; a success leaves a fresh native selection the
-            // edits behind it may use, while a failure keeps the
-            // queue's prior answer rather than reopening a refused one.
+            // edits behind it may use. An ordinary failed edit keeps the
+            // prior answer; a failed explicit pick closes painting until
+            // another pick resolves the target.
             let targetWasValid = self.paintTargetIsValid
             self.paintTargetIsValid = false
             let result = Result { try work(session, image) }
-            self.paintTargetIsValid = targetWasValid
+            self.paintTargetIsValid = rejectFailedTarget ? false : targetWasValid
             if case .success = result { self.paintTargetIsValid = true }
-            DispatchQueue.main.async {
+            self.dispatchReadWhenReady {
                 EngineActivity.shared.whenIdle {
                     defer { self.jobDidFinish(input: false) }
-                    if self.pendingTargetCommands.remove(token) != nil, case .success = result {
-                        self.rejectedTargetPick = false
+                    if self.pendingTargetCommands.remove(token) != nil {
+                        if case .success = result { self.rejectedTargetPick = false }
+                        else if rejectFailedTarget { self.rejectedTargetPick = true }
                     }
                     if !self.isClosing {
                         // Core can report a partial native insertion failure;
@@ -5594,17 +5762,20 @@ final class ImageDocument {
                             throw RecorderReplayError(message: "Unlock the recorded layer's pixels and position before replaying this transform.")
                         }
                     }
-                    if case .applyLevels = step.command {
+                    if case .transformProjectiveLayer = step.command {
+                        try Self.requireLayerTransformTarget(layer, session: session, image: image)
+                    }
+                    if step.command.isLayerAdjustment {
                         // Fresh admission against the live image, never the
                         // recorded hints: membership was already confirmed;
                         // mode, locks, masks, channels and Quick Mask are
                         // rechecked before the new session begins.
                         let mode = try session.colorInfo(image).mode
                         guard mode == .rgb || mode == .grayscale else {
-                            throw RecorderReplayError(message: "Convert the image to RGB or grayscale before replaying this Levels adjustment.")
+                            throw RecorderReplayError(message: "Convert the image to RGB or grayscale before replaying this \(step.command.title) adjustment.")
                         }
                         guard try session.layerState(layer, image: image).effective.isDisjoint(with: [.pixels]) else {
-                            throw RecorderReplayError(message: "Unlock the recorded layer's pixels before replaying this Levels adjustment.")
+                            throw RecorderReplayError(message: "Unlock the recorded layer's pixels before replaying this \(step.command.title) adjustment.")
                         }
                         let selectedLayers = try session.selectedLayers(image)
                         let editingMask = try (selectedLayers + [layer]).contains {
@@ -5612,7 +5783,7 @@ final class ImageDocument {
                         }
                         guard try !session.quickMask(image).enabled,
                               try session.selectedItems(.channel, image: image).isEmpty, !editingMask else {
-                            throw RecorderReplayError(message: "Finish editing the channel or layer mask before replaying this Levels adjustment.")
+                            throw RecorderReplayError(message: "Finish editing the channel or layer mask before replaying this \(step.command.title) adjustment.")
                         }
                     }
                     try step.command.apply(session: session, image: image, layer: layer)
@@ -5652,7 +5823,7 @@ final class ImageDocument {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
         case .channelToSelection: return true
-        case .layerProperties, .transformLayer, .applyLevels, .completeStroke: return true
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .completeStroke: return true
         default: return false
         }
     }
@@ -5676,11 +5847,17 @@ final class ImageDocument {
             // never falls through to the implicit paint target or selection.
             return .layer(layer)
         }
-        if case .applyLevels = command {
+        if case .transformProjectiveLayer = command {
             guard let layer = explicitLayer, layer > 0 else {
-                return .unavailable("The explicit layer could not be identified when this Levels adjustment was recorded.")
+                return .unavailable("The explicit layer could not be identified when this transform was recorded.")
             }
-            // The recorded Levels binds the layer the session began on and
+            return .layer(layer)
+        }
+        if command.isLayerAdjustment {
+            guard let layer = explicitLayer, layer > 0 else {
+                return .unavailable("The explicit layer could not be identified when this \(command.title) adjustment was recorded.")
+            }
+            // The recorded adjustment binds the layer the session began on and
             // never falls through to the implicit paint target or selection.
             return .layer(layer)
         }
@@ -5947,8 +6124,8 @@ final class ImageDocument {
         }
     }
 
-    /// Canvas resize alone supplies its final immutable command after the
-    /// worker resolves and uses the caller's copied color exactly once.
+    /// Commands whose final parameters come from native state supply their
+    /// immutable recording only after resolving and applying those values.
     private func runDeferredImageCommand(_ work: @escaping (EngineSession, Int32) throws -> SemanticImageCommand) {
         guard !isClosing, !refuseWhileEditingUnavailable() else { return }
         let capture: RecorderCapture?
@@ -5956,7 +6133,7 @@ final class ImageDocument {
             if recorder.isRecording { capture = try reserveRecording(context: nil) }
             else { capture = nil }
         }
-        catch { assertionFailure("A recording log refused an admitted canvas resize: \(error)"); return }
+        catch { assertionFailure("A recording log refused an admitted image command: \(error)"); return }
         enqueue(on: inputQueue, input: true) { [session, image] in
             let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
             let result = Result { try work(session, image) }
@@ -6018,6 +6195,25 @@ final class ImageDocument {
         } catch {
             assertionFailure("An accepted Recorder reservation could not settle: \(error)")
         }
+    }
+
+    /// A cache-reading completion is still accepted document work while it
+    /// waits behind another image's private preview or exclusive operation.
+    /// Keep its whole callback inside the hold: close must not destroy the
+    /// source between reconciliation and the caller's continuation.
+    private func countedReadWhenReady(_ action: @escaping @MainActor () -> Void) {
+        pendingWork += 1
+        EngineActivity.shared.whenReadyForSynchronousRead {
+            defer { self.jobDidFinish(input: false) }
+            action()
+        }
+    }
+
+    /// Called by a worker before enqueue posts its own jobDidFinish. FIFO
+    /// delivery to main registers the extra close hold before that original
+    /// count can drain, even when the readiness gate defers the actual read.
+    private nonisolated func dispatchReadWhenReady(_ action: @escaping @MainActor () -> Void) {
+        DispatchQueue.main.async { self.countedReadWhenReady(action) }
     }
 
     /// Queues engine work; the document counts it until it ran so a close

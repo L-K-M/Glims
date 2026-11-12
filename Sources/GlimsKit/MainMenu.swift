@@ -184,7 +184,12 @@ enum MainMenu {
             item("Restore Layer Source…", #selector(DocumentWindowController.restoreLayerSource(_:))),
             arrange,
             lock,
-            submenu("Transform", [
+            submenu("Transform", LayerTransformSession.Mode.allCases.map { mode in
+                let entry = item(mode.title, #selector(DocumentWindowController.setTransformModeFromMenu(_:)))
+                entry.tag = mode.menuTag
+                return entry
+            } + [
+                .separator(),
                 item("Rotate 90° Clockwise", #selector(DocumentWindowController.rotateLayer90(_:))),
                 item("Rotate 90° Counter-Clockwise", #selector(DocumentWindowController.rotateLayer270(_:))),
                 item("Rotate 180°", #selector(DocumentWindowController.rotateLayer180(_:))),
