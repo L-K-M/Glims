@@ -169,12 +169,13 @@ int main(int argc,char **argv) {
     if(!scene.id)continue;
     CHECK(glims_engine_call(engine,snapshot,&scene)==GLIMS_STATUS_OK && same(&scene,scene.before,-1),"raw seeded values and UUID order are exact independently of names and list order");
     GlimsBrushSettings brush={.struct_size=sizeof brush,.tool=GLIMS_PAINT_PENCIL,.size=7,.opacity=1,.red=1,.green=1,.blue=1,.hardness=-1,.rate=-1,.flow=-1,.exposure=-1};
-    GlimsStrokePoint points[2]={{6,6,1,0,0,100},{18,10,1,0,0,120}};GlimsStrokeID stroke=0;GlimsUndoInfo before,after;
-    api->image_undo_info(engine,scene.id,&before);
+    GlimsStrokePoint points[2]={{6,6,1,0,0,100},{18,10,1,0,0,120}};GlimsStrokeID stroke=0;GlimsUndoInfo before={0},after={0};
+    CHECK(api->image_undo_info(engine,scene.id,&before)==GLIMS_STATUS_OK,"initial Undo information is available");
     CHECK(api->stroke_begin(engine,scene.id,scene.ids[2],&brush,points,&stroke,&error)==GLIMS_STATUS_OK && stroke,"real facade Pencil begins on one scalar plane");
     if(stroke){CHECK(api->stroke_continue(engine,stroke,points+1,1)==GLIMS_STATUS_OK && api->stroke_end(engine,stroke)==GLIMS_STATUS_OK,"native paint stroke ends");}
     CHECK(glims_engine_call(engine,snapshot,&scene)==GLIMS_STATUS_OK && same(&scene,scene.before,2) && memcmp(scene.actual[2],scene.before[2],scene.bytes),"only the intended plane changes");
-    memcpy(scene.after,scene.actual,sizeof scene.after);api->image_undo_info(engine,scene.id,&after);
+    memcpy(scene.after,scene.actual,sizeof scene.after);
+    CHECK(api->image_undo_info(engine,scene.id,&after)==GLIMS_STATUS_OK,"painted Undo information is available");
     CHECK(after.undo_count==before.undo_count+1,"component stroke contributes exactly one Undo step");
     CHECK(api->image_undo(engine,scene.id)==GLIMS_STATUS_OK && glims_engine_call(engine,snapshot,&scene)==GLIMS_STATUS_OK && same(&scene,scene.before,-1),"Undo restores exact component samples");
     CHECK(api->image_redo(engine,scene.id)==GLIMS_STATUS_OK && glims_engine_call(engine,snapshot,&scene)==GLIMS_STATUS_OK && same(&scene,scene.after,-1),"Redo restores exact edited component samples");

@@ -4941,12 +4941,14 @@ define the component roles. Intensity is stored directly as 0=full ink, 1=paper;
 8-bit, 16-bit and float samples retain their actual native scalar encoding.
 
 The pure codec passes 397 checks both optimized and under Address/Undefined
-Behavior Sanitizers. The initial native matrix passes 165 checks on each of the
+Behavior Sanitizers. The final native matrix passes 171 checks on each of the
 four engines, including real facade Pencil edits, exact one-step Undo/Redo,
 layerless XCF save/reopen, all three precisions, decoy names/reordering, metadata
-preservation and ten malformed native layouts. The final rebuilt-producer matrix,
-independent storage review and hosted CI are in progress. Codec source review has
-no important findings. No upstream source changed.
+preservation and ten malformed native layouts. Rebuilt adapter conformance
+also passes on all four. Codec independent review and direct native review have
+no important findings; the native helper timed out before a verdict and is not
+counted as a clean independent review. The final app checks and hosted CI remain
+in progress. No upstream source changed.
 
 Before public admission, a central default-deny operation policy must cover both
 queued and direct engine-thread calls, all aliases and session owners. Display,
