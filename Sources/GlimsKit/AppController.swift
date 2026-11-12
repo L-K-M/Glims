@@ -393,7 +393,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     private func route(_ event: EngineSession.Event) {
         if case .progress(let progress) = event {
-            let running = PlugInCommands.running?.document
+            let running = PlugInCommands.running?.document ?? EngineActivity.shared.progressDocument
             documents.first { $0.imageDocument === running }?.showProgress(progress)
             return
         }

@@ -20,6 +20,7 @@ final class EngineActivity {
     private var afterTransformPreview: [@MainActor () -> Void] = []
     var isRenderingTransformPreview: Bool { transformPreviewReads != 0 }
     private(set) var label: String?
+    private(set) weak var progressDocument: ImageDocument?
     var isBusy: Bool { label != nil }
 
     private var liveDocuments: [ImageDocument] {
@@ -54,13 +55,14 @@ final class EngineActivity {
     }
 
     @discardableResult
-    func perform(label: String, work: @escaping () -> Void,
+    func perform(label: String, document: ImageDocument? = nil, work: @escaping () -> Void,
                  completion: @escaping @MainActor () -> Void) -> Bool {
         guard !isBusy, !preparing else { return false }
         preparing = true
         finishPendingInput()
         preparing = false
         self.label = label
+        progressDocument = document
         let admittedDocuments = liveDocuments
         admittedDocuments.forEach { $0.onStateChange?() }
         let drained = DispatchGroup()
@@ -73,6 +75,7 @@ final class EngineActivity {
             work()
             DispatchQueue.main.async {
                 self.label = nil
+                self.progressDocument = nil
                 // Dispatch cleanup first. If completion starts a new
                 // activity, its barriers then include that cleanup.
                 let actions = self.idleActions

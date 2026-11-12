@@ -3636,6 +3636,20 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_new_cmyk) (GlimsEngine *engine, int32_t width, int32_t height,
                                  uint32_t component, const uint8_t *profile_icc,
                                  size_t profile_length, GlimsImageID *result, char **error);
+
+  /* Slot182: export an admitted native CMYK document as flat PSD v1. All
+   * four authoritative ink planes are written, including hidden inks, in
+   * C/M/Y/K order with exact source ICC bytes. U8/U16 only; FLOAT refuses.
+   * No RGB conversion, layers, alpha, resolution or other metadata resources.
+   * Dimensions <=30000 and complete file <2 GiB. Requires absolute local .psd
+   * path. Nonregular/symlink targets refuse. Stream to a private sibling,
+   * sync/close successfully and atomically replace only on complete success.
+   * Cancellation uses procedure_cancel; read RPCs remain serviceable. Refuses
+   * busy engine, active strokes/filters. Native file identity, dirty state,
+   * pixels and Undo remain unchanged; caller remembers successful exports.
+   * Borrowed immutable path lives until return. Clears *error. */
+  GlimsStatus (*image_export_native_cmyk_psd) (GlimsEngine *engine, GlimsImageID image,
+                                             const char *path, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

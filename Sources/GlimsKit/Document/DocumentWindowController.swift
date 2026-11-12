@@ -2201,6 +2201,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// The engine independently enforces the same boundary for direct callers.
     private func permitsMultichannelMenu(_ action: Selector?) -> Bool {
         switch action {
+        case #selector(exportDocument(_:)), #selector(repeatExport(_:)):
+            return supportsNativeCmykPSD
         case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
              #selector(revertDocument(_:)), #selector(newSnapshot(_:)),
              #selector(channelAttributesMenu(_:)), #selector(imageInformation(_:)),
@@ -2908,6 +2910,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     @objc func exportDocument(_ sender: Any?) {
         guard canStartFileWrite() else { return }
+        if imageDocument.colorInfo.mode.usesInkChannels && !supportsNativeCmykPSD {
+            statusBar.message = "PSD export requires 8-bit or 16-bit CMYK. Save XCF to retain this document."
+            return
+        }
         canvas.tools.finishTextEditing()
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
         guard let window else { return }
@@ -2915,7 +2921,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         if let url = imageDocument.fileState.lastExportURL,
            let format = ExportFormat.forFileExtension(url.pathExtension) { settings.format = format }
         let export = ExportSavePanel(baseName: DocumentFileState.suggestedBaseName(imageDocument.name),
-                                     settings: settings)
+                                     settings: settings,
+                                     context: imageDocument.colorInfo.mode == .cmyk
+                                        ? .nativeCmyk(profileName: imageDocument.colorInfo.profileLabel) : .ordinary)
         export.panel.directoryURL = imageDocument.fileState.lastExportURL?.deletingLastPathComponent() ?? exportDirectory
         export.panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = export.panel.url, let self,
@@ -2927,6 +2935,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func repeatExport(_ sender: Any?) {
         guard let url = imageDocument.fileState.lastExportURL else { return exportDocument(sender) }
         exportTo(url, settings: imageDocument.lastExportSettings)
+    }
+
+    private var supportsNativeCmykPSD: Bool {
+        imageDocument.colorInfo.mode == .cmyk &&
+            [.u8, .u16].contains(imageDocument.colorInfo.component)
     }
 
     private func exportTo(_ url: URL, settings: ExportSettings? = nil) {

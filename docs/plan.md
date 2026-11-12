@@ -5086,3 +5086,14 @@ byte fixture now passes 315 checks in optimized and ASan/UBSan builds; source
 review found no confirmed important findings. Native adapter and CI checks
 remain pending. See
 [cmyk-psd-codec.md](cmyk-psd-codec.md).
+
+### Native CMYK PSD export integration (2026-11-12)
+
+Slot182 writes the four authoritative integer ink planes and exact source ICC
+into a flat PSD without RGB conversion. Export/Repeat Export use the source
+profile and include hidden inks; float and incompatible settings refuse. A
+private sibling transaction commits only after complete write/sync/close and
+cancellation checks. Busy/read/cancel/shutdown ownership is explicit, and
+progress routes to the activity's document. Pinned numeric/control tests,
+portable transaction checks and actual Export UI pass; full integration remains
+in progress. See [native-cmyk-psd-export.md](native-cmyk-psd-export.md).

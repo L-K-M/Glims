@@ -178,7 +178,7 @@ extension EngineSmokeTest {
 
             func attach(_ id: Int32, name: String) throws -> DocumentWindowController {
                 let document = try ImageDocument(session: session, image: id, name: name)
-                let controller = DocumentWindowController(document: document)
+                let controller = DocumentWindowController(document: document, exportDirectory: work)
                 oldErrorHandlers.append((document, document.onError))
                 document.onError = { unexpectedErrors.append($0) }
                 controllers.append(controller)
@@ -364,7 +364,72 @@ extension EngineSmokeTest {
             let saveItem = NSMenuItem(title: "Save", action: #selector(DocumentWindowController.saveDocument(_:)), keyEquivalent: "")
             let exportItem = NSMenuItem(title: "Export", action: #selector(DocumentWindowController.exportDocument(_:)), keyEquivalent: "")
             expect(controller.validateMenuItem(saveItem), "CMYK menu allows XCF Save")
-            expect(!controller.validateMenuItem(exportItem), "CMYK menu disables unsupported export")
+            expect(controller.validateMenuItem(exportItem) == (component == .u8 || component == .u16),
+                   "CMYK menu offers PSD for integer inks and gates float export")
+
+            let exportPath = work.appendingPathComponent("native-cmyk-\(component.rawValue).psd")
+            let exportBefore = try pixels(image)
+            let exportUndo = document.undoInfo.undoCount
+            let exportDirty = document.hasUnsavedChanges
+            let exportSettings = ExportSettings(format: .psd)
+            var exportReturned = false
+            var exportFailure: Error?
+            if component == .u8, ProcessInfo.processInfo.environment["GLIMS_SMOKE_CMYK_PICKER"] == "1" {
+                controller.exportDocument(nil)
+                try require(wait { controller.window?.attachedSheet != nil }, "Native CMYK export sheet did not open")
+                guard let panel = controller.window?.attachedSheet as? NSSavePanel,
+                      let form = panel.accessoryView as? ExportOptionsForm else {
+                    throw NSError(domain: "CmykSmoke", code: 10)
+                }
+                expect(form.settings.permitsNativeCmykPSD && !form.psdColorPopup.isEnabled
+                       && form.psdCmykProfilePopup.titleOfSelectedItem == document.colorInfo.profileLabel,
+                       "actual CMYK export sheet fixes source inks and profile")
+                NSApp.activate(ignoringOtherApps: true)
+                panel.makeKeyAndOrderFront(nil)
+                FileHandle.standardError.write(Data("Export picker: save only to \(exportPath.path)\n".utf8))
+                try require(wait({ controller.window?.attachedSheet == nil && document.pendingWork == 0
+                    && document.fileState.lastExportURL != nil }, timeout: 90), "CMYK picker was not accepted")
+                exportReturned = true
+            } else {
+                document.export(to: exportPath, settings: exportSettings) { error in
+                    exportFailure = error; exportReturned = true
+                }
+                expect(EngineActivity.shared.progressDocument === document,
+                       "export progress belongs to the document across queued work")
+            }
+            try drain(document)
+            expect(exportReturned && EngineActivity.shared.progressDocument == nil,
+                   "completed export releases progress ownership")
+            if component == .float {
+                expect(exportFailure != nil && !FileManager.default.fileExists(atPath: exportPath.path)
+                       && document.fileState.lastExportURL == nil,
+                       "float PSD refuses without output or remembered destination")
+            } else {
+                expect(exportFailure == nil && document.lastExportSettings?.permitsNativeCmykPSD == true,
+                       "integer CMYK export remembers its successful native settings")
+                let bytes = try Data(contentsOf: exportPath)
+                expect(bytes.count > 26 && bytes.starts(with: Data("8BPS".utf8))
+                       && bytes[24] == 0 && bytes[25] == 4
+                       && bytes[23] == (component == .u8 ? 8 : 16)
+                       && bytes.range(of: profileBytes) != nil,
+                       "native PSD contains requested integer CMYK depth and exact source ICC")
+                try FileManager.default.removeItem(at: exportPath)
+                controller.repeatExport(nil)
+                try drain(document)
+                expect(try Data(contentsOf: exportPath) == bytes,
+                       "Repeat Export reproduces exact native PSD without a sheet")
+                var incompatible = exportSettings
+                incompatible.psdLayout = .merged
+                var refused = false
+                document.export(to: exportPath, settings: incompatible) { refused = $0 != nil }
+                try drain(document)
+                expect(refused && (try Data(contentsOf: exportPath)) == bytes
+                       && document.lastExportSettings == exportSettings,
+                       "incompatible export refuses and preserves prior file and settings")
+            }
+            expect(try pixels(image) == exportBefore && document.undoInfo.undoCount == exportUndo
+                   && document.hasUnsavedChanges == exportDirty,
+                   "native export leaves displayed pixels, Undo and dirty state unchanged")
 
             let savePath = work.appendingPathComponent("cmyk-\(component.rawValue).xcf")
             try drain(document)

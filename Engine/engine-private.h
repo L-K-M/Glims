@@ -24,6 +24,10 @@
 #define GLIMS_TYPE_PROGRESS (glims_progress_get_type ())
 G_DECLARE_FINAL_TYPE (GlimsProgress, glims_progress, GLIMS, PROGRESS, GObject)
 
+/* Native scalar CMYK output, deliberately separate from RGB-to-CMYK export. */
+GlimsStatus glims_image_export_native_cmyk_psd (GlimsEngine *engine, GlimsImageID image,
+                                               const char *path, char **error);
+
 struct GlimsEngine
 {
   /* Set before the engine thread starts; read-only afterwards. */

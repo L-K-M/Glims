@@ -642,12 +642,24 @@ final class EngineSession: @unchecked Sendable {
 
     func export(_ image: Int32, to path: String) throws {
         var error: UnsafeMutablePointer<CChar>?
+        if try colorInfo(image).mode == .cmyk {
+            try check(api.image_export_native_cmyk_psd(engine, image, path, &error), error)
+            return
+        }
         try check(api.image_export(engine, image, path, &error), error)
     }
 
     func export(_ image: Int32, to path: String, settings: ExportSettings) throws {
         var value = try settings.nativeValue()
         var error: UnsafeMutablePointer<CChar>?
+        if try colorInfo(image).mode == .cmyk {
+            guard settings.permitsNativeCmykPSD else {
+                throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                    message: "Native CMYK export requires PSD with the document's ink channels and source profile.")
+            }
+            try check(api.image_export_native_cmyk_psd(engine, image, path, &error), error)
+            return
+        }
         if settings.format == .psd, settings.psdColor == .cmyk {
             let profileData = try settings.validatedPsdCmykProfileData()
             try profileData.withUnsafeBytes { bytes in
