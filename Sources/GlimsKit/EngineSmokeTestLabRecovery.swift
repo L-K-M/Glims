@@ -110,7 +110,16 @@ extension EngineSmokeTest {
         }
         // The hosted smoke owns the engine instead of launching a second one.
         // Only supply that engine; production discovery/recover/adoption runs unchanged.
-        panel.onRecover = { [weak app] records in app?.recover(records, using: session) }
+        var admittedState: Bool?
+        panel.onRecover = { [weak app, weak panel] records in
+            guard let app, let panel else { return }
+            app.recover(records, using: session)
+            // performClick may pump its animation until this tiny recovery
+            // already finishes. Observe admission inside the actual action.
+            if admittedState == nil {
+                admittedState = app.inFlightRecoveries.count == 1 && panel.busy && !panel.recoverButton.isEnabled
+            }
+        }
         expect(panelWindow.isVisible && !panelWindow.canBecomeMain && panel.records.count == 2,
                "actual recovery panel lists both stale-owner Lab records")
         guard let row = panel.records.firstIndex(where: { $0.documentID == firstID }) else {
@@ -119,7 +128,7 @@ extension EngineSmokeTest {
         panel.tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         try wait({ panel.recoverButton.isEnabled && panel.selectedRecords == [candidate] }, "Real recovery row is selected")
         panel.recoverButton.performClick(nil)
-        expect(app.inFlightRecoveries.count == 1 && panel.busy && !panel.recoverButton.isEnabled,
+        expect(admittedState == true,
                "actual Recover action counts admission and blocks duplicate clicks")
         panel.recoverButton.performClick(nil)
         try wait({ app.inFlightRecoveries.isEmpty && !panel.busy && !EngineActivity.shared.isBusy }, "Lab recovery finishes")
