@@ -4765,3 +4765,17 @@ completion flag is also respected. Cancel drains accepted document callbacks
 but can proceed to cleanup without waiting for that foreign status flag;
 native image destruction still queues behind real engine work. The latter
 regression failed before the fix. Final checks on this follow-up remain open.
+
+### Recorder Brightness/Contrast candidate (2026-11-12)
+
+A newly applied Brightness/Contrast adjustment now captures the complete
+accepted brightness/contrast pair with its explicit layer binding. Recording
+format 10 carries the finite values; earlier versions reject the new command,
+and mixed recordings choose the highest needed version. Replay retains the
+existing native admission, target and lifetime gates. Preview, Cancel and
+refused Apply add no successful row; unsupported targets/effect edits and
+actual native failures keep their explicit failure behavior.
+
+The implementation and focused regression fixture build. Pure/native tests,
+independent review and integration qualification are pending. This expands
+Recorder coverage; it does not complete Photoshop 4 actions support.
