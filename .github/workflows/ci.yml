@@ -62,6 +62,9 @@ jobs:
       - name: Check conformance runner ABI refusal
         run: scripts/test-conformance-abi.sh
 
+      - name: Check private component metadata codec
+        run: bash scripts/test-plate-map.sh
+
       - name: Build
         run: swift build
 

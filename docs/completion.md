@@ -7,14 +7,22 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-The editor implementation is merged through [#198](https://github.com/L-K-M/Glims/pull/198)
-(`e6a924b`). The tested production revision `9490d73` has identical source,
-tests, scripts, dependencies and resources at that merge. All 1,249 units,
-13,166 ordinary workflows across four engines, and the standalone bundle
-checks pass. The ordinary release app also painted, saved XCF, quit,
-reopened that file and exported PNG. See [the verification report](editor-verification.md)
-for exact scope, cold-start timing and the remaining qualification gates.
-Dated reports below retain their original scope and pending notes.
+The installed editor is merged through [#226](https://github.com/L-K-M/Glims/pull/226)
+(`7bca6be`), with a tree identical to qualified source `dbeefe9`. This includes
+Sponge saturation tools, GIF/BMP/TGA export, explicit CMYK PSD output and the
+preceding reviewed editor work. All 1,510 units, the focused Sponge/tool-menu
+and full app checks on four engines, and standalone bundle checks pass. The
+latest release launched in 1.75 seconds fresh, 1.47 cached and 3.44 after
+relocation on this Mac. These timings do not establish every machine's latency.
+No notarization is requested or required for this task.
+
+This is not yet a claim of complete Photoshop 4 parity. Native CMYK/Lab,
+duotone and Multichannel editing, broader Recorder coverage, PSD fidelity and
+physical-input/VoiceOver qualification remain open. Private component storage
+work is not yet a public document mode. See [the plan](plan.md) for current
+slice evidence and [the earlier verification report](editor-verification.md)
+for its exact historical scope. Dated reports below retain their original
+scope and pending notes.
 
 - [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
       fail before packaging. Hosted CI explicitly builds only the interface.

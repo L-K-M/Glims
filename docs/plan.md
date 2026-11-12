@@ -4891,10 +4891,11 @@ truecolor, top-left origin and no embedded ICC profile. Gray/indexed sources
 are converted to RGB only in the private copy to preserve their transparency.
 The source document and XCF save retain their mode, profile, layers and Undo.
 Older BMP readers may ignore alpha; this is stated in the form and manual.
-Native, actual Export/Repeat Export, Batch and release qualification are pending.
+PR #225 is merged. Native, actual Export/Repeat Export, Batch and standalone
+bundle qualification passed before installing the reviewed build.
 
 
-### Sponge painting candidate (2026-11-12)
+### Sponge painting (2026-11-12)
 
 Tools > Dodge/Burn now includes Sponge Desaturate and Sponge Saturate, also
 cycled with Shift-O. Each retains its own brush/preset, size, hardness, pressure
@@ -4913,6 +4914,43 @@ The pinned native fixture passes 94 checks: chromatic and neutral pixels,
 independently encoded near-neutral float TIFF, opaque/partial alpha, exact
 Undo/Redo/XCF, a proved color-dynamics counterexample, colored/pipe brushes,
 selection strokes and alpha/pixel locks, plus non-RGB refusals. The previous
-implementation fails the neutral and dynamics counterexamples. Native matrix,
-actual Tool Options/canvas fixture, independent review, CI and standalone
-release qualification are still in progress.
+implementation fails the neutral and dynamics counterexamples. All four native
+engines, actual Tool Options/canvas and tool-menu fixtures, full app checks,
+1,510 units, independent native/UI review, latest-head CI and standalone bundle
+qualification passed. PR #226 is merged at `7bca6be`; its tree is identical to
+the qualified `dbeefe9` source. The installed app launched in 1.75 seconds
+fresh, 1.47 cached and 3.44 after relocation on this Mac. Native 24 MP stroke
+calls averaged 0.309 ms desaturating and 0.335 ms saturating; these are native
+call timings, not complete input-to-display latency. No notarization.
+
+
+### Private component storage foundation (2026-11-12)
+
+The next color-mode prerequisite stores authoritative scalar planes in native
+channels, without an editable RGB proxy. This private code does not activate a
+Multichannel menu item or document mode. Native CMYK/Lab/duotone editing remains
+open work; CMYK export is a separate implemented feature.
+
+A bounded, versioned little-endian metadata codec records dimensions, precision,
+intensity encoding, ordered opaque UUIDs and ink preview RGB values. It rejects
+unknown versions, extra/truncated bytes, invalid numbers and duplicate/missing
+identities. The native resolver also checks dimensions, scalar formats, channel
+cardinality and UUID correspondence; unsupported layers or damaged metadata cannot
+be mistaken for validated component storage. Names and native list order do not
+define the component roles. Intensity is stored directly as 0=full ink, 1=paper;
+8-bit, 16-bit and float samples retain their actual native scalar encoding.
+
+The pure codec passes 397 checks both optimized and under Address/Undefined
+Behavior Sanitizers. The initial native matrix passes 165 checks on each of the
+four engines, including real facade Pencil edits, exact one-step Undo/Redo,
+layerless XCF save/reopen, all three precisions, decoy names/reordering, metadata
+preservation and ten malformed native layouts. The final rebuilt-producer matrix,
+independent storage review and hosted CI are in progress. Codec source review has
+no important findings. No upstream source changed.
+
+Before public admission, a central default-deny operation policy must cover both
+queued and direct engine-thread calls, all aliases and session owners. Display,
+profile/proof rendering, component selection, clipboard/export, history, file
+admission and each supported edit need dedicated component routes and independent
+oracles. A valid parasite alone must never switch the user-visible mode or allow
+ordinary layer/projection operations to edit a derived representation.
