@@ -570,10 +570,13 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (image adjust)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
-            if ["export-options", "export-psd", "export-cmyk-controls"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? "") {
+            if ["export-options", "export-psd", "export-cmyk-controls", "export-gif", "export-bmp", "export-tga"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? "") {
                 try exerciseExportOptions(session, work: work, documents: documents,
-                    psd: ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] != "export-options",
-                    cmyk: ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "export-cmyk-controls")
+                    psd: ["export-psd", "export-cmyk-controls"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""),
+                    cmyk: ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "export-cmyk-controls",
+                    gif: ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "export-gif",
+                    bitmap: ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "export-bmp" ? .bmp :
+                        ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "export-tga" ? .tga : nil)
                 print(failures == 0 ? "PASSED (export options)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }

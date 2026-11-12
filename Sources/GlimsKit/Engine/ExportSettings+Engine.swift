@@ -14,6 +14,9 @@ extension ExportSettings {
         case .jpeg: value.format = GLIMS_EXPORT_JPEG.rawValue
         case .tiff: value.format = GLIMS_EXPORT_TIFF.rawValue
         case .psd: value.format = GLIMS_EXPORT_PSD.rawValue
+        case .gif: value.format = GLIMS_EXPORT_GIF.rawValue
+        case .bmp: value.format = GLIMS_EXPORT_BMP.rawValue
+        case .tga: value.format = GLIMS_EXPORT_TGA.rawValue
         }
         value.jpeg_quality = jpegQuality
         value.jpeg_progressive = jpegProgressive ? 1 : 0

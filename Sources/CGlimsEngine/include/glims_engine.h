@@ -138,7 +138,9 @@ typedef struct GlimsLayerInfo {
 
 /* Owned export choices. These values never encode an upstream enum. */
 typedef enum { GLIMS_EXPORT_PNG = 1, GLIMS_EXPORT_JPEG = 2,
-               GLIMS_EXPORT_TIFF = 3, GLIMS_EXPORT_PSD = 4 } GlimsExportFormat;
+               GLIMS_EXPORT_TIFF = 3, GLIMS_EXPORT_PSD = 4,
+               GLIMS_EXPORT_GIF = 5, GLIMS_EXPORT_BMP = 6,
+               GLIMS_EXPORT_TGA = 7 } GlimsExportFormat;
 /* PSD supports RGB/grayscale here. Layers retain the native exporter's
  * baked effects and perceptual blending; merged captures visible pixels
  * into one alpha-capable layer without editing the source image. */
@@ -3568,7 +3570,7 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*filter_curves_set) (GlimsEngine *engine, GlimsFilterID filter,
                                    const GlimsCurvesSnapshot *settings, char **error);
 
-  /* Slot178: noninteractive PNG, JPEG, TIFF or PSD export with explicit settings.
+  /* Slot178: noninteractive PNG, JPEG, TIFF, PSD or GIF export with explicit settings.
    * All fields are validated, including inactive formats. The filename's
    * exporter must match format. Unsupported native argument contracts fail
    * before writing. No document-save state, pixels or Undo entry is changed;
@@ -3578,7 +3580,10 @@ typedef struct GlimsEngineAPI {
    * layout tail. PSD supports RGB/grayscale; native writers choose output
    * depth (stable 3.2/3.0: 8/16-bit; development: also 32-bit float/u32).
    * Engines before 3.2.6 refuse profiles
-   * outside their default encoding space. Clears *error when supplied. */
+   * outside their default encoding space. GIF exports one visible,
+   * canvas-clipped, still (non-animated, non-interlaced) image with at
+   * most 256 colors and binary transparency, from a private copy, and
+   * requires a .gif filename. Clears *error when supplied. */
   GlimsStatus (*image_export_configured) (GlimsEngine *engine, GlimsImageID image,
                                          const char *path,
                                          const GlimsExportSettings *settings,
