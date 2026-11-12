@@ -54,6 +54,12 @@ fi
 
 [[ -f "$INSTALL/.glims-engine-stamp" && -f "$BUILD/build.ninja" ]] ||
   die "the engine for $REF is not built; run scripts/build-engine.sh $REF first."
+# Worktrees share these trees through symlinks. Embed and link their physical
+# locations so removing the worktree does not break plug-in discovery or the
+# response files used by native fixtures.
+INSTALL="$(cd "$INSTALL" && pwd -P)"
+BUILD="$(cd "$BUILD" && pwd -P)"
+PREFIX="$(cd "$PREFIX" && pwd -P)"
 sanitize_environment
 acquire_lock
 export PATH="$PREFIX/bin:$CLEAN_PATH"

@@ -108,7 +108,7 @@ enum EngineSmokeTest {
     }
 
     static func run() -> Int32 {
-        if ["multichannel", "cmyk", "ink-edits", "ink-levels"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
+        if ["multichannel", "cmyk", "ink-edits", "ink-levels", "recorder-ink-bindings"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
             return EngineSmokeTestHost.run()
         }
         if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents", !NSApp.isRunning {
@@ -161,6 +161,16 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-ink-bindings" {
+                try exerciseRecorderInkBindings(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (ink Recorder binding UI)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-ink" {
+                try exerciseRecorderInk(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (ink Recorder)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "ink-identity" {
                 try exerciseInkIdentity(session)
                 print(failures == 0 ? "PASSED (ink identity)" : "FAILED: \(failures) failure(s)")
@@ -2546,6 +2556,10 @@ enum EngineSmokeTest {
     /// layout — so no sheet or printer is involved.
     private static func exercisePrinting(_ session: EngineSession, work: URL,
                                          documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() && Date() < deadline { spin(0.01) }
+        }
         let image = try session.newImage(width: 120, height: 80)
         let document = try ImageDocument(session: session, image: image, name: "Print")
         documents.items.append(document)
@@ -2553,13 +2567,13 @@ enum EngineSmokeTest {
         controller.showWindow(nil)
         let window = try XCTUnwrapWindow(controller)
         defer {
-            controller.window?.close()
+            controller.closeDiscardingChanges()
+            wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy &&
+                (try? session.info(image)) == nil }
+            check(document.pendingWork == 0 && !EngineActivity.shared.isBusy &&
+                    (try? session.info(image)) == nil && controller.window?.isVisible != true,
+                  "printing releases its final admission and closes the source image")
             documents.items.removeAll { $0 === document }
-            document.closeImageWhenDrained()
-        }
-        func wait(_ condition: () -> Bool) {
-            let deadline = Date().addingTimeInterval(10)
-            while !condition() && Date() < deadline { spin(0.01) }
         }
 
         // US Letter paper; the imageable rect is the printer's, margins
@@ -2862,7 +2876,11 @@ enum EngineSmokeTest {
             check((center?.first ?? 0) > 200 && (center?[1] ?? 255) < 60,
                   "the tiny image's pixels reach the fitted page")
         } else { check(false, "the tiny image's PDF is written") }
-        tiny.closeImageWhenDrained()
+        tinyController.closeDiscardingChanges()
+        wait { tiny.pendingWork == 0 && (try? session.info(tinyImage)) == nil }
+        check(tiny.pendingWork == 0 && (try? session.info(tinyImage)) == nil &&
+                tinyController.window?.isVisible != true,
+              "the tiny print closes its window, renderer and native image")
         documents.items.removeAll { $0 === tiny }
 
         // A rotate accepted but still queued decides the printed
@@ -2924,7 +2942,14 @@ enum EngineSmokeTest {
                       "paper shows outside the rotated image")
             } else { check(false, "the rotated print rasterizes") }
         } else { check(false, "the rotated print PDF is written with a fitted image") }
-        split.closeImageWhenDrained()
+        splitController.closeDiscardingChanges()
+        // A PDF runner callback precedes the exclusive worker's final main
+        // callback. Own that cleanup before the next fixture requests a save.
+        wait { split.pendingWork == 0 && !EngineActivity.shared.isBusy &&
+            (try? session.info(splitImage)) == nil }
+        check(split.pendingWork == 0 && !EngineActivity.shared.isBusy &&
+                (try? session.info(splitImage)) == nil && splitController.window?.isVisible != true,
+              "the rotated print drains its admission and native image before recovery")
         documents.items.removeAll { $0 === split }
     }
 

@@ -58,6 +58,25 @@ struct RecorderDescriptionCatalog: Equatable {
     }
 }
 
+/// Persisted ink identity belongs to one document. It never authorizes an
+/// automatic binding to another document, even when the UUID matches.
+struct RecorderInkIdentity: Equatable {
+    enum Mode: String { case cmyk, multichannel }
+    enum Role: String { case unspecified, cyan, magenta, yellow, black }
+
+    let mode: Mode
+    let role: Role
+    let uuid: UUID
+
+    var isValid: Bool {
+        guard uuid != UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) else { return false }
+        switch mode {
+        case .cmyk: return role != .unspecified
+        case .multichannel: return role == .unspecified
+        }
+    }
+}
+
 enum RecorderBindingDescription: Equatable {
     enum Target: Equatable {
         case layer(UUID)
@@ -91,6 +110,9 @@ enum RecorderBindingDescription: Equatable {
     /// An explicit source channel, for example Channel ▸ To Selection. The
     /// symbol is a channel-kind description, never the active paint target.
     case channel(UUID)
+    /// Only native ink commands accept this binding. The symbol remains a
+    /// channel-kind description; the identity contains no runtime channel ID.
+    case ink(symbol: UUID, identity: RecorderInkIdentity)
     case context(Context)
     case unavailable(String)
 }

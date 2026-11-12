@@ -72,6 +72,12 @@ enum SemanticImageCommand {
     /// accepted native settings. The explicit layer lives in the document's
     /// runtime binding, never in this command; there is no active-layer fallback.
     case applyBrightnessContrast(EngineSession.BrightnessContrastSettings)
+    /// A committed ink-channel edit with its whole accepted native settings.
+    /// The explicit channel binding stays outside the command.
+    case editInk(EngineSession.InkEdit)
+    /// A committed ink-channel Levels adjustment with its whole accepted
+    /// native settings. The explicit channel binding stays outside the command.
+    case applyInkLevels(EngineSession.InkLevelsSettings)
     case completeStroke(RecorderStrokeCommand)
 
     var isLayerAdjustment: Bool {
@@ -84,7 +90,7 @@ enum SemanticImageCommand {
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .scale, .resizeCanvas, .crop, .completeStroke: return true
+        case .transformImage, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .editInk, .applyInkLevels, .scale, .resizeCanvas, .crop, .completeStroke: return true
         case .selectionShape, .selectColor, .selectCommand, .channelToSelection, .layerProperties: return false
         }
     }
@@ -130,6 +136,8 @@ enum SemanticImageCommand {
         case .applyColorBalance: return "Color Balance"
         case .applyHueSaturation: return "Hue/Saturation"
         case .applyBrightnessContrast: return "Brightness/Contrast"
+        case .editInk(let settings): return settings.operation.title
+        case .applyInkLevels: return "Ink Levels"
         case .completeStroke(let stroke): return stroke.title
         }
     }
@@ -154,7 +162,7 @@ enum SemanticImageCommand {
             try session.crop(image: image, to: rect)
         case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke:
             throw MissingLayerBinding()
-        case .channelToSelection:
+        case .channelToSelection, .editInk, .applyInkLevels:
             throw MissingChannelBinding()
         }
     }
@@ -262,6 +270,12 @@ enum SemanticImageCommand {
         case .channelToSelection(let operation):
             guard channel > 0 else { throw MissingChannelBinding() }
             try session.channelToSelection(channel, image: image, operation: operation)
+        case .editInk(let settings):
+            guard channel > 0 else { throw MissingChannelBinding() }
+            try session.editInk(image, channel: channel, settings: settings)
+        case .applyInkLevels(let settings):
+            guard channel > 0 else { throw MissingChannelBinding() }
+            try session.applyInkLevels(image, channel: channel, settings: settings)
         default:
             try apply(session: session, image: image)
         }
