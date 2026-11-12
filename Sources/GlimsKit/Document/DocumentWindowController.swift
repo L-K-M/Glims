@@ -467,8 +467,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private func refreshIdleStatus(_ reason: ToolHintPolicy.Refresh) {
         let undo = imageDocument.undoInfo.nextUndo.isEmpty ? "" : " · Undo \(imageDocument.undoInfo.nextUndo)"
         let multichannel = imageDocument.colorInfo.mode.usesInkChannels
-        let count = multichannel ? imageDocument.channels.count : imageDocument.info.layerCount
-        let item = multichannel ? "ink channel" : "layer"
+        let lab = imageDocument.colorInfo.mode == .lab
+        let count = lab ? 3 : multichannel ? imageDocument.channels.count : imageDocument.info.layerCount
+        let item = lab ? "Lab channel" : multichannel ? "ink channel" : "layer"
         let summary = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(count) \(item)\(count == 1 ? "" : "s")\(undo)"
         let current = statusBar.message
         let message = ToolHintPolicy.status(current: current, isError: statusIsError,
@@ -981,6 +982,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func toggleSoftProof(_ sender: Any?) {
+        guard imageDocument.colorInfo.mode != .lab else { return }
         guard !closeStarted, !imageDocument.isClosing, window?.attachedSheet == nil else { return }
         if canvas.softProof != nil {
             canvas.setSoftProof(nil)
@@ -993,6 +995,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func showSoftProofSetup(_ sender: Any?) {
+        guard imageDocument.colorInfo.mode != .lab else { return }
         guard let window, !closeStarted, !imageDocument.isClosing,
               window.attachedSheet == nil, softProofController == nil else { return }
         let document = imageDocument
@@ -1044,6 +1047,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// start then queues the session's begin and initial reads behind
     /// pending input, and the panel builds when they land.
     func openNativeFilter(_ operation: EngineSession.FilterOperation) {
+        guard imageDocument.colorInfo.mode != .lab else {
+            imageDocument.onError?("Lab adjustments are not available. Use Edit > Fill for a physical channel value.")
+            return
+        }
         if imageDocument.colorInfo.mode.usesInkChannels {
             if operation.name == "gimp:levels" { openInkLevels(); return }
             guard operation.name == "gegl:invert-linear" else {
@@ -1365,12 +1372,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func toggleMaskEditing(_ sender: Any?) { imageDocument.toggleMaskEditing() }
 
     @objc func toggleQuickMask(_ sender: Any?) {
-        guard !imageDocument.colorInfo.mode.usesInkChannels else { return }
+        guard !imageDocument.colorInfo.mode.usesNativeChannels else { return }
         imageDocument.setQuickMask(!(imageDocument.quickMaskState?.enabled ?? false))
     }
 
     @objc func saveSelectionAsChannel(_ sender: Any?) {
-        guard let window, !imageDocument.colorInfo.mode.usesInkChannels else { return }
+        guard let window, !imageDocument.colorInfo.mode.usesNativeChannels else { return }
         endPendingEdits()
         ChannelForms.saveSelection(in: imageDocument, on: window)
     }
@@ -1408,14 +1415,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func duplicateChannelMenu(_ sender: Any?) {
-        guard !imageDocument.colorInfo.mode.usesInkChannels,
+        guard !imageDocument.colorInfo.mode.usesNativeChannels,
               channelMenuBaseAllowed, !imageDocument.floatingState.isActive,
               let channel = selectedSavedChannelMenuTarget else { return }
         imageDocument.duplicateChannel(channel.id)
     }
 
     @objc func deleteChannelMenu(_ sender: Any?) {
-        guard !imageDocument.colorInfo.mode.usesInkChannels,
+        guard !imageDocument.colorInfo.mode.usesNativeChannels,
               channelMenuBaseAllowed, !imageDocument.floatingState.isActive,
               let channel = selectedSavedChannelMenuTarget else { return }
         imageDocument.deleteChannel(channel.id)
@@ -1432,7 +1439,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func channelToSelectionMenu(_ sender: NSMenuItem) {
-        guard !imageDocument.colorInfo.mode.usesInkChannels,
+        guard !imageDocument.colorInfo.mode.usesNativeChannels,
               channelMenuBaseAllowed, let channel = selectedSavedChannelMenuTarget,
               let tag = UInt32(exactly: sender.tag),
               let operation = EngineSession.SelectOperation(rawValue: tag) else { return }
@@ -1808,7 +1815,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// the chosen color at the chosen opacity.
     @objc func fill(_ sender: Any?) {
         guard let window else { return }
-        if imageDocument.colorInfo.mode.usesInkChannels && (closeStarted || previewBusy) { return }
+        if imageDocument.colorInfo.mode.usesNativeChannels && (closeStarted || previewBusy) { return }
         endPendingEdits()
         FillForm.present(in: imageDocument, on: window)
     }
@@ -2332,7 +2339,40 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    private func permitsLabMenu(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(selectAll(_:)), #selector(selectNone(_:)), #selector(selectInverse(_:)):
+            return imageDocument.session.supportsLabSelections && !imageDocument.strokeIsActive
+        case #selector(fill(_:)),
+             #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
+             #selector(revertDocument(_:)), #selector(imageInformation(_:)),
+             #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)),
+             #selector(rotateViewClockwise(_:)), #selector(rotateViewCounterclockwise(_:)),
+             #selector(setViewAngle(_:)), #selector(resetViewRotation(_:)),
+             #selector(chooseScreenMode(_:)), #selector(cycleScreenMode(_:)),
+             #selector(toggleShowRulers(_:)), #selector(toggleSelectionEdges(_:)),
+             #selector(toggleShowGuides(_:)), #selector(toggleShowGrid(_:)),
+             #selector(toggleSnapToGuides(_:)), #selector(toggleSnapToGrid(_:)),
+             #selector(toggleSnapToCanvas(_:)), #selector(toggleSnapToLayerBounds(_:)):
+            return true
+        default: return false
+        }
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if imageDocument.colorInfo.mode == .lab {
+            guard permitsLabMenu(menuItem) else {
+                menuItem.toolTip = "This command is unavailable for Lab documents."
+                return false
+            }
+            if menuItem.action == #selector(fill(_:)) {
+                let reason: String?
+                if let axis = imageDocument.selectedLabAxis { reason = imageDocument.labFillRefusal(axis: axis) }
+                else { reason = "Select one Lab channel in the Channels palette." }
+                menuItem.toolTip = reason
+                return !closeStarted && !previewBusy && window?.attachedSheet == nil && reason == nil
+            }
+        }
         if imageDocument.colorInfo.mode.usesInkChannels {
             guard permitsMultichannelMenu(menuItem) else {
                 menuItem.toolTip = "This command is unavailable for ink-channel documents."
@@ -3029,6 +3069,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func exportDocument(_ sender: Any?) {
+        guard imageDocument.colorInfo.mode != .lab else {
+            statusBar.message = "Save Lab documents as XCF. Lab export is not available."
+            return
+        }
         guard canStartFileWrite() else { return }
         if imageDocument.colorInfo.mode.usesInkChannels && !supportsNativeCmykPSD {
             statusBar.message = "PSD export requires 8-bit or 16-bit CMYK. Save XCF to retain this document."
@@ -3053,6 +3097,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func repeatExport(_ sender: Any?) {
+        guard imageDocument.colorInfo.mode != .lab else { return }
         guard let url = imageDocument.fileState.lastExportURL else { return exportDocument(sender) }
         exportTo(url, settings: imageDocument.lastExportSettings)
     }

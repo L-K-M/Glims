@@ -15,8 +15,8 @@ Normal app builds include the engine. The current implementation and its
 four-engine, standalone and interactive verification are recorded in the
 [completion ledger](docs/completion.md) and
 [verification report](docs/editor-verification.md). Public distribution still
-requires source provenance and signing/notarization qualification; nothing
-has been released.
+requires source provenance and bundle qualification; nothing has been released.
+Notarization is outside the requested scope.
 
 Glims pairs GIMP's GUI-free engine (layers, masks, painting, selections,
 non-destructive filters, XCF, plug-ins) with a new AppKit interface made with

@@ -488,9 +488,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     // MARK: Menu commands
 
     @objc func newDocument(_ sender: Any?) {
-        guard session != nil, !terminationRequested else { return }
+        guard let session, !terminationRequested else { return }
         if let newImagePanel { newImagePanel.showWindow(nil); return }
-        let panel = NewImagePanel()
+        let panel = NewImagePanel(supportsLab: session.supportsLabCreation
+                                  && session.supportsLabAxes && session.supportsLabFill)
         panel.onCreate = { [weak self] settings in
             self?.createDocument(width: settings.width, height: settings.height,
                                  kind: settings.kind, component: settings.component,
@@ -519,6 +520,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                     }
                     return try session.newCmykImage(width: width, height: height,
                                                    component: component, profileICC: profileICC)
+                case .lab:
+                    return try session.newLabImage(width: width, height: height, component: component)
                 }
             }
             DispatchQueue.main.async {
@@ -822,12 +825,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     /// Runs on the engine activity queue: opens the store's copy into an
     /// intermediate image, duplicates it so the document to open is
     /// independent of the copy's own identity, and closes the
-    /// intermediate handle on every outcome.
+    /// intermediate handle on every outcome. Lab uses direct ownership transfer
+    /// because native duplication is not supported for its typed planes.
     private nonisolated static func recoverImage(from record: RecoveryStore.RecoveredDocument,
                                                  session: EngineSession) -> Result<Int32, Error> {
         do {
             let opened = try session.openImage(path: record.copyURL.path)
             do {
+                if try session.colorInfo(opened).mode == .lab { return .success(opened) }
                 let duplicated = try session.duplicateImage(opened)
                 do { try session.closeImage(opened) }
                 catch {
@@ -865,6 +870,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             do {
                 let document = try ImageDocument(session: session, image: image,
                                                  name: "\(record.name) recovered")
+                document.noteRecovered()
                 recoveredSources[document.recoveryID] = record
                 open(document)
                 lastRecoveryFailure = nil
@@ -1039,7 +1045,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
               item.identifier == MenuShortcutBridge.builtinIdentifier,
               item.action == #selector(selectToolFromMenu(_:)),
               let tool = ToolMenuCatalog.tool(forTag: item.tag),
-              tool.isAvailable(in: frontDocument?.colorInfo.mode) else { return }
+              frontDocument?.toolIsAvailable(tool) ?? true else { return }
         ToolState.shared.select(tool)
     }
 
@@ -1114,7 +1120,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 menuItem.state = .off; return false
             }
             menuItem.state = tool == ToolState.shared.current ? .on : .off
-            return tool.isAvailable(in: frontDocument?.colorInfo.mode)
+            return frontDocument?.toolIsAvailable(tool) ?? true
         case #selector(selectMoveTargetFromMenu(_:)):
             guard menuItem.identifier == MenuShortcutBridge.builtinIdentifier,
                   let mode = ToolMenuCatalog.moveTarget(forTag: menuItem.tag) else {

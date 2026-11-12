@@ -413,9 +413,11 @@ final class CanvasToolController {
         let point = canvas.imagePoint(for: event)
         let tool = pointerTool(for: event)
         let optionDown = keyboard.optionIsDown(flags: event.modifierFlags)
-        guard tool.isAvailable(in: document.colorInfo.mode),
-              !(document.colorInfo.mode.usesInkChannels && optionDown && tool.paintTool != nil) else {
-            onStatus?("Choose Brush, Pencil, Airbrush or a selection tool to edit ink channels.")
+        guard document.toolIsAvailable(tool),
+              !(document.colorInfo.mode.usesNativeChannels && optionDown && tool.paintTool != nil) else {
+            onStatus?(document.colorInfo.mode == .lab
+                ? "Choose an available Brush, selection, Hand or Zoom tool for Lab."
+                : "Choose Brush, Pencil, Airbrush or a selection tool to edit ink channels.")
             return
         }
         guard document.acceptsEdits || [.hand, .zoom, .eyedropper].contains(tool) else {
@@ -1295,6 +1297,14 @@ final class CanvasToolController {
 
         guard CanvasKeyboardPolicy.allowsPlainKey(event.modifierFlags),
               let key = event.charactersIgnoringModifiers else { return false }
+        if keyCode == Self.escapeKey, document.labBrushStrokeIsActive {
+            document.cancelLabBrushStroke()
+            tabletStrokeCapture = nil
+            dragTool = nil
+            cancelSpringTools()
+            onStatus?("Lab brush stroke cancelled.")
+            return true
+        }
         if transformSession != nil, Self.returnKeys.contains(keyCode) {
             applyTransform()
             return true
@@ -1337,6 +1347,7 @@ final class CanvasToolController {
             return true
         }
         if let arrow = CanvasKeyboardPolicy.Arrow(keyCode: keyCode) {
+            guard document.colorInfo.mode != .lab else { return true }
             let delta = CanvasKeyboardPolicy.nudge(arrow, shift: event.modifierFlags.contains(.shift))
             if document.floatingState.isActive {
                 // Arrow nudges move the unresolved floating selection
@@ -1358,7 +1369,7 @@ final class CanvasToolController {
             }
             return true
         case "q":
-            guard !document.colorInfo.mode.usesInkChannels else { return true }
+            guard !document.colorInfo.mode.usesNativeChannels else { return true }
             if !event.isARepeat {
                 document.setQuickMask(!(document.quickMaskState?.enabled ?? false))
             }
@@ -1381,13 +1392,14 @@ final class CanvasToolController {
         }
         if ToolID.group(forShortcut: key) != nil {
             guard ToolID.group(forShortcut: key)?.contains(where: {
-                $0.isAvailable(in: document.colorInfo.mode)
+                document.toolIsAvailable($0)
             }) == true else { return true }
             guard springLetters.canPress(keyCode: keyCode, isRepeat: event.isARepeat) else { return true }
             let state = ToolState.shared
             let previous = state.current, revision = state.selectionRevision
             selectingSpringTool = true
-            state.select(shortcut: key, cycle: event.modifierFlags.contains(.shift))
+            state.select(shortcut: key, cycle: event.modifierFlags.contains(.shift),
+                         available: document.toolIsAvailable)
             selectingSpringTool = false
             springLetters.press(keyCode: keyCode, at: event.timestamp, previous: previous,
                                 previousRevision: revision, selected: state.current,

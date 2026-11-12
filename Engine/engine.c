@@ -4248,6 +4248,159 @@ api_image_ink_channel_identity (GlimsEngine *engine, GlimsImageID image,
   return status;
 }
 
+static GlimsStatus
+image_lab_axes_on_engine (GlimsEngine *engine, gpointer data)
+{
+  GlimsArgs *a = data;
+  return glims_image_lab_axes (engine, a->image, a->out);
+}
+
+static GlimsStatus
+api_image_lab_axes (GlimsEngine *engine, GlimsImageID image, GlimsLabAxes *out)
+{
+  if (!out || out->struct_size < sizeof (*out))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsLabAxes empty = { .struct_size = out->struct_size };
+  memcpy (out, &empty, sizeof empty);
+  GlimsArgs a = { .image = image, .out = out };
+  GlimsStatus status = glims_facade_call (engine, GLIMS_FACADE_OP_image_lab_axes,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_lab_axes_on_engine, &a, NULL);
+  if (status != GLIMS_STATUS_OK)
+    memcpy (out, &empty, sizeof empty);
+  return status;
+}
+
+typedef struct {
+  GlimsImageID image;
+  GlimsLabFillSettings settings;
+  char **error;
+} LabFillArgs;
+
+static GlimsStatus
+image_fill_lab_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabFillArgs *a = data;
+  return glims_image_fill_lab (engine, a->image, &a->settings, a->error);
+}
+
+static GlimsStatus
+api_image_fill_lab (GlimsEngine *engine, GlimsImageID image,
+                    const GlimsLabFillSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  if (!settings || settings->struct_size < sizeof *settings)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  LabFillArgs a = { image, *settings, error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_fill_lab,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_fill_lab_on_engine, &a, error);
+}
+
+typedef struct {
+  GlimsImageID image;
+  GlimsResourceID brush;
+  GlimsLabBrushSettings settings;
+  const GlimsStrokePacketV2 *packet;
+  GlimsStrokeID stroke;
+  char **error;
+} LabStrokeArgs;
+
+static GlimsStatus
+stroke_begin_lab_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabStrokeArgs *a = data;
+  return glims_stroke_begin_lab (engine, a->image, a->brush, &a->settings,
+                                 a->packet, &a->stroke, a->error);
+}
+
+static GlimsStatus
+api_stroke_begin_lab (GlimsEngine *engine, GlimsImageID image, GlimsResourceID brush,
+                      const GlimsLabBrushSettings *settings,
+                      const GlimsStrokePacketV2 *packet, GlimsStrokeID *out, char **error)
+{
+  if (out) *out = 0;
+  if (error) *error = NULL;
+  if (!out || !settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  uint32_t size;
+  memcpy (&size, settings, sizeof size);
+  if (size < sizeof *settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  LabStrokeArgs a = { .image = image, .brush = brush, .packet = packet, .error = error };
+  memcpy (&a.settings, settings, sizeof a.settings);
+  GlimsStatus status = glims_facade_call (engine, GLIMS_FACADE_OP_stroke_begin_lab,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    stroke_begin_lab_on_engine, &a, error);
+  if (status == GLIMS_STATUS_OK) *out = a.stroke;
+  return status;
+}
+
+static GlimsStatus
+stroke_cancel_lab_on_engine (GlimsEngine *engine, gpointer data)
+{
+  return glims_stroke_cancel_lab (engine, *(GlimsStrokeID *) data);
+}
+
+static GlimsStatus
+api_stroke_cancel_lab (GlimsEngine *engine, GlimsStrokeID stroke)
+{
+  return glims_facade_call (engine, GLIMS_FACADE_OP_stroke_cancel_lab,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_STROKE, stroke, { 0, 0 } },
+    stroke_cancel_lab_on_engine, &stroke, NULL);
+}
+
+typedef struct {
+  GlimsImageID image;
+  uint32_t shape;
+  const GlimsPoint *points;
+  size_t count;
+  const GlimsLabSelectOptions *options;
+  char **error;
+} LabSelectShapeArgs;
+
+static GlimsStatus
+image_select_lab_shape_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabSelectShapeArgs *a = data;
+  return glims_image_select_lab_shape (engine, a->image, a->shape, a->points,
+                                       a->count, a->options, a->error);
+}
+
+static GlimsStatus
+api_image_select_lab_shape (GlimsEngine *engine, GlimsImageID image,
+                            uint32_t shape, const GlimsPoint *points, size_t count,
+                            const GlimsLabSelectOptions *options, char **error)
+{
+  if (error) *error = NULL;
+  LabSelectShapeArgs a = { image, shape, points, count, options, error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_select_lab_shape,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_select_lab_shape_on_engine, &a, error);
+}
+
+typedef struct {
+  GlimsImageID image;
+  uint32_t command;
+  char **error;
+} LabSelectCommandArgs;
+
+static GlimsStatus
+image_select_lab_command_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabSelectCommandArgs *a = data;
+  return glims_image_select_lab_command (engine, a->image, a->command, a->error);
+}
+
+static GlimsStatus
+api_image_select_lab_command (GlimsEngine *engine, GlimsImageID image,
+                              uint32_t command, char **error)
+{
+  if (error) *error = NULL;
+  LabSelectCommandArgs a = { image, command, error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_select_lab_command,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_select_lab_command_on_engine, &a, error);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version = GLIMS_ENGINE_API_VERSION,
   .struct_size = sizeof (GlimsEngineAPI),

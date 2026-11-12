@@ -216,6 +216,166 @@ final class EngineSession: @unchecked Sendable {
             && api.image_ink_snapshot_apply != nil && api.image_ink_snapshot_end != nil
     }
 
+    /// Lab axes have physical color semantics, not scalar ink intensity.
+    enum LabAxisRole: UInt32, CaseIterable {
+        case lightness = 0, a = 1, b = 2
+
+        var title: String {
+            switch self { case .lightness: return "Lightness (L*)"; case .a: return "a*"; case .b: return "b*" }
+        }
+        var nominalRange: ClosedRange<Double> { self == .lightness ? 0...100 : -128...127 }
+    }
+
+    struct LabAxis: Equatable {
+        let id: Int32
+        let role: LabAxisRole
+        let isSelected: Bool
+        let uuid: UUID
+        let name: String
+    }
+
+    struct LabAxes: Equatable {
+        let component: ColorComponent
+        let axes: [LabAxis]
+    }
+
+    var supportsLabCreation: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_new_lab),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_new_lab) else { return false }
+        return api.image_new_lab != nil
+    }
+
+    var supportsLabAxes: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_lab_axes),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_lab_axes) else { return false }
+        return api.image_lab_axes != nil
+    }
+
+    var supportsLabFill: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_fill_lab),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_fill_lab) else { return false }
+        return api.image_fill_lab != nil
+    }
+
+    var supportsLabBrush: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.stroke_cancel_lab),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.stroke_cancel_lab) else { return false }
+        return supportsLabAxes && api.stroke_begin_lab != nil && api.stroke_cancel_lab != nil
+            && api.stroke_continue_v2 != nil && api.stroke_end != nil
+    }
+
+    var supportsLabSelections: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_select_lab_command),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_select_lab_command) else { return false }
+        return supportsLabAxes && api.image_select_lab_shape != nil && api.image_select_lab_command != nil
+    }
+
+    /// Physical scalar painting. Brush colors and pressure dynamics have no
+    /// meaning here; only the chosen mask, size, hardness and opacity are used.
+    func beginLabStroke(image: Int32, axis: LabAxis, value: Double,
+                        brush: Brush, first: StrokeSampleV2) throws -> Int32 {
+        guard supportsLabBrush, let begin = api.stroke_begin_lab else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support the Lab brush.")
+        }
+        let hardness = brush.hardness ?? 0.5
+        guard image > 0, axis.id > 0, brush.tool == .paintbrush,
+              value.isFinite, abs(value) <= Double(Float.greatestFiniteMagnitude),
+              brush.opacity.isFinite, (0...1).contains(brush.opacity),
+              brush.size.isFinite, brush.size >= 1, brush.size <= 10_000,
+              hardness.isFinite, (0...1).contains(hardness), first.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a valid Lab axis, physical value and brush settings.")
+        }
+        let resource = try brush.resource.map { try resolveResource($0, kind: .brush) } ?? 0
+        var settings = GlimsLabBrushSettings()
+        settings.struct_size = UInt32(MemoryLayout<GlimsLabBrushSettings>.size)
+        settings.axis = axis.id; settings.role = axis.role.rawValue; settings.uuid = axis.uuid.uuid
+        settings.value = value; settings.opacity = brush.opacity
+        settings.size = brush.size; settings.hardness = hardness
+        var stroke: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try withTabletPacket([first]) { packet in
+            try check(begin(engine, image, resource, &settings, packet, &stroke, &error), error)
+        }
+        guard stroke > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Lab brush stroke did not start.")
+        }
+        return stroke
+    }
+
+    func cancelLabStroke(_ stroke: Int32) throws {
+        guard supportsLabBrush, let cancel = api.stroke_cancel_lab else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot cancel a Lab brush stroke.")
+        }
+        try check(cancel(engine, stroke), nil)
+    }
+
+    /// The owning image and the captured role/UUID must still identify its sole
+    /// selected axis. Native admission checks them again before publication.
+    func fillLab(_ image: Int32, axis: LabAxis, value: Double, opacity: Double) throws {
+        guard supportsLabFill, let slot = api.image_fill_lab else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support filling Lab channels.")
+        }
+        guard image > 0, axis.id > 0, value.isFinite, abs(value) <= Double(Float.greatestFiniteMagnitude),
+              opacity.isFinite, (0...1).contains(opacity) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a valid Lab channel, physical value and opacity.")
+        }
+        var settings = GlimsLabFillSettings()
+        settings.struct_size = UInt32(MemoryLayout<GlimsLabFillSettings>.size)
+        settings.axis = axis.id
+        settings.role = axis.role.rawValue
+        settings.uuid = axis.uuid.uuid
+        settings.value = value
+        settings.opacity = opacity
+        var error: UnsafeMutablePointer<CChar>?
+        try check(slot(engine, image, &settings, &error), error)
+    }
+
+    /// Native metadata only. This does not expose Lab editing or UI creation.
+    func labAxes(_ image: Int32) throws -> LabAxes {
+        guard supportsLabAxes, let slot = api.image_lab_axes else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support Lab component information.")
+        }
+        guard image > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a valid Lab image.")
+        }
+        var out = GlimsLabAxes()
+        out.struct_size = UInt32(MemoryLayout<GlimsLabAxes>.size)
+        try check(slot(engine, image, &out), nil)
+        return try Self.decodeLabAxes(from: out)
+    }
+
+    static func decodeLabAxes(from out: GlimsLabAxes) throws -> LabAxes {
+        let malformed = EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                    message: "Malformed Lab component information.")
+        guard out.struct_size == UInt32(MemoryLayout<GlimsLabAxes>.size), out.count == 3,
+              let component = ColorComponent(rawValue: out.component),
+              [.u8, .u16, .float].contains(component) else { throw malformed }
+        let native = [out.axes.0, out.axes.1, out.axes.2]
+        var ids = Set<Int32>(), uuids = Set<UUID>()
+        var axes: [LabAxis] = []
+        for (index, row) in native.enumerated() {
+            guard row.id > 0, ids.insert(row.id).inserted,
+                  let role = LabAxisRole(rawValue: row.role), role.rawValue == UInt32(index),
+                  row.selected <= 1,
+                  withUnsafeBytes(of: row.uuid, { $0.contains(where: { $0 != 0 }) }) else { throw malformed }
+            let uuid = UUID(uuid: row.uuid)
+            guard uuids.insert(uuid).inserted else { throw malformed }
+            let bytes = withUnsafeBytes(of: row.name) { Array($0) }
+            guard let end = bytes.firstIndex(of: 0),
+                  let name = String(bytes: bytes[..<end], encoding: .utf8) else { throw malformed }
+            axes.append(LabAxis(id: row.id, role: role, isSelected: row.selected == 1,
+                                uuid: uuid, name: name))
+        }
+        return LabAxes(component: component, axes: axes)
+    }
+
     func editInk(_ image: Int32, channel: Int32, settings: InkEdit) throws {
         guard supportsInkEdits, let edit = api.image_edit_ink else {
             throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
@@ -724,6 +884,25 @@ final class EngineSession: @unchecked Sendable {
             try check(api.image_new_cmyk(engine, Int32(width), Int32(height), component.rawValue,
                                         bytes.bindMemory(to: UInt8.self).baseAddress, profileICC.count,
                                         &image, &error), error)
+        }
+        return image
+    }
+
+    func newLabImage(width: Int, height: Int, component: ColorComponent) throws -> Int32 {
+        guard supportsLabCreation, let slot = api.image_new_lab else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support Lab images.")
+        }
+        guard (1...524_288).contains(width), (1...524_288).contains(height),
+              [.u8, .u16, .float].contains(component) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose valid Lab dimensions and precision.")
+        }
+        var image: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(slot(engine, Int32(width), Int32(height), component.rawValue, &image, &error), error)
+        guard image > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Lab image has no valid identity.")
         }
         return image
     }
@@ -1959,6 +2138,52 @@ final class EngineSession: @unchecked Sendable {
 
     // MARK: Selections
 
+    /// Explicit Lab mask writers. Slot presence alone on the old general
+    /// selection API does not imply that a producer supports Lab selections.
+    func selectLab(_ shape: SelectShape, image: Int32, options: SelectOptions) throws {
+        guard supportsLabSelections, let select = api.image_select_lab_shape else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This engine cannot create selections in Lab documents.")
+        }
+        var settings = GlimsLabSelectOptions()
+        settings.struct_size = UInt32(MemoryLayout<GlimsLabSelectOptions>.size)
+        settings.operation = options.operation.rawValue
+        settings.antialias = options.antialias ? 1 : 0
+        settings.feather = options.feather
+        settings.corner_radius = options.cornerRadius
+        let kind: GlimsSelectShape, points: [GlimsPoint]
+        switch shape {
+        case .rectangle(let rect):
+            kind = GLIMS_SHAPE_RECTANGLE; points = Self.corners(rect)
+        case .ellipse(let rect):
+            kind = GLIMS_SHAPE_ELLIPSE; points = Self.corners(rect)
+        case .polygon(let vertices):
+            guard vertices.count >= 3, vertices.count <= Int(GLIMS_LAB_SELECT_MAX_POINTS) else {
+                throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                                  message: "A Lab lasso needs 3 through \(GLIMS_LAB_SELECT_MAX_POINTS) points.")
+            }
+            kind = GLIMS_SHAPE_POLYGON
+            points = vertices.map { GlimsPoint(x: $0.x, y: $0.y) }
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try points.withUnsafeBufferPointer { buffer in
+            try check(select(engine, image, kind.rawValue, buffer.baseAddress, buffer.count, &settings, &error), error)
+        }
+    }
+
+    func selectLab(_ command: SelectCommand, image: Int32) throws {
+        guard supportsLabSelections, let select = api.image_select_lab_command else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This engine cannot change selections in Lab documents.")
+        }
+        guard [.all, .none, .invert].contains(command) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This selection command is unavailable for Lab documents.")
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try check(select(engine, image, command.rawValue, &error), error)
+    }
+
     func select(_ shape: SelectShape, image: Int32, options: SelectOptions = SelectOptions()) throws {
         var settings = Self.selectOptions(options)
         let (kind, points): (GlimsSelectShape, [GlimsPoint])
@@ -2914,10 +3139,11 @@ final class EngineSession: @unchecked Sendable {
     /// goes through `convertToIndexed`, which takes palette and dither
     /// settings; an indexed image's info still reports `.indexed`.
     enum ColorMode: UInt32 {
-        case unknown = 0, rgb = 1, grayscale = 2, indexed = 3, multichannel = 4, cmyk = 5
+        case unknown = 0, rgb = 1, grayscale = 2, indexed = 3, multichannel = 4, cmyk = 5, lab = 6
 
         /// The model's name in the window title and menus.
         var usesInkChannels: Bool { self == .multichannel || self == .cmyk }
+        var usesNativeChannels: Bool { usesInkChannels || self == .lab }
 
         var title: String {
             switch self {
@@ -2926,6 +3152,7 @@ final class EngineSession: @unchecked Sendable {
             case .indexed: return "Indexed"
             case .multichannel: return "Multichannel"
             case .cmyk: return "CMYK"
+            case .lab: return "Lab"
             case .unknown: return "Unknown"
             }
         }

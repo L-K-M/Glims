@@ -11,6 +11,12 @@ enum ToolHintPolicy {
 
     static func hint(tool: ToolID, phase: Phase, flags: NSEvent.ModifierFlags,
                      mode: EngineSession.ColorMode = .rgb) -> String {
+        if mode == .lab, tool == .paintbrush {
+            if phase == .dragging { return "Paint the captured Lab axis; release to finish. Escape cancels the stroke." }
+            return flags.contains(.option)
+                ? "Release Option to paint. Set the physical Lab value in Tool Options."
+                : "Set the physical Lab value in Tool Options, then paint the selected channel; [ ] changes size."
+        }
         if mode.usesInkChannels {
             guard tool.isAvailable(in: mode) else {
                 return "Choose a painting, selection, Hand or Zoom tool for this ink document."

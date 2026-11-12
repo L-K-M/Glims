@@ -15,7 +15,7 @@ enum ColorForms {
     /// it. The Precision item stays listed but disabled, like the
     /// catalog's unavailable filters.
     static func precisionIsFixed(mode: EngineSession.ColorMode) -> Bool {
-        mode == .indexed
+        mode == .indexed || mode.usesNativeChannels
     }
 
     /// A popup's content seeded with `current`: the valid choices in
@@ -40,7 +40,8 @@ enum ColorForms {
         guard document.acceptsEdits, window.attachedSheet == nil else { return }
         let info = document.colorInfo
         guard !precisionIsFixed(mode: info.mode) else {
-            document.onError?("Indexed images keep 8-bit non-linear precision.")
+            document.onError?(info.mode == .indexed ? "Indexed images keep 8-bit non-linear precision." :
+                                "Precision conversion is unavailable for this channel document.")
             return
         }
         let components = EngineSession.ColorComponent.conversionChoices.map { (value: $0, title: $0.title) }
@@ -106,11 +107,18 @@ enum ColorForms {
     /// User-facing precision comes from the owned color types, not the
     /// engine's internal format nick (for example, `u8-non-linear`).
     static func precisionLabel(_ colorInfo: EngineSession.ColorInfo) -> String {
+        if colorInfo.mode == .lab {
+            return "\(colorInfo.component.title) · \(colorInfo.component == .float ? "Physical Lab" : "ICC v4 Lab")"
+        }
         guard colorInfo.component != .unknown, colorInfo.trc != .unknown else { return "Unknown" }
         return "\(colorInfo.component.title) · \(colorInfo.trc.title)"
     }
 
     static func informationRows(colorInfo: EngineSession.ColorInfo) -> [(label: String, value: String)] {
+        if colorInfo.mode == .lab {
+            return [("Mode", "Lab"), ("Precision", precisionLabel(colorInfo)), ("White point", "D50"),
+                    ("Channels", "Lightness (L*), a*, b*")]
+        }
         var rows = [
             (label: "Mode", value: colorInfo.mode.title),
             (label: "Precision", value: precisionLabel(colorInfo)),

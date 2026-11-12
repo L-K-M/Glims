@@ -108,7 +108,7 @@ enum EngineSmokeTest {
     }
 
     static func run() -> Int32 {
-        if ["multichannel", "cmyk", "ink-edits", "ink-levels", "recorder-ink-bindings"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
+        if ["multichannel", "cmyk", "ink-edits", "ink-levels", "lab-ui", "lab-brush-ui", "lab-selections-ui", "lab-recovery", "recorder-ink-bindings"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
             return EngineSmokeTestHost.run()
         }
         if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents", !NSApp.isRunning {
@@ -161,6 +161,46 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "lab-selections-ui" {
+                try exerciseLabSelectionUI(session: session, work: work, documents: documents)
+                if failures == 0 { print("Engine smoke test passed") }
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "lab-brush-ui" {
+                try exerciseLabBrushUI(session: session, work: work, documents: documents)
+                if failures == 0 { print("Engine smoke test passed") }
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "lab-selections" {
+                try exerciseLabSelections(session, work: work, documents: documents)
+                if failures == 0 { print("PASSED (Lab Selections)") }
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "lab-brush" {
+                try exerciseLabBrush(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Lab Brush)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "lab-recovery" {
+                try exerciseLabRecovery(session: session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Lab recovery)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "lab-ui" {
+                try exerciseLabUI(session: session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Lab UI)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "lab-fill" {
+                try exerciseLabFill(session, work: work)
+                print(failures == 0 ? "PASSED (Lab fill)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "lab-axes" {
+                try exerciseLabAxes(session, work: work)
+                print(failures == 0 ? "PASSED (Lab axes)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "exclusive-edit-close" {
                 try exerciseExclusiveEditClose(session, documents: documents)
                 print(failures == 0 ? "PASSED (exclusive edit close)" : "FAILED: \(failures) failure(s)")

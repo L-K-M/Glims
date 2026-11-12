@@ -5225,6 +5225,34 @@ Photoshop 4 parity. Existing Multichannel/CMYK editor and scalar-edit fixtures
 also pass on every engine (4,060 / 181 / 1,314 checks each). Hosted CI remains
 an integration gate for this candidate.
 
+### Typed Lab axis metadata (2026-11-12)
+
+Slot 191 exposes canonical L/a/b roles, document-scoped UUIDs, current handles,
+selection and UTF-8 display names without interpreting them as ink channels.
+It reads metadata only and preserves caller output boundaries on success and
+failure. Swift validates the returned record and gates Lab creation and axis
+metadata independently, retaining support for older producers. The app still
+refuses Lab document construction until its editing/UI workflow is ready.
+
+All four engines pass 6,288 native axis checks, 304 admission checks, general
+conformance and 26 Swift checks each. Real 189- and 190-slot engines pass five
+compatibility checks apiece. All 1,560 Swift tests and 130 Python checks pass;
+independent native and Swift source reviews found no important issue. See
+[lab-documents.md](lab-documents.md). Hosted CI and subsequent UI qualification
+remain integration gates; this is not installed Lab editing or PS4 parity.
+
+### Native Lab channel editing candidate (2026-11-12)
+
+New Image, typed Channels and physical Fill now form the first Lab editing
+workflow, with native XCF Save/reopen and Undo/Redo. All four engines pass
+1,143 Fill and 306 policy checks; the pure kernel passes 2,998 checks in
+each optimized/sanitized run. The initial three-precision UI run passes
+after inset correction. Recovery retains explicit unsaved state, and shared
+exclusive edits retain pending input until native dirty reconciliation.
+Independent production reviews are clear. Integrated recovery, latest-source
+UI and bundle qualification remain in progress. Lab Brush, layers, conversion
+and interchange are still open; see `lab-channel-editing.md`.
+
 ### Native ink Recorder candidate (2026-11-12)
 
 Successful Fill/Clear/Invert and Levels Apply now capture exact semantic values
@@ -5237,3 +5265,34 @@ each of four engines pass, including disk round trips, XCF reopen, independent
 scalar oracles, Undo/Redo and stale-target refusal. Independent file/runtime
 reviews found no important issue. Full UI, bundle and launch qualification are
 in progress. See `ink-recorder.md` for scope and remaining selection/Batch work.
+
+
+### Physical Lab Brush candidate (2026-11-12)
+
+Typed Begin/Cancel and a private native brush core now paint one physical
+L*, a* or b* value with captured identity, bounded per-dab staging and exact
+whole-stroke cancellation. Tool Options keeps per-document/axis drafts;
+Escape cancels queued or active gestures. Save refuses tentative native
+pixels, and image close retires its strokes. All four engines pass native,
+queued Swift and actual-window checks after retained regressions; all 1,598
+Swift and 130 Python tests pass. Independent production and fixture reviews
+are clear. Bundled and hosted qualification remain in progress. See
+[lab-brush.md](lab-brush.md) for the numeric contract and limits.
+
+
+### Native Lab selections candidate (2026-11-12)
+
+Typed slots 195/196 add native root-mask Rectangle/Ellipse/Lasso selections
+with Replace/Add/Subtract/Intersect and All/None/Invert. Physical Lab Fill
+and Brush honor that coverage; authoritative axes stay unchanged by selection.
+Old general selection APIs remain blocked, and the Swift service and tool/menu
+routes require the explicit new capability. All four engines pass 1,380
+focused native and 312 Lab admission checks, plus general conformance
+(2,268/2,054/2,268/2,268), 34 compressed-XCF and 206 TIFF checks per engine.
+The headless Swift case passes 55 checks and actual U8/float selection UI
+passes 179 checks on each engine, with surrounding Brush/Fill/axes/Close
+regressions green. All 1,599 Swift and 130 Python tests pass; real older
+slot192/194 adapters preserve capability refusal. UI qualification reproduced
+and fixed a clipped selection-mode control; independent reviews are clear.
+Bundle and hosted qualification remain pending, with no Photoshop-parity claim. See
+[lab-selections.md](lab-selections.md) for contracts, evidence and limits.

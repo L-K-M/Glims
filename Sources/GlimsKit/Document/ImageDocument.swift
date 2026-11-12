@@ -245,6 +245,34 @@ final class ImageDocument {
     private(set) var maskStates: [Int32: EngineSession.MaskState] = [:]
     private(set) var components: EngineSession.ComponentState?
     private(set) var channels: [EngineSession.Channel] = []
+    private(set) var labAxes: EngineSession.LabAxes?
+    private var labBrushDrafts: [UUID: String] = [:]
+    func labBrushDraft(for axis: EngineSession.LabAxis) -> String {
+        labBrushDrafts[axis.uuid] ?? (axis.role == .lightness ? "50" : "0")
+    }
+    func setLabBrushDraft(_ text: String, for axis: EngineSession.LabAxis) {
+        guard selectedLabAxis?.uuid == axis.uuid, selectedLabAxis?.id == axis.id,
+              selectedLabAxis?.role == axis.role, !isClosing else { return }
+        labBrushDrafts[axis.uuid] = text
+    }
+    func labBrushValue(for axis: EngineSession.LabAxis) -> Result<Double, LabFillValidation.Rejection> {
+        LabFillValidation.settings(amount: labBrushDraft(for: axis), opacity: "100",
+            role: axis.role, component: colorInfo.component).map(\.value)
+    }
+    func toolIsAvailable(_ tool: ToolID) -> Bool {
+        guard tool.isAvailable(in: colorInfo.mode) else { return false }
+        guard colorInfo.mode == .lab else { return true }
+        switch tool {
+        case .paintbrush: return session.supportsLabBrush
+        case .rectangleSelect, .ellipseSelect, .lasso: return session.supportsLabSelections
+        default: return true
+        }
+    }
+    var selectedLabAxis: EngineSession.LabAxis? {
+        guard !targetCommandIsPending, !rejectedTargetPick,
+              let selected = labAxes?.axes.filter(\.isSelected), selected.count == 1 else { return nil }
+        return selected[0]
+    }
     private(set) var quickMaskState: EngineSession.QuickMaskState?
     /// The image's color model, precision and effective profile, read
     /// with the rest of the state. The window title, the Mode checkmarks,
@@ -455,8 +483,10 @@ final class ImageDocument {
     /// Touched only on `inputQueue`.
     private nonisolated(unsafe) var currentStroke: Int32?
     private nonisolated(unsafe) var currentStrokeUsesV2 = false
+    private nonisolated(unsafe) var currentStrokeIsLab = false
     private nonisolated(unsafe) var strokeRecordingDraft: StrokeRecordingDraft?
     private(set) var strokeIsActive = false
+    private(set) var labBrushStrokeIsActive = false
     private var strokeRecordingInterleaved = false
 
     /// Which plug-in commands can run on the selected layers, by name;
@@ -486,6 +516,11 @@ final class ImageDocument {
         stateVersion += 1
         info = try session.info(image)
         fileState.syncDirty(info.isDirty)
+        colorInfo = try session.colorInfo(image)
+        if colorInfo.mode == .lab && !(session.supportsLabCreation && session.supportsLabAxes && session.supportsLabFill) {
+            throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                                            message: "This image engine cannot edit Lab documents.")
+        }
         layers = try session.layers(image)
         var locks: [Int32: EngineSession.LayerLockState] = [:]
         var masks: [Int32: EngineSession.MaskState] = [:]
@@ -512,8 +547,20 @@ final class ImageDocument {
             }
         }
         maskStates = masks
-        components = try session.components(image)
-        channels = try session.channels(image)
+        if colorInfo.mode == .lab {
+            let axes = try session.labAxes(image)
+            guard axes.component == colorInfo.component else {
+                throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                                message: "The Lab component precision does not match the document.")
+            }
+            labAxes = axes
+            components = nil
+            channels = []
+        } else {
+            labAxes = nil
+            components = try session.components(image)
+            channels = try session.channels(image)
+        }
         quickMaskState = try session.quickMask(image)
         colorInfo = try session.colorInfo(image)
         guides = try session.guides(image)
@@ -597,6 +644,7 @@ final class ImageDocument {
     /// channels are an ambiguous target: no drawable at all, never the
     /// first selected channel.
     private var paintTarget: PaintTarget? {
+        guard colorInfo.mode != .lab else { return nil }
         guard !rejectedTargetPick, pendingTargetCommands.isEmpty else { return nil }
         if let pick = pendingTargetPick { return pick.target }
         if floatingState.isActive { return .layer(floatingState.floating) }
@@ -1110,6 +1158,10 @@ final class ImageDocument {
     }
 
     private func beginStroke(input: StrokeInput, brush: EngineSession.Brush) {
+        if colorInfo.mode == .lab {
+            beginLabBrushStroke(input: input, brush: brush)
+            return
+        }
         guard !strokeIsActive else { return }
         guard !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
         guard !refuseSingleLayerCommand("Paint") else { return }
@@ -1183,15 +1235,106 @@ final class ImageDocument {
         if capture != nil { notifyRecorderChanged() }
     }
 
+    private func beginLabBrushStroke(input: StrokeInput, brush: EngineSession.Brush) {
+        guard !strokeIsActive, !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
+        // Admission observers may accept their own stroke or close/retarget
+        // this document synchronously, just as on the ordinary paint path.
+        guard !strokeIsActive, !isClosing, acceptsEdits, !targetCommandIsPending else { return }
+        guard toolIsAvailable(.paintbrush), brush.tool == .paintbrush, let axis = selectedLabAxis else {
+            onError?("Select a Lab channel and an available Brush before painting.")
+            return
+        }
+        let value: Double
+        switch labBrushValue(for: axis) {
+        case .success(let physical): value = physical
+        case .failure(let rejection): onError?(rejection.message); return
+        }
+        let unsupported = "Physical Lab brush strokes cannot be replayed by Recorder yet."
+        let capture: RecorderCapture?
+        do {
+            capture = recorder.isRecording ? try reserveRecording(context: .unavailable(unsupported)) : nil
+        } catch {
+            onError?("Recorder could not accept this stroke: \(error.localizedDescription)")
+            return
+        }
+        // Capture identity and physical value before dispatch. A later palette
+        // edit or front-window change cannot retarget an accepted gesture.
+        strokeIsActive = true
+        labBrushStrokeIsActive = true
+        strokeRecordingInterleaved = false
+        enqueue(on: inputQueue, input: true, strokePart: true) { [session, image] in
+            if let capture {
+                let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+                self.strokeRecordingDraft = .init(capture: capture, confirmed: confirmed,
+                    settings: .init(brush), trace: nil)
+                self.strokeRecordingDraft?.refuse(RecorderReplayError(message: unsupported))
+            }
+            do {
+                let sample: EngineSession.StrokeSampleV2
+                switch input {
+                case .tablet(let point): sample = point
+                case .v1(let point): sample = .init(point: point, rotationTurns: nil, tangentialPressure: nil)
+                }
+                self.currentStrokeUsesV2 = true
+                self.currentStrokeIsLab = true
+                self.currentStroke = try session.beginLabStroke(image: image, axis: axis,
+                    value: value, brush: brush, first: sample)
+            } catch {
+                self.currentStroke = nil
+                self.currentStrokeUsesV2 = false
+                self.currentStrokeIsLab = false
+                self.strokeRecordingDraft?.refuse(error)
+                self.report(error)
+            }
+        }
+        if capture != nil { notifyRecorderChanged() }
+    }
+
+    /// Escape aborts the captured Lab gesture, including queued begin/dabs.
+    /// The same serial input queue guarantees Cancel follows those writes.
+    func cancelLabBrushStroke() {
+        guard strokeIsActive, labBrushStrokeIsActive else { return }
+        strokeIsActive = false
+        labBrushStrokeIsActive = false
+        strokeRecordingInterleaved = false
+        enqueue(on: inputQueue, input: true, strokePart: true) { [session] in
+            let stroke = self.currentStroke
+            self.currentStroke = nil
+            self.currentStrokeUsesV2 = false
+            self.currentStrokeIsLab = false
+            let draft = self.strokeRecordingDraft
+            self.strokeRecordingDraft = nil
+            if let stroke {
+                do { try session.cancelLabStroke(stroke) }
+                catch { self.report(error) }
+            }
+            if let draft {
+                self.settleRecording(draft.capture,
+                    result: .failure(RecorderReplayError(message: "Lab brush stroke cancelled.")),
+                    confirmed: draft.confirmed)
+            }
+        }
+    }
+
     func continueStroke(_ points: [EngineSession.StrokePoint]) {
         guard strokeIsActive else { return }
         enqueue(on: inputQueue, input: true, strokePart: true) { [session] in
             guard let stroke = self.currentStroke else { return }
             do {
-                guard !self.currentStrokeUsesV2 else { throw RecorderReplayError(message: "The stroke's input format changed.") }
-                try session.continueStroke(stroke, points: points)
+                if self.currentStrokeIsLab {
+                    try session.continueTabletStroke(stroke, points: points.map {
+                        .init(point: $0, rotationTurns: nil, tangentialPressure: nil)
+                    })
+                } else {
+                    guard !self.currentStrokeUsesV2 else { throw RecorderReplayError(message: "The stroke's input format changed.") }
+                    try session.continueStroke(stroke, points: points)
+                }
             }
             catch {
+                if self.currentStrokeIsLab {
+                    try? session.cancelLabStroke(stroke)
+                    self.currentStroke = nil
+                }
                 self.strokeRecordingDraft?.refuse(error)
                 self.report(error)
                 return
@@ -1211,6 +1354,10 @@ final class ImageDocument {
                 guard self.currentStrokeUsesV2 else { throw RecorderReplayError(message: "The stroke's input format changed.") }
                 try session.continueTabletStroke(stroke, points: points)
             } catch {
+                if self.currentStrokeIsLab {
+                    try? session.cancelLabStroke(stroke)
+                    self.currentStroke = nil
+                }
                 self.strokeRecordingDraft?.refuse(error)
                 self.report(error)
             }
@@ -1222,10 +1369,12 @@ final class ImageDocument {
         let interleaved = strokeRecordingInterleaved
         strokeRecordingInterleaved = false
         strokeIsActive = false
+        labBrushStrokeIsActive = false
         enqueue(on: inputQueue, input: true, strokePart: true) { [session] in
             let stroke = self.currentStroke
             self.currentStroke = nil
             self.currentStrokeUsesV2 = false
+            self.currentStrokeIsLab = false
             var draft = self.strokeRecordingDraft
             self.strokeRecordingDraft = nil
             if let stroke {
@@ -1245,6 +1394,10 @@ final class ImageDocument {
     // MARK: Selection
 
     func select(_ shape: EngineSession.SelectShape, options: EngineSession.SelectOptions) {
+        if colorInfo.mode == .lab {
+            runLabSelection(.shape(shape, options))
+            return
+        }
         guard !refuseWhileEditingUnavailable() else { return }
         let command = SemanticImageCommand.selectionShape(shape, options: options)
         run(semantic: command, command.apply)
@@ -1285,9 +1438,59 @@ final class ImageDocument {
     }
 
     func select(_ command: EngineSession.SelectCommand, radius: Double = 0) {
+        if colorInfo.mode == .lab {
+            guard [.all, .none, .invert].contains(command) else {
+                onError?("This selection command is unavailable for Lab documents.")
+                return
+            }
+            runLabSelection(.command(command))
+            return
+        }
         guard !refuseWhileEditingUnavailable() else { return }
         let semantic = SemanticImageCommand.selectCommand(command, radius: radius)
         run(semantic: semantic, semantic.apply)
+    }
+
+    private enum LabSelectionRequest {
+        case shape(EngineSession.SelectShape, EngineSession.SelectOptions)
+        case command(EngineSession.SelectCommand)
+
+        func apply(session: EngineSession, image: Int32) throws {
+            switch self {
+            case .shape(let shape, let options): try session.selectLab(shape, image: image, options: options)
+            case .command(let command): try session.selectLab(command, image: image)
+            }
+        }
+    }
+
+    /// Only these typed requests may bypass the general Lab mutation gate.
+    /// They change the root selection mask without interpreting Lab samples.
+    private func runLabSelection(_ request: LabSelectionRequest) {
+        guard !isClosing, !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
+        // Admission observers can synchronously start a stroke or close.
+        guard !isClosing, acceptsEdits, !targetCommandIsPending else { return }
+        guard !strokeIsActive else {
+            onError?("Finish the current stroke before changing the selection.")
+            return
+        }
+        guard session.supportsLabSelections else {
+            onError?("This engine cannot change selections in Lab documents.")
+            return
+        }
+        let unsupported = "Lab selections cannot be replayed by Recorder yet."
+        let capture: RecorderCapture?
+        do { capture = recorder.isRecording ? try reserveRecording(context: .unavailable(unsupported)) : nil }
+        catch { onError?("Recorder could not accept this selection: \(error.localizedDescription)"); return }
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+            do { try request.apply(session: session, image: image) }
+            catch { self.report(error) }
+            if let capture {
+                self.settleRecording(capture,
+                    result: .failure(RecorderReplayError(message: unsupported)), confirmed: confirmed)
+            }
+        }
+        if capture != nil { notifyRecorderChanged() }
     }
 
     /// Strokes the selection's boundary on the active layer with `brush`,
@@ -2189,6 +2392,87 @@ final class ImageDocument {
     }
 
     // MARK: Editing
+
+    @discardableResult
+    func selectLabAxis(_ axis: EngineSession.LabAxis,
+                       completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) -> Bool {
+        guard colorInfo.mode == .lab, acceptsEdits, !targetCommandIsPending,
+              labAxes?.axes.contains(where: { $0.id == axis.id && $0.role == axis.role && $0.uuid == axis.uuid }) == true else {
+            completion?(.failure(DocumentError.busy))
+            return false
+        }
+        enqueueTargetCommand({ session, image in
+            let current = try session.labAxes(image)
+            guard current.axes.contains(where: { $0.id == axis.id && $0.role == axis.role && $0.uuid == axis.uuid }) else {
+                throw RecorderReplayError(message: "The Lab channel changed before it could be selected.")
+            }
+            try session.channelCommand(.select, channel: axis.id, image: image)
+        }, rejectFailedTarget: true, completion: completion)
+        return true
+    }
+
+    func labFillRefusal(axis: EngineSession.LabAxis) -> String? {
+        guard colorInfo.mode == .lab, session.supportsLabFill else { return "Choose an editable Lab document." }
+        if isClosing { return DocumentError.closed.localizedDescription }
+        guard acceptsEdits, !strokeIsActive, !targetCommandIsPending,
+              let current = selectedLabAxis else { return "Wait for the Lab channel selection or current operation to finish." }
+        guard current.id == axis.id, current.role == axis.role, current.uuid == axis.uuid else {
+            return "Select the original Lab channel before applying this fill."
+        }
+        return nil
+    }
+
+    @discardableResult
+    func fillLabAxis(_ axis: EngineSession.LabAxis, value: Double, opacity: Double,
+                     completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) -> Bool {
+        func refuse(_ reason: String) {
+            onError?(reason)
+            completion(.failure(RecorderReplayError(message: reason)))
+        }
+        guard value.isFinite, abs(value) <= Double(Float.greatestFiniteMagnitude),
+              opacity.isFinite, (0...1).contains(opacity),
+              colorInfo.component == .float || axis.role.nominalRange.contains(value) else {
+            refuse("Enter a valid physical Lab value and opacity from 0 to 100%.")
+            return false
+        }
+        if let reason = labFillRefusal(axis: axis) { refuse(reason); return false }
+        endPendingUserEdits()
+        if let reason = labFillRefusal(axis: axis) { refuse(reason); return false }
+        let admission = InkEditAdmission()
+        var rejection = "Wait for the current image operation to finish."
+        let unsupported = "Physical Lab fills cannot be replayed by Recorder yet."
+        let accepted = enqueueExclusive(label: "Fill Lab Channel", admission: {
+            if let reason = self.labFillRefusal(axis: axis) { rejection = reason; return false }
+            return true
+        }, didAdmit: {
+            if self.recorder.isRecording {
+                do { admission.capture = try self.reserveRecording(context: .unavailable(unsupported)) }
+                catch { admission.error = error }
+            }
+        }, rejected: {
+            refuse(self.isClosing ? DocumentError.closed.localizedDescription : rejection)
+        }) { [session, image] in
+            let confirmed = Self.confirmRecordingCapture(admission.capture, session: session, image: image)
+            let result = Result<Void, Error> {
+                if let error = admission.error { throw error }
+                try session.fillLab(image, axis: axis, value: value, opacity: opacity)
+            }
+            let recording: Result<SemanticImageCommand, Error> = result.flatMap { _ in
+                .failure(RecorderReplayError(message: unsupported))
+            }
+            self.settleRecording(admission.capture, result: recording, confirmed: confirmed)
+            self.dispatchReadWhenReady {
+                if !self.isClosing {
+                    do { try self.reload() }
+                    catch { self.onError?("The Lab channel state could not be refreshed: \(error)") }
+                }
+                if case .failure(let error) = result { self.onError?(error.localizedDescription) }
+                completion(result)
+            }
+        }
+        if accepted, admission.capture != nil { notifyRecorderChanged() }
+        return accepted
+    }
 
     /// Cached admission only; the native operation independently revalidates
     /// the explicit plane, profile, locks and selection after earlier input.
@@ -3969,6 +4253,7 @@ final class ImageDocument {
     /// asks the app for an independent copy of this image opened as a new
     /// document.
     func newSnapshot() {
+        guard colorInfo.mode != .lab else { return }
         guard !refuseWhileEditingUnavailable(allowingReplayRead: true), let snapshotHandler else { return }
         snapshotHandler(self)
     }
@@ -3979,6 +4264,9 @@ final class ImageDocument {
     /// or the error, whoever is front document then. The work is counted,
     /// so a close waits for it before freeing this image.
     func snapshot(completion: @escaping @MainActor (Result<Int32, Error>) -> Void) {
+        guard colorInfo.mode != .lab else {
+            return completion(.failure(RecorderReplayError(message: "Lab snapshots are not available.")))
+        }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard acceptsImageReads else { return completion(.failure(DocumentError.busy)) }
         if !recorder.isReplaying { endPendingUserEdits() }
@@ -4454,12 +4742,15 @@ final class ImageDocument {
     /// imported image never written as XCF, edits still queued on their
     /// way to the engine, or a plug-in command still working on it.
     var hasUnsavedChanges: Bool {
-        fileState.hasUnsavedChanges || pendingInput > 0
+        fileState.hasUnsavedChanges || pendingInput > 0 || labBrushStrokeIsActive
             || PlugInCommands.running?.document === self
     }
 
     func export(to url: URL, settings: ExportSettings? = nil,
                 completion: @escaping @MainActor (Error?) -> Void) {
+        guard colorInfo.mode != .lab else {
+            return completion(RecorderReplayError(message: "Save Lab documents as XCF. Lab export is not available."))
+        }
         guard !isClosing else { return completion(DocumentError.closed) }
         guard !isTransferringClipboard, !PlugInCommands.isRunning else { return completion(DocumentError.busy) }
         enqueueExclusive(effect: .readsPixels, label: "Exporting \(url.lastPathComponent)", rejected: { completion(DocumentError.busy) }) { [session, image] in
@@ -4507,6 +4798,11 @@ final class ImageDocument {
         fileState.noteSaved(to: url)
         name = url.lastPathComponent
         try? reload()
+    }
+
+    func noteRecovered() {
+        fileState.noteRecovered()
+        onStateChange?()
     }
 
     /// Whether the engine is known to place genuine link layers (GIMP
@@ -5596,6 +5892,7 @@ final class ImageDocument {
     }
 
     func startRecording() throws {
+        guard colorInfo.mode != .lab else { throw RecorderReplayError(message: "Recording Lab edits is not available.") }
         guard !isClosing else { throw DocumentError.closed }
         guard !strokeIsActive else { throw RecorderReplayError(message: "Finish the current stroke before starting Recorder.") }
         try recorder.startRecording()
@@ -5968,6 +6265,7 @@ final class ImageDocument {
     var replayStatus: RecorderLog<SemanticImageCommand>.ReplayStatus { recorder.replayStatus }
 
     private func recorderReplayBlockReason(continuing: Bool = false) -> String? {
+        if colorInfo.mode == .lab { return "Recorder replay is not available for Lab documents." }
         if isClosing { return DocumentError.closed.localizedDescription }
         if recorder.isReplaying && !continuing { return "Recorder replay is already running." }
         if EngineActivity.shared.isBusy || PlugInCommands.isRunning || filterPreviewIsOpen
@@ -6523,6 +6821,10 @@ final class ImageDocument {
              recordingFailure: String? = nil,
              _ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
         guard !isClosing else { return false }
+        guard colorInfo.mode != .lab || effect == .readsPixels else {
+            onError?("Choose a Lab channel and use Edit > Fill to edit its physical value.")
+            return false
+        }
         if effect != .readsPixels && refuseWhileEditingUnavailable(forPreviewWork: effect == .changesPreview) {
             return false
         }

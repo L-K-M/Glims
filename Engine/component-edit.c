@@ -4,6 +4,7 @@
 #include "plate-storage.h"
 #include "component-scalar.h"
 #include "component-levels.h"
+#include "lab-fill.h"
 
 #include <math.h>
 #include <string.h>
@@ -172,11 +173,21 @@ typedef bool (*InkRow) (GlimsComponentScalarFormat format, const void *settings,
                         size_t count, const void *source, const float *mask,
                         void *destination, bool *changed);
 
+static gboolean
+lab_target_matches (const GlimsPlateStorage *storage,
+                     const GlimsLabFillSettings *settings, GimpDrawable *target)
+{
+  return storage->map.mode == GLIMS_PLATE_MODE_LAB && storage->map.count == 3 &&
+         settings->role <= GLIMS_LAB_AXIS_B &&
+         GIMP_DRAWABLE (storage->planes[settings->role]) == target &&
+         !memcmp (storage->map.entries[settings->role].uuid, settings->uuid, 16);
+}
+
 static GlimsStatus
-apply_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
+apply_component (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
            const char *title, gboolean skip_calculation,
            InkRow calculate, const void *settings, const GlimsInkSnapshot *snapshot,
-           char **error)
+           const GlimsLabFillSettings *lab, char **error)
 {
   GlimsOpenImage *open = glims_lookup_image (engine, id);
   if (!open) return GLIMS_STATUS_NOT_FOUND;
@@ -185,20 +196,22 @@ apply_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
   if (g_hash_table_size (engine->filters)) return GLIMS_STATUS_BUSY;
 
   GlimsPlateStorage storage;
-  if (!glims_plate_storage_read_open (open, &storage))
+  if (!glims_plate_storage_read_open (open, &storage) ||
+      ((storage.map.mode == GLIMS_PLATE_MODE_LAB) != (lab != NULL)))
     {
-      if (error) *error = g_strdup ("Select a native ink document for this command.");
+      if (error) *error = g_strdup (lab ? "Select a Lab document for this command." :
+                                          "Select a native ink document for this command.");
       return GLIMS_STATUS_UNSUPPORTED;
     }
   GimpDrawable *target = selected_ink (open, channel, &storage);
-  if (!target)
+  if (!target || (lab && !lab_target_matches (&storage, lab, target)))
     {
-      if (error) *error = g_strdup ("The selected ink changed. Select one ink channel and try again.");
+      if (error) *error = g_strdup (lab ? "The selected Lab channel changed. Select it again and retry." :
+                                          "The selected ink changed. Select one ink channel and try again.");
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
   status = glims_check_item_locks (GIMP_ITEM (target), GLIMS_LOCK_PIXELS, error);
   if (status != GLIMS_STATUS_OK) return status;
-  if (skip_calculation) return GLIMS_STATUS_OK;
 
   GlimsComponentScalarFormat format;
   switch (storage.map.storage)
@@ -208,6 +221,10 @@ apply_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
     case GLIMS_PLATE_STORAGE_FLOAT: format = GLIMS_COMPONENT_SCALAR_FLOAT; break;
     default: return GLIMS_STATUS_UNSUPPORTED;
     }
+  bool validation_changed;
+  if (!calculate (format, settings, 0, NULL, NULL, NULL, &validation_changed))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (skip_calculation) return GLIMS_STATUS_OK;
 
   GeglRectangle region = { 0, 0, 0, 0 };
   if (!gimp_item_mask_intersect (GIMP_ITEM (target), &region.x, &region.y,
@@ -264,7 +281,9 @@ apply_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
         if (!calculate (format, settings, count, input,
                          mask ? coverage : NULL, output, &row_changed))
           {
-            if (error) *error = g_strdup ("The ink edit contains invalid samples or produces an unrepresentable value. No pixels were changed.");
+            if (error) *error = g_strdup (lab ?
+              "The Lab fill contains invalid samples or produces an unrepresentable value. No pixels were changed." :
+              "The ink edit contains invalid samples or produces an unrepresentable value. No pixels were changed.");
             status = GLIMS_STATUS_INVALID_ARGUMENT;
             goto finish;
           }
@@ -290,9 +309,12 @@ apply_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
       if (!current || current->image != image ||
           !glims_plate_storage_read_open (current, &current_storage) ||
           selected_ink (current, channel, &current_storage) != target ||
+          (lab && !lab_target_matches (&current_storage, lab, target)) ||
+          (!lab && current_storage.map.mode == GLIMS_PLATE_MODE_LAB) ||
           gimp_drawable_get_buffer (target) != source)
         {
-          if (error) *error = g_strdup ("The selected ink changed before the edit could finish.");
+          if (error) *error = g_strdup (lab ? "The selected Lab channel changed before the fill could finish." :
+                                              "The selected ink changed before the edit could finish.");
           status = GLIMS_STATUS_INVALID_ARGUMENT;
           goto finish;
         }
@@ -330,6 +352,52 @@ finish:
   g_object_unref (image);
   engine->busy--;
   return status;
+}
+
+static GlimsStatus
+apply_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
+           const char *title, gboolean skip_calculation,
+           InkRow calculate, const void *settings, const GlimsInkSnapshot *snapshot,
+           char **error)
+{
+  return apply_component (engine, id, channel, title, skip_calculation,
+                           calculate, settings, snapshot, NULL, error);
+}
+
+static bool
+lab_fill_row (GlimsComponentScalarFormat format, const void *settings,
+              size_t count, const void *source, const float *mask,
+              void *destination, bool *changed)
+{
+  const GlimsLabFillSettings *fill = settings;
+  const GlimsLabRole roles[] = { GLIMS_LAB_ROLE_L, GLIMS_LAB_ROLE_A, GLIMS_LAB_ROLE_B };
+  GlimsLabFormat lab_format;
+  switch (format)
+    {
+    case GLIMS_COMPONENT_SCALAR_U8: lab_format = GLIMS_LAB_FORMAT_U8; break;
+    case GLIMS_COMPONENT_SCALAR_U16: lab_format = GLIMS_LAB_FORMAT_U16; break;
+    case GLIMS_COMPONENT_SCALAR_FLOAT: lab_format = GLIMS_LAB_FORMAT_FLOAT; break;
+    default: return false;
+    }
+  if (fill->role > GLIMS_LAB_AXIS_B) return false;
+  return glims_lab_fill_row (roles[fill->role], lab_format, fill->value, fill->opacity,
+                              count, source, mask, destination, changed);
+}
+
+GlimsStatus
+glims_image_fill_lab (GlimsEngine *engine, GlimsImageID id,
+                      const GlimsLabFillSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  if (!settings || settings->struct_size < sizeof *settings || settings->axis <= 0 ||
+      settings->role > GLIMS_LAB_AXIS_B || !isfinite (settings->value) ||
+      !isfinite (settings->opacity) || settings->opacity < 0 || settings->opacity > 1)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  /* Own the immutable request across cooperative progress callbacks. The UUID
+   * and role bind this handle to the document's canonical captured axis. */
+  GlimsLabFillSettings fill = *settings;
+  return apply_component (engine, id, fill.axis, "Fill Lab Channel", fill.opacity == 0,
+                           lab_fill_row, &fill, NULL, &fill, error);
 }
 
 typedef struct {

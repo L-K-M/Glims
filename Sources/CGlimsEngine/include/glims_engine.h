@@ -321,6 +321,22 @@ typedef struct GlimsSelectOptions {
                             * active layer */
 } GlimsSelectOptions;
 
+/* Bounded, mask-only selection settings for native Lab documents. The
+ * borrowed settings and points may be unaligned; they must remain readable
+ * and immutable until the synchronous call returns. Extension tails are
+ * accepted and ignored. No native enum or C bool layout crosses this contract. */
+#define GLIMS_LAB_SELECT_MAX_POINTS       65536u
+#define GLIMS_LAB_SELECT_COORDINATE_LIMIT 1048576.0
+#define GLIMS_LAB_SELECT_RADIUS_LIMIT     1000.0
+
+typedef struct GlimsLabSelectOptions {
+  uint32_t struct_size;    /* Complete prefix through corner_radius required. */
+  uint32_t operation;      /* GlimsSelectOperation. */
+  uint32_t antialias;      /* Exactly 0 or 1. */
+  double feather;         /* Finite [0, GLIMS_LAB_SELECT_RADIUS_LIMIT] pixels. */
+  double corner_radius;   /* Same range; used only for rectangles. */
+} GlimsLabSelectOptions;
+
 typedef struct GlimsPoint {
   double x, y;             /* image pixels */
 } GlimsPoint;
@@ -1181,6 +1197,49 @@ typedef struct GlimsColorInfo {
   bool     profile_embedded;
   char     profile_label[256];  /* UTF-8, truncated; "" when none */
 } GlimsColorInfo;
+
+/* Fixed-D50 Lab axes, independent of ink roles and native GIMP enums. */
+typedef enum GlimsLabAxisRole {
+  GLIMS_LAB_AXIS_LIGHTNESS = 0,
+  GLIMS_LAB_AXIS_A = 1,
+  GLIMS_LAB_AXIS_B = 2
+} GlimsLabAxisRole;
+
+typedef struct GlimsLabAxisInfo {
+  GlimsItemID id;           /* Current document-scoped native handle. */
+  uint32_t role;            /* GlimsLabAxisRole; canonical map order. */
+  uint32_t selected;        /* Exactly 0 or 1; this read does not select. */
+  uint8_t uuid[16];         /* Durable document-scoped identity, never a name. */
+  char name[256];           /* UTF-8 display name, truncated at a character boundary. */
+} GlimsLabAxisInfo;
+
+typedef struct GlimsLabAxes {
+  uint32_t struct_size;
+  uint32_t component;       /* GlimsColorComponent: U8, U16 or FLOAT. */
+  uint32_t count;           /* Exactly 3 on success, zero on failure. */
+  GlimsLabAxisInfo axes[3];  /* L*, a*, b* in that order, regardless of UI names. */
+} GlimsLabAxes;
+
+typedef struct GlimsLabFillSettings {
+  uint32_t struct_size;
+  GlimsItemID axis;        /* Captured current handle; must remain solely selected. */
+  uint32_t role;           /* GlimsLabAxisRole, bound to the captured UUID. */
+  uint8_t uuid[16];        /* Identity within the supplied owning image. */
+  double value;           /* Physical L*, a* or b*, never normalized ink intensity. */
+  double opacity;         /* Finite [0,1], multiplied once by selection coverage. */
+} GlimsLabFillSettings;
+
+/* Physical sample and captured axis identity for one mask-brush stroke. */
+typedef struct GlimsLabBrushSettings {
+  uint32_t struct_size;
+  GlimsItemID axis;
+  uint32_t role;           /* GlimsLabAxisRole. */
+  uint8_t uuid[16];
+  double value;           /* Same physical ranges as image_fill_lab. */
+  double opacity;         /* Finite [0,1], applied to the stroke-start samples. */
+  double size;            /* Diameter in image pixels, finite [1,10000]. */
+  double hardness;        /* Finite [0,1]. */
+} GlimsLabBrushSettings;
 
 /* The palette an indexed conversion builds, as image_convert_indexed's
  * settings name it. Facade-owned values; the engine's
@@ -3773,6 +3832,66 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_new_lab) (GlimsEngine *engine, int32_t width, int32_t height,
                                 uint32_t component, GlimsImageID *result,
                                 char **error);
+  /* Slot191: read-only typed Lab axis metadata. Ordinary and ink documents
+   * refuse; no ink interpretation or pixel conversion is involved. Allowed
+   * while busy like image_color_info; reads no pixels and changes no selection,
+   * dirty state, history or file identity. Output requires a readable
+   * struct_size >= sizeof(GlimsLabAxes); NULL/short output is INVALID_ARGUMENT
+   * and remains untouched. Accepted capacity preserves caller struct_size and
+   * any extension tail, and clears the entire known payload on every failure,
+   * including failed admission and NOT_RUNNING. UUIDs remain document-scoped;
+   * equality never establishes identity between unrelated documents. */
+  GlimsStatus (*image_lab_axes) (GlimsEngine *engine, GlimsImageID image,
+                                 GlimsLabAxes *out);
+  /* Slot192: fill one captured Lab axis, staging all affected tiles before one
+   * native Undo publication. U8/U16 values use nominal physical ranges L[0,100]
+   * and a/b[-128,127]; float permits any finite binary32-representable value.
+   * Zero coverage preserves exact bytes. Invalid input, cancellation, changed
+   * selection/identity or locks leave source pixels/history untouched. Other
+   * axes are unchanged. Ordinary and ink documents refuse. */
+  GlimsStatus (*image_fill_lab) (GlimsEngine *engine, GlimsImageID image,
+                                 const GlimsLabFillSettings *settings, char **error);
+  /* Slot193: selected-axis physical Lab Brush. Normal constant application,
+   * native mask geometry, captured selection, no color/dynamics/symmetry.
+   * Zero brush selects the current resource at press; its mask is retained
+   * for the stroke. Pixmap colors are ignored. Size/hardness are explicit;
+   * spacing is 15%, angle/aspect are zero and brush force is 0.5.
+   * Feed stroke_continue_v2 and finish with stroke_end, or explicitly abort
+   * with stroke_cancel_lab. Packet validation refuses before changing a dab;
+   * sample/target failures cancel the complete stroke and retire its handle.
+   * Every continuation and finish revalidates captured axis identity and
+   * sole selection. Successful changed strokes create exactly one Undo;
+   * zero-change strokes create none. Legacy RGB/ink begin calls still refuse
+   * Lab documents. Clears *error and zeros *result on every begin failure. */
+  GlimsStatus (*stroke_begin_lab) (GlimsEngine *engine, GlimsImageID image,
+                                   GlimsResourceID brush,
+                                   const GlimsLabBrushSettings *settings,
+                                   const GlimsStrokePacketV2 *first,
+                                   GlimsStrokeID *result, char **error);
+  /* Slot194: abort only a typed Lab stroke, restoring exact starting pixels
+   * without Undo, even if axis metadata/selection changed. Ordinary strokes
+   * refuse; expired handles return NOT_FOUND. */
+  GlimsStatus (*stroke_cancel_lab) (GlimsEngine *engine, GlimsStrokeID stroke);
+  /* Slot195: native Lab root selection mask only. Rectangle/ellipse require
+   * exactly two opposite corners; polygon requires 3..MAX_POINTS vertices.
+   * Every coordinate must be finite within +/-COORDINATE_LIMIT; rounded
+   * rectangle/ellipse bounds must have positive width and height. Settings
+   * are required. Axis pixels, identity, selection of axes and locks are not
+   * changed or interpreted. A changed mask uses native selection Undo.
+   * Ordinary/ink images and damaged Lab storage refuse. BUSY during a stroke,
+   * engine activity, image filter preview, disabled Undo or an open Undo group.
+   * Invalid input refuses before any mask/history change. Clears *error on
+   * entry; any returned string belongs to the caller (free_string). General
+   * select_shape/select_command remain unavailable for Lab documents. */
+  GlimsStatus (*image_select_lab_shape) (GlimsEngine *engine, GlimsImageID image,
+                                        uint32_t shape, const GlimsPoint *points,
+                                        size_t count, const GlimsLabSelectOptions *options,
+                                        char **error);
+  /* Slot196: the same mask-only admission and failure contract as slot195.
+   * Only GLIMS_SELECT_ALL, GLIMS_SELECT_NONE and GLIMS_SELECT_INVERT are
+   * supported; every other command returns UNSUPPORTED without mutation. */
+  GlimsStatus (*image_select_lab_command) (GlimsEngine *engine, GlimsImageID image,
+                                          uint32_t command, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

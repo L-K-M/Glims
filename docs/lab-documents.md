@@ -38,7 +38,8 @@ or unrepresentable RGB fails the public render; internal placeholder pixels
 cannot count as a successful result. A later retry invalidates the failed
 derived cache before reading repaired source values.
 
-The native allowlist admits information, layers, color metadata, standard and
+The native allowlist admits information, layers, color metadata, typed Lab axis
+metadata, standard and
 destination-profile rendering, XCF save/copy, history, and the existing neutral
 selection/path/guide/grid reads. Every other component operation defaults to
 denial. This includes ink edits, ink Levels/snapshots/identities, painting,
@@ -46,6 +47,21 @@ component/channel queries, selection mutations, duplication, and native CMYK
 export. Ordinary RGB/PDB operations and cross-image sources remain protected.
 Live stroke continuation checks both its destination and retained sources;
 cleanup remains available even after metadata damage.
+
+## Typed axis metadata
+
+Slot 191 reads the three canonical axes with their current native handles,
+document-scoped UUIDs, roles, selection membership and bounded UTF-8 display
+names. Names and native channel order do not determine roles or identity.
+The query reads no pixels and changes no selection, history or file identity;
+it remains available during an admitted busy operation. Ordinary RGB, CMYK
+and Multichannel images refuse this Lab-specific query.
+
+The caller supplies a readable capacity word. Short output is untouched;
+accepted output preserves that capacity and any extension tail while clearing
+the known payload on every failure. Swift checks creation and metadata slots
+independently, validates the complete returned record, and continues to load
+older engines. This metadata does not yet enable Lab documents in the UI.
 
 ## Qualification
 
@@ -62,3 +78,14 @@ preserved in a file even when their display transform correctly refuses.
 These checks are separate from physical input, accessibility, performance on
 large Lab documents, or Photoshop interchange qualification. No notarization
 is requested or performed.
+
+The axis-state fixture adds 6,288 checks per engine for canonical identities,
+selection, renaming/reordering, UTF-8 truncation/refusal, short/extended output,
+guard pages, damaged metadata, ordinary/ink refusal and unchanged native
+state, including a dirty image with nonempty Undo and Redo stacks. All four
+engines pass it, the expanded 304-check admission fixture,
+general conformance and 26 Swift transport checks. Real 189- and 190-slot
+producers each pass five compatibility checks. The six pure decoder tests,
+1,560 full Swift tests and 130 Python preflight checks pass. Independent native
+and Swift production reviews found no important issue. These results do not
+qualify Lab editing or the installed application.

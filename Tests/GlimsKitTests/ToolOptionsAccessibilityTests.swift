@@ -71,18 +71,24 @@ final class ToolOptionsAccessibilityTests: XCTestCase {
     func testSelectionModeNamesItsControlWithoutReplacingSegmentValues() throws {
         let state = ToolState.shared
         let savedTool = state.current
-        defer { state.select(savedTool) }
+        let savedOptions = state.selectOptions
+        defer { state.selectOptions = savedOptions; state.select(savedTool) }
         state.select(.rectangleSelect)
         let options = ToolOptionsPaletteController()
-        let row = try XCTUnwrap(descendants(options.view).compactMap { $0 as? NSStackView }
-            .first { ($0.arrangedSubviews.first as? NSTextField)?.stringValue == "Mode" })
-        let label = try XCTUnwrap(row.arrangedSubviews.first as? NSTextField)
-        let control = try XCTUnwrap(row.arrangedSubviews.compactMap { $0 as? NSSegmentedControl }.first)
+        let controls = descendants(options.view).compactMap { $0 as? NSSegmentedControl }
+            .filter { $0.accessibilityLabel() == "Selection mode" }
+        XCTAssertEqual(controls.count, 1)
+        let control = try XCTUnwrap(controls.first)
         XCTAssertEqual(control.accessibilityLabel(), "Selection mode")
-        XCTAssertTrue((control.accessibilityTitleUIElement() as AnyObject?) === label)
         XCTAssertEqual((0..<control.segmentCount).compactMap { control.label(forSegment: $0) },
                        ["New", "Add", "Subtract", "Intersect"])
-        XCTAssertNotNil(control.action)
+        XCTAssertNotNil(control.target)
+        let action = try XCTUnwrap(control.action)
+        for (index, operation) in [EngineSession.SelectOperation.replace, .add, .subtract, .intersect].enumerated() {
+            control.selectedSegment = index
+            XCTAssertTrue(control.sendAction(action, to: control.target))
+            XCTAssertEqual(state.selectOptions.operation, operation)
+        }
     }
     func testRejectedTransformDraftSurvivesAnUnfocusedRefreshAndCancelClearsIt() throws {
         let state = ToolState.shared

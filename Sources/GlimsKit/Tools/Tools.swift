@@ -19,6 +19,9 @@ enum ToolID: String, CaseIterable {
     /// Match the native component routes; unavailable tools are excluded
     /// from shortcuts and disabled in the palette before an interaction starts.
     func isAvailable(in mode: EngineSession.ColorMode?) -> Bool {
+        if mode == .lab {
+            return [.paintbrush, .rectangleSelect, .ellipseSelect, .lasso, .hand, .zoom].contains(self)
+        }
         guard mode?.usesInkChannels == true else { return true }
         switch self {
         case .paintbrush, .pencil, .airbrush, .rectangleSelect, .ellipseSelect, .lasso, .hand, .zoom:
@@ -309,12 +312,14 @@ final class ToolState {
 
     /// The shortcut letter's tool: the group's last-used tool, or with
     /// `cycle` the next one in the group.
-    func select(shortcut key: String, cycle: Bool) {
+    func select(shortcut key: String, cycle: Bool, available: (ToolID) -> Bool = { _ in true }) {
         guard let group = ToolID.group(forShortcut: key),
               let index = ToolID.paletteSlots.firstIndex(of: group) else { return }
-        let last = lastInGroup[index] ?? group[0]
-        if cycle, group.contains(current), let position = group.firstIndex(of: current) {
-            select(group[(position + 1) % group.count])
+        let choices = group.filter(available)
+        guard let first = choices.first else { return }
+        let last = lastInGroup[index].flatMap { choices.contains($0) ? $0 : nil } ?? first
+        if cycle, let position = choices.firstIndex(of: current) {
+            select(choices[(position + 1) % choices.count])
         } else {
             select(last)
         }

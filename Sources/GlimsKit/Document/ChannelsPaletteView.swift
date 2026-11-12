@@ -53,6 +53,7 @@ final class ChannelsPaletteView: NSView {
         /// readable but nothing is offered for editing.
         let acceptsEdits: Bool
         let multichannel: Bool
+        let labAxes: EngineSession.LabAxes?
 
         init(components: EngineSession.ComponentState? = nil,
              channels: [EngineSession.Channel] = [],
@@ -60,7 +61,7 @@ final class ChannelsPaletteView: NSView {
              hasSelectedChannels: Bool = false,
              quickMask: EngineSession.QuickMaskState? = nil,
              acceptsEdits: Bool = false,
-             multichannel: Bool = false) {
+             multichannel: Bool = false, labAxes: EngineSession.LabAxes? = nil) {
             self.components = components
             self.channels = channels
             self.activeChannel = activeChannel
@@ -68,12 +69,14 @@ final class ChannelsPaletteView: NSView {
             self.quickMask = quickMask
             self.acceptsEdits = acceptsEdits
             self.multichannel = multichannel
+            self.labAxes = labAxes
         }
     }
 
     /// What a gesture means. The controller maps these onto its document
     /// services; the view knows nothing about how they run.
     enum Action: Equatable {
+        case selectLabAxis(EngineSession.LabAxis)
         case setComponentActive(EngineSession.Components, Bool)
         case setComponentVisible(EngineSession.Components, Bool)
         case selectChannel(Int32)
@@ -349,6 +352,33 @@ final class ChannelsPaletteView: NSView {
     private(set) var snapshot = Snapshot()
     private(set) var componentRows: [ComponentRow] = []
     private(set) var channelRows: [ChannelRow] = []
+    private var labRows: [NSView] = []
+
+    private final class LabAxisButton: NSButton {
+        let axis: EngineSession.LabAxis
+        var onPick: ((EngineSession.LabAxis) -> Void)?
+        init(axis: EngineSession.LabAxis, enabled: Bool) {
+            self.axis = axis
+            super.init(frame: .zero)
+            setButtonType(.radio)
+            title = axis.role.title
+            if !axis.name.isEmpty && axis.name != "Lightness" && axis.name != "a" && axis.name != "b" {
+                title += " · \(axis.name)"
+            }
+            state = axis.isSelected ? .on : .off
+            isEnabled = enabled
+            setAccessibilityLabel(title)
+            setAccessibilityIdentifier("lab-axis-\(axis.role.rawValue)")
+            target = self
+            action = #selector(pick(_:))
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 30).isActive = true
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+        @objc private func pick(_ sender: Any?) {
+            state = axis.isSelected ? .on : .off
+            onPick?(axis)
+        }
+    }
 
     private let componentStack = NSStackView()
     private let rule = ClassicRuleView()
@@ -477,6 +507,10 @@ final class ChannelsPaletteView: NSView {
         rebuildComponentRows()
         rebuildChannelRows()
         refreshControls()
+        let lab = snapshot.labAxes != nil
+        quickMaskButton.superview?.isHidden = lab
+        selectionPopup.superview?.isHidden = lab
+        buttonBar.isHidden = lab
     }
 
     /// Sets one channel's thumbnail. The `CGImage` is wrapped on the main
@@ -532,6 +566,16 @@ final class ChannelsPaletteView: NSView {
     }
 
     private func rebuildChannelRows() {
+        // Native radio controls draw beyond their alignment rectangles.
+        // Leave room for the complete control and its focus ring in Lab mode.
+        let labInset: CGFloat = snapshot.labAxes == nil ? 0 : 6
+        listStack.edgeInsets = NSEdgeInsets(top: labInset, left: labInset,
+                                           bottom: labInset, right: labInset)
+        for row in labRows {
+            listStack.removeArrangedSubview(row)
+            row.removeFromSuperview()
+        }
+        labRows = []
         for row in channelRows {
             listStack.removeArrangedSubview(row)
             row.removeFromSuperview()
@@ -553,6 +597,21 @@ final class ChannelsPaletteView: NSView {
             row.widthAnchor.constraint(equalTo: listStack.widthAnchor).isActive = true
             return row
         }
+        if let state = snapshot.labAxes {
+            for axis in state.axes {
+                let row = LabAxisButton(axis: axis, enabled: snapshot.acceptsEdits)
+                row.onPick = { [weak self] axis in self?.emit(.selectLabAxis(axis)) }
+                listStack.addArrangedSubview(row)
+                row.widthAnchor.constraint(equalTo: listStack.widthAnchor, constant: -2 * labInset).isActive = true
+                labRows.append(row)
+            }
+            let hint = NSTextField(wrappingLabelWithString: "Choose a channel, then Edit > Fill to change its physical Lab value.")
+            hint.font = .systemFont(ofSize: 11)
+            hint.textColor = .secondaryLabelColor
+            listStack.addArrangedSubview(hint)
+            hint.widthAnchor.constraint(equalTo: listStack.widthAnchor, constant: -2 * labInset).isActive = true
+            labRows.append(hint)
+        }
     }
 
     // MARK: Gesture handling
@@ -565,7 +624,7 @@ final class ChannelsPaletteView: NSView {
 
     /// Reports an action to the controller.
     private func emit(_ action: Action) {
-        guard ChannelMenuPolicy.permits(action, multichannel: snapshot.multichannel) else { return }
+        guard ChannelMenuPolicy.permits(action, multichannel: snapshot.multichannel, lab: snapshot.labAxes != nil) else { return }
         onAction?(action)
     }
 
@@ -673,7 +732,7 @@ final class ChannelsPaletteView: NSView {
 
     /// Where the footer stands right now, applied after every reload.
     private func refreshControls() {
-        componentStack.isHidden = snapshot.components == nil || snapshot.multichannel
+        componentStack.isHidden = snapshot.components == nil || snapshot.multichannel || snapshot.labAxes != nil
         rule.isHidden = componentStack.isHidden
 
         let quick = snapshot.quickMask
