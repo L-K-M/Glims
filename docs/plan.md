@@ -4669,3 +4669,13 @@ existing-effect replay remain open. Status: the code builds with
 `swift build --build-tests`, but no `swift test` run and no GUI or
 native-engine check has run on this change yet — the root's full
 GUI/native run remains outstanding before this can be called verified.
+
+### TIFF thumbnail import candidate (2026-11-12)
+
+Open and Open as Layers now prepare mixed TIFF main-directory chains in a
+private copy, removing only directories explicitly tagged as reduced-image
+thumbnails. Ordinary pages and original source bytes are preserved. This
+fixes thumbnails becoming layers and enlarging the canvas without modifying
+upstream code. Linked Place retains its original monitored source path.
+See [TIFF import](tiff-import.md) for the 13 reproduced baseline failures,
+parser/cleanup tests and pending integration qualification.

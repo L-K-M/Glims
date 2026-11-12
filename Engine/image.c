@@ -5,6 +5,7 @@
 #include "engine-private.h"
 #include "effect-state.h"
 #include "foreign-effect-load.h"
+#include "tiff-import.h"
 
 #include <math.h>
 #include <string.h>
@@ -368,6 +369,7 @@ glims_image_open (GlimsEngine   *engine,
   const gchar       *mime_type      = NULL;
   GError            *gerror         = NULL;
   GlimsVectorLoadGuard *vector_guard;
+  g_autoptr(GFile) tiff_source = NULL;
 
   if (! path || ! out)
     return GLIMS_STATUS_INVALID_ARGUMENT;
@@ -395,6 +397,13 @@ glims_image_open (GlimsEngine   *engine,
       return glims_fail (error, gerror, "The compressed XCF could not be staged.");
     }
 
+  if (!spool && !glims_tiff_import_prepare (file, &tiff_source, &gerror))
+    {
+      g_clear_object (&source_info);
+      g_object_unref (file);
+      return glims_fail (error, gerror, "The TIFF file could not be prepared for import.");
+    }
+
   /* Loading a non-XCF file runs a plug-in, which nests a main loop. */
   engine->busy++;
   vector_guard = glims_vector_load_guard_begin (engine, NULL);
@@ -406,12 +415,14 @@ glims_image_open (GlimsEngine   *engine,
   else
     {
 #if GIMP_CHECK_VERSION (3, 2, 0)
-      image = file_open_image (engine->gimp, gimp_get_user_context (engine->gimp), NULL, file,
+      image = file_open_image (engine->gimp, gimp_get_user_context (engine->gimp), NULL,
+                               tiff_source ? tiff_source : file,
                                0, 0, FALSE, FALSE, NULL, GIMP_RUN_NONINTERACTIVE,
                                &handles_vector, &status, &mime_type, &gerror);
 #else
       /* GIMP 3.0 has no vector aspect-ratio option and no vector-handling report. */
-      image = file_open_image (engine->gimp, gimp_get_user_context (engine->gimp), NULL, file,
+      image = file_open_image (engine->gimp, gimp_get_user_context (engine->gimp), NULL,
+                               tiff_source ? tiff_source : file,
                                0, 0, FALSE, NULL, GIMP_RUN_NONINTERACTIVE,
                                &status, &mime_type, &gerror);
       (void) handles_vector;
@@ -419,6 +430,15 @@ glims_image_open (GlimsEngine   *engine,
     }
   glims_vector_load_guard_end (vector_guard);
   engine->busy--;
+
+  if (tiff_source)
+    {
+      /* file_import_image remembers the path given to the loader. Keep
+       * the original import identity after the private copy disappears. */
+      if (image)
+        gimp_image_set_imported_file (image, file);
+      glims_tiff_import_prepared_cleanup (tiff_source);
+    }
 
   if (! image)
     {
