@@ -5396,6 +5396,8 @@ selection coverage; a calculation-kind tag separates Levels and Curves caches.
 The shared lifecycle retains source ownership, stale-state refusal and exact
 Undo behavior. Existing conformance and ink Levels/snapshot checks pass on all
 four engines. Every producer also passes 741 new literal/public-facade
-checks. Independent native source review is clear. Swift transport, hosted CI
-and the application panel are in progress. See
+checks. All 1,632 Swift and 130 Python tests pass, including guarded transport
+prefixes and exact sample ownership. Independent native, fixture and Swift
+transport reviews are clear. Hosted CI and the application panel remain
+separate gates. See
 [ink-curves.md](ink-curves.md); this does not claim Photoshop parity.

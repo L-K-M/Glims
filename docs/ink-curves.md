@@ -25,7 +25,7 @@ refusal/cancellation retains it for retry or End. End creates no Undo step.
 Source Close retires its private snapshot while already returned images remain
 independently owned. Existing Levels uses the same render/apply lifecycle.
 
-## Verification in progress
+## Verification
 
 All four engines pass 741 public-facade acceptance checks each: all three native
 precisions in both ink modes; independent literal constant and nonmonotone U16
@@ -43,7 +43,10 @@ check corresponding selected planes and require preview copies to shed source
 file identity. A separate rational calculation supplies fixed U16 expectations.
 These were fixture corrections; production code did not change for them.
 
-Independent source review found no important native integration issue. Swift
-transport, latest-head CI and the modeless application interface remain in
-progress. This candidate is not an installed UI feature or a Photoshop-parity
-claim.
+Independent native, fixture and Swift transport reviews found no important
+remaining issue in their bounded scopes. All 1,632 Swift and 130 Python tests
+pass. Transport checks cover exact 256-sample ownership, guarded short API
+prefixes, independent direct/snapshot capabilities, pre-dispatch rejection and
+producer error ownership. Latest-head CI and the modeless application interface
+remain separate gates. This candidate is not an installed UI feature or a
+Photoshop-parity claim.
