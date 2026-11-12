@@ -2341,6 +2341,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     private func permitsLabMenu(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(selectAll(_:)), #selector(selectNone(_:)), #selector(selectInverse(_:)):
+            return imageDocument.session.supportsLabSelections && !imageDocument.strokeIsActive
         case #selector(fill(_:)),
              #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
              #selector(revertDocument(_:)), #selector(imageInformation(_:)),
