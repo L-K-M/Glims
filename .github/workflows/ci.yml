@@ -45,6 +45,8 @@ jobs:
         run: bash scripts/test-component-scalar.sh
       - name: Check optimized and sanitized scalar ink Levels
         run: bash scripts/test-component-levels.sh
+      - name: Check optimized and sanitized Lab samples
+        run: python3 scripts/test-lab-samples.py
 
   build-test:
     name: Build, Test & Package
@@ -105,6 +107,10 @@ jobs:
       - name: Check scalar ink Levels
         timeout-minutes: 5
         run: bash scripts/test-component-levels.sh optimized
+
+      - name: Check Lab samples
+        timeout-minutes: 5
+        run: python3 scripts/test-lab-samples.py optimized
 
       - name: Build
         run: swift build
