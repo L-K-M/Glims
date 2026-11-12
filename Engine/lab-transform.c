@@ -10,6 +10,7 @@
 struct GlimsLabTransform {
   double xyz_to_rgb[3][3];
   double white[3];
+  double rgb_to_xyz[3][3];
 };
 
 GlimsLabTransform *
@@ -64,6 +65,7 @@ glims_lab_transform_new (void)
               result->white[0] = d50->X;
               result->white[1] = d50->Y;
               result->white[2] = d50->Z;
+              memcpy (result->rgb_to_xyz, m, sizeof m);
             }
         }
     }
@@ -133,6 +135,78 @@ glims_lab_transform_pixels (const GlimsLabTransform *transform,
   for (size_t i = 0; i < count; i++)
     {
       convert_pixel (transform, source + i * 3 * sizeof (float), pixel);
+      memcpy (destination + i * sizeof pixel, pixel, sizeof pixel);
+    }
+  return true;
+}
+
+/* CIE forward f, paired with inverse_f above. The linear branch also covers
+ * negative XYZ; taking a cube root of those values would change the model. */
+static double
+forward_f (double value)
+{
+  return value > 216.0 / 24389.0 ? cbrt (value) :
+                                 (841.0 / 108.0) * value + 4.0 / 29.0;
+}
+
+static double
+forward_f_difference (double first, double second)
+{
+  /* Cancel the shared intercept algebraically, not numerically. This retains
+   * tiny signed chroma that adding then subtracting 4/29 would erase. */
+  if (first <= 216.0 / 24389.0 && second <= 216.0 / 24389.0)
+    return (841.0 / 108.0) * (first - second);
+  return forward_f (first) - forward_f (second);
+}
+
+static bool
+convert_linear_rgb_pixel (const GlimsLabTransform *transform,
+                          const unsigned char *source, float lab[3])
+{
+  float rgb[3];
+  memcpy (rgb, source, sizeof rgb);
+  if (!isfinite (rgb[0]) || !isfinite (rgb[1]) || !isfinite (rgb[2])) return false;
+
+  double xyz[3];
+  for (int i = 0; i < 3; i++)
+    xyz[i] = (transform->rgb_to_xyz[i][0] * (double) rgb[0] +
+              transform->rgb_to_xyz[i][1] * (double) rgb[1] +
+              transform->rgb_to_xyz[i][2] * (double) rgb[2]) / transform->white[i];
+
+  const double values[3] = {
+    /* Avoid subtracting the shared constant near black, including subnormals. */
+    xyz[1] > 216.0 / 24389.0 ? 116.0 * cbrt (xyz[1]) - 16.0 :
+                              (24389.0 / 27.0) * xyz[1],
+    500.0 * forward_f_difference (xyz[0], xyz[1]),
+    200.0 * forward_f_difference (xyz[1], xyz[2])
+  };
+  for (int i = 0; i < 3; i++)
+    {
+      if (!isfinite (values[i]) || fabs (values[i]) > FLT_MAX) return false;
+      lab[i] = (float) values[i];
+    }
+  return true;
+}
+
+bool
+glims_lab_transform_from_linear_rgb (const GlimsLabTransform *transform,
+                                     const void *rgb, size_t count, void *lab)
+{
+  if (!transform || count > 4096 || (count && (!rgb || !lab))) return false;
+  if (!count) return true;
+  const size_t size = count * 3 * sizeof (float);
+  const uintptr_t input = (uintptr_t) rgb, output = (uintptr_t) lab;
+  if (input > UINTPTR_MAX - size || output > UINTPTR_MAX - size ||
+      (input < output + size && output < input + size)) return false;
+
+  const unsigned char *source = rgb;
+  unsigned char *destination = lab;
+  float pixel[3];
+  for (size_t i = 0; i < count; i++)
+    if (!convert_linear_rgb_pixel (transform, source + i * sizeof pixel, pixel)) return false;
+  for (size_t i = 0; i < count; i++)
+    {
+      convert_linear_rgb_pixel (transform, source + i * sizeof pixel, pixel);
       memcpy (destination + i * sizeof pixel, pixel, sizeof pixel);
     }
   return true;

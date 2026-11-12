@@ -5253,3 +5253,14 @@ each of four engines pass, including disk round trips, XCF reopen, independent
 scalar oracles, Undo/Redo and stale-target refusal. Independent file/runtime
 reviews found no important issue. Full UI, bundle and launch qualification are
 in progress. See `ink-recorder.md` for scope and remaining selection/Batch work.
+
+
+### Private linear RGB to Lab conversion (2026-11-12)
+
+The private transform now converts linear-sRGB float triples into physical
+D50 Lab with bounded atomic rows and no clipping or transfer-curve decoding.
+Independent forward checks pass 752 cases in optimized and ASan/UBSan builds;
+the unchanged reverse suite passes 7,800 in each mode. Source review found
+no important issue. This is numeric preparation only: profile admission,
+alpha/layer policy and the actual document conversion workflow remain open.
+See [lab-transform.md](lab-transform.md).
