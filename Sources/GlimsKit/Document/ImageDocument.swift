@@ -332,6 +332,9 @@ final class ImageDocument {
     /// While the window's filter preview is open, layer changes are
     /// refused — the preview owns its drawable. Set by the controller.
     var filterPreviewIsOpen = false
+    private var inkLevelsToken: UInt64?
+    private var inkLevelsStartIsPending = false
+    private var inkLevelsCleanups = 0
     /// Queued engine commands whose result becomes or replaces the paint
     /// target — a created, pasted or text layer, an editing mask, or a
     /// command that removes the target. While one is queued the drawable
@@ -433,7 +436,9 @@ final class ImageDocument {
 
     private var acceptsImageReads: Bool {
         !isClosing && !isSavingForClose && !isTransferringClipboard && !PlugInCommands.isRunning
-            && !filterPreviewIsOpen && !EngineActivity.shared.isBusy
+            && !filterPreviewIsOpen && inkLevelsToken == nil
+            && !inkLevelsStartIsPending && inkLevelsCleanups == 0
+            && !EngineActivity.shared.isBusy
     }
 
     var acceptsEdits: Bool { acceptsImageReads && !recorder.isReplaying }
@@ -4707,6 +4712,125 @@ final class ImageDocument {
                 else { finish(.success(())) }
             }
         }
+    }
+
+    /// The window reserves its preview gate before this ordered capture. Any
+    /// accepted input lands first; a stale begin reply still owns a token that
+    /// its caller must end, including while this document is closing.
+    func beginInkLevelsPreview(channel: Int32,
+                               completion: @escaping @MainActor (Result<UInt64, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard filterPreviewIsOpen, inkLevelsToken == nil, !inkLevelsStartIsPending,
+              inkLevelsCleanups == 0, session.supportsInkLevelSnapshots,
+              colorInfo.mode.usesInkChannels, activeChannel == channel,
+              !recorder.isReplaying, !isSavingForClose, !isTransferringClipboard,
+              !PlugInCommands.isRunning, !EngineActivity.shared.isBusy else {
+            return completion(.failure(DocumentError.busy))
+        }
+        inkLevelsStartIsPending = true
+        EngineActivity.shared.beginTransformPreview()
+        enqueue(on: inputQueue) { [session, image] in
+            let result = Result { try session.beginInkLevelsSnapshot(image, channel: channel) }
+            DispatchQueue.main.async {
+                self.inkLevelsStartIsPending = false
+                if case .success(let token) = result { self.inkLevelsToken = token }
+                EngineActivity.shared.endTransformPreview()
+                completion(result)
+            }
+        }
+    }
+
+    func renderInkLevelsPreview(_ request: InkLevelsPixelPreview.Request,
+                                completion: @escaping @MainActor (Result<CGImage, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard filterPreviewIsOpen, inkLevelsToken == request.token, request.isValid else {
+            return completion(.failure(DocumentError.targetChanged))
+        }
+        pendingWork += 1 // Includes asynchronous private-copy destruction.
+        EngineActivity.shared.beginTransformPreview()
+        enqueue(on: inputQueue) { [session, image] in
+            var copy: Int32?
+            let result = Result { () throws -> CGImage in
+                let preview = try session.renderInkLevelsSnapshot(image, token: request.token, settings: request.settings)
+                copy = preview
+                return try CanvasDisplayDestination.render(session, image: preview, scale: request.renderScale,
+                    area: request.renderArea, destination: request.destination, proof: request.proof)
+            }
+            DispatchQueue.main.async {
+                let finish: @MainActor (Result<Void, Error>) -> Void = { cleanup in
+                    defer { self.jobDidFinish(input: false) }
+                    EngineActivity.shared.endTransformPreview()
+                    if self.isClosing || self.inkLevelsToken != request.token {
+                        completion(.failure(DocumentError.closed))
+                    } else {
+                        completion(cleanup.flatMap { result })
+                    }
+                }
+                if let copy { EngineActivity.shared.closeImage(copy, session: session, completion: finish) }
+                else { finish(.success(())) }
+            }
+        }
+    }
+
+    /// Native End is cleanup, so it remains counted and available while closing.
+    /// Clearing the main-actor token also prevents late pixels from reviving it.
+    func endInkLevelsPreview(_ token: UInt64,
+                             completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        if inkLevelsToken == token { inkLevelsToken = nil }
+        inkLevelsCleanups += 1
+        pendingWork += 1
+        // Order after work already queued. Any request deferred by another
+        // activity will refuse its expired token and discard its stale reply.
+        inputQueue.async {
+            DispatchQueue.main.async {
+                EngineActivity.shared.endInkSnapshot(token, image: self.image, session: self.session) { result in
+                    defer { self.jobDidFinish(input: false) }
+                    self.inkLevelsCleanups -= 1
+                    completion(result)
+                    self.onStateChange?()
+                }
+            }
+        }
+    }
+
+    @discardableResult
+    func applyInkLevelsPreview(_ token: UInt64, settings: EngineSession.InkLevelsSettings,
+                               completion: @escaping @MainActor (Result<Void, Error>) -> Void) -> Bool {
+        guard settings.isValid, filterPreviewIsOpen, inkLevelsToken == token,
+              !refuseWhileEditingUnavailable(forPreviewWork: true) else {
+            completion(.failure(DocumentError.busy))
+            return false
+        }
+        let admission = InkEditAdmission()
+        let unsupported = "Ink-channel Levels cannot be replayed by Recorder yet."
+        let accepted = enqueueExclusive(label: "Applying Levels", admission: {
+            self.filterPreviewIsOpen && self.inkLevelsToken == token && !self.isClosing
+        }, didAdmit: {
+            if self.recorder.isRecording {
+                do { admission.capture = try self.reserveRecording(context: .unavailable(unsupported)) }
+                catch { admission.error = error }
+            }
+        }, rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
+            let confirmed = Self.confirmRecordingCapture(admission.capture, session: session, image: image)
+            let result = Result<Void, Error> {
+                if let error = admission.error { throw error }
+                try session.applyInkLevelsSnapshot(image, token: token, settings: settings)
+            }
+            let recording: Result<SemanticImageCommand, Error> = result.flatMap { _ in
+                .failure(RecorderReplayError(message: unsupported))
+            }
+            self.settleRecording(admission.capture, result: recording, confirmed: confirmed)
+            self.dispatchReadWhenReady {
+                if case .success = result, self.inkLevelsToken == token { self.inkLevelsToken = nil }
+                if !self.isClosing {
+                    do { try self.reload() }
+                    catch { self.onError?("The ink channel state could not be refreshed: \(error)") }
+                }
+                completion(result)
+            }
+        }
+        if accepted, admission.capture != nil { notifyRecorderChanged() }
+        return accepted
     }
 
     // MARK: Helpers
