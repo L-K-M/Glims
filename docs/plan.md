@@ -1168,9 +1168,9 @@ run or push happened in this slice.
 
 ## Later, before any public release
 
-- Qualify the app and every bundled executable with the selected signing
-  configuration. Notarization is excluded by the user's explicit request;
-  the current app and related tools use ad-hoc signatures.
+- Verify the ad-hoc signatures of the app and bundled executables. The user
+  explicitly excluded notarization; Developer ID signing and notarization are
+  not release gates for this task.
 - A process for shipping engine security fixes within days. GIMP's file
   loaders had high-severity bugs in 2025 (for example CVE-2025-14424 in XCF
   and CVE-2025-10925 in ILBM).
@@ -5252,3 +5252,16 @@ exclusive edits retain pending input until native dirty reconciliation.
 Independent production reviews are clear. Integrated recovery, latest-source
 UI and bundle qualification remain in progress. Lab Brush, layers, conversion
 and interchange are still open; see `lab-channel-editing.md`.
+
+### Native ink Recorder candidate (2026-11-12)
+
+Successful Fill/Clear/Invert and Levels Apply now capture exact semantic values
+and authoritative ink bindings. Strict recording version 11 preserves owned
+settings and document-scoped identity; explicit Load choices validate CMYK
+roles and retain the destination UUID. Replay requires the bound ink already
+selected, revalidates natively and stops on failure. Batch name matching
+refuses ink recordings. Twenty pure tests and 329 document-service checks on
+each of four engines pass, including disk round trips, XCF reopen, independent
+scalar oracles, Undo/Redo and stale-target refusal. Independent file/runtime
+reviews found no important issue. Full UI, bundle and launch qualification are
+in progress. See `ink-recorder.md` for scope and remaining selection/Batch work.

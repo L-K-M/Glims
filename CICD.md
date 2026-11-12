@@ -128,7 +128,7 @@ The app is arm64-only because the GIMP engine it will link is built for the
 host architecture (`docs/plan.md`).
 
 **Signing.** The app is ad-hoc signed (`codesign --sign -`), which Apple
-Silicon requires to launch, and carries no Developer ID signature.
-Notarization is explicitly outside the user's requested scope. Bundle
-signature checks, source/license qualification and isolated launch/editing
-checks still apply to distribution artifacts.
+Silicon requires to launch, and carries no Developer ID signature. The user
+explicitly excluded notarization. Release qualification checks the signatures,
+bundled dependencies, corresponding sources and license notices; it does not
+require a notarization submission.
