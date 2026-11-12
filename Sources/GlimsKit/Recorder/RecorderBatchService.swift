@@ -132,21 +132,25 @@ final class RecorderBatchService {
             // Batch owns error presentation; no modal alert may interrupt a run.
             document.onError = { commandError = $0 }
             try checkCancellation()
-            let candidates = try document.recorderBatchCandidates()
+            let candidates = try await admitted(document) { try document.recorderBatchCandidates() }
             let choices = try await files {
                 try RecorderBatchBindings.resolve(file: prepared.file, candidates: candidates, policy: matching)
             }
             await settled(document)
             try checkCancellation()
-            let checkpoint = try document.recorderInstallCheckpoint()
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                document.installRecording(prepared, checkpoint: checkpoint, choices: choices) { continuation.resume(with: $0) }
+            progress("Binding \(source.lastPathComponent)")
+            try await admitted(document) {
+                let checkpoint = try document.recorderInstallCheckpoint()
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    document.installRecording(prepared, checkpoint: checkpoint, choices: choices) { continuation.resume(with: $0) }
+                }
             }
             await settled(document)
             try checkCancellation()
             progress("Replaying \(source.lastPathComponent)")
             try checkCancellation()
-            try document.startReplay(engineActivity: .wait)
+            commandError = nil
+            try await admitted(document) { try document.startReplay(engineActivity: .wait) }
             while case .running = document.replayStatus { await tick() }
             await settled(document)
             switch document.replayStatus {
@@ -163,13 +167,15 @@ final class RecorderBatchService {
             try checkCancellation()
             progress("Exporting \(source.lastPathComponent)")
             try checkCancellation()
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                let done: @MainActor (Error?) -> Void = { error in
-                    if let error { continuation.resume(throwing: error) } else { continuation.resume() }
-                }
-                switch output {
-                case .native: document.saveCopy(to: preparedOutput.stagingURL, completion: done)
-                case .exported(let settings): document.export(to: preparedOutput.stagingURL, settings: settings, completion: done)
+            try await admitted(document) {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    let done: @MainActor (Error?) -> Void = { error in
+                        if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+                    }
+                    switch output {
+                    case .native: document.saveCopy(to: preparedOutput.stagingURL, completion: done)
+                    case .exported(let settings): document.export(to: preparedOutput.stagingURL, settings: settings, completion: done)
+                    }
                 }
             }
             await settled(document)
@@ -215,7 +221,29 @@ final class RecorderBatchService {
     }
 
     private func settled(_ document: ImageDocument) async {
-        while document.pendingWork > 0 || EngineActivity.shared.isBusy || EngineActivity.shared.isRenderingTransformPreview { await tick() }
+        // Keep accepted document callbacks (including failures) observable.
+        // On Cancel, global admission flags need not delay our cleanup;
+        // native image close still queues behind actual engine work.
+        while document.pendingWork > 0 || (!cancellationRequested &&
+            (EngineActivity.shared.isBusy || PlugInCommands.isRunning || EngineActivity.shared.isRenderingTransformPreview)) {
+            await tick()
+        }
+    }
+
+    /// Only retry document-level busy refusals: these precede a save/export
+    /// or reject an unpublished read-only recording installation. Native
+    /// operation errors and partially applied replay steps are never retried.
+    private func admitted<Value>(_ document: ImageDocument, _ operation: () async throws -> Value) async throws -> Value {
+        while true {
+            await settled(document)
+            try checkCancellation()
+            do { return try await operation() }
+            catch {
+                guard let refusal = error as? ImageDocument.DocumentError,
+                      case .busy = refusal else { throw error }
+                await tick()
+            }
+        }
     }
 
     private func tick() async {

@@ -4724,7 +4724,7 @@ passes its native and app workflows, including actual Export/Repeat Export,
 with development libraries blocked. Ordinary launch measured 1.656 seconds
 with fresh user paths, 1.406 cached and 3.388 after relocation on this Mac.
 That candidate is installed locally with the previous bundle preserved;
-PR #219 still awaits hosted macOS CI and merge. No notarization is requested.
+PR #219 passed hosted macOS CI and merged as 8a9216f. No notarization is requested.
 
 The next candidate adds File > Batch for saved recordings and selected files
 or flat folders. Matching is an explicit policy: no targets, exact name/kind,
@@ -4749,3 +4749,19 @@ races, the real Batch window and picker teardown. All 39 new model/filesystem
 tests pass. Final cross-engine, full-suite, visual and independent follow-up
 qualification is pending. This does not establish complete Recorder coverage,
 PSD fidelity or native CMYK/Lab/duotone/multichannel editing.
+
+
+Batch follow-up qualification: the first combined candidate passed all 1,481
+Swift tests and its native Batch workflow on all four engines. Actual desktop
+inspection caught long-path layout pressure; the corrected panel stays 620
+pixels wide with truncated path fields and selectable full paths in results.
+The desktop screenshot is verified, but its accessibility snapshot was
+incomplete, so it does not qualify VoiceOver.
+
+A read-only bind can lose admission while another document starts engine
+work. The reproduced native failure now retries only pre-work document busy
+refusals; native errors and partly applied steps never retry. A plug-in's
+completion flag is also respected. Cancel drains accepted document callbacks
+but can proceed to cleanup without waiting for that foreign status flag;
+native image destruction still queues behind real engine work. The latter
+regression failed before the fix. Final checks on this follow-up remain open.

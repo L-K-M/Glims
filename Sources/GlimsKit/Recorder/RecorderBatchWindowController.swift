@@ -136,9 +136,6 @@ final class RecorderBatchWindowController: NSWindowController, NSWindowDelegate 
             output = .exported(exportForm.settings)
         }
         do {
-            items = []
-            resultsView.string = ""
-            runTotal = 0
             try service.start(recording: recording, inputs: inputURLs, directory: directory,
                               output: output, matching: selectedPolicy,
                               progress: { [weak self] progress in self?.showProgress(progress) },
@@ -146,6 +143,9 @@ final class RecorderBatchWindowController: NSWindowController, NSWindowDelegate 
         } catch {
             return showStatus(error.localizedDescription, isError: true)
         }
+        items = []
+        resultsView.string = ""
+        runTotal = 0
         closeAfterRun = false
         progressIndicator.isIndeterminate = true
         progressIndicator.startAnimation(nil)
@@ -298,7 +298,7 @@ final class RecorderBatchWindowController: NSWindowController, NSWindowDelegate 
         var saved = 0, failed = 0, cancelled = 0
         var lines: [String] = []
         for item in finished {
-            let name = item.source.lastPathComponent
+            let name = (item.source.path as NSString).abbreviatingWithTildeInPath
             switch item.outcome {
             case .saved(let url, let warning):
                 saved += 1
@@ -439,6 +439,8 @@ final class RecorderBatchWindowController: NSWindowController, NSWindowDelegate 
         intro.setAccessibilityLabel("Batch description")
 
         recordingField.lineBreakMode = .byTruncatingMiddle
+        recordingField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        recordingField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         recordingField.isSelectable = true
         recordingField.setAccessibilityLabel("Chosen .glimsrecording file")
         recordingField.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
@@ -467,6 +469,8 @@ final class RecorderBatchWindowController: NSWindowController, NSWindowDelegate 
         inputsScroll.widthAnchor.constraint(equalTo: inputsCell.widthAnchor).isActive = true
 
         outputFolderField.lineBreakMode = .byTruncatingMiddle
+        outputFolderField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        outputFolderField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         outputFolderField.isSelectable = true
         outputFolderField.setAccessibilityLabel("Chosen output folder")
         outputFolderField.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
@@ -501,7 +505,7 @@ final class RecorderBatchWindowController: NSWindowController, NSWindowDelegate 
         outputKindPopup.setAccessibilityLabel("Output kind")
 
         let grid = NSGridView(views: [
-            [NSTextField(labelWithString: "Recording (.glimsrecording):"), recordingRow],
+            [NSTextField(labelWithString: "Recording:"), recordingRow],
             [NSTextField(labelWithString: "Input images:"), inputsCell],
             [NSTextField(labelWithString: "Output folder:"), folderRow],
             [NSTextField(labelWithString: "Target matching:"), policyCell],

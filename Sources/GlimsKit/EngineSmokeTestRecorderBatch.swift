@@ -145,9 +145,28 @@ extension EngineSmokeTest {
 
         let doubleFlip = try recording("Two flips", commands: [
             (.transformImage(.flipHorizontal), .none), (.transformImage(.flipHorizontal), .none)])
+        let bindingOutputs = try folder("concurrent-binding")
+        var bindingForeignFinished = false
+        let bindingResults = try run(flip, [first], bindingOutputs) { update in
+            guard update.message.hasPrefix("Binding ") else { return }
+            DispatchQueue.main.async {
+                EngineActivity.shared.performWhenReady(label: "Other document work during binding", work: {
+                    Thread.sleep(forTimeInterval: 0.15)
+                }, completion: { bindingForeignFinished = true })
+            }
+        }
+        try wait { bindingForeignFinished }
+        if case .saved(let url, _) = bindingResults.first?.outcome {
+            check(try pixels(url) == Data(flipped), "Batch retries an uncommitted binding after concurrent engine work")
+        } else { check(false, "Concurrent engine work must not reject an otherwise valid recording installation") }
         let concurrentOutputs = try folder("concurrent")
         let foreignImage = try session.newImage(pixels: sourcePixels)
-        defer { try? session.closeImage(foreignImage) }
+        let foreignDocument = try ImageDocument(session: session, image: foreignImage, name: "Other document")
+        defer {
+            var closed = false
+            foreignDocument.closeImageWhenDrained { closed = true }
+            try? wait { closed }
+        }
         let foreignExport = root.appendingPathComponent("Foreign.png")
         var foreignAccepted = false, foreignFinished = false, foreignError: Error?
         let concurrent = try run(doubleFlip, [first], concurrentOutputs) { update in
@@ -189,6 +208,39 @@ extension EngineSmokeTest {
         check(try FileManager.default.contentsOfDirectory(atPath: waitingOutputs.path).isEmpty,
               "A delayed engine-idle callback cannot resume a cancelled replay or publish output")
 
+        let procedure = try session.procedures(image: foreignImage).first
+        try require(procedure != nil, "A native procedure is needed for the plug-in completion-order fixture")
+        for cancelDuringLag in [false, true] {
+            let lagOutputs = try folder(cancelDuringLag ? "cancelled-plugin-lag" : "plugin-lag")
+            var plugInFlagCleared = false
+            let lagResults = try run(flip, [first, second], lagOutputs) { update in
+                guard update.message.hasPrefix("Exporting ") else { return }
+                // Reproduce the real completion-order window: the engine is
+                // idle but the app's plug-in flag has not cleared yet. No
+                // external plug-in or dialog is launched by this fixture.
+                PlugInCommands.willRun(procedure!, on: foreignDocument)
+                DispatchQueue.main.asyncAfter(deadline: .now() + (cancelDuringLag ? 1.0 : 0.05)) {
+                    PlugInCommands.didRun(procedure!, outcome: nil)
+                    plugInFlagCleared = true
+                }
+                if cancelDuringLag { DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { service.cancel() } }
+            }
+            let completedBeforeFlagCleared = !plugInFlagCleared
+            try wait { plugInFlagCleared }
+            if cancelDuringLag {
+                check(completedBeforeFlagCleared, "Cancel closes its drained private image without waiting for a foreign plug-in status flag")
+                check(try lagResults.count == 1 && FileManager.default.contentsOfDirectory(atPath: lagOutputs.path).isEmpty,
+                      "Cancel during a plug-in completion lag discards the current export and later inputs")
+                if case .cancelled = lagResults.first?.outcome { check(true, "Plug-in flag waiting retains the Cancel result") }
+                else { check(false, "Plug-in lag cancellation must remain cancelled") }
+            } else {
+                try require(lagResults.count == 2, "Plug-in lag results missing")
+                let output = try saved(lagResults[0])
+                _ = try saved(lagResults[1])
+                check(try pixels(output) == Data(flipped), "Batch waits for the plug-in flag to clear before export admission")
+            }
+        }
+
         let cancelledOutputs = try folder("cancelled")
         let cancelled = try run(flip, [first, second], cancelledOutputs) { update in
             if update.message.hasPrefix("Exporting ") { service.cancel() }
@@ -226,6 +278,17 @@ extension EngineSmokeTest {
                 let artifacts = ProcessInfo.processInfo.environment["GLIMS_SMOKE_ARTIFACT_DIR"].map { URL(fileURLWithPath: $0) } ?? work
                 try bitmap.representation(using: .png, properties: [:])?.write(to: artifacts.appendingPathComponent("batch-window.png"))
             }
+        }
+        if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-batch-window",
+           let directory = ProcessInfo.processInfo.environment["GLIMS_SMOKE_ARTIFACT_DIR"] {
+            NSApp.activate(ignoringOtherApps: true)
+            window.window?.deminiaturize(nil)
+            window.window?.makeKeyAndOrderFront(nil)
+            spin(0.1)
+            let artifacts = URL(fileURLWithPath: directory)
+            try Data("\(ProcessInfo.processInfo.processIdentifier)".utf8).write(to: artifacts.appendingPathComponent("batch-window-ready"))
+            let deadline = Date().addingTimeInterval(45)
+            while !FileManager.default.fileExists(atPath: artifacts.appendingPathComponent("batch-window-continue").path), Date() < deadline { spin(0.02) }
         }
         window.chooseInputs(nil)
         try wait { window.openPanel != nil }

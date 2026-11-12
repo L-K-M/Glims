@@ -231,7 +231,7 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Levels recorder)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
-            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-batch" {
+            if ["recorder-batch", "recorder-batch-window"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? "") {
                 try exerciseRecorderBatch(session, work: work)
                 print(failures == 0 ? "PASSED (recorder Batch)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
