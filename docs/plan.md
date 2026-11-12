@@ -5267,6 +5267,16 @@ reviews found no important issue. Full UI, bundle and launch qualification are
 in progress. See `ink-recorder.md` for scope and remaining selection/Batch work.
 
 
+### Private linear RGB to Lab conversion (2026-11-12)
+
+The private transform now converts linear-sRGB float triples into physical
+D50 Lab with bounded atomic rows and no clipping or transfer-curve decoding.
+Independent forward checks pass 752 cases in optimized and ASan/UBSan builds;
+the unchanged reverse suite passes 7,800 in each mode. Source review found
+no important issue. This is numeric preparation only: profile admission,
+alpha/layer policy and the actual document conversion workflow remain open.
+See [lab-transform.md](lab-transform.md).
+
 ### Physical Lab Brush candidate (2026-11-12)
 
 Typed Begin/Cancel and a private native brush core now paint one physical
@@ -5296,15 +5306,24 @@ slot192/194 adapters preserve capability refusal. UI qualification reproduced
 and fixed a clipped selection-mode control; independent reviews are clear.
 Bundle and hosted qualification remain pending, with no Photoshop-parity claim. See
 [lab-selections.md](lab-selections.md) for contracts, evidence and limits.
-### Private linear RGB to Lab conversion (2026-11-12)
 
-The private transform now converts linear-sRGB float triples into physical
-D50 Lab with bounded atomic rows and no clipping or transfer-curve decoding.
-Independent forward checks pass 752 cases in optimized and ASan/UBSan builds;
-the unchanged reverse suite passes 7,800 in each mode. Source review found
-no important issue. This is numeric preparation only: profile admission,
-alpha/layer policy and the actual document conversion workflow remain open.
-See [lab-transform.md](lab-transform.md).
+### Lab editor integration (2026-11-12)
+
+The reviewed Brush and selection branches are integrated with the private
+forward Lab transform from current main. Their only merge conflict was the
+append-only plan log; both entries are retained. The qualified app remains
+exact selection source `11dd996`, not a relabelled binary from this merge.
+Its 18 standalone cases pass with development paths denied; fresh, cached
+and relocated-fresh launches measure 2.044, 1.609 and 3.590 seconds. It adds
+physical Lab Fill/Brush and root-mask selection tools to the previously
+installed editor. All 1,599 Swift and 130 Python tests pass on that source.
+Both feature heads have successful hosted CI. The integrated merge also
+requires its own latest-head CI before publication. No notarization.
+
+The only code difference from that qualified source is the separately tested
+private RGB-to-Lab arithmetic, with no public caller yet. Actual converted
+copies remain a subsequent candidate; layers and broader Lab interchange
+remain open. Qualification does not establish full Photoshop 4 parity.
 
 ### Explicit RGB/Lab converted copies (candidate)
 
