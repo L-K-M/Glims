@@ -138,7 +138,11 @@ typedef struct GlimsLayerInfo {
 
 /* Owned export choices. These values never encode an upstream enum. */
 typedef enum { GLIMS_EXPORT_PNG = 1, GLIMS_EXPORT_JPEG = 2,
-               GLIMS_EXPORT_TIFF = 3 } GlimsExportFormat;
+               GLIMS_EXPORT_TIFF = 3, GLIMS_EXPORT_PSD = 4 } GlimsExportFormat;
+/* PSD supports RGB/grayscale here. Layers retain the native exporter's
+ * baked effects and perceptual blending; merged captures visible pixels
+ * into one alpha-capable layer without editing the source image. */
+typedef enum { GLIMS_PSD_LAYERS = 0, GLIMS_PSD_MERGED = 1 } GlimsPSDLayout;
 typedef enum { GLIMS_JPEG_FULL = 0, GLIMS_JPEG_HORIZONTAL = 1,
                GLIMS_JPEG_VERTICAL = 2, GLIMS_JPEG_BOTH = 3 } GlimsJPEGSubsampling;
 typedef enum { GLIMS_TIFF_NONE = 0, GLIMS_TIFF_LZW = 1,
@@ -155,6 +159,8 @@ typedef struct GlimsExportSettings {
   uint32_t png_preserve_transparent_color;
   uint32_t tiff_compression;
   uint32_t tiff_preserve_transparent_color;
+  /* Optional tail for older PNG/JPEG/TIFF callers. PSD requires this field. */
+  uint32_t psd_layout;
 } GlimsExportSettings;
 
 typedef struct GlimsImageInfo {
@@ -3562,13 +3568,16 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*filter_curves_set) (GlimsEngine *engine, GlimsFilterID filter,
                                    const GlimsCurvesSnapshot *settings, char **error);
 
-  /* Slot178: noninteractive PNG, JPEG or TIFF export with explicit settings.
+  /* Slot178: noninteractive PNG, JPEG, TIFF or PSD export with explicit settings.
    * All fields are validated, including inactive formats. The filename's
    * exporter must match format. Unsupported native argument contracts fail
    * before writing. No document-save state, pixels or Undo entry is changed;
    * success remembers the exported path. Active strokes/previews are BUSY.
    * Input's known prefix is copied (unaligned input and larger future tails
-   * accepted); path is borrowed until return. Clears *error when supplied. */
+   * accepted); path is borrowed until return. PSD requires its complete
+   * layout tail. PSD supports RGB/grayscale, 8-bit source at 8-bit and
+   * higher precision reduced to 16-bit. Engines before 3.2.6 refuse profiles
+   * outside their default encoding space. Clears *error when supplied. */
   GlimsStatus (*image_export_configured) (GlimsEngine *engine, GlimsImageID image,
                                          const char *path,
                                          const GlimsExportSettings *settings,

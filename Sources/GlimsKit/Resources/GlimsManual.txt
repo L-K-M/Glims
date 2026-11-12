@@ -62,10 +62,16 @@ Saving and exporting are two separate jobs:
   name. Save a Copy… writes an XCF copy without changing the file you
   are editing.
 
-  Export… (Shift-Command-E) writes a finished image as PNG, JPEG or
-  TIFF. After exporting once, File > Export Again… (Command-E) reads
+  Export… (Shift-Command-E) writes an image as PNG, JPEG, TIFF or PSD. After exporting once, File > Export Again… (Command-E) reads
   "Export to name.png" and overwrites that file with the current
   image.
+
+PSD offers Layers and Merged appearance for RGB and grayscale images.
+Layers retains raster layers and masks, but renders effects into their pixels;
+blending can change when the exported file is reopened. Merged appearance
+captures the visible image as one layer, including transparency. PSD exports
+8-bit source channels at 8-bit and higher precision at 16-bit; out-of-range
+HDR values cannot be retained. Keep the XCF document for full editing.
 
 Exporting never marks the document saved; only Save does. The window
 title and the close prompt always name the XCF file that Save writes.

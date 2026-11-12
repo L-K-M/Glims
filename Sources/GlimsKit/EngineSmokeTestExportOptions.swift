@@ -3,12 +3,20 @@ import AppKit
 @MainActor
 extension EngineSmokeTest {
     static func exerciseExportOptions(_ session: EngineSession, work: URL,
-                                       documents: DocumentList) throws {
+                                       documents: DocumentList, psd: Bool = false) throws {
         func wait(seconds: TimeInterval = 20, _ condition: () -> Bool) {
             let deadline = Date().addingTimeInterval(seconds)
             while !condition() && Date() < deadline { EngineSmokeTestHost.pumpEvents() }
         }
-        let image = try session.newImage(width: 32, height: 24)
+        let image: Int32
+        if psd {
+            let base = ClipboardImage(width: 32, height: 24,
+                pixels: Data((0..<(32 * 24)).flatMap { _ in [UInt8(20), 180, 70, 64] }), origin: .zero)
+            image = try session.newImage(pixels: base)
+            let overlay = ClipboardImage(width: 16, height: 24,
+                pixels: Data((0..<(16 * 24)).flatMap { _ in [UInt8(180), 30, 220, 128] }), origin: .zero)
+            _ = try session.pastePixels(image, pixels: overlay, at: .zero)
+        } else { image = try session.newImage(width: 32, height: 24) }
         let document = try ImageDocument(session: session, image: image, name: "Export controls")
         documents.items.append(document)
         let controller = DocumentWindowController(document: document, exportDirectory: work)
@@ -50,7 +58,15 @@ extension EngineSmokeTest {
         form.progressiveBox.sendAction(form.progressiveBox.action, to: form.progressiveBox.target)
         check(form.commitEditing() && form.settings.jpegQuality == 0.37 && !form.settings.jpegProgressive,
               "the visible export fields commit the requested values")
-        let file = work.appendingPathComponent("native-export-options.jpg")
+        if psd {
+            form.selectFormat(.psd)
+            form.psdLayoutPopup.selectItem(at: ExportSettings.PsdLayout.allCases.firstIndex(of: .merged)!)
+            form.psdLayoutPopup.sendAction(form.psdLayoutPopup.action, to: form.psdLayoutPopup.target)
+            check(form.commitEditing() && form.settings.psdLayout == .merged
+                  && panel.nameFieldStringValue.hasSuffix(".psd"),
+                  "the actual Export sheet captures Merged appearance and its PSD extension")
+        }
+        let file = work.appendingPathComponent(psd ? "native-export-options.psd" : "native-export-options.jpg")
         // The native picker resolves /var to /private/var on this Mac.
         func remembersDestination() -> Bool {
             document.fileState.lastExportURL?.resolvingSymlinksInPath() == file.resolvingSymlinksInPath()
@@ -67,16 +83,37 @@ extension EngineSmokeTest {
               "accepting Export writes the image and remembers its exact settings: \(exportError ?? "ok")")
         guard FileManager.default.fileExists(atPath: file.path) else { return }
         let first = try Data(contentsOf: file)
-        check(first.starts(with: [0xff, 0xd8]) && first.range(of: Data([0xff, 0xc0])) != nil,
-              "the actual sheet produces the requested baseline JPEG")
+        check(psd ? first.starts(with: Data("8BPS".utf8)) :
+              (first.starts(with: [0xff, 0xd8]) && first.range(of: Data([0xff, 0xc0])) != nil),
+              "the actual sheet produces the requested file format")
+        func checkMergedAppearance() throws {
+            guard psd else { return }
+            var captured: Result<(Int, Data), Error>?
+            EngineActivity.shared.performWhenReady(label: "Checking exported PSD", work: {
+                let result = Result { () throws -> (Int, Data) in
+                    let reopened = try session.openImage(path: file.path)
+                    defer { try? session.closeImage(reopened) }
+                    return (try session.layers(reopened).count, try session.copyPixels(reopened, merged: true).pixels)
+                }
+                DispatchQueue.main.async { captured = result }
+            })
+            wait { captured != nil && !EngineActivity.shared.isBusy }
+            guard let captured else { throw NSError(domain: "PSD export fixture", code: 1) }
+            let (layers, pixels) = try captured.get()
+            check(layers == 1, "Merged appearance exports the two source layers as one PSD layer")
+            check(pixels.count == original.count && zip(pixels, original).allSatisfy { abs(Int($0) - Int($1)) <= 1 },
+                  "reopened PSD retains the visible colors and partial alpha within one 8-bit level")
+        }
+        try checkMergedAppearance()
 
         // Delete the output, then exercise the ordinary Cmd-E action. It
         // must repeat the successful captured request without opening a sheet.
         try FileManager.default.removeItem(at: file)
         controller.repeatExport(nil)
         wait { document.pendingWork == 0 && FileManager.default.fileExists(atPath: file.path) }
-        check(controller.window?.attachedSheet == nil && (try? Data(contentsOf: file)) == first,
+        check(controller.window?.attachedSheet == nil && (psd || (try? Data(contentsOf: file)) == first),
               "Repeat Export reuses the saved format and encoder settings")
+        try checkMergedAppearance()
 
         var failureReturned = false, refusedWrite = false
         let mismatched = work.appendingPathComponent("mismatched.png")

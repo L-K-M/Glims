@@ -6,13 +6,14 @@ import AppKit
 /// leading dot; an unknown or empty extension gets nil so the caller
 /// picks a fallback rather than guessing.
 enum ExportFormat: String, CaseIterable {
-    case png, jpeg, tiff
+    case png, jpeg, tiff, psd
 
     var title: String {
         switch self {
         case .png: return "PNG"
         case .jpeg: return "JPEG"
         case .tiff: return "TIFF"
+        case .psd: return "PSD"
         }
     }
 
@@ -23,6 +24,7 @@ enum ExportFormat: String, CaseIterable {
         case .png: return "png"
         case .jpeg: return "jpg"
         case .tiff: return "tiff"
+        case .psd: return "psd"
         }
     }
 
@@ -32,6 +34,7 @@ enum ExportFormat: String, CaseIterable {
         case "png": return .png
         case "jpg", "jpeg": return .jpeg
         case "tif", "tiff": return .tiff
+        case "psd": return .psd
         default: return nil
         }
     }
@@ -55,6 +58,26 @@ struct ExportSettings: Equatable {
     var pngCompression = 9
     var pngInterlaced = false
     var pngPreserveTransparentColor = false
+
+    var psdLayout = PsdLayout.layers
+
+    enum PsdLayout: String, CaseIterable {
+        case layers, merged
+
+        var title: String {
+            switch self {
+            case .layers: return "Layers"
+            case .merged: return "Merged appearance"
+            }
+        }
+
+        var explanation: String {
+            switch self {
+            case .layers: return "Keeps layers and masks. Effects are rendered into layers; blending may change. Higher precision is reduced to 16-bit."
+            case .merged: return "Exports the visible image as one layer, including transparency. Higher precision is reduced to 16-bit."
+            }
+        }
+    }
 
     var tiffCompression = TiffCompression.none
     var tiffPreserveTransparentColor = true
@@ -302,6 +325,8 @@ final class ExportOptionsForm: NSView {
     let tiffCompressionPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let tiffTransparentBox = NSButton(checkboxWithTitle: "Preserve transparent pixel colors",
         target: nil, action: nil)
+    let psdLayoutPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    let psdExplanation = NSTextField(wrappingLabelWithString: "")
     let messageLabel = NSTextField(labelWithString: "")
     /// The last readable refusal shown inline; nil while clean.
     private(set) var lastError: String?
@@ -335,6 +360,15 @@ final class ExportOptionsForm: NSView {
         tiffCompressionPopup.setAccessibilityLabel("TIFF compression")
         tiffCompressionPopup.target = self
         tiffCompressionPopup.action = #selector(tiffCompressionChanged(_:))
+
+        psdLayoutPopup.addItems(withTitles: ExportSettings.PsdLayout.allCases.map(\.title))
+        psdLayoutPopup.setAccessibilityLabel("PSD content")
+        psdLayoutPopup.target = self
+        psdLayoutPopup.action = #selector(psdLayoutChanged(_:))
+        psdExplanation.font = .systemFont(ofSize: 11)
+        psdExplanation.textColor = .secondaryLabelColor
+        psdExplanation.preferredMaxLayoutWidth = 270
+        psdExplanation.widthAnchor.constraint(equalToConstant: 270).isActive = true
 
         for box in [optimizeBox, progressiveBox, interlacedBox, pngTransparentBox, tiffTransparentBox] {
             box.setAccessibilityLabel(box.title)
@@ -377,8 +411,12 @@ final class ExportOptionsForm: NSView {
             [NSTextField(labelWithString: "Compression:"), tiffCompressionPopup],
             [NSGridCell.emptyContentView, tiffTransparentBox],
         ]
+        let psdRows: [[NSView]] = [
+            [NSTextField(labelWithString: "Content:"), psdLayoutPopup],
+            [NSGridCell.emptyContentView, psdExplanation],
+        ]
         let grid = NSGridView(views:
-            [[NSTextField(labelWithString: "Format:"), formatPopup]] + jpegRows + pngRows + tiffRows)
+            [[NSTextField(labelWithString: "Format:"), formatPopup]] + jpegRows + pngRows + tiffRows + psdRows)
         grid.column(at: 0).xPlacement = .trailing
         grid.rowSpacing = 8
         grid.columnSpacing = 12
@@ -386,6 +424,7 @@ final class ExportOptionsForm: NSView {
             .jpeg: (1...4).map { grid.row(at: $0) },
             .png: (5...7).map { grid.row(at: $0) },
             .tiff: (8...9).map { grid.row(at: $0) },
+            .psd: (10...11).map { grid.row(at: $0) },
         ]
         // Measured with every option row visible, the widest the grid
         // ever lays out; pinning it keeps the form's width stable while
@@ -426,6 +465,8 @@ final class ExportOptionsForm: NSView {
         tiffCompressionPopup.selectItem(at: popupIndex(of: settings.tiffCompression,
             in: ExportSettings.TiffCompression.allCases))
         tiffTransparentBox.state = settings.tiffPreserveTransparentColor ? .on : .off
+        psdLayoutPopup.selectItem(at: popupIndex(of: settings.psdLayout, in: ExportSettings.PsdLayout.allCases))
+        psdExplanation.stringValue = settings.psdLayout.explanation
     }
 
     private func popupIndex<T: Equatable>(of value: T, in choices: [T]) -> Int {
@@ -485,6 +526,14 @@ final class ExportOptionsForm: NSView {
         clearMessage()
     }
 
+    @objc private func psdLayoutChanged(_ sender: NSPopUpButton) {
+        let choices = ExportSettings.PsdLayout.allCases
+        guard choices.indices.contains(sender.indexOfSelectedItem) else { return }
+        settings.psdLayout = choices[sender.indexOfSelectedItem]
+        psdExplanation.stringValue = settings.psdLayout.explanation
+        clearMessage()
+    }
+
     @objc private func toggleChanged(_ sender: NSButton) {
         let on = sender.state == .on
         if sender === optimizeBox {
@@ -522,7 +571,7 @@ final class ExportOptionsForm: NSView {
                 window?.makeFirstResponder(compressionRow.field)
                 return false
             }
-        case .tiff:
+        case .tiff, .psd:
             break
         }
         guard ExportSettings.validate(settings) else {

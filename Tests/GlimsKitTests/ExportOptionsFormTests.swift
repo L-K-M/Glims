@@ -36,7 +36,7 @@ final class ExportOptionsFormTests: XCTestCase {
     }
 
     func testEveryFormatHasATitleAndAnExtensionThatParsesBack() {
-        XCTAssertEqual(ExportFormat.allCases, [.png, .jpeg, .tiff])
+        XCTAssertEqual(ExportFormat.allCases, [.png, .jpeg, .tiff, .psd])
         for format in ExportFormat.allCases {
             XCTAssertFalse(format.title.isEmpty)
             XCTAssertFalse(format.preferredExtension.isEmpty)
@@ -60,6 +60,28 @@ final class ExportOptionsFormTests: XCTestCase {
         for ext in ["", "gif", "webp", "pngg", "jpe", "tiff2", " png", "png "] {
             XCTAssertNil(ExportFormat.forFileExtension(ext), ext)
         }
+    }
+
+    func testPsdContentChoiceSurvivesOtherFormatEdits() {
+        let form = ExportOptionsForm()
+        XCTAssertTrue(form.psdLayoutPopup.isHidden)
+        for ext in ["psd", "PSD", ".PsD"] { XCTAssertEqual(ExportFormat.forFileExtension(ext), .psd) }
+        form.selectFormat(.psd)
+        XCTAssertFalse(form.psdLayoutPopup.isHidden)
+        XCTAssertFalse(form.psdExplanation.isHidden)
+        XCTAssertEqual(form.settings.psdLayout, .layers)
+        XCTAssertTrue(form.psdExplanation.stringValue.contains("blending may change"))
+        form.psdLayoutPopup.selectItem(at: 1)
+        fire(form.psdLayoutPopup)
+        XCTAssertEqual(form.settings.psdLayout, .merged)
+        XCTAssertTrue(form.psdExplanation.stringValue.contains("transparency"))
+        form.selectFormat(.png)
+        form.compressionRow.field.stringValue = "bad draft"
+        XCTAssertFalse(form.commitEditing())
+        form.selectFormat(.psd)
+        XCTAssertTrue(form.commitEditing(), "an unrelated hidden field draft cannot block PSD")
+        XCTAssertEqual(form.settings.psdLayout, .merged)
+        XCTAssertEqual(form.psdLayoutPopup.indexOfSelectedItem, 1)
     }
 
     // MARK: Validation gate
@@ -175,7 +197,7 @@ final class ExportOptionsFormTests: XCTestCase {
             widths.append(form.fittingSize.width)
         }
         XCTAssertEqual(widths[0], widths[1], "a format swap keeps the width")
-        XCTAssertEqual(widths[1], widths[2], "a format swap keeps the width")
+        XCTAssertTrue(widths.allSatisfy { $0 == widths[0] }, "all formats keep the width")
     }
 
     // MARK: Per-format retention

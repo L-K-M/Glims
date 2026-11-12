@@ -45,6 +45,7 @@ extension ExportFormat {
         case .png: return .png
         case .jpeg: return .jpeg
         case .tiff: return .tiff
+        case .psd: return UTType("com.adobe.photoshop-image")!
         }
     }
 }

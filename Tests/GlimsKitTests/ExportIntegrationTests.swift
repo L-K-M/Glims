@@ -31,6 +31,24 @@ final class ExportIntegrationTests: XCTestCase {
         XCTAssertEqual(native.tiff_preserve_transparent_color, 0)
     }
 
+    func testPsdChoiceReachesNativeSettingsAndPanel() throws {
+        var settings = ExportSettings()
+        settings.format = .psd
+        settings.psdLayout = .merged
+        let native = try settings.nativeValue()
+        XCTAssertEqual(native.format, GLIMS_EXPORT_PSD.rawValue)
+        XCTAssertEqual(native.psd_layout, GLIMS_PSD_MERGED.rawValue)
+        settings.psdLayout = .layers
+        XCTAssertEqual(try settings.nativeValue().psd_layout, GLIMS_PSD_LAYERS.rawValue)
+        XCTAssertEqual(native.psd_layout, GLIMS_PSD_MERGED.rawValue, "native request detaches from later edits")
+        let export = ExportSavePanel(baseName: "photo.version2", settings: settings)
+        XCTAssertEqual(export.panel.nameFieldStringValue, "photo.version2.psd")
+        XCTAssertEqual(export.panel.allowedContentTypes.map(\.identifier), ["com.adobe.photoshop-image"])
+        export.form.selectFormat(.png)
+        export.form.selectFormat(.psd)
+        XCTAssertEqual(export.panel.nameFieldStringValue, "photo.version2.psd")
+    }
+
     func testInvalidSettingsRefuseBeforeNativeConversion() {
         var settings = ExportSettings()
         settings.pngCompression = Int.max
