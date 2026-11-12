@@ -171,6 +171,7 @@ extension EngineSmokeTest {
             nativeOnly.removeAll { $0 == image }
             documents.items.append(document)
             controller.showWindow(nil)
+            NSApp.activate(ignoringOtherApps: true)
             controller.window?.makeKeyAndOrderFront(nil)
             try drain(document)
             return controller
@@ -179,6 +180,8 @@ extension EngineSmokeTest {
             try wait({ controller.inkLevelsPanel != nil && controller.canvas.inkLevelsPreviewIsCurrent &&
                        controller.inkLevelsPanel?.applyButton.isEnabled == true &&
                        controller.imageDocument.pendingWork == 0 && !EngineActivity.shared.isBusy }, message)
+            expect(controller.statusBar.message != "Preparing Levels preview…",
+                   "ready preview clears its preparing status")
         }
 
         try require(session.supportsInkLevelSnapshots, "Engine supports native ink snapshot APIs")

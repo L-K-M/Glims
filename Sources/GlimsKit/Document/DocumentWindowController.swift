@@ -2261,6 +2261,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 }
                 panel.showWindow(nil)
                 self.canvas.setInkLevelsPreview(token: token)
+                self.statusBar.message = "Adjust \(name) in Levels. Apply keeps the change; Cancel keeps the original."
             }
         }
     }
