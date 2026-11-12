@@ -4553,3 +4553,13 @@ tests and the focused save/load/rebind/replay workflow pass on all four
 engines. The complete editor matrix and independent integration review are
 running.
 This slice does not establish complete Recorder coverage or Photoshop 4 parity.
+
+### TIFF thumbnail import candidate (2026-11-12)
+
+Open and Open as Layers now prepare mixed TIFF main-directory chains in a
+private copy, removing only directories explicitly tagged as reduced-image
+thumbnails. Ordinary pages and original source bytes are preserved. This
+fixes thumbnails becoming layers and enlarging the canvas without modifying
+upstream code. Linked Place retains its original monitored source path.
+See [TIFF import](tiff-import.md) for the 13 reproduced baseline failures,
+parser/cleanup tests and pending integration qualification.

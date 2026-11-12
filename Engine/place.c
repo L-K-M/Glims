@@ -13,6 +13,7 @@
  * file_open_layers, so nothing of it reaches the facade's image table.
  */
 #include "engine-private.h"
+#include "tiff-import.h"
 
 #include <string.h>
 
@@ -54,6 +55,7 @@ import_file_layers (GlimsEngine  *engine,
   GlimsStatus        ready;
   int32_t            n;
   GlimsVectorLoadGuard *vector_guard;
+  g_autoptr(GFile) tiff_source = NULL;
 
   if (count)
     *count = 0;
@@ -101,20 +103,31 @@ import_file_layers (GlimsEngine  *engine,
       return glims_fail (error, gerror, "The file could not be opened as layers.");
     }
 
+  /* A live link must retain its original path for later reloads. Raster
+   * layer import can use the same private TIFF preparation as Open. */
+  if (!as_link && !glims_tiff_import_prepare (file, &tiff_source, &gerror))
+    {
+      g_object_unref (file);
+      return glims_fail (error, gerror, "The TIFF file could not be prepared for import.");
+    }
+
   /* Non-XCF formats load through a plug-in, which nests a main loop. */
   engine->busy++;
   vector_guard = glims_vector_load_guard_begin (engine, open->image);
 #if GIMP_CHECK_VERSION (3, 2, 0)
   new_layers = file_open_layers (engine->gimp, gimp_get_user_context (engine->gimp),
-                                 NULL, open->image, FALSE, as_link, file,
+                                 NULL, open->image, FALSE, as_link,
+                                 tiff_source ? tiff_source : file,
                                  GIMP_RUN_NONINTERACTIVE, file_proc, &status, &gerror);
 #else
   new_layers = file_open_layers (engine->gimp, gimp_get_user_context (engine->gimp),
-                                 NULL, open->image, FALSE, file,
+                                 NULL, open->image, FALSE,
+                                 tiff_source ? tiff_source : file,
                                  GIMP_RUN_NONINTERACTIVE, file_proc, &status, &gerror);
 #endif
   engine->busy--;
 
+  glims_tiff_import_prepared_cleanup (tiff_source);
   g_object_unref (file);
 
   if (! new_layers)
