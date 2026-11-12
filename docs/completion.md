@@ -7,21 +7,24 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-The installed editor is merged through [#229](https://github.com/L-K-M/Glims/pull/229)
-(`f890954`), with a tree identical to qualified source `ee552de`. It includes
-native Multichannel ink editing, the merged Rigi tool-availability controls,
-Sponge saturation tools, GIF/BMP/TGA export, explicit CMYK PSD output and the
-preceding reviewed editor work. All 1,516 units, the focused Multichannel app
-matrix and native checks on four engines pass. The final standalone pinned
-bundle passed native, full app and focused ink checks, plus actual New Image,
-pointer painting and menu/keyboard Undo/Redo. Fresh/cached/relocated launch
-measured 1.82/1.40/3.40 seconds on this Mac. Those timings do not establish every
+The installed editor uses qualified source `40c3b74`, merged in native CMYK
+PSD export [#233](https://github.com/L-K-M/Glims/pull/233). It includes native
+CMYK and Multichannel creation, conversion, ink painting and XCF persistence,
+plus native U8/U16 CMYK PSD export retaining the original inks and profile,
+the merged Rigi tool-availability controls, Sponge saturation tools, GIF/BMP/TGA
+export and the preceding reviewed editor work. All 1,523 units and native/app
+checks on four engines pass. Its standalone pinned bundle passed native, full
+app, CMYK and Multichannel checks with development trees denied, plus actual
+Export/Repeat Export controls. Fresh/cached/relocated launch measured
+1.732/1.449/3.245 seconds on this Mac. Those timings do not establish every
 machine's latency. No notarization is requested or required for this task.
 
-This is not yet a claim of complete Photoshop 4 parity. Native CMYK/Lab,
-duotone editing, broader Recorder coverage, PSD fidelity and physical-tablet/
-VoiceOver qualification remain open. A private CMYK conversion foundation is
-in PR #230; native CMYK document integration is still in development. See
+This is not yet a claim of complete Photoshop 4 parity. Native ink adjustment
+breadth, Lab and duotone editing, broader Recorder coverage, PSD fidelity and
+physical-tablet/VoiceOver qualification remain open. Scalar ink Fill/Clear/Invert
+and ink Levels are subsequent integration
+candidates; their source, review and qualification evidence does not imply
+they are already installed. See
 [the plan](plan.md) for current slice evidence and [the earlier verification
 report](editor-verification.md) for its exact historical scope. Dated reports
 below retain their original scope and pending notes.
