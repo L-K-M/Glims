@@ -22,8 +22,9 @@ typedef bool (*GlimsCmykPsdContinue) (void *context);
  * Stream into a private, exclusive temporary in the opened destination
  * directory, sync and close it successfully, then publish atomically. Refuse
  * symlinks and nonregular destinations; never follow the destination itself.
- * Failure/cancellation leaves an existing destination intact and removes our
- * temporary. Existing regular files may be replaced (last writer wins);
+ * Failure/cancellation leaves an existing destination intact and attempts to
+ * remove our temporary; filesystem errors can prevent cleanup. Existing regular
+ * files may be replaced (last writer wins);
  * caller owns any cross-process coordination. Preserve ordinary permission
  * bits on replacement; new files are private. No guarantee of directory-entry
  * durability after power loss. A successful rename is always reported OK.

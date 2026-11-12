@@ -39,6 +39,8 @@ jobs:
         run: bash scripts/test-cmyk-psd-codec.sh
       - name: Check optimized and sanitized native CMYK PSD file transaction
         run: bash scripts/test-cmyk-psd-file.sh
+      - name: Check optimized and sanitized CMYK PSD transaction faults
+        run: bash scripts/test-cmyk-psd-file-faults.sh
 
   build-test:
     name: Build, Test & Package
@@ -89,6 +91,9 @@ jobs:
       - name: Check native CMYK PSD file transaction
         timeout-minutes: 5
         run: bash scripts/test-cmyk-psd-file.sh optimized
+      - name: Check native CMYK PSD transaction faults
+        timeout-minutes: 5
+        run: bash scripts/test-cmyk-psd-file-faults.sh optimized
 
       - name: Build
         run: swift build

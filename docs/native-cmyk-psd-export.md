@@ -48,23 +48,28 @@ The activity records its source document so progress and Cancel reach its window
 The private transaction passes 251 independent checks in optimized and ASan/
 UBSan builds: new/replacement files, permissions, exact codec output, symlinks,
 nonregular targets, invalid paths, source failures, early/mid/final cancellation
-and a subprocess file-size-limit write failure. Sync/close/rename syscall faults,
-remote filesystems and crash/power loss have not been injected.
+and a subprocess file-size-limit write failure. A separate syscall fixture passes
+691 checks across 24 scenarios in both builds, including sync/close/rename/chmod
+failures, short/interrupted writes, cleanup refusal and descriptor reuse after a
+failed close. Negative controls reject unsafe close retries and ignored sync
+errors. Remote filesystems and crash/power loss have not been injected.
 
-Pinned GIMP 3.2.8 passes 174 independent native numeric checks covering exact
+All four engines pass 174 independent native numeric checks each covering exact
 U8/U16 samples and ICC, reordered/renamed/hidden inks, file replacement, source
 state preservation and invalid-mode/profile/path/dimension sentinels. Another
-22 checks cover read delivery, busy refusals, cancellation, retry and shutdown
+22 checks each cover read delivery, busy refusals, cancellation, retry and shutdown
 using a test-only nested checkpoint. The actual CMYK workflow, native Export
 sheet, Repeat Export, incompatible-setting preservation and float refusal pass.
-All 1,523 Swift tests pass. An independent bridge/ownership review found no
-important findings. Other reviews, the full engine matrix, PSD reader appearance,
+All 1,523 Swift tests and rebuilt native adapter conformance pass. Three
+independent reviews of the bridge, file transaction and UI found no important
+findings. The full app matrix, PSD reader appearance,
 standalone packaging, startup and latest CI remain pending.
 
 Reproduce with a matching isolated adapter producer and an external CMYK ICC:
 
 ```sh
 bash scripts/test-cmyk-psd-file.sh
+bash scripts/test-cmyk-psd-file-faults.sh
 python3 scripts/test-native-cmyk-export.py --producer /absolute/adapters/GIMP_3_2_8 \
   --cmyk-profile /absolute/source.icc
 python3 scripts/test-native-cmyk-export-control.py --producer /absolute/adapters/GIMP_3_2_8 \
