@@ -2180,6 +2180,89 @@ final class ImageDocument {
 
     // MARK: Editing
 
+    /// Cached admission only; the native operation independently revalidates
+    /// the explicit plane, profile, locks and selection after earlier input.
+    func inkEditRefusal(channel: Int32) -> String? {
+        guard colorInfo.mode.usesInkChannels else { return "Choose a CMYK or Multichannel image." }
+        guard session.supportsInkEdits else { return "This image engine does not support ink-channel edits." }
+        if isClosing { return DocumentError.closed.localizedDescription }
+        guard acceptsEdits, !strokeIsActive else { return "Finish or cancel the current operation first." }
+        guard !targetCommandIsPending, pendingTargetPick == nil, pendingLayerSelection == nil,
+              pendingChannelSelection == nil, quickMaskIntent == nil, !rejectedTargetPick else {
+            return "Wait for the ink channel selection to finish."
+        }
+        guard channel > 0, selectedChannelIDs.count == 1, selectedChannelIDs.first == channel,
+              activeChannel == channel, channels.contains(where: { $0.id == channel && !$0.isQuickMask }) else {
+            return "Select the original ink channel before applying this edit."
+        }
+        return nil
+    }
+
+    private final class InkEditAdmission: @unchecked Sendable {
+        // Written on main at exclusive admission, before observers and before
+        // the accepted worker is enqueued.
+        var capture: RecorderCapture?
+        var error: Error?
+    }
+
+    @discardableResult
+    func editInk(_ settings: EngineSession.InkEdit, channel: Int32,
+                 completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) -> Bool {
+        func refuse(_ reason: String) {
+            let error = RecorderReplayError(message: reason)
+            onError?(reason)
+            completion(.failure(error))
+        }
+        guard settings.isValid else {
+            refuse("Enter an ink amount and opacity from 0 to 100%.")
+            return false
+        }
+        if let reason = inkEditRefusal(channel: channel) { refuse(reason); return false }
+        endPendingUserEdits()
+        if let reason = inkEditRefusal(channel: channel) { refuse(reason); return false }
+        let admission = InkEditAdmission()
+        var rejection = "Wait for the current image operation to finish."
+        let unsupported = "Ink-channel fills, clears and inversions cannot be replayed by Recorder yet."
+        let accepted = enqueueExclusive(label: settings.operation.title, admission: {
+            if let reason = self.inkEditRefusal(channel: channel) {
+                rejection = reason
+                return false
+            }
+            return true
+        }, didAdmit: {
+            // No reservation on a refused admission or a cancelled sheet.
+            // Counted work already holds the image if a Recorder observer closes it.
+            if self.recorder.isRecording {
+                do { admission.capture = try self.reserveRecording(context: .unavailable(unsupported)) }
+                catch { admission.error = error }
+            }
+        }, rejected: {
+            refuse(self.isClosing ? DocumentError.closed.localizedDescription : rejection)
+        }) { [session, image] in
+            let confirmed = Self.confirmRecordingCapture(admission.capture, session: session, image: image)
+            let result = Result<Void, Error> {
+                if let error = admission.error { throw error }
+                try session.editInk(image, channel: channel, settings: settings)
+            }
+            let recording: Result<SemanticImageCommand, Error> = result.flatMap { _ in
+                .failure(RecorderReplayError(message: unsupported))
+            }
+            self.settleRecording(admission.capture, result: recording, confirmed: confirmed)
+            self.dispatchReadWhenReady {
+                if !self.isClosing {
+                    do { try self.reload() }
+                    catch { self.onError?("The ink channel state could not be refreshed: \(error)") }
+                }
+                if case .failure(let error) = result { self.onError?(error.localizedDescription) }
+                completion(result)
+            }
+        }
+        // Schedule the worker before notifying observers: a callback may
+        // close the image, stop recording, or run a nested event loop.
+        if accepted, admission.capture != nil { notifyRecorderChanged() }
+        return accepted
+    }
+
     func fill(at point: CGPoint, mode: EngineSession.FillMode, color: NSColor, threshold: Double,
               sampleMerged: Bool, opacity: Double = 1) {
         guard !refuseWhileEditingUnavailable() else { return }
@@ -6331,20 +6414,23 @@ final class ImageDocument {
 
     /// Count the whole exclusive operation, including its input drain,
     /// so a close cannot destroy the image while a file call is waiting.
+    @discardableResult
     private func enqueueExclusive(effect: CommandEffect = .changesImage, label: String,
                                   admission: (() -> Bool)? = nil,
+                                  didAdmit: (@MainActor () -> Void)? = nil,
                                   rejected: @escaping @MainActor () -> Void,
-                                  _ work: @escaping () -> Void) {
-        guard !isClosing, !recorder.isReplaying || effect == .readsPixels else { return rejected() }
+                                  _ work: @escaping () -> Void) -> Bool {
+        guard !isClosing, !recorder.isReplaying || effect == .readsPixels else { rejected(); return false }
         onUserCommand?()
         // The observer can start replay or close; reject with the original
         // completion rather than silently dropping an admitted write.
-        guard !isClosing, !recorder.isReplaying || effect == .readsPixels else { return rejected() }
+        guard !isClosing, !recorder.isReplaying || effect == .readsPixels else { rejected(); return false }
         // Source vectors also revalidate after this observer: a field action
         // may have changed cached targets or started another operation.
-        guard admission?() != false else { return rejected() }
+        guard admission?() != false else { rejected(); return false }
         pendingWork += 1
-        let accepted = EngineActivity.shared.perform(label: label, document: self, work: work) {
+        let accepted = EngineActivity.shared.perform(label: label, document: self,
+                                                     didAdmit: didAdmit, work: work) {
             self.jobDidFinish(input: false)
         }
         if accepted && strokeIsActive && effect != .readsPixels { strokeRecordingInterleaved = true }
@@ -6352,6 +6438,7 @@ final class ImageDocument {
             jobDidFinish(input: false)
             rejected()
         }
+        return accepted
     }
 
     private func jobDidFinish(input: Bool) {

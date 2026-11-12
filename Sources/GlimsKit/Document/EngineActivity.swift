@@ -55,7 +55,8 @@ final class EngineActivity {
     }
 
     @discardableResult
-    func perform(label: String, document: ImageDocument? = nil, work: @escaping () -> Void,
+    func perform(label: String, document: ImageDocument? = nil,
+                 didAdmit: (@MainActor () -> Void)? = nil, work: @escaping () -> Void,
                  completion: @escaping @MainActor () -> Void) -> Bool {
         guard !isBusy, !preparing else { return false }
         preparing = true
@@ -63,6 +64,9 @@ final class EngineActivity {
         preparing = false
         self.label = label
         progressDocument = document
+        // Reserve accepted command state before busy observers can stop or
+        // restart recording. This hook must not notify observers itself.
+        didAdmit?()
         let admittedDocuments = liveDocuments
         admittedDocuments.forEach { $0.onStateChange?() }
         let drained = DispatchGroup()

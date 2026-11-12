@@ -1041,6 +1041,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// start then queues the session's begin and initial reads behind
     /// pending input, and the panel builds when they land.
     func openNativeFilter(_ operation: EngineSession.FilterOperation) {
+        if imageDocument.colorInfo.mode.usesInkChannels {
+            guard operation.name == "gegl:invert-linear" else {
+                imageDocument.onError?("This adjustment is unavailable for ink-channel documents.")
+                return
+            }
+            performInkEdit(.invert)
+            return
+        }
         guard !previewBusy, !imageDocument.isClosing, !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
               !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
         if operation.name == SourceFilterOperation.oilify.rawValue {
@@ -1796,8 +1804,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// the chosen color at the chosen opacity.
     @objc func fill(_ sender: Any?) {
         guard let window else { return }
+        if imageDocument.colorInfo.mode.usesInkChannels && (closeStarted || previewBusy) { return }
         endPendingEdits()
         FillForm.present(in: imageDocument, on: window)
+    }
+
+    /// Shared by the component Clear shortcut and the exact linear Invert
+    /// menu route. Generic filters and ordinary-image Clear keep their paths.
+    func performInkEdit(_ settings: EngineSession.InkEdit) {
+        guard !closeStarted, !previewBusy, window?.attachedSheet == nil else { return }
+        endPendingEdits()
+        imageDocument.editInk(settings, channel: imageDocument.activeChannel ?? 0)
     }
 
     /// Edit ▸ Stroke Selection…: opens this document's stroke-selection
@@ -2199,8 +2216,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     /// Component documents expose only commands with qualified native routes.
     /// The engine independently enforces the same boundary for direct callers.
-    private func permitsMultichannelMenu(_ action: Selector?) -> Bool {
-        switch action {
+    private func permitsMultichannelMenu(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(fill(_:)), #selector(deleteBackward(_:)), #selector(clearPixels(_:)):
+            return true
+        case #selector(runNativeFilter(_:)):
+            return (item.representedObject as? NativeFilterCommand)?.operation.name == "gegl:invert-linear"
         case #selector(exportDocument(_:)), #selector(repeatExport(_:)):
             return supportsNativeCmykPSD
         case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
@@ -2223,9 +2244,19 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if imageDocument.colorInfo.mode.usesInkChannels && !permitsMultichannelMenu(menuItem.action) {
-            menuItem.toolTip = "This command is unavailable for ink-channel documents."
-            return false
+        if imageDocument.colorInfo.mode.usesInkChannels {
+            guard permitsMultichannelMenu(menuItem) else {
+                menuItem.toolTip = "This command is unavailable for ink-channel documents."
+                return false
+            }
+            switch menuItem.action {
+            case #selector(fill(_:)), #selector(deleteBackward(_:)), #selector(clearPixels(_:)),
+                 #selector(runNativeFilter(_:)):
+                let reason = imageDocument.inkEditRefusal(channel: imageDocument.activeChannel ?? 0)
+                menuItem.toolTip = reason
+                return !closeStarted && !previewBusy && window?.attachedSheet == nil && reason == nil
+            default: break
+            }
         }
         let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
             || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || EngineActivity.shared.isBusy || window?.attachedSheet != nil
