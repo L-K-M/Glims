@@ -245,6 +245,12 @@ final class ImageDocument {
     private(set) var maskStates: [Int32: EngineSession.MaskState] = [:]
     private(set) var components: EngineSession.ComponentState?
     private(set) var channels: [EngineSession.Channel] = []
+    private(set) var labAxes: EngineSession.LabAxes?
+    var selectedLabAxis: EngineSession.LabAxis? {
+        guard !targetCommandIsPending, !rejectedTargetPick,
+              let selected = labAxes?.axes.filter(\.isSelected), selected.count == 1 else { return nil }
+        return selected[0]
+    }
     private(set) var quickMaskState: EngineSession.QuickMaskState?
     /// The image's color model, precision and effective profile, read
     /// with the rest of the state. The window title, the Mode checkmarks,
@@ -486,6 +492,11 @@ final class ImageDocument {
         stateVersion += 1
         info = try session.info(image)
         fileState.syncDirty(info.isDirty)
+        colorInfo = try session.colorInfo(image)
+        if colorInfo.mode == .lab && !(session.supportsLabCreation && session.supportsLabAxes && session.supportsLabFill) {
+            throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                                            message: "This image engine cannot edit Lab documents.")
+        }
         layers = try session.layers(image)
         var locks: [Int32: EngineSession.LayerLockState] = [:]
         var masks: [Int32: EngineSession.MaskState] = [:]
@@ -512,8 +523,20 @@ final class ImageDocument {
             }
         }
         maskStates = masks
-        components = try session.components(image)
-        channels = try session.channels(image)
+        if colorInfo.mode == .lab {
+            let axes = try session.labAxes(image)
+            guard axes.component == colorInfo.component else {
+                throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                                message: "The Lab component precision does not match the document.")
+            }
+            labAxes = axes
+            components = nil
+            channels = []
+        } else {
+            labAxes = nil
+            components = try session.components(image)
+            channels = try session.channels(image)
+        }
         quickMaskState = try session.quickMask(image)
         colorInfo = try session.colorInfo(image)
         guides = try session.guides(image)
@@ -597,6 +620,7 @@ final class ImageDocument {
     /// channels are an ambiguous target: no drawable at all, never the
     /// first selected channel.
     private var paintTarget: PaintTarget? {
+        guard colorInfo.mode != .lab else { return nil }
         guard !rejectedTargetPick, pendingTargetCommands.isEmpty else { return nil }
         if let pick = pendingTargetPick { return pick.target }
         if floatingState.isActive { return .layer(floatingState.floating) }
@@ -2189,6 +2213,87 @@ final class ImageDocument {
     }
 
     // MARK: Editing
+
+    @discardableResult
+    func selectLabAxis(_ axis: EngineSession.LabAxis,
+                       completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) -> Bool {
+        guard colorInfo.mode == .lab, acceptsEdits, !targetCommandIsPending,
+              labAxes?.axes.contains(where: { $0.id == axis.id && $0.role == axis.role && $0.uuid == axis.uuid }) == true else {
+            completion?(.failure(DocumentError.busy))
+            return false
+        }
+        enqueueTargetCommand({ session, image in
+            let current = try session.labAxes(image)
+            guard current.axes.contains(where: { $0.id == axis.id && $0.role == axis.role && $0.uuid == axis.uuid }) else {
+                throw RecorderReplayError(message: "The Lab channel changed before it could be selected.")
+            }
+            try session.channelCommand(.select, channel: axis.id, image: image)
+        }, rejectFailedTarget: true, completion: completion)
+        return true
+    }
+
+    func labFillRefusal(axis: EngineSession.LabAxis) -> String? {
+        guard colorInfo.mode == .lab, session.supportsLabFill else { return "Choose an editable Lab document." }
+        if isClosing { return DocumentError.closed.localizedDescription }
+        guard acceptsEdits, !strokeIsActive, !targetCommandIsPending,
+              let current = selectedLabAxis else { return "Wait for the Lab channel selection or current operation to finish." }
+        guard current.id == axis.id, current.role == axis.role, current.uuid == axis.uuid else {
+            return "Select the original Lab channel before applying this fill."
+        }
+        return nil
+    }
+
+    @discardableResult
+    func fillLabAxis(_ axis: EngineSession.LabAxis, value: Double, opacity: Double,
+                     completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) -> Bool {
+        func refuse(_ reason: String) {
+            onError?(reason)
+            completion(.failure(RecorderReplayError(message: reason)))
+        }
+        guard value.isFinite, abs(value) <= Double(Float.greatestFiniteMagnitude),
+              opacity.isFinite, (0...1).contains(opacity),
+              colorInfo.component == .float || axis.role.nominalRange.contains(value) else {
+            refuse("Enter a valid physical Lab value and opacity from 0 to 100%.")
+            return false
+        }
+        if let reason = labFillRefusal(axis: axis) { refuse(reason); return false }
+        endPendingUserEdits()
+        if let reason = labFillRefusal(axis: axis) { refuse(reason); return false }
+        let admission = InkEditAdmission()
+        var rejection = "Wait for the current image operation to finish."
+        let unsupported = "Physical Lab fills cannot be replayed by Recorder yet."
+        let accepted = enqueueExclusive(label: "Fill Lab Channel", admission: {
+            if let reason = self.labFillRefusal(axis: axis) { rejection = reason; return false }
+            return true
+        }, didAdmit: {
+            if self.recorder.isRecording {
+                do { admission.capture = try self.reserveRecording(context: .unavailable(unsupported)) }
+                catch { admission.error = error }
+            }
+        }, rejected: {
+            refuse(self.isClosing ? DocumentError.closed.localizedDescription : rejection)
+        }) { [session, image] in
+            let confirmed = Self.confirmRecordingCapture(admission.capture, session: session, image: image)
+            let result = Result<Void, Error> {
+                if let error = admission.error { throw error }
+                try session.fillLab(image, axis: axis, value: value, opacity: opacity)
+            }
+            let recording: Result<SemanticImageCommand, Error> = result.flatMap { _ in
+                .failure(RecorderReplayError(message: unsupported))
+            }
+            self.settleRecording(admission.capture, result: recording, confirmed: confirmed)
+            self.dispatchReadWhenReady {
+                if !self.isClosing {
+                    do { try self.reload() }
+                    catch { self.onError?("The Lab channel state could not be refreshed: \(error)") }
+                }
+                if case .failure(let error) = result { self.onError?(error.localizedDescription) }
+                completion(result)
+            }
+        }
+        if accepted, admission.capture != nil { notifyRecorderChanged() }
+        return accepted
+    }
 
     /// Cached admission only; the native operation independently revalidates
     /// the explicit plane, profile, locks and selection after earlier input.
@@ -3969,6 +4074,7 @@ final class ImageDocument {
     /// asks the app for an independent copy of this image opened as a new
     /// document.
     func newSnapshot() {
+        guard colorInfo.mode != .lab else { return }
         guard !refuseWhileEditingUnavailable(allowingReplayRead: true), let snapshotHandler else { return }
         snapshotHandler(self)
     }
@@ -3979,6 +4085,9 @@ final class ImageDocument {
     /// or the error, whoever is front document then. The work is counted,
     /// so a close waits for it before freeing this image.
     func snapshot(completion: @escaping @MainActor (Result<Int32, Error>) -> Void) {
+        guard colorInfo.mode != .lab else {
+            return completion(.failure(RecorderReplayError(message: "Lab snapshots are not available.")))
+        }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard acceptsImageReads else { return completion(.failure(DocumentError.busy)) }
         if !recorder.isReplaying { endPendingUserEdits() }
@@ -4460,6 +4569,9 @@ final class ImageDocument {
 
     func export(to url: URL, settings: ExportSettings? = nil,
                 completion: @escaping @MainActor (Error?) -> Void) {
+        guard colorInfo.mode != .lab else {
+            return completion(RecorderReplayError(message: "Save Lab documents as XCF. Lab export is not available."))
+        }
         guard !isClosing else { return completion(DocumentError.closed) }
         guard !isTransferringClipboard, !PlugInCommands.isRunning else { return completion(DocumentError.busy) }
         enqueueExclusive(effect: .readsPixels, label: "Exporting \(url.lastPathComponent)", rejected: { completion(DocumentError.busy) }) { [session, image] in
@@ -4507,6 +4619,11 @@ final class ImageDocument {
         fileState.noteSaved(to: url)
         name = url.lastPathComponent
         try? reload()
+    }
+
+    func noteRecovered() {
+        fileState.noteRecovered()
+        onStateChange?()
     }
 
     /// Whether the engine is known to place genuine link layers (GIMP
@@ -5596,6 +5713,7 @@ final class ImageDocument {
     }
 
     func startRecording() throws {
+        guard colorInfo.mode != .lab else { throw RecorderReplayError(message: "Recording Lab edits is not available.") }
         guard !isClosing else { throw DocumentError.closed }
         guard !strokeIsActive else { throw RecorderReplayError(message: "Finish the current stroke before starting Recorder.") }
         try recorder.startRecording()
@@ -5968,6 +6086,7 @@ final class ImageDocument {
     var replayStatus: RecorderLog<SemanticImageCommand>.ReplayStatus { recorder.replayStatus }
 
     private func recorderReplayBlockReason(continuing: Bool = false) -> String? {
+        if colorInfo.mode == .lab { return "Recorder replay is not available for Lab documents." }
         if isClosing { return DocumentError.closed.localizedDescription }
         if recorder.isReplaying && !continuing { return "Recorder replay is already running." }
         if EngineActivity.shared.isBusy || PlugInCommands.isRunning || filterPreviewIsOpen
@@ -6523,6 +6642,10 @@ final class ImageDocument {
              recordingFailure: String? = nil,
              _ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
         guard !isClosing else { return false }
+        guard colorInfo.mode != .lab || effect == .readsPixels else {
+            onError?("Choose a Lab channel and use Edit > Fill to edit its physical value.")
+            return false
+        }
         if effect != .readsPixels && refuseWhileEditingUnavailable(forPreviewWork: effect == .changesPreview) {
             return false
         }

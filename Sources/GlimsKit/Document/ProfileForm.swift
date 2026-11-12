@@ -85,7 +85,7 @@ enum ProfileForm {
     /// not — their native palette conversion ignores intent and BPC —
     /// while Assign stays allowed on them.
     static func convertAllowed(mode: EngineSession.ColorMode) -> Bool {
-        mode != .indexed
+        mode != .indexed && !mode.usesNativeChannels
     }
 
     /// The one-line cached profile state the form shows: the effective
@@ -151,6 +151,10 @@ enum ProfileForm {
             return
         }
         let info = document.colorInfo
+        guard !info.mode.usesNativeChannels else {
+            document.onError?("Profile changes are not available for this channel document.")
+            return
+        }
         if kind == .convert, !convertAllowed(mode: info.mode) {
             document.onError?(ImageDocument.DocumentError.indexedProfileConversion.localizedDescription)
             return

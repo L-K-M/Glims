@@ -52,15 +52,16 @@ final class ChannelsPaletteController: NSViewController, PaletteContent, Palette
                           activeChannel: document.activeChannel,
                           hasSelectedChannels: document.isChannelTargetActive,
                           quickMask: document.quickMaskState,
-                          acceptsEdits: document.acceptsEdits,
-                          multichannel: document.colorInfo.mode.usesInkChannels))
+                          acceptsEdits: document.acceptsEdits && !document.targetCommandIsPending,
+                          multichannel: document.colorInfo.mode.usesInkChannels,
+                          labAxes: document.labAxes))
         let owner = ObjectIdentifier(document), version = document.stateVersion
         guard thumbnailOwner != owner || thumbnailVersion != version else { return }
         thumbnailRequest?.cancel()
         thumbnailOwner = owner
         thumbnailVersion = version
         body.setThumbnails([:])
-        guard !document.isClosing else { return }
+        guard !document.isClosing, document.labAxes == nil else { return }
         let request = ThumbnailRequest()
         thumbnailRequest = request
         let ids = document.channels.map(\.id)
@@ -85,8 +86,10 @@ final class ChannelsPaletteController: NSViewController, PaletteContent, Palette
 
     func perform(_ action: ChannelsPaletteView.Action) {
         guard let document, document.acceptsEdits,
-              ChannelMenuPolicy.permits(action, multichannel: document.colorInfo.mode.usesInkChannels) else { return }
+              ChannelMenuPolicy.permits(action, multichannel: document.colorInfo.mode.usesInkChannels,
+                                        lab: document.colorInfo.mode == .lab) else { return }
         switch action {
+        case .selectLabAxis(let axis): document.selectLabAxis(axis)
         case .setComponentActive(let component, let enabled): document.setComponentActive(component, to: enabled)
         case .setComponentVisible(let component, let visible): document.setComponentVisible(component, to: visible)
         case .selectChannel(let id): document.selectChannel(id)
@@ -116,6 +119,10 @@ final class ChannelsPaletteController: NSViewController, PaletteContent, Palette
             item.representedObject = action
             menu.addItem(item)
         }
+        if let axes = document?.labAxes {
+            for axis in axes.axes { add(axis.role.title, .selectLabAxis(axis)) }
+            return menu
+        }
         add("Save Selection as Channel…", .newChannel)
         add("Return to Layers", .returnToLayers)
         add("Quick Mask", .setQuickMask(!(document?.quickMaskState?.enabled ?? false)))
@@ -142,8 +149,12 @@ final class ChannelsPaletteController: NSViewController, PaletteContent, Palette
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         guard let document, document.acceptsEdits,
               let action = menuItem.representedObject as? ChannelsPaletteView.Action,
-              ChannelMenuPolicy.permits(action, multichannel: document.colorInfo.mode.usesInkChannels) else { return false }
+              ChannelMenuPolicy.permits(action, multichannel: document.colorInfo.mode.usesInkChannels,
+                                        lab: document.colorInfo.mode == .lab) else { return false }
         switch action {
+        case .selectLabAxis(let axis):
+            menuItem.state = document.selectedLabAxis?.id == axis.id ? .on : .off
+            return !document.targetCommandIsPending && document.labAxes?.axes.contains(axis) == true
         case .setQuickMask:
             menuItem.state = document.quickMaskState?.enabled == true ? .on : .off
             return true

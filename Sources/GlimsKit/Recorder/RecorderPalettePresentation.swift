@@ -138,6 +138,11 @@ struct RecorderPalettePresentation {
             gates[.record] = "Recording ink-channel edits is not available."
             gates[.replay] = "Replay requires an RGB, grayscale or indexed image."
         }
+        if document.colorInfo.mode == .lab {
+            gates[.record] = "Recording physical Lab edits is not available."
+            gates[.replay] = "Replay is not available for Lab documents."
+            gates[.loadRecording] = "Recorder files cannot be loaded into Lab documents."
+        }
         refusals = gates
     }
 

@@ -30,7 +30,7 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
     private let screenModes = NSSegmentedControl(labels: DocumentScreenMode.allCases.map(\.title),
         trackingMode: .selectOne, target: nil, action: nil)
     private weak var targetDocument: ImageDocument?
-    private var showsInkTools = false
+    private var shownMode: EngineSession.ColorMode?
     /// The owned modeless color editor; a Foreground/Background click
     /// captures that global `ToolState` target in it.
     private var colorEditor: ToolColorEditorController { .shared }
@@ -83,9 +83,9 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
 
     func retarget(to target: ImageDocument?) {
         targetDocument = target
-        let ink = target?.colorInfo.mode.usesInkChannels == true
-        if showsInkTools != ink {
-            showsInkTools = ink
+        let mode = target?.colorInfo.mode
+        if shownMode != mode {
+            shownMode = mode
             grid.slots = ToolID.paletteSlots.map { group in
                 ClassicToolGrid.Slot(tools: group.map {
                     ClassicToolGrid.Tool(id: $0.rawValue, name: $0.name, shortcut: $0.shortcut,
@@ -94,7 +94,7 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
             }
         }
         if !ToolState.shared.current.isAvailable(in: target?.colorInfo.mode) {
-            ToolState.shared.select(.paintbrush)
+            ToolState.shared.select(mode == .lab ? .hand : .paintbrush)
         }
         stateChanged()
         refreshScreenMode()

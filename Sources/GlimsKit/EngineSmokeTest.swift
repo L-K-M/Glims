@@ -108,7 +108,7 @@ enum EngineSmokeTest {
     }
 
     static func run() -> Int32 {
-        if ["multichannel", "cmyk", "ink-edits", "ink-levels", "recorder-ink-bindings"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
+        if ["multichannel", "cmyk", "ink-edits", "ink-levels", "lab-ui", "lab-recovery", "recorder-ink-bindings"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
             return EngineSmokeTestHost.run()
         }
         if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents", !NSApp.isRunning {
@@ -161,6 +161,21 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "lab-recovery" {
+                try exerciseLabRecovery(session: session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Lab recovery)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "lab-ui" {
+                try exerciseLabUI(session: session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Lab UI)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "lab-fill" {
+                try exerciseLabFill(session, work: work)
+                print(failures == 0 ? "PASSED (Lab fill)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "lab-axes" {
                 try exerciseLabAxes(session, work: work)
                 print(failures == 0 ? "PASSED (Lab axes)" : "FAILED: \(failures) failure(s)")

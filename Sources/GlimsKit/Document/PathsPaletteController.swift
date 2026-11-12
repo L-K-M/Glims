@@ -145,7 +145,7 @@ final class PathsPaletteController: NSViewController, PaletteContent, PaletteEdi
     }
 
     private func isEnabled(_ command: Command) -> Bool {
-        guard let document, !document.colorInfo.mode.usesInkChannels else { return false }
+        guard let document, !document.colorInfo.mode.usesNativeChannels else { return false }
         if command == .new { return true }
         guard document.activePath != nil else { return false }
         // To Vector Layer needs an engine with vector layers (GIMP 3.2+);
@@ -195,7 +195,7 @@ final class PathsPaletteController: NSViewController, PaletteContent, PaletteEdi
     /// One command on the front document, also used by the menus and the
     /// engine smoke test.
     func run(_ command: Command) {
-        guard let document, !document.colorInfo.mode.usesInkChannels else { return }
+        guard let document, !document.colorInfo.mode.usesNativeChannels else { return }
         if command == .new {
             document.addPath(VectorPath()) { [weak self, weak document] result in
                 guard case .success = result, let self, let document,

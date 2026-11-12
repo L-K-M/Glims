@@ -1337,6 +1337,7 @@ final class CanvasToolController {
             return true
         }
         if let arrow = CanvasKeyboardPolicy.Arrow(keyCode: keyCode) {
+            guard document.colorInfo.mode != .lab else { return true }
             let delta = CanvasKeyboardPolicy.nudge(arrow, shift: event.modifierFlags.contains(.shift))
             if document.floatingState.isActive {
                 // Arrow nudges move the unresolved floating selection
@@ -1358,7 +1359,7 @@ final class CanvasToolController {
             }
             return true
         case "q":
-            guard !document.colorInfo.mode.usesInkChannels else { return true }
+            guard !document.colorInfo.mode.usesNativeChannels else { return true }
             if !event.isARepeat {
                 document.setQuickMask(!(document.quickMaskState?.enabled ?? false))
             }

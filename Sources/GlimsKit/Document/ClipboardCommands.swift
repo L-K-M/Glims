@@ -103,7 +103,7 @@ extension DocumentWindowController {
     }
 
     @objc func clearPixels(_ sender: Any?) {
-        if imageDocument.colorInfo.mode.usesInkChannels {
+        if imageDocument.colorInfo.mode.usesNativeChannels {
             performInkEdit(.clear)
             return
         }

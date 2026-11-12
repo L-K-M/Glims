@@ -66,11 +66,27 @@ extension EngineSmokeTest {
         defer { try? session.closeImage(ordinary) }
         unsupported({ _ = try session.labAxes(ordinary) }, "ordinary channels cannot masquerade as Lab axes")
 
-        // Until Lab UI capabilities are implemented, construction must refuse
-        // and Open must release its otherwise successfully loaded native image.
+        // Current producers can construct a typed Lab document. Older ones
+        // still refuse cleanly; neither path may leak an opened native image.
+        if session.supportsLabFill {
+            let adopted = try session.newLabImage(width: 8, height: 4, component: .u8)
+            let document = try ImageDocument(session: session, image: adopted, name: "Lab admission witness")
+            check(document.colorInfo.mode == .lab && document.labAxes?.axes.count == 3 &&
+                  document.channels.isEmpty && document.components == nil,
+                  "Lab document construction uses typed axes without ordinary channel state")
+            var closed = false
+            document.closeImageWhenDrained { closed = true }
+            let deadline = Date().addingTimeInterval(10)
+            while !closed && Date() < deadline { spin(0.01) }
+            check(closed, "typed Lab document closes after counted work drains")
+        }
         let rejected = try session.newLabImage(width: 8, height: 4, component: .u8)
         do {
             try AppController.adoptOpenedImage(.success(rejected), adopt: { image in
+                if session.supportsLabFill {
+                    throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                                                    message: "Controlled document adoption refusal")
+                }
                 _ = try ImageDocument(session: session, image: image, name: "Lab admission witness")
             }, close: { try session.closeImage($0) })
             check(false, "unsupported Lab document construction is refused")
