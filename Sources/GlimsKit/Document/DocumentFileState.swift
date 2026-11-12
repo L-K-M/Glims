@@ -20,9 +20,9 @@ struct DocumentFileState: Equatable {
     /// Changes not written to `nativeURL`: edits the engine counted
     /// and, for an imported image, the missing native file itself.
     private(set) var hasUnsavedChanges: Bool
-    /// A recovered copy is not the user's save destination, even if its native
+    /// A generated or recovered copy has no save destination, even if its native
     /// XCF handle reports clean. Only a successful native Save clears this.
-    private var recoveredNeedsSave = false
+    private var unsavedCopyNeedsSave = false
 
     /// The engine's native file extension.
     static let nativeExtension = "xcf"
@@ -112,14 +112,18 @@ struct DocumentFileState: Equatable {
     /// imported image stays unsaved even when the engine calls it
     /// clean: its only disk copy is still the foreign source.
     mutating func syncDirty(_ dirty: Bool) {
-        hasUnsavedChanges = dirty || importedSourceURL != nil || recoveredNeedsSave
+        hasUnsavedChanges = dirty || importedSourceURL != nil || unsavedCopyNeedsSave
     }
 
-    mutating func noteRecovered() {
+    mutating func noteRecovered() { noteUnsavedCopy() }
+
+    /// Generated or recovered pixels have no user-owned save destination,
+    /// even when the engine's construction history is clean.
+    mutating func noteUnsavedCopy() {
         nativeURL = nil
         importedSourceURL = nil
         lastExportURL = nil
-        recoveredNeedsSave = true
+        unsavedCopyNeedsSave = true
         hasUnsavedChanges = true
     }
 
@@ -127,7 +131,7 @@ struct DocumentFileState: Equatable {
     mutating func noteSaved(to url: URL) {
         nativeURL = url
         importedSourceURL = nil
-        recoveredNeedsSave = false
+        unsavedCopyNeedsSave = false
         hasUnsavedChanges = false
     }
 

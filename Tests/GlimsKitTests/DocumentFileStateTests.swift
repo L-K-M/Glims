@@ -41,6 +41,22 @@ final class DocumentFileStateTests: XCTestCase {
         XCTAssertEqual(state.saveRoute, .write(otherXcf))
     }
 
+    func testConvertedCopyRemainsUnsavedAfterCleanReadsAndExport() {
+        var state = DocumentFileState()
+        state.noteUnsavedCopy()
+        state.syncDirty(false)
+        XCTAssertTrue(state.hasUnsavedChanges)
+        XCTAssertEqual(state.saveRoute, .askForFile)
+        XCTAssertNil(state.revertSource)
+        state.noteExported(to: png)
+        state.syncDirty(false)
+        XCTAssertTrue(state.hasUnsavedChanges)
+        state.noteSaved(to: xcf)
+        state.syncDirty(false)
+        XCTAssertFalse(state.hasUnsavedChanges)
+        XCTAssertEqual(state.saveRoute, .write(xcf))
+    }
+
     func testAnOpenedXCFSavesBackToItself() {
         let state = DocumentFileState(openedFrom: xcf)
         XCTAssertEqual(state.nativeURL, xcf)

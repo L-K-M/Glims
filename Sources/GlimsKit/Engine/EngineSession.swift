@@ -270,6 +270,23 @@ final class EngineSession: @unchecked Sendable {
         return supportsLabAxes && api.image_select_lab_shape != nil && api.image_select_lab_command != nil
     }
 
+    enum LabCopyDestination {
+        case lab, linearRGB
+
+        fileprivate var facadeMode: UInt32 {
+            switch self {
+            case .lab: return GLIMS_COLOR_MODE_LAB.rawValue
+            case .linearRGB: return GLIMS_COLOR_MODE_RGB.rawValue
+            }
+        }
+    }
+
+    var supportsLabConvertedCopy: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_convert_lab_copy),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_convert_lab_copy) else { return false }
+        return api.image_convert_lab_copy != nil && supportsLabCreation && supportsLabAxes && supportsLabFill
+    }
+
     /// Physical scalar painting. Brush colors and pressure dynamics have no
     /// meaning here; only the chosen mask, size, hardness and opacity are used.
     func beginLabStroke(image: Int32, axis: LabAxis, value: Double,
@@ -905,6 +922,37 @@ final class EngineSession: @unchecked Sendable {
             throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Lab image has no valid identity.")
         }
         return image
+    }
+
+    /// An independent, unsaved, merged-canvas FLOAT image. The caller owns the
+    /// returned image and must close it if document adoption fails. This call
+    /// can take time and must run off the main thread.
+    func convertedLabCopy(image: Int32, destination: LabCopyDestination) throws -> Int32 {
+        guard supportsLabConvertedCopy, let convert = api.image_convert_lab_copy else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support converted Lab copies.")
+        }
+        guard image > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a valid image to convert.")
+        }
+        var settings = GlimsLabCopySettings()
+        settings.struct_size = UInt32(MemoryLayout<GlimsLabCopySettings>.size)
+        settings.destination_mode = destination.facadeMode
+        settings.content = GLIMS_LAB_COPY_MERGED_CANVAS.rawValue
+        settings.output_component = GLIMS_COLOR_COMPONENT_FLOAT.rawValue
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        let status = convert(engine, image, &settings, &result, &error)
+        // Ownership transfers only on success. A malformed failure result may
+        // name an existing document, so only the producer can clean up a failed
+        // conversion safely; the caller must not close an arbitrary handle.
+        try check(status, error)
+        guard result > 0, result != image else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The converted copy has no independent image identity.")
+        }
+        return result
     }
 
     func openImage(path: String) throws -> Int32 {

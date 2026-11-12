@@ -849,6 +849,26 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// Image ▸ New Snapshot: an independent copy opened as a new document.
     @objc func newSnapshot(_ sender: Any?) { imageDocument.newSnapshot() }
 
+    @objc func createConvertedLabCopy(_ sender: Any?) {
+        guard let window, window.attachedSheet == nil, !closeStarted, !previewBusy,
+              imageDocument.labCopyHandler != nil else { return }
+        let destination: EngineSession.LabCopyDestination = imageDocument.colorInfo.mode == .lab ? .linearRGB : .lab
+        if let reason = imageDocument.labCopyRefusal(destination) { showStatusError(reason); return }
+        let alert = NSAlert()
+        alert.messageText = destination == .lab ? "Create Lab Copy" : "Create Linear RGB Copy"
+        alert.informativeText = destination == .lab
+            ? "Creates a separate 32-bit Lab document from the full visible canvas. The original keeps its layers and edits. The canvas must be opaque and use sRGB; replace linked layers with ordinary pixel layers first. Other metadata is not copied."
+            : "Creates a separate, opaque 32-bit linear RGB document from all three Lab channels. The full canvas is copied, regardless of the selection or channel preview. The original remains open; other metadata is not copied."
+        alert.addButton(withTitle: "Create Copy")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn,
+                  !self.closeStarted, !self.previewBusy, !self.imageDocument.isClosing else { return }
+            self.imageDocument.newLabCopy(destination)
+        }
+    }
+
+
     // MARK: Guides
 
     /// Image ▸ Guides…: opens this document's guide management sheet. The
@@ -2341,6 +2361,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     private func permitsLabMenu(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(createConvertedLabCopy(_:)):
+            return imageDocument.session.supportsLabConvertedCopy
         case #selector(selectAll(_:)), #selector(selectNone(_:)), #selector(selectInverse(_:)):
             return imageDocument.session.supportsLabSelections && !imageDocument.strokeIsActive
         case #selector(fill(_:)),
@@ -2755,6 +2777,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             menuItem.toolTip = allowed ? nil
                 : "Convert the image to RGB first: indexed palette conversion ignores the intent and black-point settings."
             return allowed && !editingBlocked && !previewBusy
+        case #selector(createConvertedLabCopy(_:)):
+            let destination: EngineSession.LabCopyDestination = imageDocument.colorInfo.mode == .lab ? .linearRGB : .lab
+            menuItem.title = destination == .lab ? "Create Lab Copy…" : "Create Linear RGB Copy…"
+            let reason = imageDocument.labCopyRefusal(destination)
+            menuItem.toolTip = reason
+            return reason == nil && imageDocument.labCopyHandler != nil && !closeStarted && !editingBlocked && !previewBusy
         case #selector(newSnapshot(_:)):
             // Without an app to adopt the copy there is nothing to run.
             return imageDocument.snapshotHandler != nil && !editingBlocked && !previewBusy

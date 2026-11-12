@@ -90,6 +90,7 @@ allowed (GlimsFacadeOperation op)
     case GLIMS_FACADE_OP_stroke_begin_lab:
     case GLIMS_FACADE_OP_image_select_lab_shape:
     case GLIMS_FACADE_OP_image_select_lab_command:
+    case GLIMS_FACADE_OP_image_convert_lab_copy:
     case GLIMS_FACADE_OP_image_render_to_profile: case GLIMS_FACADE_OP_image_save:
     case GLIMS_FACADE_OP_image_save_copy: case GLIMS_FACADE_OP_image_undo_info:
     case GLIMS_FACADE_OP_image_history: case GLIMS_FACADE_OP_image_undo:

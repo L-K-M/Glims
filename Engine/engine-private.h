@@ -236,6 +236,11 @@ gboolean         glims_stroke_references_image (GlimsEngine *engine, GlimsStroke
 #define GLIMS_MAX_PIXEL_BUFFER_BYTES ((uint64_t) 512 * 1024 * 1024)
 gboolean         glims_pixel_bytes       (int width, int height, size_t *bytes);
 
+/* lab-copy.c: publishes only fully converted, independent images. */
+GlimsStatus glims_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID image,
+                                          const GlimsLabCopySettings *settings,
+                                          GlimsImageID *result, char **error);
+
 /* image.c */
 GlimsStatus glims_image_new        (GlimsEngine *e, int32_t w, int32_t h, GlimsImageID *out, char **error);
 GlimsStatus glims_image_open       (GlimsEngine *e, const char *path, GlimsImageID *out, char **error);

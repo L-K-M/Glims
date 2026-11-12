@@ -405,6 +405,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     func open(_ document: ImageDocument) {
         document.snapshotHandler = { [weak self] document in self?.snapshot(document) }
+        document.labCopyHandler = { [weak self] document, destination in
+            self?.convertedLabCopy(document, destination: destination)
+        }
         let controller = DocumentWindowController(document: document)
         controller.reserveWrite = { [weak self, weak controller] url in
             guard let self, let controller else { throw ImageDocument.DocumentError.closed }
@@ -949,6 +952,58 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 }
             case .failure(let error):
                 document.onError?(String(describing: error))
+            }
+        }
+    }
+
+    /// A converted copy is a file transaction even though it does not write the
+    /// source. Quit and source Close cannot leave an unowned native result.
+    func convertedLabCopy(_ document: ImageDocument, destination: EngineSession.LabCopyDestination) {
+        guard !terminationRequested else { return }
+        if let reason = document.labCopyRefusal(destination) { document.onError?(reason); return }
+        let session = document.session
+        let name = "\(document.name) \(destination == .lab ? "Lab" : "RGB") copy"
+        pendingFileOperations += 1
+        document.convertedLabCopy(destination) { [weak self] result in
+            guard let self else {
+                if case .success(let image) = result {
+                    EngineActivity.shared.closeImage(image, session: session) { _ in }
+                }
+                return
+            }
+            let finish = {
+                self.pendingFileOperations -= 1
+                self.advanceDocumentClosing()
+            }
+            let discard = { (image: Int32) in
+                // A native link reload in another document may return BUSY.
+                // Retain both result ownership and the Quit hold until cleanup
+                // completes, using the same retry path as document destruction.
+                EngineActivity.shared.closeImage(image, session: session) { cleanup in
+                    if case .failure(let error) = cleanup, !document.isClosing {
+                        document.onError?(String(describing: error))
+                    }
+                    finish()
+                }
+            }
+            switch result {
+            case .success(let image):
+                guard !self.terminationRequested, !document.isClosing else {
+                    discard(image)
+                    return
+                }
+                do {
+                    let copy = try ImageDocument(session: session, image: image, name: name)
+                    copy.noteUnsavedConvertedCopy()
+                    self.open(copy)
+                    finish()
+                } catch {
+                    document.onError?(String(describing: error))
+                    discard(image)
+                }
+            case .failure(let error):
+                if !document.isClosing { document.onError?(String(describing: error)) }
+                finish()
             }
         }
     }

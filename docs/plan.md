@@ -5305,3 +5305,24 @@ the unchanged reverse suite passes 7,800 in each mode. Source review found
 no important issue. This is numeric preparation only: profile admission,
 alpha/layer policy and the actual document conversion workflow remain open.
 See [lab-transform.md](lab-transform.md).
+
+### Explicit RGB/Lab converted copies (candidate)
+
+Image > Create Lab Copy and Create Linear RGB Copy create a separate,
+unsaved 32-bit document while preserving the source. Slot 197 copies the
+full canvas and resolution, with opaque standard-sRGB admission and native
+physical Lab samples. A confirmation explains the merged pixel-only scope;
+unsupported transparency, profiles and linked-layer objects refuse. Private
+candidate construction prevents publication of partial results. Source Close
+and application Quit wait for accepted work and asynchronous result cleanup.
+
+Independent native checks pass on all four engine sets: 412 conversion
+assertions on 3.2.8, 3.2.0 and master; 392 on 3.0.8, where linked layers are
+unavailable; and 314 admission assertions each. Fixed LCMS/literal bounds,
+source preservation, cancellation, row/chunk boundaries and XCF persistence
+are covered. The full Swift suite passes 1,608 tests. A native
+AppKit regression reproduced six BUSY-cleanup failures, then passed unchanged
+after retaining discarded handles through retries, across all four engines.
+The pinned real-menu workflow passes 58 assertions. All-engine menu and final
+app/bundle qualification remain in progress. See
+[lab-converted-copy.md](lab-converted-copy.md) for the contract and limits.
