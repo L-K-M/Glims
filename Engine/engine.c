@@ -4175,6 +4175,52 @@ api_image_ink_snapshot_end (GlimsEngine *engine, GlimsImageID image,
                             image_ink_snapshot_end_on_engine, &a, NULL);
 }
 
+static GlimsStatus
+image_ink_channel_identity_on_engine (GlimsEngine *engine, gpointer data)
+{
+  GlimsArgs *a = data;
+  return glims_image_ink_channel_identity (engine, a->image, a->item, a->out);
+}
+
+static GlimsStatus
+api_image_ink_channel_identity (GlimsEngine *engine, GlimsImageID image,
+                                GlimsItemID channel,
+                                GlimsInkChannelIdentity *out)
+{
+  GlimsArgs a = { .image = image, .item = channel, .out = out };
+  GlimsStatus status;
+
+  if (! out)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  /* Preserve caller struct_size/tail on accepted capacity. Clear the known
+   * payload on every failure, including admission/NOT_RUNNING, without trusting
+   * arbitrary caller-declared sizes for memset. */
+  if (out->struct_size >= sizeof (*out))
+    {
+      GlimsInkChannelIdentity temp = { 0 };
+
+      temp.struct_size = out->struct_size;
+      memcpy (out, &temp, sizeof temp);
+    }
+  else
+    {
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  status = glims_facade_call (engine, GLIMS_FACADE_OP_image_ink_channel_identity,
+                              (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                              image_ink_channel_identity_on_engine, &a, NULL);
+  if (status != GLIMS_STATUS_OK)
+    {
+      GlimsInkChannelIdentity temp = { 0 };
+
+      temp.struct_size = out->struct_size;
+      memcpy (out, &temp, sizeof temp);
+    }
+  return status;
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version = GLIMS_ENGINE_API_VERSION,
   .struct_size = sizeof (GlimsEngineAPI),

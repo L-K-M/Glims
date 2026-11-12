@@ -104,6 +104,111 @@ final class EngineSession: @unchecked Sendable {
         var isValid: Bool { value.isValid }
     }
 
+    /// Facade-owned ink roles; unrelated to native engine enum values.
+    enum InkRole: UInt32 {
+        case unspecified = 0
+        case cyan = 1
+        case magenta = 2
+        case yellow = 3
+        case black = 4
+    }
+
+    /// Durable plane identity within one document. A UUID alone does not identify
+    /// a channel across unrelated documents, so this is not a global equality key.
+    struct InkChannelIdentity {
+        let colorMode: ColorMode
+        let role: InkRole
+        let ordinal: UInt32
+        let count: UInt32
+        let uuid: Foundation.UUID
+    }
+
+    /// Direct committed Levels requires only slot 184, independently of preview slots 185–188.
+    var supportsInkLevels: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_levels_ink),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_levels_ink) else { return false }
+        return api.image_levels_ink != nil
+    }
+
+    /// Commits one scalar ink Levels edit without creating a snapshot or preview image.
+    func applyInkLevels(_ image: Int32, channel: Int32, settings: InkLevelsSettings) throws {
+        guard supportsInkLevels, let levels = api.image_levels_ink else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support ink-channel Levels.")
+        }
+        guard image > 0, channel > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose one ink channel to apply Levels.")
+        }
+        guard settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Levels endpoints must be between 0 and 1 and gamma between 0.1 and 10.")
+        }
+        var nativeSettings = inkLevels(settings)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(levels(engine, image, channel, &nativeSettings, &error), error)
+    }
+
+    var supportsInkChannelIdentity: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_ink_channel_identity),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_ink_channel_identity) else { return false }
+        return api.image_ink_channel_identity != nil
+    }
+
+    /// Read-only metadata; the channel need not be selected. Call off the main thread.
+    func inkChannelIdentity(_ image: Int32, channel: Int32) throws -> InkChannelIdentity {
+        guard supportsInkChannelIdentity, let slot = api.image_ink_channel_identity else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support ink channel identity.")
+        }
+        guard image > 0, channel > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a valid image and ink channel.")
+        }
+        var out = GlimsInkChannelIdentity()
+        out.struct_size = UInt32(MemoryLayout<GlimsInkChannelIdentity>.size)
+        let status = slot(engine, image, channel, &out)
+        try check(status, nil)
+        return try Self.decodeInkChannelIdentity(from: out)
+    }
+
+    static func decodeInkChannelIdentity(from out: GlimsInkChannelIdentity) throws -> InkChannelIdentity {
+        // The wrapper requests exactly this known size; producers must preserve it.
+        let expectedSize = UInt32(MemoryLayout<GlimsInkChannelIdentity>.size)
+        guard out.struct_size == expectedSize else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "Malformed ink channel identity.")
+        }
+        guard let colorMode = ColorMode(rawValue: out.color_mode),
+              let role = InkRole(rawValue: out.role) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "Malformed ink channel identity.")
+        }
+
+        guard withUnsafeBytes(of: out.uuid, { $0.contains(where: { $0 != 0 }) }) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "Malformed ink channel identity.")
+        }
+
+        switch colorMode {
+        case .cmyk:
+            guard out.count == 4, out.ordinal < 4, role.rawValue == out.ordinal + 1 else {
+                throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                  message: "Malformed ink channel identity.")
+            }
+        case .multichannel:
+            guard role == .unspecified, out.count >= 1, out.count <= 32, out.ordinal < out.count else {
+                throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                  message: "Malformed ink channel identity.")
+            }
+        default:
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "Malformed ink channel identity.")
+        }
+
+        return InkChannelIdentity(colorMode: colorMode, role: role, ordinal: out.ordinal, count: out.count, uuid: UUID(uuid: out.uuid))
+    }
+
     var supportsInkLevelSnapshots: Bool {
         guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_ink_snapshot_end),
               Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_ink_snapshot_end) else { return false }
@@ -550,7 +655,7 @@ final class EngineSession: @unchecked Sendable {
                       userDirectory: URL,
                       cacheDirectory: URL,
                       onEvent: @escaping @MainActor (Event) -> Void) throws -> EngineSession {
-        let api = pointer.pointee
+        let api = try EngineLibrary.copyAPI(pointer)
         let relay = EventRelay(handler: onEvent)
         var engine: OpaquePointer?
         var error: UnsafeMutablePointer<CChar>?

@@ -139,11 +139,33 @@ enum EngineLibrary {
             throw LoadError.missingEntryPoint(path: path)
         }
         let getAPI = unsafeBitCast(symbol, to: GlimsEngineGetAPIFunction.self)
-        guard let api = getAPI(GLIMS_ENGINE_API_VERSION),
-              api.pointee.api_version == GLIMS_ENGINE_API_VERSION,
-              Int(api.pointee.struct_size) >= MemoryLayout<GlimsEngineAPI>.size else {
+        guard let api = getAPI(GLIMS_ENGINE_API_VERSION) else {
             throw LoadError.unsupportedVersion(path: path)
         }
+        _ = try copyAPI(api, path: path)
         return api
+    }
+
+    /// The required production prefix ends at native CMYK export (slot 182).
+    /// Later additions have independent capability gates. Read only the two
+    /// header words before validating size, then copy complete known slots;
+    /// a producer may end at a page boundary or have a larger future tail.
+    static func copyAPI(_ pointer: UnsafePointer<GlimsEngineAPI>,
+                        path: String = "selected engine") throws -> GlimsEngineAPI {
+        let raw = UnsafeRawPointer(pointer)
+        let version = raw.load(as: UInt32.self)
+        let size = Int(raw.load(fromByteOffset: MemoryLayout<UInt32>.size, as: UInt32.self))
+        let minimum = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_edit_ink)!
+        let knownSize = MemoryLayout<GlimsEngineAPI>.size
+        let slotSize = MemoryLayout.size(ofValue: GlimsEngineAPI().image_edit_ink)
+        guard version == GLIMS_ENGINE_API_VERSION, size >= minimum,
+              size >= knownSize || (size - minimum).isMultiple(of: slotSize) else {
+            throw LoadError.unsupportedVersion(path: path)
+        }
+        var copy = GlimsEngineAPI()
+        withUnsafeMutableBytes(of: &copy) { destination in
+            destination.copyBytes(from: UnsafeRawBufferPointer(start: raw, count: min(size, knownSize)))
+        }
+        return copy
     }
 }
