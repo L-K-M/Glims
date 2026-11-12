@@ -46,6 +46,7 @@ typedef struct {
   GlimsStatus status;
   GlimsImageID result;
   char *error;
+  double pause_value;
 } Control;
 
 static void put16 (guint8 *p, guint v) { p[0] = (guint8) (v >> 8); p[1] = (guint8) v; }
@@ -89,6 +90,45 @@ literal_psd (guint width, guint height, guint depth, const guint8 *icc, gsize ic
     else append16(f.bytes,value);
   }
   return f;
+}
+
+/* Independent PackBits producer, working only on the literal fixture's
+ * known row bytes. Packet runs are limited to128 bytes; no product codec is
+ * called to create either these packets or the sample oracle above. */
+static void literal_rle (Literal *f) {
+  GByteArray *encoded=g_byte_array_new();
+  g_byte_array_append(encoded,f->bytes->data,(guint)f->pixel_offset);
+  put16(encoded->data+f->compression_offset,1);
+  gsize table=encoded->len,rows=(gsize)4*f->height,row_size=(gsize)f->width*(f->depth/8);
+  for(gsize i=0;i<rows;i++)append16(encoded,0);
+  gsize pixels=encoded->len;
+  const guint8 nop=128;
+  for(gsize r=0;r<rows;r++) {
+    const guint8 *row=f->bytes->data+f->pixel_offset+r*row_size;
+    gsize start=encoded->len;
+    g_byte_array_append(encoded,&nop,1);
+    for(gsize x=0;x<row_size;) {
+      gsize run=1;
+      while(run<128 && x+run<row_size && row[x+run]==row[x])run++;
+      if(run>=2) {
+        guint8 packet[2]={(guint8)(257-run),row[x]};
+        g_byte_array_append(encoded,packet,2);x+=run;
+      } else {
+        gsize literal=x++;
+        while(x<row_size && x-literal<128) {
+          if(x+1<row_size && row[x]==row[x+1])break;
+          x++;
+        }
+        guint8 control=(guint8)(x-literal-1);
+        g_byte_array_append(encoded,&control,1);
+        g_byte_array_append(encoded,row+literal,(guint)(x-literal));
+      }
+    }
+    g_byte_array_append(encoded,&nop,1);
+    g_assert(encoded->len-start<=65535);
+    put16(encoded->data+table+2*r,(guint)(encoded->len-start));
+  }
+  g_byte_array_unref(f->bytes);f->bytes=encoded;f->pixel_offset=pixels;
 }
 
 static gboolean file_equals (const char *path, const GByteArray *expected) {
@@ -223,11 +263,12 @@ static void preview_oracle (GlimsEngine *e,const Capture *c) {
 }
 
 static void run_valid (GlimsEngine *e,const char *work,const guint8 *icc,gsize icc_size,
-                       guint width,guint height,guint depth) {
-  printf("INFO literal %ux%u depth%u\n",width,height,depth);
+                       guint width,guint height,guint depth,gboolean rle) {
+  printf("INFO literal %ux%u depth%u RLE%d\n",width,height,depth,rle);
   Literal f=literal_psd(width,height,depth,icc,icc_size);
-  gchar *path=g_strdup_printf("%s/literal-%u-%u-%u.psd",work,width,height,depth);
-  gchar *xcf=g_strdup_printf("%s/literal-%u-%u-%u.xcf",work,width,height,depth);
+  if(rle)literal_rle(&f);
+  gchar *path=g_strdup_printf("%s/literal-%u-%u-%u-%d.psd",work,width,height,depth,rle);
+  gchar *xcf=g_strdup_printf("%s/literal-%u-%u-%u-%d.xcf",work,width,height,depth,rle);
   Counts before=counts_of(e);char *error=NULL;GlimsImageID id=0,second=0,reopened=0;
   Capture first={.literal=&f,.icc=icc,.icc_size=icc_size,.imported=path};
   Capture other={.literal=&f,.icc=icc,.icc_size=icc_size,.imported=path};
@@ -252,6 +293,32 @@ static void run_valid (GlimsEngine *e,const char *work,const guint8 *icc,gsize i
     if(ok)for(guint i=0;i<4;i++)for(guint j=0;j<4;j++)
       CHECK(memcmp(first.uuid[i],other.uuid[j],16)!=0,"UUID never equates distinct imported documents");
     CHECK(api->image_close(e,second)==GLIMS_STATUS_OK,"close second import");second=0;
+  }
+  if(rle) {
+    Capture edited={.id=id,.literal=&f,.icc=icc,.icc_size=icc_size,.imported=path};
+    Capture undone={.id=id,.literal=&f,.icc=icc,.icc_size=icc_size,.imported=path};
+    status=api->image_edit_ink(e,id,first.ids[0],GLIMS_INK_EDIT_INVERT,0,1,&error);
+    CHECK(status==GLIMS_STATUS_OK,"imported compressed ink remains editable");free_error(&error);
+    gboolean ok=glims_engine_call(e,capture_on_engine,&edited)==GLIMS_STATUS_OK;
+    CHECK(ok,"capture edited compressed import");
+    if(ok) {
+      gboolean exact=edited.valid&&edited.source_identity&&g_bytes_equal(edited.map,first.map);
+      for(guint c=1;c<4;c++)exact=exact&&g_bytes_equal(edited.raw[c],first.raw[c]);
+      gsize n=0;const guint8 *raw=g_bytes_get_data(edited.raw[0],&n);
+      for(guint y=0;y<height;y++)for(guint x=0;x<width;x++) {
+        gsize i=(gsize)y*width+x;guint16 got;
+        if(depth==8)got=raw[i];else memcpy(&got,raw+i*2,2);
+        exact=exact&&got==(depth==8?255u:65535u)-sample(depth,0,x,y);
+      }
+      CHECK(exact,"Invert changes only Cyan with exact independently subtracted samples");
+    }
+    GlimsUndoInfo undo={0};
+    CHECK(api->image_undo_info(e,id,&undo)==GLIMS_STATUS_OK&&undo.undo_count==1&&!undo.redo_count,
+      "editing imported RLE adds exactly one Undo step");
+    CHECK(api->image_undo(e,id)==GLIMS_STATUS_OK,"undo imported compressed ink edit");free_error(&error);
+    ok=glims_engine_call(e,capture_on_engine,&undone)==GLIMS_STATUS_OK;
+    CHECK(ok&&persistent_equal(&first,&undone),"Undo restores all exact imported planes, map and profile");
+    clear_capture(&edited);clear_capture(&undone);
   }
   status=api->image_save(e,id,xcf,&error);
   if(error)printf("INFO XCF save status%d %s\n",status,error);
@@ -302,7 +369,7 @@ static void run_refusals (GlimsEngine *e,const char *work,const guint8 *icc,gsiz
     {6,1,GLIMS_STATUS_FAILED,"nonzero reserved header"},{13,5,GLIMS_STATUS_UNSUPPORTED,"fifth alpha/extra plane"},
     {23,32,GLIMS_STATUS_UNSUPPORTED,"32-bit samples"},{25,3,GLIMS_STATUS_UNSUPPORTED,"RGB mode"},
     {39,0x10,GLIMS_STATUS_UNSUPPORTED,"unhandled resource ID"},
-    {f.compression_offset+1,1,GLIMS_STATUS_UNSUPPORTED,"RLE"},
+    {f.compression_offset+1,1,GLIMS_STATUS_FAILED,"RAW payload falsely labelled RLE"},
     {f.compression_offset+1,2,GLIMS_STATUS_UNSUPPORTED,"ZIP"},
     {f.layer_offset+3,1,GLIMS_STATUS_UNSUPPORTED,"nonempty layer/mask section"},
     {f.icc_offset+36,'x',GLIMS_STATUS_FAILED,"bad ICC signature"}
@@ -319,6 +386,14 @@ static void run_refusals (GlimsEngine *e,const char *work,const guint8 *icc,gsiz
   }
   GByteArray *b=g_byte_array_new();g_byte_array_append(b,f.bytes->data,f.bytes->len);
   const guint8 extra=7;g_byte_array_append(b,&extra,1);refuse(e,path,b,GLIMS_STATUS_FAILED,"unexpected trailing byte");g_byte_array_unref(b);
+  Literal packed=literal_psd(7,3,16,icc,size);literal_rle(&packed);
+  gsize table=packed.compression_offset+2,last=table+2*(4*packed.height-1);
+  guint old_length=((guint)packed.bytes->data[last]<<8)|packed.bytes->data[last+1];
+  put16(packed.bytes->data+last,old_length-1);
+  refuse(e,path,packed.bytes,GLIMS_STATUS_FAILED,"last RLE row has unexplained leftover byte");
+  put16(packed.bytes->data+last,old_length);g_byte_array_set_size(packed.bytes,packed.bytes->len-2);
+  refuse(e,path,packed.bytes,GLIMS_STATUS_FAILED,"truncated final RLE row");
+  g_byte_array_unref(packed.bytes);
   guint8 fake[128]={0};put32(fake,128);memcpy(fake+12,"prtrCMYK",8);memcpy(fake+36,"acsp",4);
   Literal invalid=literal_psd(7,3,8,fake,sizeof fake);
   refuse(e,path,invalid.bytes,GLIMS_STATUS_OK,"structurally plausible but unusable CMYK ICC");
@@ -345,14 +420,18 @@ static gboolean pause_idle (gpointer data) {
 }
 static void event (void *data,const GlimsEvent *ev) {
   Control *c=data;
-  if(ev->kind==GLIMS_EVENT_PROGRESS&&ev->active&&g_atomic_int_compare_and_exchange(&c->armed,1,0))
+  if(ev->kind==GLIMS_EVENT_PROGRESS&&ev->active&&ev->value>=c->pause_value&&g_atomic_int_compare_and_exchange(&c->armed,1,0))
     g_atomic_int_set(&c->idle,(gint)g_idle_add_full(G_PRIORITY_HIGH,pause_idle,c,NULL));
 }
 static gpointer import_worker (gpointer data) {
   Control *c=data;c->status=api->image_import_native_cmyk_psd(c->engine,c->path,&c->result,&c->error);return NULL;
 }
-static void run_cancel (Control *c,const char *work,const guint8 *icc,gsize size) {
-  Literal f=literal_psd(4097,17,16,icc,size);gchar *path=g_build_filename(work,"cancel.psd",NULL);
+static void run_cancel (Control *c,const char *work,const guint8 *icc,gsize size,gboolean rle) {
+  Literal f=literal_psd(4097,17,16,icc,size);
+  if(rle)literal_rle(&f);
+  gchar *path=g_build_filename(work,rle?"cancel-rle.psd":"cancel.psd",NULL);
+  c->pause_value=rle?1.0:0.0;
+  g_atomic_int_set(&c->paused,0);g_atomic_int_set(&c->release,0);g_atomic_int_set(&c->timed_out,0);
   CHECK(g_file_set_contents(path,(const gchar *)f.bytes->data,f.bytes->len,NULL),"write cancellation literal");
   Counts initial=counts_of(c->engine);GlimsImageID anchor=0;char *anchor_error=NULL;
   CHECK(api->image_new(c->engine,3,3,&anchor,&anchor_error)==GLIMS_STATUS_OK&&anchor,"create unrelated document for reentrant read/close checks");
@@ -404,13 +483,14 @@ int main (int argc,char **argv) {
   Control control={0};GlimsEngineConfig config={.struct_size=sizeof config,.user_directory=user,.cache_directory=cache,.on_event=event,.event_context=&control};
   char *error=NULL;if(api->start(&config,&control.engine,&error)!=GLIMS_STATUS_OK){fprintf(stderr,"start failed: %s\n",error?error:"");free_error(&error);g_free(icc);g_free(user);g_free(cache);return 2;}
   free_error(&error);
-  for(guint depth=8;depth<=16;depth+=8) {
-    run_valid(control.engine,argv[1],(const guint8 *)icc,size,1,7,depth);
-    run_valid(control.engine,argv[1],(const guint8 *)icc,size,7,3,depth);
-    run_valid(control.engine,argv[1],(const guint8 *)icc,size,4097,3,depth);
+  for(guint rle=0;rle<=1;rle++)for(guint depth=8;depth<=16;depth+=8) {
+    run_valid(control.engine,argv[1],(const guint8 *)icc,size,1,7,depth,rle);
+    run_valid(control.engine,argv[1],(const guint8 *)icc,size,7,3,depth,rle);
+    run_valid(control.engine,argv[1],(const guint8 *)icc,size,4097,3,depth,rle);
   }
   run_refusals(control.engine,argv[1],(const guint8 *)icc,size);
-  run_cancel(&control,argv[1],(const guint8 *)icc,size);
+  run_cancel(&control,argv[1],(const guint8 *)icc,size,FALSE);
+  run_cancel(&control,argv[1],(const guint8 *)icc,size,TRUE);
   api->stop(control.engine);g_free(icc);g_free(user);g_free(cache);
   printf("%u checks, %u failures\n",checks,failures);return failures?1:0;
 }

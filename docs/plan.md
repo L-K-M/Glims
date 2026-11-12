@@ -5434,3 +5434,14 @@ failed native work remains a failure. All 1,650 Swift tests pass. All four
 engines pass 423 ink Recorder checks and 186 actual Curves panel checks each.
 Independent production review is clear; hosted CI and combined qualification
 remain pending. See [ink-recorder.md](ink-recorder.md).
+
+### Preserving compressed CMYK PSD import (candidate)
+
+The explicit CMYK importer now reads flat PackBits/RLE PSDs at 8/16 bits as
+well as RAW. The private reader validates every compressed row before native
+allocation, retains exact C/M/Y/K samples and the embedded profile, and limits
+expanded sample bytes as well as input size. Layered/ZIP PSDs and resources
+beyond the single ICC remain outside this preserving subset.
+The standalone reader passes 1,011 optimized/sanitized checks and the pinned
+native acceptance fixture passes 1,328 checks. Four-engine qualification and
+independent review are in progress. See [cmyk-psd-import.md](cmyk-psd-import.md).
