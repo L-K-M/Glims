@@ -146,9 +146,11 @@ typedef struct
   gulong     guide_removed_handler;
   gulong     guide_moved_handler;
   guint64    history_revision;
-  /* Internal admission state. No public mode is activated by this flag.
-   * Future component adoption must validate native storage before setting it. */
+  /* Set only after complete native storage validation at adoption. */
   gboolean   component_document;
+  struct _GlimsPlatePreview *component_preview;
+  GimpDrawable *component_planes[32];
+  gulong component_updates[32];
 } GlimsOpenImage;
 
 /* A live filter session, owned by `filters` until commit or abort.
@@ -186,6 +188,7 @@ void             glims_emit_progress     (GlimsEngine *engine, gboolean active,
 /* Consumes gerror. Transfer a caller-owned variable with g_steal_pointer. */
 GlimsStatus      glims_fail              (char **error, GError *gerror, const gchar *fallback);
 GlimsOpenImage * glims_lookup_image      (GlimsEngine *engine, GlimsImageID id);
+/* Consumes the image reference only on success; failure leaves it owned by the caller. */
 GlimsStatus      glims_adopt_image       (GlimsEngine *engine, GimpImage *image, GlimsImageID *id);
 void             glims_release_image     (GlimsEngine *engine, GlimsImageID id);
 void             glims_track_image_links (GimpImage *image);
@@ -258,6 +261,7 @@ GlimsStatus glims_image_undo       (GlimsEngine *e, GlimsImageID id);
 GlimsStatus glims_image_redo       (GlimsEngine *e, GlimsImageID id);
 
 /* paint.c */
+GlimsStatus glims_stroke_component_ready (GlimsEngine *engine, GlimsStrokeID id);
 GlimsStatus glims_stroke_begin     (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                     const GlimsBrushSettings *brush, const GlimsStrokePoint *first,
                                     GlimsStrokeID *out, char **error);

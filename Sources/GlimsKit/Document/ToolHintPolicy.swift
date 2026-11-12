@@ -9,7 +9,18 @@ enum ToolHintPolicy {
     }
     enum Refresh: Equatable { case context, afterAction, stateChange }
 
-    static func hint(tool: ToolID, phase: Phase, flags: NSEvent.ModifierFlags) -> String {
+    static func hint(tool: ToolID, phase: Phase, flags: NSEvent.ModifierFlags,
+                     mode: EngineSession.ColorMode = .rgb) -> String {
+        if mode == .multichannel {
+            guard tool.isAvailable(in: mode) else {
+                return "Choose a painting, selection, Hand or Zoom tool for this ink document."
+            }
+            if phase == .idle, tool.paintTool != nil {
+                return flags.contains(.option)
+                    ? "Release Option to paint the selected ink channel."
+                    : "Paint the selected ink channel. Black adds ink; white removes it; [ ] changes size."
+            }
+        }
         switch phase {
         case .textEditing: return "Type text. Escape or clicking outside applies it."
         case .transformReady: return "Return applies the transform; Escape cancels it."

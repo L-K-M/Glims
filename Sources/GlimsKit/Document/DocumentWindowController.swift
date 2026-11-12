@@ -464,7 +464,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     private func refreshIdleStatus(_ reason: ToolHintPolicy.Refresh) {
         let undo = imageDocument.undoInfo.nextUndo.isEmpty ? "" : " · Undo \(imageDocument.undoInfo.nextUndo)"
-        let summary = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(imageDocument.info.layerCount) layer\(imageDocument.info.layerCount == 1 ? "" : "s")\(undo)"
+        let multichannel = imageDocument.colorInfo.mode == .multichannel
+        let count = multichannel ? imageDocument.channels.count : imageDocument.info.layerCount
+        let item = multichannel ? "ink channel" : "layer"
+        let summary = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(count) \(item)\(count == 1 ? "" : "s")\(undo)"
         let current = statusBar.message
         let message = ToolHintPolicy.status(current: current, isError: statusIsError,
             progressActive: statusProgressActive, activity: EngineActivity.shared.label,
@@ -1350,11 +1353,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func toggleMaskEditing(_ sender: Any?) { imageDocument.toggleMaskEditing() }
 
     @objc func toggleQuickMask(_ sender: Any?) {
+        guard imageDocument.colorInfo.mode != .multichannel else { return }
         imageDocument.setQuickMask(!(imageDocument.quickMaskState?.enabled ?? false))
     }
 
     @objc func saveSelectionAsChannel(_ sender: Any?) {
-        guard let window else { return }
+        guard let window, imageDocument.colorInfo.mode != .multichannel else { return }
         endPendingEdits()
         ChannelForms.saveSelection(in: imageDocument, on: window)
     }
@@ -1392,13 +1396,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func duplicateChannelMenu(_ sender: Any?) {
-        guard channelMenuBaseAllowed, !imageDocument.floatingState.isActive,
+        guard imageDocument.colorInfo.mode != .multichannel,
+              channelMenuBaseAllowed, !imageDocument.floatingState.isActive,
               let channel = selectedSavedChannelMenuTarget else { return }
         imageDocument.duplicateChannel(channel.id)
     }
 
     @objc func deleteChannelMenu(_ sender: Any?) {
-        guard channelMenuBaseAllowed, !imageDocument.floatingState.isActive,
+        guard imageDocument.colorInfo.mode != .multichannel,
+              channelMenuBaseAllowed, !imageDocument.floatingState.isActive,
               let channel = selectedSavedChannelMenuTarget else { return }
         imageDocument.deleteChannel(channel.id)
     }
@@ -1414,7 +1420,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func channelToSelectionMenu(_ sender: NSMenuItem) {
-        guard channelMenuBaseAllowed, let channel = selectedSavedChannelMenuTarget,
+        guard imageDocument.colorInfo.mode != .multichannel,
+              channelMenuBaseAllowed, let channel = selectedSavedChannelMenuTarget,
               let tag = UInt32(exactly: sender.tag),
               let operation = EngineSession.SelectOperation(rawValue: tag) else { return }
         imageDocument.channelToSelection(channel.id, operation: operation)
@@ -2190,7 +2197,34 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         return true
     }
 
+    /// Component documents expose only commands with qualified native routes.
+    /// The engine independently enforces the same boundary for direct callers.
+    private func permitsMultichannelMenu(_ action: Selector?) -> Bool {
+        switch action {
+        case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
+             #selector(revertDocument(_:)), #selector(newSnapshot(_:)),
+             #selector(channelAttributesMenu(_:)), #selector(imageInformation(_:)),
+             #selector(selectAll(_:)), #selector(selectNone(_:)), #selector(selectInverse(_:)),
+             #selector(sharpenSelection(_:)), #selector(featherSelection(_:)),
+             #selector(growSelection(_:)), #selector(shrinkSelection(_:)), #selector(borderSelection(_:)),
+             #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)),
+             #selector(rotateViewClockwise(_:)), #selector(rotateViewCounterclockwise(_:)),
+             #selector(setViewAngle(_:)), #selector(resetViewRotation(_:)),
+             #selector(chooseScreenMode(_:)), #selector(cycleScreenMode(_:)),
+             #selector(toggleShowRulers(_:)), #selector(toggleSelectionEdges(_:)),
+             #selector(toggleShowGuides(_:)), #selector(toggleShowGrid(_:)),
+             #selector(toggleSnapToGuides(_:)), #selector(toggleSnapToGrid(_:)),
+             #selector(toggleSnapToCanvas(_:)), #selector(toggleSnapToLayerBounds(_:)):
+            return true
+        default: return false
+        }
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if imageDocument.colorInfo.mode == .multichannel && !permitsMultichannelMenu(menuItem.action) {
+            menuItem.toolTip = "This command is unavailable for ink-channel documents."
+            return false
+        }
         let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
             || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || EngineActivity.shared.isBusy || window?.attachedSheet != nil
         switch menuItem.action {

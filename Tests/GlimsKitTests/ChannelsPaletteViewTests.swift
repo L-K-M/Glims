@@ -10,6 +10,32 @@ import RigiUI
 /// dispatch — and read the semantic `Action`s the palette reports.
 @MainActor
 final class ChannelsPaletteViewTests: XCTestCase {
+    @MainActor
+    func testInkChannelControlsPreserveTargetAndAttributeEditing() throws {
+        let view = ChannelsPaletteView()
+        var actions: [ChannelsPaletteView.Action] = []
+        view.onAction = { actions.append($0) }
+        view.update(.init(components: componentState(mode: .multichannel, supported: []),
+            channels: [channel(7)], activeChannel: 7, hasSelectedChannels: true,
+            quickMask: quickMask(), acceptsEdits: true, multichannel: true))
+        XCTAssertTrue(view.componentRows.isEmpty)
+        XCTAssertTrue(try XCTUnwrap(view.channelRows.first).eyeToggle.isEnabled)
+        XCTAssertTrue(try XCTUnwrap(view.channelRows.first).thumbnail.isEnabled)
+        XCTAssertFalse(view.quickMaskButton.isEnabled)
+        XCTAssertFalse(view.returnToLayersButton.isEnabled)
+        XCTAssertFalse(view.selectionPopup.isEnabled)
+        let bar = try XCTUnwrap(descendant(of: view, as: ClassicPaletteButtonBar.self))
+        let new = try XCTUnwrap(footerButton("New Channel", in: bar))
+        let duplicate = try XCTUnwrap(footerButton("Duplicate Channel", in: bar))
+        let delete = try XCTUnwrap(footerButton("Delete Channel", in: bar))
+        let edit = try XCTUnwrap(footerButton("Edit Channel", in: bar))
+        XCTAssertFalse(new.isEnabled); XCTAssertFalse(duplicate.isEnabled); XCTAssertFalse(delete.isEnabled)
+        XCTAssertTrue(edit.isEnabled)
+        fire(new); fire(duplicate); fire(delete); fire(view.quickMaskButton); fire(view.returnToLayersButton)
+        XCTAssertTrue(actions.isEmpty, "stale disabled callbacks cannot emit unsupported actions")
+        fire(edit)
+        XCTAssertEqual(actions, [.editChannel(7)])
+    }
 
     // MARK: Fixtures
 

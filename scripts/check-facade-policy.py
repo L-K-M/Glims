@@ -27,6 +27,8 @@ def check(root=ROOT):
               'free_metadata_strings', 'metadata_languages_free',
               'free_curves_snapshot', 'free_histogram_snapshot'}
     cleanup = {'image_close', 'stroke_end', 'filter_abort', 'procedure_cancel'}
+    component = {'image_grid', 'image_history', 'image_info', 'stroke_begin_with_brush_resource', 'image_render_to_profile', 'image_select_items', 'image_quick_mask', 'image_history_move', 'select_shape', 'image_guides', 'image_color_info', 'image_duplicate', 'drawable_thumbnail', 'stroke_begin_with_capture_facts', 'image_redo', 'image_selected_items', 'stroke_begin', 'image_selected_layers', 'image_floating_selection', 'image_undo_info', 'image_channels', 'image_components', 'channel_command', 'channel_change', 'image_undo', 'select_command', 'image_render', 'selection_bounds', 'selection_outline', 'image_layers', 'image_save_copy', 'stroke_begin_v2', 'paths', 'image_save'}
+    component_stroke = {'stroke_continue', 'stroke_continue_v2'}
     for name, wrapper, kind, policy in entries:
         if name in direct:
             if kind != 'NONE' or policy != 'DIRECT':
@@ -76,7 +78,8 @@ def check(root=ROOT):
         packed_target = f'(GlimsFacadeTarget){{GLIMS_FACADE_TARGET_{expected_kind},{expected_id},{{{expected_sources[0]},{expected_sources[1]}}}}}'
         if packed_target not in re.sub(r'\s+', '', body):
             errors.append(f'{name}: source ownership capture differs from its contract')
-        expected_policy = 'CLEANUP' if name in cleanup else 'GLOBAL' if kind == 'NONE' else 'ORDINARY'
+        expected_policy = ('COMPONENT' if name in component else 'COMPONENT_STROKE' if name in component_stroke else
+                           'CLEANUP' if name in cleanup else 'GLOBAL' if kind == 'NONE' else 'ORDINARY')
         if policy != expected_policy:
             errors.append(f'{name}: unexpected initial admission policy {policy}')
     table = source[source.index('static const GlimsEngineAPI api_v1 = {'):]

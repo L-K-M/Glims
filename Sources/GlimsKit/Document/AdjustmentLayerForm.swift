@@ -90,6 +90,9 @@ enum AdjustmentLayerLogic {
         case .indexed:
             return ModeAdmission(allowed: false,
                 reason: "Adjustment layers require RGB or grayscale. Convert the indexed image first.")
+        case .multichannel:
+            return ModeAdmission(allowed: false,
+                reason: "Adjustment layers require an RGB or grayscale image.")
         case .unknown:
             return ModeAdmission(allowed: false,
                 reason: "The image's color mode is unknown, so no adjustment layer can be added.")

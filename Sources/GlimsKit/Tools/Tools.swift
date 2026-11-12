@@ -16,6 +16,17 @@ enum ToolID: String, CaseIterable {
     case gradient, bucketFill
     case hand, zoom
 
+    /// Match the native component routes; unavailable tools are excluded
+    /// from shortcuts and disabled in the palette before an interaction starts.
+    func isAvailable(in mode: EngineSession.ColorMode?) -> Bool {
+        guard mode == .multichannel else { return true }
+        switch self {
+        case .paintbrush, .pencil, .airbrush, .rectangleSelect, .ellipseSelect, .lasso, .hand, .zoom:
+            return true
+        default: return false
+        }
+    }
+
     var name: String {
         switch self {
         case .move: return "Move"

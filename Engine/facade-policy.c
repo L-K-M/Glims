@@ -1,9 +1,10 @@
 #include "facade-policy.h"
+#include "plate-storage.h"
 #include "core/gimpimage.h"
 #include "core/gimpitem.h"
 #include <string.h>
 
-typedef enum { POLICY_DIRECT, POLICY_GLOBAL, POLICY_CLEANUP, POLICY_ORDINARY } Policy;
+typedef enum { POLICY_DIRECT, POLICY_GLOBAL, POLICY_CLEANUP, POLICY_ORDINARY, POLICY_COMPONENT, POLICY_COMPONENT_STROKE } Policy;
 typedef struct { const char *name; GlimsFacadeTargetKind kind; Policy policy; } Descriptor;
 static const Descriptor descriptors[GLIMS_FACADE_OPERATION_COUNT] = {
 #define GLIMS_FACADE(name, wrapper, target, policy) \
@@ -94,6 +95,32 @@ dispatch (GlimsEngine *engine, gpointer data)
     {
       if (call->error) *call->error = strdup ("This command is not available for component documents.");
       return GLIMS_STATUS_UNSUPPORTED;
+    }
+  if (descriptor->policy == POLICY_COMPONENT)
+    {
+      /* Qualified destination operations never grant cross-image source
+       * access. The backend still validates its own typed arguments. */
+      for (guint i = 0; i < G_N_ELEMENTS (call->target.sources); i++)
+        {
+          GimpItem *item = gimp_item_get_by_id (engine->gimp, call->target.sources[i]);
+          if (item && component_image (engine, gimp_item_get_image (item)))
+            return GLIMS_STATUS_UNSUPPORTED;
+        }
+      GlimsOpenImage *open = glims_lookup_image (engine, call->target.id);
+      if (open && open->component_document)
+        {
+          GlimsPlateStorage storage;
+          if (glims_plate_storage_read (open->image, &storage) != GLIMS_PLATE_STORAGE_VALID)
+            {
+              if (call->error) *call->error = strdup ("The document's component storage is damaged or unsupported.");
+              return GLIMS_STATUS_UNSUPPORTED;
+            }
+        }
+    }
+  if (descriptor->policy == POLICY_COMPONENT_STROKE && target_is_component (engine, call->target))
+    {
+      GlimsStatus status = glims_stroke_component_ready (engine, call->target.id);
+      if (status != GLIMS_STATUS_OK) return status;
     }
   if (call->invoked) *call->invoked = TRUE;
   return call->func (engine, call->data);

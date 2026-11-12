@@ -4,6 +4,13 @@ import Foundation
 /// the document's cached selection, channel list and edit gates; never the
 /// engine. The controller rechecks the same rules before acting.
 enum ChannelMenuPolicy {
+    static func permits(_ action: ChannelsPaletteView.Action, multichannel: Bool) -> Bool {
+        guard multichannel else { return true }
+        switch action {
+        case .selectChannel, .setChannelVisible, .editChannel: return true
+        default: return false
+        }
+    }
     /// The single saved channel targeted by main-menu channel commands, or
     /// nil when there is not exactly one selected channel or that channel
     /// is Quick Mask. Never falls back to a remembered or first row.

@@ -140,7 +140,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
 
     private func bind(_ command: Command) -> ClassicPaletteButtonBar.Item {
         ClassicPaletteButtonBar.Item(id: command.id, title: command.title, image: command.image) { [weak self] in
-            guard let document = self?.document else { return }
+            guard let document = self?.document, document.colorInfo.mode != .multichannel else { return }
             command.run(document)
         }
     }
@@ -429,6 +429,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     }
 
     @objc private func runLayerCommand(_ sender: NSMenuItem) {
+        guard document?.colorInfo.mode != .multichannel else { return }
         guard let command = EngineSession.LayerCommand(rawValue: UInt32(sender.tag)) else { return }
         if command == .duplicate, document?.hasMultipleSelectedLayers == true {
             document?.duplicateSelectedLayers()
@@ -438,6 +439,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     }
 
     @objc private func newLayerGroup(_ sender: NSMenuItem) {
+        guard document?.colorInfo.mode != .multichannel else { return }
         document?.createGroup()
     }
 
@@ -627,6 +629,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard document?.colorInfo.mode != .multichannel else { return false }
         if let item = menuItem.representedObject as? EffectItem {
             return validateEffectItem(menuItem, item)
         }
@@ -777,7 +780,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             thumbnailRequests.removeValue(forKey: key)?.cancel()
             thumbnailWaiters.removeValue(forKey: key)?.forEach { $0(nil) }
         }
-        let editable = document?.acceptsEdits == true
+        let editable = document?.acceptsEdits == true && document?.colorInfo.mode != .multichannel
         // While a floating selection is active the structural layer
         // commands are gated resolve-first, so their buttons go quiet too.
         let floatingActive = document?.floatingState.isActive == true
