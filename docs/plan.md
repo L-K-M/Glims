@@ -5371,8 +5371,8 @@ other metadata. Ordinary Open remains the appearance-import route.
 The application preserves this import intent through Revert and forces a
 native Save As, even for a misleading XCF filename. Save changes Revert to
 the new native file; Export does not. Import results remain owned through
-adoption or asynchronous cleanup, and Quit waits for accepted work. Swift
-and pinned native builds pass; independent native source review is clear.
-Runtime preservation/lifecycle fixtures, final packaging and hosted CI
-remain pending. See [cmyk-psd-import.md](cmyk-psd-import.md) for the exact
+adoption or asynchronous cleanup, and Quit waits for accepted work. All
+four engines pass 720 independent preservation checks and 62 hosted app
+workflow checks each; all 1,623 Swift tests pass. Native and Swift source
+reviews are clear. Final packaging/startup and hosted CI remain pending. See [cmyk-psd-import.md](cmyk-psd-import.md) for the exact
 subset and qualification limits. This does not establish Photoshop 4 parity.

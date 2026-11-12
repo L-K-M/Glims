@@ -66,13 +66,15 @@ has no LeakSanitizer support; its initial unsupported-option abort is retained
 separately and is not a passing run. The reader itself allocates no memory.
 
 Independent source review found no important defect. A minor missing
-cross-callback assertion was added without changing production code. Native
-compatibility and hosted CI remain integration gates for this candidate.
+cross-callback assertion was added without changing the private reader.
 
-The native transaction and Swift integration compile. Independent source
-review of the native transaction found no important issue. Native preserving
-import, app lifecycle, final bundle and latest-head CI checks are still in
-progress; the parser checks above do not establish those behaviors.
+Independent native and Swift source reviews found no important issue. The
+native preserving-import fixture passes 720 checks on each supported engine;
+general conformance, compressed XCF and TIFF checks also pass on all four.
+The hosted app fixture passes 62 checks per engine, including exact re-export,
+Revert before and after native Save, duplicate-open identity, cancelled Open,
+failed adoption and Quit while result cleanup returns BUSY. All 1,623 Swift
+tests pass. Final bundle/startup and latest-head CI remain integration gates.
 
 The independent native acceptance fixture can be run against a built adapter:
 
@@ -84,9 +86,9 @@ python3 scripts/test-native-cmyk-psd-preserve.py \
 
 It writes literal PSD fields and samples independently of the product codec,
 uses an external CMYK profile, checks exact native samples and XCF persistence,
-and compares preview pixels with an LCMS double-percent oracle. Its first
-pinned-engine run passes 720 checks with zero preview difference for both
-tested precisions. It also exercises malformed/unsupported input, cancellation
+and compares preview pixels with an LCMS double-percent oracle. All four
+engine runs pass 720 checks with zero preview difference for both tested
+precisions. It also exercises malformed/unsupported input, cancellation
 and reentrant BUSY refusal; it does not establish maximum-size performance or
 disk-full, Stop-during-import and adversarial concurrent-write behavior.
 
