@@ -4947,8 +4947,11 @@ layerless XCF save/reopen, all three precisions, decoy names/reordering, metadat
 preservation and ten malformed native layouts. Rebuilt adapter conformance
 also passes on all four. Codec independent review and direct native review have
 no important findings; the native helper timed out before a verdict and is not
-counted as a clean independent review. The final app checks and hosted CI remain
-in progress. No upstream source changed.
+counted as a clean independent review. All 1,510 unit tests and full app checks
+pass on all four engines. Hosted CI remains in progress: the Mac runner timed
+out starting its ASan binary, so the portable codec now runs both sanitizers
+on Linux and its optimized checks on macOS. Local sanitizer checks pass.
+No upstream source changed.
 
 Before public admission, a central default-deny operation policy must cover both
 queued and direct engine-thread calls, all aliases and session owners. Display,

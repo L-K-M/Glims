@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 # Pure metadata contract checks; no engine install or GUI is needed.
 set -euo pipefail
+case "${1:-all}" in
+  all) modes=(optimized sanitized) ;;
+  optimized|sanitized) modes=("$1") ;;
+  *) echo "Usage: $0 [all|optimized|sanitized]" >&2; exit 2 ;;
+esac
+if [[ $# -gt 1 ]]; then
+  echo "Usage: $0 [all|optimized|sanitized]" >&2
+  exit 2
+fi
+compiler=(clang)
+if [[ "$(uname -s)" == Darwin ]]; then compiler=(xcrun clang); fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/glims-plate-map.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
@@ -17,12 +28,12 @@ except subprocess.TimeoutExpired:
 raise SystemExit(result.returncode)
 PY
 }
-for mode in optimized sanitized; do
+for mode in "${modes[@]}"; do
   flags=(-O2)
   if [[ "$mode" == sanitized ]]; then
     flags=(-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer)
   fi
-  run_bounded xcrun clang -std=c11 -Wall -Wextra -Werror -pedantic "${flags[@]}" \
+  run_bounded "${compiler[@]}" -std=c11 -Wall -Wextra -Werror -pedantic "${flags[@]}" \
     -I"$ROOT/Engine" "$ROOT/Engine/plate-map.c" "$ROOT/Engine/tests/plate-map-tests.c" \
     -o "$WORK/$mode"
   run_bounded "$WORK/$mode"
