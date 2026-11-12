@@ -297,10 +297,10 @@ final class ExportOptionsForm: NSView {
     let compressionRow = ExportNumberRow(label: "PNG compression", range: 0...9,
         integer: true, rejection: "Compression must be a whole number from 0 to 9.")
     let interlacedBox = NSButton(checkboxWithTitle: "Interlaced (Adam7)", target: nil, action: nil)
-    let pngTransparentBox = NSButton(checkboxWithTitle: "Save color values from transparent pixels",
+    let pngTransparentBox = NSButton(checkboxWithTitle: "Preserve transparent pixel colors",
         target: nil, action: nil)
     let tiffCompressionPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    let tiffTransparentBox = NSButton(checkboxWithTitle: "Save color values from transparent pixels",
+    let tiffTransparentBox = NSButton(checkboxWithTitle: "Preserve transparent pixel colors",
         target: nil, action: nil)
     let messageLabel = NSTextField(labelWithString: "")
     /// The last readable refusal shown inline; nil while clean.
@@ -340,6 +340,9 @@ final class ExportOptionsForm: NSView {
             box.setAccessibilityLabel(box.title)
             box.target = self
             box.action = #selector(toggleChanged(_:))
+        }
+        for box in [pngTransparentBox, tiffTransparentBox] {
+            box.toolTip = "Keep color channel values where pixels are fully transparent."
         }
 
         qualityRow.onChange = { [weak self] percent in
@@ -395,14 +398,14 @@ final class ExportOptionsForm: NSView {
         addSubview(messageLabel)
         messageLabel.preferredMaxLayoutWidth = fullWidth
         NSLayoutConstraint.activate([
-            grid.leadingAnchor.constraint(equalTo: leadingAnchor),
-            grid.topAnchor.constraint(equalTo: topAnchor),
-            grid.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            grid.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            grid.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            grid.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
             grid.widthAnchor.constraint(greaterThanOrEqualToConstant: fullWidth),
-            messageLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
+            messageLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             messageLabel.topAnchor.constraint(equalTo: grid.bottomAnchor, constant: 8),
-            messageLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
-            messageLabel.bottomAnchor.constraint(equalTo: bottomAnchor),
+            messageLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
+            messageLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
         ])
     }
 

@@ -4586,3 +4586,12 @@ The sheet starts in the last successful export folder; isolated UI fixtures
 supply their own initial folder before presentation. The final full editor
 and packaged export checks remain in progress. This does not establish native
 CMYK/Lab editing, complete Photoshop 4 parity or complete Recorder/batch coverage.
+
+Export qualification follow-up: the full editor suite passes on all four
+engines, and the standalone bundle passes native conformance, the 60-check
+export fixture, the full editor suite and the externally driven native
+Export/Repeat Export workflow with development trees inaccessible. Real
+PNG/TIFF/JPEG screenshots exposed tight accessory margins; the form now has
+insets and shorter transparent-pixel labels. All 1,418 units and the actual
+native picker workflow pass after that layout-only change. The final
+combined package will include it.
