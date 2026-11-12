@@ -169,6 +169,10 @@ enum RecorderFileSemanticBridge {
                 clampInput: value.clampInput, clampOutput: value.clampOutput)
             guard settings.isValid else { throw RecorderFileError.invalid("A recorded ink Levels adjustment has invalid settings.") }
             return .applyInkLevels(settings)
+        case .applyInkCurves(let value):
+            let settings = EngineSession.InkCurvesSettings(samples: value.samples)
+            guard settings.isValid else { throw RecorderFileError.invalid("A recorded ink Curves adjustment has invalid settings.") }
+            return .applyInkCurves(settings)
         case .completeStroke(let value): return .completeStroke(value)
         }
     }

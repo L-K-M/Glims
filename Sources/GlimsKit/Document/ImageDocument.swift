@@ -5241,8 +5241,7 @@ final class ImageDocument {
                 }
                 switch settings {
                 case .levels(let values): return .success(.applyInkLevels(values))
-                case .curves:
-                    return .failure(RecorderReplayError(message: "Ink Curves recording is not available."))
+                case .curves(let values): return .success(.applyInkCurves(values))
                 }
             }
             self.settleRecording(admission.capture, result: recording, confirmed: confirmed)
@@ -6558,7 +6557,7 @@ final class ImageDocument {
         switch command {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
-        case .channelToSelection, .editInk, .applyInkLevels: return true
+        case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves: return true
         case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke: return true
         default: return false
         }
@@ -6568,7 +6567,7 @@ final class ImageDocument {
                                         explicitChannel: Int32? = nil) -> RecorderContext? {
         guard Self.recorderCommandNeedsTarget(command) else { return nil }
         switch command {
-        case .editInk, .applyInkLevels:
+        case .editInk, .applyInkLevels, .applyInkCurves:
             guard let channel = explicitChannel, channel > 0 else {
                 return .unavailable("The explicit ink channel was unavailable when this edit was recorded.")
             }

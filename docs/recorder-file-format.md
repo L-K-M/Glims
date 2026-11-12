@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 10
+# Recorder file format, versions 1 to 12
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,19 +7,19 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is integer `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`, `9` or `10`. `recordingID` is a file UUID. `origin` contains
+`version` is integer `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`, `9`, `10`, `11` or `12`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
 The writer chooses the highest version required by a successful record:
 `completeStroke` requires 2, `channelToSelection` 3, `transformLayer` 4,
 `applyLevels` 5, `transformProjectiveLayer` 6, `applyCurves` 7,
-`applyColorBalance` 8, `applyHueSaturation` 9 and `applyBrightnessContrast`
-10. A file declaring one of those versions must contain at least one
+`applyColorBalance` 8, `applyHueSaturation` 9, `applyBrightnessContrast` 10, `editInk` or
+`applyInkLevels` 11, and `applyInkCurves` 12. A file declaring one of those versions must contain at least one
 successful command from that version's family. It may also contain
 commands from all earlier versions. Failure/cancelled rows do not raise
 the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...10 refuse the file.
+version 1. Integers outside 1...12 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -57,6 +57,9 @@ Commands have an owned `tag` and the following exact fields:
 | `applyColorBalance` | `settings` (version 8) |
 | `applyHueSaturation` | `settings` (version 9) |
 | `applyBrightnessContrast` | `settings` (version 10) |
+| `editInk` | `operation`, `intensity`, `opacity` (version 11) |
+| `applyInkLevels` | `lowInput`, `highInput`, `gamma`, `lowOutput`, `highOutput`, `clampInput`, `clampOutput` (version 11) |
+| `applyInkCurves` | `samples` (version 12) |
 | `scale` | integer `width`, `height` |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |
@@ -86,7 +89,8 @@ Brightness/Contrast require a layer symbol (any layer-kind description);
 `channelToSelection` requires a channel symbol whose description kind is
 `channel` — the explicit source channel, never the active paint target.
 Select Alpha and color selection with `sampleMerged:false` require context;
-other commands require none. Context has ordered `layers`/`channels` UUID
+other non-ink commands require none. Native ink commands require the `ink`
+binding below. Context has ordered `layers`/`channels` UUID
 arrays, `target`, `masks` and
 `quickMask`. Target kinds are layer/channel/quickMask with `symbol`, or mask with
 `owner`. Mask entries contain `owner`, `isPresent`, `enabled`, `editing`,
@@ -276,6 +280,28 @@ retaining its capture metadata for retry. Mask/channel targets and
 existing-effect edits produce explicit unsupported rows instead of
 inventing layer actions. Replay checks current membership, color mode,
 locks and editing role, then commits one new effect with one Undo step.
+
+## Native ink commands (versions 11 and 12)
+
+`editInk` stores one of `fill`, `clear` or `invert` and finite intensity/opacity
+in 0...1; Clear and Invert use canonical values. `applyInkLevels` stores its
+flat numeric endpoints (0...1), gamma (0.1...10) and Boolean clamps. Reversed
+or equal endpoints are valid. These successful command families require v11.
+
+`applyInkCurves` has exactly `tag` and `samples`; the array contains exactly
+256 finite numbers in 0...1. There is no nested `settings` object, control-point
+payload or native channel ID. The array is an owned copy of the accepted
+Apply table. A successful ink Curves command requires v12; a declared v12 file
+without one refuses. Earlier versions reject this tag. Failed/cancelled rows
+never raise the selected version; previous command/version contracts remain.
+
+All three require `kind:"ink"` with exactly `symbol`, `mode`, `role` and `uuid`.
+The symbol describes a channel. Mode/role and the document-scoped plane UUID
+must be valid and consistent for each symbol. See
+[Recording native ink edits](ink-recorder.md) for explicit destination choices,
+mode/role matching, fresh native admission and sole-selected-ink requirements.
+The file UUID does not confer permission over another open document. Batch
+name/path matching cannot automatically bind these ink commands.
 
 ## Levels (version 5)
 

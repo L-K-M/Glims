@@ -277,6 +277,7 @@ extension EngineSmokeTest {
                 expect(controller.inkCurvesPanel == nil && controller.canvas.inkCurvesPreviewImage == nil,
                        "Cancel removes panel and preview")
                 expect(try render(image) == original && document.undoInfo.undoCount == undo, "Cancel changes no source pixels or history")
+                try document.startRecording()
                 controller.openNativeFilter(operation); try ready(controller)
                 let applying = controller.inkCurvesPanel!
                 try drawHalf(applying); try ready(controller)
@@ -312,6 +313,15 @@ extension EngineSmokeTest {
                 expect(try render(image) == expected, "committed pixels match independent Fill oracle")
                 expect(document.undoInfo.undoCount == undo + 1, "Apply is exactly one Undo")
                 expect(controller.canvas.inkCurvesPreviewImage == nil, "Apply discards preview overlay")
+                expect(document.recorder.pendingCount == 0 && document.recorder.records.count == 1,
+                       "actual panel Apply settles one Recorder row")
+                if document.recorder.records.count == 1,
+                   case .success(.applyInkCurves(let captured)) = document.recorder.records[0].resolution,
+                   case .ink(_, let capturedIdentity)? = document.recorderBindingDescriptions[0] {
+                    expect(captured.samples == Array(repeating: 0.5, count: 256) && capturedIdentity.uuid == identity.uuid,
+                           "actual panel records the full accepted curve and original ink identity")
+                } else { expect(false, "actual panel records a successful ink Curves command") }
+                try document.stopRecording()
                 document.undo(); try drain(document); expect(try render(image) == original, "Undo restores source")
                 document.redo(); try drain(document); expect(try render(image) == expected, "Redo restores Curves result")
                 // Close while a fresh capture is queued; no late panel may

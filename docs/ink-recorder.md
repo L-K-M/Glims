@@ -1,13 +1,13 @@
 # Recording native ink edits
 
-Recorder captures successful native ink Fill, Clear, Invert and Levels Apply
+Recorder captures successful native ink Fill, Clear, Invert, Levels and Curves Apply
 as owned semantic commands. Preview Begin, rendering and Cancel create no
 rows. A refused admission creates no reservation; accepted work reserves its
 row before busy observers can Stop, Start or Close the document. A new
 recording epoch cannot receive an earlier epoch's completion.
 
-Scalar edits capture the explicit channel behind accepted input. Levels
-retains the original channel and authoritative identity with its Begin token,
+Scalar edits capture the explicit channel behind accepted input. Levels and
+Curves retain the original channel and authoritative identity with its Begin token,
 then records the final accepted settings at Apply. Native failure remains a
 failure. If identity metadata is unavailable on an older engine, the live edit
 can still succeed but the recording reports a failure instead of promising
@@ -31,6 +31,12 @@ destination's own UUID; it never treats equal UUIDs in unrelated images as
 permission. The binding picker narrows its suggestions using cached mode and
 canonical order, and the service revalidates native identity before accepting.
 Batch name/path matching refuses ink recordings.
+
+Version 12 adds `applyInkCurves` with exactly an owned array of 256 finite
+`samples` in 0...1. It stores the accepted lookup table, independent of how
+the panel produced it. A successful ink Curves command raises the file to
+v12; failed/cancelled rows do not. Versions 1–11 keep their prior rules.
+Curves uses the same explicit identity and destination-binding contract.
 
 Replay requires the bound ink to be the sole selected ink. Both cached and
 fresh native admission check the target; the command never silently switches
@@ -68,3 +74,17 @@ Cancel/reopen and pixel/history/selection preservation. It compiles; runtime
 qualification, combined bundle and launch results are tracked in the
 integration PR. This slice does not complete Recorder coverage or Photoshop 4
 parity.
+
+### Curves extension (candidate)
+
+All 1,650 Swift tests pass, including strict v12 schema/version refusal, owned
+value round trips, native-ID refusal and failure-only version preservation.
+Independent production review found no important findings. On all four engine
+sets the expanded document-service fixture passes 423 checks and the actual
+Curves panel passes 186 checks, with six mode/precision combinations, final
+Apply capture, disk Save/Load, explicit rebinding, stale-selection refusal,
+failed-step stopping and XCF reopen. Existing Fill/Levels checks remain in the
+same fixture. Exact production hashes were unchanged after review.
+
+Latest-head hosted CI and combined bundle qualification remain required. This
+extension has not replaced the separately qualified installed editor.
