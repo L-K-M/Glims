@@ -44,12 +44,6 @@ extension EngineSmokeTest {
             channels.stringValue = "4"
             panel.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: channels))
             expect(create.isEnabled, "New Image accepts valid ink settings")
-            if component == .u8, let path = ProcessInfo.processInfo.environment["GLIMS_MULTICHANNEL_VISUAL"] {
-                let directory = URL(fileURLWithPath: path)
-                try Data().write(to: directory.appendingPathComponent("ready"))
-                expect(wait { FileManager.default.fileExists(atPath: directory.appendingPathComponent("continue").path) },
-                       "external desktop capture completed while New Image was visible")
-            }
             if component == .u8, let path = ProcessInfo.processInfo.environment["GLIMS_SMOKE_ARTIFACT_DIR"],
                let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
                 content.layoutSubtreeIfNeeded(); content.cacheDisplay(in: content.bounds, to: rep)
