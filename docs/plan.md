@@ -4960,6 +4960,17 @@ admission and each supported edit need dedicated component routes and independen
 oracles. A valid parasite alone must never switch the user-visible mode or allow
 ordinary layer/projection operations to edit a derived representation.
 
+### CMYK preview conversion foundation (2026-11-12)
+
+A private per-instance LittleCMS primitive converts authoritative C/M/Y/K ink
+intensity into derived linear-sRGB RGBA with explicit percentage units and a
+fixed relative-colorimetric/BPC policy. It exposes no new document mode yet.
+All four engines pass optimized and sanitized numerical checks against an
+independent double-precision oracle, and rebuilt adapter conformance. One
+independent source review found no confirmed important issue. See
+[cmyk-transform.md](cmyk-transform.md) for the exact contract, measured error,
+profile scope and remaining document integration work.
+
 
 ### Private component command admission (2026-11-12)
 
@@ -4972,7 +4983,7 @@ for boundaries and reproduced review findings. PR #228 merged at `3965d22`
 after 214 admission checks and full app checks passed on all four engines,
 with latest native CI passing and both direct-review findings closed.
 
-### Multichannel editor in progress (2026-11-12)
+### Multichannel editor qualified (2026-11-12)
 
 New Image now offers Multichannel documents with 1–32 authoritative native ink
 channels at 8-bit integer, 16-bit integer or 32-bit float precision. These
@@ -5033,6 +5044,14 @@ viewport at 25%, post-dab rendering fell from 489 to 8.7 ms for U8 and 492 to
 reads still took about half a second. These are engine timings, not complete
 pointer-to-display latency. Reproduce with `python3 scripts/test-component-perf.py --library /absolute/path/to/libglimsengine.dylib --work /tmp/component-perf`.
 
-Latest Glims CI and a qualified standalone bundle remain in progress. The
-installed app remains the previously qualified revision. This is not Photoshop 4
-parity.
+PR #229 merged at `f890954` after both latest CI jobs passed. The standalone
+pinned-engine bundle passed native, full app and focused Multichannel checks
+with development libraries and build trees inaccessible. Ordinary New Image,
+pointer painting, menu Undo/Redo and keyboard Undo/Redo passed on the packaged
+app. The first keyboard probe used US physical Y/Z positions on this Mac's
+Swiss German layout; correcting test delivery passed without a product change.
+Fresh/cached/relocated launch measured 1.82/1.40/3.40 seconds. The installed
+`dist/Glims.app` is qualified source `ee552de`; its unsigned executable and
+6,708 payload files/symlinks match the tested copy. The previous app is retained
+as a backup. No notarization. Native CMYK work is continuing separately; this
+is not Photoshop 4 parity.
