@@ -1,6 +1,6 @@
 # Native ink Fill, Clear and Invert
 
-Implementation and qualification are in progress. These commands operate on one
+These commands operate on one
 explicitly selected authoritative CMYK or Multichannel ink plane. They do not
 convert through RGB or enable generic layer filters on an ink document.
 
@@ -43,5 +43,26 @@ native file identity remain unchanged.
 The UI captures the Fill sheet's target and resolves selection pixels when the
 queued operation executes. Accepted edits drain before Close; later submissions
 refuse. Recorder coverage must be reported explicitly until these commands have
-their own replay schema. Actual interface integration and these preservation
-claims still require the native, UI and package checks.
+their own replay schema. Accepted edits reserve their Recorder entry before busy
+observers can stop or restart recording; late completion cannot enter a new epoch.
+
+## Qualification
+
+The independent native fixture passes 1,314 checks on each of the four engine
+sets, covering both ink modes and all three precisions, weighted selections,
+exact raw Undo/Redo, preserved other planes and metadata, locks and invalid
+inputs. A separate 39-check control fixture passes on each set: cancellation
+before publication, busy/read ownership, shutdown, projection events and retry.
+The scalar kernel passes 828 optimized and sanitized checks. An independent
+197,397-check integer/extreme-float probe passes. Two numeric regressions were
+observed before correction: huge-float half-mask Invert cancellation and integer
+half-up Fill rounding. Final source review found no remaining important issue.
+
+The pinned actual-window fixture passes 246 checks: invalid/cancelled/retargeted
+Fill sheets, admitted Fill/Clear/Delete/linear Invert, exact display Undo/Redo,
+unsupported filter gating, Recorder Stop/restart isolation and accepted Close
+drain. The Recorder observer regression produced six failures before its fix.
+All 1,526 Swift tests pass. Artifact-only PNG capture adds two visual checks to
+the final packaged run. All-engine UI, standalone package/startup and latest CI
+qualification remain in progress. This does not complete ink-mode adjustment
+coverage, Recorder replay support or Photoshop 4 parity.

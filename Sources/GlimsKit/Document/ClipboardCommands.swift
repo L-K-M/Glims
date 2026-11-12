@@ -103,6 +103,10 @@ extension DocumentWindowController {
     }
 
     @objc func clearPixels(_ sender: Any?) {
+        if imageDocument.colorInfo.mode.usesInkChannels {
+            performInkEdit(.clear)
+            return
+        }
         guard !PlugInCommands.isRunning, !imageDocument.isClosing else { return }
         canvas.tools.finishTextEditing()
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
