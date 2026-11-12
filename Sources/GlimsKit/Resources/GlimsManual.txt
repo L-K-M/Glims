@@ -371,7 +371,7 @@ partial success never passes for a complete macro.
 # Batch
 
 File > Batch… runs a saved .glimsrecording on several images. Choose the
-recording, input files or folders, an output folder, and XCF or PNG/JPEG/TIFF.
+recording, input files or folders, an output folder, and XCF or PNG/JPEG/TIFF/PSD.
 Folders contribute visible files directly inside them, without subfolders
 or links. Files the editor cannot open appear as individual failures.
 
