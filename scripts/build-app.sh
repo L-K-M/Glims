@@ -110,8 +110,14 @@ if [[ "$SHELL_ONLY" == false ]]; then
   echo "==> Building the current engine adapter ($ENGINE_REF)"
   "$PROJECT_ROOT/scripts/build-adapter.sh" "$ENGINE_REF"
   echo "==> Bundling the engine ($ENGINE_REF)"
+  xcrun clang -O2 -Wall -Wextra -Werror -mmacosx-version-min=13.0 -I"$DEPS_PREFIX/include" \
+    "$PROJECT_ROOT/Engine/helpers/font-cache.c" "$DEPS_PREFIX/lib/libfontconfig.dylib" \
+    "$DEPS_PREFIX/lib/libharfbuzz.dylib" -framework CoreText -framework CoreFoundation \
+    -o "$APP_PATH/Contents/MacOS/glims-font-cache"
   python3 -I "$PROJECT_ROOT/scripts/bundle-engine.py" "$APP_PATH" "$ENGINE_INSTALL" "$DEPS_PREFIX" \
     "$ENGINE_ADAPTER" "$PROJECT_ROOT/_engine/src/$ENGINE_REF"
+  echo "==> Preparing first-launch command registry"
+  python3 -I "$PROJECT_ROOT/scripts/prepare-engine-startup.py" "$APP_PATH"
 fi
 
 echo "==> Signing"

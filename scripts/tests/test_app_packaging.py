@@ -155,10 +155,33 @@ class AppPackagingTests(unittest.TestCase):
                            "target = pathlib.Path(sys.argv[1]) / 'Contents/Frameworks'\n"
                            "target.mkdir()\n"
                            "(target / 'libglimsengine.dylib').write_text('engine')\n")
+        compiler = self.root / "tools/xcrun"
+        compiler.write_text("#!/usr/bin/env python3\nimport pathlib, sys\n"
+                            "target = pathlib.Path(sys.argv[sys.argv.index('-o') + 1])\n"
+                            "target.write_text('#!/bin/sh\\nexit 0\\n')\n"
+                            "target.chmod(0o755)\n")
+        compiler.chmod(0o755)
+        prepare = self.root / "scripts/prepare-engine-startup.py"
+        prepare.write_text("import pathlib, sys\n"
+                           "contents = pathlib.Path(sys.argv[1]) / 'Contents'\n"
+                           "assert (contents / 'MacOS/glims-font-cache').is_file()\n"
+                           "assert (contents / 'Frameworks/libglimsengine.dylib').is_file()\n"
+                           "target = contents / 'Resources/Engine-Startup'\n"
+                           "target.mkdir()\n"
+                           "(target / 'pluginrc').write_text('registry')\n")
         result = self.run_build()
         self.assertEqual(result.returncode, 0, result.stderr)
-        engine = self.root / "dist/Glims.app/Contents/Frameworks/libglimsengine.dylib"
-        self.assertEqual(engine.read_text(), "engine")
+        app = self.root / "dist/Glims.app"
+        self.assertEqual((app / "Contents/Frameworks/libglimsengine.dylib").read_text(), "engine")
+        self.assertTrue(os.access(app / "Contents/MacOS/glims-font-cache", os.X_OK))
+        self.assertEqual((app / "Contents/Resources/Engine-Startup/pluginrc").read_text(), "registry")
+        # A failed cache-generation step must not publish a partial app.
+        marker = app / "previous-version"
+        marker.write_text("keep")
+        prepare.write_text("raise SystemExit(42)\n")
+        self.assertEqual(self.run_build().returncode, 42)
+        self.assertEqual(marker.read_text(), "keep")
+        self.assertEqual(list((self.root / "dist").iterdir()), [app])
 
     def test_mutually_exclusive_options_in_both_orders(self):
         for args in [("--shell-only", "--engine", "master"),

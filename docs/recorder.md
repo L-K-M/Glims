@@ -21,7 +21,7 @@ Current capture covers these command families:
 - Image cropping.
 - Supported layer property changes: name, visibility, opacity and blend mode.
 - Complete Pencil, Eraser and Paintbrush gestures with supported brush settings.
-- A newly applied Levels adjustment on an explicitly bound layer,
+- A newly applied Levels or Curves adjustment on an explicitly bound layer,
   with the whole accepted settings.
 
 Other layer changes, other effects (including edits to an existing effect)
@@ -29,10 +29,10 @@ and file operations remain outside this capture scope. A live recording
 belongs to one open image. To use a saved recording in another image, load
 it in that image and choose its targets.
 
-Levels records the final native settings when Apply is admitted. Preview
+Levels and Curves record the final native settings when Apply is admitted. Preview
 updates, Cancel and refused Apply add no row. An admitted Apply retains its
 place if recording stops while it is pending. A native failure becomes a
-failure row. Applying Levels to a mask/channel or editing an existing Levels
+failure row. Applying either adjustment to a mask/channel or editing an existing
 effect also produces an explicit unsupported row after a successful commit,
 so the recording cannot silently replay an incomplete sequence. A settings
 capture failure preserves the live edit and marks the recording as failed.
@@ -61,8 +61,10 @@ recording; painting a mask/channel or using another paint tool produces an
 explicit unsupported row. Saved strokes use recording format version 2;
 recordings without successful strokes retain version 1; Channel ▸ To Selection
 raises the file to version 3, a committed Transform-tool layer affine
-raises it to version 4, and a committed Levels adjustment raises it to
-version 5. See
+raises it to version 4, a committed Levels adjustment raises it to
+version 5, a perspective layer transform raises it to version 6, and a Curves
+adjustment raises it to version 7. Mixed
+recordings use the highest required version. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
 Record starts a fresh log, replacing the prior recording. Stop stops accepting

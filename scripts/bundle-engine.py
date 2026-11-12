@@ -269,6 +269,12 @@ class Bundler:
             raise SystemExit("fonts.conf still names the dependency prefix")
         with open(os.path.join(fonts, "fonts.conf"), "w") as handle:
             handle.write(conf)
+        # Keep the original config as a failure fallback. The runtime helper
+        # adds the actual downloaded font directories using CoreText; scanning
+        # every system asset here also visits speech models and other data.
+        editor_conf = re.sub(r"<dir>\s*/System/Library/Assets(?:V2)?/?\s*</dir>", "", conf)
+        with open(os.path.join(fonts, "fonts-glims.conf"), "w") as handle:
+            handle.write(editor_conf)
 
     def copy_python(self):
         framework = self.framework

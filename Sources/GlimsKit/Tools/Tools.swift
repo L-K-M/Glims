@@ -235,7 +235,9 @@ final class ToolState {
         get { gradientPrefs.opacity }
         set { updateGradientPrefs { $0.opacity = newValue } }
     }
-    var transformInterpolation = EngineSession.Interpolation.cubic
+    var transformInterpolation = EngineSession.Interpolation.cubic {
+        didSet { if oldValue != transformInterpolation { notify() } }
+    }
     /// How Stroke Path draws; its color is the foreground color.
     var pathLineWidth: Double = 2
     var pathLine: EngineSession.LineSettings {

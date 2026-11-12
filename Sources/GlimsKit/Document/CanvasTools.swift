@@ -221,6 +221,10 @@ final class CanvasToolController {
     /// The Transform tool's pending transform, waiting for Return.
     private(set) var transformSession: LayerTransformSession?
     private var transformDrag: LayerTransformSession.Drag?
+    private var transformMode: LayerTransformSession.Mode = .scaleRotate
+    private(set) var transformCommitIsPending = false
+    private var colorPickGeneration: UInt64 = 0
+    private var textPickGeneration: UInt64 = 0
     /// The pointer's last image location during a Transform drag, so a
     /// modifier-only event recomputes the preview from the same point.
     private var transformDragCurrent: CGPoint?
@@ -273,6 +277,17 @@ final class CanvasToolController {
         let tool = acceptedTool ?? keyboard.pointerTool(current: ToolState.shared.current, flags: hintFlags)
         var flags = hintFlags
         if keyboard.optionIsDown(flags: hintFlags) { flags.insert(.option) }
+        if tool == .transform {
+            if transformCommitIsPending { return "Applying the transform…" }
+            if transformSession?.isIdentity != false {
+                switch transformPreview?.mode ?? transformMode {
+                case .scaleRotate: break
+                case .skew: return "Drag an edge handle along its edge to skew; drag inside to move."
+                case .distort: return "Drag a corner independently, or an edge to move both corners."
+                case .perspective: return "Drag a corner horizontally or vertically; the first movement fixes the direction."
+                }
+            }
+        }
         let phase: ToolHintPolicy.Phase
         if acceptedTool != nil { phase = .dragging }
         else if tool == .text, textEditor != nil { phase = .textEditing }
@@ -587,11 +602,12 @@ final class CanvasToolController {
                 canvas.needsDisplay = true
             }
         case .transform:
-            guard let drag = transformDrag else { return }
+            guard var drag = transformDrag else { return }
             transformDragCurrent = point
-            transformSession?.update(drag, to: point, constrained: event.modifierFlags.contains(.shift))
+            transformSession?.update(&drag, to: point, constrained: event.modifierFlags.contains(.shift))
+            transformDrag = drag
             canvas.needsDisplay = true
-            onTransformSessionChange?()
+            transformSessionDidChange()
         case .eyedropper:
             pickColor(at: point)
         case .path:
@@ -672,11 +688,11 @@ final class CanvasToolController {
         case .path:
             pathTool.mouseUp()
         case .transform:
-            if let drag = transformDrag {
-                transformSession?.update(drag, to: end, constrained: event.modifierFlags.contains(.shift))
+            if var drag = transformDrag {
+                transformSession?.update(&drag, to: end, constrained: event.modifierFlags.contains(.shift))
             }
             transformDrag = nil
-            onTransformSessionChange?()
+            transformSessionDidChange()
             if transformSession?.isIdentity == false {
                 onStatus?("Return applies the transform; Escape cancels it.")
             }
@@ -1200,8 +1216,22 @@ final class CanvasToolController {
     }
 
     private func pickColor(at point: CGPoint) {
+        colorPickGeneration &+= 1
         guard point.x >= 0, point.y >= 0, point.x < Double(document.info.width),
               point.y < Double(document.info.height) else { return }
+        if EngineActivity.shared.isRenderingTransformPreview {
+            let generation = colorPickGeneration
+            let revision = ToolState.shared.selectionRevision
+            let foreground = ToolState.shared.foreground
+            EngineActivity.shared.whenReadyForSynchronousRead { [weak self] in
+                guard let self, !self.document.isClosing,
+                      self.colorPickGeneration == generation,
+                      ToolState.shared.selectionRevision == revision,
+                      ToolState.shared.foreground == foreground else { return }
+                self.pickColor(at: point)
+            }
+            return
+        }
         do {
             let sample = try document.session.sampleColor(document.image,
                 x: Int(floor(point.x)), y: Int(floor(point.y)))
@@ -1230,6 +1260,10 @@ final class CanvasToolController {
         hintFlags = event.modifierFlags
         defer { hintChanged(.afterAction) }
         let keyCode = Int(event.keyCode)
+        if keyCode == Self.escapeKey {
+            colorPickGeneration &+= 1
+            textPickGeneration &+= 1
+        }
         // Field editors and the on-canvas text overlay own ordinary typing,
         // including Space, digits and the color/Quick Mask letters.
         if textEditor != nil || canvas.window?.firstResponder is NSTextView { return false }
@@ -1260,6 +1294,7 @@ final class CanvasToolController {
             return true
         }
         if transformSession != nil, keyCode == Self.escapeKey {
+            guard !transformCommitIsPending else { return true }
             cancelTransform(message: "Transform cancelled.")
             cancelSpringTools()
             return true
@@ -1420,6 +1455,8 @@ final class CanvasToolController {
     /// an implicit floating anchor. A promoted text editor has no held owner.
     @discardableResult
     func cancelSpringTools() -> Bool {
+        colorPickGeneration &+= 1
+        textPickGeneration &+= 1
         keyboard = CanvasKeyboardState()
         let ownsInteraction = springLetters.ownsInteraction
         let prior = springLetters.cancel(selectionRevision: ToolState.shared.selectionRevision)
@@ -1455,11 +1492,12 @@ final class CanvasToolController {
     /// the captured drag and its last pointer location, without a native
     /// call.
     func transformModifiersChanged(_ flags: NSEvent.ModifierFlags) {
-        guard dragTool == .transform, let drag = transformDrag else { return }
-        transformSession?.update(drag, to: transformDragCurrent ?? drag.start,
+        guard dragTool == .transform, var drag = transformDrag else { return }
+        transformSession?.update(&drag, to: transformDragCurrent ?? drag.start,
                                  constrained: flags.contains(.shift))
+        transformDrag = drag
         canvas.needsDisplay = true
-        onTransformSessionChange?()
+        transformSessionDidChange()
     }
 
     /// The rubber band or lasso path of a selection being drawn, in view
@@ -1587,6 +1625,21 @@ final class CanvasToolController {
     /// Opens the editor: on the topmost visible text layer under `point`,
     /// or for new text with its top-left at `point`.
     private func beginTextEditing(at point: CGPoint) {
+        textPickGeneration &+= 1
+        if EngineActivity.shared.isRenderingTransformPreview {
+            let generation = textPickGeneration
+            let revision = ToolState.shared.selectionRevision
+            let state = document.stateVersion
+            let targetRevision = document.moveTargetRevision
+            EngineActivity.shared.whenReadyForSynchronousRead { [weak self] in
+                guard let self, !self.document.isClosing, self.document.stateVersion == state,
+                      self.document.moveTargetRevision == targetRevision,
+                      self.textPickGeneration == generation,
+                      ToolState.shared.selectionRevision == revision, self.textEditor == nil else { return }
+                self.beginTextEditing(at: point)
+            }
+            return
+        }
         let hit = document.layers.first { layer in
             guard layer.isVisible, layer.bounds.contains(point) else { return false }
             if layer.kind == .text { return true }
@@ -1680,6 +1733,11 @@ final class CanvasToolController {
     /// Starts or continues the session on the selected layer and grabs the
     /// handle under the pointer. A double-click applies.
     private func beginTransformDrag(at point: CGPoint, clickCount: Int) {
+        guard !transformCommitIsPending else {
+            onStatus?("Applying the transform…")
+            dragTool = nil
+            return
+        }
         if document.isMaskTargetActive {
             // The transform session describes the layer's bounds; a mask
             // target cannot be moved or transformed on its own.
@@ -1708,6 +1766,7 @@ final class CanvasToolController {
         if transformSession?.layer != layer.id || transformSession?.original != layer.bounds {
             transformGeneration &+= 1
             transformSession = LayerTransformSession(layer: layer.id, bounds: layer.bounds)
+            transformSession?.setMode(transformMode)
         }
         guard let session = transformSession else { return }
 
@@ -1720,7 +1779,7 @@ final class CanvasToolController {
         transformDrag = session.beginDrag(handle, at: point)
         transformDragCurrent = point
         canvas.needsDisplay = true
-        onTransformSessionChange?()
+        transformSessionDidChange()
     }
 
     /// Whether `session` still describes its layer as the document has it.
@@ -1733,7 +1792,9 @@ final class CanvasToolController {
         guard document.activeDrawable == document.activeLayer,
               let layer = document.layers.first(where: { $0.id == document.activeLayer }),
               layer.bounds.width > 0, layer.bounds.height > 0 else { return nil }
-        return LayerTransformSession(layer: layer.id, bounds: layer.bounds)
+        var session = LayerTransformSession(layer: layer.id, bounds: layer.bounds)
+        session.setMode(transformMode)
+        return session
     }
 
     /// The session the numeric fields show and edit: the pending one while
@@ -1753,7 +1814,11 @@ final class CanvasToolController {
     }
 
     var transformNumericEditsAllowed: Bool {
-        guard ToolState.shared.current == .transform, document.acceptsEdits,
+        ToolState.shared.current == .transform && transformModeSelectionAllowed
+    }
+
+    var transformModeSelectionAllowed: Bool {
+        guard document.acceptsEdits, !transformCommitIsPending,
               !document.filterPreviewIsOpen, EngineActivity.shared.label == nil,
               !document.strokeIsActive, !document.hasMultipleSelectedLayers, !document.targetCommandIsPending,
               !document.isMaskTargetActive, !document.isChannelTargetActive,
@@ -1761,6 +1826,20 @@ final class CanvasToolController {
               let layer = transformPreview?.layer else { return false }
         let locks = document.layerLocks[layer]?.effective ?? []
         return !locks.contains(.pixels) && !locks.contains(.position) && transformDrag == nil
+    }
+
+    /// Modes change handle behavior while retaining the pending mapping.
+    @discardableResult
+    func setTransformMode(_ mode: LayerTransformSession.Mode) -> Bool {
+        guard transformNumericEditsAllowed else { return false }
+        var session = transformPreview
+        guard session != nil else { return false }
+        session?.setMode(mode)
+        transformMode = mode
+        transformSession = session
+        canvas.needsDisplay = true
+        transformSessionDidChange()
+        return true
     }
 
     /// Applies one numeric box edit from the options' fields. The pending
@@ -1782,7 +1861,7 @@ final class CanvasToolController {
                                    degrees: degrees) == true else { return false }
         transformSession = session
         canvas.needsDisplay = true
-        onTransformSessionChange?()
+        transformSessionDidChange()
         return true
     }
 
@@ -1795,33 +1874,63 @@ final class CanvasToolController {
 
     /// Discards the pending preview without touching the image, as Escape
     /// on the canvas does.
-    func cancelPendingTransform() { cancelTransform(message: "Transform cancelled.") }
+    func cancelPendingTransform() {
+        guard !transformCommitIsPending else { return }
+        cancelTransform(message: "Transform cancelled.")
+    }
 
     /// Re-evaluates the preview after document state changed (selected
     /// layer, bounds, target, pending work) and tells the options to
     /// refresh their unfocused fields and readiness.
-    func transformDocumentStateDidChange() { onTransformSessionChange?() }
+    func transformDocumentStateDidChange() {
+        canvas.invalidateTransformPixelPreview()
+        // A reload can be nested inside a larger native read completion.
+        // Start the next copy at draw time, after that callback unwinds.
+        onTransformSessionChange?()
+    }
+
+    private func transformSessionDidChange() {
+        canvas.refreshTransformPixelPreview()
+        onTransformSessionChange?()
+    }
 
     private func applyTransform() {
-        defer {
-            transformGeneration &+= 1
-            transformSession = nil
-            transformDrag = nil
-            canvas.needsDisplay = true
-            onTransformSessionChange?()
-            finishSpringInteractionIfReady()
-        }
-        guard let session = transformSession, !session.isIdentity else { return }
-        // The box describes the layer as it was when the drag began; an
-        // undo, or a change from a menu, may have moved or resized it since.
+        guard !transformCommitIsPending, let session = transformSession,
+              !session.isIdentity else { return }
         guard isCurrent(session) else {
-            onStatus?("The layer changed, so the transform was not applied.")
+            cancelTransform(message: "The layer changed, so the transform was not applied.")
             return
         }
-
-        document.transformLayer(session.layer, matrix: session.matrix,
-                                interpolation: ToolState.shared.transformInterpolation)
-        onStatus?("Transformed.")
+        guard transformNumericEditsAllowed else { return }
+        transformCommitIsPending = true
+        transformDrag = nil
+        transformDragCurrent = nil
+        let generation = transformGeneration
+        onStatus?("Applying the transform…")
+        transformSessionDidChange()
+        document.transformLayer(session.layer, matrix: session.projectiveMatrix,
+                                expectedBounds: session.original,
+                                interpolation: ToolState.shared.transformInterpolation) { [weak self] result in
+            guard let self else { return }
+            self.transformCommitIsPending = false
+            // Tool changes and close may have discarded the preview while
+            // accepted work drained. They must never receive an old session.
+            if self.transformGeneration == generation {
+                if case .success = result {
+                    self.cancelTransform(message: "Transformed.")
+                } else {
+                    // Keep a valid preview for retry; native stale-bound
+                    // refusals will expose a fresh box after reconciliation.
+                    if !self.isCurrent(session) { self.cancelTransform(message: nil) }
+                    if case .failure(let error) = result {
+                        self.onStatus?(error.localizedDescription)
+                    }
+                }
+            }
+            self.canvas.needsDisplay = true
+            self.transformSessionDidChange()
+            self.finishSpringInteractionIfReady()
+        }
     }
 
     private func cancelTransform(message: String?) {
@@ -1829,7 +1938,7 @@ final class CanvasToolController {
         transformSession = nil
         transformDrag = nil
         canvas.needsDisplay = true
-        onTransformSessionChange?()
+        transformSessionDidChange()
         if let message { onStatus?(message) }
     }
 
@@ -1841,7 +1950,7 @@ final class CanvasToolController {
         guard ToolState.shared.current == .transform, let session = transformPreview
         else { return }
         let toView = { (point: CGPoint) in NSPoint(x: point.x * scale, y: point.y * scale) }
-        let corners = session.corners.map(toView)
+        let corners = session.imageCorners.map(toView)
 
         let outline = NSBezierPath()
         outline.move(to: corners[0])
@@ -1850,17 +1959,29 @@ final class CanvasToolController {
         EngineCanvasView.strokeMarchingAnts(outline, phase: 0)
 
         let grid = NSBezierPath()
-        for fraction in [1.0 / 3, 2.0 / 3] {
-            grid.move(to: Self.mix(corners[0], corners[1], fraction))
-            grid.line(to: Self.mix(corners[3], corners[2], fraction))
-            grid.move(to: Self.mix(corners[0], corners[3], fraction))
-            grid.line(to: Self.mix(corners[1], corners[2], fraction))
+        for segment in session.gridSegments {
+            grid.move(to: toView(segment.start))
+            grid.line(to: toView(segment.end))
         }
         NSColor(calibratedWhite: 1, alpha: 0.6).setStroke()
         grid.lineWidth = 1
         grid.stroke()
 
-        for point in corners + session.edgeMiddles.map(toView) {
+        var handles: [CGPoint] = []
+        if session.mode != .skew { handles += session.corners }
+        if session.mode != .perspective { handles += session.edgeMiddles }
+        // After a warp, Scale/Rotate acts on its independent affine frame.
+        if session.mode == .scaleRotate && session.frameCorners != session.imageCorners {
+            let frame = NSBezierPath()
+            let points = session.frameCorners.map(toView)
+            frame.move(to: points[0])
+            points.dropFirst().forEach { frame.line(to: $0) }
+            frame.close()
+            NSColor(calibratedWhite: 1, alpha: 0.5).setStroke()
+            frame.lineWidth = 1
+            frame.stroke()
+        }
+        for point in handles.map(toView) {
             let square = NSRect(x: point.x - 3.5, y: point.y - 3.5, width: 7, height: 7)
             NSColor.white.setFill()
             square.fill()
@@ -1873,10 +1994,6 @@ final class CanvasToolController {
         dot.fill()
         NSColor.black.setStroke()
         dot.stroke()
-    }
-
-    private static func mix(_ a: NSPoint, _ b: NSPoint, _ t: Double) -> NSPoint {
-        NSPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)
     }
 
     /// The area a pending crop keeps, with everything outside it dimmed.
